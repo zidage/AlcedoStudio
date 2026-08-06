@@ -2,7 +2,7 @@
 
 Date: 2026-08-06
 
-Status: Phase R1 complete on branch `feature/editor_render_simplify`. Phases R2–R4 pending.
+Status: Phases R1–R2 complete on branch `feature/editor_render_simplify`. Phases R3–R4 pending.
 Delivery is one feature branch with sequential commits (not one GitHub PR per phase).
 
 Primary owner: Alcedo Studio editor session render path.
@@ -199,14 +199,85 @@ reproduce in the interactive app.
 
 **Goal:** O(1) replace and schedule selection for the three real ladder roles.
 
-- Replace `pending_` deque + `replacement_key` string equality with three optional slots:
+- [x] Replace `pending_` deque + `replacement_key` string equality with three optional slots:
   interactive, quality, detail (enum / quality-derived index).
-- Same-slot submit overwrites and emits `Replaced`.
-- `ScheduleNext` picks interactive > quality > detail in constant time.
-- Epoch mismatch clears all slots and cancels in-flight via token; no full-container rescans for
+- [x] Same-slot submit overwrites and emits `Replaced`.
+- [x] `ScheduleNext` picks interactive > quality > detail in constant time.
+- [x] Epoch mismatch clears all slots and cancels in-flight via token; no full-container rescans for
   coalesce.
-- Keep single-flight (`Submit` then schedule when idle; complete then schedule next).
-- Keep `ReasonReusesCurrentFrame` (ZoomPan / Resize do not schedule pipeline work).
+- [x] Keep single-flight (`Submit` then schedule when idle; complete then schedule next).
+- [x] Keep `ReasonReusesCurrentFrame` (ZoomPan / Resize do not schedule pipeline work).
+
+##### Phase R2 completion record (2026-08-06)
+
+**Status:** complete — fixed quality slots replace string-keyed pending deque in
+`EditorRenderCoordinator`.
+
+**Primary success call chain:**
+
+```text
+Submit(intent)
+  -> FillRenderIntentDefaults / AcceptOrReject / ReasonReusesCurrentFrame
+  -> PlaceInSlot(SlotIndexForQuality)  // overwrite same ladder slot + Replaced
+  -> ScheduleNext when idle
+       · ScrubPendingSlots (token / epoch, O(3))
+       · SelectNextSlotIndex: interactive > quality > detail
+  -> IEditorPipelineSchedulerPort::Schedule
+  -> NotifySchedulerCompleted -> FrameReady -> ScheduleNext next slot
+```
+
+**Primary failure call chain:**
+
+```text
+SetActiveImageLoadRequest(new_epoch)
+  -> CancelObsoleteForImageLoadMismatch
+       · clear every occupied slot with epoch mismatch (Cancelled)
+       · cancel in-flight token + emit Cancelled
+  -> scheduler_->Cancel(job) outside mutex
+  -> DeliverPendingResults
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SameQualitySlotSubmitReplacesPriorPending` | `EditorRenderCoordinatorTest` | PASS |
+| `ThreeQualitySlotsCanCoexistAndScheduleInteractiveFirst` | `EditorRenderCoordinatorTest` | PASS |
+| `BurstOfReplaceableIntentsKeepsNewestInteractiveOnly` | `EditorRenderCoordinatorTest` | PASS |
+| `SetActiveImageLoadRequestCancelsObsoletePendingAndInflight` | `EditorRenderCoordinatorTest` | PASS |
+| `ZoomPanIntentIsReusedWithoutScheduling` / `ResizeIntentIsReusedWithoutScheduling` | `EditorRenderCoordinatorTest` | PASS |
+| `SlotIndexMatchesQualityLadderOrder` | `EditorRenderCoordinatorTest` | PASS |
+| Full coordinator suite | `EditorRenderCoordinatorTest` | PASS 30/30 |
+| Render controller regression | `EditorSessionRenderControllerTest` | PASS 13/13 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorRenderCoordinatorTest
+ctest --test-dir build/debug -R EditorRenderCoordinatorTest --output-on-failure
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionRenderControllerTest
+ctest --test-dir build/debug -R EditorSessionRenderControllerTest --output-on-failure
+```
+
+Suite totals: `EditorRenderCoordinatorTest` 30/30; `EditorSessionRenderControllerTest` 13/13.
+
+**Checklist / exit condition:** all R2 boxes checked.
+
+**LOC note (grill-code-review):**
+
+| File | LOC |
+| --- | --- |
+| `alcedo_studio/src/app/editor_render_coordinator.cpp` | ~491 |
+| `alcedo_studio/src/include/app/editor_render_coordinator.hpp` | ~173 |
+| `alcedo_studio/tests/app/editor_render_coordinator_test.cpp` | ~752 |
+
+No responsibility split needed; coordinator still owns only coalesce + single-flight.
+
+**Residual gaps:**
+
+- `replacement_key` remains on `EditorRenderIntent` for producers / diagnostics; coalesce no longer
+  uses string equality (R2). Removal of the field is optional later YAGNI.
+- Session render context (R3) and test-producer production branches (R4) unchanged.
 
 ### Phase R3 — Session render context
 
@@ -284,3 +355,21 @@ Focused tests (all passed):
 - `EditorSessionRenderControllerTest` 13/13
 
 Next: Phase R2 (fixed slots).
+
+### 2026-08-06 — Phase R2 complete
+
+Branch: `feature/editor_render_simplify`.
+
+Code:
+
+- `alcedo_studio/src/include/app/editor_render_coordinator.hpp` — `QualitySlot` / `slots_` array;
+  `SlotIndexForQuality`, `PlaceInSlot`, `SelectNextSlotIndex`, `ScrubPendingSlots`;
+- `alcedo_studio/src/app/editor_render_coordinator.cpp` — deque + `ReplacePendingWithKey` /
+  `SelectNextIndex` removed; cancel/schedule walk three fixed slots only.
+
+Focused tests (all passed):
+
+- `EditorRenderCoordinatorTest` 30/30 (includes three-slot order + 100-burst + slot index)
+- `EditorSessionRenderControllerTest` 13/13
+
+Next: Phase R3 (session render context).

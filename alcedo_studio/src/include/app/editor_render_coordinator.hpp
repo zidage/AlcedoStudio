@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -29,14 +29,25 @@ class IEditorPipelineSchedulerPort {
   virtual void WaitForSessionIdle(std::uint64_t /*session_epoch*/) {}
 };
 
-/// Application-layer owner of the editor render request queue.
+/// Application-layer owner of editor render coalesce + single-flight scheduling.
 ///
+/// Pending work is three fixed quality slots (interactive / quality / detail).
+/// Same-slot submit overwrites the prior pending entry and emits `Replaced`.
+/// `ScheduleNext` selects interactive > quality > detail in constant time.
 /// This is the only production component allowed to call the editor pipeline
 /// scheduler. Session service, adjustment models, and viewport controllers submit
 /// EditorRenderIntent values here and never receive a PipelineScheduler pointer.
 class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
  public:
   using ResultObserver = std::function<void(const EditorRenderResult&)>;
+
+  /// Ladder slots derived from `EditorRenderQuality` (not string keys).
+  enum class QualitySlot : std::uint8_t {
+    Interactive = 0,
+    Quality     = 1,
+    Detail      = 2,
+  };
+  static constexpr std::size_t kQualitySlotCount = 3;
 
   explicit EditorRenderCoordinator(std::shared_ptr<IEditorPipelineSchedulerPort> scheduler);
   ~EditorRenderCoordinator() override = default;
@@ -67,12 +78,12 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Mark the blocking scheduler call complete and start the next request.
   void NotifySchedulerCompleted(std::uint64_t request_id, bool success, std::string message = {});
 
-  /// Process the pending queue: schedule at most one job when idle.
+  /// Process pending slots: schedule at most one job when idle.
   void Pump();
 
   [[nodiscard]] auto pending_count() const -> std::size_t {
     std::scoped_lock lock(mutex_);
-    return pending_.size();
+    return CountOccupiedSlots();
   }
   [[nodiscard]] auto has_inflight() const -> bool {
     std::scoped_lock lock(mutex_);
@@ -91,22 +102,25 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
     std::scoped_lock                   lock(mutex_);
     EditorRenderCoordinatorDiagnostics diag;
     diag.has_inflight  = inflight_.has_value();
-    diag.pending_count = pending_.size();
+    diag.pending_count = CountOccupiedSlots();
     diag.inflight_reason =
         inflight_ ? std::make_optional(inflight_->request.intent.reason) : std::nullopt;
-    diag.replaced_count               = replaced_count_;
-    diag.cancelled_count              = cancelled_count_;
-    diag.last_error                   = last_error_;
-    diag.image_load_request_id        = active_image_load_request_id_;
-    diag.last_rejection_reason        = last_rejection_reason_;
-    diag.last_rejected_render_reason  = last_rejected_render_reason_;
-    diag.last_ready_frame_role    = last_ready_frame_role_;
-    diag.last_ready_render_reason = last_ready_render_reason_;
-    diag.accepted_count               = accepted_count_;
-    diag.failed_count                 = failed_count_;
-    diag.ready_count                  = ready_count_;
+    diag.replaced_count              = replaced_count_;
+    diag.cancelled_count             = cancelled_count_;
+    diag.last_error                  = last_error_;
+    diag.image_load_request_id       = active_image_load_request_id_;
+    diag.last_rejection_reason       = last_rejection_reason_;
+    diag.last_rejected_render_reason = last_rejected_render_reason_;
+    diag.last_ready_frame_role       = last_ready_frame_role_;
+    diag.last_ready_render_reason    = last_ready_render_reason_;
+    diag.accepted_count              = accepted_count_;
+    diag.failed_count                = failed_count_;
+    diag.ready_count                 = ready_count_;
     return diag;
   }
+
+  /// Maps quality to the fixed coalesce slot (Interactive / Quality / Detail).
+  [[nodiscard]] static auto SlotIndexForQuality(EditorRenderQuality quality) -> std::size_t;
 
  private:
   struct PendingEntry {
@@ -115,7 +129,8 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   };
 
   auto AcceptOrReject(const EditorRenderIntent& intent, std::string* message) const -> bool;
-  void ReplacePendingWithKey(const std::string& key, std::uint64_t except_request_id);
+  /// Overwrite `slots_[slot]`; emit Replaced for any previous occupant.
+  void PlaceInSlot(std::size_t slot, PendingEntry entry);
   /// Cancel pending/in-flight work whose image_load_request_id does not match
   /// active_image_load_request_id_. Returns the running scheduler job to stop.
   auto CancelObsoleteForImageLoadMismatch() -> std::uint64_t;
@@ -123,19 +138,23 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   void               Emit(EditorRenderResult result);
   void               DeliverPendingResults();
   void               ScheduleNext();
-  [[nodiscard]] static auto PriorityRank(EditorRenderPriority priority) -> int;
-  [[nodiscard]] static auto SelectNextIndex(const std::deque<PendingEntry>& pending) -> std::size_t;
+  [[nodiscard]] auto CountOccupiedSlots() const -> std::size_t;
+  /// First occupied slot in interactive > quality > detail order, or nullopt.
+  [[nodiscard]] auto SelectNextSlotIndex() const -> std::optional<std::size_t>;
+  /// Drop cancelled / epoch-obsolete entries from all slots (O(slot count)).
+  void ScrubPendingSlots();
 
   std::shared_ptr<IEditorPipelineSchedulerPort> scheduler_;
   ResultObserver                                observer_;
   std::uint64_t                                 active_image_load_request_id_ = 0;
-  std::uint64_t                                 next_request_id_           = 1;
-  std::uint64_t                                 last_scheduled_request_id_ = 0;
-  std::deque<PendingEntry>                      pending_;
-  std::optional<PendingEntry>                   inflight_;
-  std::vector<EditorRenderResult>               results_;
-  std::vector<EditorRenderResult>               pending_delivery_;
-  std::unordered_set<std::uint64_t>             terminal_request_ids_;
+  std::uint64_t                                 next_request_id_              = 1;
+  std::uint64_t                                 last_scheduled_request_id_    = 0;
+  /// At most one pending request per quality ladder role.
+  std::array<std::optional<PendingEntry>, kQualitySlotCount> slots_{};
+  std::optional<PendingEntry>                                inflight_;
+  std::vector<EditorRenderResult>                            results_;
+  std::vector<EditorRenderResult>                            pending_delivery_;
+  std::unordered_set<std::uint64_t>                          terminal_request_ids_;
   // Diagnostics for the QML spinner/progress/error surface.
   std::size_t                                   replaced_count_  = 0;
   std::size_t                                   cancelled_count_ = 0;

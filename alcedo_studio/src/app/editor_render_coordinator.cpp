@@ -4,7 +4,6 @@
 
 #include "app/editor_render_coordinator.hpp"
 
-#include <algorithm>
 #include <utility>
 
 namespace alcedo {
@@ -18,6 +17,38 @@ void EditorRenderCoordinator::SetResultObserver(ResultObserver observer) {
   observer_ = std::move(observer);
 }
 
+auto EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality quality) -> std::size_t {
+  switch (quality) {
+    case EditorRenderQuality::Interactive:
+      return static_cast<std::size_t>(QualitySlot::Interactive);
+    case EditorRenderQuality::Quality:
+      return static_cast<std::size_t>(QualitySlot::Quality);
+    case EditorRenderQuality::Detail:
+      return static_cast<std::size_t>(QualitySlot::Detail);
+  }
+  return static_cast<std::size_t>(QualitySlot::Interactive);
+}
+
+auto EditorRenderCoordinator::CountOccupiedSlots() const -> std::size_t {
+  std::size_t n = 0;
+  for (const auto& slot : slots_) {
+    if (slot.has_value()) {
+      ++n;
+    }
+  }
+  return n;
+}
+
+auto EditorRenderCoordinator::SelectNextSlotIndex() const -> std::optional<std::size_t> {
+  // Visible work order: interactive, settled quality, then detail patch.
+  for (std::size_t i = 0; i < kQualitySlotCount; ++i) {
+    if (slots_[i].has_value()) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 auto EditorRenderCoordinator::IsObsolete(const EditorRenderIntent& intent) const -> bool {
   return intent.image_load_request_id.value != active_image_load_request_id_;
 }
@@ -28,19 +59,18 @@ auto EditorRenderCoordinator::CancelObsoleteForImageLoadMismatch() -> std::uint6
   // callback, which re-enters CancelRequest and would deadlock if called while
   // mutex_ is held (zoom animation used to hit this on every DetailRefresh).
   std::uint64_t scheduler_job_to_cancel = 0;
-  for (auto it = pending_.begin(); it != pending_.end();) {
-    if (IsObsolete(it->request.intent)) {
-      EditorRenderResult cancelled;
-      cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = it->request.request_id;
-      cancelled.intent     = it->request.intent;
-      cancelled.message    = "Cancelled: obsolete image load request";
-      Emit(std::move(cancelled));
-      terminal_request_ids_.insert(it->request.request_id);
-      it = pending_.erase(it);
-    } else {
-      ++it;
+  for (auto& slot : slots_) {
+    if (!slot.has_value() || !IsObsolete(slot->request.intent)) {
+      continue;
     }
+    EditorRenderResult cancelled;
+    cancelled.kind       = EditorRenderResultKind::Cancelled;
+    cancelled.request_id = slot->request.request_id;
+    cancelled.intent     = slot->request.intent;
+    cancelled.message    = "Cancelled: obsolete image load request";
+    Emit(std::move(cancelled));
+    terminal_request_ids_.insert(slot->request.request_id);
+    slot.reset();
   }
   if (inflight_ && IsObsolete(inflight_->request.intent)) {
     scheduler_job_to_cancel        = inflight_->scheduler_job_id;
@@ -48,7 +78,7 @@ auto EditorRenderCoordinator::CancelObsoleteForImageLoadMismatch() -> std::uint6
     if (inflight_->request.intent.cancellation) {
       inflight_->request.intent.cancellation->Cancel();
     }
-    EditorRenderResult  cancelled;
+    EditorRenderResult cancelled;
     cancelled.kind       = EditorRenderResultKind::Cancelled;
     cancelled.request_id = request_id;
     cancelled.intent     = inflight_->request.intent;
@@ -98,72 +128,20 @@ auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,
   return true;
 }
 
-auto EditorRenderCoordinator::PriorityRank(EditorRenderPriority priority) -> int {
-  switch (priority) {
-    case EditorRenderPriority::High:
-      return 3;
-    case EditorRenderPriority::Normal:
-      return 2;
-    case EditorRenderPriority::Low:
-      return 1;
+void EditorRenderCoordinator::PlaceInSlot(std::size_t slot, PendingEntry entry) {
+  if (slot >= kQualitySlotCount) {
+    slot = static_cast<std::size_t>(QualitySlot::Interactive);
   }
-  return 0;
-}
-
-auto EditorRenderCoordinator::SelectNextIndex(const std::deque<PendingEntry>& pending)
-    -> std::size_t {
-  // Visible work order: interactive frame, settled quality frame, then detail
-  // patch. Priority breaks ties without disturbing stable order.
-  std::size_t best      = 0;
-  auto        role_rank = [](FrameRole role) -> int {
-    switch (role) {
-      case FrameRole::InteractivePrimary:
-        return 3;
-      case FrameRole::QualityBase:
-        return 2;
-      case FrameRole::DetailPatch:
-        return 1;
-    }
-    return 0;
-  };
-  for (std::size_t i = 1; i < pending.size(); ++i) {
-    const auto& a  = pending[i].request.intent;
-    const auto& b  = pending[best].request.intent;
-    const int   ra = role_rank(a.frame_role);
-    const int   rb = role_rank(b.frame_role);
-    if (ra > rb) {
-      best = i;
-      continue;
-    }
-    if (ra < rb) {
-      continue;
-    }
-    if (PriorityRank(a.priority) > PriorityRank(b.priority)) {
-      best = i;
-    }
+  if (slots_[slot].has_value()) {
+    EditorRenderResult replaced;
+    replaced.kind       = EditorRenderResultKind::Replaced;
+    replaced.request_id = slots_[slot]->request.request_id;
+    replaced.intent     = slots_[slot]->request.intent;
+    replaced.message    = "Replaced by newer intent in the same quality slot";
+    Emit(std::move(replaced));
+    terminal_request_ids_.insert(slots_[slot]->request.request_id);
   }
-  return best;
-}
-
-void EditorRenderCoordinator::ReplacePendingWithKey(const std::string& key,
-                                                    std::uint64_t      except_request_id) {
-  if (key.empty()) {
-    return;
-  }
-  for (auto it = pending_.begin(); it != pending_.end();) {
-    if (it->request.request_id != except_request_id && it->request.intent.replacement_key == key) {
-      EditorRenderResult replaced;
-      replaced.kind       = EditorRenderResultKind::Replaced;
-      replaced.request_id = it->request.request_id;
-      replaced.intent     = it->request.intent;
-      replaced.message    = "Replaced by newer intent with the same replacement key";
-      Emit(std::move(replaced));
-      terminal_request_ids_.insert(it->request.request_id);
-      it = pending_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  slots_[slot] = std::move(entry);
 }
 
 void EditorRenderCoordinator::Emit(EditorRenderResult result) {
@@ -243,7 +221,7 @@ void EditorRenderCoordinator::DeliverPendingResults() {
 auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> EditorRenderResult {
   EditorRenderResult result;
   {
-    std::scoped_lock   lock(mutex_);
+    std::scoped_lock lock(mutex_);
     // Fill defaults before storing the immutable accepted request.
     EditorRenderIntent stamped = intent;
     FillRenderIntentDefaults(stamped);
@@ -266,11 +244,9 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
       request.request_id = next_request_id_++;
       request.intent     = std::move(stamped);
 
-      ReplacePendingWithKey(request.intent.replacement_key, request.request_id);
-
       PendingEntry entry;
       entry.request = request;
-      pending_.push_back(std::move(entry));
+      PlaceInSlot(SlotIndexForQuality(request.intent.quality), std::move(entry));
 
       result.kind       = EditorRenderResultKind::RequestAccepted;
       result.request_id = request.request_id;
@@ -289,19 +265,19 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id)
   std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
-    for (auto it = pending_.begin(); it != pending_.end();) {
-      if (it->request.intent.image_load_request_id.value == image_load_request_id) {
-        EditorRenderResult cancelled;
-        cancelled.kind       = EditorRenderResultKind::Cancelled;
-        cancelled.request_id = it->request.request_id;
-        cancelled.intent     = it->request.intent;
-        cancelled.message    = "Cancelled with session";
-        Emit(std::move(cancelled));
-        terminal_request_ids_.insert(it->request.request_id);
-        it = pending_.erase(it);
-      } else {
-        ++it;
+    for (auto& slot : slots_) {
+      if (!slot.has_value() ||
+          slot->request.intent.image_load_request_id.value != image_load_request_id) {
+        continue;
       }
+      EditorRenderResult cancelled;
+      cancelled.kind       = EditorRenderResultKind::Cancelled;
+      cancelled.request_id = slot->request.request_id;
+      cancelled.intent     = slot->request.intent;
+      cancelled.message    = "Cancelled with session";
+      Emit(std::move(cancelled));
+      terminal_request_ids_.insert(slot->request.request_id);
+      slot.reset();
     }
     if (inflight_ && inflight_->request.intent.image_load_request_id.value == image_load_request_id) {
       scheduler_job_to_cancel        = inflight_->scheduler_job_id;
@@ -309,7 +285,7 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id)
       if (inflight_->request.intent.cancellation) {
         inflight_->request.intent.cancellation->Cancel();
       }
-      EditorRenderResult  cancelled;
+      EditorRenderResult cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
       cancelled.request_id = request_id;
       cancelled.intent     = inflight_->request.intent;
@@ -340,19 +316,19 @@ void EditorRenderCoordinator::WaitForSessionIdle(std::uint64_t image_load_reques
   // - Do not cancel in-flight work — let it present, then take render_lock.
   {
     std::scoped_lock lock(mutex_);
-    for (auto it = pending_.begin(); it != pending_.end();) {
-      if (it->request.intent.image_load_request_id.value == image_load_request_id) {
-        EditorRenderResult cancelled;
-        cancelled.kind       = EditorRenderResultKind::Cancelled;
-        cancelled.request_id = it->request.request_id;
-        cancelled.intent     = it->request.intent;
-        cancelled.message    = "Superseded while queueing behind in-flight frame";
-        Emit(std::move(cancelled));
-        terminal_request_ids_.insert(it->request.request_id);
-        it = pending_.erase(it);
-      } else {
-        ++it;
+    for (auto& slot : slots_) {
+      if (!slot.has_value() ||
+          slot->request.intent.image_load_request_id.value != image_load_request_id) {
+        continue;
       }
+      EditorRenderResult cancelled;
+      cancelled.kind       = EditorRenderResultKind::Cancelled;
+      cancelled.request_id = slot->request.request_id;
+      cancelled.intent     = slot->request.intent;
+      cancelled.message    = "Superseded while queueing behind in-flight frame";
+      Emit(std::move(cancelled));
+      terminal_request_ids_.insert(slot->request.request_id);
+      slot.reset();
     }
   }
   DeliverPendingResults();
@@ -371,18 +347,18 @@ auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
   {
     std::scoped_lock lock(mutex_);
     if (terminal_request_ids_.count(request_id) == 0) {
-      for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-        if (it->request.request_id != request_id) {
+      for (auto& slot : slots_) {
+        if (!slot.has_value() || slot->request.request_id != request_id) {
           continue;
         }
         EditorRenderResult cancelled;
         cancelled.kind       = EditorRenderResultKind::Cancelled;
         cancelled.request_id = request_id;
-        cancelled.intent     = it->request.intent;
+        cancelled.intent     = slot->request.intent;
         cancelled.message    = "Cancelled by request id";
         Emit(std::move(cancelled));
         terminal_request_ids_.insert(request_id);
-        pending_.erase(it);
+        slot.reset();
         ScheduleNext();
         did_cancel = true;
         break;
@@ -411,42 +387,48 @@ auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
   return did_cancel;
 }
 
-void EditorRenderCoordinator::ScheduleNext() {
-  if (inflight_ || pending_.empty() || !scheduler_) {
-    return;
-  }
-
-  // Drop cancelled pending entries before selecting.
-  for (auto it = pending_.begin(); it != pending_.end();) {
-    if (it->request.intent.cancellation && it->request.intent.cancellation->IsCancelled()) {
+void EditorRenderCoordinator::ScrubPendingSlots() {
+  for (auto& slot : slots_) {
+    if (!slot.has_value()) {
+      continue;
+    }
+    if (slot->request.intent.cancellation && slot->request.intent.cancellation->IsCancelled()) {
       EditorRenderResult cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = it->request.request_id;
-      cancelled.intent     = it->request.intent;
+      cancelled.request_id = slot->request.request_id;
+      cancelled.intent     = slot->request.intent;
       cancelled.message    = "Cancelled by token before schedule";
       Emit(std::move(cancelled));
-      terminal_request_ids_.insert(it->request.request_id);
-      it = pending_.erase(it);
-    } else if (IsObsolete(it->request.intent)) {
+      terminal_request_ids_.insert(slot->request.request_id);
+      slot.reset();
+      continue;
+    }
+    if (IsObsolete(slot->request.intent)) {
       EditorRenderResult cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = it->request.request_id;
-      cancelled.intent     = it->request.intent;
+      cancelled.request_id = slot->request.request_id;
+      cancelled.intent     = slot->request.intent;
       cancelled.message    = "Cancelled: obsolete image load request before schedule";
       Emit(std::move(cancelled));
-      terminal_request_ids_.insert(it->request.request_id);
-      it = pending_.erase(it);
-    } else {
-      ++it;
+      terminal_request_ids_.insert(slot->request.request_id);
+      slot.reset();
     }
   }
-  if (pending_.empty()) {
+}
+
+void EditorRenderCoordinator::ScheduleNext() {
+  if (inflight_ || !scheduler_) {
     return;
   }
 
-  const std::size_t index = SelectNextIndex(pending_);
-  PendingEntry      entry = pending_[index];
-  pending_.erase(pending_.begin() + static_cast<std::ptrdiff_t>(index));
+  ScrubPendingSlots();
+  const auto next_slot = SelectNextSlotIndex();
+  if (!next_slot.has_value()) {
+    return;
+  }
+
+  PendingEntry entry = std::move(*slots_[*next_slot]);
+  slots_[*next_slot].reset();
 
   const std::uint64_t job_id = scheduler_->Schedule(entry.request);
   if (job_id == 0) {
