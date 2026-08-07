@@ -355,5 +355,26 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(scheduler->session_context()->presentation_sink_id, 10u);
 }
 
+TEST(EditorSessionRenderSchedulerPortTest,
+     ForwardScheduleCompletionInvokedWithoutReverseCoordinator) {
+  auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->InstallSessionContext(MakeReadyContext(7, 22, 11));
+
+  std::atomic<int> completed{0};
+  ASSERT_NE(scheduler->Schedule(
+                MakeRequest(77, 7),
+                [&](bool /*success*/, std::string /*message*/) {
+                  completed.fetch_add(1, std::memory_order_relaxed);
+                }),
+            0u);
+  scheduler->WaitForSessionIdle(7);
+
+  // Fixture context has no real RAW bytes; pipeline may fail — the residual
+  // cleanup claim is forward completion without SetCoordinator / weak_ptr.
+  EXPECT_EQ(completed.load(), 1);
+}
+
 }  // namespace
 }  // namespace alcedo::ui

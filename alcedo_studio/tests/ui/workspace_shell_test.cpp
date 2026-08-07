@@ -141,12 +141,7 @@ auto InstallTestFrameProducer(ApplicationModuleHost& host,
     return host.editor_session() ? host.editor_session()->presentation_frame_sink() : nullptr;
   });
   harness->SetFrameProducer(std::move(producer));
-  harness->SetCompletionNotifier(
-      [coordinator](std::uint64_t request_id, bool success, std::string message) {
-        coordinator->NotifySchedulerCompleted(request_id, success, std::move(message),
-                                              /*schedule_next_from_pool=*/false);
-        coordinator->Pump();
-      });
+  // Forward completion: coordinator installs on_complete at Schedule; no reverse notifier.
   coordinator->SetPipelineSchedulerPort(std::move(harness));
   return true;
 }

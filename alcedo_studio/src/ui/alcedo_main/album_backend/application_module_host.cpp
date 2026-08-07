@@ -228,7 +228,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
         session_checkpoint, session_thumbnail, save_coordinator,
         std::make_shared<QtEditorSessionCommandExecutor>(this));
-    session_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
+    // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }
   RecordConstruction("EditorSessionService", editor_session_runtime_->service.get());

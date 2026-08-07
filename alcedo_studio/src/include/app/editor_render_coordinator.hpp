@@ -19,13 +19,20 @@
 
 namespace alcedo {
 
+/// Forward completion installed by the coordinator at Schedule time.
+/// Production adapters invoke this instead of holding a reverse coordinator pointer.
+using EditorPipelineScheduleCompletion =
+    std::function<void(bool success, std::string message)>;
+
 /// Small scheduler seam used by production and deterministic coordinator tests.
 class IEditorPipelineSchedulerPort {
  public:
-  virtual ~IEditorPipelineSchedulerPort()                                    = default;
+  virtual ~IEditorPipelineSchedulerPort() = default;
   /// Returns a scheduler-side job id, or 0 on immediate failure.
-  virtual auto Schedule(const EditorRenderRequest& request) -> std::uint64_t = 0;
-  virtual void Cancel(std::uint64_t scheduler_job_id)                        = 0;
+  /// `on_complete` is the only control-plane path back to the coordinator.
+  virtual auto Schedule(const EditorRenderRequest& request,
+                        EditorPipelineScheduleCompletion on_complete = {}) -> std::uint64_t = 0;
+  virtual void Cancel(std::uint64_t scheduler_job_id) = 0;
   virtual void WaitForSessionIdle(std::uint64_t /*session_epoch*/) {}
   /// Bind stable render inputs for the open/switched image (epoch + identity +
   /// presentation sink id). Production loads image/buffer/pipeline once; fakes no-op.

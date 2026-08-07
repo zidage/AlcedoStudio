@@ -22,12 +22,14 @@ namespace {
 
 class RecordingScheduler final : public IEditorPipelineSchedulerPort {
  public:
-  auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
+  auto Schedule(const EditorRenderRequest& request,
+                EditorPipelineScheduleCompletion on_complete = {}) -> std::uint64_t override {
     if (fail_next_) {
       fail_next_ = false;
       return 0;
     }
     scheduled_.push_back(request);
+    last_completion_ = std::move(on_complete);
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
@@ -47,32 +49,32 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     PresentationSinkId presentation_sink_id = 0;
   };
 
-  std::vector<EditorRenderRequest> scheduled_;
-  std::vector<std::uint64_t>       cancelled_;
-  std::vector<std::uint64_t>       waited_sessions_;
-  std::vector<BindCall>            bind_calls_;
-  int                              clear_count_ = 0;
-  std::uint64_t                    next_job_  = 0;
-  bool                             fail_next_ = false;
+  std::vector<EditorRenderRequest>     scheduled_;
+  std::vector<std::uint64_t>           cancelled_;
+  std::vector<std::uint64_t>           waited_sessions_;
+  std::vector<BindCall>                bind_calls_;
+  EditorPipelineScheduleCompletion     last_completion_;
+  int                                  clear_count_ = 0;
+  std::uint64_t                        next_job_    = 0;
+  bool                                 fail_next_   = false;
 };
 
 auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
                 std::uint64_t session_gen = 1) -> EditorRenderIntent {
   EditorRenderIntent intent;
-  intent.element_id         = 10;
-  intent.image_id           = 20;
+  intent.element_id            = 10;
+  intent.image_id              = 20;
   intent.image_load_request_id = ImageLoadRequestId{session_gen};
-  intent.quality            = quality;
-  intent.priority           = priority;
-  intent.frame_role         = FrameRoleForQuality(quality);
-  intent.replacement_key    = DefaultReplacementKey(quality);
-  intent.reason             = EditorRenderReason::InteractiveAdjustment;
+  intent.quality               = quality;
+  intent.priority              = priority;
+  intent.frame_role            = FrameRoleForQuality(quality);
+  intent.reason                = EditorRenderReason::InteractiveAdjustment;
   return intent;
 }
 
 // Phase 5D: view-change intent (zoom/pan/resize/crop-rotation/ROI). Carries the
 // reason that drives the coordinator's reuse-vs-render decision; quality still
-// sets frame_role/replacement_key like a service-produced intent.
+// sets frame_role like a service-produced intent.
 auto MakeViewIntent(EditorRenderReason reason, EditorRenderQuality quality,
                     EditorRenderPriority priority = EditorRenderPriority::Normal,
                     std::uint64_t session_gen = 1) -> EditorRenderIntent {
@@ -238,8 +240,7 @@ TEST_F(EditorRenderCoordinatorTest, CancellationTokenStopsAnInflightRequestAndSt
   const auto inflight          = coordinator_->Submit(inflight_intent);
   ASSERT_TRUE(coordinator_->has_inflight());
 
-  auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  pending.replacement_key = "quality-after-cancel";
+  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
   const auto pending_result = coordinator_->Submit(pending);
   ASSERT_EQ(coordinator_->pending_count(), 1u);
 
@@ -272,8 +273,7 @@ TEST_F(EditorRenderCoordinatorTest, ObserverRunsAfterQueueStateIsStable) {
   });
 
   auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High);
-  pending.replacement_key = "observer-follow-up";
-  const auto accepted     = coordinator_->Submit(pending);
+  const auto accepted = coordinator_->Submit(pending);
 
   EXPECT_TRUE(observer_cancelled);
   ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
@@ -343,7 +343,6 @@ TEST_F(EditorRenderCoordinatorTest, ObserverExceptionDoesNotDisableLaterDelivery
   int delivered = 0;
   coordinator_->SetResultObserver([&](const EditorRenderResult&) { ++delivered; });
   auto next            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  next.replacement_key = "after-observer-failure";
   EXPECT_EQ(coordinator_->Submit(next).kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_GT(delivered, 0);
 }
@@ -402,7 +401,6 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
   ASSERT_TRUE(coordinator_->has_inflight());
 
   auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  pending.replacement_key = "quality";
   const auto pending_result = coordinator_->Submit(pending);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
@@ -467,14 +465,12 @@ TEST_F(EditorRenderCoordinatorTest,
 TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
   EditorRenderIntent intent =
       MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  intent.replacement_key.clear();
   intent.adjustment.fingerprint = "tone:v1";
   intent.adjustment.params_json = R"({"exposure":0.5})";
   intent.adjustment.patches.push_back(EditorAdjustmentPatch{"exposure", R"({"v":0.5})", false});
 
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
-  EXPECT_EQ(accepted.intent.replacement_key, "quality");
   EXPECT_EQ(accepted.intent.frame_role, FrameRole::QualityBase);
   EXPECT_EQ(accepted.intent.adjustment.fingerprint, "tone:v1");
   ASSERT_EQ(accepted.intent.adjustment.patches.size(), 1u);
@@ -484,8 +480,25 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
   ASSERT_FALSE(scheduler_->scheduled_.empty());
   const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
   EXPECT_EQ(scheduled_intent.adjustment, accepted.intent.adjustment);
-  EXPECT_EQ(scheduled_intent.replacement_key, accepted.intent.replacement_key);
   EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ForwardScheduleCompletionDrivesFrameReadyWithoutReversePort) {
+  const auto accepted = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_TRUE(scheduler_->last_completion_);
+
+  scheduler_->last_completion_(true, "Frame ready");
+  EXPECT_FALSE(coordinator_->has_inflight());
+
+  int ready = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.kind == EditorRenderResultKind::FrameReady && r.request_id == accepted.request_id) {
+      ++ready;
+    }
+  }
+  EXPECT_EQ(ready, 1);
 }
 
 TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
@@ -556,7 +569,8 @@ TEST_F(EditorRenderCoordinatorTest, DetailRefreshSchedulesDetailPatch) {
 TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelWaitsForBlockingRequestBeforeNextWork) {
   class ReentrantCancelScheduler final : public IEditorPipelineSchedulerPort {
    public:
-    auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
+    auto Schedule(const EditorRenderRequest& request,
+                  EditorPipelineScheduleCompletion /*on_complete*/ = {}) -> std::uint64_t override {
       scheduled_.push_back(request);
       tokens_[++next_job_] = request.intent.cancellation;
       return next_job_;

@@ -524,7 +524,16 @@ void EditorRenderCoordinator::ScheduleNext() {
   PendingEntry entry = std::move(*slots_[*next_slot]);
   slots_[*next_slot].reset();
 
-  const std::uint64_t job_id = scheduler_->Schedule(entry.request);
+  const auto request_id = entry.request.request_id;
+  // Forward completion only: adapter must not hold a reverse coordinator pointer.
+  // Pool completion defers ScheduleNext (false) then Pump so present can settle.
+  EditorPipelineScheduleCompletion on_complete =
+      [this, request_id](bool success, std::string message) {
+        NotifySchedulerCompleted(request_id, success, std::move(message),
+                                 /*schedule_next_from_pool=*/false);
+        Pump();
+      };
+  const std::uint64_t job_id = scheduler_->Schedule(entry.request, std::move(on_complete));
   if (job_id == 0) {
     EditorRenderResult failed;
     failed.kind       = EditorRenderResultKind::Failed;

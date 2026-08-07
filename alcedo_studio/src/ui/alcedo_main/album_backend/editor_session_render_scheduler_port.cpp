@@ -131,12 +131,6 @@ EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
   }
 }
 
-void EditorSessionRenderSchedulerPort::SetCoordinator(
-    std::weak_ptr<alcedo::EditorRenderCoordinator> coordinator) {
-  std::scoped_lock lock(mutex_);
-  coordinator_ = std::move(coordinator);
-}
-
 void EditorSessionRenderSchedulerPort::SetSinkResolver(EditorSessionFrameSinkResolver resolver) {
   std::scoped_lock lock(mutex_);
   sink_resolver_ = std::move(resolver);
@@ -215,8 +209,9 @@ auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
          context.pipeline_guard && context.pipeline_guard->pipeline_;
 }
 
-auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderRequest& request)
-    -> std::uint64_t {
+auto EditorSessionRenderSchedulerPort::Schedule(
+    const alcedo::EditorRenderRequest& request,
+    alcedo::EditorPipelineScheduleCompletion on_complete) -> std::uint64_t {
   if (!CanProduceFrame(request)) {
     TraceDetailRequest("scheduler-reject", request, "no-frame-source");
     return 0;
@@ -229,9 +224,10 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
       TraceDetailRequest("scheduler-reject", request, "busy-or-shutdown");
       return 0;
     }
-    job.job_id   = ++next_job_id_;
-    job.request  = request;
-    running_job_ = job;
+    job.job_id      = ++next_job_id_;
+    job.request     = request;
+    job.on_complete = std::move(on_complete);
+    running_job_    = job;
     scheduled_.push_back(request);
   }
   TraceDetailRequest("scheduler-queued", request);
@@ -565,7 +561,8 @@ auto EditorSessionRenderSchedulerPort::JobIsCancelled(const Job& job) const -> b
 
 void EditorSessionRenderSchedulerPort::FinishJob(const Job& job, bool success,
                                                  std::string message) {
-  bool should_complete = false;
+  bool                                     should_complete = false;
+  alcedo::EditorPipelineScheduleCompletion on_complete;
   {
     std::scoped_lock lock(mutex_);
     if (running_job_ && running_job_->job_id == job.job_id) {
@@ -577,31 +574,26 @@ void EditorSessionRenderSchedulerPort::FinishJob(const Job& job, bool success,
           message = "Cancelled during execution";
         }
       }
+      on_complete = std::move(running_job_->on_complete);
       running_job_.reset();
       should_complete = true;
     }
     jobs_changed_.notify_all();
   }
   if (should_complete) {
-    CompleteJob(job.request, success, std::move(message));
+    CompleteJob(job.request, success, std::move(message), std::move(on_complete));
   }
 }
 
-void EditorSessionRenderSchedulerPort::CompleteJob(const alcedo::EditorRenderRequest& request,
-                                                   bool success, std::string message) {
-  std::shared_ptr<alcedo::EditorRenderCoordinator> coordinator;
-  {
-    std::scoped_lock lock(mutex_);
-    coordinator = coordinator_.lock();
-  }
-  if (!coordinator) {
+void EditorSessionRenderSchedulerPort::CompleteJob(
+    const alcedo::EditorRenderRequest& /*request*/, bool success, std::string message,
+    alcedo::EditorPipelineScheduleCompletion on_complete) {
+  if (!on_complete) {
     return;
   }
-  // Pipeline-pool completion: do not ScheduleNext inline. The Ready frame just
-  // hit present; let the display consume it before the next produce starts.
-  coordinator->NotifySchedulerCompleted(request.request_id, success, std::move(message),
-                                        /*schedule_next_from_pool=*/false);
-  coordinator->Pump();
+  // Forward-only: coordinator installed this at Schedule. Pool completion already
+  // deferred ScheduleNext; the callback typically ends with Pump().
+  on_complete(success, std::move(message));
 }
 
 }  // namespace alcedo::ui

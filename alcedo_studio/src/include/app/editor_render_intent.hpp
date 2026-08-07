@@ -18,7 +18,7 @@
 namespace alcedo {
 
 /// Why the editor requested a pipeline render. Maps to coordinator policy
-/// (priority, quality ladder, replacement key), not to QML control identity.
+/// (priority, quality ladder / fixed slots), not to QML control identity.
 enum class EditorRenderReason : std::uint8_t {
   InitialFrame = 0,
   InteractiveAdjustment,
@@ -98,8 +98,6 @@ struct EditorRenderIntent {
   FrameRole                                      frame_role       = FrameRole::InteractivePrimary;
   EditorRenderQuality                            quality  = EditorRenderQuality::Interactive;
   EditorRenderPriority                           priority = EditorRenderPriority::Normal;
-  /// Same key replaces prior pending work (e.g. "interactive", "quality", "detail").
-  std::string                                    replacement_key;
   std::shared_ptr<EditorRenderCancellationToken> cancellation;
   PresentationSinkId                             presentation_sink_id  = 0;
   // Geometry-panel previews keep the full source frame visible while the
@@ -120,18 +118,6 @@ struct EditorRenderResult {
   EditorRenderIntent     intent{};
   std::string            message;
 };
-
-[[nodiscard]] inline auto DefaultReplacementKey(EditorRenderQuality quality) -> const char* {
-  switch (quality) {
-    case EditorRenderQuality::Interactive:
-      return "interactive";
-    case EditorRenderQuality::Quality:
-      return "quality";
-    case EditorRenderQuality::Detail:
-      return "detail";
-  }
-  return "interactive";
-}
 
 [[nodiscard]] inline auto FrameRoleForQuality(EditorRenderQuality quality) -> FrameRole {
   switch (quality) {
@@ -229,19 +215,13 @@ struct EditorRenderResult {
          reason != EditorRenderReason::DetailRefresh;
 }
 
-/// Fill role/replacement defaults derived from quality before Submit stores the
+/// Fill frame-role defaults derived from quality before Submit stores the
 /// intent. Producers should set reason/quality/priority (or accept reason defaults).
+/// Coalesce uses fixed quality slots — no string replacement key.
 inline void FillRenderIntentDefaults(EditorRenderIntent& intent) {
-  // Align InteractivePrimary with non-interactive quality (legacy coordinator policy).
-  if (intent.frame_role == FrameRole::InteractivePrimary &&
-      intent.quality != EditorRenderQuality::Interactive) {
+  // Align InteractivePrimary with quality ladder role.
+  if (intent.frame_role == FrameRole::InteractivePrimary) {
     intent.frame_role = FrameRoleForQuality(intent.quality);
-  } else if (intent.frame_role == FrameRole::InteractivePrimary &&
-             intent.quality == EditorRenderQuality::Interactive) {
-    intent.frame_role = FrameRoleForQuality(intent.quality);
-  }
-  if (intent.replacement_key.empty()) {
-    intent.replacement_key = DefaultReplacementKey(intent.quality);
   }
 }
 

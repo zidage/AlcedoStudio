@@ -59,7 +59,8 @@ auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
 /// by the test through `EditorRenderCoordinator::Notify*`.
 class RecordingScheduler final : public IEditorPipelineSchedulerPort {
  public:
-  auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
+  auto Schedule(const EditorRenderRequest& request,
+                EditorPipelineScheduleCompletion /*on_complete*/ = {}) -> std::uint64_t override {
     scheduled_.push_back(request);
     return ++next_job_;
   }

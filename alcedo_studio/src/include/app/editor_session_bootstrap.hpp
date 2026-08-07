@@ -97,7 +97,8 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
     PresentationSinkId presentation_sink_id  = 0;
   };
 
-  auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
+  auto Schedule(const EditorRenderRequest& request,
+                EditorPipelineScheduleCompletion /*on_complete*/ = {}) -> std::uint64_t override {
     scheduled_.push_back(request);
     return ++next_job_id_;
   }
