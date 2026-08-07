@@ -2,8 +2,10 @@
 
 Date: 2026-08-06
 
-Status: Phases R1–R4 complete on branch `feature/editor_render_simplify`.
-Delivery is one feature branch with sequential commits (not one GitHub PR per phase).
+Status: Phases R1–R4 complete; optional residual cleanup (completion direction +
+`replacement_key`) complete on branch `feature/editor_render_simplify`. Interactive-app
+verification follow-up intentionally deferred. Delivery is one feature branch with
+sequential commits (not one GitHub PR per phase).
 
 Primary owner: Alcedo Studio editor session render path.
 
@@ -107,9 +109,9 @@ Invariants:
 2. **One execution layer.** `PipelineScheduler` is the only thread pool for editor preview work.
    The session port must not own a second worker or second FIFO of jobs.
 3. **Forward completion.** Task completion notifies the coordinator through a completion path
-   established when the job is submitted (prefer `PipelineTask::on_complete_`). Long term, remove
-   the port’s stored reverse `weak_ptr` to the coordinator if the submit interface can carry the
-   callback instead.
+   established when the job is submitted (`EditorPipelineScheduleCompletion` on
+   `IEditorPipelineSchedulerPort::Schedule`, fed by `PipelineTask::on_complete_`). The production
+   adapter does not store a reverse `weak_ptr` to the coordinator.
 4. **Pipeline owns frame binding.** Production `BindFrameSubmission` stays inside pipeline task
    setup / apply. Upper layers do not pre-bind “for convenience.”
 5. **Session-scoped render inputs.** Image, input buffer, pipeline guard, and sink identity for
@@ -527,9 +529,9 @@ Suite totals: `EditorSessionRenderSchedulerPortTest` 14/14; `EditorRenderCoordin
 
 No responsibility split needed; harness lives only under `tests/support/`.
 
-**Remaining gaps:** reverse `SetCoordinator` / `NotifySchedulerCompleted` and
-`replacement_key` cleanup remain under **Optional follow-up**. Interactive-app / real-RAW
-open-switch latency evidence remains under **Optional follow-up (verification)**.
+**Remaining gaps:** interactive-app / real-RAW open-switch latency evidence remains under
+**Optional follow-up (verification)** (deferred). Completion direction and `replacement_key`
+cleanup closed 2026-08-07.
 
 #### Session context / sink (from R3, if not closed in R4)
 
@@ -538,20 +540,20 @@ open-switch latency evidence remains under **Optional follow-up (verification)**
 
 ### Optional follow-up — residuals and ownership notes
 
-Work below is **not** optional in the sense of “forget it”: it is sequenced after R4 (or in
-parallel only if R4 does not absorb the item). Each line is a tracked task from R1–R3 residuals.
+Work below is sequenced after R4. Completion direction and intent-field cleanup are done
+(2026-08-07). Interactive-app verification remains deferred by request.
 
 #### Completion direction (from R1)
 
-- [ ] Carry completion on the submit path (`PipelineTask::on_complete_` / submit callback) so the
+- [x] Carry completion on the submit path (`PipelineTask::on_complete_` / submit callback) so the
   production adapter no longer needs reverse `SetCoordinator` +
   `NotifySchedulerCompleted` via `weak_ptr` to the coordinator.
-- [ ] Delete reverse coordinator pointer from `EditorSessionRenderSchedulerPort` once the forward
+- [x] Delete reverse coordinator pointer from `EditorSessionRenderSchedulerPort` once the forward
   path is the only control plane.
 
 #### Intent field cleanup (from R2)
 
-- [ ] Remove `EditorRenderIntent::replacement_key` (and `DefaultReplacementKey` / fill path) if no
+- [x] Remove `EditorRenderIntent::replacement_key` (and `DefaultReplacementKey` / fill path) if no
   producer/diagnostic consumer still requires the string; slots already own coalesce.
 
 #### Verification (from R3)
@@ -562,11 +564,79 @@ parallel only if R4 does not absorb the item). Each line is a tracked task from 
 - [ ] If lazy-once first-frame load is too slow, promote payload load into
   `BindSessionContext` (eager bind) and re-measure; keep the single-load invariant.
 
+**Deferred by request (2026-08-07 residual cleanup):** interactive-app / real-RAW open-switch
+latency evidence is not part of this cleanup pass.
+
 #### Raw pointer ownership notes (pre-existing)
 
 - [ ] Document owner lifetimes for `EditorSessionController` bare pointers (`editor_`,
   `session_backend_`, `interaction_policy_`); keep `QPointer` for QML viewport objects.
 - [ ] No mass ownership redesign unless a concrete use-after-free appears.
+
+##### Optional residual cleanup completion record (2026-08-07)
+
+**Status:** complete — forward Schedule completion + `replacement_key` removal; verification
+intentionally skipped.
+
+**Primary success call chain:**
+
+```text
+Coordinator::ScheduleNext
+  -> IEditorPipelineSchedulerPort::Schedule(request, on_complete)
+       · on_complete captures NotifySchedulerCompleted(..., schedule_next_from_pool=false) + Pump
+  -> EditorSessionRenderSchedulerPort stores on_complete on Job (no coordinator weak_ptr)
+  -> PipelineScheduler::ScheduleTask -> PipelineTask::on_complete_
+  -> FinishJob -> CompleteJob invokes Schedule on_complete
+  -> FrameReady / Failed / Cancelled + Pump next slot
+```
+
+**Primary failure call chain:**
+
+```text
+Schedule reject / pipeline empty / cancel
+  -> FinishJob(success=false, message)
+  -> on_complete(false, message)  // still forward-only
+  -> NotifySchedulerCompleted -> Failed/Cancelled; Pump may start next slot
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ForwardScheduleCompletionDrivesFrameReadyWithoutReversePort` | `EditorRenderCoordinatorTest` | PASS |
+| `ForwardScheduleCompletionInvokedWithoutReverseCoordinator` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `SubmitDoesNotMutateStoredIntentAfterAccept` (no replacement_key) | `EditorRenderCoordinatorTest` | PASS |
+| Full port suite | `EditorSessionRenderSchedulerPortTest` | PASS 15/15 |
+| Full coordinator suite | `EditorRenderCoordinatorTest` | PASS 32/32 |
+| Full render controller suite | `EditorSessionRenderControllerTest` | PASS 15/15 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionRenderSchedulerPortTest EditorRenderCoordinatorTest EditorSessionRenderControllerTest
+ctest --test-dir build/debug -R "EditorSessionRenderSchedulerPortTest|EditorRenderCoordinatorTest|EditorSessionRenderControllerTest" --output-on-failure
+```
+
+Suite totals: port 15/15; coordinator 32/32; render controller 15/15 (62/62 combined).
+
+**Checklist / exit condition:** completion-direction and intent-field boxes checked; verification
+left unchecked by explicit request.
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `editor_render_coordinator.hpp` | ~201 |
+| `editor_render_coordinator.cpp` | ~600 |
+| `editor_render_intent.hpp` | ~228 |
+| `editor_session_render_scheduler_port.hpp` | ~130 |
+| `editor_session_render_scheduler_port.cpp` | ~599 |
+| `harness_completing_pipeline_scheduler_port.hpp` | ~224 |
+
+No responsibility split needed; harness no longer owns a reverse notifier plane.
+
+**Remaining gaps:** interactive-app verification (deferred); raw-pointer ownership notes
+(documentation-only, pre-existing).
 
 ## Acceptance criteria
 
@@ -587,7 +657,7 @@ parallel only if R4 does not absorb the item). Each line is a tracked task from 
 |----------|--------|-----------|
 | How many queues? | One coalesce layer (coordinator) | Second queue was only a blocking adapter artifact |
 | Who runs pipeline work? | `PipelineScheduler` only | Already owns the pool and cancel checks |
-| Completion direction | Task `on_complete_` forward | Avoids a second control plane; reverse weak_ptr is transitional |
+| Completion direction | Task `on_complete_` + Schedule callback forward | Avoids a second control plane; reverse weak_ptr removed |
 | Coalesce key | Fixed interactive / quality / detail slots | Matches real ladder; string keys add nothing |
 | Image handles | Session context at open/switch | Avoid per-frame pool lookups |
 | Tests | Mock port or sink boundary | Do not grow production if-test branches |
@@ -692,3 +762,23 @@ Focused tests (all passed):
 
 Next: Optional follow-ups (completion direction, `replacement_key` cleanup,
 interactive-app verification).
+
+### 2026-08-07 — Optional residual cleanup complete
+
+Branch: `feature/editor_render_simplify`.
+
+Code:
+
+- `IEditorPipelineSchedulerPort::Schedule` carries `EditorPipelineScheduleCompletion`;
+  coordinator installs forward completion at `ScheduleNext` (no reverse port pointer);
+- Removed `EditorSessionRenderSchedulerPort::SetCoordinator` / `coordinator_` weak_ptr;
+- Harness uses Schedule `on_complete` only (no `SetCompletionNotifier`);
+- Removed `EditorRenderIntent::replacement_key` / `DefaultReplacementKey` / fill path.
+
+Focused tests (all passed):
+
+- `EditorSessionRenderSchedulerPortTest` 15/15
+- `EditorRenderCoordinatorTest` 32/32
+- `EditorSessionRenderControllerTest` 15/15
+
+Deferred: interactive-app / real-RAW verification follow-up (by request).

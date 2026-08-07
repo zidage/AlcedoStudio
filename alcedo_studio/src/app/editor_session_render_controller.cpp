@@ -82,7 +82,6 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.quality               = DefaultQualityForReason(command.reason);
   intent.priority              = DefaultPriorityForReason(command.reason);
   intent.frame_role            = FrameRoleForQuality(intent.quality);
-  intent.replacement_key       = DefaultReplacementKey(intent.quality);
   intent.adjustment            = command.adjustment;
   intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
   intent.requested_width       = presentation_width_;
@@ -437,10 +436,9 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
   qb_command.adjustment   = pending_initial_adjustment_;
   auto intent             = MakeRenderIntent(qb_command, identity, load_request);
   if (intent && deps_.render && PresentationTargetReady()) {
-    intent->quality         = EditorRenderQuality::Quality;
-    intent->frame_role      = FrameRole::QualityBase;
-    intent->priority        = EditorRenderPriority::Normal;
-    intent->replacement_key = DefaultReplacementKey(EditorRenderQuality::Quality);
+    intent->quality    = EditorRenderQuality::Quality;
+    intent->frame_role = FrameRole::QualityBase;
+    intent->priority   = EditorRenderPriority::Normal;
     FillRenderIntentDefaults(*intent);
     deps_.render->SetActiveImageLoadRequest(load_request.value);
     const auto qb_routed = deps_.render->Submit(*intent);
