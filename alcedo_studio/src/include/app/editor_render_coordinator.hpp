@@ -87,7 +87,10 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   auto CancelRequest(std::uint64_t request_id) -> bool;
 
   /// Mark the blocking scheduler call complete and start the next request.
-  void NotifySchedulerCompleted(std::uint64_t request_id, bool success, std::string message = {});
+  /// `schedule_next_from_pool=false` defers ScheduleNext (present handoff);
+  /// production calls true only from a scheduler-pool callback tail.
+  void NotifySchedulerCompleted(std::uint64_t request_id, bool success, std::string message = {},
+                                bool schedule_next_from_pool = true);
 
   /// Process pending slots: schedule at most one job when idle.
   void Pump();

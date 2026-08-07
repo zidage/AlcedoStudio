@@ -621,7 +621,11 @@ void EditorSessionRenderSchedulerPort::CompleteJob(const alcedo::EditorRenderReq
   if (!coordinator) {
     return;
   }
-  coordinator->NotifySchedulerCompleted(request.request_id, success, std::move(message));
+  // Pipeline-pool completion: do not ScheduleNext inline. The Ready frame just
+  // hit present; let the display consume it before the next produce starts.
+  coordinator->NotifySchedulerCompleted(request.request_id, success, std::move(message),
+                                        /*schedule_next_from_pool=*/false);
+  coordinator->Pump();
 }
 
 }  // namespace alcedo::ui

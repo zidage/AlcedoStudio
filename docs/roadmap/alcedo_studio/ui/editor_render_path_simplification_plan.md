@@ -380,6 +380,59 @@ No responsibility split needed; context lives on the production adapter only.
 | No interactive-app / real-RAW open-switch latency evidence for context bind + lazy-once load | **Optional follow-up (verification)** |
 | First frame after bind still pays one payload load (lazy-once) | Accepted R3 design; only re-open if open latency measurement fails in verification follow-up |
 
+##### Phase R3 re-land completion record (2026-08-07)
+
+**Status:** complete — R3 re-applied after a temporary full revert used while fixing vsync /
+frame-production desync. Restored commit content is the final R3 edition: session context bind
+plus `ImageBuffer` shared encoded payload (`ShareEncodedBuffer`) so quality-ladder frames do not
+deep-copy multi-MB RAW bytes.
+
+**Why re-land:** R3 was reverted (`da95f574`) to isolate a present/vsync overlap issue. That
+issue is addressed separately by deferring `ScheduleNext` on pipeline-pool completion
+(`NotifySchedulerCompleted(..., schedule_next_from_pool=false)` + `Pump`), kept in the working
+tree alongside this re-land. R3 itself is restored as commit `2d5aef7b` (revert of the revert of
+`072d3024`).
+
+**Primary success call chain:** unchanged from the 2026-08-07 R3 record above
+(`RouteInitialRender` → bind → `EnsureContextForRequest` lazy-once →
+`ShareEncodedBuffer` on Apply).
+
+**Primary failure call chain:** unchanged (missing bind/pool → `FinishJob(false)` → Failed).
+
+**What was proven (re-run after re-land):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `BindSessionContextRecordsIdentityWithoutPoolRead` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `ClearSessionContextDropsBoundIdentity` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `ImageSwitchBindReplacesPriorContextPayload` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `RebindSameImageIdentityKeepsPayloadWithoutReload` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `InstalledContextAllowsScheduleWithoutImagePoolService` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `HotPathAfterInstalledContextDoesNotInvokeImagePoolResolver` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `BoundIdentityWithoutPayloadStillRejectsWhenPoolUnavailable` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `RouteInitialRenderBindsSessionContextAtOpen` | `EditorSessionRenderControllerTest` | PASS |
+| `ResetForNewImageClearsSessionRenderContext` | `EditorSessionRenderControllerTest` | PASS |
+| `BindAndClearSessionRenderContextForwardToScheduler` | `EditorRenderCoordinatorTest` | PASS |
+| Full port suite | `EditorSessionRenderSchedulerPortTest` | PASS 12/12 |
+| Full coordinator suite | `EditorRenderCoordinatorTest` | PASS 31/31 |
+| Full render controller suite | `EditorSessionRenderControllerTest` | PASS 15/15 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionRenderSchedulerPortTest EditorRenderCoordinatorTest EditorSessionRenderControllerTest
+ctest --test-dir build/debug -R "EditorSessionRenderSchedulerPortTest|EditorRenderCoordinatorTest|EditorSessionRenderControllerTest" --output-on-failure
+```
+
+Suite totals: `EditorSessionRenderSchedulerPortTest` 12/12; `EditorRenderCoordinatorTest` 31/31;
+`EditorSessionRenderControllerTest` 15/15 (58/58 combined).
+
+**Checklist / exit condition:** all R3 boxes remain checked; acceptance criterion 6 re-proven.
+
+**Residual gaps:** same as the original R3 residual table (R4 + optional follow-ups). Vsync /
+present handoff deferral is outside R3 scope and remains local WIP diagnostics until committed
+separately.
+
 ### Phase R4 — Test seams without production branches
 
 **Goal:** remove `SetTestFrameProducer` special-casing from the production adapter, and close
@@ -523,13 +576,27 @@ Code:
 - `EditorSessionRenderController::RouteInitialRender` binds at open/switch;
   `ResetForNewImage` clears;
 - `DispatchPipelineFrame` / `CanProduceFrame` use bound context; payload loads once via
-  `EnsureContextForRequest`.
+  `EnsureContextForRequest`;
+- `ImageBuffer` encoded payload held as `shared_ptr`; `ShareEncodedBuffer()` aliases multi-MB
+  RAW bytes across session source and per-Apply working buffers (no deep copy on ladder frames).
 
 Focused tests (all passed):
 
-- `EditorSessionRenderSchedulerPortTest` 11/11
+- `EditorSessionRenderSchedulerPortTest` 11/11 (later 12/12 after rebind-identity case)
 - `EditorRenderCoordinatorTest` 31/31
 - `EditorSessionRenderControllerTest` 15/15
+
+### 2026-08-07 — Phase R3 temporarily reverted, then re-landed
+
+Branch: `feature/editor_render_simplify`.
+
+- Temporary full revert of R3 (`da95f574`) while isolating vsync / frame-production desync.
+- R3 final edition restored (`2d5aef7b`, revert of the revert of `072d3024`): session context +
+  shared encoded RAW bytes.
+- Present/vsync handoff deferral (`schedule_next_from_pool=false` on pool completion) kept as
+  local WIP with R3, not part of the R3 commit itself.
+
+Re-verified focused suites: port 12/12, coordinator 31/31, render controller 15/15 (58/58).
 
 Next: Phase R4 (test seams + carried residuals: no test-producer production branches;
 presentation sink identity on session context). Residual table under R3 maps each open item to

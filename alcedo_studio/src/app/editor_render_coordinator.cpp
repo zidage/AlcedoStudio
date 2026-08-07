@@ -4,9 +4,72 @@
 
 #include "app/editor_render_coordinator.hpp"
 
+#include "utils/diagnostics/render_e2e_timing.hpp"
+
 #include <utility>
 
 namespace alcedo {
+namespace {
+
+auto ReasonLabel(const EditorRenderReason reason) -> const char* {
+  switch (reason) {
+    case EditorRenderReason::InitialFrame:
+      return "InitialFrame";
+    case EditorRenderReason::InteractiveAdjustment:
+      return "InteractiveAdjustment";
+    case EditorRenderReason::SettledAdjustment:
+      return "SettledAdjustment";
+    case EditorRenderReason::ZoomPan:
+      return "ZoomPan";
+    case EditorRenderReason::Resize:
+      return "Resize";
+    case EditorRenderReason::DetailRefresh:
+      return "DetailRefresh";
+    case EditorRenderReason::UndoRedo:
+      return "UndoRedo";
+    case EditorRenderReason::ImageSwitch:
+      return "ImageSwitch";
+    case EditorRenderReason::Retry:
+      return "Retry";
+    case EditorRenderReason::CropRotate:
+      return "CropRotate";
+    case EditorRenderReason::ScopeRefresh:
+      return "ScopeRefresh";
+  }
+  return "?";
+}
+
+auto QualityLabel(const EditorRenderQuality quality) -> const char* {
+  switch (quality) {
+    case EditorRenderQuality::Interactive:
+      return "Interactive";
+    case EditorRenderQuality::Quality:
+      return "Quality";
+    case EditorRenderQuality::Detail:
+      return "Detail";
+  }
+  return "?";
+}
+
+auto RoleLabel(const FrameRole role) -> const char* {
+  switch (role) {
+    case FrameRole::InteractivePrimary:
+      return "InteractivePrimary";
+    case FrameRole::QualityBase:
+      return "QualityBase";
+    case FrameRole::DetailPatch:
+      return "DetailPatch";
+  }
+  return "?";
+}
+
+void NoteE2eSubmit(const EditorRenderRequest& request) {
+  diag::NoteRenderE2eSubmit(request.request_id, ReasonLabel(request.intent.reason),
+                            QualityLabel(request.intent.quality),
+                            RoleLabel(request.intent.frame_role));
+}
+
+}  // namespace
 
 EditorRenderCoordinator::EditorRenderCoordinator(
     std::shared_ptr<IEditorPipelineSchedulerPort> scheduler)
@@ -165,9 +228,15 @@ void EditorRenderCoordinator::Emit(EditorRenderResult result) {
       break;
     case EditorRenderResultKind::Replaced:
       ++replaced_count_;
+      if (result.request_id != 0) {
+        diag::NoteRenderE2eTerminal(result.request_id, "replaced");
+      }
       break;
     case EditorRenderResultKind::Cancelled:
       ++cancelled_count_;
+      if (result.request_id != 0) {
+        diag::NoteRenderE2eTerminal(result.request_id, "cancelled");
+      }
       break;
     case EditorRenderResultKind::Failed:
       ++failed_count_;
@@ -176,6 +245,9 @@ void EditorRenderCoordinator::Emit(EditorRenderResult result) {
       if (result.message.rfind("Rejected:", 0) == 0) {
         last_rejection_reason_       = last_error_;
         last_rejected_render_reason_ = result.intent.reason;
+      }
+      if (result.request_id != 0) {
+        diag::NoteRenderE2eTerminal(result.request_id, "failed");
       }
       break;
     case EditorRenderResultKind::FrameReady:
@@ -257,6 +329,7 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
       EditorRenderRequest request;
       request.request_id = next_request_id_++;
       request.intent     = std::move(stamped);
+      NoteE2eSubmit(request);
 
       PendingEntry entry;
       entry.request = request;
@@ -460,6 +533,7 @@ void EditorRenderCoordinator::ScheduleNext() {
   entry.scheduler_job_id     = job_id;
   last_scheduled_request_id_ = entry.request.request_id;
   inflight_                  = std::move(entry);
+  diag::NoteRenderE2eScheduled(inflight_->request.request_id);
 
   EditorRenderResult started;
   started.kind       = EditorRenderResultKind::RenderStarted;
@@ -477,7 +551,8 @@ void EditorRenderCoordinator::Pump() {
 }
 
 void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id, bool success,
-                                                       std::string message) {
+                                                       std::string message,
+                                                       bool schedule_next_from_pool) {
   {
     std::scoped_lock lock(mutex_);
     if (inflight_ && inflight_->request.request_id == request_id) {
@@ -496,7 +571,11 @@ void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id,
         terminal_request_ids_.insert(request_id);
       }
       inflight_.reset();
-      ScheduleNext();
+      // Defer the next ScheduleNext when the pipeline pool just handed a Ready
+      // frame to present; keeps produce from overlapping the current vsync.
+      if (schedule_next_from_pool) {
+        ScheduleNext();
+      }
     }
   }
   DeliverPendingResults();
