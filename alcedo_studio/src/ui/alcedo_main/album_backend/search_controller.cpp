@@ -588,6 +588,10 @@ void SearchController::SetSearchPreviewThumbnailVisible(uint elementId, uint ima
     search_preview_visible_thumbnails_.erase(key);
     search_preview_thumbnail_requests_.erase(key);
 
+    if (library_) {
+      library_->thumbs().ReleaseStoreImageIfUnpinned(key);
+    }
+
     auto thumb_svc = project_->handler().thumbnail_service();
     if (!thumb_svc) {
       return;
@@ -702,9 +706,9 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
           }
 
           std::thread([self, service, elementId, imageId, maxEdge, key, request_generation,
-                       request_id,
+                       request_id, image_store = self->library_->thumbs().image_store(),
                        guard = std::move(result.guard)]() mutable {
-            QString data_url;
+            QString thumb_url;
             QString error_text;
             try {
               auto* buffer = guard->thumbnail_buffer_.get();
@@ -715,11 +719,16 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                 QImage image = album_util::MatRgba32fToQImageCopy(buffer->GetCPUData());
                 if (!image.isNull()) {
                   const int edge = static_cast<int>(std::max<uint>(1, maxEdge));
-                  data_url       = album_util::DataUrlFromImage(
-                      image.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                  QImage scaled =
+                      image.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                  if (image_store) {
+                    thumb_url = image_store->Put(static_cast<sl_element_id_t>(elementId),
+                                                 static_cast<uint32_t>(key.resolution),
+                                                 std::move(scaled));
+                  }
                 }
               }
-              if (data_url.isEmpty()) {
+              if (thumb_url.isEmpty()) {
                 error_text = QObject::tr("Thumbnail conversion produced no image.");
               }
             } catch (...) {
@@ -729,7 +738,7 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
             if (self) {
               QMetaObject::invokeMethod(
                   self,
-                  [self, service, elementId, imageId, key, request_generation, request_id, data_url,
+                  [self, service, elementId, imageId, key, request_generation, request_id, thumb_url,
                    error_text]() {
                     if (!self) {
                       if (service) {
@@ -773,9 +782,9 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                       return;
                     }
                     self->search_preview_thumbnail_requests_.erase(key);
-                    emit self->SearchPreviewThumbnailUpdated(elementId, data_url, false, false,
+                    emit self->SearchPreviewThumbnailUpdated(elementId, thumb_url, false, false,
                                                              error_text);
-                    emit self->searchPreviewThumbnailUpdated(elementId, data_url, false, false,
+                    emit self->searchPreviewThumbnailUpdated(elementId, thumb_url, false, false,
                                                              error_text);
                   },
                   Qt::QueuedConnection);
@@ -816,6 +825,14 @@ void SearchController::CancelSearchPreviewThumbnails() {
   auto thumb_svc = project_->handler().thumbnail_service();
   search_preview_visible_thumbnails_.clear();
   search_preview_thumbnail_requests_.clear();
+
+  if (library_) {
+    for (const auto& [key, present] : keys_to_release) {
+      (void)present;
+      library_->thumbs().ReleaseStoreImageIfUnpinned(key);
+    }
+  }
+
   if (!thumb_svc) {
     return;
   }

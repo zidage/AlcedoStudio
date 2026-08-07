@@ -120,6 +120,17 @@ auto DecodeDataUrlImage(const QString& data_url) -> QImage {
   return image;
 }
 
+auto ResolveThumbUrlImage(ApplicationModuleHost& backend, const QString& thumb_url) -> QImage {
+  if (thumb_url.startsWith(QStringLiteral("image://"))) {
+    auto store = backend.library()->thumbs().image_store();
+    if (!store) {
+      return {};
+    }
+    return store->ResolveUrl(thumb_url);
+  }
+  return DecodeDataUrlImage(thumb_url);
+}
+
 auto MaxImageEdge(const QImage& image) -> int {
   return std::max(image.width(), image.height());
 }
@@ -171,7 +182,7 @@ TEST_F(ThumbnailTests, ThumbnailModelSelectionRangeExtendsAfterPagedAppend) {
   EXPECT_EQ(model.rowByElementId(10), 9);
 }
 
-TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesDataUrl) {
+TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesProviderUrl) {
 #ifndef HAVE_METAL
   GTEST_SKIP() << "Metal is not enabled in this build.";
 #else
@@ -353,8 +364,10 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
                               2048);
   const QString high_url = WaitForThumbnailUrl(backend, element_id, true, 30000);
   ASSERT_FALSE(high_url.isEmpty());
+  EXPECT_TRUE(high_url.startsWith(QStringLiteral("image://alcedo-thumb/")))
+      << high_url.toStdString();
 
-  const QImage high_image = DecodeDataUrlImage(high_url);
+  const QImage high_image = ResolveThumbUrlImage(backend, high_url);
   ASSERT_FALSE(high_image.isNull());
   ASSERT_LE(MaxImageEdge(high_image), 2048);
 
@@ -370,7 +383,7 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   ASSERT_FALSE(high_row.isEmpty())
       << "Changing maxEdge on a pinned thumbnail did not refresh.";
 
-  const QImage low_image = DecodeDataUrlImage(high_row.value("thumbUrl").toString());
+  const QImage low_image = ResolveThumbUrlImage(backend, high_row.value("thumbUrl").toString());
   ASSERT_FALSE(low_image.isNull());
   EXPECT_LT(MaxImageEdge(low_image), MaxImageEdge(high_image));
   EXPECT_LE(MaxImageEdge(low_image), 256);

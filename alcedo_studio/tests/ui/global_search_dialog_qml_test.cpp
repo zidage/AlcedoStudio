@@ -316,6 +316,17 @@ auto DecodeDataUrlImage(const QString& dataUrl) -> QImage {
   return image;
 }
 
+auto ResolveThumbUrlImage(ApplicationModuleHost& backend, const QString& thumbUrl) -> QImage {
+  if (thumbUrl.startsWith(QStringLiteral("image://"))) {
+    auto store = backend.library()->thumbs().image_store();
+    if (!store) {
+      return {};
+    }
+    return store->ResolveUrl(thumbUrl);
+  }
+  return DecodeDataUrlImage(thumbUrl);
+}
+
 auto SearchPreviewReadySignalCount(const QSignalSpy& spy) -> int {
   int readySignals = 0;
   for (const auto& call : spy) {
@@ -391,6 +402,7 @@ TEST_F(GlobalSearchDialogQmlTests,
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  backend.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
@@ -455,8 +467,10 @@ TEST_F(GlobalSearchDialogQmlTests,
 
   const QString firstPageUrl = FirstReadyDataUrl(resultContent, 0);
   ASSERT_FALSE(firstPageUrl.isEmpty());
-  EXPECT_FALSE(DecodeDataUrlImage(firstPageUrl).isNull())
-      << "First rendered preview did not decode as an image.";
+  EXPECT_TRUE(firstPageUrl.startsWith(QStringLiteral("image://alcedo-thumb/")))
+      << firstPageUrl.toStdString();
+  EXPECT_FALSE(ResolveThumbUrlImage(backend, firstPageUrl).isNull())
+      << "First rendered preview did not resolve as an image.";
 
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "loadMorePreview"));
 
@@ -488,8 +502,10 @@ TEST_F(GlobalSearchDialogQmlTests,
 
   const QString secondPageUrl = FirstReadyDataUrl(resultContent, kPageSize);
   ASSERT_FALSE(secondPageUrl.isEmpty());
-  EXPECT_FALSE(DecodeDataUrlImage(secondPageUrl).isNull())
-      << "Second-page rendered preview did not decode as an image.";
+  EXPECT_TRUE(secondPageUrl.startsWith(QStringLiteral("image://alcedo-thumb/")))
+      << secondPageUrl.toStdString();
+  EXPECT_FALSE(ResolveThumbUrlImage(backend, secondPageUrl).isNull())
+      << "Second-page rendered preview did not resolve as an image.";
 
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "close"));
   ASSERT_TRUE(WaitUntil([&]() { return !dialog->property("visible").toBool(); }, 5000));
@@ -528,8 +544,10 @@ TEST_F(GlobalSearchDialogQmlTests,
 
   const QString reopenedUrl = FirstReadyDataUrl(resultContent, 0);
   ASSERT_FALSE(reopenedUrl.isEmpty());
-  EXPECT_FALSE(DecodeDataUrlImage(reopenedUrl).isNull())
-      << "Reopened dialog produced a non-decodable preview image.";
+  EXPECT_TRUE(reopenedUrl.startsWith(QStringLiteral("image://alcedo-thumb/")))
+      << reopenedUrl.toStdString();
+  EXPECT_FALSE(ResolveThumbUrlImage(backend, reopenedUrl).isNull())
+      << "Reopened dialog produced a non-resolvable preview image.";
 
   EXPECT_GT(SearchPreviewReadySignalCount(previewSpy), readySignalCountBeforeReopen)
       << "Reopening the dialog did not emit any new ready preview updates.";
@@ -629,6 +647,7 @@ TEST_F(GlobalSearchDialogQmlTests, SemanticTypingShowsAwaitingSubmitAndLabelUses
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  backend.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
@@ -707,6 +726,7 @@ TEST_F(GlobalSearchDialogQmlTests,
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  backend.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
@@ -800,6 +820,7 @@ TEST_F(GlobalSearchDialogQmlTests, NaturalLanguageSearchGate_SyncedOnDialogOpen)
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  backend.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),

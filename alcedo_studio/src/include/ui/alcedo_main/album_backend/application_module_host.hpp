@@ -9,6 +9,8 @@
 #include <memory>
 #include <string>
 
+class QQmlEngine;
+
 #include "app/ai_provider_profile.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/image_analysis_service.hpp"
@@ -137,6 +139,10 @@ class ApplicationModuleHost final : public QObject {
   // Explicitly idempotent so the application can shut down modules before the
   // QML engine is torn down. The destructor calls the same path.
   void Shutdown();
+
+  /// Register the album thumbnail `image://alcedo-thumb/` provider on @p engine.
+  /// Safe to call once per engine; the engine takes ownership of the provider.
+  void AttachQmlEngine(QQmlEngine* engine);
 
  private:
   void RecordConstruction(const char* type_name, const void* object);

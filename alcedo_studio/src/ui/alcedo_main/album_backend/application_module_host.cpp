@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
+#include <QQmlEngine>
 #include <QThread>
 #include <chrono>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
@@ -520,6 +522,21 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 }
 
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
+
+void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
+  if (engine == nullptr || library_ == nullptr) {
+    return;
+  }
+
+  auto store = library_->thumbs().image_store();
+  if (!store) {
+    return;
+  }
+
+  // QQmlEngine takes ownership of the provider.
+  engine->addImageProvider(QString::fromUtf8(kThumbnailImageProviderId),
+                           new ThumbnailImageProvider(std::move(store)));
+}
 
 void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {
   if (lifecycle_observer_) {

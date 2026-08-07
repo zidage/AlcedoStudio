@@ -53,6 +53,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
   language_manager.AttachEngine(&engine);
+  host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
                                             &alcedo::ui::AppTheme::Instance());

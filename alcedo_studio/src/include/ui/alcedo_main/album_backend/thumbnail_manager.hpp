@@ -13,12 +13,13 @@
 
 #include "app/thumbnail_service.hpp"
 #include "type/type.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 
 namespace alcedo::ui {
 
 class LibraryModule;
 
-/// Manages thumbnail pin reference counts and async data-URL generation.
+/// Manages thumbnail pin reference counts and async image:// provider delivery.
 class ThumbnailManager {
  public:
   explicit ThumbnailManager(LibraryModule& library);
@@ -34,6 +35,14 @@ class ThumbnailManager {
   [[nodiscard]] bool IsThumbnailPinned(sl_element_id_t elementId) const;
   void               RemoveThumbnailState(sl_element_id_t elementId, image_id_t imageId);
   void               ReleaseVisibleThumbnailPins();
+
+  /// Drop a store entry only when the library grid/filmstrip is not pinning that key.
+  void ReleaseStoreImageIfUnpinned(const ThumbnailCacheKey& key);
+
+  [[nodiscard]] auto image_store() -> std::shared_ptr<ThumbnailImageStore> { return image_store_; }
+  [[nodiscard]] auto image_store() const -> std::shared_ptr<ThumbnailImageStore> {
+    return image_store_;
+  }
 
  private:
   struct PinnedThumbnailState {
@@ -53,6 +62,7 @@ class ThumbnailManager {
                                             const ThumbnailCacheKey& keep_key);
 
   LibraryModule& library_;
+  std::shared_ptr<ThumbnailImageStore> image_store_{std::make_shared<ThumbnailImageStore>()};
   // TODO: Move pin ref-count tracking into ThumbnailService.
   std::unordered_map<ThumbnailCacheKey, PinnedThumbnailState> thumbnail_pins_{};
   std::unordered_map<sl_element_id_t, ThumbnailCacheKey>      current_visible_thumbnail_keys_{};

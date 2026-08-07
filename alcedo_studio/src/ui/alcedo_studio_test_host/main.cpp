@@ -244,6 +244,7 @@ int main(int argc, char* argv[]) {
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
   language_manager.AttachEngine(&engine);
+  app_modules.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty("appModules", &app_modules);
   engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
   engine.rootContext()->setContextProperty("languageManager", &language_manager);

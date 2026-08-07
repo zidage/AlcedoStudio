@@ -7,6 +7,7 @@
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 
 #include <QCoreApplication>
 #include <QImage>
@@ -177,6 +178,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
 
   // Strategy B: mark only this request key as inactive.
   DeactivateThumbnailRequest(key);
+  image_store_->Remove(elementId, static_cast<uint32_t>(key.resolution));
 
   const auto* item = library_.FindAlbumItem(elementId);
   const bool  missing_source = item != nullptr && item->thumb_missing_source;
@@ -285,14 +287,15 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
           return;
         }
 
-        std::thread([self, service, elementId, maxEdge, key, is_active,
+        auto image_store = self->thumbs().image_store();
+        std::thread([self, service, elementId, maxEdge, key, is_active, image_store,
                      guard = std::move(guard)]() mutable {
           // Strategy B: re-check before expensive conversion.
           if (!is_active || !is_active->load()) {
             return;
           }
 
-          QString dataUrl;
+          QString thumbUrl;
           QString errorText;
           try {
             auto* buffer = guard->thumbnail_buffer_.get();
@@ -308,7 +311,15 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
                   const int scaled_max_edge = static_cast<int>(std::max<uint32_t>(1, maxEdge));
                   QImage scaled = image.scaled(scaled_max_edge, scaled_max_edge,
                                                Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                  dataUrl = album_util::DataUrlFromImage(scaled);
+                  if (image_store) {
+                    const uint32_t store_edge = static_cast<uint32_t>(key.resolution);
+                    thumbUrl =
+                        image_store->Put(elementId, store_edge, std::move(scaled));
+                  }
+                  if (thumbUrl.isEmpty()) {
+                    errorText =
+                        QObject::tr("Thumbnail conversion produced no image provider URL.");
+                  }
                 } else {
                   errorText =
                       QObject::tr("Thumbnail CPU buffer could not be converted to an image.");
@@ -324,7 +335,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
           if (self) {
             QMetaObject::invokeMethod(
                 self,
-                [self, service, elementId, key, dataUrl, errorText, is_active]() {
+                [self, service, elementId, key, thumbUrl, errorText, is_active]() {
                   if (!self) {
                     return;
                   }
@@ -336,15 +347,16 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
 
                   const bool pinned = self->thumbs().IsThumbnailPinned(key);
                   if (pinned) {
-                    const bool render_error = dataUrl.isEmpty();
+                    const bool render_error = thumbUrl.isEmpty();
                     self->thumbs().UpdateThumbnailState(
-                        elementId, dataUrl, false, false,
+                        elementId, thumbUrl, false, false,
                         render_error
                             ? (errorText.isEmpty()
                                    ? QObject::tr("Thumbnail conversion produced no image.")
                                    : errorText)
                             : QString{});
                   } else if (!self->thumbs().IsThumbnailPinned(elementId)) {
+                    self->thumbs().image_store()->RemoveElement(elementId);
                     self->thumbs().UpdateThumbnailState(elementId, QString(), false, false);
                   }
                   if (!pinned && service) {
@@ -425,6 +437,12 @@ bool ThumbnailManager::IsThumbnailPinned(const ThumbnailCacheKey& key) const {
   return it != thumbnail_pins_.end() && it->second.ref_count_ > 0;
 }
 
+void ThumbnailManager::ReleaseStoreImageIfUnpinned(const ThumbnailCacheKey& key) {
+  if (!IsThumbnailPinned(key)) {
+    image_store_->Remove(key.element_id, static_cast<uint32_t>(key.resolution));
+  }
+}
+
 void ThumbnailManager::DeactivateThumbnailRequest(const ThumbnailCacheKey& key) {
   auto flag_it = thumbnail_active_flags_.find(key);
   if (flag_it != thumbnail_active_flags_.end() && flag_it->second) {
@@ -444,6 +462,7 @@ void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& ke
     current_visible_thumbnail_keys_.erase(current_it);
   }
   DeactivateThumbnailRequest(key);
+  image_store_->Remove(key.element_id, static_cast<uint32_t>(key.resolution));
 
   auto thumb_svc = library_.project()->handler().thumbnail_service();
   if (thumb_svc) {
@@ -506,6 +525,7 @@ void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_
     DeactivateThumbnailRequest(key);
   }
 
+  image_store_->RemoveElement(elementId);
   UpdateThumbnailState(elementId, QString(), false, false);
 
   auto thumb_svc = library_.project()->handler().thumbnail_service();
@@ -556,6 +576,7 @@ void ThumbnailManager::ReleaseVisibleThumbnailPins() {
   thumbnail_pins_.clear();
   thumbnail_active_flags_.clear();
   current_visible_thumbnail_keys_.clear();
+  image_store_->Clear();
 }
 
 }  // namespace alcedo::ui

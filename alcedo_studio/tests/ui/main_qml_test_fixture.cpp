@@ -36,6 +36,7 @@ auto MainQmlTestFixture::FinishLoad(std::unique_ptr<LoadedMainWindow> loaded)
 
   loaded->engine.addImportPath(QStringLiteral("qrc:/"));
   loaded->language_manager.AttachEngine(&loaded->engine);
+  loaded->host.AttachQmlEngine(&loaded->engine);
   loaded->engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &loaded->host);
   loaded->engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
                                                    &alcedo::ui::AppTheme::Instance());

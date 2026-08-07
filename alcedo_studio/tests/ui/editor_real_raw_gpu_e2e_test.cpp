@@ -150,6 +150,7 @@ TEST_F(EditorRealRawGpuE2eTest,
   engine.addImportPath(QStringLiteral(ALCEDO_QT_QML_IMPORT_PATH));
 #endif
   language_manager.AttachEngine(&engine);
+  host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("languageManager"), &language_manager);
