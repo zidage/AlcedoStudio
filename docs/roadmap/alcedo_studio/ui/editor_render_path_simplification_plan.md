@@ -2,7 +2,7 @@
 
 Date: 2026-08-06
 
-Status: Phases R1–R2 complete on branch `feature/editor_render_simplify`. Phases R3–R4 pending.
+Status: Phases R1–R3 complete on branch `feature/editor_render_simplify`. Phase R4 pending.
 Delivery is one feature branch with sequential commits (not one GitHub PR per phase).
 
 Primary owner: Alcedo Studio editor session render path.
@@ -176,12 +176,12 @@ Delivered:
 - destructor and `WaitForSessionIdle` still drain in-flight pool work and may pump GUI events
   during present handoff.
 
-Still deferred in R1:
+Still deferred after R1 (recorded as later-phase tasks):
 
-- reverse `SetCoordinator` / `NotifySchedulerCompleted` (works; remove when submit API carries
-  completion);
-- test-producer `BindFrameSubmission` branch (kept behind `SetTestFrameProducer` until R4);
-- per-frame image pool reads (R3).
+- reverse `SetCoordinator` / `NotifySchedulerCompleted` → **Optional follow-up (completion
+  direction)**;
+- test-producer `BindFrameSubmission` branch → **Phase R4**;
+- per-frame image pool reads → **Phase R3** (done 2026-08-07).
 
 **Focused verification (R1):**
 
@@ -273,11 +273,12 @@ Suite totals: `EditorRenderCoordinatorTest` 30/30; `EditorSessionRenderControlle
 
 No responsibility split needed; coordinator still owns only coalesce + single-flight.
 
-**Residual gaps:**
+**Residual gaps (carried forward as later-phase tasks):**
 
-- `replacement_key` remains on `EditorRenderIntent` for producers / diagnostics; coalesce no longer
-  uses string equality (R2). Removal of the field is optional later YAGNI.
-- Session render context (R3) and test-producer production branches (R4) unchanged.
+- `replacement_key` still on `EditorRenderIntent` for producers / diagnostics; coalesce no longer
+  uses string equality → **Optional follow-up (intent field cleanup)**.
+- Session render context → **Phase R3** (done 2026-08-07).
+- Test-producer production branches → **Phase R4**.
 
 ### Phase R3 — Session render context
 
@@ -290,23 +291,158 @@ EditorRenderSessionContext
   presentation sink identity / resolver
 ```
 
-- Populate on successful image open / switch.
-- Adapter reads context only; image switch replaces the whole context under the new epoch.
-- Existing `cached_input_` becomes part of this context, not a separate half-cache.
+- [x] Populate on successful image open / switch.
+- [x] Adapter reads context only; image switch replaces the whole context under the new epoch.
+- [x] Existing `cached_input_` becomes part of this context, not a separate half-cache.
+
+##### Phase R3 completion record (2026-08-07)
+
+**Status:** complete — session render context binds identity at open/switch; payload
+loads once; hot path no longer re-resolves the image pool.
+
+**Primary success call chain:**
+
+```text
+Open/Switch → ContinueToTarget
+  -> ResetForNewImage → ClearSessionRenderContext
+  -> RouteInitialRender
+       · BindSessionRenderContext(epoch, element_id, image_id)
+       · SetActiveImageLoadRequest(epoch)
+       · Submit(intent)
+  -> Coordinator → EditorSessionRenderSchedulerPort::Schedule
+  -> EnsureContextForRequest
+       · match bound identity
+       · lazy-once load Image + ImageBuffer + PipelineGuard into context
+  -> DispatchPipelineFrame builds PipelineTask from context only
+  -> PipelineScheduler::ScheduleTask → on_complete_ → FrameReady
+```
+
+**Primary failure call chain:**
+
+```text
+Schedule without bind / with missing pool after identity-only bind
+  -> EnsureContextForRequest fails (no pipeline / no pool / empty path)
+  -> FinishJob(false, error) → NotifySchedulerCompleted
+  -> Coordinator publishes Failed; next slot may schedule
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `BindSessionContextRecordsIdentityWithoutPoolRead` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `ClearSessionContextDropsBoundIdentity` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `ImageSwitchBindReplacesPriorContextPayload` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `InstalledContextAllowsScheduleWithoutImagePoolService` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `HotPathAfterInstalledContextDoesNotInvokeImagePoolResolver` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `BoundIdentityWithoutPayloadStillRejectsWhenPoolUnavailable` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `RouteInitialRenderBindsSessionContextAtOpen` | `EditorSessionRenderControllerTest` | PASS |
+| `ResetForNewImageClearsSessionRenderContext` | `EditorSessionRenderControllerTest` | PASS |
+| `BindAndClearSessionRenderContextForwardToScheduler` | `EditorRenderCoordinatorTest` | PASS |
+| Full port suite | `EditorSessionRenderSchedulerPortTest` | PASS 11/11 |
+| Full coordinator suite | `EditorRenderCoordinatorTest` | PASS 31/31 |
+| Full render controller suite | `EditorSessionRenderControllerTest` | PASS 15/15 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionRenderSchedulerPortTest EditorRenderCoordinatorTest EditorSessionRenderControllerTest
+ctest --test-dir build/debug -R "EditorSessionRenderSchedulerPortTest|EditorRenderCoordinatorTest|EditorSessionRenderControllerTest" --output-on-failure
+```
+
+Suite totals: `EditorSessionRenderSchedulerPortTest` 11/11; `EditorRenderCoordinatorTest` 31/31;
+`EditorSessionRenderControllerTest` 15/15 (57/57 combined).
+
+**Checklist / exit condition:** all R3 boxes checked. Acceptance criterion 6 (hot interactive
+frames do not call image-pool after context bind) covered by
+`HotPathAfterInstalledContextDoesNotInvokeImagePoolResolver`.
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `editor_session_render_scheduler_port.hpp` | ~160 |
+| `editor_session_render_scheduler_port.cpp` | ~560 |
+| `editor_session_render_scheduler_port_test.cpp` | ~300 |
+| `editor_session_render_controller.cpp` | ~480 |
+| `editor_render_coordinator.cpp` / `.hpp` | modest Bind/Clear forwarders |
+
+No responsibility split needed; context lives on the production adapter only.
+
+**Residual gaps (carried forward as later-phase tasks — do not drop):**
+
+| Residual | Owner phase / section |
+| --- | --- |
+| Test-producer `BindFrameSubmission` / `EnsureSize` still rewrites production `Dispatch` | **Phase R4** |
+| Presentation sink still resolved every schedule via `sink_resolver_` (not session-context identity) | **Phase R4** (sink identity on context) or **Optional follow-up** if R4 scope is already full |
+| Reverse `SetCoordinator` / `NotifySchedulerCompleted` still the completion plane | **Optional follow-up (completion direction)** (from R1) |
+| `replacement_key` field still on `EditorRenderIntent` after slot coalesce | **Optional follow-up (intent field cleanup)** (from R2) |
+| No interactive-app / real-RAW open-switch latency evidence for context bind + lazy-once load | **Optional follow-up (verification)** |
+| First frame after bind still pays one payload load (lazy-once) | Accepted R3 design; only re-open if open latency measurement fails in verification follow-up |
 
 ### Phase R4 — Test seams without production branches
 
-**Goal:** remove `SetTestFrameProducer` special-casing from the production adapter.
+**Goal:** remove `SetTestFrameProducer` special-casing from the production adapter, and close
+residuals that force production branches or re-resolve presentation inputs on the hot path.
 
-- Coordinator unit tests keep recording `IEditorPipelineSchedulerPort` fakes.
-- Frame metadata / ready-frame tests target sink or pipeline completion without rewriting
+**Checklist (includes residuals carried from R1–R3):**
+
+- [ ] Remove `SetTestFrameProducer` and any production `if (test_producer_)` branch from
+  `EditorSessionRenderSchedulerPort`.
+- [ ] Production adapter no longer calls `BindFrameSubmission` / `EnsureSize` for a test-only path
+  (R1 residual; R3 residual).
+- [ ] Coordinator unit tests keep recording `IEditorPipelineSchedulerPort` fakes (no test producer
+  on the production adapter).
+- [ ] Frame metadata / ready-frame tests target sink or pipeline completion without rewriting
   production `Dispatch` branches.
-- Production adapter no longer calls `BindFrameSubmission` / `EnsureSize` for a test-only path.
+- [ ] Session context (or bind path) records **presentation sink identity** so schedule does not
+  re-resolve a live sink pointer as a substitute for session-scoped sink identity (R3 residual:
+  today `sink_resolver_()` runs every `DispatchJob`). Prefer stamping `PresentationSinkId` at
+  open/switch and resolving the pointer only when submitting to the pipeline / present path if a
+  live `IFrameSink*` is still required.
+- [ ] Focused tests prove: (1) production `DispatchPipelineFrame` has no test-producer branch;
+  (2) ready-frame metadata still correct without adapter-side `BindFrameSubmission`; (3) sink
+  identity is stable across interactive frames for one bound session context.
 
-### Optional follow-up — Raw pointer ownership notes
+**Exit condition:** all R4 boxes checked; acceptance criterion 5 satisfied.
 
-Document owner lifetimes for `EditorSessionController` bare pointers; keep `QPointer` for QML
-viewport objects. No mass ownership redesign unless a concrete use-after-free appears.
+### Optional follow-up — residuals and ownership notes
+
+Work below is **not** optional in the sense of “forget it”: it is sequenced after R4 (or in
+parallel only if R4 does not absorb the item). Each line is a tracked task from R1–R3 residuals.
+
+#### Completion direction (from R1)
+
+- [ ] Carry completion on the submit path (`PipelineTask::on_complete_` / submit callback) so the
+  production adapter no longer needs reverse `SetCoordinator` +
+  `NotifySchedulerCompleted` via `weak_ptr` to the coordinator.
+- [ ] Delete reverse coordinator pointer from `EditorSessionRenderSchedulerPort` once the forward
+  path is the only control plane.
+
+#### Intent field cleanup (from R2)
+
+- [ ] Remove `EditorRenderIntent::replacement_key` (and `DefaultReplacementKey` / fill path) if no
+  producer/diagnostic consumer still requires the string; slots already own coalesce.
+
+#### Session context / sink (from R3, if not closed in R4)
+
+- [ ] If R4 does not land sink identity on `EditorRenderSessionContext`, do it here: bind
+  `PresentationSinkId` (and document owner of the live `IFrameSink*`) at open/switch; hot path
+  must not treat “call `sink_resolver_` again” as the session context contract.
+
+#### Verification (from R3)
+
+- [ ] Interactive-app or focused integration proof: open / switch a real RAW, confirm first-frame
+  path binds context once, subsequent interactive frames do not hit image-pool `Read`, and
+  open/switch latency stays acceptable with lazy-once payload load.
+- [ ] If lazy-once first-frame load is too slow, promote payload load into
+  `BindSessionContext` (eager bind) and re-measure; keep the single-load invariant.
+
+#### Raw pointer ownership notes (pre-existing)
+
+- [ ] Document owner lifetimes for `EditorSessionController` bare pointers (`editor_`,
+  `session_backend_`, `interaction_policy_`); keep `QPointer` for QML viewport objects.
+- [ ] No mass ownership redesign unless a concrete use-after-free appears.
 
 ## Acceptance criteria
 
@@ -373,3 +509,28 @@ Focused tests (all passed):
 - `EditorSessionRenderControllerTest` 13/13
 
 Next: Phase R3 (session render context).
+
+### 2026-08-07 — Phase R3 complete
+
+Branch: `feature/editor_render_simplify`.
+
+Code:
+
+- `EditorRenderSessionContext` on the production scheduler port (epoch, element, image,
+  Image, ImageBuffer, PipelineGuard); replaces `cached_input_` half-cache;
+- `BindSessionContext` / `ClearSessionContext` on `IEditorPipelineSchedulerPort` and
+  `BindSessionRenderContext` / `ClearSessionRenderContext` on `IEditorRenderSubmitPort`;
+- `EditorSessionRenderController::RouteInitialRender` binds at open/switch;
+  `ResetForNewImage` clears;
+- `DispatchPipelineFrame` / `CanProduceFrame` use bound context; payload loads once via
+  `EnsureContextForRequest`.
+
+Focused tests (all passed):
+
+- `EditorSessionRenderSchedulerPortTest` 11/11
+- `EditorRenderCoordinatorTest` 31/31
+- `EditorSessionRenderControllerTest` 15/15
+
+Next: Phase R4 (test seams + carried residuals: no test-producer production branches;
+presentation sink identity on session context). Residual table under R3 maps each open item to
+R4 or Optional follow-up — do not drop those tasks when implementing R4.

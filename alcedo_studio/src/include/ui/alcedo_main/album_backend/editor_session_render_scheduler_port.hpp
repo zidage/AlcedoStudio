@@ -16,7 +16,10 @@
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/pipeline_service.hpp"
+#include "image/image.hpp"
+#include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
+#include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -31,13 +34,26 @@ using EditorSessionTestFrameProducer =
     std::function<bool(alcedo::IFrameSink*, const alcedo::EditorRenderRequest&)>;
 
 struct EditorSessionSchedulerServices {
-  /// Resolve the image pool used for render input acquisition.
+  /// Resolve the image pool used for render input acquisition at context bind.
+  /// Hot interactive frames must not call this after a successful payload load.
   std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool;
 };
 
-/// Thin adapter: builds a PipelineTask and hands it to PipelineScheduler.
-/// No private worker thread and no second request queue — the coordinator owns
-/// single-flight; PipelineScheduler owns execution.
+/// Stable render inputs for the currently open/switched editor image.
+/// Bound at open/switch (identity immediately; image/buffer/pipeline lazy-once).
+/// Image switch replaces the whole context under the new epoch.
+struct EditorRenderSessionContext {
+  std::uint64_t                        epoch      = 0;
+  sl_element_id_t                      element_id = 0;
+  image_id_t                           image_id   = 0;
+  std::shared_ptr<alcedo::Image>       image;
+  std::shared_ptr<alcedo::ImageBuffer> input;
+  std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
+};
+
+/// Thin adapter: builds a PipelineTask from bound session context and hands it
+/// to PipelineScheduler. No private worker thread and no second request queue —
+/// the coordinator owns single-flight; PipelineScheduler owns execution.
 class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSchedulerPort {
  public:
   explicit EditorSessionRenderSchedulerPort(
@@ -51,10 +67,22 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   /// Deterministic frame producer for focused tests (runs on the pipeline pool).
   void SetTestFrameProducer(EditorSessionTestFrameProducer producer);
 
+  /// Bind identity for the open/switched image. Replaces any prior context.
+  /// Image/buffer/pipeline load once on first production frame for this bind.
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id,
+                          image_id_t image_id) override;
+  void ClearSessionContext() override;
+  /// Install a fully populated context (tests / preloaded open path).
+  void InstallSessionContext(EditorRenderSessionContext context);
+
   auto Schedule(const alcedo::EditorRenderRequest& request) -> std::uint64_t override;
   void Cancel(std::uint64_t scheduler_job_id) override;
   void WaitForSessionIdle(std::uint64_t session_epoch) override;
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
+  /// Snapshot of the bound context identity and payload presence (for tests).
+  [[nodiscard]] auto session_context() const -> std::optional<EditorRenderSessionContext>;
+  /// Times image-pool resolution ran to load context payload (bind/hot-path).
+  [[nodiscard]] auto context_payload_load_count() const -> std::uint64_t;
 
  private:
   struct Job {
@@ -65,6 +93,14 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
 
   [[nodiscard]] auto CanProduceFrame(const alcedo::EditorRenderRequest& request) const -> bool;
   [[nodiscard]] auto EnsurePipelineScheduler() -> std::shared_ptr<alcedo::PipelineScheduler>;
+  /// Ensure context identity matches the request and payload is loaded once.
+  [[nodiscard]] auto EnsureContextForRequest(const alcedo::EditorRenderRequest& request,
+                                             std::string* error)
+      -> std::optional<EditorRenderSessionContext>;
+  [[nodiscard]] auto ContextMatchesRequest(const EditorRenderSessionContext& context,
+                                           const alcedo::EditorRenderRequest& request) const
+      -> bool;
+  [[nodiscard]] auto ContextPayloadReady(const EditorRenderSessionContext& context) const -> bool;
   void               DispatchJob(Job job);
   void               DispatchTestProducer(Job job, alcedo::IFrameSink* sink,
                                           EditorSessionTestFrameProducer producer);
@@ -84,8 +120,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   std::uint64_t                                  next_job_id_ = 0;
   std::optional<Job>                             running_job_;
   std::vector<alcedo::EditorRenderRequest>       scheduled_;
-  image_id_t                                     cached_input_image_id_ = 0;
-  std::shared_ptr<alcedo::ImageBuffer>           cached_input_;
+  std::optional<EditorRenderSessionContext>      session_context_;
+  std::uint64_t                                  context_payload_load_count_ = 0;
   bool                                           shutting_down_ = false;
 };
 

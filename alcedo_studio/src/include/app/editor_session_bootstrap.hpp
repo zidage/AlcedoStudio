@@ -90,21 +90,36 @@ class EditorSessionBootstrapJournalPort     final : public IEditorJournalPort {
 /// Accepts schedule calls and records them. Does not run pipeline work.
 class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedulerPort {
  public:
+  struct SessionContextBind {
+    std::uint64_t   epoch      = 0;
+    sl_element_id_t element_id = 0;
+    image_id_t      image_id   = 0;
+  };
+
   auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
     scheduled_.push_back(request);
     return ++next_job_id_;
   }
   void               Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id,
+                          image_id_t image_id) override {
+    binds_.push_back({epoch, element_id, image_id});
+  }
+  void ClearSessionContext() override { ++clear_count_; }
 
   [[nodiscard]] auto scheduled() const -> const std::vector<EditorRenderRequest>& {
     return scheduled_;
   }
   [[nodiscard]] auto cancelled() const -> const std::vector<std::uint64_t>& { return cancelled_; }
+  [[nodiscard]] auto binds() const -> const std::vector<SessionContextBind>& { return binds_; }
+  [[nodiscard]] auto clear_count() const -> int { return clear_count_; }
 
  private:
   std::uint64_t                    next_job_id_ = 0;
   std::vector<EditorRenderRequest> scheduled_;
   std::vector<std::uint64_t>       cancelled_;
+  std::vector<SessionContextBind>  binds_;
+  int                              clear_count_ = 0;
 };
 
 struct EditorSessionRuntime {
