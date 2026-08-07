@@ -27,10 +27,11 @@ class IEditorPipelineSchedulerPort {
   virtual auto Schedule(const EditorRenderRequest& request) -> std::uint64_t = 0;
   virtual void Cancel(std::uint64_t scheduler_job_id)                        = 0;
   virtual void WaitForSessionIdle(std::uint64_t /*session_epoch*/) {}
-  /// Bind stable render inputs for the open/switched image (epoch + identity).
-  /// Production loads image/buffer/pipeline once; fakes no-op.
+  /// Bind stable render inputs for the open/switched image (epoch + identity +
+  /// presentation sink id). Production loads image/buffer/pipeline once; fakes no-op.
   virtual void BindSessionContext(std::uint64_t /*epoch*/, sl_element_id_t /*element_id*/,
-                                  image_id_t /*image_id*/) {}
+                                  image_id_t /*image_id*/,
+                                  PresentationSinkId /*presentation_sink_id*/ = 0) {}
   /// Drop the bound session render context (close / pre-switch reset).
   virtual void ClearSessionContext() {}
 };
@@ -65,8 +66,14 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   /// Forward open/switch session render context bind to the production adapter.
   void BindSessionRenderContext(std::uint64_t epoch, sl_element_id_t element_id,
-                                image_id_t image_id) override;
+                                image_id_t image_id,
+                                PresentationSinkId presentation_sink_id = 0) override;
   void ClearSessionRenderContext() override;
+
+  /// Replace the pipeline scheduler seam after construction. Production hosts
+  /// set the scheduler once via the constructor; focused harnesses may swap in
+  /// a recording/completing fake so tests never grow production Dispatch branches.
+  void SetPipelineSchedulerPort(std::shared_ptr<IEditorPipelineSchedulerPort> scheduler);
 
   [[nodiscard]] auto image_load_request_id() const -> std::uint64_t {
     std::scoped_lock lock(mutex_);

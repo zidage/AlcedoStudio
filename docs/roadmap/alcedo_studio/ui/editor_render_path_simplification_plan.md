@@ -2,7 +2,7 @@
 
 Date: 2026-08-06
 
-Status: Phases R1–R3 complete on branch `feature/editor_render_simplify`. Phase R4 pending.
+Status: Phases R1–R4 complete on branch `feature/editor_render_simplify`.
 Delivery is one feature branch with sequential commits (not one GitHub PR per phase).
 
 Primary owner: Alcedo Studio editor session render path.
@@ -440,24 +440,101 @@ residuals that force production branches or re-resolve presentation inputs on th
 
 **Checklist (includes residuals carried from R1–R3):**
 
-- [ ] Remove `SetTestFrameProducer` and any production `if (test_producer_)` branch from
+- [x] Remove `SetTestFrameProducer` and any production `if (test_producer_)` branch from
   `EditorSessionRenderSchedulerPort`.
-- [ ] Production adapter no longer calls `BindFrameSubmission` / `EnsureSize` for a test-only path
+- [x] Production adapter no longer calls `BindFrameSubmission` / `EnsureSize` for a test-only path
   (R1 residual; R3 residual).
-- [ ] Coordinator unit tests keep recording `IEditorPipelineSchedulerPort` fakes (no test producer
+- [x] Coordinator unit tests keep recording `IEditorPipelineSchedulerPort` fakes (no test producer
   on the production adapter).
-- [ ] Frame metadata / ready-frame tests target sink or pipeline completion without rewriting
+- [x] Frame metadata / ready-frame tests target sink or pipeline completion without rewriting
   production `Dispatch` branches.
-- [ ] Session context (or bind path) records **presentation sink identity** so schedule does not
+- [x] Session context (or bind path) records **presentation sink identity** so schedule does not
   re-resolve a live sink pointer as a substitute for session-scoped sink identity (R3 residual:
   today `sink_resolver_()` runs every `DispatchJob`). Prefer stamping `PresentationSinkId` at
   open/switch and resolving the pointer only when submitting to the pipeline / present path if a
   live `IFrameSink*` is still required.
-- [ ] Focused tests prove: (1) production `DispatchPipelineFrame` has no test-producer branch;
+- [x] Focused tests prove: (1) production `DispatchPipelineFrame` has no test-producer branch;
   (2) ready-frame metadata still correct without adapter-side `BindFrameSubmission`; (3) sink
   identity is stable across interactive frames for one bound session context.
 
 **Exit condition:** all R4 boxes checked; acceptance criterion 5 satisfied.
+
+##### Phase R4 completion record (2026-08-07)
+
+**Status:** complete — removed production test-producer branches; stamped
+`PresentationSinkId` on session context; shell/e2e harness moved to a test-only scheduler port.
+
+**Primary success call chain:**
+
+```text
+RouteInitialRender
+  -> BindSessionRenderContext(epoch, element, image, presentation_sink_id)
+  -> EditorSessionRenderSchedulerPort::BindSessionContext stamps context.presentation_sink_id
+  -> Coordinator::Submit -> Schedule
+  -> DispatchJob
+       · reject if intent sink id mismatches bound context
+       · resolve live IFrameSink* only at submit (sink_resolve_count++)
+  -> DispatchPipelineFrame (only path)
+  -> PipelineTask::SetExecutorRenderParams -> BindFrameSubmission
+  -> on_complete_ -> FrameReady
+```
+
+**Primary failure call chain:**
+
+```text
+Schedule with mismatched presentation_sink_id
+  -> DispatchJob FinishJob(false, sink identity mismatch)
+  -> no EnsureSize / no adapter BindFrameSubmission
+  -> NotifySchedulerCompleted(Failed)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `ScopeRefreshMarksFrameAsRequestedScopeInput` (metadata via pipeline bind) | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `SinkIdentityStableAcrossInteractiveFramesForBoundContext` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `MismatchedPresentationSinkIdentityFailsWithoutAdapterEnsureSize` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `BindAndClearSessionRenderContextForwardToScheduler` (sink id forwarded) | `EditorRenderCoordinatorTest` | PASS |
+| `RouteInitialRenderBindsSessionContextAtOpen` (sink id stamped) | `EditorSessionRenderControllerTest` | PASS |
+| Full port suite | `EditorSessionRenderSchedulerPortTest` | PASS 14/14 |
+| Full coordinator suite | `EditorRenderCoordinatorTest` | PASS 31/31 |
+| Full render controller suite | `EditorSessionRenderControllerTest` | PASS 15/15 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionRenderSchedulerPortTest EditorRenderCoordinatorTest EditorSessionRenderControllerTest
+ctest --test-dir build/debug -R "EditorSessionRenderSchedulerPortTest|EditorRenderCoordinatorTest|EditorSessionRenderControllerTest" --output-on-failure
+```
+
+Suite totals: `EditorSessionRenderSchedulerPortTest` 14/14; `EditorRenderCoordinatorTest` 31/31;
+`EditorSessionRenderControllerTest` 15/15 (60/60 combined).
+
+**Checklist / exit condition:** all R4 boxes checked; acceptance criterion 5 satisfied
+(production path does not pre-bind frame submission outside pipeline task setup).
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `editor_session_render_scheduler_port.hpp` | ~127 |
+| `editor_session_render_scheduler_port.cpp` | ~607 |
+| `editor_session_render_scheduler_port_test.cpp` | ~359 |
+| `harness_completing_pipeline_scheduler_port.hpp` (tests/support) | ~226 |
+| `editor_render_coordinator.hpp` / `.cpp` | modest SetPipelineSchedulerPort + sink-id forward |
+
+No responsibility split needed; harness lives only under `tests/support/`.
+
+**Remaining gaps:** reverse `SetCoordinator` / `NotifySchedulerCompleted` and
+`replacement_key` cleanup remain under **Optional follow-up**. Interactive-app / real-RAW
+open-switch latency evidence remains under **Optional follow-up (verification)**.
+
+#### Session context / sink (from R3, if not closed in R4)
+
+- [x] Closed in R4: `PresentationSinkId` stamped on `EditorRenderSessionContext` at
+  open/switch; live `IFrameSink*` resolved only at submit.
 
 ### Optional follow-up — residuals and ownership notes
 
@@ -476,12 +553,6 @@ parallel only if R4 does not absorb the item). Each line is a tracked task from 
 
 - [ ] Remove `EditorRenderIntent::replacement_key` (and `DefaultReplacementKey` / fill path) if no
   producer/diagnostic consumer still requires the string; slots already own coalesce.
-
-#### Session context / sink (from R3, if not closed in R4)
-
-- [ ] If R4 does not land sink identity on `EditorRenderSessionContext`, do it here: bind
-  `PresentationSinkId` (and document owner of the live `IFrameSink*`) at open/switch; hot path
-  must not treat “call `sink_resolver_` again” as the session context contract.
 
 #### Verification (from R3)
 
@@ -598,6 +669,26 @@ Branch: `feature/editor_render_simplify`.
 
 Re-verified focused suites: port 12/12, coordinator 31/31, render controller 15/15 (58/58).
 
-Next: Phase R4 (test seams + carried residuals: no test-producer production branches;
-presentation sink identity on session context). Residual table under R3 maps each open item to
-R4 or Optional follow-up — do not drop those tasks when implementing R4.
+### 2026-08-07 — Phase R4 complete
+
+Branch: `feature/editor_render_simplify`.
+
+Code:
+
+- Removed `SetTestFrameProducer` / `DispatchTestProducer` from
+  `EditorSessionRenderSchedulerPort`; production `Dispatch` is pipeline-only;
+- `EditorRenderSessionContext::presentation_sink_id` stamped at
+  `BindSessionContext` / `RouteInitialRender`; live sink resolved only at submit;
+- Test-only `HarnessCompletingPipelineSchedulerPort` under `tests/support/` for
+  shell/e2e frame completion; coordinator `SetPipelineSchedulerPort` swaps the seam;
+- Port metadata tests assert pipeline `BindFrameSubmission` without adapter
+  `EnsureSize`.
+
+Focused tests (all passed):
+
+- `EditorSessionRenderSchedulerPortTest` 14/14
+- `EditorRenderCoordinatorTest` 31/31
+- `EditorSessionRenderControllerTest` 15/15
+
+Next: Optional follow-ups (completion direction, `replacement_key` cleanup,
+interactive-app verification).

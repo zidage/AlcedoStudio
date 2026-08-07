@@ -449,10 +449,11 @@ class IEditorRenderSubmitPort {
   /// Stamps the active image-load request and cancels pending/in-flight work for
   /// other image-load requests.
   virtual void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) = 0;
-  /// Bind stable session render inputs at open/switch (epoch + element + image).
-  /// Production adapter loads image/buffer once; fakes no-op.
+  /// Bind stable session render inputs at open/switch (epoch + element + image +
+  /// presentation sink identity). Production adapter loads image/buffer once; fakes no-op.
   virtual void BindSessionRenderContext(std::uint64_t /*epoch*/, sl_element_id_t /*element_id*/,
-                                        image_id_t /*image_id*/) {}
+                                        image_id_t /*image_id*/,
+                                        PresentationSinkId /*presentation_sink_id*/ = 0) {}
   /// Clear bound session render inputs (close / pre-switch reset).
   virtual void ClearSessionRenderContext() {}
   /// Phase 5D diagnostics. Default impls report an idle coordinator so test

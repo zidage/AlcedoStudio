@@ -170,9 +170,10 @@ void EditorRenderCoordinator::SetActiveImageLoadRequest(std::uint64_t image_load
 
 void EditorRenderCoordinator::BindSessionRenderContext(std::uint64_t epoch,
                                                        sl_element_id_t element_id,
-                                                       image_id_t image_id) {
+                                                       image_id_t image_id,
+                                                       PresentationSinkId presentation_sink_id) {
   if (scheduler_) {
-    scheduler_->BindSessionContext(epoch, element_id, image_id);
+    scheduler_->BindSessionContext(epoch, element_id, image_id, presentation_sink_id);
   }
 }
 
@@ -180,6 +181,12 @@ void EditorRenderCoordinator::ClearSessionRenderContext() {
   if (scheduler_) {
     scheduler_->ClearSessionContext();
   }
+}
+
+void EditorRenderCoordinator::SetPipelineSchedulerPort(
+    std::shared_ptr<IEditorPipelineSchedulerPort> scheduler) {
+  std::scoped_lock lock(mutex_);
+  scheduler_ = std::move(scheduler);
 }
 
 auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,

@@ -30,8 +30,6 @@ class ImagePoolService;
 namespace alcedo::ui {
 
 using EditorSessionFrameSinkResolver = std::function<alcedo::IFrameSink*()>;
-using EditorSessionTestFrameProducer =
-    std::function<bool(alcedo::IFrameSink*, const alcedo::EditorRenderRequest&)>;
 
 struct EditorSessionSchedulerServices {
   /// Resolve the image pool used for render input acquisition at context bind.
@@ -43,11 +41,14 @@ struct EditorSessionSchedulerServices {
 /// Bound at open/switch (identity immediately; image/buffer/pipeline lazy-once).
 /// Image switch replaces the whole context under the new epoch.
 struct EditorRenderSessionContext {
-  std::uint64_t                        epoch      = 0;
-  sl_element_id_t                      element_id = 0;
-  image_id_t                           image_id   = 0;
-  std::shared_ptr<alcedo::Image>       image;
-  std::shared_ptr<alcedo::ImageBuffer> input;
+  std::uint64_t                          epoch                 = 0;
+  sl_element_id_t                        element_id            = 0;
+  image_id_t                             image_id              = 0;
+  /// Presentation sink identity stamped at open/switch. Live `IFrameSink*` is
+  /// resolved only at pipeline submit; this id is the session-scoped identity.
+  alcedo::PresentationSinkId             presentation_sink_id  = 0;
+  std::shared_ptr<alcedo::Image>         image;
+  std::shared_ptr<alcedo::ImageBuffer>   input;
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
 };
 
@@ -64,13 +65,11 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   void SetSinkResolver(EditorSessionFrameSinkResolver resolver);
   void SetPipelinePort(std::shared_ptr<EditorSessionPipelinePort> pipeline_port);
   void SetServices(EditorSessionSchedulerServices services);
-  /// Deterministic frame producer for focused tests (runs on the pipeline pool).
-  void SetTestFrameProducer(EditorSessionTestFrameProducer producer);
 
   /// Bind identity for the open/switched image. Replaces any prior context.
   /// Image/buffer/pipeline load once on first production frame for this bind.
-  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id,
-                          image_id_t image_id) override;
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+                          alcedo::PresentationSinkId presentation_sink_id = 0) override;
   void ClearSessionContext() override;
   /// Install a fully populated context (tests / preloaded open path).
   void InstallSessionContext(EditorRenderSessionContext context);
@@ -83,6 +82,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   [[nodiscard]] auto session_context() const -> std::optional<EditorRenderSessionContext>;
   /// Times image-pool resolution ran to load context payload (bind/hot-path).
   [[nodiscard]] auto context_payload_load_count() const -> std::uint64_t;
+  /// Times the live sink pointer was resolved at submit (not at bind).
+  [[nodiscard]] auto sink_resolve_count() const -> std::uint64_t;
 
  private:
   struct Job {
@@ -102,8 +103,6 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
       -> bool;
   [[nodiscard]] auto ContextPayloadReady(const EditorRenderSessionContext& context) const -> bool;
   void               DispatchJob(Job job);
-  void               DispatchTestProducer(Job job, alcedo::IFrameSink* sink,
-                                          EditorSessionTestFrameProducer producer);
   void               DispatchPipelineFrame(Job job, alcedo::IFrameSink* sink);
   void               FinishJob(const Job& job, bool success, std::string message);
   void CompleteJob(const alcedo::EditorRenderRequest& request, bool success, std::string message);
@@ -114,7 +113,6 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   EditorSessionFrameSinkResolver                 sink_resolver_;
   std::shared_ptr<EditorSessionPipelinePort>     pipeline_port_;
   EditorSessionSchedulerServices                 services_{};
-  EditorSessionTestFrameProducer                 test_producer_;
   mutable std::mutex                             mutex_;
   std::condition_variable                        jobs_changed_;
   std::uint64_t                                  next_job_id_ = 0;
@@ -122,7 +120,8 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   std::vector<alcedo::EditorRenderRequest>       scheduled_;
   std::optional<EditorRenderSessionContext>      session_context_;
   std::uint64_t                                  context_payload_load_count_ = 0;
-  bool                                           shutting_down_ = false;
+  std::uint64_t                                  sink_resolve_count_         = 0;
+  bool                                           shutting_down_              = false;
 };
 
 }  // namespace alcedo::ui

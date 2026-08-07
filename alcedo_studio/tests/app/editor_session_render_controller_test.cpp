@@ -108,6 +108,7 @@ TEST_F(EditorSessionRenderControllerTest, RouteInitialRenderBindsSessionContextA
   EXPECT_EQ(sched->binds().front().element_id, lifecycle_->identity().element_id);
   EXPECT_EQ(sched->binds().front().image_id, lifecycle_->identity().image_id);
   EXPECT_EQ(sched->binds().front().epoch, lifecycle_->active_image_load_request().value);
+  EXPECT_EQ(sched->binds().front().presentation_sink_id, 1u);
 }
 
 TEST_F(EditorSessionRenderControllerTest, ResetForNewImageClearsSessionRenderContext) {

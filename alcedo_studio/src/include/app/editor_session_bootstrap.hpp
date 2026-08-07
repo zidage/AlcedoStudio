@@ -91,9 +91,10 @@ class EditorSessionBootstrapJournalPort     final : public IEditorJournalPort {
 class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedulerPort {
  public:
   struct SessionContextBind {
-    std::uint64_t   epoch      = 0;
-    sl_element_id_t element_id = 0;
-    image_id_t      image_id   = 0;
+    std::uint64_t      epoch                 = 0;
+    sl_element_id_t    element_id            = 0;
+    image_id_t         image_id              = 0;
+    PresentationSinkId presentation_sink_id  = 0;
   };
 
   auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
@@ -101,9 +102,9 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
     return ++next_job_id_;
   }
   void               Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
-  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id,
-                          image_id_t image_id) override {
-    binds_.push_back({epoch, element_id, image_id});
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+                          PresentationSinkId presentation_sink_id = 0) override {
+    binds_.push_back({epoch, element_id, image_id, presentation_sink_id});
   }
   void ClearSessionContext() override { ++clear_count_; }
 

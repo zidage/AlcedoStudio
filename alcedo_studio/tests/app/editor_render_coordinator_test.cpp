@@ -34,16 +34,17 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
   void WaitForSessionIdle(std::uint64_t session_epoch) override {
     waited_sessions_.push_back(session_epoch);
   }
-  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id,
-                          image_id_t image_id) override {
-    bind_calls_.push_back({epoch, element_id, image_id});
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+                          PresentationSinkId presentation_sink_id = 0) override {
+    bind_calls_.push_back({epoch, element_id, image_id, presentation_sink_id});
   }
   void ClearSessionContext() override { ++clear_count_; }
 
   struct BindCall {
-    std::uint64_t   epoch      = 0;
-    sl_element_id_t element_id = 0;
-    image_id_t      image_id   = 0;
+    std::uint64_t      epoch                = 0;
+    sl_element_id_t    element_id           = 0;
+    image_id_t         image_id             = 0;
+    PresentationSinkId presentation_sink_id = 0;
   };
 
   std::vector<EditorRenderRequest> scheduled_;
@@ -710,11 +711,13 @@ TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, BindAndClearSessionRenderContextForwardToScheduler) {
-  coordinator_->BindSessionRenderContext(/*epoch=*/42, /*element_id=*/7, /*image_id=*/9);
+  coordinator_->BindSessionRenderContext(/*epoch=*/42, /*element_id=*/7, /*image_id=*/9,
+                                         /*presentation_sink_id=*/55);
   ASSERT_EQ(scheduler_->bind_calls_.size(), 1u);
   EXPECT_EQ(scheduler_->bind_calls_.front().epoch, 42u);
   EXPECT_EQ(scheduler_->bind_calls_.front().element_id, 7u);
   EXPECT_EQ(scheduler_->bind_calls_.front().image_id, 9u);
+  EXPECT_EQ(scheduler_->bind_calls_.front().presentation_sink_id, 55u);
 
   coordinator_->ClearSessionRenderContext();
   EXPECT_EQ(scheduler_->clear_count_, 1);

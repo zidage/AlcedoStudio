@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "app/editor_render_intent.hpp"
+#include "support/harness_completing_pipeline_scheduler_port.hpp"
 #include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
@@ -116,23 +117,37 @@ auto WaitForInteractiveImage(ApplicationModuleHost&, EditorSessionController* se
          session->image_id() == imageId && session->can_edit();
 }
 
-auto InstallTestFrameProducer(ApplicationModuleHost& host) -> bool {
-  auto* render_scheduler = host.editor_session_scheduler();
-  if (render_scheduler == nullptr) {
+auto InstallTestFrameProducer(ApplicationModuleHost& host,
+                              alcedo::test::HarnessFrameProducer producer = {}) -> bool {
+  auto* coordinator = host.editor_render_coordinator();
+  if (coordinator == nullptr) {
     return false;
   }
-  render_scheduler->SetTestFrameProducer(
-      [](alcedo::IFrameSink* sink, const alcedo::EditorRenderRequest&) {
-        if (sink == nullptr) {
-          return false;
-        }
-        const auto mapping = sink->MapResourceForWrite(alcedo::FrameMemoryDomain::HostVisible);
-        if (mapping) {
-          sink->UnmapResource();
-        }
-        sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
-        return true;
+  if (!producer) {
+    producer = [](alcedo::IFrameSink* sink, const alcedo::EditorRenderRequest&) {
+      if (sink == nullptr) {
+        return false;
+      }
+      const auto mapping = sink->MapResourceForWrite(alcedo::FrameMemoryDomain::HostVisible);
+      if (mapping) {
+        sink->UnmapResource();
+      }
+      sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
+      return true;
+    };
+  }
+  auto harness = std::make_shared<alcedo::test::HarnessCompletingPipelineSchedulerPort>();
+  harness->SetSinkResolver([&host]() -> alcedo::IFrameSink* {
+    return host.editor_session() ? host.editor_session()->presentation_frame_sink() : nullptr;
+  });
+  harness->SetFrameProducer(std::move(producer));
+  harness->SetCompletionNotifier(
+      [coordinator](std::uint64_t request_id, bool success, std::string message) {
+        coordinator->NotifySchedulerCompleted(request_id, success, std::move(message),
+                                              /*schedule_next_from_pool=*/false);
+        coordinator->Pump();
       });
+  coordinator->SetPipelineSchedulerPort(std::move(harness));
   return true;
 }
 
@@ -738,9 +753,9 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ASSERT_NE(scheduler, nullptr);
 
   std::atomic<int> written_frame_count{0};
-  scheduler->SetTestFrameProducer([&written_frame_count](
-                                      alcedo::IFrameSink*                sink,
-                                      const alcedo::EditorRenderRequest& request) -> bool {
+  ASSERT_TRUE(InstallTestFrameProducer(
+      loaded->host, [&written_frame_count](alcedo::IFrameSink*                sink,
+                                           const alcedo::EditorRenderRequest& request) -> bool {
     if (!sink) {
       return false;
     }
@@ -802,7 +817,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
     sink->NotifyFrameReady({metadata, presentation_mode});
     written_frame_count.fetch_add(1, std::memory_order_release);
     return true;
-  });
+  }));
 
   loaded->host.workspace_router()->OpenEditor(7, 70);
   const auto first_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);

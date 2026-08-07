@@ -9,7 +9,6 @@
 #include <QString>
 #include <QThread>
 
-#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <utility>
@@ -154,15 +153,9 @@ void EditorSessionRenderSchedulerPort::SetServices(EditorSessionSchedulerService
   services_ = std::move(services);
 }
 
-void EditorSessionRenderSchedulerPort::SetTestFrameProducer(
-    EditorSessionTestFrameProducer producer) {
-  std::scoped_lock lock(mutex_);
-  test_producer_ = std::move(producer);
-}
-
-void EditorSessionRenderSchedulerPort::BindSessionContext(std::uint64_t epoch,
-                                                          sl_element_id_t element_id,
-                                                          image_id_t image_id) {
+void EditorSessionRenderSchedulerPort::BindSessionContext(
+    std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+    alcedo::PresentationSinkId presentation_sink_id) {
   std::scoped_lock lock(mutex_);
   // Same open image: keep Image / ImageBuffer / PipelineGuard. RouteInitialRender
   // (undo, head-move, quality re-route) rebinds with the same element/image and
@@ -170,14 +163,16 @@ void EditorSessionRenderSchedulerPort::BindSessionContext(std::uint64_t epoch,
   // Only a true image identity change replaces the whole context.
   if (session_context_ && session_context_->element_id == element_id &&
       session_context_->image_id == image_id) {
-    session_context_->epoch = epoch;
+    session_context_->epoch                = epoch;
+    session_context_->presentation_sink_id = presentation_sink_id;
     return;
   }
   EditorRenderSessionContext context;
-  context.epoch      = epoch;
-  context.element_id = element_id;
-  context.image_id   = image_id;
-  session_context_   = std::move(context);
+  context.epoch                = epoch;
+  context.element_id           = element_id;
+  context.image_id             = image_id;
+  context.presentation_sink_id = presentation_sink_id;
+  session_context_             = std::move(context);
 }
 
 void EditorSessionRenderSchedulerPort::ClearSessionContext() {
@@ -199,6 +194,11 @@ auto EditorSessionRenderSchedulerPort::session_context() const
 auto EditorSessionRenderSchedulerPort::context_payload_load_count() const -> std::uint64_t {
   std::scoped_lock lock(mutex_);
   return context_payload_load_count_;
+}
+
+auto EditorSessionRenderSchedulerPort::sink_resolve_count() const -> std::uint64_t {
+  std::scoped_lock lock(mutex_);
+  return sink_resolve_count_;
 }
 
 auto EditorSessionRenderSchedulerPort::ContextMatchesRequest(
@@ -242,21 +242,16 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
 
 auto EditorSessionRenderSchedulerPort::CanProduceFrame(
     const alcedo::EditorRenderRequest& request) const -> bool {
-  EditorSessionTestFrameProducer test_producer;
-  bool                           has_matching_context = false;
-  bool                           payload_ready        = false;
-  bool                           has_image_pool       = false;
+  bool has_matching_context = false;
+  bool payload_ready        = false;
+  bool has_image_pool       = false;
   {
     std::scoped_lock lock(mutex_);
-    test_producer = test_producer_;
     if (session_context_ && ContextMatchesRequest(*session_context_, request)) {
       has_matching_context = true;
       payload_ready        = ContextPayloadReady(*session_context_);
     }
     has_image_pool = static_cast<bool>(services_.image_pool);
-  }
-  if (test_producer) {
-    return true;
   }
   // Bound context with payload: no pool probe on the hot path.
   if (has_matching_context && payload_ready) {
@@ -289,10 +284,11 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     // Align identity with this request when open/switch bind was skipped.
     if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
       EditorRenderSessionContext context;
-      context.epoch      = request.intent.image_load_request_id.value;
-      context.element_id = request.intent.element_id;
-      context.image_id   = request.intent.image_id;
-      session_context_   = std::move(context);
+      context.epoch                = request.intent.image_load_request_id.value;
+      context.element_id           = request.intent.element_id;
+      context.image_id             = request.intent.image_id;
+      context.presentation_sink_id = request.intent.presentation_sink_id;
+      session_context_             = std::move(context);
     }
   }
 
@@ -381,13 +377,34 @@ auto EditorSessionRenderSchedulerPort::EnsurePipelineScheduler()
 
 void EditorSessionRenderSchedulerPort::DispatchJob(Job job) {
   EditorSessionFrameSinkResolver resolver;
-  EditorSessionTestFrameProducer test_producer;
+  alcedo::PresentationSinkId     bound_sink_id = 0;
+  bool                           has_context   = false;
   {
     std::scoped_lock lock(mutex_);
-    resolver      = sink_resolver_;
-    test_producer = test_producer_;
+    resolver = sink_resolver_;
+    if (session_context_) {
+      has_context   = true;
+      bound_sink_id = session_context_->presentation_sink_id;
+    }
   }
-  alcedo::IFrameSink* sink = resolver ? resolver() : nullptr;
+
+  // Session-scoped sink identity is stamped at bind. Reject mismatched intents
+  // before resolving a live pointer for pipeline submit.
+  if (has_context && bound_sink_id != 0 && job.request.intent.presentation_sink_id != 0 &&
+      job.request.intent.presentation_sink_id != bound_sink_id) {
+    auto scheduler = EnsurePipelineScheduler();
+    scheduler->ScheduleWork([this, job]() mutable {
+      FinishJob(job, false, "Presentation sink identity does not match session context");
+    });
+    return;
+  }
+
+  alcedo::IFrameSink* sink = nullptr;
+  {
+    std::scoped_lock lock(mutex_);
+    ++sink_resolve_count_;
+  }
+  sink = resolver ? resolver() : nullptr;
   if (!sink) {
     auto scheduler = EnsurePipelineScheduler();
     scheduler->ScheduleWork([this, job]() mutable {
@@ -396,48 +413,7 @@ void EditorSessionRenderSchedulerPort::DispatchJob(Job job) {
     return;
   }
 
-  if (test_producer) {
-    DispatchTestProducer(std::move(job), sink, std::move(test_producer));
-    return;
-  }
   DispatchPipelineFrame(std::move(job), sink);
-}
-
-void EditorSessionRenderSchedulerPort::DispatchTestProducer(
-    Job job, alcedo::IFrameSink* sink, EditorSessionTestFrameProducer producer) {
-  auto scheduler = EnsurePipelineScheduler();
-  scheduler->ScheduleWork([this, job = std::move(job), sink, producer = std::move(producer)]() {
-    if (JobIsCancelled(job)) {
-      FinishJob(job, false, "Cancelled during execution");
-      return;
-    }
-    alcedo::FramePreviewMetadata meta = FrameRoleToPreviewMetadata(job.request.intent);
-    meta.presentation_request_id      = job.request.request_id;
-    const alcedo::FramePresentationMode mode =
-        job.request.intent.frame_role == alcedo::FrameRole::DetailPatch
-            ? alcedo::FramePresentationMode::ViewportTransformed
-            : alcedo::FramePresentationMode::FullFrame;
-    // ponytail: test producers still need BindFrameSubmission; production path
-    // leaves binding to PipelineTask::SetExecutorRenderParams.
-    sink->BindFrameSubmission(alcedo::FrameCompletionSubmission{meta, mode});
-    sink->EnsureSize(std::max(1, job.request.intent.requested_width),
-                     std::max(1, job.request.intent.requested_height));
-    bool        ok = false;
-    std::string message;
-    try {
-      ok      = producer(sink, job.request);
-      message = ok ? "Frame ready" : "Test frame producer failed";
-    } catch (const std::exception& ex) {
-      message = ex.what();
-    } catch (...) {
-      message = "Test frame producer exception";
-    }
-    if (JobIsCancelled(job)) {
-      FinishJob(job, false, "Cancelled during execution");
-      return;
-    }
-    FinishJob(job, ok, std::move(message));
-  });
 }
 
 void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IFrameSink* sink) {

@@ -119,7 +119,7 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
   }
   // Bind stable session render inputs at open/switch before first schedule.
   deps_.render->BindSessionRenderContext(image_load_request.value, identity.element_id,
-                                         identity.image_id);
+                                         identity.image_id, presentation_sink_id_);
   deps_.render->SetActiveImageLoadRequest(image_load_request.value);
   const EditorRenderResult routed = deps_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {

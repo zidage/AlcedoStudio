@@ -4,6 +4,7 @@
 /// @file editor_adjustment_transfer_real_project_e2e_test.cpp
 /// @brief Replays Copy/Paste through production Main.qml on a packed project.
 
+#include "support/harness_completing_pipeline_scheduler_port.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 #include <gtest/gtest.h>
@@ -116,20 +117,31 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   // QML workflow. Frame contents are covered by the dedicated GPU E2E tests;
   // provide a lightweight presentation frame here so session close cannot wait
   // on an unrelated RAW decode after the panel assertions have completed.
-  auto* render_scheduler = loaded->host.editor_session_scheduler();
-  ASSERT_NE(render_scheduler, nullptr);
-  render_scheduler->SetTestFrameProducer(
-      [](alcedo::IFrameSink* sink, const alcedo::EditorRenderRequest&) {
-        if (sink == nullptr) {
-          return false;
-        }
-        const auto mapping = sink->MapResourceForWrite(alcedo::FrameMemoryDomain::HostVisible);
-        if (mapping) {
-          sink->UnmapResource();
-        }
-        sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
-        return true;
+  auto* coordinator = loaded->host.editor_render_coordinator();
+  ASSERT_NE(coordinator, nullptr);
+  auto harness = std::make_shared<alcedo::test::HarnessCompletingPipelineSchedulerPort>();
+  harness->SetSinkResolver([&loaded]() -> alcedo::IFrameSink* {
+    return loaded->host.editor_session() ? loaded->host.editor_session()->presentation_frame_sink()
+                                         : nullptr;
+  });
+  harness->SetFrameProducer([](alcedo::IFrameSink* sink, const alcedo::EditorRenderRequest&) {
+    if (sink == nullptr) {
+      return false;
+    }
+    const auto mapping = sink->MapResourceForWrite(alcedo::FrameMemoryDomain::HostVisible);
+    if (mapping) {
+      sink->UnmapResource();
+    }
+    sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
+    return true;
+  });
+  harness->SetCompletionNotifier(
+      [coordinator](std::uint64_t request_id, bool success, std::string message) {
+        coordinator->NotifySchedulerCompleted(request_id, success, std::move(message),
+                                              /*schedule_next_from_pool=*/false);
+        coordinator->Pump();
       });
+  coordinator->SetPipelineSchedulerPort(std::move(harness));
 
   const auto first  = loaded->host.library()->Thumbnails().at(0).toMap();
   const auto second = loaded->host.library()->Thumbnails().at(1).toMap();
