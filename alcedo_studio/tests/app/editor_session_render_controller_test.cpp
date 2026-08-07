@@ -100,26 +100,6 @@ TEST_F(EditorSessionRenderControllerTest, RouteInitialRenderSchedulesInteractive
   EXPECT_NE(render_->first_frame_request_id(), 0u);
 }
 
-TEST_F(EditorSessionRenderControllerTest, RouteInitialRenderBindsSessionContextAtOpen) {
-  OpenImage();
-  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
-  ASSERT_NE(sched, nullptr);
-  ASSERT_EQ(sched->binds().size(), 1u);
-  EXPECT_EQ(sched->binds().front().element_id, lifecycle_->identity().element_id);
-  EXPECT_EQ(sched->binds().front().image_id, lifecycle_->identity().image_id);
-  EXPECT_EQ(sched->binds().front().epoch, lifecycle_->active_image_load_request().value);
-}
-
-TEST_F(EditorSessionRenderControllerTest, ResetForNewImageClearsSessionRenderContext) {
-  OpenImage();
-  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
-  ASSERT_NE(sched, nullptr);
-  const int clears_after_open = sched->clear_count();
-
-  render_->ResetForNewImage();
-  EXPECT_EQ(sched->clear_count(), clears_after_open + 1);
-}
-
 TEST_F(EditorSessionRenderControllerTest, GeometryOverlayFlagIsStampedOnRenderIntent) {
   render_->SetGeometryOverlayActive(true);
   OpenImage();

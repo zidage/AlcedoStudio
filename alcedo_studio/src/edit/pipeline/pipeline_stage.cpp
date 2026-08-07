@@ -531,12 +531,10 @@ std::shared_ptr<ImageBuffer> PipelineStage::ApplyGpuOperators(OperatorParams& gl
         profile.AddDuration("copy_input_gpu", ProfileClock::now() - copy_start);
       }
     } else if (input_img_->buffer_valid_) {
-      // Share encoded payload (O(1)). Do not deep-copy multi-MB RAW file bytes —
-      // RAW_DECODE replaces *this working ImageBuffer in place and leaves the
-      // session-held source ImageBuffer intact when the objects are distinct.
       const auto materialize_start = ProfileClock::now();
-      current_img                  = input_img_->ShareEncodedBuffer();
-      profile.AddDuration("share_input_buffer", ProfileClock::now() - materialize_start);
+      auto       buffer            = input_img_->GetBuffer();
+      current_img = std::make_shared<ImageBuffer>(std::move(buffer));
+      profile.AddDuration("materialize_input_buffer", ProfileClock::now() - materialize_start);
     }
 
     const auto apply_gpu_operator = [&](OperatorType op_type, const OperatorEntry& op_entry) {

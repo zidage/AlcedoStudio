@@ -160,61 +160,6 @@ void EditorSessionRenderSchedulerPort::SetTestFrameProducer(
   test_producer_ = std::move(producer);
 }
 
-void EditorSessionRenderSchedulerPort::BindSessionContext(std::uint64_t epoch,
-                                                          sl_element_id_t element_id,
-                                                          image_id_t image_id) {
-  std::scoped_lock lock(mutex_);
-  // Same open image: keep Image / ImageBuffer / PipelineGuard. RouteInitialRender
-  // (undo, head-move, quality re-route) rebinds with the same element/image and
-  // must not force another full-file LoadImageInputBuffer or drop the payload.
-  // Only a true image identity change replaces the whole context.
-  if (session_context_ && session_context_->element_id == element_id &&
-      session_context_->image_id == image_id) {
-    session_context_->epoch = epoch;
-    return;
-  }
-  EditorRenderSessionContext context;
-  context.epoch      = epoch;
-  context.element_id = element_id;
-  context.image_id   = image_id;
-  session_context_   = std::move(context);
-}
-
-void EditorSessionRenderSchedulerPort::ClearSessionContext() {
-  std::scoped_lock lock(mutex_);
-  session_context_.reset();
-}
-
-void EditorSessionRenderSchedulerPort::InstallSessionContext(EditorRenderSessionContext context) {
-  std::scoped_lock lock(mutex_);
-  session_context_ = std::move(context);
-}
-
-auto EditorSessionRenderSchedulerPort::session_context() const
-    -> std::optional<EditorRenderSessionContext> {
-  std::scoped_lock lock(mutex_);
-  return session_context_;
-}
-
-auto EditorSessionRenderSchedulerPort::context_payload_load_count() const -> std::uint64_t {
-  std::scoped_lock lock(mutex_);
-  return context_payload_load_count_;
-}
-
-auto EditorSessionRenderSchedulerPort::ContextMatchesRequest(
-    const EditorRenderSessionContext& context, const alcedo::EditorRenderRequest& request) const
-    -> bool {
-  return context.epoch == request.intent.image_load_request_id.value &&
-         context.element_id == request.intent.element_id &&
-         context.image_id == request.intent.image_id;
-}
-
-auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
-    const EditorRenderSessionContext& context) const -> bool {
-  return context.image && !context.image->image_path_.empty() && context.input &&
-         context.pipeline_guard && context.pipeline_guard->pipeline_;
-}
-
 auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderRequest& request)
     -> std::uint64_t {
   if (!CanProduceFrame(request)) {
@@ -242,132 +187,31 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
 
 auto EditorSessionRenderSchedulerPort::CanProduceFrame(
     const alcedo::EditorRenderRequest& request) const -> bool {
-  EditorSessionTestFrameProducer test_producer;
-  bool                           has_matching_context = false;
-  bool                           payload_ready        = false;
-  bool                           has_image_pool       = false;
+  EditorSessionTestFrameProducer                          test_producer;
+  std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool;
   {
     std::scoped_lock lock(mutex_);
     test_producer = test_producer_;
-    if (session_context_ && ContextMatchesRequest(*session_context_, request)) {
-      has_matching_context = true;
-      payload_ready        = ContextPayloadReady(*session_context_);
-    }
-    has_image_pool = static_cast<bool>(services_.image_pool);
+    image_pool    = services_.image_pool;
   }
   if (test_producer) {
     return true;
   }
-  // Bound context with payload: no pool probe on the hot path.
-  if (has_matching_context && payload_ready) {
-    return true;
-  }
-  // Identity bound or services available: allow Schedule; EnsureContext loads once.
-  if (has_matching_context || has_image_pool) {
-    return request.intent.image_id != 0 && request.intent.element_id != 0;
-  }
-  return false;
-}
-
-auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
-    const alcedo::EditorRenderRequest& request, std::string* error)
-    -> std::optional<EditorRenderSessionContext> {
-  {
-    std::scoped_lock lock(mutex_);
-    if (session_context_ && ContextMatchesRequest(*session_context_, request) &&
-        ContextPayloadReady(*session_context_)) {
-      return session_context_;
-    }
-  }
-
-  std::shared_ptr<EditorSessionPipelinePort>             pipeline_port;
-  std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool_resolver;
-  {
-    std::scoped_lock lock(mutex_);
-    pipeline_port       = pipeline_port_;
-    image_pool_resolver = services_.image_pool;
-    // Align identity with this request when open/switch bind was skipped.
-    if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
-      EditorRenderSessionContext context;
-      context.epoch      = request.intent.image_load_request_id.value;
-      context.element_id = request.intent.element_id;
-      context.image_id   = request.intent.image_id;
-      session_context_   = std::move(context);
-    }
-  }
-
-  if (!pipeline_port) {
-    if (error) {
-      *error = "Editor pipeline port is not configured";
-    }
-    return std::nullopt;
-  }
-
-  std::string pipeline_error;
-  auto        guard = pipeline_port->EnsureLoaded(request.intent.element_id, &pipeline_error);
-  if (!guard || !guard->pipeline_) {
-    if (error) {
-      *error = pipeline_error.empty() ? "No pipeline guard for image; open may lack a project"
-                                      : std::move(pipeline_error);
-    }
-    return std::nullopt;
-  }
-
-  if (!image_pool_resolver) {
-    if (error) {
-      *error = "Image pool is unavailable";
-    }
-    return std::nullopt;
-  }
-  auto image_pool = image_pool_resolver();
   if (!image_pool) {
-    if (error) {
-      *error = "Image pool is unavailable";
-    }
-    return std::nullopt;
+    return false;
   }
-
-  std::shared_ptr<alcedo::Image>       image_desc;
-  std::shared_ptr<alcedo::ImageBuffer> input;
   try {
-    image_desc = image_pool->Read<std::shared_ptr<alcedo::Image>>(
+    const auto pool = image_pool();
+    if (!pool) {
+      return false;
+    }
+    const auto image = pool->Read<std::shared_ptr<alcedo::Image>>(
         request.intent.image_id,
-        [](const std::shared_ptr<alcedo::Image>& image) { return image; });
-    if (!image_desc || image_desc->image_path_.empty()) {
-      if (error) {
-        *error = "Image descriptor is missing or has an empty path";
-      }
-      return std::nullopt;
-    }
-    input = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
-  } catch (const std::exception& ex) {
-    if (error) {
-      *error = ex.what();
-    }
-    return std::nullopt;
+        [](const std::shared_ptr<alcedo::Image>& value) { return value; });
+    return image && !image->image_path_.empty();
   } catch (...) {
-    if (error) {
-      *error = "Failed to load session render context payload";
-    }
-    return std::nullopt;
+    return false;
   }
-
-  std::scoped_lock lock(mutex_);
-  // Another bind/switch may have replaced the identity while we loaded.
-  if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
-    if (error) {
-      *error = "Session render context was replaced during load";
-    }
-    return std::nullopt;
-  }
-  // Only the first successful payload load for this identity counts.
-  if (!ContextPayloadReady(*session_context_)) {
-    session_context_->image          = std::move(image_desc);
-    session_context_->input          = std::move(input);
-    session_context_->pipeline_guard = std::move(guard);
-    ++context_payload_load_count_;
-  }
-  return session_context_;
 }
 
 auto EditorSessionRenderSchedulerPort::EnsurePipelineScheduler()
@@ -441,29 +285,74 @@ void EditorSessionRenderSchedulerPort::DispatchTestProducer(
 }
 
 void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IFrameSink* sink) {
-  auto scheduler = EnsurePipelineScheduler();
-  if (!scheduler) {
-    // EnsurePipelineScheduler always creates one; defensive path only.
-    FinishJob(job, false, "Editor pipeline scheduler is not fully configured");
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  EditorSessionSchedulerServices             services;
+  auto                                       scheduler = EnsurePipelineScheduler();
+  {
+    std::scoped_lock lock(mutex_);
+    pipeline_port = pipeline_port_;
+    services      = services_;
+  }
+  if (!pipeline_port || !scheduler) {
+    scheduler->ScheduleWork([this, job]() mutable {
+      FinishJob(job, false, "Editor pipeline scheduler is not fully configured");
+    });
     return;
   }
 
   std::string error;
-  auto        context = EnsureContextForRequest(job.request, &error);
-  if (!context) {
-    scheduler->ScheduleWork([this, job, error = std::move(error)]() mutable {
-      FinishJob(job, false, error.empty() ? "Session render context is unavailable" : std::move(error));
+  auto        guard = pipeline_port->EnsureLoaded(job.request.intent.element_id, &error);
+  if (!guard || !guard->pipeline_) {
+    if (error.empty()) {
+      error = "No pipeline guard for image; open may lack a project";
+    }
+    scheduler->ScheduleWork([this, job, error]() mutable {
+      FinishJob(job, false, std::move(error));
+    });
+    return;
+  }
+
+  std::shared_ptr<alcedo::ImagePoolService> image_pool;
+  if (services.image_pool) {
+    image_pool = services.image_pool();
+  }
+  if (!image_pool) {
+    scheduler->ScheduleWork([this, job]() mutable {
+      FinishJob(job, false, "Image pool is unavailable");
     });
     return;
   }
 
   try {
     TraceDetailRequest("pipeline-submit", job.request);
-    auto exec = context->pipeline_guard->pipeline_;
+    auto                           exec = guard->pipeline_;
+    std::shared_ptr<alcedo::Image> image_desc;
+    try {
+      image_desc = image_pool->Read<std::shared_ptr<alcedo::Image>>(
+          job.request.intent.image_id,
+          [](const std::shared_ptr<alcedo::Image>& image) { return image; });
+    } catch (...) {
+    }
+    std::shared_ptr<alcedo::ImageBuffer> input;
+    {
+      std::scoped_lock lock(mutex_);
+      if (cached_input_image_id_ == job.request.intent.image_id) {
+        input = cached_input_;
+      }
+    }
+    if (!input) {
+      auto loaded = controllers::LoadImageInputBuffer(image_pool, job.request.intent.image_id);
+      std::scoped_lock lock(mutex_);
+      if (cached_input_image_id_ != job.request.intent.image_id || !cached_input_) {
+        cached_input_image_id_ = job.request.intent.image_id;
+        cached_input_          = std::move(loaded);
+      }
+      input = cached_input_;
+    }
 
     alcedo::PipelineTask task;
-    task.input_                             = context->input;
-    task.input_desc_                        = context->image;
+    task.input_                             = std::move(input);
+    task.input_desc_                        = std::move(image_desc);
     task.pipeline_executor_                 = exec;
     task.options_.render_desc_.render_type_ = RenderTypeForIntent(job.request.intent);
     task.options_.render_desc_.use_viewport_region_ =

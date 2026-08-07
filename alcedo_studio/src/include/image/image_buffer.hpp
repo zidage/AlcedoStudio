@@ -83,10 +83,7 @@ class ImageBuffer {
   cv::Mat                               cpu_data_;
   GpuImageWrapper                       gpu_data_;
 
-  /// Encoded file bytes (e.g. RAW payload). Shared so session-held sources and
-  /// per-Apply working ImageBuffers can alias the same multi-MB vector without
-  /// deep-copying on every quality-ladder frame.
-  std::shared_ptr<std::vector<uint8_t>> buffer_;
+  std::unique_ptr<std::vector<uint8_t>> buffer_;
 
  public:
   bool cpu_data_valid_ = false;
@@ -118,11 +115,6 @@ class ImageBuffer {
   ImageBuffer(std::vector<uint8_t>&& buffer);
 
   void ReadFromVectorBuffer(std::vector<uint8_t>&& buffer);
-
-  /// New ImageBuffer aliasing the same encoded payload (O(1)). Distinct object
-  /// so operators that replace `*input` (e.g. RAW_DECODE) do not wipe the
-  /// session-held source buffer.
-  [[nodiscard]] auto ShareEncodedBuffer() const -> std::shared_ptr<ImageBuffer>;
 
   auto GetCPUData() -> cv::Mat&;
   auto GetBuffer() -> std::vector<uint8_t>&;

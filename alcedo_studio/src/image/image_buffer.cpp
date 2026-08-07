@@ -364,7 +364,7 @@ ImageBuffer::ImageBuffer(cv::Mat& data) : cpu_data_valid_(true) { data.copyTo(cp
 ImageBuffer::ImageBuffer(cv::Mat&& data) : cpu_data_(std::move(data)), cpu_data_valid_(true) {}
 
 ImageBuffer::ImageBuffer(std::vector<uint8_t>&& buffer) : buffer_valid_(true) {
-  buffer_ = std::make_shared<std::vector<uint8_t>>(std::move(buffer));
+  buffer_ = std::make_unique<std::vector<uint8_t>>(std::move(buffer));
 }
 
 ImageBuffer::ImageBuffer(ImageBuffer&& other) noexcept
@@ -411,18 +411,8 @@ ImageBuffer& ImageBuffer::operator=(ImageBuffer&& other) noexcept {
 }
 
 void ImageBuffer::ReadFromVectorBuffer(std::vector<uint8_t>&& buffer) {
-  buffer_       = std::make_shared<std::vector<uint8_t>>(std::move(buffer));
+  buffer_       = std::make_unique<std::vector<uint8_t>>(std::move(buffer));
   buffer_valid_ = true;
-}
-
-auto ImageBuffer::ShareEncodedBuffer() const -> std::shared_ptr<ImageBuffer> {
-  if (!buffer_valid_ || !buffer_) {
-    throw std::runtime_error("ImageBuffer: No valid encoded buffer data to share.");
-  }
-  auto shared          = std::make_shared<ImageBuffer>();
-  shared->buffer_      = buffer_;
-  shared->buffer_valid_ = true;
-  return shared;
 }
 
 auto ImageBuffer::GetCPUData() -> cv::Mat& {
@@ -583,12 +573,8 @@ ImageBuffer ImageBuffer::Clone() const {
     return ImageBuffer{std::move(cpu_copy)};
   }
   if (buffer_valid_) {
-    // Alias encoded bytes; callers that need an isolated ImageBuffer object
-    // (RAW_DECODE in-place replace) should use ShareEncodedBuffer().
-    ImageBuffer copy;
-    copy.buffer_       = buffer_;
-    copy.buffer_valid_ = true;
-    return copy;
+    auto buffer = *buffer_;
+    return ImageBuffer{std::move(buffer)};
   }
   throw std::runtime_error("ImageBuffer: No valid data to clone.");
 }
