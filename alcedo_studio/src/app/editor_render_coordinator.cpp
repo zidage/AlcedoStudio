@@ -105,6 +105,20 @@ void EditorRenderCoordinator::SetActiveImageLoadRequest(std::uint64_t image_load
   DeliverPendingResults();
 }
 
+void EditorRenderCoordinator::BindSessionRenderContext(std::uint64_t epoch,
+                                                       sl_element_id_t element_id,
+                                                       image_id_t image_id) {
+  if (scheduler_) {
+    scheduler_->BindSessionContext(epoch, element_id, image_id);
+  }
+}
+
+void EditorRenderCoordinator::ClearSessionRenderContext() {
+  if (scheduler_) {
+    scheduler_->ClearSessionContext();
+  }
+}
+
 auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,
                                              std::string*              message) const -> bool {
   if (intent.image_load_request_id.value != active_image_load_request_id_) {

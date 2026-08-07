@@ -240,12 +240,26 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     stage_profiles.push_back(std::move(stage_profile));
   };
 
+  // Session tasks hold a multi-MB encoded source (RAW file bytes). A distinct
+  // ImageBuffer must wrap that payload for RAW_DECODE (*input = move(decoded)),
+  // but the underlying vector must be shared — deep-cloning it on every
+  // quality-ladder cache miss re-copies the whole file into working results.
+  const auto materialize_stage_input = [&](const char* step_name) {
+    const auto materialize_start = ProfileClock::now();
+    if (input && input->buffer_valid_ && !input->cpu_data_valid_ && !input->gpu_data_valid_) {
+      output = input->ShareEncodedBuffer();
+      executor_steps.push_back(std::string(step_name) + "_share_encoded=" +
+                               FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
+      return;
+    }
+    output = std::make_shared<ImageBuffer>(input->Clone());
+    executor_steps.push_back(std::string(step_name) + "_clone=" +
+                             FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
+  };
+
   if (enable_cache_) {
     if (!first_stage->CacheValid()) {
-      const auto clone_start = ProfileClock::now();
-      output = std::make_shared<ImageBuffer>(input->Clone());
-      executor_steps.push_back("clone_input=" +
-                               FormatDurationMs(DurationToMs(ProfileClock::now() - clone_start)));
+      materialize_stage_input("stage_input");
       for (auto* stage : exec_stages_) {
         apply_stage(stage);
       }
@@ -269,10 +283,7 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     }
   } else {
     // Cache is disabled, just process the stages sequentially
-    const auto clone_start = ProfileClock::now();
-    output = std::make_shared<ImageBuffer>(input->Clone());
-    executor_steps.push_back("clone_input=" +
-                             FormatDurationMs(DurationToMs(ProfileClock::now() - clone_start)));
+    materialize_stage_input("stage_input");
     for (auto* stage : exec_stages_) {
       apply_stage(stage);
     }
