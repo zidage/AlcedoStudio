@@ -15,6 +15,7 @@
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/render_e2e_timing.hpp"
 
 using alcedo::diag::editorPresentLog;
 
@@ -412,6 +413,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
             << " reason=not-mapped-or-not-unmapped mapped=" << has_mapped_slot_
             << " unmap_pending=" << unmapped_pending_submit_;
       }
+      diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "sink-not-mapped");
       return;
     }
     if (!AcceptSubmissionRequestId(metadata.presentation_request_id)) {
@@ -423,6 +425,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
       has_mapped_slot_         = false;
       unmapped_pending_submit_ = false;
       mapped_slot_index_       = -1;
+      diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "stale-request-id");
       return;
     }
     slot_index = mapped_slot_index_;
@@ -438,6 +441,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
         << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
           << " reason=no-item-queue-or-slot slot=" << slot_index;
     }
+    diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "sink-no-queue");
     return;
   }
   if (metadata.frame_role == FrameRole::DetailPatch) {
@@ -449,12 +453,14 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
         << metadata.source_roi_norm.height;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
+  diag::NoteRenderE2eProducerReady(metadata.presentation_request_id);
   qCDebug(editorPresentLog,
           "[EditorPresent] submitted frame request=%llu image=%llu epoch=%llu slot=%d",
           static_cast<unsigned long long>(metadata.presentation_request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
           static_cast<unsigned long long>(item_->sessionEpoch()), slot_index);
   item_->requestPresentUpdate();
+  diag::NoteRenderE2ePresentWake(metadata.presentation_request_id);
 }
 
 void DirectFrameSink::SubmitHostFrame(const ViewerFrame&) {
@@ -495,17 +501,21 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   {
     std::lock_guard lock(mutex_);
     if (!AcceptSubmissionRequestId(imported.preview_metadata.presentation_request_id)) {
+      diag::NoteRenderE2eTerminal(imported.preview_metadata.presentation_request_id,
+                                  "stale-metal-request");
       return;
     }
     request_id        = imported.preview_metadata.presentation_request_id;
     imported.sequence = ++imported_sequence_;
     const auto layer  = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
+      const auto superseded =
+          pending_imported_[layer]->preview_metadata.presentation_request_id;
       qCDebug(editorPresentLog,
               "[EditorPresent] superseding pending Metal import role=%d request=%llu",
               static_cast<int>(imported.preview_metadata.frame_role),
-              static_cast<unsigned long long>(
-                  pending_imported_[layer]->preview_metadata.presentation_request_id));
+              static_cast<unsigned long long>(superseded));
+      diag::NoteRenderE2eTerminal(superseded, "superseded-metal-import");
     }
     pending_imported_[layer] = imported;
     ++submitted_frame_count_;
@@ -524,6 +534,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     }
   }
 
+  diag::NoteRenderE2eProducerReady(request_id);
   qCDebug(editorPresentLog,
           "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu size=%dx%d "
           "handle=%llu (zero-copy)",
@@ -542,6 +553,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
         connection);
   }
   item_->requestPresentUpdate();
+  diag::NoteRenderE2ePresentWake(request_id);
 }
 #endif
 

@@ -22,6 +22,7 @@
 #include "ui/editor_rhi/native_resource_counters.hpp"
 
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/render_e2e_timing.hpp"
 
 using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
@@ -516,8 +517,10 @@ void EditorViewportRenderer::consumeDirectFrames() {
     if (!frame.has_value()) {
       continue;
     }
+    const std::uint64_t request_id = frame->slot.preview_metadata.presentation_request_id;
+    diag::NoteRenderE2eConsumeBegin(request_id);
     qCDebug(editorPresentLog, "[EditorPresent] consuming frame request=%llu image=%llu epoch=%llu size=%dx%d",
-          static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
+          static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(frame->slot.image_identity),
           static_cast<unsigned long long>(frame->slot.session_epoch), frame->slot.width,
            frame->slot.height);
@@ -539,6 +542,8 @@ void EditorViewportRenderer::consumeDirectFrames() {
                static_cast<unsigned long long>(
                    frame->slot.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame->slot.native.native_handle));
+      diag::NoteRenderE2eTerminal(frame->slot.preview_metadata.presentation_request_id,
+                                  "qrhi-import-failed");
       destroyResource(texture);
       present_queue_->CompleteRendererRead(frame->slot.index);
       if (role == FrameRole::DetailPatch) {
@@ -568,6 +573,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_ = true;
+    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog)
         << "[ROI_TRACE][renderer-imported] request="
@@ -592,10 +598,12 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     if (!frame.valid()) {
       continue;
     }
-    const FrameRole role = frame.preview_metadata.frame_role;
+    const FrameRole     role       = frame.preview_metadata.frame_role;
+    const std::uint64_t request_id = frame.preview_metadata.presentation_request_id;
+    diag::NoteRenderE2eConsumeBegin(request_id);
     qCDebug(editorPresentLog, "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
           "size=%dx%d handle=%llu",
-          static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
+          static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(frame.image_identity),
           static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
            static_cast<unsigned long long>(frame.texture_handle));
@@ -624,6 +632,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.ready_frame.slot.sequence = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
+      diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
       if (role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog)
         << "[ROI_TRACE][renderer-metal-reused] request="
@@ -642,6 +651,8 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       qCWarning(editorPresentLog, "[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
                static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame.texture_handle));
+      diag::NoteRenderE2eTerminal(frame.preview_metadata.presentation_request_id,
+                                  "metal-qrhi-import-failed");
       destroyResource(texture);
       if (role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog)
@@ -676,6 +687,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.ready_frame.slot.sequence = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
+    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog)
         << "[ROI_TRACE][renderer-metal-imported] request="
@@ -908,6 +920,9 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   if (!command_buffer || !render_target || !rhi_ || !item_) {
     return;
   }
+
+  // P0 present split: scene-graph / vsync wait ends when this render pass starts.
+  diag::NoteRenderE2eRenderEnter();
 
   // Targets are producer-driven. Matches the pre-refactor surface: create the
   // exact output slot requested by EnsureSize, with no speculative pool.

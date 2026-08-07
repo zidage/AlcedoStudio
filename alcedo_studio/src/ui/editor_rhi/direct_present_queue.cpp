@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/render_e2e_timing.hpp"
 
 namespace alcedo::editor_rhi {
 using alcedo::diag::editorPresentLog;
@@ -414,6 +415,8 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
             << " new_request=" << metadata.presentation_request_id << " old_slot=" << i
             << " new_slot=" << slot_index;
       }
+      diag::NoteRenderE2eTerminal(other.preview_metadata.presentation_request_id,
+                                  "superseded-present-queue");
       ++dropped_stale_frame_count_;
       RecycleSlotLocked(i, false);
     }

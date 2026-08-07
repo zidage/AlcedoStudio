@@ -19,6 +19,7 @@
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/render_e2e_timing.hpp"
 
 using alcedo::diag::editorPresentLog;
 
@@ -268,6 +269,8 @@ void EditorViewportItem::requestPresentUpdateOnGuiThread() {
     if (QQuickWindow* w = window()) {
       w->requestUpdate();
     }
+    // Stamp every Ready frame waiting on this GUI wake (P0 present split).
+    diag::NoteRenderE2eGuiUpdate();
   };
   if (thread() == QThread::currentThread()) {
     request();

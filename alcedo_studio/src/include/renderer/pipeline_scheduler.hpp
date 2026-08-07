@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <unordered_map>
 
@@ -36,5 +37,9 @@ class PipelineScheduler {
    * @param task
    */
   void ScheduleTask(PipelineTask&& task);
+
+  /// Run arbitrary work on the same pool as pipeline tasks (test producers,
+  /// async failure completion). Prefer ScheduleTask for real renders.
+  void ScheduleWork(std::function<void()> work);
 };
 };  // namespace alcedo

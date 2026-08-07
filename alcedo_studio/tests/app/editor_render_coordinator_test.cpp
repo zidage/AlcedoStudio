@@ -34,10 +34,24 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
   void WaitForSessionIdle(std::uint64_t session_epoch) override {
     waited_sessions_.push_back(session_epoch);
   }
+  void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+                          PresentationSinkId presentation_sink_id = 0) override {
+    bind_calls_.push_back({epoch, element_id, image_id, presentation_sink_id});
+  }
+  void ClearSessionContext() override { ++clear_count_; }
+
+  struct BindCall {
+    std::uint64_t      epoch                = 0;
+    sl_element_id_t    element_id           = 0;
+    image_id_t         image_id             = 0;
+    PresentationSinkId presentation_sink_id = 0;
+  };
 
   std::vector<EditorRenderRequest> scheduled_;
   std::vector<std::uint64_t>       cancelled_;
   std::vector<std::uint64_t>       waited_sessions_;
+  std::vector<BindCall>            bind_calls_;
+  int                              clear_count_ = 0;
   std::uint64_t                    next_job_  = 0;
   bool                             fail_next_ = false;
 };
@@ -97,15 +111,13 @@ TEST_F(EditorRenderCoordinatorTest, RejectsStaleImageLoadRequest) {
   EXPECT_NE(rejected.message.find("image load request"), std::string::npos);
 }
 
-TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
+TEST_F(EditorRenderCoordinatorTest, SameQualitySlotSubmitReplacesPriorPending) {
   auto first = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
 
-  // Phase 5D: ZoomPan/Resize are reused (never enqueued), so a replacement-key
-  // test must use a reason that enqueues. MakeIntent defaults to
-  // InteractiveAdjustment, which produces a pending "interactive" entry that a
-  // newer same-key submit replaces.
+  // ZoomPan/Resize are reused (never enqueued). InteractiveAdjustment fills the
+  // interactive slot; a second interactive submit overwrites that slot only.
   auto       older       = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
   const auto pending_old = coordinator_->Submit(older);
   EXPECT_EQ(pending_old.kind, EditorRenderResultKind::RequestAccepted);
@@ -602,9 +614,9 @@ TEST_F(EditorRenderCoordinatorTest, CropRotateSchedulesInteractivePrimary) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteractiveOnly) {
-  // Phase 5D A2/D3: a burst of replaceable input (slider/pointer updates sharing
-  // a replacement key) does not create one task per event. Prior pending entries
-  // are replaced; only the newest interactive state survives to render.
+  // Interactive burst: many same-slot submits while one job is in flight leave
+  // at most one pending interactive slot; the final scheduled frame is the
+  // latest accepted interactive intent.
   coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
 
@@ -612,12 +624,11 @@ TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteract
   constexpr int  kPreviewBurst  = 100;
   for (int i = 0; i < kPreviewBurst; ++i) {
     auto intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
-    intent.replacement_key = "interactive";  // same key → replace prior pending
-    const auto result      = coordinator_->Submit(intent);
+    const auto result = coordinator_->Submit(intent);
     ASSERT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
     last_pending_id = result.request_id;
   }
-  // One hundred preview updates but only one pending entry — the newest — survives.
+  // One hundred preview updates but only one pending slot — the newest — survives.
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
   int replaced = 0;
@@ -633,6 +644,49 @@ TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteract
   coordinator_->NotifySchedulerCompleted(inflight_id, true);
   ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
   EXPECT_EQ(scheduler_->scheduled_.back().request_id, last_pending_id);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ThreeQualitySlotsCanCoexistAndScheduleInteractiveFirst) {
+  // Fixed slots: one interactive + one quality + one detail pending (detail in
+  // flight first). After completion, schedule order is interactive > quality >
+  // detail regardless of EditorRenderPriority.
+  const auto detail_inflight =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::High));
+  ASSERT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->last_scheduled_request_id(), detail_inflight.request_id);
+
+  const auto interactive = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low));
+  const auto quality =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High));
+  const auto detail_pending =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::High));
+  // Detail slot overwrite: inflight detail is separate; pending detail is one slot.
+  EXPECT_EQ(coordinator_->pending_count(), 3u);
+  EXPECT_EQ(detail_pending.kind, EditorRenderResultKind::RequestAccepted);
+
+  coordinator_->NotifySchedulerCompleted(detail_inflight.request_id, true);
+  ASSERT_GE(scheduler_->scheduled_.size(), 2u);
+  EXPECT_EQ(scheduler_->scheduled_[1].request_id, interactive.request_id);
+
+  coordinator_->NotifySchedulerCompleted(interactive.request_id, true);
+  ASSERT_GE(scheduler_->scheduled_.size(), 3u);
+  EXPECT_EQ(scheduler_->scheduled_[2].request_id, quality.request_id);
+
+  coordinator_->NotifySchedulerCompleted(quality.request_id, true);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 4u);
+  EXPECT_EQ(scheduler_->scheduled_[3].request_id, detail_pending.request_id);
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
+TEST(EditorRenderCoordinatorSlotTest, SlotIndexMatchesQualityLadderOrder) {
+  EXPECT_EQ(EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Interactive), 0u);
+  EXPECT_EQ(EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Quality), 1u);
+  EXPECT_EQ(EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Detail), 2u);
+  EXPECT_LT(EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Interactive),
+            EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Quality));
+  EXPECT_LT(EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Quality),
+            EditorRenderCoordinator::SlotIndexForQuality(EditorRenderQuality::Detail));
 }
 
 TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
@@ -654,6 +708,19 @@ TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
   ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
   EXPECT_EQ(scheduler_->scheduled_.back().request_id, interactive.request_id);
   EXPECT_NE(scheduler_->scheduled_.back().request_id, detail.request_id);
+}
+
+TEST_F(EditorRenderCoordinatorTest, BindAndClearSessionRenderContextForwardToScheduler) {
+  coordinator_->BindSessionRenderContext(/*epoch=*/42, /*element_id=*/7, /*image_id=*/9,
+                                         /*presentation_sink_id=*/55);
+  ASSERT_EQ(scheduler_->bind_calls_.size(), 1u);
+  EXPECT_EQ(scheduler_->bind_calls_.front().epoch, 42u);
+  EXPECT_EQ(scheduler_->bind_calls_.front().element_id, 7u);
+  EXPECT_EQ(scheduler_->bind_calls_.front().image_id, 9u);
+  EXPECT_EQ(scheduler_->bind_calls_.front().presentation_sink_id, 55u);
+
+  coordinator_->ClearSessionRenderContext();
+  EXPECT_EQ(scheduler_->clear_count_, 1);
 }
 
 TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndReadyFrame) {

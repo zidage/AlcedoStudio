@@ -117,6 +117,9 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
   if (!intent) {
     return 0;
   }
+  // Bind stable session render inputs at open/switch before first schedule.
+  deps_.render->BindSessionRenderContext(image_load_request.value, identity.element_id,
+                                         identity.image_id, presentation_sink_id_);
   deps_.render->SetActiveImageLoadRequest(image_load_request.value);
   const EditorRenderResult routed = deps_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
@@ -361,6 +364,10 @@ auto EditorSessionRenderController::presentation_sink_id() const -> Presentation
 }
 
 void EditorSessionRenderController::ResetForNewImage() {
+  // Drop prior image render inputs before the new open/switch binds a context.
+  if (deps_.render) {
+    deps_.render->ClearSessionRenderContext();
+  }
   std::scoped_lock lock(mutex_);
   first_frame_request_id_  = 0;
   quality_base_request_id_ = 0;

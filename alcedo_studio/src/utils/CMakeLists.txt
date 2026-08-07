@@ -10,6 +10,8 @@ def_library(AppDiagnostics
     SOURCES
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/app_logging.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/app_logging.hpp
+        ${ALCEDO_SRC_ROOT}/utils/diagnostics/render_e2e_timing.cpp
+        ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/render_e2e_timing.hpp
     PUBLIC_DEPS Qt6::Core
 )
 
