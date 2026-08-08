@@ -186,7 +186,7 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
     ProjectService project(db_path_, meta_path_);
     auto           sleeve_service = project.GetSleeveService();
     auto           image_pool     = project.GetImagePoolService();
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ImportServiceImpl import_service(sleeve_service, image_pool);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
@@ -259,7 +259,7 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
     ProjectService project(db_path_, meta_path_);
     auto           sleeve_service = project.GetSleeveService();
     auto           image_pool     = project.GetImagePoolService();
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ImportServiceImpl import_service(sleeve_service, image_pool);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
@@ -363,7 +363,7 @@ TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles
   ProjectService project(db_path_, meta_path_);
   auto           sleeve_service = project.GetSleeveService();
   auto           image_pool     = project.GetImagePoolService();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   ImportServiceImpl import_service(sleeve_service, image_pool);
 
@@ -442,7 +442,7 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
   ProjectService project(db_path_, meta_path_);
   auto           sleeve_service = project.GetSleeveService();
   auto           image_pool     = project.GetImagePoolService();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   ImportServiceImpl import_service(sleeve_service, image_pool);
   auto              paths = CollectSupportedBatchImportImages(/*max_count=*/2);

@@ -665,7 +665,7 @@ Acceptance:
 4 个测试因为缺少外部项目或 Metal 环境而跳过。常用的项目、导入、文件夹、删除、评分、
 缩略图和搜索流程目前没有发现普遍退化，但下面的问题仍需修正后才能把 Phase 1A 标为完成。
 
-- `ImageController::DeleteTargets()` 中“导入仍在运行”的判断写成了
+- `ImageStore::DeleteTargets()` 中“导入仍在运行”的判断写成了
   `ie && ie->current_import_job() && !ie && ...`。前面已经要求 `ie` 有值，后面又要求
   `ie` 没有值，所以这个分支永远不会执行。`DeleteImages()` 从 QML 进入时通常还会先经过
   `InteractionPolicyController`，因此普通界面操作不一定马上暴露问题；但是
@@ -707,7 +707,7 @@ Acceptance:
 - “模块可以用假对象单独测试”这一项没有完成。项目、文件夹、图片、导入导出、图库、统计和
   搜索测试仍然都先创建完整的 `ApplicationModuleHost`，会同时创建项目服务、模型服务和所有
   无关模块。现有测试只能证明整组对象放在一起时能工作，不能证明构造函数只要求了真正需要的
-  对象。应至少为 `ProjectModule`、`LibraryModule`、`FolderController`、`ImageController`、
+  对象。应至少为 `ProjectModule`、`LibraryModule`、`FolderController`、`ImageStore`、
   `ImportExportHandler`、`StatsEngine` 和 `SearchController` 各增加直接构造测试，使用小型假对象
   验证输入、状态变化和信号，不创建 `ApplicationModuleHost`。
 

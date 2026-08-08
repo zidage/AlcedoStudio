@@ -127,7 +127,7 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  if (auto pipeline_service = state_.PipelineService()) {
+  if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {
@@ -179,7 +179,7 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  if (auto pipeline_service = state_.PipelineService()) {
+  if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {

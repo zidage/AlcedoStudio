@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
-#include <array>
 
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/duckorm/duckdb_orm.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -20,8 +20,12 @@ struct PipelineMapperParams {
   std::unique_ptr<std::string> param_json;
 };
 
+/**
+ * @brief Single-table mapper for PipelineParam rows and CPUPipelineExecutor snapshots.
+ */
 class PipelineMapper
-    : public MapperInterface<PipelineMapper, PipelineMapperParams, sl_element_id_t>,
+    : public Mapper<PipelineMapper, std::shared_ptr<CPUPipelineExecutor>, PipelineMapperParams,
+                    sl_element_id_t>,
       public FieldReflectable<PipelineMapper> {
  private:
   static constexpr uint32_t    field_count_                                      = 2;
@@ -33,7 +37,15 @@ class PipelineMapper
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> PipelineMapperParams;
+  static auto ToParams(const std::shared_ptr<CPUPipelineExecutor> source) -> PipelineMapperParams;
+  static auto FromParams(PipelineMapperParams&& param) -> std::shared_ptr<CPUPipelineExecutor>;
+
+  auto GetPipelineParamByFileId(const sl_element_id_t file_id)
+      -> std::shared_ptr<CPUPipelineExecutor>;
+  void UpdatePipelineParamByFileId(const sl_element_id_t                      file_id,
+                                   const std::shared_ptr<CPUPipelineExecutor> pipeline);
+
   friend struct FieldReflectable<PipelineMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
-};  // namespace alcedo
+}  // namespace alcedo

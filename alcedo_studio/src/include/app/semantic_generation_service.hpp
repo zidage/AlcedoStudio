@@ -22,8 +22,8 @@
 #include "app/thumbnail_service.hpp"
 #include "app/thumbnail_types.hpp"
 #include "sidecar_client/dto/semantic_embedding.hpp"
-#include "storage/controller/semantic/semantic_label_config.hpp"
-#include "storage/controller/semantic/semantic_storage_controller.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
+#include "storage/store/semantic/semantic_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -70,7 +70,7 @@ struct SemanticGenerationProgress {
 };
 
 struct SemanticGenerationPersistenceOptions {
-  SemanticStorageController* storage_controller = nullptr;
+  SemanticStore* storage_controller = nullptr;
   std::string                model_key;
   std::string                prompt_config_hash = kDefaultSemanticPhotographyPromptConfigHash;
   size_t                     label_prototype_batch_size  = 64;

@@ -4,12 +4,16 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <string>
+#include <vector>
 
-#include "storage/image_pool/image_pool_manager.hpp"
+#include "image/image.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -23,8 +27,12 @@ struct ImageMapperParams {
   std::unique_ptr<std::string> metadata;
 };
 
-class ImageMapper : public MapperInterface<ImageMapper, ImageMapperParams, image_id_t>,
-                    public FieldReflectable<ImageMapper> {
+/**
+ * @brief Single-table mapper for Image rows and domain Image objects.
+ */
+class ImageMapper
+    : public Mapper<ImageMapper, std::shared_ptr<Image>, ImageMapperParams, image_id_t>,
+      public FieldReflectable<ImageMapper> {
  private:
   static constexpr uint32_t                                         field_count_      = 5;
   static constexpr const char*                                      table_name_       = "Image";
@@ -36,7 +44,15 @@ class ImageMapper : public MapperInterface<ImageMapper, ImageMapperParams, image
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMapperParams;
+  static auto ToParams(const std::shared_ptr<Image> source) -> ImageMapperParams;
+  static auto FromParams(ImageMapperParams&& param) -> std::shared_ptr<Image>;
+
+  auto        GetImageById(const image_id_t id) -> std::vector<std::shared_ptr<Image>>;
+  auto        GetImageByName(const std::wstring& name) -> std::vector<std::shared_ptr<Image>>;
+  auto GetImageByPath(const std::filesystem::path path) -> std::vector<std::shared_ptr<Image>>;
+  auto GetImageByType(const ImageType type) -> std::vector<std::shared_ptr<Image>>;
+
   friend struct FieldReflectable<ImageMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 }  // namespace alcedo

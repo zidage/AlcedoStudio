@@ -23,7 +23,7 @@
 #include "app/project_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo::test {
@@ -74,7 +74,7 @@ class EditorMiniGitProjectFixture {
 
   /// Close ProjectService and reopen it on the same database/metadata paths.
   ///
-  /// Side effects: drops live graph pointers and reloads StorageService. Working
+  /// Side effects: drops live graph pointers and reloads Storage. Working
   /// histories and journals are recreated against the reopened storage.
   void CloseAndReopenProject();
 
@@ -97,7 +97,7 @@ class EditorMiniGitProjectFixture {
                                 std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
   [[nodiscard]] auto project() -> ProjectService& { return *project_; }
-  [[nodiscard]] auto storage() -> const std::shared_ptr<StorageService>& { return storage_; }
+  [[nodiscard]] auto storage() -> const std::shared_ptr<Storage>& { return storage_; }
   [[nodiscard]] auto materializer() -> EditorMiniGitMaterializer& { return *materializer_; }
   [[nodiscard]] auto save_coordinator() -> EditorSaveCheckpointCoordinator& {
     return *save_coordinator_;
@@ -133,7 +133,7 @@ class EditorMiniGitProjectFixture {
   std::filesystem::path                      db_path_;
   std::filesystem::path                      meta_path_;
   std::unique_ptr<ProjectService>                      project_;
-  std::shared_ptr<StorageService>                      storage_;
+  std::shared_ptr<Storage>                      storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator>     save_coordinator_;
   std::unique_ptr<EditorMiniGitMaterializer>           materializer_;
   ImageRuntime                                         image_a_;

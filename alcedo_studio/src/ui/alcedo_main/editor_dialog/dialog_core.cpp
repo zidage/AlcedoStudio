@@ -533,7 +533,7 @@ void EditorDialog::BuildToneControlPanel() {
     history_coordinator_->SeedWorkingVersionFromActive();
   }
 
-  // If the pipeline already has operator params (loaded from PipelineService/storage or history),
+  // If the pipeline already has operator params (loaded from PipelineMapper/storage or history),
   // initialize UI state from those params rather than overwriting them.
   const bool loaded_state_from_pipeline = LoadStateFromPipelineIfPresent();
   if (!loaded_state_from_pipeline) {

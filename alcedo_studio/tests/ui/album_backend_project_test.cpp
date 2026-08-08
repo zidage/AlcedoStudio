@@ -29,7 +29,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 
@@ -677,8 +677,8 @@ TEST_F(ProjectTests, DataSummary_WarnsOnDbChanged) {
   // Modify the database outside of the project so the stored data_summary
   // no longer matches.
   {
-    StorageService storage(dbPath);
-    auto           guard = storage.GetDBController().GetConnectionGuard();
+    Storage storage(dbPath);
+    auto           guard = storage.GetDatabase().GetConnectionGuard();
     duckdb_result  result;
     ASSERT_EQ(duckdb_query(guard.conn_,
                            "INSERT INTO Element (id, type, element_name, "

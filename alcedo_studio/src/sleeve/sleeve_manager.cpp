@@ -26,10 +26,10 @@ namespace alcedo {
  * @brief Ad-hoc constructor for temporary sleeve, e.g. folder preview
  *
  */
-SleeveManager::SleeveManager(std::filesystem::path db_path) : storage_service_(db_path) {
+SleeveManager::SleeveManager(std::filesystem::path db_path) : storage_(db_path) {
   // Update the application clock
   TimeProvider::Refresh();
-  fs_ = std::make_shared<FileSystem>(db_path, storage_service_, 0);
+  fs_ = std::make_shared<FileSystem>(db_path, storage_, 0);
   fs_->InitRoot();
   image_pool_ = std::make_shared<ImagePoolManager>(128, 4);
 }
@@ -77,7 +77,7 @@ auto SleeveManager::LoadToPath(std::vector<image_path_t> img_os_paths, sl_path_t
   // FIXME: The following two function is used in the filter tests
   // So we can't remove them yet
   fs_->SyncToDB();
-  storage_service_.GetImageController().CaptureImagePool(image_pool_);
+  storage_.GetImageStore().CaptureImagePool(image_pool_);
   return total_size;
 }
 

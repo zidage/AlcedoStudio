@@ -28,7 +28,7 @@ TEST(EditorSessionPipelinePortTest, CachesLoadedGuardUntilRelease) {
   int                       load_count = 0;
 
   EditorSessionPipelinePort port;
-  port.SetServices(EditorSessionPipelineServices{{}, [&](sl_element_id_t element_id) {
+  port.SetServices(EditorSessionPipelineMappers{{}, [&](sl_element_id_t element_id) {
                                                    ++load_count;
                                                    EXPECT_EQ(element_id, 42u);
                                                    return loaded;

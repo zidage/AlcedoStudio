@@ -544,7 +544,7 @@ Tests:
 
 - Rust semantic batch tests.
 - `SemanticGenerationServiceTest`.
-- `SemanticStorageControllerTest`.
+- `SemanticStoreTest`.
 - `FilterServiceTest` for existing semantic labels/search behavior.
 - Environment-gated live runtime smoke when model assets are available.
 
@@ -1300,19 +1300,19 @@ surface, and a per-job usage summary — without letting a failed or cancelled c
 create an active annotation.
 
 Phase 7a constraint (product decision, 2026-06-27): the numeric AI rating is NOT
-persisted through `AiStorageController.UpsertRating`. A photo's star rating is
+persisted through `AiStore.UpsertRating`. A photo's star rating is
 already the EXIF/metadata `Rating` value surfaced everywhere (star UI, stats
 filter, thumbnail cards — read via `json_extract(i.metadata, '$.Rating')`). The AI
 score must therefore be applied directly through the existing
-`AlbumBackend::SetImageRating` / `ImageController::SetImageRating` path that owns
-that metadata column. `AiStorageController` is used in 7a only to persist the
+`AlbumBackend::SetImageRating` / `ImageStore::SetImageRating` path that owns
+that metadata column. `AiStore` is used in 7a only to persist the
 rating *reasons* (the rationale text) plus provider/model/prompt-profile/rubric
 identity. `UpsertRating` from Phase 5f is kept but not called in 7a.
 
 #### Decisions (locked via design review, 2026-06-27)
 
 1. **Reasons storage** — reuse the existing `AiImageRating` table. Add a new
-   `AiStorageController.UpsertRatingReasons` that writes a row with `rating = 0`
+   `AiStore.UpsertRatingReasons` that writes a row with `rating = 0`
    as a sentinel (NOT the truth), plus `reasons`, `provider_id`, `model_id`,
    `prompt_profile_id`, `rendition_kind`, `rubric_id`, `rubric_version`, `active`.
    Add `AiRating::IsValidReasonsOnly()` (file_id/task/provider/model non-empty +
@@ -1388,7 +1388,7 @@ class IImageAnalysisSink {
 
 The production implementation `AlbumImageAnalysisSink` lives in `album_backend.cpp`
 (declared a friend of `AlbumBackend`) and delegates to
-`StorageService::GetAiStorageController()`, `ImageController`, and `stats_`. The
+`Storage::GetAiStore()`, `ImageStore`, and `stats_`. The
 test fake records calls so "no upsert on failure" is a one-liner assertion. The
 controller constructor becomes `(env, preset, sink, parent)`.
 
@@ -1404,7 +1404,7 @@ job regenerates them (reasons/stars are cheap to recompute).
 **Storage — reasons-only path.** `AiRating` gains `IsValidReasonsOnly()`:
 `file_id_ != 0 && !task_id_/provider_id_/model_id_.empty() && !reasons_.empty()`
 (rating ignored). `IsValid()` stays strict (rating 1..5) so 5f tests are
-untouched. `AiStorageController::UpsertRatingReasons(const AiRating&)` validates
+untouched. `AiStore::UpsertRatingReasons(const AiRating&)` validates
 via `IsValidReasonsOnly()`, runs the `FileExists` guard, and
 `duckorm::insert_or_replace` on `AiImageUnderstanding`'s sibling `AiImageRating`
 reusing `kInsertRatingFields` (caller sets `rating_ = 0`). PK `(file_id, task_id)`
@@ -1415,13 +1415,13 @@ Identity columns (`provider_id_`, `model_id_`, `prompt_profile_id_`,
 in both the understanding and reasons paths.
 
 **Rating star path — light writes.** Extract from
-`ImageController::SetImageRating` (`image_controller.cpp:856-967`) two pieces:
+`ImageStore::SetImageRating` (`image_controller.cpp:856-967`) two pieces:
 
-- `ImageController::ApplyStarRatingLight(elementId, imageId, rating)`: the
+- `ImageStore::ApplyStarRatingLight(elementId, imageId, rating)`: the
   `Write_NoSync` block (897-909) + view-state patch (924-929) +
   `thumbnail_model_.updateRating` (930). NO `SyncWithStorage`/`SaveProject`/
   `Package`/`RefreshStats`.
-- `ImageController::FlushPendingStarRatings()`:
+- `ImageStore::FlushPendingStarRatings()`:
   `image_pool->SyncWithStorage()` + `stats_.RefreshStats()`.
 
 `AlbumBackend` exposes both; the sink delegates. The existing `SetImageRating`
@@ -1438,7 +1438,7 @@ identity on job results."
 
 **`GetImageRatingReasons` read API.** New
 `Q_INVOKABLE QVariantMap AlbumBackend::GetImageRatingReasons(uint elementId)` →
-`AiStorageController::GetActiveRating(elementId)` → `{hasReasons, reasons,
+`AiStore::GetActiveRating(elementId)` → `{hasReasons, reasons,
 provider, modelId, rubricId, rubricVersion}`. No QML wiring in 7a.
 
 **Search refresh hook.** `NotifySearchDocumentChanged()` →
@@ -1448,19 +1448,19 @@ provider, modelId, rubricId, rubricVersion}`. No QML wiring in 7a.
 
 #### Deliverables
 
-- Add `AiRating::IsValidReasonsOnly()` and `AiStorageController::UpsertRatingReasons`
+- Add `AiRating::IsValidReasonsOnly()` and `AiStore::UpsertRatingReasons`
   (reuses `kInsertRatingFields`; no DDL change).
 - Add `IImageAnalysisSink` + production `AlbumImageAnalysisSink`; inject into
   `ImageAnalysisController`. Wire persistence (understanding / reasons + star) +
   job-end flush/notify into the finished callback.
-- Extract `ImageController::ApplyStarRatingLight` + `FlushPendingStarRatings` from
+- Extract `ImageStore::ApplyStarRatingLight` + `FlushPendingStarRatings` from
   `SetImageRating`.
 - Add `lastUsage` aggregate Q_PROPERTY; add `promptProfileId`/`providerRequestId`
   to `lastResults`.
 - Add `Q_INVOKABLE GetImageRatingReasons` on `AlbumBackend`.
 - Show provider/model/prompt-profile/rubric identity on job results and stored rows
   so prompt or model changes do not reinterpret old annotations.
-- Persist successful describe results through `AiStorageController.UpsertUnderstanding`;
+- Persist successful describe results through `AiStore.UpsertUnderstanding`;
   refresh the search path so new captions/tags become searchable only after
   persistence.
 - Keep rating out of full-text search (rating reasons never enter the FTS document;
@@ -1468,7 +1468,7 @@ provider, modelId, rubricId, rubricVersion}`. No QML wiring in 7a.
 
 #### Tests
 
-- `AiStorageControllerTest`: `UpsertRatingReasons` insert + replace (PK), reasons-only
+- `AiStoreTest`: `UpsertRatingReasons` insert + replace (PK), reasons-only
   row has `rating = 0`, `GetActiveRating` returns reasons, `IsValidReasonsOnly`
   rejects empty reasons, `IsValid` (5f) still rejects `rating = 0` (no regression),
   delete cascade still drops reasons rows.
@@ -1529,7 +1529,7 @@ What changed:
 
 - `AiRating` gained `IsValidReasonsOnly()` (rating ignored; file key + provider/model
   identity + non-empty reasons). `IsValid()` stays strict (1..5) so Phase 5f tests are
-  untouched. `AiStorageController::UpsertRatingReasons` reuses `kInsertRatingFields`
+  untouched. `AiStore::UpsertRatingReasons` reuses `kInsertRatingFields`
   (caller sets `rating_ = 0` sentinel) with the same `(file_id, task_id)` PK +
   `FileExists` guard — no DDL change.
 - New `IImageAnalysisSink` seam (`image_analysis_sink.hpp`) injected into
@@ -1539,12 +1539,12 @@ What changed:
   are skipped. The trailing `FlushPendingStarRatings` (score) / `NotifySearchDocumentChanged`
   (describe) fires only when `analyzed_ > 0`, so a fully failed/cancelled job produces
   ZERO sink calls. The service stays storage-agnostic.
-- `ImageController::ApplyStarRatingLight` (the `Write_NoSync` + view-state patch +
+- `ImageStore::ApplyStarRatingLight` (the `Write_NoSync` + view-state patch +
   `thumbnail_model_.updateRating` half) and `FlushPendingStarRatings`
   (`SyncWithStorage` + `RefreshStats`) were extracted from `SetImageRating`.
   `SetImageRating` (manual single click) is unchanged.
 - Production `AlbumImageAnalysisSink` in `album_backend.cpp` (friend of `AlbumBackend`)
-  delegates to `AiStorageController`, `ImageController`, and `stats_.RebuildThumbnailView()`.
+  delegates to `AiStore`, `ImageStore`, and `stats_.RebuildThumbnailView()`.
   task_id slots `"describe"` / `"rate"` match the Phase 5g live-smoke convention.
 - New `Q_INVOKABLE AlbumBackend::GetImageRatingReasons(elementId)` returns
   `{hasReasons, reasons, provider, modelId, rubricId, rubricVersion}` from
@@ -1556,12 +1556,12 @@ What changed:
 Acceptance verification (MSVC debug, PowerShell tool per project memory):
 
 - `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumBackendLib
-  AiStorageControllerTest ImageAnalysisControllerTest FilterServiceTest --parallel 4`:
+  AiStoreTest ImageAnalysisControllerTest FilterServiceTest --parallel 4`:
   succeeded.
-- `ctest --test-dir build/debug -R "AiStorageControllerTest|ImageAnalysisControllerTest|
+- `ctest --test-dir build/debug -R "AiStoreTest|ImageAnalysisControllerTest|
   FilterServiceTest"`: 72/72 passed.
 - Regression `ctest --test-dir build/debug -R "ImageAnalysisServiceTest|
-  AiSidecarRuntimeServiceTest|SemanticGenerationServiceTest|SemanticStorageControllerTest"`:
+  AiSidecarRuntimeServiceTest|SemanticGenerationServiceTest|SemanticStoreTest"`:
   66/66 passed (2 environment-gated live smokes skipped).
 - `ImageAnalysisServiceTest` unchanged and green — proves the sink boundary keeps the
   service storage-agnostic.
@@ -1709,7 +1709,7 @@ cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
 Targeted CTest group after semantic, storage, or search changes:
 
 ```powershell
-ctest --test-dir build/debug --output-on-failure -R "AiSidecarRuntimeServiceTest|SemanticGenerationServiceTest|SemanticStorageControllerTest|FilterServiceTest|GlobalSearchDialogQmlTest|SearchQueryClassifierTest"
+ctest --test-dir build/debug --output-on-failure -R "AiSidecarRuntimeServiceTest|SemanticGenerationServiceTest|SemanticStoreTest|FilterServiceTest|GlobalSearchDialogQmlTest|SearchQueryClassifierTest"
 ```
 
 Live runtime tests remain environment-gated and should be run when the required model assets and
@@ -1874,7 +1874,7 @@ Test results:
   `EmbedImageBatchFallsBackToV1WhenV2Unsupported`, `EmbedImageBatchV2EchoesRequestIds`. The 15 existing
   `AiSidecarRuntimeServiceTest` tests still pass - now exercising the v2 path (the fake v2 overrides
   with `v2_supported_ = true`), which proves v2 canned is bit-identical to v1.
-  `SemanticGenerationServiceTest` / `SemanticStorageControllerTest` / `FilterServiceTest` /
+  `SemanticGenerationServiceTest` / `SemanticStoreTest` / `FilterServiceTest` /
   `SearchQueryClassifierTest` / `GlobalSearchDialogQmlTest` are unchanged and green (they use
   `ISemanticImageEmbeddingClient` fakes / storage / search, not the v2 gRPC path).
 
@@ -2680,7 +2680,7 @@ Test results:
   36/36 passed (3 `ImageAnalysisEncoderTest` + 9 `ImageAnalysisServiceTest` + 24
   `AiSidecarRuntimeServiceTest` including the 3 new wire tests; 1 pre-existing live-runtime test
   Skipped - `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set).
-- ctest regression regex (`-R "SemanticGenerationServiceTest|SemanticStorageControllerTest|FilterServiceTest|GlobalSearchDialogQmlTest|SearchQueryClassifierTest"`):
+- ctest regression regex (`-R "SemanticGenerationServiceTest|SemanticStoreTest|FilterServiceTest|GlobalSearchDialogQmlTest|SearchQueryClassifierTest"`):
   66/66 passed - no regression in semantic/storage/search from the shared-header changes.
 
 Build note for the next handoff: after any edit to `image_analysis.proto` or to test-only
@@ -3029,7 +3029,7 @@ Implemented (file-by-file, per the plan):
   unrated one (`UnsetRatingNotPersisted`). The EXIF-standard `Rating` (0..5,
   0 = unrated) in `metadata.hpp` is a separate data rule and is untouched.
 - `alcedo_studio/src/storage/controller/ai/ai_storage_controller.cpp` +
-  `alcedo_studio/src/include/storage/controller/ai/ai_storage_controller.hpp` -
+  `alcedo_studio/src/include/storage/store/ai/ai_store.hpp` -
   NEW ORM controller. Field arrays via `FIELD_AS`
   (`kInsertUnderstandingFields` = 11 fields, `kSelectUnderstandingFields` = 12 in
   DDL order incl. `updated_at`; same shape for rating with `rating` INT32).
@@ -3044,7 +3044,7 @@ Implemented (file-by-file, per the plan):
   DELETE for the AI tables, only the `file_id IN (...)` predicate. Constants
   `kUnderstandingTable = "AiImageUnderstanding"`,
   `kRatingTable = "AiImageRating"`.
-- `alcedo_studio/src/include/storage/controller/db_controller.hpp` - NEW
+- `alcedo_studio/src/include/storage/store/database.hpp` - NEW
   `ai_annotation_table_query` DDL (static `const char*`, executed once on both
   init paths, the same pattern as the semantic tables): `CREATE TABLE IF NOT
   EXISTS AiImageUnderstanding` (`file_id BIGINT`; `task_id`/`provider_id`/
@@ -3070,7 +3070,7 @@ Implemented (file-by-file, per the plan):
   `RemoveElements` with the bulk `file_ids`) now also calls
   `DeleteAiAnnotationRowsForFiles(conn, file_ids)` after the pre-existing raw
   DELETEs for the three semantic tables. The AI cleanup runs on the
-  ElementController's own connection so it is atomic with element deletion;
+  ElementStore's own connection so it is atomic with element deletion;
   rating rows are dropped here too even though they are not part of full-text
   search, so a re-import cannot resurrect an old AI rating under a new image id.
   The single-id `RemoveElement(sl_element_id_t)` overload is unchanged (it never
@@ -3098,7 +3098,7 @@ Implemented (file-by-file, per the plan):
   `ok`/`rendition`/`error` are taken from the rating result, never the
   understanding result, so the two schemas stay distinct).
 - `alcedo_studio/tests/storage/ai_storage_controller_test.cpp` - NEW 11
-  `AiStorageControllerTest` cases (the plan-required storage tests):
+  `AiStoreTest` cases (the plan-required storage tests):
   `UpsertAndRetrieveUnderstanding` (full identity + content + confidence +
   tags-json round-trip), `ReplaceUnderstandingForSamePairKeepsOneRow`
   (`insert_or_replace` does not append a second row for the same
@@ -3112,7 +3112,7 @@ Implemented (file-by-file, per the plan):
   `ProviderModelPromptIdentityPreserved` (a different
   provider/model/prompt-profile/rubric on a later run is read back as that row's
   own identity), `DeleteForFilesRemovesBothKinds`, `ElementDeletionCascadesAiRows`
-  (`ElementController::RemoveElements` drops AI rows on the same connection). The
+  (`ElementStore::RemoveElements` drops AI rows on the same connection). The
   fixture uses a per-test temp DB, calls `RegisterAllOperators()`, and
   `CountUnderstandingRows` runs a raw `COUNT(*)` on the project's own connection
   (test verification, not ser/deser).
@@ -3128,7 +3128,7 @@ Implemented (file-by-file, per the plan):
   live smoke is extended with a NEW `RatesOneImageFromPackedProject` (validates
   Task #1's 1..5 integer rating rule end-to-end) and the existing
   `DescribesOneImageFromPackedProject` is strengthened: after the live describe,
-  the result is persisted via `AiStorageController.UpsertUnderstanding` and read
+  the result is persisted via `AiStore.UpsertUnderstanding` and read
   back with `GetActiveUnderstanding` (round-trip assertions on caption/scene/
   provider/model/confidence/active/tags), then a token drawn from the live caption
   is shown searchable via a fresh `SleeveFilterService` ONLY after AI persistence
@@ -3139,10 +3139,10 @@ Implemented (file-by-file, per the plan):
   every result/persisted field. (The actual caption and reasons are printed only
   to the env-gated test stdout, not recorded here, per the "you don't need to
   look at what the image is" instruction.)
-- `alcedo_studio/tests/CMakeLists.txt` - NEW `AiStorageControllerTest` target
+- `alcedo_studio/tests/CMakeLists.txt` - NEW `AiStoreTest` target
   (links `ProjectService GTest::gtest_main`, `gtest_discover_tests` with the
   WIN32 dll-copy block for lensfun/duckdb, label `ci_core_flow`), added to the
-  `ci_core` category after `SemanticStorageControllerTest`.
+  `ci_core` category after `SemanticStoreTest`.
 
 Invariants (Phase 5f review focus):
 
@@ -3176,7 +3176,7 @@ Invariants (Phase 5f review focus):
   persistence.
 
 ORM discipline (user-requested): no raw SQL is written for AI
-serialization/deserialization — `AiStorageController` uses
+serialization/deserialization — `AiStore` uses
 `duckorm::insert_or_replace`, `duckorm::select`, and `duckorm::remove`
 exclusively, with `FIELD_AS` field descriptors and the `file_id IN (...)`
 predicate as the only hand-written fragment (a predicate, not a statement). The
@@ -3220,7 +3220,7 @@ from every result/persisted field).
 
 - Describe (re-run this phase with attribution): PASSED. The LLM returned a
   coherent caption, a non-empty tags list, a scene hint, and a confidence in
-  range; the result was persisted via `AiStorageController.UpsertUnderstanding`
+  range; the result was persisted via `AiStore.UpsertUnderstanding`
   and read back with `GetActiveUnderstanding` (round-trip on caption/scene/
   provider/model/confidence/active/tags); a token drawn from the live caption is
   searchable via a fresh `SleeveFilterService` ONLY after AI persistence (not
@@ -3245,16 +3245,16 @@ same Ark key. Both live tests this phase used
 
 Test results:
 
-- C++ MSVC build (PowerShell tool): the new `AiStorageControllerTest` target and
+- C++ MSVC build (PowerShell tool): the new `AiStoreTest` target and
   the edited `FilterServiceTest` / `ImageAnalysisLiveSmokeTest` targets built
   clean.
-- ctest Phase 5f group (`-R "AiStorageControllerTest|FilterServiceTest|
+- ctest Phase 5f group (`-R "AiStoreTest|FilterServiceTest|
   ImageAnalysisServiceTest|ImageAnalysisLiveSmokeTest|AiSidecarRuntimeServiceTest"`):
   88/88 — 85 passed, 3 Skipped, 0 failed. Composition: 32 `FilterServiceTest`
   (incl. the 2 new AI cases `AiUnderstandingCaptionAndTagsSearchableOnlyAfter
   ActivePersistence`, `AiRatingReasonsAreNotInFullScreenSearch`), 24
   `AiSidecarRuntimeServiceTest` (23 passed + 1 pre-existing live-runtime Skip —
-  `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set), 11 `AiStorageControllerTest` (all
+  `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set), 11 `AiStoreTest` (all
   new, all passed), 19 `ImageAnalysisServiceTest`, 2 `ImageAnalysisLiveSmokeTest`
   (both Skipped — the live env vars are not set in the ctest shell; run
   individually below).
@@ -3307,7 +3307,7 @@ smokes (including the optional legacy OpenRouter smoke and known Volcengine
 Responses 404) do not turn the suite red.
 
 Review conclusion: bugs found — none; risk accepted — (1) the single-id
-`ElementController::RemoveElement(sl_element_id_t)` overload does not cascade AI
+`ElementStore::RemoveElement(sl_element_id_t)` overload does not cascade AI
 (or semantic) rows, which is pre-existing behavior unchanged by 5f and out of
 scope, and (2) the `.env.test` credential matrix (optional legacy OpenRouter 401,
 Volcengine Ark Responses 404 = Open Decision #4) is an environment constraint,
@@ -3427,7 +3427,7 @@ Test results:
   hold (count is 6).
 - C++ MSVC build (PowerShell tool): `AiProviderPreset` lib + `AiProviderPresetTest`
   built clean (AUTOMOC ran; no warnings). ctest `-R "AiSidecarRuntimeServiceTest|
-  AiProviderPresetTest|AiStorageControllerTest"`: 42/42 passed (1 live-runtime
+  AiProviderPresetTest|AiStoreTest"`: 42/42 passed (1 live-runtime
   Skip — `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set). The 5 `AiProviderPresetTest`
   cases pass. No existing C++ source changed, so no downstream rebuild was
   required beyond the new target.
@@ -3909,7 +3909,7 @@ Test results:
   `OversizedImageBytesRejectedBeforeProviderCall` passes; the `AiProviderPresetTest`
   `provider_id` additions pass.
 - ctest regression (`-R "SemanticGenerationServiceTest|FilterServiceTest|
-  AiStorageControllerTest|AiSidecarRuntimeServiceTest"`): all green (1 pre-existing
+  AiStoreTest|AiSidecarRuntimeServiceTest"`): all green (1 pre-existing
   live-runtime Skip — `ALCEDO_SEMANTIC_LIVE_RUNTIME_PATH` not set). No regression
   in semantic/storage/search.
 
@@ -3920,7 +3920,7 @@ Next phase / renumbering note:
   carrying the gRPC client, DTO mapping, credential vault calls, embedding RPCs,
   and image-analysis RPCs in the same file as `QProcess` lifecycle management.
 - Persistence, search refresh, rating surface, and usage summary are renumbered
-  to Phase 7a. The controller emits `lastResults` only; `AiStorageController`
+  to Phase 7a. The controller emits `lastResults` only; `AiStore`
   wiring and the storage-layer `IsValid()` backstop for "no upsert on failure"
   land after the sidecar client boundary is clean.
 - QML UI (menu actions + progress dialog) remains deferred. The controller is

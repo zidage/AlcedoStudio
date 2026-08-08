@@ -629,7 +629,7 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
   }
 
   try {
-    auto storage = project->GetStorageService();
+    auto storage = project->GetStorage();
     if (!storage) {
       if (errorOut) {
         *errorOut = Tr("Storage service is unavailable for DB snapshot.");
@@ -637,7 +637,7 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
       return false;
     }
 
-    auto& db_ctrl = storage->GetDBController();
+    auto& db_ctrl = storage->GetDatabase();
     auto  guard   = db_ctrl.GetConnectionGuard();
     auto  db_lock = guard.Lock();
 

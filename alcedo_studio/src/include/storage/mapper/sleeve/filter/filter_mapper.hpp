@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -18,7 +18,7 @@ struct FilterMapperParams {
   uint32_t    type;
   const char* data;
 };
-class FilterMapper : MapperInterface<FilterMapper, FilterMapperParams, sl_element_id_t>,
+class FilterMapper : Mapper<FilterMapper, FilterMapperParams, FilterMapperParams, sl_element_id_t>,
                      FieldReflectable<FilterMapper> {
  private:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> FilterMapperParams;
@@ -30,7 +30,7 @@ class FilterMapper : MapperInterface<FilterMapper, FilterMapperParams, sl_elemen
       FIELD(FilterMapperParams, data, VARCHAR)};
 
  public:
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
   friend struct FieldReflectable<FilterMapper>;
 };
 
@@ -39,7 +39,7 @@ struct ComboMapperParams {
   uint32_t combo_id_;
   uint32_t folder_id_;
 };
-class ComboMapper : MapperInterface<ComboMapper, ComboMapperParams, sl_element_id_t>,
+class ComboMapper : Mapper<ComboMapper, ComboMapperParams, ComboMapperParams, sl_element_id_t>,
                     FieldReflectable<ComboMapper> {
  private:
   static constexpr uint32_t    field_count_                                      = 2;
@@ -51,6 +51,6 @@ class ComboMapper : MapperInterface<ComboMapper, ComboMapperParams, sl_element_i
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ComboMapperParams;
   friend struct FieldReflectable<ComboMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 };  // namespace alcedo

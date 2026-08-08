@@ -11,8 +11,8 @@
 #include <stdexcept>
 
 #include "sleeve/sleeve_manager.hpp"
-#include "storage/controller/db_controller.hpp"
-#include "storage/controller/image/image_controller.hpp"
+#include "storage/store/database.hpp"
+#include "storage/store/image/image_store.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "type/type.hpp"
 
@@ -29,7 +29,7 @@ TEST(SleeveMapperTest, DISABLED_InitTest1) {
   }
   {
     try {
-      DBController db_ctr{db_path};
+      Database db_ctr{db_path};
       db_ctr.InitializeDB();
     } catch (std::exception& e) {
       std::cout << e.what() << std::endl;
@@ -46,9 +46,9 @@ TEST(SleeveMapperTest, SimpleCaptureTest1) {
     try {
       Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
 
-      // DBController db_ctr{db_path};
+      // Database db_ctr{db_path};
       // db_ctr.InitializeDB();
-      // ImageController img_ctr{db_ctr.GetConnectionGuard()};
+      // ImageStore img_ctr{db_ctr.GetConnectionGuard()};
 
       SleeveManager   manager{db_path};
       std::vector<image_path_t> imgs;

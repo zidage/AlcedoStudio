@@ -34,7 +34,7 @@ enum class FilterField {
   Rating,
   ImagePath,
   // Phase 2: stats-bar bucket columns. Each column must equal the bucket
-  // expression used by ElementController::BuildFolderStats GROUP BY so a
+  // expression used by ElementStore::BuildFolderStats GROUP BY so a
   // clicked bucket label selects exactly the rows that produced that bucket.
   CameraModelLabel,
   LensLabel,

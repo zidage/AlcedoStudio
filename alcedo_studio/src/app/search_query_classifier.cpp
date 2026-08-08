@@ -12,7 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "storage/controller/semantic/semantic_label_config.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {

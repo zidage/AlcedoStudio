@@ -20,7 +20,7 @@
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "json.hpp"
 #include "renderer/pipeline_scheduler.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 
@@ -91,7 +91,7 @@ struct PipelineSnapshot {
 
 class PipelineMgmtService final {
  private:
-  std::shared_ptr<StorageService>                                     storage_service_;
+  std::shared_ptr<Storage>                                     storage_;
 
   LRUCache<sl_element_id_t, sl_element_id_t>                          pipeline_cache_;
 
@@ -109,8 +109,8 @@ class PipelineMgmtService final {
 
  public:
   PipelineMgmtService() = delete;
-  explicit PipelineMgmtService(std::shared_ptr<StorageService> storage_service)
-      : storage_service_(storage_service),
+  explicit PipelineMgmtService(std::shared_ptr<Storage> storage_service)
+      : storage_(storage_service),
         pipeline_cache_(default_cache_capacity_),
         loaded_pipelines_() {}
 

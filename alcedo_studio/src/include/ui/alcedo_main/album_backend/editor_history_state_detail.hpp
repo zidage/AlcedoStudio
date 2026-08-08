@@ -66,7 +66,7 @@ class EditorHistoryState {
   [[nodiscard]] auto PipelinePort() const -> std::shared_ptr<EditorSessionPipelinePort>;
 
   /// Resolve the pipeline service through the current pipeline port.
-  [[nodiscard]] auto PipelineService() const -> std::shared_ptr<alcedo::PipelineMgmtService>;
+  [[nodiscard]] auto PipelineMapper() const -> std::shared_ptr<alcedo::PipelineMgmtService>;
 
   /// Compare the live working head with the last materialized head.
   auto HasUnmaterializedChanges(sl_element_id_t element_id, std::string* error) -> bool;

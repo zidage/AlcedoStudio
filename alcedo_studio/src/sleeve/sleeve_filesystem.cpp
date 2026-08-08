@@ -28,12 +28,12 @@ auto IsRootPath(const std::filesystem::path& path) -> bool {
 }
 }  // namespace
 
-FileSystem::FileSystem(std::filesystem::path db_path, StorageService& storage_service,
+FileSystem::FileSystem(std::filesystem::path db_path, Storage& storage_service,
                        sl_element_id_t start_id)
     : id_gen_(start_id),
       db_path_(db_path),
       storage_service_(storage_service),
-      storage_handler_(storage_service_.GetElementController(), storage_),
+      storage_handler_(storage_service_.GetElementStore(), storage_),
       resolver_(storage_handler_, id_gen_) {
   root_ = nullptr;
 }
@@ -45,7 +45,7 @@ auto FileSystem::InitRoot() -> bool {
   // root's id is always 0
   std::shared_ptr<SleeveElement> root;
   try {
-    root = storage_service_.GetElementController().GetElementById(0);
+    root = storage_service_.GetElementStore().GetElementById(0);
   } catch (std::exception& e) {
     root = SleeveElementFactory::CreateElement(ElementType::FOLDER, 0, L"");
   }
@@ -207,7 +207,7 @@ auto FileSystem::DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t 
   if (!source_history) {
     try {
       source_history =
-          storage_service_.GetElementController().GetEditHistoryByFileId(source_file->element_id_);
+          storage_service_.GetElementStore().GetEditHistoryByFileId(source_file->element_id_);
     } catch (...) {
     }
   }
@@ -507,7 +507,7 @@ auto FileSystem::ApplyFilterToFolder(const std::filesystem::path&       folder_p
     return result_elements;
   }
 
-  auto result_elements_db = storage_service_.GetElementController().GetElementsInFolderByFilter(
+  auto result_elements_db = storage_service_.GetElementStore().GetElementsInFolderByFilter(
       filter, folder->element_id_);
   // Just for cache purpose, which will not affect sync status nor anything else
   folder->CreateIndex(result_elements_db, filter->filter_id_);
@@ -555,7 +555,7 @@ auto FileSystem::GetDeletedElements() -> std::vector<std::shared_ptr<SleeveEleme
 }
 
 void FileSystem::SyncToDB() {
-  auto& element_ctrl = storage_service_.GetElementController();
+  auto& element_ctrl = storage_service_.GetElementStore();
   for (auto& pair : storage_) {
     auto element = pair.second;
     if (element->sync_flag_ == SyncFlag::UNSYNC) {

@@ -14,7 +14,7 @@
 #include "app/sleeve_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "image_pool_service.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -34,7 +34,7 @@ class ProjectService {
   void SaveProject(const std::filesystem::path& meta_path);
   void LoadProject(const std::filesystem::path& meta_path);
 
-  auto GetStorageService() const -> std::shared_ptr<StorageService> { return storage_service_; }
+  auto GetStorage() const -> std::shared_ptr<Storage> { return storage_; }
 
   auto GetSleeveService() const -> std::shared_ptr<SleeveServiceImpl> { return sleeve_service_; }
   auto GetImagePoolService() const -> std::shared_ptr<ImagePoolService> {
@@ -62,7 +62,7 @@ class ProjectService {
   std::filesystem::path                 db_path_;
   std::filesystem::path                 meta_path_;
   std::string                           project_uuid_;
-  std::shared_ptr<StorageService>       storage_service_;
+  std::shared_ptr<Storage>       storage_;
   std::shared_ptr<SleeveServiceImpl>    sleeve_service_;
   // TODO: Add ImagePoolService and store its start_id into the metadata
   std::shared_ptr<ImagePoolService>      pool_service_;

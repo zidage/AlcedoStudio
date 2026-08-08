@@ -19,7 +19,7 @@
 namespace alcedo {
 class EditorMiniGitMaterializer;
 class EditorSaveCheckpointCoordinator;
-class StorageService;
+class Storage;
 }  // namespace alcedo
 
 namespace alcedo::ui {
@@ -32,7 +32,7 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
  public:
   struct Services {
     /// Resolve the storage service used for durable graph writes.
-    std::function<std::shared_ptr<alcedo::StorageService>()> storage_service;
+    std::function<std::shared_ptr<alcedo::Storage>()> storage_service;
     /// Resolve the per-image journal path used during recovery.
     std::function<std::filesystem::path(sl_element_id_t)>    mini_git_journal_path;
     /// Project-owned global save lock shared with EditorSaveCheckpointService.
@@ -66,7 +66,7 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
   Services                                           services_{};
   mutable std::mutex                                 mutex_;
   std::shared_ptr<alcedo::EditorMiniGitMaterializer> materializer_;
-  std::shared_ptr<alcedo::StorageService>            materializer_storage_;
+  std::shared_ptr<alcedo::Storage>            materializer_storage_;
   // std::thread (not jthread): Apple libc++ on the CI deployment target still
   // omits std::jthread even under -std=c++20. Destructor joins workers_ explicitly.
   std::vector<std::thread>                           workers_;

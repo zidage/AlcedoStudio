@@ -852,7 +852,7 @@ class AlbumWidget final : public QWidget {
  public:
   AlbumWidget(std::shared_ptr<ThumbnailService>                   thumbnail_service,
               std::shared_ptr<SleeveServiceImpl>                  sleeve_service,
-              std::shared_ptr<StorageService>                     storage_service,
+              std::shared_ptr<Storage>                     storage_service,
               std::vector<std::pair<sl_element_id_t, image_id_t>> ids, QWidget* parent = nullptr)
       : QWidget(parent),
         service_(std::move(thumbnail_service)),
@@ -1379,13 +1379,13 @@ int main(int argc, char** argv) {
     alcedo::ProjectService project(db_path, meta_path);
     auto                     img_pool = project.GetImagePoolService();
     auto                     pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
 
     auto thumbnail_service = std::make_shared<alcedo::ThumbnailService>(
         project.GetSleeveService(), img_pool, pipeline_service);
 
     auto* w = new alcedo::AlbumWidget(thumbnail_service, project.GetSleeveService(),
-                                        project.GetStorageService(), std::move(imported.ids));
+                                        project.GetStorage(), std::move(imported.ids));
     w->setWindowTitle("alcedo - Thumbnail Album Qt Demo");
     w->resize(1400, 900);
     w->show();

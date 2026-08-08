@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "sleeve/sleeve_filter/filter_factory.hpp"
-#include "storage/controller/semantic/semantic_label_config.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"

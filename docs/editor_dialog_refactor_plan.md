@@ -106,7 +106,7 @@ Progress note (2026-05-02):
 - Phase 2 render/history coordinator extraction has been implemented. `EditorRenderCoordinator` now owns preview request queues, preview generation/detail state, render timers, inflight future polling, and render completion sequencing. Existing `EditorDialog` render methods remain as forwarding wrappers for unmigrated panel code.
 - `EditorHistoryCoordinator` now owns the working version and version operations: version reconstruction, checkout, undo, commit-all, working-version seeding, and version UI refresh. History-triggered pipeline reloads route back through the adjustment session load path before synchronizing legacy controls.
 - `EditorDialog` still owns shell widgets and legacy panel controls, but it no longer stores the render queues/timers/future state or the working `Version` directly. CMake includes the new `render/` and `history/` coordinator sources.
-- Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. For `ctest`, `CudaImageGeometryOpsTest` and `CudaPreviewVramReclamationTest` were disabled via new CMake switches because their executables exit `0xc0000139` during GoogleTest discovery. Additional generated discovery includes with the same startup status were disabled in the local build tree for this run: `PipelineServiceTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, and the `AlbumBackend*` tests.
+- Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. For `ctest`, `CudaImageGeometryOpsTest` and `CudaPreviewVramReclamationTest` were disabled via new CMake switches because their executables exit `0xc0000139` during GoogleTest discovery. Additional generated discovery includes with the same startup status were disabled in the local build tree for this run: `PipelineMapperTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, and the `AlbumBackend*` tests.
 - Remaining `ctest --test-dir build/debug --output-on-failure` execution reached 94 discovered tests; 88 passed, 2 were skipped, and 6 unrelated assertions failed in `RawProcessorPatternTest`, `CudaRawOpsTest`, and `SharedToneCurveTest`. Run the manual matrix before merging UI-facing follow-up phases.
 
 ## Phase 3: Split Typed State and Adapter Skeletons
@@ -152,7 +152,7 @@ Progress note (2026-05-02):
 - `EditorAdjustmentSnapshot` has been redefined as an aggregate of the six typed states plus `RenderType`. Inline conversion helpers `ToLegacyAdjustmentState()` and `FromLegacyAdjustmentState()` preserve full bidirectional compatibility with the existing `AdjustmentState` struct.
 - Six pipeline adapter skeletons now live under `pipeline/`: `TonePipelineAdapter`, `ColorTempPipelineAdapter`, `LookPipelineAdapter`, `DisplayTransformPipelineAdapter`, `GeometryPipelineAdapter`, and `RawPipelineAdapter`. Each adapter is stateless and currently delegates to `pipeline_io.cpp` by constructing temporary legacy `AdjustmentState` objects, calling the existing free functions, and extracting the relevant results. A generic `PipelineLoadResult<T>` template is provided in `adjustment_pipeline_adapter.hpp`.
 - `AdjustmentState` itself remains unchanged; no existing code paths were modified. All new headers are wired into `alcedo_studio/src/CMakeLists.txt`.
-- Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. For `ctest`, the same `0xc0000139`-affected tests disabled in Phase 2 were excluded from the local build tree (`PipelineServiceTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, `AlbumBackend*`, `CudaImageGeometryOpsTest`, `CudaPreviewVramReclamationTest`). Remaining `ctest --test-dir build/debug --output-on-failure` reached 94 discovered tests; 88 passed, 2 were skipped, and 6 unrelated pre-existing assertions failed in `RawProcessorPatternTest`, `CudaRawOpsTest`, and `SharedToneCurveTest`.
+- Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. For `ctest`, the same `0xc0000139`-affected tests disabled in Phase 2 were excluded from the local build tree (`PipelineMapperTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, `AlbumBackend*`, `CudaImageGeometryOpsTest`, `CudaPreviewVramReclamationTest`). Remaining `ctest --test-dir build/debug --output-on-failure` reached 94 discovered tests; 88 passed, 2 were skipped, and 6 unrelated pre-existing assertions failed in `RawProcessorPatternTest`, `CudaRawOpsTest`, and `SharedToneCurveTest`.
 
 ## Phase 4: Migrate Tone Panel First
 
@@ -258,9 +258,9 @@ Progress note (2026-05-02):
   delegates lens combo/status text refresh to `RawDecodePanelWidget::RetranslateUi()`.
 - Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. The
   initial `ctest --test-dir build/debug --output-on-failure` run hit the known `0xc0000139`
-  GoogleTest discovery failure at `PipelineServiceTest.exe`; the generated discovery includes for
+  GoogleTest discovery failure at `PipelineMapperTest.exe`; the generated discovery includes for
   the same affected local build-tree tests noted in previous phases were disabled
-  (`PipelineServiceTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, and the
+  (`PipelineMapperTest`, `EditHistoryMgmtServiceTest`, `ExportServiceTest`, and the
   `AlbumBackend*` tests), then the remaining suite was run.
 - Remaining `ctest --test-dir build/debug --output-on-failure` execution reached 94 discovered
   tests; 88 passed, 2 were skipped, and 6 unrelated assertions failed in
@@ -519,7 +519,7 @@ Progress note (2026-05-02):
   Attempting `ctest --test-dir build/debug --output-on-failure -R
   "^(EditViewerLogicTest|ToneCurveWidgetTest|ODTOpTest|LutCatalogTest|CropRotateOpTest)\."`
   still evaluated unrelated GoogleTest discovery includes and hit the known
-  `PipelineServiceTest.exe` `0xc0000139` startup error. The editor-related executables were then
+  `PipelineMapperTest.exe` `0xc0000139` startup error. The editor-related executables were then
   run directly: `EditViewerLogicTest`, `ToneCurveWidgetTest`, `ODTOpTest`, `LutCatalogTest`, and
   `CropRotateOpTest`; all 36 tests passed.
 
@@ -605,4 +605,4 @@ The refactor is ready for final acceptance when:
   - Moved `last_applied_lut_path_` into `LookControlPanelWidget`.
   - Moved slider double-click reset callback ownership into each panel widget, and moved the curve reset callback into `ToneControlPanelWidget`.
   - Removed the corresponding color-temp helpers, LUT cache, reset callback maps, and `eventFilter()` reset dispatch from `EditorDialog`; the dialog now only wires high-level render/session/history coordination for these paths.
-  - Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. Direct editor-related tests passed: `EditViewerLogicTest` (10), `ToneCurveWidgetTest` (3), `ODTOpTest` (8), `LutCatalogTest` (6), and `CropRotateOpTest` (9). The filtered `ctest` command still hits the known unrelated `PipelineServiceTest.exe` `0xc0000139` GoogleTest discovery failure before applying the regex.
+  - Verification: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4` passes. Direct editor-related tests passed: `EditViewerLogicTest` (10), `ToneCurveWidgetTest` (3), `ODTOpTest` (8), `LutCatalogTest` (6), and `CropRotateOpTest` (9). The filtered `ctest` command still hits the known unrelated `PipelineMapperTest.exe` `0xc0000139` GoogleTest discovery failure before applying the regex.

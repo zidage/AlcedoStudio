@@ -1,4 +1,4 @@
-# Storage & DB target ownership (DuckDB ORM, mappers, storage service).
+# Storage & DB target ownership (DuckDB ORM, mappers, Storage facade).
 
 # ORM Layer
 def_library(DuckORM
@@ -16,6 +16,7 @@ set(MAPPER_SRCS
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/element_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/element/element_id_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/base/base_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/base/root_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/image/image_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/filter/filter_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/history_mapper.cpp"
@@ -28,32 +29,23 @@ set(MAPPER_SRCS
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
-    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool EditPipeline PipelineScheduler
+    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool EditHistory EditPipeline PipelineScheduler
 )
 
-# Services
-set(SERVICE_SRCS
-    "${ALCEDO_SRC_ROOT}/sleeve/storage_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/controller_types.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/db_controller.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/image/image_controller.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/semantic/semantic_storage_controller.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/ai/ai_storage_controller.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/controller/sleeve/element_controller.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/image/image_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/base/base_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/base/root_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/element/element_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/element/element_id_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/element/file_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/element/folder_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/edit_history/history_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/sleeve/edit_history/commit_graph_service.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/service/pipeline/pipeline_service.cpp"
+# Stores + Storage facade (no storage/service rank)
+set(STORAGE_SRCS
+    "${ALCEDO_SRC_ROOT}/sleeve/storage.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/store_types.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/database.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/image/image_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/element_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
 )
 
-def_library(StorageService
-    SOURCES ${SERVICE_SRCS}
+def_library(Storage
+    SOURCES ${STORAGE_SRCS}
     PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StrConv PipelineScheduler
     PRIVATE_DEPS AppDiagnostics
 )

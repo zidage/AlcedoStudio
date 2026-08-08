@@ -38,7 +38,7 @@ set(FS_SRCS
 
 def_library(SleeveFS
     SOURCES ${FS_SRCS}
-    PUBLIC_DEPS SleeveElement StorageService
+    PUBLIC_DEPS SleeveElement Storage
 )
 
 def_library(SleeveManager

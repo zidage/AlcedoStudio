@@ -27,7 +27,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -99,7 +99,7 @@ class EditorSessionHistoryPortTest : public ::testing::Test {
     root_graph_   = std::make_shared<alcedo::CommitGraph>(*guard_->commit_graph_);
     pipeline_     = std::make_shared<EditorSessionPipelinePort>();
     pipeline_->SetServices(
-        EditorSessionPipelineServices{{}, [guard = guard_](sl_element_id_t) { return guard; }});
+        EditorSessionPipelineMappers{{}, [guard = guard_](sl_element_id_t) { return guard; }});
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_);
@@ -564,7 +564,7 @@ TEST_F(EditorSessionHistoryPortTest,
                                      capture->materialization.commits));
   reopened_guard->root_id_                = capture->materialization.image_state.root_id;
   auto reopened_pipeline = std::make_shared<EditorSessionPipelinePort>();
-  reopened_pipeline->SetServices(EditorSessionPipelineServices{
+  reopened_pipeline->SetServices(EditorSessionPipelineMappers{
       {}, [reopened_guard](sl_element_id_t) { return reopened_guard; }});
   EditorSessionHistoryPort reopened;
   reopened.SetServices(
@@ -870,7 +870,7 @@ TEST_F(EditorSessionHistoryPortTest, ReopenReplaysJournalIntoWorkingPipeline) {
   auto reopened_guard           = MakeMiniGitPipelineGuard(42);
   reopened_guard->commit_graph_ = std::make_shared<alcedo::CommitGraph>(*root_graph_);
   auto reopened_pipeline        = std::make_shared<EditorSessionPipelinePort>();
-  reopened_pipeline->SetServices(EditorSessionPipelineServices{
+  reopened_pipeline->SetServices(EditorSessionPipelineMappers{
       {}, [reopened_guard](sl_element_id_t) { return reopened_guard; }});
   EditorSessionHistoryPort reopened;
   reopened.SetServices(
@@ -1275,7 +1275,7 @@ TEST(EditorSessionHistoryPortPersistTest,
   constexpr sl_element_id_t element_id = 821;
   alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
   auto pipeline_service =
-      std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+      std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
 
   auto guard = pipeline_service->LoadEditorPipeline(element_id);
   ASSERT_NE(guard, nullptr);
@@ -1284,7 +1284,7 @@ TEST(EditorSessionHistoryPortPersistTest,
   EXPECT_EQ(guard->commit_graph_->GetVersionRef(default_version_id).display_name, "Default");
 
   auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-  pipeline->SetServices(EditorSessionPipelineServices{
+  pipeline->SetServices(EditorSessionPipelineMappers{
       [pipeline_service]() { return pipeline_service; },
       [guard](sl_element_id_t) { return guard; }});
 
@@ -1310,9 +1310,9 @@ TEST(EditorSessionHistoryPortPersistTest,
   auto capture = history.CaptureSaveCheckpoint(handle, &error);
   ASSERT_TRUE(static_cast<bool>(capture)) << error;
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    alcedo::CommitGraphService graph_service(db_guard.conn_);
+    alcedo::CommitGraphStore graph_service(db_guard.conn_);
     graph_service.Materialize(capture->materialization);
   }
   ASSERT_TRUE(history.DiscardMaterializedJournalThrough(handle, *capture->last_journal_sequence,
@@ -1370,11 +1370,11 @@ TEST(EditorSessionHistoryPortProjectTest,
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-    pipeline->SetServices(EditorSessionPipelineServices{
+    pipeline->SetServices(EditorSessionPipelineMappers{
         [pipeline_service]() { return pipeline_service; },
         [guard](sl_element_id_t) { return guard; }});
 
@@ -1406,11 +1406,11 @@ TEST(EditorSessionHistoryPortProjectTest,
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kLoadExisting);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-    pipeline->SetServices(EditorSessionPipelineServices{
+    pipeline->SetServices(EditorSessionPipelineMappers{
         [pipeline_service]() { return pipeline_service; },
         [guard](sl_element_id_t) { return guard; }});
 
@@ -1471,11 +1471,11 @@ TEST(EditorSessionHistoryPortProjectTest,
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-    pipeline->SetServices(EditorSessionPipelineServices{
+    pipeline->SetServices(EditorSessionPipelineMappers{
         [pipeline_service]() { return pipeline_service; },
         [guard](sl_element_id_t) { return guard; }});
 
@@ -1501,11 +1501,11 @@ TEST(EditorSessionHistoryPortProjectTest,
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kLoadExisting);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-    pipeline->SetServices(EditorSessionPipelineServices{
+    pipeline->SetServices(EditorSessionPipelineMappers{
         [pipeline_service]() { return pipeline_service; },
         [guard](sl_element_id_t) { return guard; }});
 
@@ -1560,7 +1560,7 @@ TEST(EditorSessionHistoryPortProjectTest, LoadRejectsOrQuarantinesIncompatibleWa
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     project.SaveProject(meta_path);
@@ -1592,11 +1592,11 @@ TEST(EditorSessionHistoryPortProjectTest, LoadRejectsOrQuarantinesIncompatibleWa
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kLoadExisting);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
     auto guard = pipeline_service->LoadEditorPipeline(element_id);
     ASSERT_NE(guard, nullptr);
     auto pipeline = std::make_shared<EditorSessionPipelinePort>();
-    pipeline->SetServices(EditorSessionPipelineServices{
+    pipeline->SetServices(EditorSessionPipelineMappers{
         [pipeline_service]() { return pipeline_service; },
         [guard](sl_element_id_t) { return guard; }});
 

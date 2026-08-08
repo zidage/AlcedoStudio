@@ -226,7 +226,7 @@ Responsibilities:
 - expose count or total-result metadata for preview pagination
 
 For folder scoping, reuse the same root/folder semantics as
-`ElementController::BuildScopedFileQuery`. Avoid duplicating ad hoc folder SQL.
+`ElementStore::BuildScopedFileQuery`. Avoid duplicating ad hoc folder SQL.
 
 For applying a semantic search to the album grid, avoid a giant `IN (...)` list
 for large result sets. Prefer a temporary or project-local result table keyed by
@@ -292,7 +292,7 @@ opaque BLOBs. Free-text semantic search must not fetch every stored vector into
 C++ for cosine comparison. The storage layer owns a ranked query primitive that:
 
 - validates the query vector against the active model dimension
-- reuses `ElementController::BuildScopedFileQuery` for root/folder scope
+- reuses `ElementStore::BuildScopedFileQuery` for root/folder scope
 - joins scoped files to `SemanticImageEmbedding`
 - ranks with DuckDB VSS/HNSW using `array_distance` over normalized embeddings
 - fetches a bounded VSS candidate pool, applies query-local relevance cutoff,
@@ -321,7 +321,7 @@ embedding table rather than degrading back to C++ vector scans.
 
 Required follow-up updates:
 
-- add table creation to `DBController`
+- add table creation to `Database`
 - include semantic tables in project data summaries/checksums
 - delete semantic rows when files are removed
 - include semantic tables in project save/load/package workflows
@@ -335,10 +335,10 @@ not necessarily endorse every choice.
 
 ### Project open and storage lifetime
 
-- `StorageService` owns one `DBController` plus one long-lived
-  `SemanticStorageController`; the semantic controller keeps its own DuckDB
+- `Storage` owns one `Database` plus one long-lived
+  `SemanticStore`; the semantic controller keeps its own DuckDB
   connection guard for the lifetime of the storage service.
-- `DBController::InitializeDB()` runs on both new and existing project
+- `Database::InitializeDB()` runs on both new and existing project
   databases. For existing projects it only runs the semantic schema string,
   then seeds default label query rows.
 - The semantic schema uses `CREATE TABLE IF NOT EXISTS` and normal secondary
@@ -355,7 +355,7 @@ not necessarily endorse every choice.
 
 - Before a generation workflow starts, the album semantic controller asks the
   runtime for model info, builds a model key from that info, then calls
-  `SemanticStorageController::UpsertModel(...)`.
+  `SemanticStore::UpsertModel(...)`.
 - Model registration is an `INSERT OR REPLACE` into `SemanticModel`.
   Re-running generation for the same model key refreshes that row rather than
   creating a new model row.
@@ -411,7 +411,7 @@ not necessarily endorse every choice.
 
 ### Search and vector index behavior
 
-- `SemanticStorageController::SearchImageEmbeddings(...)` validates the query
+- `SemanticStore::SearchImageEmbeddings(...)` validates the query
   vector and calls `EnsureVectorSearchIndex(model_key)` before running the
   ranked query.
 - `EnsureVectorSearchIndex(...)` loads DuckDB `vss` lazily, first trying the
@@ -607,7 +607,7 @@ Packaging smoke tests should verify:
    - decide final image payload format: raw `rgba8:WxH` or encoded image bytes
 
 4c. Bulk generation persistence and labels - complete
-   - persist image embeddings through `SemanticStorageController`
+   - persist image embeddings through `SemanticStore`
    - seed bundled photography label query rows into new project databases
    - generate label query embeddings once per model/config and cache them in
      `SemanticLabelPrototype`
@@ -663,7 +663,7 @@ Packaging smoke tests should verify:
       - fetch/validate model info, derive the active model key, and reject
         search when the model key is not registered in storage
       - call text embedding once per submitted query, validate the returned
-        vector, then call `SemanticStorageController::SearchImageEmbeddings`
+        vector, then call `SemanticStore::SearchImageEmbeddings`
       - keep DuckDB VSS/HNSW as the only ranked vector path; missing extension
         or index is an actionable semantic-search error, not a C++ scan fallback
       - return rows in the same lightweight shape as `FuzzySearchMatch` so
@@ -692,7 +692,7 @@ Packaging smoke tests should verify:
       - make clearing search release the semantic result scope and restore the
         normal album query path
       - keep root and folder scope aligned with
-        `ElementController::BuildScopedFileQuery`
+        `ElementStore::BuildScopedFileQuery`
     - 5g. Realtime-search experiment
       - measure a debounced semantic preview behind a development flag or local
         instrumentation only
@@ -955,7 +955,7 @@ Manual smoke tests:
 2. 设置页如何排除已有标签，统计谁做
 设置页三项统计存在 SemanticGenerationController 成员里：album_total_count_、album_labeled_count_、album_unlabeled_count_，Q_PROPERTY 暴露给 QML。生命周期跟 AlbumBackend.semantic_generation_ 一样，是内存 UI 状态，不是表。见 [semantic_generation_controller.hpp (line 41)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/ui/alcedo_main/album_backend/semantic_generation_controller.hpp:41)。
 触发时机：设置页 Component.onCompleted 和 onSemanticControllerChanged 调 RefreshAlbumSummary()；生成进度、生成完成、模型激活后也会刷新。见 [SemanticGenerationSettingsPanel.qml (line 110)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/qml/SemanticGenerationSettingsPanel.qml:110)、[semantic_generation_controller.cpp (line 1316)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:1316)。
-统计逻辑：总数走 browse->CountFilesInFolderById(0)，已有标签数走 SemanticStorageController::CountImageLabelsInFolder(0, active_model_key)，未标注数是相减。见 [semantic_generation_controller.cpp (line 847)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:847)。
+统计逻辑：总数走 browse->CountFilesInFolderById(0)，已有标签数走 SemanticStore::CountImageLabelsInFolder(0, active_model_key)，未标注数是相减。见 [semantic_generation_controller.cpp (line 847)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:847)。
 真正生成前还会过滤一次：ItemsNeedingSemanticGeneration() 对每个候选调用 HasReadyImageEmbedding(file_id, image_id, model_key, require_label=true)。SemanticGenerationService::RunJob() 内部又重复做了一次 skip check，这是双保险，但也是额外 DB 读。见 [semantic_generation_controller.cpp (line 362)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:362) 和 [semantic_generation_service.cpp (line 889)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:889)。
 3. 列表进入生成系统后的调用链
 入口是 StartGenerationForItems()，它先进入 running 状态，160ms 后继续，让 UI 能先显示“Preparing”。之后确保 runtime 已经按 active profile 启动，如果当前 sidecar 是另一模型/根目录，会 Stop() 后重启。见 [semantic_generation_controller.cpp (line 1016)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:1016)。
@@ -966,8 +966,8 @@ prompt：每张图片生成不传 prompt。label prompt 是项目表 SemanticLab
 4. Batch 拆包和 DB 写入
 Rust 侧 EmbedImageBatch 先把每个 RGBA8 decode 成 RgbImage，无效 item 返回 per-item error；有效图片统一 engine.embed_images(&images)，按原 slot 写回 EmbeddingBatchItem，所以 response 保持 request 对应关系。见 [semantic.rs (line 427)](D:/Projects/pu-erh_lab/rust/puerh_mind/src/server/semantic.rs:427)。
 C++ 拆包先用 request_id 建 map，再按原 input 顺序重排，检测 missing/duplicate response。见 [semantic_generation_service.cpp (line 417)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:417)。
-写入：成功 embedding 调 PersistSemanticResult()，构造 SemanticImageEmbeddingRecord，再进 SemanticStorageController::UpsertImageEmbeddingAndAssignLabel()。一个图片一个 DuckDB transaction：删除旧 SemanticImageEmbedding、删除旧 SemanticImageLabel、插入新 embedding，然后 JOIN SemanticLabelPrototype 用 array_inner_product 排 top labels，插入 SemanticImageLabel，最后 commit。见 [semantic_generation_service.cpp (line 282)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:282)、[semantic_storage_controller.cpp (line 657)](D:/Projects/pu-erh_lab/alcedo_studio/src/storage/controller/semantic/semantic_storage_controller.cpp:657)。
-写入表：SemanticModel、SemanticImageEmbedding、SemanticImageLabel、必要时 SemanticLabelPrototype；SemanticLabelQuery 是 DB 初始化时 seed。schema 见 [db_controller.hpp (line 48)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/storage/controller/db_controller.hpp:48)。
+写入：成功 embedding 调 PersistSemanticResult()，构造 SemanticImageEmbeddingRecord，再进 SemanticStore::UpsertImageEmbeddingAndAssignLabel()。一个图片一个 DuckDB transaction：删除旧 SemanticImageEmbedding、删除旧 SemanticImageLabel、插入新 embedding，然后 JOIN SemanticLabelPrototype 用 array_inner_product 排 top labels，插入 SemanticImageLabel，最后 commit。见 [semantic_generation_service.cpp (line 282)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:282)、[semantic_storage_controller.cpp (line 657)](D:/Projects/pu-erh_lab/alcedo_studio/src/storage/controller/semantic/semantic_storage_controller.cpp:657)。
+写入表：SemanticModel、SemanticImageEmbedding、SemanticImageLabel、必要时 SemanticLabelPrototype；SemanticLabelQuery 是 DB 初始化时 seed。schema 见 [db_controller.hpp (line 48)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/storage/store/database.hpp:48)。
 拷贝情况：不是零拷贝。缩略图 Mat 复制到 std::vector<uint8_t>；generation input 又复制到 runtime request；protobuf set_image_bytes 再复制；embedding 写 DB 前从 response vector 复制进 record，然后再 stringify 成 FLOAT[512] SQL literal。见 [semantic_generation_service.cpp (line 109)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:109)、[semantic_generation_service.cpp (line 711)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_generation_service.cpp:711)、[semantic_runtime_service.cpp (line 669)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/semantic_runtime_service.cpp:669)、[semantic_storage_controller.cpp (line 84)](D:/Projects/pu-erh_lab/alcedo_studio/src/storage/controller/semantic/semantic_storage_controller.cpp:84)。
 5. 写完后如何刷新相册，三个 panel 怎么读 DB
 生成完成后 Finish()：reset job/runtime guard，RefreshAlbumSummary()，backend_.ReloadCurrentFolder()，然后保存/打包项目。runtime guard 析构会 stop sidecar。见 [semantic_generation_controller.cpp (line 1330)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/semantic_generation_controller.cpp:1330)。
@@ -979,7 +979,7 @@ C++ 拆包先用 request_id 建 map，再按原 input 顺序重排，检测 miss
 Inspector 不直接拿 DB result；它绑定 albumBackend.*Stats。DB -> StorageStatsBucket -> StatsBucket -> QVariantMap{label,count} -> QML model。见 [sleeve_filter_service.hpp (line 20)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/app/sleeve_filter_service.hpp:20)。
 7. Grid 小格子信息从哪来
 Grid delegate 的字段来自 AlbumThumbnailModel roles：fileName/cameraModel/extension/iso/aperture/focalLength/captureDate/rating/isHdr/tags/thumbUrl/...。见 [album_thumbnail_model.cpp (line 38)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/album_thumbnail_model.cpp:38)。
-这些 role 的来源分三块：基础 file id/name 来自 ElementController::ListFilesInFolderPage()；EXIF/评分/HDR 来自 ImagePoolService::Read(imageId) 的 Image 对象；tags 来自 active model 下的 SemanticImageLabel 查询。缩略图 URL 则由 delegate 可见性触发 SetThumbnailVisible()，经 ThumbnailService 异步回填并发 thumbnailUpdated。见 [ThumbnailGridView.qml (line 730)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/qml/ThumbnailGridView.qml:730)、[thumbnail_manager.cpp (line 102)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_manager.cpp:102)。
+这些 role 的来源分三块：基础 file id/name 来自 ElementStore::ListFilesInFolderPage()；EXIF/评分/HDR 来自 ImagePoolService::Read(imageId) 的 Image 对象；tags 来自 active model 下的 SemanticImageLabel 查询。缩略图 URL 则由 delegate 可见性触发 SetThumbnailVisible()，经 ThumbnailService 异步回填并发 thumbnailUpdated。见 [ThumbnailGridView.qml (line 730)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/qml/ThumbnailGridView.qml:730)、[thumbnail_manager.cpp (line 102)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_manager.cpp:102)。
 8. 每次打开一张图片是否还查 DB
 详情弹窗打开时会调用 albumBackend.GetImageDetails(elementId, imageId)。它先从当前 AlbumItem 尝试解析 file id/image id，然后调用 SemanticLabelDisplayText(file_id) 查一次 SemanticImageLabel，再用 ImagePoolService::Read(image_id) 读取本地/缓存 Image 来生成 EXIF rows。见 [Main.qml (line 427)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/qml/Main.qml:427)、[image_controller.cpp (line 734)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/image_controller.cpp:734)。
 所以：文件名、image id、部分 grid metadata 可以来自当前 AlbumItem；EXIF 详情、原图尺寸、source directory 来自 ImagePool 中的 Image；semantic tags 仍查 DB。中间 grid 已缓存 tags，但详情弹窗没有复用 item->tags，而是重新查 active model label，这保证模型切换后详情不读旧标签，但会多一次 DB 查询。
@@ -1011,7 +1011,7 @@ Import snapshot / Settings full album list
 
 1. UI 图片删除入口
 中间 grid 或 Nikon HE recovery 走 `AlbumBackend::DeleteImages()`，最终进
-`ImageController::DeleteTargets()`。这里先看当前 folder scope：如果当前是 root
+`ImageStore::DeleteTargets()`。这里先看当前 folder scope：如果当前是 root
 folder (`folder_id == 0`)，就是“从 library 删除”；如果当前是 album folder，就是
 “从这个 album 移除”。见
 [image_controller.cpp (line 511)](D:/Projects/pu-erh_lab/alcedo_studio/src/ui/alcedo_main/album_backend/image_controller.cpp:511)
@@ -1029,12 +1029,12 @@ folder (`folder_id == 0`)，就是“从 library 删除”；如果当前是 alb
 2. root/library 删除路径
 root 删除的核心链路是：
 
-`ImageController::DeleteTargets()`
+`ImageStore::DeleteTargets()`
 → `AlbumBrowseService::DeleteFilesInFolderByElementIds(0, ids)`
 → `SleeveServiceImpl::DeleteFilesEverywhere(ids)`
 → `FileSystem::DeleteFilesEverywhere(ids)`
 → `SleeveServiceImpl::Sync()`
-→ `ElementController::RemoveElements(garbage_elements)`
+→ `ElementStore::RemoveElements(garbage_elements)`
 → `DeleteSemanticRowsForFiles(file_ids)`.
 
 `FileSystem::DeleteFilesEverywhere()` 会把 file 从所有已加载 folder membership 里移除，
@@ -1045,7 +1045,7 @@ root 删除的核心链路是：
 和
 [sleeve_service.cpp (line 128)](D:/Projects/pu-erh_lab/alcedo_studio/src/app/sleeve_service.cpp:128)。
 
-`ElementController::RemoveElements()` 会先收集所有被删 file 的 `element_id`，然后调用
+`ElementStore::RemoveElements()` 会先收集所有被删 file 的 `element_id`，然后调用
 `DeleteSemanticRowsForFiles(file_ids)`。这个 helper 执行三条 SQL：
 
 - `DELETE FROM SemanticImageEmbedding WHERE file_id IN (...)`
@@ -1089,7 +1089,7 @@ identity；file children remain live library files。见
 label prompt 配置；`SemanticLabelPrototype*` 是 model + prompt 的文本原型缓存，供所有
 图片共享。单张图片删除不应该删这些表，否则会影响同一模型下其他图片的生成/搜索。schema
 见
-[db_controller.hpp (line 48)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/storage/controller/db_controller.hpp:48)。
+[db_controller.hpp (line 48)](D:/Projects/pu-erh_lab/alcedo_studio/src/include/storage/store/database.hpp:48)。
 
 5. 生成覆盖旧标签时也会先删旧行
 除了图片删除，重新生成同一 file/model 的 embedding 时也会先删旧 embedding 和旧 label，
@@ -1101,7 +1101,7 @@ label prompt 配置；`SemanticLabelPrototype*` 是 model + prompt 的文本原�
 
 6. 测试覆盖
 已有一个直接覆盖语义清理的测试：
-`SemanticStorageControllerTest.DeletingFileRemovesSemanticRows`。它创建两个文件，给两个
+`SemanticStoreTest.DeletingFileRemovesSemanticRows`。它创建两个文件，给两个
 文件都写 semantic embedding，然后 `DeleteFileEverywhere(delete_id)`，最后断言被删文件
 的 embedding count 变 0、保留文件仍为 1，并且 semantic search 只返回保留文件。见
 [semantic_storage_controller_test.cpp (line 668)](D:/Projects/pu-erh_lab/alcedo_studio/tests/storage/semantic_storage_controller_test.cpp:668)。
@@ -1114,7 +1114,7 @@ UI 层也覆盖了 root 删除会从所有 album 中级联移除 membership：
 7. 仍然值得补的风险点
 有两个小风险：
 
-- `ElementController` 里还有一个 `RemoveElement(sl_element_id_t id)` overload，它只删
+- `ElementStore` 里还有一个 `RemoveElement(sl_element_id_t id)` overload，它只删
   `Element` 表，不清 file child rows，也不清 semantic rows。目前我没有看到删除路径调用
   这个 overload；真实路径用的是 `RemoveElement(shared_ptr)` 或 `RemoveElements(span)`。
   但这个 overload 是潜在 footgun，后续最好删除、私有化，或改成完整清理。

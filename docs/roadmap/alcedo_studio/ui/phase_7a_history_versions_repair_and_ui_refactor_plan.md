@@ -561,8 +561,8 @@ in-memory `materialized_head` with DuckDB — there is no reachable
 in-memory/DuckDB desync to turn into a validation mismatch. `ReadPipelineSnapshot`
 only fails when `!guard.pipeline_` (unreachable after a valid rebuild), and
 `PipelineMgmtService`/`EditorSessionPipelinePort` are `final`, so the persist and
-rebuild paths cannot be faked. `StorageService::GetDBController()` is non-virtual
-and returns a concrete `DBController&` member, so subclassing cannot inject a
+rebuild paths cannot be faked. `Storage::GetDatabase()` is non-virtual
+and returns a concrete `Database&` member, so subclassing cannot inject a
 failing DuckDB connection either. The sole reachable late failure is a controllable
 DuckDB write failure inside `graph_service.Materialize` after `SelectVersion`
 clears redo — i.e. R7's "Inject failure at DuckDB publication" fixture. Every
@@ -938,7 +938,7 @@ method body is the original implementation moved verbatim.
 **Remaining gaps:** Two pre-existing R0 RED tests (`HeadMoveApplyFailurePreservesHeadRedo...`
 and `MoveAcrossMergeReconstructsResolvedFields`) remain failing as expected — they are scoped
 to R5 (Mini-Git atomic transitions). New unit tests for the extracted units require the full
-`PipelineMgmtService` test fixture (with DuckDB/StorageService) to avoid access violations;
+`PipelineMgmtService` test fixture (with DuckDB/Storage) to avoid access violations;
 those are deferred to R7's production-path fixture.
 
 
@@ -1317,7 +1317,7 @@ Build a production-path fixture with real:
 - `EditorSessionHistoryPort`;
 - `EditorSessionPipelinePort`;
 - `PipelineMgmtService`;
-- `CommitGraphService` and DuckDB storage;
+- `CommitGraphStore` and DuckDB storage;
 - Mini-Git journal file;
 - QML Versions/history panels;
 - deterministic commit clock and controllable completion executor.
@@ -1393,7 +1393,7 @@ These passing tests confirm local algorithms and fake-panel interactions. They d
 missing async controller observer, complete rollback tuple, production QML-to-DuckDB call chain, or
 performance notification counts.
 
-The broader selected `PipelineServiceTest` run also exposed eight failures caused by the shared
+The broader selected `PipelineMapperTest` run also exposed eight failures caused by the shared
 `sleeve_service_test.db` temporary file being locked. That is test-isolation evidence, not evidence
 that the history repair passes or fails. Production-path qualification must use unique test storage
 paths under `build/tmp/`.

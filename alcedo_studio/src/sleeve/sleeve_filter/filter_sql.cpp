@@ -32,7 +32,7 @@ auto FormatTimestampLiteral(const std::tm& tm_value) -> SqlFragment {
 /**
  * @brief Map a domain field onto a scoped album-query column expression.
  *
- * Alias rule (must match ElementController::BuildScopedFileQuery):
+ * Alias rule (must match ElementStore::BuildScopedFileQuery):
  * - `i` is the Image row (`i.metadata`, `i.file_name`, `i.image_path`)
  * - `e` is the Element row (`e.element_name`, `e.added_time`)
  */

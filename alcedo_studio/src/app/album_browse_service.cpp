@@ -110,8 +110,8 @@ auto AlbumBrowseService::ListFilesInFolderById(
   }
 
   try {
-    const auto  storage = sleeve_service_->GetStorageService();
-    const auto& ctrl    = storage->GetElementController();
+    const auto  storage = sleeve_service_->GetStorage();
+    const auto& ctrl    = storage->GetElementStore();
     const auto  entries = ctrl.ListFilesInFolderPage(folder_id, offset, limit, extra_filter_where);
     files.reserve(entries.size());
     for (const auto& entry : entries) {
@@ -143,8 +143,8 @@ auto AlbumBrowseService::CountFilesInFolderById(
   }
 
   try {
-    const auto  storage = sleeve_service_->GetStorageService();
-    const auto& ctrl    = storage->GetElementController();
+    const auto  storage = sleeve_service_->GetStorage();
+    const auto& ctrl    = storage->GetElementStore();
     return ctrl.CountFilesInFolder(folder_id, extra_filter_where);
   } catch (...) {
     return 0;

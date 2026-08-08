@@ -10,7 +10,7 @@
 
 #include "edit/history/commit_clock_test_access.hpp"
 #include "edit/operators/operator_registeration.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo::test {
@@ -124,9 +124,9 @@ void EditorMiniGitProjectFixture::CloseAndReopenProject() {
 
 auto EditorMiniGitProjectFixture::LoadStoredGraph(sl_element_id_t element_id)
     -> std::optional<CommitGraph> {
-  auto guard = storage_->GetDBController().GetConnectionGuard();
+  auto guard = storage_->GetDatabase().GetConnectionGuard();
   auto lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
+  CommitGraphStore graph_service(guard.conn_);
   return graph_service.LoadGraph(element_id);
 }
 
@@ -141,9 +141,9 @@ auto EditorMiniGitProjectFixture::ReadJournalRecords(sl_element_id_t element_id,
 }
 
 auto EditorMiniGitProjectFixture::CountStoredCommits(sl_element_id_t element_id) -> std::uint64_t {
-  auto guard = storage_->GetDBController().GetConnectionGuard();
+  auto guard = storage_->GetDatabase().GetConnectionGuard();
   auto lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
+  CommitGraphStore graph_service(guard.conn_);
   return graph_service.CountCommitsForRoot(root_id(element_id));
 }
 
@@ -170,7 +170,7 @@ auto EditorMiniGitProjectFixture::RuntimeFor(sl_element_id_t element_id) const
 
 void EditorMiniGitProjectFixture::OpenProjectObjects() {
   project_          = std::make_unique<ProjectService>(db_path_, meta_path_);
-  storage_          = project_->GetStorageService();
+  storage_          = project_->GetStorage();
   save_coordinator_ = std::make_shared<EditorSaveCheckpointCoordinator>();
   materializer_     = std::make_unique<EditorMiniGitMaterializer>(storage_, save_coordinator_);
 }
@@ -222,9 +222,9 @@ void EditorMiniGitProjectFixture::CreatePersistedImage(ImageRuntime&       runti
                                                        const std::string&  version_name) {
   runtime.element_id   = element_id;
   runtime.journal_path = root_dir_ / ("image_" + std::to_string(element_id) + ".mini-git.wal");
-  auto guard           = storage_->GetDBController().GetConnectionGuard();
+  auto guard           = storage_->GetDatabase().GetConnectionGuard();
   auto lock            = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
+  CommitGraphStore graph_service(guard.conn_);
   auto               graph = graph_service.CreateEmptyPersisted(element_id, version_name);
   runtime.root_id          = graph.GetRootId();
   runtime.graph            = std::make_shared<CommitGraph>(std::move(graph));

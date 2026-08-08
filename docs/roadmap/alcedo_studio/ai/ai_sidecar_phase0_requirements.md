@@ -253,7 +253,7 @@ Current proto surface (`rust/puerh_mind/proto/`): exactly two project-owned prot
   v1 RPCs frozen; Phase 4 migrates this path to v2 *call-site by call-site* with a
   legacy fallback until the new fake-runtime and real-runtime tests are stable.
 - **Semantic search** (`ProjectSemanticSearchProvider`, `project_service.cpp:183-293`
-  → `EmbedText` → `SemanticStorageController::SearchImageEmbeddings`): v1 frozen.
+  → `EmbedText` → `SemanticStore::SearchImageEmbeddings`): v1 frozen.
   Search-document construction and HNSW ranking are untouched in Phase 1.
 - **Model download / install / settings** (`ModelDownloadService` + aria2 +
   `ModelDownloadController` + `model_asset_catalog`): entirely C++-owned, talks to
@@ -448,8 +448,8 @@ The in-process fake client must gain a canned `ListCapabilities` response (the
 ### 5.1 Current storage state (verified)
 
 Schema is inline `constexpr` strings in
-`alcedo_studio/src/include/storage/controller/db_controller.hpp`, run by
-`DBController::InitializeDB()` (`db_controller.cpp:74-126`). There are **no `.sql`
+`alcedo_studio/src/include/storage/store/database.hpp`, run by
+`Database::InitializeDB()` (`db_controller.cpp:74-126`). There are **no `.sql`
 files** in the repo. Relevant existing tables:
 
 - `SemanticModel` (`db_controller.hpp:52-64`): `model_key` PK (= `model_id@revision`),
@@ -461,7 +461,7 @@ files** in the repo. Relevant existing tables:
   (FLOAT[512] / FLOAT[768]); `file_id`, `image_id`, `model_key`, `embedding`,
   `embedding_dim`, `thumbnail_resolution`, `generated_at`, `status`, `error`;
   PK `(file_id, model_key)`; HNSW index created lazily by
-  `SemanticStorageController::EnsureVectorSearchIndex` (`.cpp:1902-1928`).
+  `SemanticStore::EnsureVectorSearchIndex` (`.cpp:1902-1928`).
 - `SemanticImageLabel` (`91-104`): CLIP label assignment, one row per
   `(file_id, model_key)` — `label`, `score`, `second_label`, `second_score`, `margin`,
   `confident`, `top_scores JSON`. **Not** an LLM caption/tag store.
@@ -574,13 +574,13 @@ existing `SemanticLabelExpr` (`sleeve_filter_service.cpp:149-171`):
 ### 5.6 Connection ownership and cleanup wiring
 
 - **Connection ownership:** the new `AiAnnotationStorageController` follows the
-  `SemanticStorageController` pattern — store a `DBController&`, open a transient
-  `ConnectionGuard` per operation (`db_ctrl_.GetConnectionGuard()` then
+  `SemanticStore` pattern — store a `Database&`, open a transient
+  `ConnectionGuard` per operation (`database_.GetConnectionGuard()` then
   `guard.Lock()`), and hold **no** long-lived connection. This is the DuckDB ownership
-  rule in `CLAUDE.md` and matches `SemanticStorageController` exactly
-  (`.cpp:980-981`). It must **not** follow the `ElementController`/`ImageController`
+  rule in `CLAUDE.md` and matches `SemanticStore` exactly
+  (`.cpp:980-981`). It must **not** follow the `ElementStore`/`ImageStore`
   long-lived-guard pattern.
-- **Delete cleanup:** `ElementController::DeleteSemanticRowsForFiles`
+- **Delete cleanup:** `ElementStore::DeleteSemanticRowsForFiles`
   (`element_controller.cpp:119-138,270-271,312`) currently deletes
   `SemanticImageEmbedding` / `SemanticImageEmbedding768` / `SemanticImageLabel` rows
   for the deleted file ids. It must be extended to also

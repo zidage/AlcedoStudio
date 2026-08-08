@@ -136,7 +136,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
     session_scheduler->SetPipelinePort(session_pipeline);
 
-    EditorSessionPipelineServices pipeline_services;
+    EditorSessionPipelineMappers pipeline_services;
     pipeline_services.pipeline_service = [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
     };
@@ -152,12 +152,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       }
       return project_->handler().project()->GetImagePoolService();
     };
-    std::function<std::shared_ptr<alcedo::StorageService>()> storage_service =
-        [this]() -> std::shared_ptr<alcedo::StorageService> {
+    std::function<std::shared_ptr<alcedo::Storage>()> storage_service =
+        [this]() -> std::shared_ptr<alcedo::Storage> {
       if (!project_ || !project_->handler().project()) {
         return nullptr;
       }
-      return project_->handler().project()->GetStorageService();
+      return project_->handler().project()->GetStorage();
     };
     std::function<std::filesystem::path(sl_element_id_t)> journal_path =
         [this](sl_element_id_t element_id) {

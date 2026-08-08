@@ -87,7 +87,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     journal_path_ = std::filesystem::temp_directory_path() / ("qml_multi_slider_" + stamp + ".wal");
     guard_        = MakeGuard(42);
     pipeline_port_ = std::make_shared<EditorSessionPipelinePort>();
-    pipeline_port_->SetServices(EditorSessionPipelineServices{
+    pipeline_port_->SetServices(EditorSessionPipelineMappers{
         {}, [g = guard_](sl_element_id_t) { return g; }});
     history_.SetServices(EditorSessionHistoryPort::Services{
         [this](sl_element_id_t) { return journal_path_; }});

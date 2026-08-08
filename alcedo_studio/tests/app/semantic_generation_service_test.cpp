@@ -372,7 +372,7 @@ auto LabelIndex(SemanticLabelLanguage language, const std::string& label) -> siz
   return 0;
 }
 
-void RegisterSemanticTestModel(SemanticStorageController& semantic) {
+void RegisterSemanticTestModel(SemanticStore& semantic) {
   std::string error;
   ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-test",
                                                        .model_id_      = "mock/mobileclip",
@@ -383,7 +383,7 @@ void RegisterSemanticTestModel(SemanticStorageController& semantic) {
       << error;
 }
 
-void RegisterLocalizedSemanticTestModel(SemanticStorageController& semantic) {
+void RegisterLocalizedSemanticTestModel(SemanticStore& semantic) {
   std::string error;
   ASSERT_TRUE(semantic.UpsertModel(
       SemanticModelRecord{.model_key_     = "localized-zh-test",
@@ -846,10 +846,10 @@ TEST_F(SemanticGenerationServiceTest, UsesRealThumbnailServiceAndBatchesMockEmbe
                     "git-lfs fixtures to exercise real-import semantic generation";
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
       project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
-      project.GetStorageService(),
+      project.GetStorage(),
       project.GetProjectUUID());
 
   auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
@@ -924,7 +924,7 @@ TEST_F(SemanticGenerationServiceTest, RealThumbnailFailureSkipsMockEmbeddingForT
   }
   items.push_back(SemanticGenerationItem{999999u, 999999u});
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
       project.GetSleeveService(), project.GetImagePoolService(), pipeline_service);
 
@@ -962,7 +962,7 @@ TEST_F(SemanticGenerationServiceTest, CancelDuringMockEmbeddingDoesNotHoldRealTh
                     "git-lfs fixtures to exercise real-import semantic generation";
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
       project.GetSleeveService(), project.GetImagePoolService(), pipeline_service);
 
@@ -1087,7 +1087,7 @@ TEST_F(SemanticGenerationServiceTest, DefaultPhotographyLabelsLiveInConfigHeader
 
 TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticTestModel(semantic);
 
   auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1143,7 +1143,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
 
 TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDisplayText) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterLocalizedSemanticTestModel(semantic);
 
   auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1195,7 +1195,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
 
 TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticTestModel(semantic);
 
   auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1241,7 +1241,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   ASSERT_GT(paths.size(), 0U);
 
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticTestModel(semantic);
 
   const auto items = ImportPaths(project, paths);
@@ -1266,10 +1266,10 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
     }
   }
 
-  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
       project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
-      project.GetStorageService(),
+      project.GetStorage(),
       project.GetProjectUUID());
   auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
   auto embedder   = std::make_shared<Routed512EmbeddingClient>(std::move(routes));
@@ -1304,7 +1304,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   EXPECT_EQ(embedder->ImageItemCount(), static_cast<int>(items.size()));
 
   const auto item_count = static_cast<int64_t>(items.size());
-  auto       sql_guard  = project.GetStorageService()->GetDBController().GetConnectionGuard();
+  auto       sql_guard  = project.GetStorage()->GetDatabase().GetConnectionGuard();
   EXPECT_EQ(RawScalarInt64(sql_guard.conn_,
                            "SELECT COUNT(*) FROM SemanticImageEmbedding "
                            "WHERE model_key = 'mobileclip-test' AND status = 'ready';"),
@@ -1330,7 +1330,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
 
 TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWritingRows) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticTestModel(semantic);
 
   auto bad_embedding                   = OneHot512(3);

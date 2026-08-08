@@ -15,7 +15,7 @@
 #include "edit/history/editor_transaction_journal.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "json.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -44,7 +44,7 @@ struct EditorMaterializeResult {
 /// history / pipeline / recovery-metadata update required by Phase 5H.
 class EditorHistoryMaterializer final {
  public:
-  explicit EditorHistoryMaterializer(std::shared_ptr<StorageService> storage);
+  explicit EditorHistoryMaterializer(std::shared_ptr<Storage> storage);
 
   /// Materialize journal-committed state into DuckDB using one connection and
   /// one transaction. Separate SaveHistory/SavePipeline calls are intentionally
@@ -66,7 +66,7 @@ class EditorHistoryMaterializer final {
       -> std::optional<EditorRecoveryMetadata>;
 
  private:
-  std::shared_ptr<StorageService> storage_;
+  std::shared_ptr<Storage> storage_;
 };
 
 }  // namespace alcedo

@@ -12,7 +12,7 @@
 #include <optional>
 #include <sstream>
 
-#include "storage/controller/semantic/semantic_label_config.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -569,7 +569,7 @@ auto SleeveFilterService::ApplyFilterOn(filter_id_t filter_id, sl_element_id_t p
 
   // No cached result, we need to execute the filter.
   auto result_ids =
-      storage_service_->GetElementController().GetElementIdsInFolderByFilter(combo, parent_id);
+      storage_->GetElementStore().GetElementIdsInFolderByFilter(combo, parent_id);
   // Cache the result for future use.
   filter_result_cache_.RecordAccess(cache_key, result_ids);
   return result_ids;
@@ -586,8 +586,8 @@ auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  pare
     }
   }
 
-  const auto active_model_key = storage_service_->GetSemanticStorageController().ActiveModelKey();
-  const auto storage_stats    = storage_service_->GetElementController().BuildFolderStats(
+  const auto active_model_key = storage_->GetSemanticStore().ActiveModelKey();
+  const auto storage_stats    = storage_->GetElementStore().BuildFolderStats(
       parent_id, extra_where, active_model_key);
 
   AlbumStatsView out;
@@ -640,10 +640,10 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
   }
 
   const auto active_model_key =
-      storage_service_ ? storage_service_->GetSemanticStorageController().ActiveModelKey()
+      storage_ ? storage_->GetSemanticStore().ActiveModelKey()
                        : std::string{};
   const bool has_ai_fts =
-      storage_service_ && storage_service_->GetAiStorageController().HasUnderstandingFtsIndex();
+      storage_ && storage_->GetAiStore().HasUnderstandingFtsIndex();
 
   std::vector<duckorm::SqlFragment> token_clauses;
   token_clauses.reserve(tokens.size());
@@ -682,7 +682,7 @@ auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wst
                                        size_t offset, size_t limit, SearchFieldMask mask) const
     -> std::vector<FuzzySearchMatch> {
   std::vector<FuzzySearchMatch> out;
-  if (!storage_service_) {
+  if (!storage_) {
     return out;
   }
   const auto filter_node = BuildFuzzySearchWhere(query, mask);
@@ -694,7 +694,7 @@ auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wst
     return out;
   }
 
-  const auto rows = storage_service_->GetElementController().ListFilesInFolderPage(
+  const auto rows = storage_->GetElementStore().ListFilesInFolderPage(
       parent_id, offset, limit, where);
   out.reserve(rows.size());
   for (const auto& row : rows) {
@@ -724,7 +724,7 @@ auto SleeveFilterService::SearchFolderSemantic(sl_element_id_t parent_id, const 
 auto SleeveFilterService::CountSearchResults(sl_element_id_t     parent_id,
                                              const std::wstring& query,
                                              SearchFieldMask      mask) const -> size_t {
-  if (!storage_service_) {
+  if (!storage_) {
     return 0;
   }
   const auto filter_node = BuildFuzzySearchWhere(query, mask);
@@ -735,7 +735,7 @@ auto SleeveFilterService::CountSearchResults(sl_element_id_t     parent_id,
   if (!where.has_value()) {
     return 0;
   }
-  return storage_service_->GetElementController().CountFilesInFolder(parent_id, where);
+  return storage_->GetElementStore().CountFilesInFolder(parent_id, where);
 }
 
 void SleeveFilterService::InvalidateResultCache(sl_element_id_t folder_id) {

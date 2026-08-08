@@ -714,18 +714,18 @@ incompatible / unreplayable WAL record
 
 | Required name / criterion | Target / binary | Result |
 | --- | --- | --- |
-| `LoadWithMatchingCheckpointSkipsFullReplay` | `PipelineServiceTest` | PASS |
-| `LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues` | `PipelineServiceTest` | PASS |
+| `LoadWithMatchingCheckpointSkipsFullReplay` | `PipelineMapperTest` | PASS |
+| `LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues` | `PipelineMapperTest` | PASS |
 | `LoadAttachesCompatibleWalThenComparesCheckpoint` | `EditorSessionHistoryPortTest` | PASS |
 
 Commands:
 
 ```bat
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineServiceTest EditorSessionHistoryPortTest
-build\debug\alcedo_studio\tests\app\PipelineServiceTest_runtime\PipelineServiceTest.exe --gtest_filter=*LoadWith*:*Checkpoint*
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest EditorSessionHistoryPortTest
+build\debug\alcedo_studio\tests\app\PipelineMapperTest_runtime\PipelineMapperTest.exe --gtest_filter=*LoadWith*:*Checkpoint*
 ```
 
-Suite totals: filtered PipelineService 3/3; HistoryPort includes WAL attach test (33/33)
+Suite totals: filtered PipelineMapper 3/3; HistoryPort includes WAL attach test (33/33)
 
 **Checklist / exit condition:** 5.1–5.3 evidenced; 5.4 closed in WU6 residual (`LoadRejectsOrQuarantinesIncompatibleWal`)
 
@@ -781,20 +781,20 @@ CompleteLiveMerge with stale first_parent_head / package fingerprint mismatch
 | `LoadRejectsOrQuarantinesIncompatibleWal` | `EditorSessionHistoryPortTest` | PASS |
 | `LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline` | `EditorSessionHistoryPortTest` | PASS |
 | Prior live paste/merge/WAL suite | `EditorSessionHistoryPortTest` | PASS (35/35) |
-| Checkpoint load suite | `PipelineServiceTest` | PASS (25/25) |
+| Checkpoint load suite | `PipelineMapperTest` | PASS (25/25) |
 
 Commands:
 
 ```bat
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AdjustmentTransferServiceMiniGitTest EditorSessionHistoryPortTest EditorSessionCommandQueueBaselineTest EditorSessionCq5QualificationTest PipelineServiceTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AdjustmentTransferServiceMiniGitTest EditorSessionHistoryPortTest EditorSessionCommandQueueBaselineTest EditorSessionCq5QualificationTest PipelineMapperTest
 build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceMiniGitTest_runtime\AdjustmentTransferServiceMiniGitTest.exe
 build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
 build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
 build\debug\alcedo_studio\tests\app\EditorSessionCq5QualificationTest_runtime\EditorSessionCq5QualificationTest.exe
-build\debug\alcedo_studio\tests\app\PipelineServiceTest_runtime\PipelineServiceTest.exe
+build\debug\alcedo_studio\tests\app\PipelineMapperTest_runtime\PipelineMapperTest.exe
 ```
 
-Suite totals: MiniGit 21/21; HistoryPort 35/35; CQ baseline 16/16; CQ5 5/5; PipelineService 25/25
+Suite totals: MiniGit 21/21; HistoryPort 35/35; CQ baseline 16/16; CQ5 5/5; PipelineMapper 25/25
 
 **Checklist / exit condition:** all WU6 boxes checked; prior residual gaps closed (WAL quarantine named test; Lens live portable-only; shadow API deletion)
 

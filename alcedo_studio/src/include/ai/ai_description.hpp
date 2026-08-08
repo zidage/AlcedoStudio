@@ -21,12 +21,12 @@ namespace alcedo {
 //
 // `task_id` distinguishes analysis runs (e.g. a prompt-profile version or a provider
 // re-evaluation). At most one row per `(file_id, task_id)` is active-for-search; the
-// `AiStorageController` upserts on the table's `PRIMARY KEY (file_id, task_id)` so a new
+// `AiStore` upserts on the table's `PRIMARY KEY (file_id, task_id)` so a new
 // active persist replaces the prior row for that pair, and a row whose `active_` is
 // false is kept for history but excluded from full-text search.
 //
 // DB serialization/deserialization goes through the duckorm layer in `src/storage/`
-// (`AiStorageController`); this header stays free of storage / ORM includes. `tags_` is
+// (`AiStore`); this header stays free of storage / ORM includes. `tags_` is
 // stored as a JSON array string (e.g. `["sahara","dunes"]`) so the ORM binds a single
 // VARCHAR; `Tags()` / `SetTags()` round-trip it to `std::vector<std::string>` for app use.
 struct AiDescription {

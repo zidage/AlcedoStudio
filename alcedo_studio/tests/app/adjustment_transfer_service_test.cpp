@@ -256,8 +256,8 @@ TEST_F(AdjustmentTransferServiceTest, VersionedApplyCreatesActiveCheckoutVersion
   constexpr sl_element_id_t target_id = 42;
 
   ProjectService         project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  PipelineMgmtService    pipeline_service(project.GetStorageService());
-  EditHistoryMgmtService history_service(project.GetStorageService());
+  PipelineMgmtService    pipeline_service(project.GetStorage());
+  EditHistoryMgmtService history_service(project.GetStorage());
 
   {
     auto pipeline = pipeline_service.LoadPipeline(target_id);
@@ -354,8 +354,8 @@ TEST_F(AdjustmentTransferServiceTest, VersionedMergeMaterializesCombinedParamsWi
   constexpr sl_element_id_t target_id = 42;
 
   ProjectService         project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  PipelineMgmtService    pipeline_service(project.GetStorageService());
-  EditHistoryMgmtService history_service(project.GetStorageService());
+  PipelineMgmtService    pipeline_service(project.GetStorage());
+  EditHistoryMgmtService history_service(project.GetStorage());
 
   const sl_element_id_t ids[] = {target_id};
   const nlohmann::json  initial_package_json = {
@@ -430,8 +430,8 @@ TEST_F(AdjustmentTransferServiceTest, VersionedApplyPersistsOutputTransformForEd
   constexpr sl_element_id_t target_id = 42;
 
   ProjectService         project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  PipelineMgmtService    pipeline_service(project.GetStorageService());
-  EditHistoryMgmtService history_service(project.GetStorageService());
+  PipelineMgmtService    pipeline_service(project.GetStorage());
+  EditHistoryMgmtService history_service(project.GetStorage());
 
   {
     auto source_pipeline = pipeline_service.LoadPipeline(source_id);
@@ -504,7 +504,7 @@ TEST_F(AdjustmentTransferServiceTest, VersionedApplyPersistsOutputTransformForEd
   pipeline_service.Sync();
   history_service.Sync();
 
-  PipelineMgmtService reopened_pipeline_service(project.GetStorageService());
+  PipelineMgmtService reopened_pipeline_service(project.GetStorage());
   auto reopened_pipeline = reopened_pipeline_service.LoadPipeline(target_id);
   ASSERT_NE(reopened_pipeline, nullptr);
   ASSERT_NE(reopened_pipeline->pipeline_, nullptr);

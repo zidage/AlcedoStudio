@@ -22,7 +22,7 @@
 #include "ai/ai_description.hpp"
 #include "ai/ai_rating.hpp"
 #include "image/image.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -1073,7 +1073,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
 
   auto project     = ph.project();
   auto image_pool  = project->GetImagePoolService();
-  auto storage_svc = project->GetStorageService();
+  auto storage_svc = project->GetStorage();
   if (!image_pool || !storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
     status_->SetTaskState(msg, 0, false);
@@ -1082,7 +1082,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
   }
 
   try {
-    auto& ai = storage_svc->GetAiStorageController();
+    auto& ai = storage_svc->GetAiStore();
     const std::optional<AiDescription> description = ai.GetActiveUnderstanding(resolved_file_id);
     const std::optional<AiRating>      rating_reason = ai.GetActiveRating(resolved_file_id);
     const QString semantic_tags =
@@ -1309,7 +1309,7 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
     return result;
   }
 
-  auto storage_svc = project->GetStorageService();
+  auto storage_svc = project->GetStorage();
   if (!storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
     status_->SetTaskState(msg, 0, false);
@@ -1318,7 +1318,7 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
   }
 
   try {
-    auto&         ai       = storage_svc->GetAiStorageController();
+    auto&         ai       = storage_svc->GetAiStore();
     AiDescription updated  = ai.GetActiveUnderstanding(file_id).value_or(AiDescription{});
     updated.file_id_       = file_id;
     updated.caption_       = trimmed_caption.toStdString();
@@ -1390,7 +1390,7 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
     return result;
   }
 
-  auto storage_svc = project->GetStorageService();
+  auto storage_svc = project->GetStorage();
   if (!storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
     status_->SetTaskState(msg, 0, false);
@@ -1399,7 +1399,7 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
   }
 
   try {
-    auto&    ai      = storage_svc->GetAiStorageController();
+    auto&    ai      = storage_svc->GetAiStore();
     AiRating updated = ai.GetActiveRating(file_id).value_or(AiRating{});
     updated.file_id_ = file_id;
     updated.rating_  = 0;
@@ -1521,7 +1521,7 @@ auto ImageController::GetImageRatingReasons(uint elementId) -> QVariantMap {
     return result;
   }
   const auto row =
-      project->GetStorageService()->GetAiStorageController().GetActiveRating(elementId);
+      project->GetStorage()->GetAiStore().GetActiveRating(elementId);
   if (!row.has_value() || row->reasons_.empty()) {
     return result;
   }
@@ -1548,7 +1548,7 @@ auto ImageController::GetImageDescription(uint elementId) -> QVariantMap {
     return result;
   }
   const auto row =
-      project->GetStorageService()->GetAiStorageController().GetActiveUnderstanding(elementId);
+      project->GetStorage()->GetAiStore().GetActiveUnderstanding(elementId);
   if (!row.has_value() || row->caption_.empty()) {
     return result;
   }

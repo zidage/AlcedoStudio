@@ -215,7 +215,7 @@ std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(
     alcedo::AiProviderProfileController* profiles,
     std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate);
 
-/// Production Phase 7a sink. Delegates to AiStorageController, ImageController,
+/// Production Phase 7a sink. Delegates to AiStore, ImageController,
 /// and StatsEngine. Queues writes behind ProjectDbWriteBarrier when held.
 std::shared_ptr<IImageAnalysisSink> MakeAlbumImageAnalysisSink(
     ProjectModule* project, ImageController* images, StatsEngine* stats,

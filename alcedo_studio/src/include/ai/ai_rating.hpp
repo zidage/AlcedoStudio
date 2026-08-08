@@ -27,7 +27,7 @@ namespace alcedo {
 //
 // Rating is intentionally NOT part of full-text search (Phase 5f): it is exposed for
 // sort/filter/recommendation only, once a product rubric is approved. DB ser/deser goes
-// through the duckorm layer in `src/storage/` (`AiStorageController`); this header stays
+// through the duckorm layer in `src/storage/` (`AiStore`); this header stays
 // free of storage / ORM includes.
 struct AiRating {
   sl_element_id_t file_id_           = 0;    // FK -> Sleeve element id (inode)
@@ -56,7 +56,7 @@ struct AiRating {
   [[nodiscard]] auto IsValid() const -> bool;
 
   // Phase 7a reasons-only gate. The product star rating is the EXIF/metadata `Rating`
-  // value, written through the existing star-rating path; `AiStorageController` is used
+  // value, written through the existing star-rating path; `AiStore` is used
   // only to persist the rating *reasons* (rationale text) plus provider/model/prompt/
   // rubric identity. Such a row carries `rating_ = 0` as a sentinel ("the truth is the
   // EXIF star, not this column"), so `IsValid()` — which requires 1..5—rejects it. This

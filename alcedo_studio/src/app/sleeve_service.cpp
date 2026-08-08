@@ -54,11 +54,11 @@ void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& el
             << std::endl;
 }
 
-void ClonePipelineForDuplicate(StorageService& storage_service, sl_element_id_t source_file_id,
+void ClonePipelineForDuplicate(Storage& storage_service, sl_element_id_t source_file_id,
                                sl_element_id_t duplicate_file_id) {
   auto source_pipeline = storage_service.GetLivePipeline(source_file_id);
   if (!source_pipeline) {
-    source_pipeline = storage_service.GetElementController().GetPipelineByElementId(source_file_id);
+    source_pipeline = storage_service.GetElementStore().GetPipelineByElementId(source_file_id);
   }
   if (!source_pipeline) {
     return;
@@ -68,27 +68,27 @@ void ClonePipelineForDuplicate(StorageService& storage_service, sl_element_id_t 
   duplicate_pipeline->SetBoundFile(duplicate_file_id);
   duplicate_pipeline->ImportPipelineParams(source_pipeline->ExportPipelineParams());
   duplicate_pipeline->SetExecutionStages();
-  storage_service.GetElementController().UpdatePipelineByElementId(duplicate_file_id,
+  storage_service.GetElementStore().UpdatePipelineByElementId(duplicate_file_id,
                                                                    duplicate_pipeline);
   storage_service.RememberLivePipeline(duplicate_file_id, duplicate_pipeline);
 }
 
 }  // namespace
 
-SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<StorageService> storage_service,
+SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
                                      const std::filesystem::path& db_path, sl_element_id_t start_id)
-    : storage_service_(std::move(storage_service)), db_path_(db_path) {
-  if (!storage_service_) {
-    throw std::invalid_argument("StorageService is null");
+    : storage_(std::move(storage_service)), db_path_(db_path) {
+  if (!storage_) {
+    throw std::invalid_argument("Storage is null");
   }
-  fs_ = std::make_unique<FileSystem>(db_path_, *storage_service_, start_id);
+  fs_ = std::make_unique<FileSystem>(db_path_, *storage_, start_id);
   fs_->InitRoot();
 }
 
 auto SleeveServiceImpl::Sync() -> SyncResult {
   SyncResult result{true, 0, ""};
   try {
-    auto&      element_ctrl      = storage_service_->GetElementController();
+    auto&      element_ctrl      = storage_->GetElementStore();
     auto       modified_elements = fs_->GetModifiedElements();
     auto       unsynced_elements = fs_->GetUnsyncedElements();
     auto       garbage_elements  = fs_->GetDeletedElements();
@@ -121,8 +121,8 @@ auto SleeveServiceImpl::Sync() -> SyncResult {
     for (auto& element : garbage_elements) {
       LogSyncElement("Deleted", element);
       if (element && element->type_ == ElementType::FILE) {
-        storage_service_->ForgetLiveEditHistory(element->element_id_);
-        storage_service_->ForgetLivePipeline(element->element_id_);
+        storage_->ForgetLiveEditHistory(element->element_id_);
+        storage_->ForgetLivePipeline(element->element_id_);
       }
     }
     element_ctrl.RemoveElements(garbage_elements);
@@ -279,7 +279,7 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
   }
 
   try {
-    ClonePipelineForDuplicate(*storage_service_, file_id, duplicated->element_id_);
+    ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);
   } catch (const std::exception& e) {
     sync_result.success_ = false;
     sync_result.message_ = e.what();

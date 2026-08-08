@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: Phase 1–2 complete; Phase 3 pending
+Status: Phase 1–3 complete
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and sleeve filter SQL.
 
@@ -116,8 +116,8 @@ link labels in this file.
 | **expr** | The duckorm helpers that build `SqlFragment` values (`and_`, `or_`, `eq`, `like`, `exists`, `lit`, `raw`). |
 | **Mapper** | One type per table (or per persisted domain object). Owns row params, field descriptors, `ToParams` / `FromParams`, and single-table CRUD through duckorm. |
 | **Store** | Connection-scoped persistence API for one domain (`ElementStore`, `ImageStore`, …). Owns locks, transactions, cross-table writes, and scope queries. |
-| **Database** | Opens the DuckDB file, owns schema setup, and hands out `ConnectionGuard` values. Today this is `DBController`. |
-| **Storage** | Facade that owns `Database` and the domain Stores. Today this is `StorageService`. |
+| **Database** | Opens the DuckDB file, owns schema setup, and hands out `ConnectionGuard` values. Today this is `Database`. |
+| **Storage** | Facade that owns `Database` and the domain Stores. Today this is `Storage`. |
 | **TMP** | C++ template metaprogramming used here as CRTP and traits so Mapper and duckorm stay generic and avoid copy-paste. |
 | **FilterNode** | The sleeve filter tree (`Logical`, `Condition`, `RawSQL`) in `filter_combo.hpp`. |
 | **FilterSQLCompiler** | The sleeve domain compiler. It maps a `FilterNode` onto `duckorm::expr` fragments. It does not own FROM/JOIN scope SQL. |
@@ -147,22 +147,22 @@ Target names:
 | --- | --- | --- |
 | **Mapper** | today’s Mapper **merged with** storage Service | serialize domain object ↔ row; run single-table CRUD |
 | **Store** | today’s Controller | connection-scoped persistence API |
-| **Database** | `DBController` | open DB, schema, connection guards |
-| **Storage** | `StorageService` | own Database + Stores |
+| **Database** | `Database` | open DB, schema, connection guards |
+| **Storage** | `Storage` | own Database + Stores |
 
 Examples:
 
 ```text
-ElementMapper   ← ElementMapper + ElementService
-FileMapper      ← FileMapper + FileService
-ImageMapper     ← ImageMapper + ImageService
-ElementStore    ← ElementController
-ImageStore      ← ImageController
-SemanticStore   ← SemanticStorageController
-AiStore         ← AiStorageController
-CommitGraphStore ← CommitGraphService   // orchestration, not an app Service
-Database        ← DBController
-Storage         ← StorageService
+ElementMapper   ← ElementMapper + ElementMapper
+FileMapper      ← FileMapper + FileMapper
+ImageMapper     ← ImageMapper + ImageMapper
+ElementStore    ← ElementStore
+ImageStore      ← ImageStore
+SemanticStore   ← SemanticStore
+AiStore         ← AiStore
+CommitGraphStore ← CommitGraphStore   // orchestration, not an app Service
+Database        ← Database
+Storage         ← Storage
 ```
 
 App-layer `*Service` types stay as product façades. Do not rename them in this plan.
@@ -212,7 +212,7 @@ duckorm does **not** assemble the final album SELECT today.
 Current split:
 
 1. `FilterSQLCompiler` builds only a WHERE predicate from a `FilterNode`.
-2. `ElementController::BuildScopedFileQuery` builds FROM/JOIN and folder scope.
+2. `ElementStore::BuildScopedFileQuery` builds FROM/JOIN and folder scope.
 3. The controller formats `SELECT ...` + scope + predicate and runs it.
 4. `duckorm::select` only handles simple `SELECT * FROM <table> WHERE <string>` CRUD.
 
@@ -222,7 +222,7 @@ After this plan, duckorm gains `expr`. That does not move album meaning into duc
 FilterNode                 // meaning: "camera model equals X"
     ↓ FilterSQLCompiler    // domain map: FilterField → column / subquery shape
 duckorm::SqlFragment       // generic SQL: AND / EQ / lit / escape
-    ↓ ElementStore         // scope: FROM/JOIN/folder  (today: ElementController)
+    ↓ ElementStore         // scope: FROM/JOIN/folder  (today: ElementStore)
 final SELECT string        // run against DuckDB
 ```
 
@@ -257,7 +257,7 @@ These types are in the build and have callers:
 | Unit | Role | Callers today |
 | --- | --- | --- |
 | `FilterNode` / `FieldCondition` / `FilterField` / `CompareOp` | Domain filter tree | tests, Qt demos, `CreateFilterCombo`, `BuildFolderStats` extra filter |
-| `FilterSQLCompiler` | Compiles a tree to a WHERE clause | `ElementController::GetElement*ByFilter`, `BuildFolderStats`, sleeve and FilterService tests |
+| `FilterSQLCompiler` | Compiles a tree to a WHERE clause | `ElementStore::GetElement*ByFilter`, `BuildFolderStats`, sleeve and FilterService tests |
 | `FilterCombo` | In-memory filter id plus root node | `SleeveFilterService::ApplyFilterOn` and demos |
 
 `FilterSQLCompiler` already is a small AST-to-SQL translator for WHERE clauses. It
@@ -336,7 +336,7 @@ layer. The compiler maps domain meaning onto `expr` fragments. It does not repla
 scope query assembly.
 
 Collapse storage persistence names to **Mapper + Store**. Delete the storage Service
-rank. Rename `DBController` / `StorageService` to **Database** / **Storage**.
+rank. Rename `Database` / `Storage` to **Database** / **Storage**.
 
 Delete the unused legacy class filter hierarchy and unused full-query helpers.
 
@@ -391,7 +391,7 @@ Stats-bar filter on the thumbnail grid:
 StatsEngine::ToggleStatsFilter
   → BuildStatsFilterWhere()          // hand-built wstring
   → LibraryModule::LoadThumbnailWindow(where)
-  → AlbumBrowse / ElementController scoped page query
+  → AlbumBrowse / ElementStore scoped page query
 ```
 
 Stats refresh with an active search:
@@ -504,7 +504,7 @@ FilterNode tree (typed condition / logical / RawSQL)
   -> FilterSQLCompiler::Compile
   -> duckorm::expr (col / lit / and_ / or_ / like / between / raw)
   -> duckorm::SqlFragment { sql_, binds_ }
-  -> ElementController / SleeveFilterService convert sql_ to WHERE text
+  -> ElementStore / SleeveFilterService convert sql_ to WHERE text
   -> BuildScopedFileQuery (FROM/JOIN + i./e. aliases) + DuckDB run
 ```
 
@@ -528,7 +528,7 @@ Unescaped user quote in filter string (historical risk)
 Commands:
 
 ```text
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter StorageService SleeveFilterService DuckormExprTest SleeveFilterCompileTest FilterServiceTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter Storage SleeveFilterService DuckormExprTest SleeveFilterCompileTest FilterServiceTest
 build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
 build\debug\alcedo_studio\tests\sleeve\SleeveFilterCompileTest_runtime\SleeveFilterCompileTest.exe
 build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
@@ -615,7 +615,7 @@ StatsEngine::ToggleStatsFilter / SearchController::ApplyFuzzySearch
   -> MergeFilterNodes (one AND root) in LibraryModule and StatsEngine
   -> FilterSQLCompiler::Compile -> duckorm::SqlFragment
   -> CompileFilterWhere -> scoped WHERE text
-  -> AlbumBrowseService / ElementController ListFilesInFolderPage + BuildFolderStats
+  -> AlbumBrowseService / ElementStore ListFilesInFolderPage + BuildFolderStats
 ```
 
 **Primary failure call chain:**
@@ -640,7 +640,7 @@ Unparseable capture-date string on a file (for example "")
 Commands:
 
 ```text
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter SleeveFilterService StorageService DuckormExprTest SleeveFilterCompileTest SleeveFilterFactoryTest FilterServiceTest AlbumBackendStatsFilterTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter SleeveFilterService Storage DuckormExprTest SleeveFilterCompileTest SleeveFilterFactoryTest FilterServiceTest AlbumBackendStatsFilterTest
 build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
 build\debug\alcedo_studio\tests\sleeve\SleeveFilterFactoryTest_runtime\SleeveFilterFactoryTest.exe
 build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
@@ -700,13 +700,101 @@ Do this work:
 
 Acceptance criteria:
 
-- [ ] No `storage/service` sources remain for ordinary table CRUD.
-- [ ] Each migrated table has one Mapper type with schema facts plus conversion only.
-- [ ] Single-table insert/update/remove/select wrappers are not copy-pasted per table.
-- [ ] Domain Stores own transactions, cross-table writes, and scope/analytical queries.
-- [ ] `Storage` exposes Stores and `Database`; it does not expose a storage Service rank.
-- [ ] Focused storage, sleeve, filter, and album backend tests stay green after rename.
-- [ ] A repository search shows no new `storage/service` includes in first-party code.
+- [x] No `storage/service` sources remain for ordinary table CRUD.
+- [x] Each migrated table has one Mapper type with schema facts plus conversion only.
+- [x] Single-table insert/update/remove/select wrappers are not copy-pasted per table.
+- [x] Domain Stores own transactions, cross-table writes, and scope/analytical queries.
+- [x] `Storage` exposes Stores and `Database`; it does not expose a storage Service rank.
+- [x] Focused storage, sleeve, filter, and album backend tests stay green after rename.
+- [x] A repository search shows no new `storage/service` includes in first-party code.
+
+##### Phase 3 completion record (2026-08-08)
+
+**Status:** complete — merged CRTP `Mapper` base, deleted `storage/service`, renamed
+Controllers to Stores, `DBController` to `Database`, and `StorageService` to `Storage`.
+
+**Primary success call chain:**
+
+```text
+ProjectService::GetStorage
+  -> Storage::GetElementStore / GetImageStore / GetDatabase
+  -> ElementStore / ImageStore (transactions, scope SQL)
+  -> ElementMapper / ImageMapper::Insert|GetByPredicate (ToParams / FromParams)
+  -> Mapper CRTP base (single-table CRUD)
+  -> duckorm::insert|select|update|remove (+ SqlFragment WHERE)
+  -> DuckDB row change or query rows
+```
+
+**Primary failure call chain:**
+
+```text
+Broken primary-key clause on RemoveByIds
+  -> Mapper::RemoveByIds throws "Mapper: invalid primary key clause"
+  -> Store transaction catch / caller exception
+  -> no partial batch commit for that Mapper batch path
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ToParamsFromParamsRoundTripsImageIdentityAndPath` | `MapperCrtpRoundtripTest` | PASS |
+| `InsertAndGetByPredicateSqlFragmentSelectsInsertedImage` | `MapperCrtpRoundtripTest` | PASS |
+| `RemoveByClauseSqlFragmentDeletesMatchingImageRow` | `MapperCrtpRoundtripTest` | PASS |
+| Filter/stats path after rename | `FilterServiceTest` (41) | PASS |
+| Sleeve compile / factories | `SleeveFilterCompileTest` (6), `SleeveFilterFactoryTest` (13) | PASS |
+| duckorm expr | `DuckormExprTest` (9) | PASS |
+| Mini-Git persistence after CommitGraphStore rename | `CommitGraphTest` (34) | PASS |
+| Sleeve FS after Storage rename | `SleeveFSTest` (12) | PASS |
+| Album stats filter path | `AlbumBackendStatsFilterTest` (3) | PASS |
+| Album thumbnail path | `AlbumBackendThumbnailTest` (3 pass, 1 skip Metal) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH=D:/Qt/6.9.3/msvc2022_64/lib/cmake
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target Storage SleeveMapper MapperCrtpRoundtripTest FilterServiceTest SleeveFS SleeveFSTest CommitGraphTest AlbumBackendStatsFilterTest AlbumBackendThumbnailTest
+build\debug\alcedo_studio\tests\sleeve\MapperCrtpRoundtripTest_runtime\MapperCrtpRoundtripTest.exe
+build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
+build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterCompileTest_runtime\SleeveFilterCompileTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterFactoryTest_runtime\SleeveFilterFactoryTest.exe
+build\debug\alcedo_studio\tests\edit\CommitGraphTest_runtime\CommitGraphTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFSTest_runtime\SleeveFSTest.exe
+build\debug\alcedo_studio\tests\ui\AlbumBackendStatsFilterTest_runtime\AlbumBackendStatsFilterTest.exe
+build\debug\alcedo_studio\tests\ui\AlbumBackendThumbnailTest_runtime\AlbumBackendThumbnailTest.exe
+```
+
+Suite totals: MapperCrtpRoundtripTest 3/3; DuckormExprTest 9/9; SleeveFilterCompileTest 6/6;
+SleeveFilterFactoryTest 13/13; FilterServiceTest 41/41; CommitGraphTest 34/34;
+SleeveFSTest 12/12; AlbumBackendStatsFilterTest 3/3; AlbumBackendThumbnailTest 3/3 (+1 skip).
+
+**Checklist / exit condition:** all Phase 3 acceptance boxes checked.
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `mapper.hpp` (merged CRTP) | 306 |
+| `element_mapper.cpp` / `image_mapper.cpp` | 106 / 61 |
+| `element_store.cpp` | 637 |
+| `database.cpp` | 277 |
+| `commit_graph_store.cpp` | 393 |
+| `storage.cpp` (facade) | 121 |
+| `mapper_crtp_roundtrip_test.cpp` | 87 |
+
+No changed production file is near the 1000-LOC split threshold for this phase.
+`element_store.cpp` stays under the threshold; it still owns multi-table sleeve scope SQL.
+
+**Open work:** none (no plan-owner decision required).
+
+**Deferred checks:**
+
+- Full prepared-statement bind use on album scope queries (Stores still pass WHERE text into
+  `BuildScopedFileQuery` for list/stats). Later Store work after bind path is wired end-to-end.
+- `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload` fails on the
+  base tree too (Phase 2 note). Not re-proven as a Phase 3 regression in this pass.
+- UI album class `ImageController` stays under `alcedo::ui` (not storage `ImageStore`).
 
 ## Test and verification
 

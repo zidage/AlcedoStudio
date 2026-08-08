@@ -18,7 +18,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/operator_registeration.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -46,10 +46,10 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     meta_path_      = temp / ("session_checkpoint_" + stamp + ".json");
     journal_path_   = temp / ("session_checkpoint_" + stamp + ".mini-git.wal");
     project_        = std::make_unique<alcedo::ProjectService>(db_path_, meta_path_);
-    storage_        = project_->GetStorageService();
-    auto                       guard = storage_->GetDBController().GetConnectionGuard();
+    storage_        = project_->GetStorage();
+    auto                       guard = storage_->GetDatabase().GetConnectionGuard();
     auto                       lock  = guard.Lock();
-    alcedo::CommitGraphService graph_service(guard.conn_);
+    alcedo::CommitGraphStore graph_service(guard.conn_);
     graph_ = std::make_shared<alcedo::CommitGraph>(
         graph_service.CreateEmptyPersisted(element_id_, "Default"));
     save_coordinator_ = std::make_shared<alcedo::EditorSaveCheckpointCoordinator>();
@@ -104,7 +104,7 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
   std::filesystem::path                                            meta_path_;
   std::filesystem::path                                            journal_path_;
   std::unique_ptr<alcedo::ProjectService>                          project_;
-  std::shared_ptr<alcedo::StorageService>                          storage_;
+  std::shared_ptr<alcedo::Storage>                          storage_;
   std::shared_ptr<alcedo::CommitGraph>                             graph_;
   std::shared_ptr<alcedo::EditorSaveCheckpointCoordinator>         save_coordinator_;
   std::unique_ptr<EditorSessionCheckpointStore>                    store_;
@@ -121,9 +121,9 @@ TEST_F(EditorSessionCheckpointStoreTest, MaterializePersistsCaptureBeforeTruncat
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
-  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
   auto                       lock  = guard.Lock();
-  alcedo::CommitGraphService graph_service(guard.conn_);
+  alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->CommitCount(), 1u);
@@ -150,9 +150,9 @@ TEST_F(EditorSessionCheckpointStoreTest, ProductionCaptureValueReachesCheckpoint
   EXPECT_EQ(*owned->last_journal_sequence, last);
   EXPECT_EQ(owned.use_count(), 1);
 
-  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
   auto                       lock  = guard.Lock();
-  alcedo::CommitGraphService graph_service(guard.conn_);
+  alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, head);
@@ -209,9 +209,9 @@ TEST_F(EditorSessionCheckpointStoreTest, MiniGitCheckpointDoesNotInvokeLegacyMat
   // Mini-Git durable state: one content-addressed commit, active Version head,
   // and truncated journal. Legacy transaction-array materialization does not
   // write CommitGraph commit objects.
-  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
   auto                       lock  = guard.Lock();
-  alcedo::CommitGraphService graph_service(guard.conn_);
+  alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->CommitCount(), 1u);
@@ -243,9 +243,9 @@ TEST_F(EditorSessionCheckpointStoreTest, CaptureFailureWritesNothingAndLeavesJou
   EXPECT_EQ(remaining.records().size(), preserved_size);
   EXPECT_EQ(remaining.records().back().sequence, preserved_last);
 
-  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       guard = storage_->GetDatabase().GetConnectionGuard();
   auto                       lock  = guard.Lock();
-  alcedo::CommitGraphService graph_service(guard.conn_);
+  alcedo::CommitGraphStore graph_service(guard.conn_);
   const auto                 stored = graph_service.LoadGraph(element_id_);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->CommitCount(), 0u);

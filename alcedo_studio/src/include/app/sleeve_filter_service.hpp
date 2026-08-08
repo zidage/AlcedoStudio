@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/id/id_generator.hpp"
@@ -93,7 +93,7 @@ class SemanticSearchProvider {
 // This service should not be used in multi-threaded scenarios.
 class SleeveFilterService {
  private:
-  std::shared_ptr<StorageService>                       storage_service_;
+  std::shared_ptr<Storage>                       storage_;
   std::shared_ptr<SemanticSearchProvider>               semantic_search_provider_{};
 
   // Filter will not be saved in DB for now. It will be only stored in memory for the lifetime of
@@ -109,8 +109,8 @@ class SleeveFilterService {
   SleeveFilterService(const SleeveFilterService&)            = delete;
   SleeveFilterService& operator=(const SleeveFilterService&) = delete;
 
-  SleeveFilterService(std::shared_ptr<StorageService> storage_service)
-      : storage_service_(std::move(storage_service)), filter_id_generator_(0) {}
+  SleeveFilterService(std::shared_ptr<Storage> storage_service)
+      : storage_(std::move(storage_service)), filter_id_generator_(0) {}
 
   auto CreateFilterCombo(const FilterNode& root) -> filter_id_t;
   auto GetFilterCombo(filter_id_t filter_id) -> std::optional<std::shared_ptr<FilterCombo>>;

@@ -223,7 +223,7 @@ target_link_libraries(EditorSessionCheckpointStoreTest
   EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
-  StorageService
+  Storage
   Operators
   GTest::gtest_main)
 set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES

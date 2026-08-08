@@ -215,7 +215,7 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesP
   ASSERT_NE(image_id, 0);
 
   ProjectService project(db_path_, meta_path_);
-  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
   auto           pipeline_guard   = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(pipeline_guard, nullptr);
   ASSERT_NE(pipeline_guard->pipeline_, nullptr);

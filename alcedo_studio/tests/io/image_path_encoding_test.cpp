@@ -4,7 +4,7 @@
 
 #include "io/image/image_loader.hpp"
 #include "storage/mapper/image/image_mapper.hpp"
-#include "storage/service/image/image_service.hpp"
+#include "storage/mapper/image/image_mapper.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 
@@ -65,7 +65,7 @@ TEST(ImagePathEncodingTest, RestoredUtf8ImagePathRemainsReadable) {
       std::make_unique<std::string>("{}"),
   };
 
-  auto restored = ImageService::FromParams(std::move(params));
+  auto restored = ImageMapper::FromParams(std::move(params));
   ASSERT_NE(restored, nullptr);
   EXPECT_EQ(restored->image_path_.wstring(), file_path.wstring());
   EXPECT_EQ(restored->image_name_, file_path.filename().wstring());

@@ -52,13 +52,13 @@ target_link_libraries(SearchQueryClassifierTest SleeveFilterService GTest::gtest
 gtest_discover_tests(SearchQueryClassifierTest TEST_PREFIX "SearchQueryClassifierTest.")
 alcedo_register_test_target(SearchQueryClassifierTest app)
 
-add_executable(PipelineServiceTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
-target_include_directories(PipelineServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineServiceTest ProjectService PipelineMgmtService GTest::gtest_main)
-gtest_discover_tests(PipelineServiceTest TEST_PREFIX "PipelineServiceTest."
+add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
+target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineMapperTest ProjectService PipelineMgmtService GTest::gtest_main)
+gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
-alcedo_register_test_target(PipelineServiceTest app ci_core)
+alcedo_register_test_target(PipelineMapperTest app ci_core)
 
 # Phase 6C-8: Mini-Git-based Paste and Merge tests using the project fixture.
 add_executable(AdjustmentTransferServiceMiniGitTest
@@ -115,7 +115,7 @@ target_link_libraries(EditorSessionTestSupport
     EditorMiniGitMaterializer
     ProjectService
     EditHistory
-    StorageService
+    Storage
     GTest::gtest
 )
 alcedo_register_test_target(EditorSessionTestSupport app)

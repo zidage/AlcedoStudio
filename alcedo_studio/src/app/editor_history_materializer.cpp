@@ -130,16 +130,16 @@ auto ValidateCompactionTransition(const JournalEpochInfo&                      e
 
 }  // namespace
 
-EditorHistoryMaterializer::EditorHistoryMaterializer(std::shared_ptr<StorageService> storage)
+EditorHistoryMaterializer::EditorHistoryMaterializer(std::shared_ptr<Storage> storage)
     : storage_(std::move(storage)) {
   if (!storage_) {
-    throw std::invalid_argument("EditorHistoryMaterializer requires StorageService");
+    throw std::invalid_argument("EditorHistoryMaterializer requires Storage");
   }
 }
 
 auto EditorHistoryMaterializer::LoadRecoveryMetadata(sl_element_id_t element_id) const
     -> std::optional<EditorRecoveryMetadata> {
-  return storage_->GetElementController().GetEditorRecoveryMetadata(element_id);
+  return storage_->GetElementStore().GetEditorRecoveryMetadata(element_id);
 }
 
 auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest&     request,
@@ -166,7 +166,7 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest&     
   auto&      active = ResolveVersion(*history, request.identity);
 
   const auto stored_metadata =
-      storage_->GetElementController().GetEditorRecoveryMetadata(request.identity.element_id);
+      storage_->GetElementStore().GetEditorRecoveryMetadata(request.identity.element_id);
   JournalEpochInfo epoch;
   if (!InspectJournalEpoch(*journal, request.identity, &epoch, error) ||
       !ValidateCompactionTransition(epoch, stored_metadata, error)) {
@@ -264,7 +264,7 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest&     
   metadata.pipeline_parameter_hash         = ComputePipelineParameterHash(head_params);
 
   std::string storage_error;
-  if (!storage_->GetElementController().MaterializeEditorState(history, pipeline, metadata,
+  if (!storage_->GetElementStore().MaterializeEditorState(history, pipeline, metadata,
                                                                &storage_error)) {
     result.error = storage_error.empty() ? "atomic materialize failed" : storage_error;
     if (error) {
@@ -297,7 +297,7 @@ auto EditorHistoryMaterializer::RecoverAndMaterialize(
 
   EditorRecoveryMetadata stored{};
   const auto             stored_metadata =
-      storage_->GetElementController().GetEditorRecoveryMetadata(identity.element_id);
+      storage_->GetElementStore().GetEditorRecoveryMetadata(identity.element_id);
   if (stored_metadata.has_value()) {
     stored = *stored_metadata;
   } else {
@@ -386,7 +386,7 @@ auto EditorHistoryMaterializer::RecoverAndMaterialize(
   metadata.pipeline_parameter_hash         = ComputePipelineParameterHash(head_params);
 
   std::string storage_error;
-  if (!storage_->GetElementController().MaterializeEditorState(history, pipeline, metadata,
+  if (!storage_->GetElementStore().MaterializeEditorState(history, pipeline, metadata,
                                                                &storage_error)) {
     result.error = storage_error.empty() ? "atomic materialize failed" : storage_error;
     if (error) {

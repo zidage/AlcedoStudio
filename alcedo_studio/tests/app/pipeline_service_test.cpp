@@ -21,13 +21,13 @@
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
-#include "sleeve/storage_service.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
 
-class PipelineServiceTests : public ::testing::Test {
+class PipelineMapperTests : public ::testing::Test {
  protected:
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
@@ -55,16 +55,16 @@ class PipelineServiceTests : public ::testing::Test {
   }
 };
 
-TEST_F(PipelineServiceTests, InitTest) {
+TEST_F(PipelineMapperTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
-  EXPECT_NO_THROW(PipelineMgmtService pipeline_service(project.GetStorageService()));
+  EXPECT_NO_THROW(PipelineMgmtService pipeline_service(project.GetStorage()));
 }
 
-TEST_F(PipelineServiceTests, BasicPipelineRWTest) {
+TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
   std::string pipeline_param;
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     // Load a pipeline that does not exist yet, should get a new pipeline
     auto                pipeline_guard = pipeline_service.LoadPipeline(1);
@@ -100,7 +100,7 @@ TEST_F(PipelineServiceTests, BasicPipelineRWTest) {
   // Leave the scope, reopen and load again
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     auto                pipeline_guard = pipeline_service.LoadPipeline(1);
     EXPECT_NE(pipeline_guard, nullptr);
@@ -113,9 +113,9 @@ TEST_F(PipelineServiceTests, BasicPipelineRWTest) {
   }
 }
 
-TEST_F(PipelineServiceTests, DefaultOutputTransformUsesOpenDRT) {
+TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   auto                pipeline_guard = pipeline_service.LoadPipeline(42);
   ASSERT_NE(pipeline_guard, nullptr);
@@ -142,7 +142,7 @@ TEST_F(PipelineServiceTests, DefaultOutputTransformUsesOpenDRT) {
   EXPECT_EQ(exported.dump(), reloaded->pipeline_->ExportPipelineParams().dump());
 }
 
-TEST_F(PipelineServiceTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
+TEST_F(PipelineMapperTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
   CPUPipelineExecutor exec;
 
   const auto exported = exec.ExportPipelineParams();
@@ -170,7 +170,7 @@ TEST_F(PipelineServiceTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
   EXPECT_FALSE(global.lmt_enabled_);
 }
 
-TEST_F(PipelineServiceTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndColorTemp) {
+TEST_F(PipelineMapperTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndColorTemp) {
   CPUPipelineExecutor exec;
   auto&               loading = exec.GetStage(PipelineStageName::Image_Loading);
   auto&               to_ws   = exec.GetStage(PipelineStageName::To_WorkingSpace);
@@ -203,10 +203,10 @@ TEST_F(PipelineServiceTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndC
             30.0);
 }
 
-TEST_F(PipelineServiceTests, LoadPipelineRepairsLensCalibEnableMismatchFromParams) {
+TEST_F(PipelineMapperTests, LoadPipelineRepairsLensCalibEnableMismatchFromParams) {
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     auto                pipeline_guard = pipeline_service.LoadPipeline(44);
     ASSERT_NE(pipeline_guard, nullptr);
@@ -235,7 +235,7 @@ TEST_F(PipelineServiceTests, LoadPipelineRepairsLensCalibEnableMismatchFromParam
 
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     auto                reloaded = pipeline_service.LoadPipeline(44);
     ASSERT_NE(reloaded, nullptr);
@@ -249,9 +249,9 @@ TEST_F(PipelineServiceTests, LoadPipelineRepairsLensCalibEnableMismatchFromParam
   }
 }
 
-TEST_F(PipelineServiceTests, OutputTransformPersistencePreservesSharedAndMethodSpecificSettings) {
+TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSpecificSettings) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   auto                pipeline_guard = pipeline_service.LoadPipeline(43);
   ASSERT_NE(pipeline_guard, nullptr);
@@ -293,9 +293,9 @@ TEST_F(PipelineServiceTests, OutputTransformPersistencePreservesSharedAndMethodS
   EXPECT_EQ(odt["open_drt"]["display_grey_luminance"], 12.5);
 }
 
-TEST_F(PipelineServiceTests, SharedGuardPinsUntilLastSave) {
+TEST_F(PipelineMapperTests, SharedGuardPinsUntilLastSave) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   auto                guard_a = pipeline_service.LoadPipeline(7);
   auto                guard_b = pipeline_service.LoadPipeline(7);
@@ -320,12 +320,12 @@ TEST_F(PipelineServiceTests, SharedGuardPinsUntilLastSave) {
   EXPECT_EQ(guard_c->pin_count_, 1u);
 }
 
-TEST_F(PipelineServiceTests, MultiplePipelineTest) {
+TEST_F(PipelineMapperTests, MultiplePipelineTest) {
   constexpr int                           pipeline_count = 5;
   std::array<std::string, pipeline_count> pipeline_params;
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     // Create and save multiple pipelines
     for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
@@ -351,7 +351,7 @@ TEST_F(PipelineServiceTests, MultiplePipelineTest) {
   // Reopen and load again to verify
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
       auto pipeline_guard = pipeline_service.LoadPipeline(i);
@@ -365,10 +365,10 @@ TEST_F(PipelineServiceTests, MultiplePipelineTest) {
   }
 }
 
-TEST_F(PipelineServiceTests, CacheTest1) {
+TEST_F(PipelineMapperTests, CacheTest1) {
   {
     ProjectService                              project(db_path_, meta_path_);
-    PipelineMgmtService                         pipeline_service(project.GetStorageService());
+    PipelineMgmtService                         pipeline_service(project.GetStorage());
 
     // The default cache size is 64, so we will create 65 pipelines to exceed the cache size
     constexpr int                               pipeline_count = 65;
@@ -398,10 +398,10 @@ TEST_F(PipelineServiceTests, CacheTest1) {
   }
 }
 
-TEST_F(PipelineServiceTests, CacheTest2) {
+TEST_F(PipelineMapperTests, CacheTest2) {
   {
     ProjectService                              project(db_path_, meta_path_);
-    PipelineMgmtService                         pipeline_service(project.GetStorageService());
+    PipelineMgmtService                         pipeline_service(project.GetStorage());
 
     // The default cache size is 64, so we will create 70 pipelines to exceed the cache size
     constexpr int                               pipeline_count = 70;
@@ -429,10 +429,10 @@ TEST_F(PipelineServiceTests, CacheTest2) {
   }
 }
 
-TEST_F(PipelineServiceTests, DISABLED_FuzzTest) {
+TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     constexpr int                 kOpsCount        = 500;
     constexpr int                 kIdRange         = 96;
@@ -514,7 +514,7 @@ TEST_F(PipelineServiceTests, DISABLED_FuzzTest) {
   // Reopen to verify some pipelines persisted and can be read
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
 
     for (sl_element_id_t id = 1; id <= 10; ++id) {
       auto guard = pipeline_service.LoadPipeline(id);
@@ -526,9 +526,9 @@ TEST_F(PipelineServiceTests, DISABLED_FuzzTest) {
   }
 }
 
-TEST_F(PipelineServiceTests, DISABLED_ThreadSafeTest) {
+TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   constexpr int kThreads   = 8;
   constexpr int kOpsPerThr = 200;
@@ -578,12 +578,12 @@ TEST_F(PipelineServiceTests, DISABLED_ThreadSafeTest) {
 // independent executor WITHOUT pinning the live guard, clearing dirty state, or
 // writing storage. A later user edit must persist through the normal editor path
 // and not be overwritten by the snapshot.
-TEST_F(PipelineServiceTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveGuard) {
+TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveGuard) {
   nlohmann::json params_v1;
   nlohmann::json params_v2;
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorageService());
+    PipelineMgmtService ps(project.GetStorage());
 
     auto g1 = ps.LoadPipeline(1);
     ASSERT_NE(g1, nullptr);
@@ -630,7 +630,7 @@ TEST_F(PipelineServiceTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLive
   // snapshot's 1.5.
   {
     ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorageService());
+    PipelineMgmtService ps(project.GetStorage());
     auto                g2 = ps.LoadPipeline(1);
     ASSERT_NE(g2, nullptr);
     ASSERT_NE(g2->pipeline_, nullptr);
@@ -641,9 +641,9 @@ TEST_F(PipelineServiceTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLive
 // Phase 3: cache-miss fallback. When the element is not currently loaded, the
 // snapshot path falls back to LoadPipeline/SavePipeline (net-zero pin) to obtain
 // a coherent, repaired executor. Must not crash or write storage.
-TEST_F(PipelineServiceTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
+TEST_F(PipelineMapperTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService ps(project.GetStorageService());
+  PipelineMgmtService ps(project.GetStorage());
 
   // 999 was never loaded → cache-miss fallback inside LoadPipelineSnapshot.
   std::string err;
@@ -662,9 +662,9 @@ TEST_F(PipelineServiceTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) 
   EXPECT_NO_THROW(ps.ReleasePipelineSnapshot(snap));
 }
 
-TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
+TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
 
   auto initial = first.LoadEditorPipeline(701);
   ASSERT_NE(initial, nullptr);
@@ -678,7 +678,7 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
 
   // A new service instance forces the editor path to read the serialized state rather than
   // reusing the first service's cache entry.
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   auto                loaded = reopened.LoadEditorPipeline(701);
   ASSERT_NE(loaded, nullptr);
   EXPECT_EQ(loaded->root_id_, initial->root_id_);
@@ -689,15 +689,15 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineServiceTests, LoadWithMatchingCheckpointSkipsFullReplay) {
+TEST_F(PipelineMapperTests, LoadWithMatchingCheckpointSkipsFullReplay) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
 
   auto initial = first.LoadEditorPipeline(731);
   ASSERT_NE(initial, nullptr);
   first.SavePipeline(initial);
 
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
   auto loaded = reopened.LoadEditorPipeline(731);
   ASSERT_NE(loaded, nullptr);
@@ -707,10 +707,10 @@ TEST_F(PipelineServiceTests, LoadWithMatchingCheckpointSkipsFullReplay) {
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineServiceTests,
+TEST_F(PipelineMapperTests,
        PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   auto guard = pipeline_service.LoadEditorPipeline(715);
   ASSERT_NE(guard, nullptr);
@@ -729,9 +729,9 @@ TEST_F(PipelineServiceTests,
 
   {
     auto               db_guard =
-        project.GetStorageService()->GetDBController().GetConnectionGuard();
+        project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     const auto         persisted = graph_service.LoadGraph(715);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_EQ(persisted->GetActiveVersionId(), new_version);
@@ -740,7 +740,7 @@ TEST_F(PipelineServiceTests,
 
   pipeline_service.SavePipeline(guard);
 
-  PipelineMgmtService reopened_service(project.GetStorageService());
+  PipelineMgmtService reopened_service(project.GetStorage());
   auto                reopened = reopened_service.LoadEditorPipeline(715);
   ASSERT_NE(reopened, nullptr);
   ASSERT_NE(reopened->commit_graph_, nullptr);
@@ -749,9 +749,9 @@ TEST_F(PipelineServiceTests,
   reopened_service.SavePipeline(reopened);
 }
 
-TEST_F(PipelineServiceTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly) {
+TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipelines(project.GetStorageService());
+  PipelineMgmtService pipelines(project.GetStorage());
 
   auto deleted = pipelines.LoadEditorPipeline(711);
   auto retained = pipelines.LoadEditorPipeline(712);
@@ -765,18 +765,18 @@ TEST_F(PipelineServiceTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphO
   const std::vector<sl_element_id_t> deleted_ids = {711};
   pipelines.DeletePipelines(deleted_ids);
 
-  auto               db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+  auto               db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
-  CommitGraphService graph_service(db_guard.conn_);
+  CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_FALSE(graph_service.GetImageEditState(711).has_value());
   EXPECT_FALSE(graph_service.GetRootSerializedPipelineState(711, deleted_root).has_value());
   EXPECT_TRUE(graph_service.LoadGraph(712).has_value());
   EXPECT_TRUE(graph_service.GetRootSerializedPipelineState(712, retained_root).has_value());
 }
 
-TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
+TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
 
   auto initial = first.LoadEditorPipeline(702);
   ASSERT_NE(initial, nullptr);
@@ -786,9 +786,9 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   commit_hash_t            expected_head{};
   transaction_chain_hash_t expected_chain{};
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto graph = graph_service.LoadGraph(702);
     ASSERT_TRUE(graph.has_value());
 
@@ -812,7 +812,7 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
         nlohmann::json{{"legacy", true}}));
   }
 
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   auto                rebuilt = reopened.LoadEditorPipeline(702);
   ASSERT_NE(rebuilt, nullptr);
   EXPECT_EQ(rebuilt->root_id_, root_id);
@@ -824,7 +824,7 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
             2.0f);
   reopened.SavePipeline(rebuilt);
 
-  PipelineMgmtService after_writeback(project.GetStorageService());
+  PipelineMgmtService after_writeback(project.GetStorage());
   auto                matched = after_writeback.LoadEditorPipeline(702);
   ASSERT_NE(matched, nullptr);
   EXPECT_FALSE(matched->serialized_state_needs_writeback_);
@@ -836,10 +836,10 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   after_writeback.SavePipeline(matched);
 }
 
-TEST_F(PipelineServiceTests,
+TEST_F(PipelineMapperTests,
        LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
 
   auto initial = first.LoadEditorPipeline(732);
   ASSERT_NE(initial, nullptr);
@@ -847,9 +847,9 @@ TEST_F(PipelineServiceTests,
 
   commit_hash_t expected_head{};
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto graph = graph_service.LoadGraph(732);
     ASSERT_TRUE(graph.has_value());
 
@@ -872,7 +872,7 @@ TEST_F(PipelineServiceTests,
                        {"stale_exposure", 0.0f}}));
   }
 
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
   auto rebuilt = reopened.LoadEditorPipeline(732);
   ASSERT_NE(rebuilt, nullptr);
@@ -885,10 +885,10 @@ TEST_F(PipelineServiceTests,
   reopened.SavePipeline(rebuilt);
 }
 
-TEST_F(PipelineServiceTests,
+TEST_F(PipelineMapperTests,
        SerializedStateWritebackRejectsAConcurrentMaterializedHistoryChange) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipelines(project.GetStorageService());
+  PipelineMgmtService pipelines(project.GetStorage());
 
   auto local = pipelines.LoadEditorPipeline(703);
   ASSERT_NE(local, nullptr);
@@ -913,9 +913,9 @@ TEST_F(PipelineServiceTests,
 
   commit_hash_t remote_head{};
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto remote_graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(remote_graph.has_value());
 
@@ -938,9 +938,9 @@ TEST_F(PipelineServiceTests,
   EXPECT_TRUE(local->serialized_state_needs_writeback_);
 
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     const auto persisted = graph_service.LoadGraph(703);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, remote_head);
@@ -951,10 +951,10 @@ TEST_F(PipelineServiceTests,
   local->serialized_state_needs_writeback_ = false;
 }
 
-TEST_F(PipelineServiceTests,
+TEST_F(PipelineMapperTests,
        CheckpointMaterializedStateSyncLetsVersionPersistenceGuardAcceptDurableTuple) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorageService());
+  PipelineMgmtService pipeline_service(project.GetStorage());
 
   auto guard = pipeline_service.LoadEditorPipeline(720);
   ASSERT_NE(guard, nullptr);
@@ -980,9 +980,9 @@ TEST_F(PipelineServiceTests,
   // production checkpoint path, does NOT call ApplyMaterializedState, so the in-memory
   // materialized_* stays at root while DuckDB advances to the working head.
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     graph_service.Materialize(
         guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
             nlohmann::json{{"exposure", 1.0f}}));
@@ -991,9 +991,9 @@ TEST_F(PipelineServiceTests,
   // DuckDB now holds the working head; the in-memory graph still reports root.
   commit_hash_t durable_head{};
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto             persisted = graph_service.LoadGraph(720);
     ASSERT_TRUE(persisted.has_value());
     durable_head = persisted->GetImageEditState().materialized_head_commit_hash.value();
@@ -1021,9 +1021,9 @@ TEST_F(PipelineServiceTests,
   pipeline_service.SavePipeline(guard);
 }
 
-TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) {
+TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
 
   RawRuntimeColorContext raw_context;
   raw_context.valid_                        = true;
@@ -1047,9 +1047,9 @@ TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) 
   first.SavePipeline(initial);
 
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     const auto encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
     ASSERT_TRUE(encoded.has_value());
     ASSERT_TRUE(encoded->contains("raw_color_context"));
@@ -1058,7 +1058,7 @@ TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) 
     EXPECT_TRUE((*encoded)["raw_color_context"]["DngWarpRectilinearApplied"]);
   }
 
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   auto                loaded = reopened.LoadEditorPipeline(704);
   ASSERT_NE(loaded, nullptr);
   const auto& global = loaded->pipeline_->GetGlobalParams();
@@ -1070,18 +1070,18 @@ TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) 
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineServiceTests, RootStateRejectsDifferentImageOwner) {
+TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipelines(project.GetStorageService());
+  PipelineMgmtService pipelines(project.GetStorage());
 
   auto first = pipelines.LoadEditorPipeline(705);
   auto second = pipelines.LoadEditorPipeline(706);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
 
-  auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+  auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
   auto db_lock  = db_guard.Lock();
-  CommitGraphService graph_service(db_guard.conn_);
+  CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first->root_id_),
                std::runtime_error);
   db_lock.unlock();
@@ -1089,9 +1089,9 @@ TEST_F(PipelineServiceTests, RootStateRejectsDifferentImageOwner) {
   pipelines.SavePipeline(second);
 }
 
-TEST_F(PipelineServiceTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
+TEST_F(PipelineMapperTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipelines(project.GetStorageService());
+  PipelineMgmtService pipelines(project.GetStorage());
 
   auto requested = pipelines.LoadPipeline(707);
   auto unrelated = pipelines.LoadPipeline(708);
@@ -1109,18 +1109,18 @@ TEST_F(PipelineServiceTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
   pipelines.SavePipeline(unrelated);
 }
 
-TEST_F(PipelineServiceTests, EditorLoadReportsMissingReachableCommit) {
+TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
   ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorageService());
+  PipelineMgmtService first(project.GetStorage());
   auto                initial = first.LoadEditorPipeline(703);
   ASSERT_NE(initial, nullptr);
   first.SavePipeline(initial);
 
   commit_hash_t missing_hash{};
   {
-    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(graph.has_value());
 
@@ -1149,7 +1149,7 @@ TEST_F(PipelineServiceTests, EditorLoadReportsMissingReachableCommit) {
     duckdb_destroy_result(&result);
   }
 
-  PipelineMgmtService reopened(project.GetStorageService());
+  PipelineMgmtService reopened(project.GetStorage());
   try {
     (void)reopened.LoadEditorPipeline(703);
     FAIL() << "expected missing first-parent commit to reject editor open";

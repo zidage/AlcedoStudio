@@ -2279,7 +2279,7 @@ class EditorDialog final : public QDialog {
       }
     }
 
-    // If the pipeline already has operator params (loaded from PipelineService/storage),
+    // If the pipeline already has operator params (loaded from PipelineMapper/storage),
     // initialize UI state from those params rather than overwriting them.
     const bool loaded_state_from_pipeline = LoadStateFromPipelineIfPresent();
     if (!loaded_state_from_pipeline) {
@@ -3559,8 +3559,8 @@ class AlbumWindow final : public QWidget {
 
     export_service_  = std::make_shared<ExportService>(project_->GetSleeveService(), image_pool_,
                                                        pipeline_service_);
-    filter_service_  = std::make_unique<SleeveFilterService>(project_->GetStorageService());
-    history_service_ = std::make_shared<EditHistoryMgmtService>(project_->GetStorageService());
+    filter_service_  = std::make_unique<SleeveFilterService>(project_->GetStorage());
+    history_service_ = std::make_shared<EditHistoryMgmtService>(project_->GetStorage());
 
     auto* root       = new QVBoxLayout(this);
     root->setContentsMargins(16, 16, 16, 16);
@@ -4485,7 +4485,7 @@ int main(int argc, char* argv[]) {
 
     auto project = std::make_shared<alcedo::ProjectService>(db_path, meta_path);
     auto pipeline_service =
-        std::make_shared<alcedo::PipelineMgmtService>(project->GetStorageService());
+        std::make_shared<alcedo::PipelineMgmtService>(project->GetStorage());
     auto thumb_service = std::make_shared<alcedo::ThumbnailService>(
         project->GetSleeveService(), project->GetImagePoolService(), pipeline_service);
 

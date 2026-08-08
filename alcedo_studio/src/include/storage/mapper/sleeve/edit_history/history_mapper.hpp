@@ -5,9 +5,11 @@
 #pragma once
 
 #include <array>
+#include <memory>
 
+#include "edit/history/edit_history.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -17,8 +19,12 @@ struct EditHistoryMapperParams {
   std::unique_ptr<std::string> history;
 };
 
+/**
+ * @brief Single-table mapper for EditHistory rows and domain EditHistory objects.
+ */
 class EditHistoryMapper
-    : public MapperInterface<EditHistoryMapper, EditHistoryMapperParams, sl_element_id_t>,
+    : public Mapper<EditHistoryMapper, std::shared_ptr<EditHistory>, EditHistoryMapperParams,
+                    sl_element_id_t>,
       public FieldReflectable<EditHistoryMapper> {
  private:
   static constexpr uint32_t    field_count_                                     = 2;
@@ -30,8 +36,13 @@ class EditHistoryMapper
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> EditHistoryMapperParams;
-  friend struct FieldReflectable<EditHistoryMapper>;
-  using MapperInterface::MapperInterface;
-};
+  static auto ToParams(const std::shared_ptr<EditHistory> source) -> EditHistoryMapperParams;
+  static auto FromParams(EditHistoryMapperParams&& param) -> std::shared_ptr<EditHistory>;
 
-};  // namespace alcedo
+  auto GetEditHistoryByFileId(const sl_element_id_t file_id) -> std::shared_ptr<EditHistory>;
+  void UpdateEditHistory(const std::shared_ptr<EditHistory> history);
+
+  friend struct FieldReflectable<EditHistoryMapper>;
+  using Mapper::Mapper;
+};
+}  // namespace alcedo

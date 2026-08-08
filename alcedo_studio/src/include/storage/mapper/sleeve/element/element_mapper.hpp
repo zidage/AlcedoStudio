@@ -7,9 +7,11 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
+#include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -25,8 +27,14 @@ struct ElementMapperParams {
   std::unique_ptr<std::string> modified_time;
   uint32_t                     ref_count;
 };
-class ElementMapper : public MapperInterface<ElementMapper, ElementMapperParams, sl_element_id_t>,
-                      public FieldReflectable<ElementMapper> {
+
+/**
+ * @brief Single-table mapper for Sleeve Element rows and domain SleeveElement objects.
+ */
+class ElementMapper
+    : public Mapper<ElementMapper, std::shared_ptr<SleeveElement>, ElementMapperParams,
+                    sl_element_id_t>,
+      public FieldReflectable<ElementMapper> {
  private:
   static constexpr uint32_t                                         field_count_      = 6;
   static constexpr const char*                                      table_name_       = "Element";
@@ -41,8 +49,16 @@ class ElementMapper : public MapperInterface<ElementMapper, ElementMapperParams,
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementMapperParams;
-  friend struct FieldReflectable<ElementMapper>;
+  static auto ToParams(const std::shared_ptr<SleeveElement>& source) -> ElementMapperParams;
+  static auto FromParams(ElementMapperParams&& param) -> std::shared_ptr<SleeveElement>;
 
-  using MapperInterface::MapperInterface;
+  auto        GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
+  auto GetElementByName(const std::wstring& name) -> std::vector<std::shared_ptr<SleeveElement>>;
+  auto GetElementByType(const ElementType type) -> std::vector<std::shared_ptr<SleeveElement>>;
+  auto GetElementsInFolderByFilter(const std::wstring& filter_sql)
+      -> std::vector<std::shared_ptr<SleeveElement>>;
+
+  friend struct FieldReflectable<ElementMapper>;
+  using Mapper::Mapper;
 };
-};  // namespace alcedo
+}  // namespace alcedo

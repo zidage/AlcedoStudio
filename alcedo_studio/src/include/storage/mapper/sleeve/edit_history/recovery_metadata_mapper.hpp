@@ -10,7 +10,7 @@
 #include <string>
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -32,8 +32,7 @@ struct EditorRecoveryMetadataMapperParams {
 };
 
 class EditorRecoveryMetadataMapper
-    : public MapperInterface<EditorRecoveryMetadataMapper, EditorRecoveryMetadataMapperParams,
-                             sl_element_id_t>,
+    : public Mapper<EditorRecoveryMetadataMapper, EditorRecoveryMetadataMapperParams, EditorRecoveryMetadataMapperParams, sl_element_id_t>,
       public FieldReflectable<EditorRecoveryMetadataMapper> {
  private:
   static constexpr uint32_t    field_count_      = 6;
@@ -51,7 +50,7 @@ class EditorRecoveryMetadataMapper
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data)
       -> EditorRecoveryMetadataMapperParams;
   friend struct FieldReflectable<EditorRecoveryMetadataMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 
 }  // namespace alcedo

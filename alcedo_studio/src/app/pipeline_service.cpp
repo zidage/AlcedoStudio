@@ -19,7 +19,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -375,7 +375,7 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
   if (pipeline_guard->pipeline_) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
     if (pipeline_guard->dirty_) {
-      storage_service_->GetElementController().UpdatePipelineByElementId(
+      storage_->GetElementStore().UpdatePipelineByElementId(
           candidate, pipeline_guard->pipeline_);
       pipeline_guard->dirty_ = false;
     }
@@ -416,16 +416,16 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       EnsureDefaultLensCalib(*cached->pipeline_);
       ResyncGlobalParamsFromOperators(*cached->pipeline_);
     }
-    storage_service_->RememberLivePipeline(id, cached->pipeline_);
+    storage_->RememberLivePipeline(id, cached->pipeline_);
     return cached;
   }
 
   std::shared_ptr<CPUPipelineExecutor> pipeline;
   auto                                pipeline_guard = std::make_shared<PipelineGuard>();
   try {
-    pipeline = storage_service_->GetLivePipeline(id);
+    pipeline = storage_->GetLivePipeline(id);
     if (!pipeline) {
-      pipeline = storage_service_->GetElementController().GetPipelineByElementId(id);
+      pipeline = storage_->GetElementStore().GetPipelineByElementId(id);
     }
   } catch (std::exception& e) {
     throw std::runtime_error(
@@ -450,7 +450,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
     ResyncGlobalParamsFromOperators(*pipeline);
     pipeline->SetExecutionStages();
   }
-  storage_service_->RememberLivePipeline(id, pipeline);
+  storage_->RememberLivePipeline(id, pipeline);
 
   pipeline_guard->pipeline_   = std::move(pipeline);
   pipeline_guard->id_         = id;
@@ -497,9 +497,9 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
     root_params = pipeline->pipeline_->ExportPipelineParams();
   }
 
-  auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+  auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
-  CommitGraphService graph_service(db_guard.conn_);
+  CommitGraphStore graph_service(db_guard.conn_);
   auto               state = graph_service.GetImageEditState(pipeline->id_);
   if (!state.has_value()) {
     auto graph = graph_service.CreateRootPipelinePersisted(
@@ -531,9 +531,9 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
     std::optional<CommitGraph>             graph;
     std::optional<DecodedRootPipelineState> root_state;
     {
-      auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+      auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
       auto               db_lock  = db_guard.Lock();
-      CommitGraphService graph_service(db_guard.conn_);
+      CommitGraphStore graph_service(db_guard.conn_);
       graph = graph_service.LoadGraph(id);
       if (!graph.has_value()) {
         throw std::runtime_error(
@@ -616,7 +616,7 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
     return;
   }
 
-  storage_service_->RememberLivePipeline(pipeline->id_, pipeline->pipeline_);
+  storage_->RememberLivePipeline(pipeline->id_, pipeline->pipeline_);
 
   bool will_release_last_pin = false;
   {
@@ -631,9 +631,9 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
         pipeline_params = pipeline->pipeline_->ExportPipelineParams();
       }
 
-      auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+      auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
       auto               db_lock  = db_guard.Lock();
-      CommitGraphService graph_service(db_guard.conn_);
+      CommitGraphStore graph_service(db_guard.conn_);
       auto stored_graph = graph_service.LoadGraph(pipeline->id_);
       if (!stored_graph.has_value()) {
         throw std::runtime_error(
@@ -733,9 +733,9 @@ auto PipelineMgmtService::PersistEditorHistoryState(
   }
 
   try {
-    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto               stored_graph = graph_service.LoadGraph(pipeline->id_);
     if (!stored_graph.has_value()) {
       throw std::runtime_error("PipelineMgmtService: persisted editor graph is missing");
@@ -801,9 +801,9 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
 
   DecodedRootPipelineState root_state;
   {
-    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     const auto root_encoded =
         graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
     if (!root_encoded.has_value()) {
@@ -883,9 +883,9 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
   auto& graph = *pipeline->commit_graph_;
   DecodedRootPipelineState root_state;
   {
-    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     const auto root_encoded =
         graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
     if (!root_encoded.has_value()) {
@@ -944,9 +944,9 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
 }
 
 auto PipelineMgmtService::CollectUnreachableEditCommits() -> std::size_t {
-  auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+  auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
-  CommitGraphService graph_service(db_guard.conn_);
+  CommitGraphStore graph_service(db_guard.conn_);
   return graph_service.DeleteUnreachableCommitsForProject();
 }
 
@@ -956,9 +956,9 @@ void PipelineMgmtService::DeletePipeline(sl_element_id_t id) {
     pipeline_cache_.RemoveRecord(id);
     loaded_pipelines_.erase(id);
   }
-  storage_service_->ForgetLivePipeline(id);
+  storage_->ForgetLivePipeline(id);
   try {
-    storage_service_->GetElementController().RemovePipelineByElementId(id);
+    storage_->GetElementStore().RemovePipelineByElementId(id);
   } catch (...) {
   }
 }
@@ -976,13 +976,13 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
   }
   for (const auto id : ids) {
     if (id != 0) {
-      storage_service_->ForgetLivePipeline(id);
+      storage_->ForgetLivePipeline(id);
     }
   }
   try {
-    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     for (const auto id : ids) {
       if (id != 0) {
         graph_service.DeleteGraphForElement(id);
@@ -991,7 +991,7 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
   } catch (...) {
   }
   try {
-    storage_service_->GetElementController().RemovePipelinesByElementIds(ids);
+    storage_->GetElementStore().RemovePipelinesByElementIds(ids);
   } catch (...) {
   }
 }
@@ -1036,7 +1036,7 @@ void PipelineMgmtService::Sync() {
 
   for (const auto& pipeline_guard : dirty_pipelines) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
-    storage_service_->GetElementController().UpdatePipelineByElementId(pipeline_guard->id_,
+    storage_->GetElementStore().UpdatePipelineByElementId(pipeline_guard->id_,
                                                                        pipeline_guard->pipeline_);
     {
       std::unique_lock<std::mutex> cache_lock(lock_);
@@ -1058,7 +1058,7 @@ void PipelineMgmtService::SyncPipeline(sl_element_id_t id) {
   }
 
   std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
-  storage_service_->GetElementController().UpdatePipelineByElementId(id, pipeline_guard->pipeline_);
+  storage_->GetElementStore().UpdatePipelineByElementId(id, pipeline_guard->pipeline_);
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     pipeline_guard->dirty_ = false;

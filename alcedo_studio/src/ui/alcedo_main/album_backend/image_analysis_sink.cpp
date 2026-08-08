@@ -66,7 +66,7 @@ class AlbumImageAnalysisSink final : public IImageAnalysisSink {
     if (!project) {
       return;
     }
-    auto& ai = project->GetStorageService()->GetAiStorageController();
+    auto& ai = project->GetStorage()->GetAiStore();
     (void)ai.UpsertUnderstanding(MakeDescription(result));
   }
 
@@ -83,7 +83,7 @@ class AlbumImageAnalysisSink final : public IImageAnalysisSink {
     for (const auto& result : results) {
       descriptions.push_back(MakeDescription(result));
     }
-    auto& ai = project->GetStorageService()->GetAiStorageController();
+    auto& ai = project->GetStorage()->GetAiStore();
     (void)ai.UpsertUnderstandings(descriptions);
   }
 
@@ -95,7 +95,7 @@ class AlbumImageAnalysisSink final : public IImageAnalysisSink {
     if (!project) {
       return;
     }
-    auto&    ai = project->GetStorageService()->GetAiStorageController();
+    auto&    ai = project->GetStorage()->GetAiStore();
     AiRating r;
     r.file_id_           = result.item.element_id;
     r.task_id_           = kScoreTaskId;
