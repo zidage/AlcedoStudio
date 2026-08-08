@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: Phase 1–3 complete
+Status: Phase 1–3 complete; deferred checks complete
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and sleeve filter SQL.
 
@@ -555,12 +555,8 @@ No changed production file is near the 1000-LOC split threshold for this phase.
 
 **Open work:** none (no plan-owner decision required).
 
-**Deferred checks:**
-
-- Album UI stats/search hand-built WHERE removal — Phase 2.
-- Mapper/Store rename and CRTP merge — Phase 3.
-- Full prepared-statement bind use on album scope queries — later Store work after
-  consumers stop pasting WHERE as plain text.
+**Deferred checks:** none remaining (Phase 2/3 and the 2026-08-08 bind-path
+pass closed these).
 
 ### Phase 2 — Album filter consumers
 
@@ -670,12 +666,8 @@ No changed production file is near the 1000-LOC split threshold for this phase.
 
 **Open work:** none (no plan-owner decision required).
 
-**Deferred checks:**
-
-- Phase 3: Mapper + Store rename keeps the string WHERE overloads, then the
-  prepared-statement bind path for album scope queries runs later.
-- `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload` fails
-  on the base tree too (verified by stash). It is not a Phase 2 regression.
+**Deferred checks:** none remaining (Phase 3 rename + 2026-08-08 bind-path pass
+closed the album scope bind work).
 
 ### Phase 3 — Mapper + Store reshape with TMP
 
@@ -788,13 +780,70 @@ No changed production file is near the 1000-LOC split threshold for this phase.
 
 **Open work:** none (no plan-owner decision required).
 
-**Deferred checks:**
+**Deferred checks:** none remaining after the 2026-08-08 bind-path pass (see
+below). UI album class `ImageController` stays under `alcedo::ui` (not storage
+`ImageStore`) by design.
 
-- Full prepared-statement bind use on album scope queries (Stores still pass WHERE text into
-  `BuildScopedFileQuery` for list/stats). Later Store work after bind path is wired end-to-end.
-- `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload` fails on the
-  base tree too (Phase 2 note). Not re-proven as a Phase 3 regression in this pass.
-- UI album class `ImageController` stays under `alcedo::ui` (not storage `ImageStore`).
+##### Deferred checks completion record (2026-08-08)
+
+**Status:** complete — album scope list/stats/count queries prepare SQL and bind
+`SqlFragment` values end-to-end. Filter compile uses `expr::param` for user
+values. RawSQL bridge nodes keep factory/search binds.
+
+**Primary success call chain:**
+
+```text
+StatsEngine / SearchController / LibraryModule
+  -> MergeFilterNodes + CompileFilterPredicate
+  -> FilterSQLCompiler (typed ? binds) / RawSQL raw_binds_
+  -> AlbumBrowseService / ElementStore ListFilesInFolderPage|Count|BuildFolderStats
+  -> BuildScopedFileQuery (FROM/JOIN + AND predicate, binds_)
+  -> duckorm::execute_query (prepare + bind_fragment_values)
+  -> DuckDB rows for grid/stats
+```
+
+**Primary failure call chain:**
+
+```text
+User filter value with embedded quote (for example O'Brien)
+  -> expr::param keeps raw string in binds_ (no SQL splice)
+  -> prepare/bind path runs
+  -> scoped list/stats match the intended rows
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Param bind order / expr composition | `DuckormExprTest` (9) | PASS |
+| Typed compile uses `?` + binds | `SleeveFilterCompileTest` (6) | PASS |
+| Bucket/EXISTS factories keep binds | `SleeveFilterFactoryTest` (13) | PASS |
+| Stats/search/grid + quote-in-label bind path | `FilterServiceTest` (42) | PASS |
+| Module-host stats + combined search | `AlbumBackendStatsFilterTest` (3) | PASS |
+| Mapper SqlFragment CRUD still works | `MapperCrtpRoundtripTest` (3) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target Storage SleeveFilterService DuckormExprTest SleeveFilterCompileTest SleeveFilterFactoryTest FilterServiceTest AlbumBackendStatsFilterTest MapperCrtpRoundtripTest
+build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterCompileTest_runtime\SleeveFilterCompileTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterFactoryTest_runtime\SleeveFilterFactoryTest.exe
+build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
+build\debug\alcedo_studio\tests\ui\AlbumBackendStatsFilterTest_runtime\AlbumBackendStatsFilterTest.exe
+build\debug\alcedo_studio\tests\sleeve\MapperCrtpRoundtripTest_runtime\MapperCrtpRoundtripTest.exe
+```
+
+Suite totals: DuckormExprTest 9/9; SleeveFilterCompileTest 6/6;
+SleeveFilterFactoryTest 13/13; FilterServiceTest 42/42;
+AlbumBackendStatsFilterTest 3/3; MapperCrtpRoundtripTest 3/3.
+
+**Checklist / exit condition:** deferred bind-path work closed. Album scope APIs
+take `optional<SqlFragment>`; string WHERE paste for list/stats is gone.
+
+**Open work:** none (no plan-owner decision required).
+
+**Deferred checks:** none.
 
 ## Test and verification
 

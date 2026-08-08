@@ -23,12 +23,13 @@ auto MakeConditionNode(FilterField field, CompareOp op, FilterValue value) -> Fi
   return FilterNode{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 }
 
-// Bridge node that owns compiler output only (escaped literals already
-// embedded by expr helpers). Sleeve factories may build these; UI code must
-// not author RawSQL text.
-auto MakeRawSQLNode(const SqlFragment& fragment) -> FilterNode {
-  return FilterNode{
-      FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt, conv::FromBytes(fragment.sql_)};
+// Bridge node that owns compiler output (SQL + binds). Sleeve factories may
+// build these; UI code must not author RawSQL text.
+auto MakeRawSQLNode(SqlFragment fragment) -> FilterNode {
+  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
+                  conv::FromBytes(fragment.sql_)};
+  node.raw_binds_ = std::move(fragment.binds_);
+  return node;
 }
 
 }  // namespace
@@ -49,7 +50,8 @@ auto BuildCaptureDateUnknownFilter() -> FilterNode {
   // Use json_extract_string: comparing json_extract(...) to '' would cast ''
   // to JSON and fail (Malformed JSON) in DuckDB.
   const auto date_col = expr::col("json_extract_string(i.metadata, '$.DateTimeString')");
-  const auto fragment = expr::or_({expr::is_null(date_col), expr::eq(date_col, expr::lit(""))});
+  const auto fragment =
+      expr::or_({expr::is_null(date_col), expr::eq(date_col, expr::param(""))});
   return MakeRawSQLNode(fragment);
 }
 
@@ -79,7 +81,7 @@ auto BuildSemanticLabelExistsFilter(const std::string&           model_key,
   label_terms.reserve(aliases.size());
   for (const auto& alias : aliases) {
     auto lower_alias = expr::raw("LOWER(");
-    lower_alias.append(expr::lit(alias));
+    lower_alias.append(expr::param(alias));
     lower_alias.append(expr::raw(")"));
     label_terms.push_back(expr::eq(expr::raw("LOWER(sl.label)"), std::move(lower_alias)));
   }
@@ -88,7 +90,7 @@ auto BuildSemanticLabelExistsFilter(const std::string&           model_key,
       label_terms.size() == 1 ? std::move(label_terms.front()) : expr::or_(label_terms);
   auto subquery = expr::raw("SELECT 1 FROM SemanticImageLabel sl WHERE ");
   subquery.append(expr::and_({expr::eq(expr::col("sl.file_id"), expr::col("e.id")),
-                              expr::eq(expr::col("sl.model_key"), expr::lit(model_key)),
+                              expr::eq(expr::col("sl.model_key"), expr::param(model_key)),
                               std::move(alias_match)}));
   return MakeRawSQLNode(expr::exists(std::move(subquery)));
 }

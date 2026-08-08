@@ -85,18 +85,19 @@ auto FilterSQLCompiler::ValueToFragment(const FilterValue& value) -> SqlFragment
     return expr::lit_null();
   }
   if (std::holds_alternative<int64_t>(value)) {
-    return expr::lit(std::get<int64_t>(value));
+    return expr::param(std::get<int64_t>(value));
   }
   if (std::holds_alternative<double>(value)) {
-    return expr::lit(std::get<double>(value));
+    return expr::param(std::get<double>(value));
   }
   if (std::holds_alternative<bool>(value)) {
-    return expr::lit(std::get<bool>(value));
+    return expr::param(std::get<bool>(value));
   }
   if (std::holds_alternative<std::wstring>(value)) {
-    return expr::lit(conv::ToBytes(std::get<std::wstring>(value)));
+    return expr::param(conv::ToBytes(std::get<std::wstring>(value)));
   }
   if (std::holds_alternative<std::tm>(value)) {
+    // Timestamp literals keep a fixed SQL shape; values come from trusted tm fields.
     return FormatTimestampLiteral(std::get<std::tm>(value));
   }
   return expr::lit_null();
@@ -114,19 +115,19 @@ auto FilterSQLCompiler::GenerateCondition(const FieldCondition& cond) -> SqlFrag
                            ValueToFragment(*cond.second_value_));
     case CompareOp::CONTAINS: {
       const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::lit("%" + conv::ToBytes(text) + "%"));
+      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
     }
     case CompareOp::NOT_CONTAINS: {
       const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::not_like(std::move(column), expr::lit("%" + conv::ToBytes(text) + "%"));
+      return expr::not_like(std::move(column), expr::param("%" + conv::ToBytes(text) + "%"));
     }
     case CompareOp::STARTS_WITH: {
       const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::lit(conv::ToBytes(text) + "%"));
+      return expr::like(std::move(column), expr::param(conv::ToBytes(text) + "%"));
     }
     case CompareOp::ENDS_WITH: {
       const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::like(std::move(column), expr::lit("%" + conv::ToBytes(text)));
+      return expr::like(std::move(column), expr::param("%" + conv::ToBytes(text)));
     }
     case CompareOp::EQUALS:
       return expr::eq(std::move(column), ValueToFragment(cond.value_));
@@ -142,7 +143,15 @@ auto FilterSQLCompiler::GenerateCondition(const FieldCondition& cond) -> SqlFrag
       return expr::le(std::move(column), ValueToFragment(cond.value_));
     case CompareOp::REGEX: {
       const auto& text = std::get<std::wstring>(cond.value_);
-      return expr::raw("(" + column.sql_ + " REGEXP " + expr::lit(conv::ToBytes(text)).sql_ + ")");
+      // DuckDB REGEXP has no typed helper; bind the pattern as a parameter.
+      auto pattern = expr::param(conv::ToBytes(text));
+      SqlFragment out;
+      out.sql_.append("(");
+      out.append(std::move(column));
+      out.sql_.append(" REGEXP ");
+      out.append(std::move(pattern));
+      out.sql_.append(")");
+      return out;
     }
   }
   return expr::raw("1=0");
@@ -178,8 +187,11 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
   }
 
   if (node.type_ == FilterNode::Type::RawSQL && node.raw_sql_.has_value()) {
-    // Bridge only: trusted compiled text or temporary product RawSQL.
-    return expr::raw(conv::ToBytes(*node.raw_sql_));
+    // Bridge: trusted SQL text plus any prepared binds the factory kept.
+    SqlFragment frag;
+    frag.sql_   = conv::ToBytes(*node.raw_sql_);
+    frag.binds_ = node.raw_binds_;
+    return frag;
   }
 
   return {};
@@ -201,16 +213,16 @@ auto MergeFilterNodes(const std::optional<FilterNode>& left,
                     std::nullopt};
 }
 
-auto CompileFilterWhere(const std::optional<FilterNode>& node)
-    -> std::optional<std::wstring> {
+auto CompileFilterPredicate(const std::optional<FilterNode>& node)
+    -> std::optional<duckorm::SqlFragment> {
   if (!node.has_value()) {
     return std::nullopt;
   }
-  const auto fragment = FilterSQLCompiler::Compile(*node);
+  auto fragment = FilterSQLCompiler::Compile(*node);
   if (fragment.empty()) {
     return std::nullopt;
   }
-  return conv::FromBytes(fragment.sql_);
+  return fragment;
 }
 
 }  // namespace alcedo

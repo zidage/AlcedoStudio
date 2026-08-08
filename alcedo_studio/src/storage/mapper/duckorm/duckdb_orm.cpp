@@ -7,6 +7,7 @@
 #include <duckdb.h>
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -227,6 +228,7 @@ void bind_fragment_value(duckdb_prepared_statement stmt, idx_t index, const Bind
       },
       value);
 }
+}  // namespace
 
 void bind_fragment_values(duckdb_prepared_statement stmt, idx_t start_index,
                           const SqlFragment& fragment) {
@@ -234,6 +236,24 @@ void bind_fragment_values(duckdb_prepared_statement stmt, idx_t start_index,
     bind_fragment_value(stmt, start_index + static_cast<idx_t>(i), fragment.binds_[i]);
   }
 }
+
+duckdb_state execute_query(duckdb_connection& conn, const std::string& sql,
+                           const SqlFragment& fragment, duckdb_result* out_result) {
+  if (!out_result) {
+    throw std::runtime_error("duckorm::execute_query requires a non-null out_result");
+  }
+  PreparedStatement prepared(conn, sql);
+  bind_fragment_values(prepared.stmt_, 1, fragment);
+  const duckdb_state state = duckdb_execute_prepared(prepared.stmt_, &prepared.result_);
+  // Transfer ownership of the materialised result to the caller. Clear the
+  // PreparedStatement's copy so its destructor does not destroy it twice.
+  *out_result      = prepared.result_;
+  prepared.result_ = {};
+  std::memset(&prepared.result_, 0, sizeof(prepared.result_));
+  return state;
+}
+
+namespace {
 
 auto decode_select_rows(PreparedStatement& select_pre, std::span<const DuckFieldDesc> sample_fields,
                         size_t field_count) -> std::vector<std::vector<VarTypes>> {

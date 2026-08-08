@@ -25,39 +25,44 @@
 
 namespace alcedo {
 
-auto BuildScopedFileQuery(sl_element_id_t                    folder_id,
-                          const std::optional<std::wstring>& extra_filter_where)
+auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
+                          const std::optional<duckorm::SqlFragment>& extra_filter)
     -> ScopedFileQuery {
-  std::string extra_where;
-  if (extra_filter_where.has_value() && !extra_filter_where->empty()) {
-    extra_where = " AND (" + conv::ToBytes(*extra_filter_where) + ")";
+  ScopedFileQuery scope;
+  std::string     extra_where;
+  if (extra_filter.has_value() && !extra_filter->empty()) {
+    extra_where = " AND (" + extra_filter->sql_ + ")";
+    scope.binds_.sql_ = extra_filter->sql_;
+    scope.binds_.binds_ = extra_filter->binds_;
   }
 
   if (folder_id == 0) {
-    return {
-        std::format("FROM Element e "
-                    "JOIN FileImage fi ON fi.file_id = e.id "
-                    "JOIN Image i ON i.id = fi.image_id "
-                    "WHERE e.type = {}{}",
-                    static_cast<uint32_t>(ElementType::FILE), extra_where)};
+    scope.from_where_ = std::format(
+        "FROM Element e "
+        "JOIN FileImage fi ON fi.file_id = e.id "
+        "JOIN Image i ON i.id = fi.image_id "
+        "WHERE e.type = {}{}",
+        static_cast<uint32_t>(ElementType::FILE), extra_where);
+    return scope;
   }
 
-  return {
-      std::format("FROM FolderContent fc "
-                  "JOIN Element e ON fc.element_id = e.id "
-                  "JOIN FileImage fi ON fi.file_id = e.id "
-                  "JOIN Image i ON i.id = fi.image_id "
-                  "WHERE fc.folder_id = {} AND e.type = {}{}",
-                  folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where)};
+  scope.from_where_ = std::format(
+      "FROM FolderContent fc "
+      "JOIN Element e ON fc.element_id = e.id "
+      "JOIN FileImage fi ON fi.file_id = e.id "
+      "JOIN Image i ON i.id = fi.image_id "
+      "WHERE fc.folder_id = {} AND e.type = {}{}",
+      folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
+  return scope;
 }
 
 namespace {
 
-auto RunGroupByQuery(duckdb_connection conn, const std::string& sql)
-    -> std::vector<StorageStatsBucket> {
+auto RunGroupByQuery(duckdb_connection conn, const std::string& sql,
+                     const duckorm::SqlFragment& binds) -> std::vector<StorageStatsBucket> {
   std::vector<StorageStatsBucket> rows;
   duckdb_result                   result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return rows;
   }
@@ -79,9 +84,10 @@ auto RunGroupByQuery(duckdb_connection conn, const std::string& sql)
   return rows;
 }
 
-auto RunScalarInt64(duckdb_connection conn, const std::string& sql) -> int64_t {
+auto RunScalarInt64(duckdb_connection conn, const std::string& sql,
+                    const duckorm::SqlFragment& binds) -> int64_t {
   duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return 0;
   }
@@ -91,20 +97,6 @@ auto RunScalarInt64(duckdb_connection conn, const std::string& sql) -> int64_t {
   }
   duckdb_destroy_result(&result);
   return value;
-}
-
-auto SqlString(const std::string& value) -> std::string {
-  std::string out;
-  out.reserve(value.size() + 2);
-  out.push_back('\'');
-  for (const char ch : value) {
-    if (ch == '\'') {
-      out.push_back('\'');
-    }
-    out.push_back(ch);
-  }
-  out.push_back('\'');
-  return out;
 }
 
 auto JoinIds(std::span<const sl_element_id_t> ids) -> std::string {
@@ -390,43 +382,48 @@ void ElementStore::UpdateElements(std::span<const std::shared_ptr<SleeveElement>
 }
 
 auto ElementStore::GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
-                                                    const sl_element_id_t              folder_id)
+                                               const sl_element_id_t              folder_id)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   auto       db_lock    = guard_.Lock();
   const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
   const auto where =
-      where_frag.empty() ? std::optional<std::wstring>{} : conv::FromBytes(where_frag.sql_);
-  const auto scope      = BuildScopedFileQuery(folder_id, where);
-  const auto sql        = std::format("SELECT e.* {};", scope.from_where_);
-  const auto filter_sql = conv::FromBytes(sql);
-  return element_mapper_.GetElementsInFolderByFilter(filter_sql);  // for specialized queries only
+      where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
+  // Always resolve ids through the prepared-bind list path so SqlFragment
+  // binds stay valid. Then load full elements by primary key.
+  const auto ids = ListFilteredFileIds(folder_id, where);
+  std::vector<std::shared_ptr<SleeveElement>> out;
+  out.reserve(ids.size());
+  for (const auto id : ids) {
+    if (auto element = element_mapper_.GetElementById(id)) {
+      out.push_back(std::move(element));
+    }
+  }
+  return out;
 }
 
 auto ElementStore::GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
-                                                      const sl_element_id_t              folder_id)
+                                                 const sl_element_id_t              folder_id)
     -> std::vector<sl_element_id_t> {
   auto       db_lock    = guard_.Lock();
   const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
   const auto where =
-      where_frag.empty() ? std::optional<std::wstring>{} : conv::FromBytes(where_frag.sql_);
-  const auto scope      = BuildScopedFileQuery(folder_id, where);
-  const auto sql        = std::format("SELECT e.id {};", scope.from_where_);
-  const auto filter_sql = conv::FromBytes(sql);
-  return element_id_mapper_.GetElementIdsByQuery(filter_sql);  // for specialized queries only
+      where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
+  return ListFilteredFileIds(folder_id, where);
 }
 
-auto ElementStore::BuildFolderStats(sl_element_id_t                    folder_id,
-                                         const std::optional<std::wstring>& extra_filter_where,
-                                         const std::string& active_semantic_model_key)
+auto ElementStore::BuildFolderStats(sl_element_id_t                            folder_id,
+                                    const std::optional<duckorm::SqlFragment>& extra_filter,
+                                    const std::string& active_semantic_model_key)
     -> FolderStatsView {
   auto            db_lock = guard_.Lock();
   FolderStatsView out;
 
-  const auto      base_query = BuildScopedFileQuery(folder_id, extra_filter_where);
-  const auto&     base_join  = base_query.from_where_;
+  const auto  base_query = BuildScopedFileQuery(folder_id, extra_filter);
+  const auto& base_join  = base_query.from_where_;
+  const auto& binds      = base_query.binds_;
 
-  out.total_photo_count_ =
-      static_cast<int>(RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", base_join)));
+  out.total_photo_count_ = static_cast<int>(
+      RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", base_join), binds));
 
   out.date_stats_ = RunGroupByQuery(
       guard_.conn_,
@@ -434,7 +431,8 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                    folder_id
           "SELECT TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR AS d, "
           "COUNT(*) AS c {} "
           "GROUP BY d ORDER BY d DESC",
-          base_join));
+          base_join),
+      binds);
 
   out.camera_stats_ = RunGroupByQuery(
       guard_.conn_,
@@ -442,7 +440,8 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                    folder_id
           "SELECT COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') "
           "AS m, COUNT(*) AS c {} "
           "GROUP BY m ORDER BY c DESC",
-          base_join));
+          base_join),
+      binds);
 
   out.lens_stats_ = RunGroupByQuery(
       guard_.conn_,
@@ -450,25 +449,30 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                    folder_id
           "SELECT COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), '(unknown)') "
           "AS l, COUNT(*) AS c {} "
           "GROUP BY l ORDER BY c DESC",
-          base_join));
+          base_join),
+      binds);
 
   if (!active_semantic_model_key.empty()) {
+    duckorm::SqlFragment label_binds = binds;
+    label_binds.binds_.push_back(duckorm::BindValue{active_semantic_model_key});
     out.label_stats_ = RunGroupByQuery(
         guard_.conn_,
         std::format("WITH scoped AS (SELECT e.id AS file_id {}) "
                     "SELECT sl.label AS l, COUNT(DISTINCT scoped.file_id) AS c "
                     "FROM scoped "
                     "JOIN SemanticImageLabel sl ON sl.file_id = scoped.file_id "
-                    "WHERE sl.model_key = {} AND sl.label IS NOT NULL AND sl.label <> '' "
+                    "WHERE sl.model_key = ? AND sl.label IS NOT NULL AND sl.label <> '' "
                     "GROUP BY sl.label ORDER BY c DESC, sl.label",
-                    base_join, SqlString(active_semantic_model_key)));
+                    base_join),
+        label_binds);
   }
 
   out.rating_stats_ = RunGroupByQuery(
       guard_.conn_,
       std::format("SELECT json_extract(i.metadata, '$.Rating')::VARCHAR AS r, COUNT(*) AS c {} "
                   "GROUP BY r ORDER BY r DESC",
-                  base_join));
+                  base_join),
+      binds);
 
   return out;
 }
@@ -481,18 +485,19 @@ auto ElementStore::ListFilesInFolder(sl_element_id_t folder_id) const
 
 auto ElementStore::ListFilesInFolderPage(
     sl_element_id_t folder_id, size_t offset, size_t limit,
-    const std::optional<std::wstring>& extra_filter_where) const -> std::vector<FileListEntry> {
+    const std::optional<duckorm::SqlFragment>& extra_filter) const -> std::vector<FileListEntry> {
   auto                       db_lock = guard_.Lock();
   std::vector<FileListEntry> out;
-  const auto                 scope = BuildScopedFileQuery(folder_id, extra_filter_where);
+  const auto                 scope = BuildScopedFileQuery(folder_id, extra_filter);
   auto                       sql =
       std::format("SELECT e.id, fi.image_id, e.element_name {} ORDER BY e.id", scope.from_where_);
   if (limit > 0) {
     sql += std::format(" LIMIT {} OFFSET {}", limit, offset);
   }
 
-  duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  duckdb_result     result;
+  duckdb_connection conn = guard_.conn_;
+  if (duckorm::execute_query(conn, sql, scope.binds_, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return out;
   }
@@ -516,24 +521,26 @@ auto ElementStore::ListFilesInFolderPage(
 }
 
 auto ElementStore::CountFilesInFolder(
-    sl_element_id_t folder_id, const std::optional<std::wstring>& extra_filter_where) const
+    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
     -> size_t {
-  auto       db_lock = guard_.Lock();
-  const auto scope   = BuildScopedFileQuery(folder_id, extra_filter_where);
+  auto              db_lock = guard_.Lock();
+  const auto        scope   = BuildScopedFileQuery(folder_id, extra_filter);
+  duckdb_connection conn    = guard_.conn_;
   return static_cast<size_t>(
-      RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", scope.from_where_)));
+      RunScalarInt64(conn, std::format("SELECT COUNT(*) {}", scope.from_where_), scope.binds_));
 }
 
 auto ElementStore::ListFilteredFileIds(
-    sl_element_id_t folder_id, const std::optional<std::wstring>& extra_filter_where) const
+    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
     -> std::vector<sl_element_id_t> {
   auto                         db_lock = guard_.Lock();
   std::vector<sl_element_id_t> out;
-  const auto                   scope = BuildScopedFileQuery(folder_id, extra_filter_where);
+  const auto                   scope = BuildScopedFileQuery(folder_id, extra_filter);
   const auto                   sql = std::format("SELECT e.id {} ORDER BY e.id", scope.from_where_);
 
-  duckdb_result                result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  duckdb_result     result;
+  duckdb_connection conn = guard_.conn_;
+  if (duckorm::execute_query(conn, sql, scope.binds_, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return out;
   }

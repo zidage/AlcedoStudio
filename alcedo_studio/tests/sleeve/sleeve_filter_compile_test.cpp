@@ -4,11 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 
 using namespace alcedo;
 
-TEST(SleeveFilterCompileTest, EqualsCameraModelUsesImageAliasAndEscapedLiteral) {
+TEST(SleeveFilterCompileTest, EqualsCameraModelUsesImageAliasAndBoundParam) {
   FieldCondition cond{
       .field_ = FilterField::ExifCameraModel,
       .op_    = CompareOp::EQUALS,
@@ -17,11 +19,12 @@ TEST(SleeveFilterCompileTest, EqualsCameraModelUsesImageAliasAndEscapedLiteral) 
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'Canon EOS 5D Mark IV')");
-  EXPECT_TRUE(sql.binds_.empty());
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
 
-TEST(SleeveFilterCompileTest, NestedAndOrUsesExprFragments) {
+TEST(SleeveFilterCompileTest, NestedAndOrUsesExprFragmentsWithBinds) {
   FieldCondition cond1{
       .field_ = FilterField::ExifCameraModel,
       .op_    = CompareOp::EQUALS,
@@ -40,11 +43,14 @@ TEST(SleeveFilterCompileTest, NestedAndOrUsesExprFragments) {
 
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
-            "((json_extract(i.metadata, '$.Model') = 'Nikon D850') AND "
-            "(UPPER(i.file_name) LIKE '%.NEF'))");
+            "((json_extract(i.metadata, '$.Model') = ?) AND "
+            "(UPPER(i.file_name) LIKE ?))");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
+  EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
 }
 
-TEST(SleeveFilterCompileTest, EscapesQuoteInsideStringFilterValue) {
+TEST(SleeveFilterCompileTest, BindsQuoteInsideStringFilterValueWithoutEmbedding) {
   FieldCondition cond{
       .field_ = FilterField::ExifCameraModel,
       .op_    = CompareOp::CONTAINS,
@@ -53,7 +59,9 @@ TEST(SleeveFilterCompileTest, EscapesQuoteInsideStringFilterValue) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') LIKE '%O''Brien%')");
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') LIKE ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%O'Brien%");
 }
 
 TEST(SleeveFilterCompileTest, RawSQLBridgeNodeKeepsTrustedText) {
@@ -61,9 +69,10 @@ TEST(SleeveFilterCompileTest, RawSQLBridgeNodeKeepsTrustedText) {
                   std::wstring(L"(e.id > 0 AND i.image_path IS NOT NULL)")};
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_, "(e.id > 0 AND i.image_path IS NOT NULL)");
+  EXPECT_TRUE(sql.binds_.empty());
 }
 
-TEST(SleeveFilterCompileTest, BetweenIsoUsesImageMetadataAlias) {
+TEST(SleeveFilterCompileTest, BetweenIsoUsesImageMetadataAliasAndBinds) {
   FieldCondition cond{
       .field_        = FilterField::ExifISO,
       .op_           = CompareOp::BETWEEN,
@@ -73,10 +82,13 @@ TEST(SleeveFilterCompileTest, BetweenIsoUsesImageMetadataAlias) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN 100 AND 800)");
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
 }
 
-TEST(SleeveFilterCompileTest, ImportDateAndFileNameUseElementAlias) {
+TEST(SleeveFilterCompileTest, ImportDateAndFileNameUseElementAliasWithBinds) {
   FieldCondition name_cond{
       .field_ = FilterField::FileName,
       .op_    = CompareOp::EQUALS,
@@ -95,6 +107,8 @@ TEST(SleeveFilterCompileTest, ImportDateAndFileNameUseElementAlias) {
   FilterNode root{FilterNode::Type::Logical, FilterOp::AND, {name_node, import_node}, {},
                   std::nullopt};
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_,
-            "((e.element_name = 'shot.nef') AND (e.added_time > '2025-01-01'))");
+  EXPECT_EQ(sql.sql_, "((e.element_name = ?) AND (e.added_time > ?))");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "shot.nef");
+  EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "2025-01-01");
 }

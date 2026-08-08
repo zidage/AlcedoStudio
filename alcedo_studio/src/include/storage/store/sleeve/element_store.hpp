@@ -17,6 +17,7 @@
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/store/store_types.hpp"
 #include "storage/mapper/sleeve/edit_history/recovery_metadata_mapper.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
@@ -42,16 +43,24 @@ struct FolderStatsView {
   std::vector<StorageStatsBucket> rating_stats_{};
 };
 
+/**
+ * @brief Shared FROM/JOIN/WHERE scope for album file queries.
+ *
+ * @details @c from_where_ is the SQL text after SELECT columns (starts with FROM).
+ * @c binds_ holds prepared-statement values for any `?` placeholders in that text
+ * (extra filter predicates only; folder scope ids stay embedded as trusted integers).
+ */
 struct ScopedFileQuery {
-  std::string from_where_;
+  std::string                 from_where_;
+  duckorm::SqlFragment        binds_{};
 };
 
 /// Build the shared scope query fragment (FROM ... JOIN ... WHERE) for file-in-folder queries.
 /// All folder-scoped file lookups (search, stats, listing, pagination) must use this builder so
 /// the scope definition stays consistent across the application.
-auto BuildScopedFileQuery(sl_element_id_t                    folder_id,
-                          const std::optional<std::wstring>& extra_filter_where = std::nullopt)
-    -> ScopedFileQuery;
+auto BuildScopedFileQuery(
+    sl_element_id_t                           folder_id,
+    const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) -> ScopedFileQuery;
 
 struct FileListEntry {
   sl_element_id_t file_id_  = 0;
@@ -111,25 +120,28 @@ class ElementStore {
   auto GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                      const sl_element_id_t              folder_id)
       -> std::vector<sl_element_id_t>;
-  auto BuildFolderStats(sl_element_id_t                    folder_id,
-                        const std::optional<std::wstring>& extra_filter_where = std::nullopt,
-                        const std::string& active_semantic_model_key = {}) -> FolderStatsView;
+  auto BuildFolderStats(
+      sl_element_id_t                            folder_id,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
+      const std::string&                         active_semantic_model_key = {}) -> FolderStatsView;
 
   /// Return lightweight file metadata for every live File in a folder, queried directly from DB
   /// without materializing full SleeveElement objects.
   auto ListFilesInFolder(sl_element_id_t folder_id) const -> std::vector<FileListEntry>;
-  auto ListFilesInFolderPage(sl_element_id_t folder_id, size_t offset, size_t limit,
-                             const std::optional<std::wstring>& extra_filter_where =
-                                 std::nullopt) const -> std::vector<FileListEntry>;
+  auto ListFilesInFolderPage(
+      sl_element_id_t folder_id, size_t offset, size_t limit,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
+      -> std::vector<FileListEntry>;
   auto CountFilesInFolder(
-      sl_element_id_t                    folder_id,
-      const std::optional<std::wstring>& extra_filter_where = std::nullopt) const -> size_t;
+      sl_element_id_t                            folder_id,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
 
-  /// Return element IDs for files in a folder matching an extra SQL WHERE clause.
+  /// Return element IDs for files in a folder matching an extra SqlFragment predicate.
   /// Uses the same BuildScopedFileQuery infrastructure for consistency with stats queries.
-  auto ListFilteredFileIds(sl_element_id_t                    folder_id,
-                           const std::optional<std::wstring>& extra_filter_where =
-                               std::nullopt) const -> std::vector<sl_element_id_t>;
+  auto ListFilteredFileIds(
+      sl_element_id_t                            folder_id,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
+      -> std::vector<sl_element_id_t>;
 
   void EnsureChildrenLoaded(sl_element_id_t folder_id);
 

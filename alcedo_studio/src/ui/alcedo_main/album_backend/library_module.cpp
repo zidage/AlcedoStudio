@@ -203,7 +203,7 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
   ThumbnailModelLoadingGuard loading_guard(thumbnail_model_);
   const auto                 merged_filter =
       MergeFilterNodes(statsFilter, search_->ActiveSearchFilterNode());
-  const auto effective_filter_where = CompileFilterWhere(merged_filter);
+  const auto effective_filter = CompileFilterPredicate(merged_filter);
 
   if (reset) {
     thumbs().ReleaseVisibleThumbnailPins();
@@ -232,7 +232,7 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
   const auto folder_id   = folder_id_opt.value();
   const auto folder_path = folders_->CurrentFolderFsPath();
   if (reset || view_state_.total_count_ == 0) {
-    view_state_.total_count_ = browse->CountFilesInFolderById(folder_id, effective_filter_where);
+    view_state_.total_count_ = browse->CountFilesInFolderById(folder_id, effective_filter);
   }
 
   const size_t oldSize = view_state_.all_images_.size();
@@ -245,7 +245,7 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
   const auto page_size =
       search_->HasActiveSearchFilter() ? kSearchMetadataPageSize : kAlbumMetadataPageSize;
   const auto files =
-      browse->ListFilesInFolderById(folder_id, oldSize, page_size, effective_filter_where);
+      browse->ListFilesInFolderById(folder_id, oldSize, page_size, effective_filter);
   for (const auto& file : files) {
     const auto file_path =
         file.file_path_.empty() ? folder_path / file.file_name_ : file.file_path_;

@@ -41,12 +41,12 @@ auto WStringToUtf8(const std::wstring& value) -> std::optional<std::string> {
   }
 }
 
-// Phase 2: fuzzy-search clauses are composed from duckorm expr fragments.
+// Fuzzy-search clauses are composed from duckorm expr fragments.
 // Fixed DuckDB function shapes (contains / json_extract / REPLACE / BM25) stay
-// behind expr::raw; every user text value goes through expr::lit (escaped).
+// behind expr::raw; every user text value goes through expr::param (prepared binds).
 
 auto LitW(const std::wstring& value) -> duckorm::SqlFragment {
-  return duckorm::expr::lit(conv::ToBytes(value));
+  return duckorm::expr::param(conv::ToBytes(value));
 }
 
 /// `(contains(COALESCE(field, ''), token) OR
@@ -578,17 +578,11 @@ auto SleeveFilterService::ApplyFilterOn(filter_id_t filter_id, sl_element_id_t p
 auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  parent_id,
                                            const std::optional<FilterNode>& extra_filter) const
     -> AlbumStatsView {
-  std::optional<std::wstring> extra_where;
-  if (extra_filter.has_value()) {
-    const auto where_frag = FilterSQLCompiler::Compile(*extra_filter);
-    if (!where_frag.empty()) {
-      extra_where = conv::FromBytes(where_frag.sql_);
-    }
-  }
+  const auto extra_predicate = CompileFilterPredicate(extra_filter);
 
   const auto active_model_key = storage_->GetSemanticStore().ActiveModelKey();
   const auto storage_stats    = storage_->GetElementStore().BuildFolderStats(
-      parent_id, extra_where, active_model_key);
+      parent_id, extra_predicate, active_model_key);
 
   AlbumStatsView out;
   out.total_photo_count_ = storage_stats.total_photo_count_;
@@ -665,17 +659,21 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
   if (ai_fts_applicable) {
     where = duckorm::expr::or_({std::move(where), AiUnderstandingFtsClause(trimmed)});
   }
-  // The node owns compiler output only: literals were escaped by expr helpers.
-  return FilterNode{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
-                    conv::FromBytes(where.sql_)};
+  // The node owns compiler output (SQL + binds). Prefer typed nodes; this bridge
+  // keeps factory/search fragments ready for prepared album scope queries.
+  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
+                  conv::FromBytes(where.sql_)};
+  node.raw_binds_ = std::move(where.binds_);
+  return node;
 }
 
 auto SleeveFilterService::BuildExactFileWhere(sl_element_id_t file_id) const -> FilterNode {
-  const auto fragment =
-      duckorm::expr::eq(duckorm::expr::col("e.id"),
-                        duckorm::expr::lit(static_cast<int64_t>(file_id)));
-  return FilterNode{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
-                    conv::FromBytes(fragment.sql_)};
+  const auto fragment = duckorm::expr::eq(
+      duckorm::expr::col("e.id"), duckorm::expr::param(static_cast<int64_t>(file_id)));
+  FilterNode node{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt,
+                  conv::FromBytes(fragment.sql_)};
+  node.raw_binds_ = fragment.binds_;
+  return node;
 }
 
 auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wstring& query,
@@ -689,7 +687,7 @@ auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wst
   if (!filter_node.has_value()) {
     return out;
   }
-  const auto where = CompileFilterWhere(filter_node);
+  const auto where = CompileFilterPredicate(filter_node);
   if (!where.has_value()) {
     return out;
   }
@@ -731,7 +729,7 @@ auto SleeveFilterService::CountSearchResults(sl_element_id_t     parent_id,
   if (!filter_node.has_value()) {
     return 0;
   }
-  const auto where = CompileFilterWhere(filter_node);
+  const auto where = CompileFilterPredicate(filter_node);
   if (!where.has_value()) {
     return 0;
   }

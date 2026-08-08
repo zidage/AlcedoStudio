@@ -61,4 +61,30 @@ std::vector<std::vector<VarTypes>> select(duckdb_connection& conn, const std::st
 std::vector<std::vector<VarTypes>> select_by_query(duckdb_connection&             conn,
                                                    std::span<const DuckFieldDesc> sample_fields,
                                                    size_t field_count, const std::string& sql);
+
+/**
+ * @brief Bind SqlFragment values onto a prepared statement starting at @p start_index.
+ *
+ * @param stmt Prepared statement that already includes matching `?` placeholders.
+ * @param start_index 1-based DuckDB parameter index of the first fragment bind.
+ * @param fragment Fragment whose binds_ list is applied in declaration order.
+ */
+void bind_fragment_values(duckdb_prepared_statement stmt, idx_t start_index,
+                          const SqlFragment& fragment);
+
+/**
+ * @brief Prepare and run a SQL statement, binding values from @p fragment.
+ *
+ * @param conn Open DuckDB connection.
+ * @param sql Full SQL text. May contain `?` placeholders for @p fragment binds.
+ * @param fragment Bind values applied at positions 1..n (empty binds still prepare).
+ * @param out_result Receives a materialised result on success. Caller destroys it.
+ * @return DuckDBSuccess on success. On failure @p out_result is still valid for error
+ *         inspection and must be destroyed by the caller.
+ *
+ * @details Album scope queries and other multi-table SELECTs use this path so filter
+ * predicates keep prepared-statement binds end-to-end.
+ */
+duckdb_state execute_query(duckdb_connection& conn, const std::string& sql,
+                           const SqlFragment& fragment, duckdb_result* out_result);
 }  // namespace duckorm

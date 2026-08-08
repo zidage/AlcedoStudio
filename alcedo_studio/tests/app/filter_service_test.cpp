@@ -320,8 +320,9 @@ TEST_F(FilterServiceTests, SQLCompilationTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'Canon EOS 5D Mark IV')");
-  EXPECT_TRUE(sql.binds_.empty());
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
 
 TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
@@ -343,8 +344,11 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
 
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
-            "((json_extract(i.metadata, '$.Model') = 'Nikon D850') AND "
-            "(UPPER(i.file_name) LIKE '%.NEF'))");
+            "((json_extract(i.metadata, '$.Model') = ?) AND "
+            "(UPPER(i.file_name) LIKE ?))");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
+  EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
 }
 
 TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
@@ -357,10 +361,13 @@ TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN 100 AND 800)");
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
 }
 
-TEST_F(FilterServiceTests, EscapesSingleQuoteInStringFilterValue) {
+TEST_F(FilterServiceTests, BindsStringFilterValueWithEmbeddedQuote) {
   FieldCondition cond{
       .field_ = FilterField::ExifCameraModel,
       .op_    = CompareOp::EQUALS,
@@ -369,13 +376,16 @@ TEST_F(FilterServiceTests, EscapesSingleQuoteInStringFilterValue) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'O''Brien')");
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "O'Brien");
 }
 
 TEST_F(FilterServiceTests, RawSQLBridgeNodeCompilesAsTrustedText) {
   FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"e.id > 0")};
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_, "e.id > 0");
+  EXPECT_TRUE(sql.binds_.empty());
 }
 
 TEST_F(FilterServiceTests, FolderIndexTest_Model) {
@@ -1447,7 +1457,7 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
   ASSERT_TRUE(search_node.has_value());
 
   // Search alone: two files carry "50mm" in the lens field.
-  const auto search_where = CompileFilterWhere(search_node);
+  const auto search_where = CompileFilterPredicate(search_node);
   ASSERT_TRUE(search_where.has_value());
   auto search_rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
       0, 0, 0, search_where);
@@ -1460,7 +1470,7 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
   // Combined: only the Nikon D850 file whose lens contains "50mm".
   const auto merged = MergeFilterNodes(stats_node, search_node);
   ASSERT_TRUE(merged.has_value());
-  const auto merged_where = CompileFilterWhere(merged);
+  const auto merged_where = CompileFilterPredicate(merged);
   ASSERT_TRUE(merged_where.has_value());
   const auto merged_rows =
       project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
@@ -1492,7 +1502,7 @@ TEST_F(FilterServiceTests, StatsCameraBucketFilterRestrictsFolderStatsAndGrid) {
   ASSERT_NE(camera_bucket, stats.camera_stats_.end());
   EXPECT_EQ(camera_bucket->count_, 1);
 
-  const auto where = CompileFilterWhere(stats_node);
+  const auto where = CompileFilterPredicate(stats_node);
   ASSERT_TRUE(where.has_value());
   const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
       0, 0, 0, where);
@@ -1530,7 +1540,7 @@ TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
       [](const StatsBucket& row) { return row.label_ == "landscape" && row.count_ == 1; });
   EXPECT_NE(label_bucket, stats.label_stats_.end());
 
-  const auto where = CompileFilterWhere(stats_node);
+  const auto where = CompileFilterPredicate(stats_node);
   ASSERT_TRUE(where.has_value());
   const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
       0, 0, 0, where);
@@ -1563,7 +1573,7 @@ TEST_F(FilterServiceTests, StatsRatingBucketFilterRestrictsFolderStats) {
       [](const StatsBucket& row) { return row.label_ == "4" && row.count_ == 1; });
   EXPECT_NE(rating_bucket, stats.rating_stats_.end());
 
-  const auto where = CompileFilterWhere(stats_node);
+  const auto where = CompileFilterPredicate(stats_node);
   ASSERT_TRUE(where.has_value());
   const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
       0, 0, 0, where);
@@ -1589,7 +1599,7 @@ TEST_F(FilterServiceTests, StatsCaptureDateUnknownFilterMatchesFilesWithoutDate)
   SleeveFilterService filter_service(project.GetStorage());
 
   const auto unknown_node = sleeve_filter::BuildCaptureDateUnknownFilter();
-  const auto unknown_where = CompileFilterWhere(unknown_node);
+  const auto unknown_where = CompileFilterPredicate(unknown_node);
   ASSERT_TRUE(unknown_where.has_value());
   const auto unknown_rows =
       project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
@@ -1599,7 +1609,7 @@ TEST_F(FilterServiceTests, StatsCaptureDateUnknownFilterMatchesFilesWithoutDate)
   EXPECT_EQ(filter_service.BuildFolderStats(0, unknown_node).total_photo_count_, 1);
 
   const auto known_node = sleeve_filter::BuildCaptureDateBucketFilter(L"2026-01-01");
-  const auto known_where = CompileFilterWhere(known_node);
+  const auto known_where = CompileFilterPredicate(known_node);
   ASSERT_TRUE(known_where.has_value());
   const auto known_rows =
       project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
@@ -1607,6 +1617,37 @@ TEST_F(FilterServiceTests, StatsCaptureDateUnknownFilterMatchesFilesWithoutDate)
   ASSERT_EQ(known_rows.size(), 1u);
   EXPECT_EQ(known_rows.front().file_id_, dated_id);
   EXPECT_EQ(filter_service.BuildFolderStats(0, known_node).total_photo_count_, 1);
+}
+
+TEST_F(FilterServiceTests,
+       StatsCameraBucketWithEmbeddedQuoteUsesPreparedBindsOnAlbumScopeQuery) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     quoted_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"quote_cam_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/quote/a.dng"},
+                                 .camera_model_ = "O'Brien Body"});
+  const auto plain_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"quote_cam_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/quote/b.dng"},
+                                 .camera_model_ = "Plain Body"});
+  ASSERT_NE(quoted_id, 0u);
+  ASSERT_NE(plain_id, 0u);
+
+  const auto stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"O'Brien Body");
+  const auto predicate  = CompileFilterPredicate(stats_node);
+  ASSERT_TRUE(predicate.has_value());
+  ASSERT_FALSE(predicate->binds_.empty());
+  EXPECT_EQ(std::get<std::string>(predicate->binds_.front()), "O'Brien Body");
+  EXPECT_NE(predicate->sql_.find('?'), std::string::npos);
+
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, predicate);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, quoted_id);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  EXPECT_EQ(filter_service.BuildFolderStats(0, stats_node).total_photo_count_, 1);
+  EXPECT_EQ(project.GetStorage()->GetElementStore().CountFilesInFolder(0, predicate), 1u);
 }
 
 }  // namespace alcedo

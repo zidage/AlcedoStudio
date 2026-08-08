@@ -77,8 +77,10 @@ struct FilterNode {
   // For Condition nodes
   std::optional<FieldCondition> condition_;
 
-  // For RawSQL nodes
-  std::optional<std::wstring> raw_sql_;
+  // For RawSQL nodes: trusted SQL text plus optional prepared-statement binds.
+  // Prefer typed Condition nodes. RawSQL is a bridge for factories and search.
+  std::optional<std::wstring>     raw_sql_;
+  std::vector<duckorm::BindValue> raw_binds_{};
 };
 
 /**
@@ -97,9 +99,12 @@ class FilterSQLCompiler {
    * @brief Compile a filter tree into a SqlFragment WHERE predicate.
    *
    * @param node Root of the filter tree.
-   * @return Fragment with escaped/embedded literals. Empty when the tree is empty.
+   * @return Fragment with `?` binds for user values (and RawSQL bridge binds).
+   * Empty when the tree is empty.
    *
-   * @note String values are escaped. RawSQL nodes are a temporary bridge only.
+   * @note Typed string/number values use prepared binds. RawSQL may carry binds
+   * from sleeve factories. Callers must run the fragment through a prepared
+   * statement path (ElementStore album scope queries).
    */
   static auto Compile(const FilterNode& node) -> duckorm::SqlFragment;
 
@@ -123,14 +128,14 @@ class FilterSQLCompiler {
     -> std::optional<FilterNode>;
 
 /**
- * @brief Compile an optional filter tree into scoped-query WHERE text.
+ * @brief Compile an optional filter tree into a SqlFragment WHERE predicate.
  *
  * @param node Filter tree (already merged by the caller).
- * @return UTF-8 WHERE predicate text, or std::nullopt when the tree is absent
- * or compiles to an empty fragment.
+ * @return Fragment with SQL text and binds, or std::nullopt when the tree is
+ * absent or compiles to an empty fragment.
  */
-[[nodiscard]] auto CompileFilterWhere(const std::optional<FilterNode>& node)
-    -> std::optional<std::wstring>;
+[[nodiscard]] auto CompileFilterPredicate(const std::optional<FilterNode>& node)
+    -> std::optional<duckorm::SqlFragment>;
 
 class FilterCombo {
  public:
