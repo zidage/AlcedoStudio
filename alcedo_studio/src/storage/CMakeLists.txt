@@ -2,7 +2,10 @@
 
 # ORM Layer
 def_library(DuckORM
-    SOURCES "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_orm.cpp" "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_types.cpp"
+    SOURCES
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_orm.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_types.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
     PUBLIC_DEPS DuckDB
 )
 

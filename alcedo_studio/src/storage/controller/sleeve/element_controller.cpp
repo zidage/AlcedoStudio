@@ -393,7 +393,9 @@ auto ElementController::GetElementsInFolderByFilter(const std::shared_ptr<Filter
                                                     const sl_element_id_t              folder_id)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   auto       db_lock    = guard_.Lock();
-  const auto where      = FilterSQLCompiler::Compile(filter->GetRoot());
+  const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
+  const auto where =
+      where_frag.empty() ? std::optional<std::wstring>{} : conv::FromBytes(where_frag.sql_);
   const auto scope      = BuildScopedFileQuery(folder_id, where);
   const auto sql        = std::format("SELECT e.* {};", scope.from_where_);
   const auto filter_sql = conv::FromBytes(sql);
@@ -404,7 +406,9 @@ auto ElementController::GetElementIdsInFolderByFilter(const std::shared_ptr<Filt
                                                       const sl_element_id_t              folder_id)
     -> std::vector<sl_element_id_t> {
   auto       db_lock    = guard_.Lock();
-  const auto where      = FilterSQLCompiler::Compile(filter->GetRoot());
+  const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
+  const auto where =
+      where_frag.empty() ? std::optional<std::wstring>{} : conv::FromBytes(where_frag.sql_);
   const auto scope      = BuildScopedFileQuery(folder_id, where);
   const auto sql        = std::format("SELECT e.id {};", scope.from_where_);
   const auto filter_sql = conv::FromBytes(sql);

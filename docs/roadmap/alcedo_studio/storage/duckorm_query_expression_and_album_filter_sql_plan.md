@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: planning
+Status: Phase 1 complete; Phase 2–3 pending
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and sleeve filter SQL.
 
@@ -88,6 +88,21 @@ Rules for unfinished work:
 3. Do not name unfinished work with the banned leftover term.
 4. Do not name interfaces, APIs, schemas, or acceptance criteria with the banned
    `c` + `ontract` noun.
+
+### Execution discipline (phase completion)
+
+When an agent or developer finishes a named phase from this plan:
+
+1. Finish all work that the phase checklist and exit condition require.
+2. Do **not** leave **Open work** for that phase unless an item needs a
+   product or engineering **decision from the plan owner**.
+3. If the implementer can complete an item without a new decision, complete it
+   in the same phase. Do not park implementable scraps under Open work.
+4. Put later-phase scope under the next phase heading, not under Open work.
+5. Put checks that need later evidence under **Deferred checks**, with the
+   exact later phase or suite that will run them.
+6. Write the completion record before you stop. Mark checklist boxes only when
+   tests or inspection justify them.
 
 Roadmap rule: the banned `c` + `ontract` noun is also forbidden in headings and
 link labels in this file.
@@ -462,19 +477,90 @@ Do this work:
 
 Acceptance criteria:
 
-- [ ] A caller can build nested AND/OR predicates without string glue in product code.
-- [ ] `FilterSQLCompiler` returns `SqlFragment`, or an equivalent typed result that owns
+- [x] A caller can build nested AND/OR predicates without string glue in product code.
+- [x] `FilterSQLCompiler` returns `SqlFragment`, or an equivalent typed result that owns
       SQL text and binds.
-- [ ] Quoted string values from filter inputs are escaped or bound.
-- [ ] Existing FilterService and sleeve filter tests stay green after the compile rewrite.
-- [ ] New tests cover escape, AND/OR nesting, and at least one RawSQL bridge node.
-- [ ] duckorm headers and tests do not mention sleeve `FilterField` or UI types.
-- [ ] `sleeve_filter/filters/` is gone from the tree and from any target source list.
-- [ ] `GenerateSQLOn` / `GenerateIdSQLOn` are gone. Scoped queries still use
+- [x] Quoted string values from filter inputs are escaped or bound.
+- [x] Existing FilterService and sleeve filter tests stay green after the compile rewrite.
+- [x] New tests cover escape, AND/OR nesting, and at least one RawSQL bridge node.
+- [x] duckorm headers and tests do not mention sleeve `FilterField` or UI types.
+- [x] `sleeve_filter/filters/` is gone from the tree and from any target source list.
+- [x] `GenerateSQLOn` / `GenerateIdSQLOn` are gone. Scoped queries still use
       `BuildScopedFileQuery`.
 
 If Phase 1 leaves unfinished items, list them under **Open work** in the Phase 1
 completion record. Do not invent a cleanup phase name for leftover scraps.
+Open work is only for plan-owner decisions (see **Execution discipline**).
+
+##### Phase 1 completion record (2026-08-08)
+
+**Status:** complete — duckorm `expr` / `SqlFragment`, FilterSQLCompiler rewrite,
+dead filter removal, and unit/integration compile-path proof.
+
+**Primary success call chain:**
+
+```text
+FilterNode tree (typed condition / logical / RawSQL)
+  -> FilterSQLCompiler::Compile
+  -> duckorm::expr (col / lit / and_ / or_ / like / between / raw)
+  -> duckorm::SqlFragment { sql_, binds_ }
+  -> ElementController / SleeveFilterService convert sql_ to WHERE text
+  -> BuildScopedFileQuery (FROM/JOIN + i./e. aliases) + DuckDB run
+```
+
+**Primary failure call chain:**
+
+```text
+Unescaped user quote in filter string (historical risk)
+  -> expr::lit / escape_string doubles '
+  -> SqlFragment SQL embeds 'O''Brien' form
+  -> scoped query parse/run succeeds (FilterService + compile tests)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Escape / lit / nested AND-OR / like / exists / param binds | `DuckormExprTest` (7) | PASS |
+| Alias, escape, RawSQL bridge, BETWEEN, element aliases | `SleeveFilterCompileTest` (6) | PASS |
+| Compile + folder filters + search + stats/cache paths | `FilterServiceTest` (36) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter StorageService SleeveFilterService DuckormExprTest SleeveFilterCompileTest FilterServiceTest
+build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterCompileTest_runtime\SleeveFilterCompileTest.exe
+build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
+```
+
+Suite totals: DuckormExprTest 7/7; SleeveFilterCompileTest 6/6; FilterServiceTest 36/36.
+
+**Checklist / exit condition:** all Phase 1 acceptance boxes checked.
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `duckdb_expr.hpp` | 125 |
+| `duckdb_expr.cpp` | 189 |
+| `duckdb_orm.hpp` | 50 |
+| `duckdb_orm.cpp` | 441 |
+| `filter_combo.hpp` | 102 |
+| `filter_sql.cpp` | 162 |
+| `duckorm_expr_test.cpp` | 58 |
+| `sleeve_filter_compile_test.cpp` | 83 |
+
+No changed production file is near the 1000-LOC split threshold for this phase.
+
+**Open work:** none (no plan-owner decision required).
+
+**Deferred checks:**
+
+- Album UI stats/search hand-built WHERE removal — Phase 2.
+- Mapper/Store rename and CRTP merge — Phase 3.
+- Full prepared-statement bind use on album scope queries — later Store work after
+  consumers stop pasting WHERE as plain text.
 
 ### Phase 2 — Album filter consumers
 

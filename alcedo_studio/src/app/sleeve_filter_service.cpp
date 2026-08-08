@@ -531,9 +531,9 @@ auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  pare
     -> AlbumStatsView {
   std::optional<std::wstring> extra_where;
   if (extra_filter.has_value()) {
-    const auto where_w = FilterSQLCompiler::Compile(*extra_filter);
-    if (!where_w.empty()) {
-      extra_where = where_w;
+    const auto where_frag = FilterSQLCompiler::Compile(*extra_filter);
+    if (!where_frag.empty()) {
+      extra_where = conv::FromBytes(where_frag.sql_);
     }
   }
 

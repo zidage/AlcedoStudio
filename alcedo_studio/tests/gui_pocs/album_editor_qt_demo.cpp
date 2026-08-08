@@ -653,7 +653,7 @@ class FilterDrawer final : public QWidget {
       if (!node_opt.has_value()) {
         return;
       }
-      SetSqlPreview(QString::fromStdWString(FilterSQLCompiler::Compile(node_opt.value())));
+      SetSqlPreview(QString::fromStdString(FilterSQLCompiler::Compile(node_opt.value()).sql_));
       if (on_apply_) {
         on_apply_(node_opt.value());
       }

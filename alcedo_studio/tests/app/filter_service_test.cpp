@@ -316,11 +316,11 @@ TEST_F(FilterServiceTests, SQLCompilationTest) {
       .op_    = CompareOp::EQUALS,
       .value_ = std::wstring(L"Canon EOS 5D Mark IV"),
   };
-  FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql          = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql = L"(json_extract(metadata, '$.Model') = 'Canon EOS 5D Mark IV')";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'Canon EOS 5D Mark IV')");
+  EXPECT_TRUE(sql.binds_.empty());
 }
 
 TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
@@ -329,21 +329,21 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
       .op_    = CompareOp::EQUALS,
       .value_ = std::wstring(L"Nikon D850"),
   };
-  FilterNode     node1{FilterNode::Type::Condition, {}, {}, std::move(cond1), std::nullopt};
+  FilterNode node1{FilterNode::Type::Condition, {}, {}, std::move(cond1), std::nullopt};
 
   FieldCondition cond2{
       .field_ = FilterField::FileExtension,
       .op_    = CompareOp::ENDS_WITH,
       .value_ = std::wstring(L".NEF"),
   };
-  FilterNode   node2{FilterNode::Type::Condition, {}, {}, std::move(cond2), std::nullopt};
+  FilterNode node2{FilterNode::Type::Condition, {}, {}, std::move(cond2), std::nullopt};
 
-  FilterNode   root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
+  FilterNode root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
 
-  std::wstring sql = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql =
-      L"((json_extract(metadata, '$.Model') = 'Nikon D850') AND (UPPER(file_name) LIKE '%.NEF'))";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_,
+            "((json_extract(i.metadata, '$.Model') = 'Nikon D850') AND "
+            "(UPPER(i.file_name) LIKE '%.NEF'))");
 }
 
 TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
@@ -353,11 +353,28 @@ TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
       .value_        = int64_t(100),
       .second_value_ = int64_t(800),
   };
-  FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql          = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql = L"(json_extract(metadata, '$.ISO')::INT BETWEEN 100 AND 800)";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN 100 AND 800)");
+}
+
+TEST_F(FilterServiceTests, EscapesSingleQuoteInStringFilterValue) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifCameraModel,
+      .op_    = CompareOp::EQUALS,
+      .value_ = std::wstring(L"O'Brien"),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'O''Brien')");
+}
+
+TEST_F(FilterServiceTests, RawSQLBridgeNodeCompilesAsTrustedText) {
+  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"e.id > 0")};
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "e.id > 0");
 }
 
 TEST_F(FilterServiceTests, FolderIndexTest_Model) {

@@ -331,7 +331,7 @@ class FilterPanel final : public QGroupBox {
       }
       try {
         sql_preview_->setText(
-            QString::fromStdWString(FilterSQLCompiler::Compile(root_node_opt.value())));
+            QString::fromStdString(FilterSQLCompiler::Compile(root_node_opt.value()).sql_));
       } catch (...) {
         sql_preview_->setText("(SQL compile failed)");
       }
