@@ -47,7 +47,9 @@ class SearchController final : public QObject {
     return natural_language_search_enabled_;
   }
   [[nodiscard]] bool HasActiveSearchFilter() const;
-  [[nodiscard]] auto ActiveSearchFilterWhere() const -> const std::optional<std::wstring>&;
+  /// Active search filter tree. The tree owns compiler output only; consumers
+  /// merge it with other filters and compile once before a scoped query.
+  [[nodiscard]] auto ActiveSearchFilterNode() const -> const std::optional<FilterNode>&;
 
   [[nodiscard]] bool SearchFieldFilenameEnabled() const;
   [[nodiscard]] bool SearchFieldExifEnabled() const;
@@ -98,12 +100,12 @@ class SearchController final : public QObject {
   FolderController* folders_ = nullptr;
   StatsEngine*      stats_   = nullptr;
 
-  QString                     active_search_query_{};
-  std::optional<std::wstring> active_search_filter_where_{};
-  bool                        natural_language_search_enabled_ = false;
-  std::uint64_t               search_response_request_sequence_ = 0;
-  std::uint64_t               search_preview_generation_        = 0;
-  std::uint64_t               search_preview_request_sequence_  = 0;
+  QString                   active_search_query_{};
+  std::optional<FilterNode> active_search_filter_node_{};
+  bool                      natural_language_search_enabled_ = false;
+  std::uint64_t             search_response_request_sequence_ = 0;
+  std::uint64_t             search_preview_generation_        = 0;
+  std::uint64_t             search_preview_request_sequence_  = 0;
   std::unordered_map<ThumbnailCacheKey, image_id_t>    search_preview_visible_thumbnails_{};
   std::unordered_map<ThumbnailCacheKey, std::uint64_t> search_preview_thumbnail_requests_{};
 };

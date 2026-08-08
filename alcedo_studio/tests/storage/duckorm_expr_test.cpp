@@ -51,6 +51,23 @@ TEST(DuckormExprTest, LikeAndExistsComposeFragments) {
             "EXISTS (SELECT 1 FROM SemanticLabel sl WHERE sl.image_id = i.id)");
 }
 
+TEST(DuckormExprTest, LikeEscapeAddsEscapeClauseAndKeepsWildcardsLiteral) {
+  const auto pattern = expr::lit("%" + expr::escape_like_pattern("100%_dune~") + "%");
+  EXPECT_EQ(pattern.sql_, "'%100~%~_dune~~%'");
+
+  const auto frag =
+      expr::like_escape(expr::col("LOWER(COALESCE(e.element_name, ''))"), pattern);
+  EXPECT_EQ(frag.sql_,
+            "(LOWER(COALESCE(e.element_name, '')) LIKE '%100~%~_dune~~%' ESCAPE '~')");
+  EXPECT_TRUE(frag.binds_.empty());
+}
+
+TEST(DuckormExprTest, EscapeLikePatternUsesCustomEscapeCharacter) {
+  EXPECT_EQ(expr::escape_like_pattern("a%b_c", '!'), "a!%b!_c");
+  EXPECT_EQ(expr::escape_like_pattern("plain"), "plain");
+  EXPECT_EQ(expr::escape_like_pattern(""), "");
+}
+
 TEST(DuckormExprTest, ParamKeepsBindValuesInOrder) {
   const auto frag = expr::and_({expr::eq(expr::col("id"), expr::param(int64_t{7})),
                                 expr::eq(expr::col("name"), expr::param("x'y"))});

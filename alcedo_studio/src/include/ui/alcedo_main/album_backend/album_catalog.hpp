@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 
 namespace alcedo::ui {
@@ -32,10 +33,7 @@ class IAlbumCatalog {
 
   virtual void ReloadFolderTree(const std::filesystem::path& preferredFolderPath = {}) = 0;
   virtual void ReloadCurrentFolder()                                                   = 0;
-  virtual bool LoadThumbnailWindow(const std::optional<std::wstring>& filterWhere,
-                                   bool                               reset)           = 0;
-  virtual auto EffectiveFilterWhere(const std::optional<std::wstring>& filterWhere) const
-      -> std::optional<std::wstring> = 0;
+  virtual bool LoadThumbnailWindow(const std::optional<FilterNode>& statsFilter, bool reset) = 0;
 };
 
 }  // namespace alcedo::ui

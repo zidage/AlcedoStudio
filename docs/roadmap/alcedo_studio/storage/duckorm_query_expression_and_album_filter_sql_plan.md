@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 
-Status: Phase 1 complete; Phase 2–3 pending
+Status: Phase 1–2 complete; Phase 3 pending
 
 Primary owner: Alcedo Studio storage (`duckorm`, Mapper, Store) and sleeve filter SQL.
 
@@ -587,19 +587,95 @@ Do this work:
 
 Acceptance criteria:
 
-- [ ] `stats_engine.cpp` does not contain `json_extract`, `EXISTS`, or SQL keyword string
+- [x] `stats_engine.cpp` does not contain `json_extract`, `EXISTS`, or SQL keyword string
       literals for filter predicates.
-- [ ] Thumbnail paging and `BuildFolderStats` use the same compiled predicate source for
+- [x] Thumbnail paging and `BuildFolderStats` use the same compiled predicate source for
       the same UI filter state.
-- [ ] Fuzzy-search WHERE construction uses duckorm expr for ordinary AND/OR/LIKE/literal
+- [x] Fuzzy-search WHERE construction uses duckorm expr for ordinary AND/OR/LIKE/literal
       composition.
-- [ ] Combined search and stats-bar filters still restrict the thumbnail grid and the
+- [x] Combined search and stats-bar filters still restrict the thumbnail grid and the
       stats panel together.
-- [ ] FilterService, album backend, and related search tests cover the migrated paths.
-- [ ] A repository search of first-party album UI and backend sources shows no new
+- [x] FilterService, album backend, and related search tests cover the migrated paths.
+- [x] A repository search of first-party album UI and backend sources shows no new
       hand-built stats-bar WHERE builders outside sleeve and app compile entry points.
 
 During Phase 2, existing `*Controller` names may remain. Phase 3 performs the rename.
+
+##### Phase 2 completion record (2026-08-08)
+
+**Status:** complete — stats-bar and fuzzy-search predicates now compile through
+`FilterNode` and duckorm expr. The UI layer builds no filter SQL.
+
+**Primary success call chain:**
+
+```text
+StatsEngine::ToggleStatsFilter / SearchController::ApplyFuzzySearch
+  -> BuildStatsFilterNode / BuildFuzzySearchWhere (FilterNode)
+  -> sleeve_filter factories (bucket fields, semantic-label EXISTS) / SleeveFilterService expr
+  -> MergeFilterNodes (one AND root) in LibraryModule and StatsEngine
+  -> FilterSQLCompiler::Compile -> duckorm::SqlFragment
+  -> CompileFilterWhere -> scoped WHERE text
+  -> AlbumBrowseService / ElementController ListFilesInFolderPage + BuildFolderStats
+```
+
+**Primary failure call chain:**
+
+```text
+Unparseable capture-date string on a file (for example "")
+  -> TRY_CAST date bucket + json_extract_string IS NULL / '' check
+  -> predicate stays NULL-safe; the scoped query runs (plain CAST('' AS DATE) failed before)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| like_escape and escape_like_pattern | `DuckormExprTest` (9) | PASS |
+| Bucket factories, EXISTS subquery, merge and compile helpers | `SleeveFilterFactoryTest` (13) | PASS |
+| Combined stats-bar + search predicate path, bucket, label, rating, date filters | `FilterServiceTest` (41) | PASS |
+| Stats-bar, date, combined search+stats on the real module host | `AlbumBackendStatsFilterTest` (3) | PASS |
+| Sleeve compile regression | `SleeveFilterCompileTest` (6) | PASS |
+| Album backend regression suites | `AlbumBackendThumbnailTest` (3), `AlbumBackendImageDeleteTest` (9), `AlbumBackendProjectTest` (23), `AlbumBackendFolderTest` (7), `AlbumBackendImportTest` (15), `ApplicationModuleHostLifecycleTest` (2), `AlbumBackendRatingTest` (5), `AlbumBackendCiWorkflowTest` (1), `AlbumBackendDbWriteBarrierTest` (8), `AlbumBackendBackgroundTaskTest` (13), `AlbumBackendInteractionPolicyTest` (14) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DuckORM SleeveFilter SleeveFilterService StorageService DuckormExprTest SleeveFilterCompileTest SleeveFilterFactoryTest FilterServiceTest AlbumBackendStatsFilterTest
+build\debug\alcedo_studio\tests\sleeve\DuckormExprTest_runtime\DuckormExprTest.exe
+build\debug\alcedo_studio\tests\sleeve\SleeveFilterFactoryTest_runtime\SleeveFilterFactoryTest.exe
+build\debug\alcedo_studio\tests\app\FilterServiceTest_runtime\FilterServiceTest.exe
+build\debug\alcedo_studio\tests\ui\AlbumBackendStatsFilterTest_runtime\AlbumBackendStatsFilterTest.exe
+```
+
+Suite totals: DuckormExprTest 9/9; SleeveFilterCompileTest 6/6; SleeveFilterFactoryTest
+13/13; FilterServiceTest 41/41; AlbumBackendStatsFilterTest 3/3; album backend suites
+as listed above.
+
+**Checklist / exit condition:** all Phase 2 acceptance boxes checked.
+
+**LOC note (grill-code-review):**
+
+| File | LOC (approx) |
+| --- | --- |
+| `duckdb_expr.hpp` / `duckdb_expr.cpp` | 165 / 257 |
+| `filter_combo.hpp` | 150 |
+| `filter_factory.hpp` / `filter_factory.cpp` | 67 / 97 (new) |
+| `filter_sql.cpp` | 216 |
+| `sleeve_filter_service.cpp` | 752 |
+| `stats_engine.cpp` | 337 |
+| `library_module.cpp` | 575 |
+| `search_controller.cpp` | 857 |
+
+No changed production file is near the 1000-LOC split threshold for this phase.
+
+**Open work:** none (no plan-owner decision required).
+
+**Deferred checks:**
+
+- Phase 3: Mapper + Store rename keeps the string WHERE overloads, then the
+  prepared-statement bind path for album scope queries runs later.
+- `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload` fails
+  on the base tree too (verified by stash). It is not a Phase 2 regression.
 
 ### Phase 3 — Mapper + Store reshape with TMP
 

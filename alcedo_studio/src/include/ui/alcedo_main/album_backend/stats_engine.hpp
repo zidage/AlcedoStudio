@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 
 namespace alcedo::ui {
@@ -84,8 +85,11 @@ class StatsEngine final : public QObject {
   void ToggleFilter(const QString& category, const QString& label);
   void ClearFilters();
 
-  [[nodiscard]] bool           HasActiveFilter() const;
-  [[nodiscard]] auto BuildStatsFilterWhere() const -> std::optional<std::wstring>;
+  [[nodiscard]] bool HasActiveFilter() const;
+
+  /// Build a FilterNode tree for the active stats-bar filters. Returns
+  /// std::nullopt when no stats filter is active. Never contains SQL text.
+  [[nodiscard]] auto BuildStatsFilterNode() const -> std::optional<FilterNode>;
 
  signals:
   void StatsChanged();

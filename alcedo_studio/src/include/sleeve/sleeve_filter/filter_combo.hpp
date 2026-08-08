@@ -33,6 +33,13 @@ enum class FilterField {
   ImageSize,
   Rating,
   ImagePath,
+  // Phase 2: stats-bar bucket columns. Each column must equal the bucket
+  // expression used by ElementController::BuildFolderStats GROUP BY so a
+  // clicked bucket label selects exactly the rows that produced that bucket.
+  CameraModelLabel,
+  LensLabel,
+  CaptureDateLabel,
+  RatingLabel,
   SemanticTags
 };
 
@@ -102,6 +109,28 @@ class FilterSQLCompiler {
   static auto FieldToColumn(FilterField field) -> duckorm::SqlFragment;
   static auto ValueToFragment(const FilterValue& value) -> duckorm::SqlFragment;
 };
+
+/**
+ * @brief Merge two optional filter trees under one AND root.
+ *
+ * @param left Left filter (for example the stats-bar filter).
+ * @param right Right filter (for example the active search filter).
+ * @return The merged tree, or the single present side, or std::nullopt when
+ * both sides are absent.
+ */
+[[nodiscard]] auto MergeFilterNodes(const std::optional<FilterNode>& left,
+                                    const std::optional<FilterNode>& right)
+    -> std::optional<FilterNode>;
+
+/**
+ * @brief Compile an optional filter tree into scoped-query WHERE text.
+ *
+ * @param node Filter tree (already merged by the caller).
+ * @return UTF-8 WHERE predicate text, or std::nullopt when the tree is absent
+ * or compiles to an empty fragment.
+ */
+[[nodiscard]] auto CompileFilterWhere(const std::optional<FilterNode>& node)
+    -> std::optional<std::wstring>;
 
 class FilterCombo {
  public:

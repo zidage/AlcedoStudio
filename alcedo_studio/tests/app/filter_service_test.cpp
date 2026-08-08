@@ -21,6 +21,7 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "storage/controller/ai/ai_storage_controller.hpp"
 #include "storage/controller/semantic/semantic_storage_controller.hpp"
 #include "type/supported_file_type.hpp"
@@ -1417,6 +1418,195 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
   ASSERT_EQ(zh_rows.size(), 1u);
   EXPECT_EQ(zh_rows.front().file_id_, landscape_id);
   EXPECT_FALSE(fake->was_called_);
+}
+
+TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     d850_24 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/a.dng"},
+                                 .camera_model_ = "Nikon D850",
+                                 .lens_         = "NIKKOR 24mm"});
+  const auto d850_50 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/b.dng"},
+                                 .camera_model_ = "Nikon D850",
+                                 .lens_         = "NIKKOR 50mm"});
+  const auto sony_50 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_c.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/c.dng"},
+                                 .camera_model_ = "Sony A7",
+                                 .lens_         = "SEL 50mm"});
+  ASSERT_NE(d850_24, 0u);
+  ASSERT_NE(d850_50, 0u);
+  ASSERT_NE(sony_50, 0u);
+
+  SleeveFilterService filter_service(project.GetStorageService());
+  const auto          stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"Nikon D850");
+  const auto          search_node = filter_service.BuildFuzzySearchWhere(L"50mm");
+  ASSERT_TRUE(search_node.has_value());
+
+  // Search alone: two files carry "50mm" in the lens field.
+  const auto search_where = CompileFilterWhere(search_node);
+  ASSERT_TRUE(search_where.has_value());
+  auto search_rows = project.GetStorageService()->GetElementController().ListFilesInFolderPage(
+      0, 0, 0, search_where);
+  ASSERT_EQ(search_rows.size(), 2u);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, search_node).total_photo_count_, 2);
+
+  // Stats-bar alone: two Nikon D850 files.
+  EXPECT_EQ(filter_service.BuildFolderStats(0, stats_node).total_photo_count_, 2);
+
+  // Combined: only the Nikon D850 file whose lens contains "50mm".
+  const auto merged = MergeFilterNodes(stats_node, search_node);
+  ASSERT_TRUE(merged.has_value());
+  const auto merged_where = CompileFilterWhere(merged);
+  ASSERT_TRUE(merged_where.has_value());
+  const auto merged_rows =
+      project.GetStorageService()->GetElementController().ListFilesInFolderPage(0, 0, 0,
+                                                                                merged_where);
+  ASSERT_EQ(merged_rows.size(), 1u);
+  EXPECT_EQ(merged_rows.front().file_id_, d850_50);
+
+  const auto merged_stats = filter_service.BuildFolderStats(0, merged);
+  EXPECT_EQ(merged_stats.total_photo_count_, 1);
+  (void)d850_24;
+  (void)sony_50;
+}
+
+TEST_F(FilterServiceTests, StatsCameraBucketFilterRestrictsFolderStatsAndGrid) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     nikon_id = CreateSyntheticFile(project, L"bucket_nikon.dng", "Nikon D850");
+  const auto     sony_id  = CreateSyntheticFile(project, L"bucket_sony.dng", "Sony A7");
+  ASSERT_NE(nikon_id, 0u);
+  ASSERT_NE(sony_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorageService());
+  const auto          stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"Nikon D850");
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto camera_bucket = std::find_if(
+      stats.camera_stats_.begin(), stats.camera_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "Nikon D850"; });
+  ASSERT_NE(camera_bucket, stats.camera_stats_.end());
+  EXPECT_EQ(camera_bucket->count_, 1);
+
+  const auto where = CompileFilterWhere(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, nikon_id);
+}
+
+TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     landscape_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_label_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .lens_         = "Plain Lens"});
+  const auto portrait_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_label_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .lens_         = "Plain Lens"});
+  ASSERT_NE(landscape_id, 0u);
+  ASSERT_NE(portrait_id, 0u);
+
+  auto& semantic = project.GetStorageService()->GetSemanticStorageController();
+  RegisterSemanticSearchModel(semantic, "mobileclip-stats-filter");
+  StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
+
+  SleeveFilterService filter_service(project.GetStorageService());
+  const auto          stats_node = sleeve_filter::BuildSemanticLabelExistsFilter(
+      "mobileclip-stats-filter", SemanticLabelAliases("landscape"));
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto label_bucket = std::find_if(
+      stats.label_stats_.begin(), stats.label_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "landscape" && row.count_ == 1; });
+  EXPECT_NE(label_bucket, stats.label_stats_.end());
+
+  const auto where = CompileFilterWhere(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, landscape_id);
+}
+
+TEST_F(FilterServiceTests, StatsRatingBucketFilterRestrictsFolderStats) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     four_star = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_rating_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .rating_       = 4});
+  const auto two_star = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_rating_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .rating_       = 2});
+  ASSERT_NE(four_star, 0u);
+  ASSERT_NE(two_star, 0u);
+
+  SleeveFilterService filter_service(project.GetStorageService());
+  const auto          stats_node = sleeve_filter::BuildRatingBucketFilter(L"4");
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto rating_bucket = std::find_if(
+      stats.rating_stats_.begin(), stats.rating_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "4" && row.count_ == 1; });
+  EXPECT_NE(rating_bucket, stats.rating_stats_.end());
+
+  const auto where = CompileFilterWhere(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, four_star);
+}
+
+TEST_F(FilterServiceTests, StatsCaptureDateUnknownFilterMatchesFilesWithoutDate) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     dated_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_date_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .date_time_    = "2026-01-01 10:00:00"});
+  const auto undated_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_date_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .date_time_    = ""});
+  ASSERT_NE(dated_id, 0u);
+  ASSERT_NE(undated_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorageService());
+
+  const auto unknown_node = sleeve_filter::BuildCaptureDateUnknownFilter();
+  const auto unknown_where = CompileFilterWhere(unknown_node);
+  ASSERT_TRUE(unknown_where.has_value());
+  const auto unknown_rows =
+      project.GetStorageService()->GetElementController().ListFilesInFolderPage(0, 0, 0,
+                                                                                unknown_where);
+  ASSERT_EQ(unknown_rows.size(), 1u);
+  EXPECT_EQ(unknown_rows.front().file_id_, undated_id);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, unknown_node).total_photo_count_, 1);
+
+  const auto known_node = sleeve_filter::BuildCaptureDateBucketFilter(L"2026-01-01");
+  const auto known_where = CompileFilterWhere(known_node);
+  ASSERT_TRUE(known_where.has_value());
+  const auto known_rows =
+      project.GetStorageService()->GetElementController().ListFilesInFolderPage(0, 0, 0,
+                                                                                known_where);
+  ASSERT_EQ(known_rows.size(), 1u);
+  EXPECT_EQ(known_rows.front().file_id_, dated_id);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, known_node).total_photo_count_, 1);
 }
 
 }  // namespace alcedo

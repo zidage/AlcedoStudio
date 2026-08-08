@@ -176,6 +176,31 @@ auto not_like(SqlFragment left, SqlFragment pattern) -> SqlFragment {
   return bin_op(std::move(left), "NOT LIKE", std::move(pattern));
 }
 
+auto escape_like_pattern(std::string_view value, char escape_char) -> std::string {
+  std::string out;
+  out.reserve(value.size());
+  for (const char ch : value) {
+    if (ch == escape_char || ch == '%' || ch == '_') {
+      out.push_back(escape_char);
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
+auto like_escape(SqlFragment left, SqlFragment pattern, char escape_char) -> SqlFragment {
+  SqlFragment out;
+  out.sql_.reserve(left.sql_.size() + pattern.sql_.size() + 24);
+  out.sql_.push_back('(');
+  out.append(std::move(left));
+  out.sql_.append(" LIKE ");
+  out.append(std::move(pattern));
+  out.sql_.append(" ESCAPE '");
+  out.sql_.push_back(escape_char);
+  out.sql_.append("')");
+  return out;
+}
+
 auto between(SqlFragment value, SqlFragment low, SqlFragment high) -> SqlFragment {
   SqlFragment out;
   out.sql_.push_back('(');

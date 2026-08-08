@@ -60,6 +60,19 @@ auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
       return expr::col("json_extract(i.metadata, '$.Rating')");
     case FilterField::ImagePath:
       return expr::col("i.image_path");
+    case FilterField::CameraModelLabel:
+      return expr::col("COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), "
+                       "'(unknown)')");
+    case FilterField::LensLabel:
+      return expr::col("COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), "
+                       "'(unknown)')");
+    case FilterField::CaptureDateLabel:
+      // TRY_CAST: plain CAST would fail the whole query on rows whose date
+      // string is not parseable (for example an empty string).
+      return expr::col(
+          "TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR");
+    case FilterField::RatingLabel:
+      return expr::col("json_extract(i.metadata, '$.Rating')::INT");
     case FilterField::SemanticTags:
       // Domain semantic-label filters use EXISTS factories (Phase 2). Placeholder only.
       return expr::col("i.embedding");
@@ -174,6 +187,30 @@ auto FilterSQLCompiler::CompileNode(const FilterNode& node) -> SqlFragment {
 
 auto FilterSQLCompiler::Compile(const FilterNode& node) -> SqlFragment {
   return CompileNode(node);
+}
+
+auto MergeFilterNodes(const std::optional<FilterNode>& left,
+                      const std::optional<FilterNode>& right) -> std::optional<FilterNode> {
+  if (!left.has_value()) {
+    return right;
+  }
+  if (!right.has_value()) {
+    return left;
+  }
+  return FilterNode{FilterNode::Type::Logical, FilterOp::AND, {*left, *right}, std::nullopt,
+                    std::nullopt};
+}
+
+auto CompileFilterWhere(const std::optional<FilterNode>& node)
+    -> std::optional<std::wstring> {
+  if (!node.has_value()) {
+    return std::nullopt;
+  }
+  const auto fragment = FilterSQLCompiler::Compile(*node);
+  if (fragment.empty()) {
+    return std::nullopt;
+  }
+  return conv::FromBytes(fragment.sql_);
 }
 
 }  // namespace alcedo

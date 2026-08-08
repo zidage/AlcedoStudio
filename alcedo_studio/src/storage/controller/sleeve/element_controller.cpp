@@ -431,7 +431,7 @@ auto ElementController::BuildFolderStats(sl_element_id_t                    fold
   out.date_stats_ = RunGroupByQuery(
       guard_.conn_,
       std::format(
-          "SELECT CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR AS d, "
+          "SELECT TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR AS d, "
           "COUNT(*) AS c {} "
           "GROUP BY d ORDER BY d DESC",
           base_join));

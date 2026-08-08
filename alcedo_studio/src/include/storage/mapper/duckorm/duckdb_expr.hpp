@@ -122,6 +122,28 @@ namespace expr {
 [[nodiscard]] auto le(SqlFragment left, SqlFragment right) -> SqlFragment;
 [[nodiscard]] auto like(SqlFragment left, SqlFragment pattern) -> SqlFragment;
 [[nodiscard]] auto not_like(SqlFragment left, SqlFragment pattern) -> SqlFragment;
+
+/**
+ * @brief Escape a string for use inside a LIKE pattern.
+ *
+ * @param value Pattern content. May contain `%`, `_`, or the escape character.
+ * @param escape_char Escape character used by the LIKE clause (default `~`).
+ * @return Content with `%`, `_`, and @p escape_char prefixed by @p escape_char.
+ */
+[[nodiscard]] auto escape_like_pattern(std::string_view value, char escape_char = '~')
+    -> std::string;
+
+/**
+ * @brief Build a LIKE predicate with an explicit escape character.
+ *
+ * @param left Column or expression fragment.
+ * @param pattern Pattern fragment (escape wildcards with `escape_like_pattern`).
+ * @param escape_char Escape character (default `~`).
+ * @return `(left LIKE pattern ESCAPE 'c')`.
+ */
+[[nodiscard]] auto like_escape(SqlFragment left, SqlFragment pattern,
+                               char escape_char = '~') -> SqlFragment;
+
 [[nodiscard]] auto between(SqlFragment value, SqlFragment low, SqlFragment high) -> SqlFragment;
 [[nodiscard]] auto is_null(SqlFragment operand) -> SqlFragment;
 [[nodiscard]] auto is_not_null(SqlFragment operand) -> SqlFragment;

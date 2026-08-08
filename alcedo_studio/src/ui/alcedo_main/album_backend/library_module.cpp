@@ -10,6 +10,7 @@
 #include <limits>
 
 #include "image/image.hpp"
+#include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -195,12 +196,14 @@ void LibraryModule::ReloadCurrentFolder() {
 }
 
 
-bool LibraryModule::LoadThumbnailWindow(const std::optional<std::wstring>& filterWhere, bool reset) {
+bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFilter, bool reset) {
   if (thumbnail_model_.loading()) {
     return false;
   }
   ThumbnailModelLoadingGuard loading_guard(thumbnail_model_);
-  const auto                 effective_filter_where = EffectiveFilterWhere(filterWhere);
+  const auto                 merged_filter =
+      MergeFilterNodes(statsFilter, search_->ActiveSearchFilterNode());
+  const auto effective_filter_where = CompileFilterWhere(merged_filter);
 
   if (reset) {
     thumbs().ReleaseVisibleThumbnailPins();
@@ -271,19 +274,6 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<std::wstring>& filte
 
   emit CountsChanged();
   return !files.empty();
-}
-
-
-auto LibraryModule::EffectiveFilterWhere(const std::optional<std::wstring>& filterWhere) const
-    -> std::optional<std::wstring> {
-  const auto& active_search_filter_where = search_->ActiveSearchFilterWhere();
-  if (!active_search_filter_where.has_value() || active_search_filter_where->empty()) {
-    return filterWhere;
-  }
-  if (!filterWhere.has_value() || filterWhere->empty()) {
-    return active_search_filter_where;
-  }
-  return L"(" + *filterWhere + L") AND (" + *active_search_filter_where + L")";
 }
 
 

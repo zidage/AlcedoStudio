@@ -19,3 +19,11 @@ target_include_directories(SleeveFilterCompileTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(SleeveFilterCompileTest PRIVATE GTest::gtest_main SleeveFilter StrConv)
 gtest_discover_tests(SleeveFilterCompileTest TEST_PREFIX "SleeveFilterCompileTest.")
 alcedo_register_test_target(SleeveFilterCompileTest storage)
+
+# Compile-path unit checks for the sleeve filter factories (stats-bar bucket
+# predicates, semantic-label EXISTS, merge/compile entry helpers).
+add_executable(SleeveFilterFactoryTest ${ALCEDO_TEST_ROOT}/sleeve/sleeve_filter_factory_test.cpp)
+target_include_directories(SleeveFilterFactoryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SleeveFilterFactoryTest PRIVATE GTest::gtest_main SleeveFilter StrConv)
+gtest_discover_tests(SleeveFilterFactoryTest TEST_PREFIX "SleeveFilterFactoryTest.")
+alcedo_register_test_target(SleeveFilterFactoryTest storage)

@@ -2,6 +2,7 @@
 
 set(FILTER_SRCS
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_sql.cpp"
+    "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_factory.cpp"
 )
 
 def_library(SleeveFilter
