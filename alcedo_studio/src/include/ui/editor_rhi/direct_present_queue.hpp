@@ -20,7 +20,7 @@
 namespace alcedo::editor_rhi {
 
 // Fixed three-slot direct-present queue restored from the pre-unified-QML
-// RhiEditViewerSurface path. Ownership is exclusive per slot; there is no
+// The direct-presentation path owns each slot exclusively; there is no
 // application-wide lease protocol or dual-sided completion map.
 //
 // Slot states:
@@ -46,7 +46,7 @@ class DirectPresentQueue final {
     int                width            = 0;
     int                height           = 0;
     int                preferred_slot   = -1;
-    std::uint64_t      session_epoch = 0;
+    std::uint64_t      session_epoch    = 0;
     std::uint64_t      image_identity   = 0;
     std::uint64_t      layer_generation = 0;
     FrameRole          frame_role       = FrameRole::InteractivePrimary;
@@ -82,9 +82,9 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
-    std::uint64_t         session_epoch = 0;
-    std::uint64_t         image_identity   = 0;
-    std::uint64_t         sequence         = 0;
+    std::uint64_t         session_epoch  = 0;
+    std::uint64_t         image_identity = 0;
+    std::uint64_t         sequence       = 0;
   };
 
   struct ReadyFrame {
@@ -92,19 +92,19 @@ class DirectPresentQueue final {
   };
 
   struct Diagnostics {
-    EditorBackend backend                        = EditorBackend::Cuda;
-    std::uint64_t target_generation              = 0;
+    EditorBackend backend                     = EditorBackend::Cuda;
+    std::uint64_t target_generation           = 0;
     std::uint64_t session_epoch               = 0;
-    std::uint64_t image_identity                 = 0;
+    std::uint64_t image_identity              = 0;
     std::uint64_t last_composed_session_epoch = 0;
-    std::uint64_t last_composed_request_id       = 0;
-    std::uint64_t composed_frame_count           = 0;
-    std::uint64_t dropped_stale_frame_count      = 0;
-    std::size_t   live_target_count              = 0;
-    std::size_t   available_count                = 0;
-    std::size_t   producer_writing_count         = 0;
-    std::size_t   ready_count                    = 0;
-    bool          consumer_available             = true;
+    std::uint64_t last_composed_request_id    = 0;
+    std::uint64_t composed_frame_count        = 0;
+    std::uint64_t dropped_stale_frame_count   = 0;
+    std::size_t   live_target_count           = 0;
+    std::size_t   available_count             = 0;
+    std::size_t   producer_writing_count      = 0;
+    std::size_t   ready_count                 = 0;
+    bool          consumer_available          = true;
   };
 
   struct PrepareResult {
@@ -157,10 +157,10 @@ class DirectPresentQueue final {
 
   // Diagnostic: every composed primary frame increments composed_frame_count
   // and records the active session_epoch / request_id.
-  void NoteFrameComposed(std::uint64_t request_id, std::uint64_t session_epoch,
-                         std::uint64_t image_identity);
+  void               NoteFrameComposed(std::uint64_t request_id, std::uint64_t session_epoch,
+                                       std::uint64_t image_identity);
 
-  void SetConsumerAvailable(bool available);
+  void               SetConsumerAvailable(bool available);
   void InvalidateSessionEpoch(std::uint64_t session_epoch, std::uint64_t image_identity = 0);
   void InvalidateTargetGeneration();
   void Shutdown();
@@ -185,9 +185,9 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
-    std::uint64_t         session_epoch = 0;
-    std::uint64_t         image_identity   = 0;
-    std::uint64_t         sequence         = 0;
+    std::uint64_t         session_epoch  = 0;
+    std::uint64_t         image_identity = 0;
+    std::uint64_t         sequence       = 0;
   };
 
   [[nodiscard]] auto IsValidSlot(int index) const -> bool;
@@ -204,19 +204,19 @@ class DirectPresentQueue final {
   EditorBackend                backend_;
   // Starts unavailable: producers must not block on WaitForWritableSlot until
   // a visible exposed window publishes consumer availability.
-  bool                         consumer_available_                 = false;
-  bool                         shutdown_                           = false;
-  std::uint64_t                target_generation_                  = 0;
-  std::uint64_t                session_epoch_                   = 0;
-  std::uint64_t                image_identity_                     = 0;
-  std::uint64_t                sequence_                           = 0;
-  std::uint64_t                last_composed_session_epoch_     = 0;
-  std::uint64_t                last_composed_request_id_           = 0;
-  std::uint64_t                composed_frame_count_               = 0;
-  std::uint64_t                dropped_stale_frame_count_          = 0;
-  int                          write_idx_                          = 1;
-  int                          active_idx_                         = 0;
-  int                          mapped_slot_idx_                    = -1;
+  bool                         consumer_available_          = false;
+  bool                         shutdown_                    = false;
+  std::uint64_t                target_generation_           = 0;
+  std::uint64_t                session_epoch_               = 0;
+  std::uint64_t                image_identity_              = 0;
+  std::uint64_t                sequence_                    = 0;
+  std::uint64_t                last_composed_session_epoch_ = 0;
+  std::uint64_t                last_composed_request_id_    = 0;
+  std::uint64_t                composed_frame_count_        = 0;
+  std::uint64_t                dropped_stale_frame_count_   = 0;
+  int                          write_idx_                   = 1;
+  int                          active_idx_                  = 0;
+  int                          mapped_slot_idx_             = -1;
   std::array<Slot, kSlotCount> slots_{};
   std::deque<SizeRequest>      pending_requests_;
   std::deque<SizeRequest>      failed_requests_;

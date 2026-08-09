@@ -6,16 +6,15 @@
 // plot padding, normalized↔widget mapping, hit testing, and scene-geometry
 // construction without creating a QQuickWindow or GPU context.
 
-#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
+#include <gtest/gtest.h>
 
 #include <QPointF>
 #include <QRectF>
-
-#include <gtest/gtest.h>
-
 #include <cmath>
 #include <vector>
+
+#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
+#include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -31,7 +30,7 @@ TEST(EditorToneCurveGeometryTest, PlotRectUsesLegacyPadding) {
 TEST(EditorToneCurveGeometryTest, NormalizedWidgetRoundTrip) {
   const QRectF  plot = ToneCurvePlotRect(320, 240);
   const QPointF n(0.25, 0.75);
-  const QPointF w = ToneCurveToWidgetPoint(n, plot);
+  const QPointF w    = ToneCurveToWidgetPoint(n, plot);
   const QPointF back = ToneCurveToNormalizedPoint(w, plot);
   EXPECT_NEAR(back.x(), n.x(), 1e-6);
   EXPECT_NEAR(back.y(), n.y(), 1e-6);
@@ -43,20 +42,18 @@ TEST(EditorToneCurveGeometryTest, NormalizedWidgetRoundTrip) {
 }
 
 TEST(EditorToneCurveGeometryTest, HitTestPrefersNearestHandle) {
-  const QRectF plot = ToneCurvePlotRect(320, 240);
-  const std::vector<QPointF> points = {QPointF(0.0, 0.0), QPointF(0.5, 0.5),
-                                       QPointF(1.0, 1.0)};
-  const QPointF mid = ToneCurveToWidgetPoint(points[1], plot);
+  const QRectF               plot   = ToneCurvePlotRect(320, 240);
+  const std::vector<QPointF> points = {QPointF(0.0, 0.0), QPointF(0.5, 0.5), QPointF(1.0, 1.0)};
+  const QPointF              mid    = ToneCurveToWidgetPoint(points[1], plot);
   EXPECT_EQ(ToneCurveHitTestPoint(mid, points, plot), 1);
   EXPECT_EQ(ToneCurveHitTestPoint(mid + QPointF(3.0, -2.0), points, plot), 1);
   EXPECT_EQ(ToneCurveHitTestPoint(QPointF(0.0, 0.0), points, plot), -1);
 }
 
 TEST(EditorToneCurveGeometryTest, SceneGeometrySamplesHermiteAndHandles) {
-  const std::vector<QPointF> points = {QPointF(0.0, 0.0), QPointF(0.4, 0.6),
-                                       QPointF(1.0, 1.0)};
-  const auto g = BuildToneCurveSceneGeometry(points, 320, 240, /*active_index=*/1,
-                                             /*sample_count=*/64);
+  const std::vector<QPointF> points = {QPointF(0.0, 0.0), QPointF(0.4, 0.6), QPointF(1.0, 1.0)};
+  const auto                 g = BuildToneCurveSceneGeometry(points, 320, 240, /*active_index=*/1,
+                                                             /*sample_count=*/64);
   EXPECT_EQ(g.handles.size(), 3u);
   EXPECT_EQ(g.active_index, 1);
   EXPECT_EQ(static_cast<int>(g.curve_samples.size()), 65);
@@ -76,9 +73,9 @@ TEST(EditorToneCurveGeometryTest, SceneGeometrySamplesHermiteAndHandles) {
 }
 
 TEST(EditorToneCurveGeometryTest, LiftedBlackEndpointRaisesNearBlackOutput) {
-  const std::vector<QPointF> lifted = {QPointF(0.0, 0.2), QPointF(0.25, 0.25),
-                                       QPointF(0.75, 0.75), QPointF(1.0, 1.0)};
-  const auto cache = curve::BuildCurveHermiteCache(lifted);
+  const std::vector<QPointF> lifted = {QPointF(0.0, 0.2), QPointF(0.25, 0.25), QPointF(0.75, 0.75),
+                                       QPointF(1.0, 1.0)};
+  const auto                 cache  = curve::BuildCurveHermiteCache(lifted);
   EXPECT_GT(curve::EvaluateCurveHermite(0.10f, lifted, cache), 0.10f);
 }
 

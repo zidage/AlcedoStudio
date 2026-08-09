@@ -6,8 +6,8 @@
 
 #include <QCoreApplication>
 #include <QDesktopServices>
-#include <QUrl>
 #include <QStringList>
+#include <QUrl>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -23,17 +23,16 @@
 #include "ai/ai_rating.hpp"
 #include "image/image.hpp"
 #include "sleeve/storage.hpp"
-#include "ui/alcedo_main/album_backend/image_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
-#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 
 namespace alcedo::ui {
 
@@ -85,10 +84,10 @@ using json                                                      = nlohmann::json
     QT_TRANSLATE_NOOP("Alcedo", "Failed to save rating reason."),
 });
 
-constexpr const char* kManualAnnotationIdentity = "manual";
-constexpr const char* kManualAnnotationModel    = "user";
-constexpr const char* kDescribeTaskId           = "describe";
-constexpr const char* kScoreTaskId              = "rate";
+constexpr const char*           kManualAnnotationIdentity       = "manual";
+constexpr const char*           kManualAnnotationModel          = "user";
+constexpr const char*           kDescribeTaskId                 = "describe";
+constexpr const char*           kScoreTaskId                    = "rate";
 
 auto ToVariantIdList(const std::vector<sl_element_id_t>& ids) -> QVariantList {
   QVariantList out;
@@ -244,13 +243,9 @@ auto MakeDetailsRow(const QString& section, const QString& label, const QString&
 }
 
 auto MakeInspectionTile(const QString& id, const QString& label, const QString& value,
-                        const QString& detail = QString{}, bool editable = false)
-    -> QVariantMap {
-  return QVariantMap{{"id", id},
-                     {"label", label},
-                     {"value", value},
-                     {"detail", detail},
-                     {"editable", editable}};
+                        const QString& detail = QString{}, bool editable = false) -> QVariantMap {
+  return QVariantMap{
+      {"id", id}, {"label", label}, {"value", value}, {"detail", detail}, {"editable", editable}};
 }
 
 void AppendDetailsRow(QVariantList& rows, const QString& section, const QString& label,
@@ -403,9 +398,9 @@ auto BuildDetailsResult(const AlbumItem* item, const std::shared_ptr<Image>& ima
 
 auto BuildInspectionResult(const AlbumItem* item, const std::shared_ptr<Image>& image,
                            sl_element_id_t file_id, image_id_t image_id,
-                           const QString& semantic_tags,
+                           const QString&                      semantic_tags,
                            const std::optional<AiDescription>& description,
-                           const std::optional<AiRating>& rating_reason) -> QVariantMap {
+                           const std::optional<AiRating>&      rating_reason) -> QVariantMap {
   const json                metadata         = ParseExifDisplayJson(image);
   const uint32_t            width            = JsonUnsignedOrZero(metadata, "ImageWidth");
   const uint32_t            height           = JsonUnsignedOrZero(metadata, "ImageHeight");
@@ -418,8 +413,7 @@ auto BuildInspectionResult(const AlbumItem* item, const std::shared_ptr<Image>& 
   const QString aperture     = FormatFixed(JsonNumberOrZero(metadata, "Aperture"), 1, "f/");
   const QString shutter      = FormatShutterSpeed(metadata);
   const QString iso          = FormatUnsigned(JsonUnsignedOrZero(metadata, "ISO"));
-  const QString focal =
-      FormatFixed(JsonNumberOrZero(metadata, "FocalLength"), 0, QString{}, "mm");
+  const QString focal  = FormatFixed(JsonNumberOrZero(metadata, "FocalLength"), 0, QString{}, "mm");
   const int     rating = static_cast<int>(JsonUnsignedOrZero(metadata, "Rating"));
   QString       lens_value = DashIfEmpty(lens_model);
   if (focal != DashValue()) {
@@ -436,9 +430,9 @@ auto BuildInspectionResult(const AlbumItem* item, const std::shared_ptr<Image>& 
                                  QString::fromStdString(description->model_id_))
           : QString{};
 
-  const QString reasons =
-      rating_reason.has_value() ? QString::fromStdString(rating_reason->reasons_).trimmed()
-                                : QString{};
+  const QString reasons = rating_reason.has_value()
+                              ? QString::fromStdString(rating_reason->reasons_).trimmed()
+                              : QString{};
   const QString reason_identity =
       rating_reason.has_value()
           ? ComposeModelIdentity(QString::fromStdString(rating_reason->provider_id_),
@@ -449,50 +443,46 @@ auto BuildInspectionResult(const AlbumItem* item, const std::shared_ptr<Image>& 
   tiles.reserve(6);
   tiles.push_back(MakeInspectionTile(QStringLiteral("camera"), Tr("Camera"),
                                      DashIfEmpty(camera_model), DashIfEmpty(camera_make)));
-  tiles.push_back(MakeInspectionTile(QStringLiteral("lens"), Tr("Lens"), lens_value,
-                                     DashIfEmpty(lens_make)));
-  tiles.push_back(MakeInspectionTile(
-      QStringLiteral("exposure"), Tr("Aperture / Shutter"),
-      QStringLiteral("%1 · %2").arg(aperture, shutter)));
+  tiles.push_back(
+      MakeInspectionTile(QStringLiteral("lens"), Tr("Lens"), lens_value, DashIfEmpty(lens_make)));
+  tiles.push_back(MakeInspectionTile(QStringLiteral("exposure"), Tr("Aperture / Shutter"),
+                                     QStringLiteral("%1 · %2").arg(aperture, shutter)));
   tiles.push_back(MakeInspectionTile(QStringLiteral("iso"), Tr("ISO"), iso));
   tiles.push_back(MakeInspectionTile(QStringLiteral("description"), Tr("Description"),
                                      caption.isEmpty() ? Tr("No AI description yet") : caption,
                                      scene.isEmpty() ? description_identity : scene, true));
-  tiles.push_back(MakeInspectionTile(QStringLiteral("rating"), Tr("Rating"),
-                                     FormatRating(rating),
-                                     reasons.isEmpty() ? Tr("No rating reason yet") : reasons, true));
+  tiles.push_back(MakeInspectionTile(QStringLiteral("rating"), Tr("Rating"), FormatRating(rating),
+                                     reasons.isEmpty() ? Tr("No rating reason yet") : reasons,
+                                     true));
 
-  return QVariantMap{{"success", true},
-                     {"message", QString{}},
-                     {"elementId", static_cast<uint>(file_id)},
-                     {"fileId", static_cast<uint>(file_id)},
-                     {"imageId", static_cast<uint>(image_id)},
-                     {"title", ResolveTitle(item, image)},
-                     {"subtitle", ComposeSubtitle(metadata)},
-                     {"semanticTags", semantic_tags},
-                     {"dimensions", FormatDimensions(width, height)},
-                     {"aspectRatio", FormatAspectRatio(width, height)},
-                     {"capturedAt", ToDisplayText(JsonStringOrEmpty(metadata, "DateTimeString"))},
-                     {"sourceDirectory", source_directory.displayText},
-                     {"sourceDirectoryPath", source_directory.pathText},
-                     {"sourceDirectoryCanOpen", source_directory.canOpen},
-                     {"rating", rating},
-                     {"description", caption},
-                     {"descriptionScene", scene},
-                     {"descriptionProvider", description.has_value()
-                                                ? QString::fromStdString(description->provider_id_)
-                                                : QString{}},
-                     {"descriptionModelId", description.has_value()
-                                               ? QString::fromStdString(description->model_id_)
-                                               : QString{}},
-                     {"ratingReason", reasons},
-                     {"ratingReasonProvider", rating_reason.has_value()
-                                                  ? QString::fromStdString(rating_reason->provider_id_)
-                                                  : QString{}},
-                     {"ratingReasonModelId", rating_reason.has_value()
-                                                 ? QString::fromStdString(rating_reason->model_id_)
-                                                 : QString{}},
-                     {"tiles", tiles}};
+  return QVariantMap{
+      {"success", true},
+      {"message", QString{}},
+      {"elementId", static_cast<uint>(file_id)},
+      {"fileId", static_cast<uint>(file_id)},
+      {"imageId", static_cast<uint>(image_id)},
+      {"title", ResolveTitle(item, image)},
+      {"subtitle", ComposeSubtitle(metadata)},
+      {"semanticTags", semantic_tags},
+      {"dimensions", FormatDimensions(width, height)},
+      {"aspectRatio", FormatAspectRatio(width, height)},
+      {"capturedAt", ToDisplayText(JsonStringOrEmpty(metadata, "DateTimeString"))},
+      {"sourceDirectory", source_directory.displayText},
+      {"sourceDirectoryPath", source_directory.pathText},
+      {"sourceDirectoryCanOpen", source_directory.canOpen},
+      {"rating", rating},
+      {"description", caption},
+      {"descriptionScene", scene},
+      {"descriptionProvider",
+       description.has_value() ? QString::fromStdString(description->provider_id_) : QString{}},
+      {"descriptionModelId",
+       description.has_value() ? QString::fromStdString(description->model_id_) : QString{}},
+      {"ratingReason", reasons},
+      {"ratingReasonProvider",
+       rating_reason.has_value() ? QString::fromStdString(rating_reason->provider_id_) : QString{}},
+      {"ratingReasonModelId",
+       rating_reason.has_value() ? QString::fromStdString(rating_reason->model_id_) : QString{}},
+      {"tiles", tiles}};
 }
 
 void FillManualDescriptionIdentity(AiDescription& description) {
@@ -517,20 +507,16 @@ void FillManualRatingIdentity(AiRating& rating) {
 }  // namespace
 
 ImageController::ImageController(ProjectModule* project, LibraryModule* library,
-                                 FolderController* folders, IUiStatusSink* status,
-                                 QObject* parent)
-    : QObject(parent), project_(project), library_(library), folders_(folders),
-      status_(status) {}
+                                 FolderController* folders, IUiStatusSink* status, QObject* parent)
+    : QObject(parent), project_(project), library_(library), folders_(folders), status_(status) {}
 
 void ImageController::BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
-                                        EditorController* editor,
                                         SemanticGenerationController* semantic,
-                                        InteractionPolicyController* policy) {
-  stats_ = stats;
+                                        InteractionPolicyController*  policy) {
+  stats_         = stats;
   import_export_ = import_export;
-  editor_ = editor;
-  semantic_ = semantic;
-  policy_ = policy;
+  semantic_      = semantic;
+  policy_        = policy;
 }
 
 auto ImageController::SaveProjectSnapshot() -> bool {
@@ -817,11 +803,6 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     }
   }
 
-  if (editor_ && editor_->editor_active() &&
-      target_ids.contains(editor_->editor_element_id())) {
-    editor_->FinalizeEditorSession(true);
-  }
-
   auto proj         = ph.project();
   auto browse       = proj->GetAlbumBrowseService();
   auto image_pool   = proj->GetImagePoolService();
@@ -960,12 +941,9 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
 }
 
 auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantMap {
-  QVariantMap result{{"success", false},
-                     {"message", QString{}},
-                     {"title", QString{}},
-                     {"subtitle", QString{}},
-                     {"semanticTags", QString{}},
-                     {"rows", QVariantList{}}};
+  QVariantMap result{{"success", false},          {"message", QString{}},
+                     {"title", QString{}},        {"subtitle", QString{}},
+                     {"semanticTags", QString{}}, {"rows", QVariantList{}}};
 
   auto&       ph = project_->handler();
   if (ph.project_loading()) {
@@ -1011,8 +989,7 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
             ? (semantic_ ? semantic_->LabelDisplayText(resolved_file_id) : QString{})
             : QString{};
     return image_pool->Read<QVariantMap>(
-        resolved_image_id,
-        [item, semantic_tags](const std::shared_ptr<Image>& image) {
+        resolved_image_id, [item, semantic_tags](const std::shared_ptr<Image>& image) {
           return BuildDetailsResult(item, image, semantic_tags);
         });
   } catch (const std::exception&) {
@@ -1029,19 +1006,14 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
 }
 
 auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) -> QVariantMap {
-  QVariantMap result{{"success", false},
-                     {"message", QString{}},
-                     {"elementId", elementId},
-                     {"imageId", imageId},
-                     {"title", QString{}},
-                     {"subtitle", QString{}},
-                     {"semanticTags", QString{}},
-                     {"rating", 0},
-                     {"description", QString{}},
-                     {"ratingReason", QString{}},
+  QVariantMap result{{"success", false},          {"message", QString{}},
+                     {"elementId", elementId},    {"imageId", imageId},
+                     {"title", QString{}},        {"subtitle", QString{}},
+                     {"semanticTags", QString{}}, {"rating", 0},
+                     {"description", QString{}},  {"ratingReason", QString{}},
                      {"tiles", QVariantList{}}};
 
-  auto& ph = project_->handler();
+  auto&       ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
     status_->SetTaskState(msg, 0, false);
@@ -1082,10 +1054,10 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
   }
 
   try {
-    auto& ai = storage_svc->GetAiStore();
-    const std::optional<AiDescription> description = ai.GetActiveUnderstanding(resolved_file_id);
+    auto&                              ai            = storage_svc->GetAiStore();
+    const std::optional<AiDescription> description   = ai.GetActiveUnderstanding(resolved_file_id);
     const std::optional<AiRating>      rating_reason = ai.GetActiveRating(resolved_file_id);
-    const QString semantic_tags =
+    const QString                      semantic_tags =
         semantic_ ? semantic_->LabelDisplayText(resolved_file_id) : QString{};
     return image_pool->Read<QVariantMap>(
         resolved_image_id, [item, resolved_file_id, resolved_image_id, semantic_tags, description,
@@ -1275,7 +1247,7 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
 }
 
 auto ImageController::SetImageDescription(uint elementId, const QString& caption) -> QVariantMap {
-  QVariantMap result{{"success", false}, {"message", QString{}}, {"caption", QString{}}};
+  QVariantMap   result{{"success", false}, {"message", QString{}}, {"caption", QString{}}};
 
   const QString trimmed_caption = caption.trimmed();
   if (trimmed_caption.isEmpty()) {
@@ -1299,9 +1271,9 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
     return result;
   }
 
-  const auto raw_element_id = static_cast<sl_element_id_t>(elementId);
-  const auto* item = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
-  const auto file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
+  const auto  raw_element_id = static_cast<sl_element_id_t>(elementId);
+  const auto* item    = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
+  const auto  file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
   if (file_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
     status_->SetTaskState(msg, 0, false);
@@ -1318,11 +1290,11 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
   }
 
   try {
-    auto&         ai       = storage_svc->GetAiStore();
-    AiDescription updated  = ai.GetActiveUnderstanding(file_id).value_or(AiDescription{});
-    updated.file_id_       = file_id;
-    updated.caption_       = trimmed_caption.toStdString();
-    updated.active_        = true;
+    auto&         ai      = storage_svc->GetAiStore();
+    AiDescription updated = ai.GetActiveUnderstanding(file_id).value_or(AiDescription{});
+    updated.file_id_      = file_id;
+    updated.caption_      = trimmed_caption.toStdString();
+    updated.active_       = true;
     FillManualDescriptionIdentity(updated);
     if (!ai.UpsertUnderstanding(updated)) {
       const auto msg    = PL_TEXT("Failed to save image description.");
@@ -1331,8 +1303,8 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
     }
 
     stats_->RebuildThumbnailView();
-    bool      save_ok = SaveProjectSnapshot();
-    auto      msg     = PL_TEXT("Description saved.");
+    bool save_ok = SaveProjectSnapshot();
+    auto msg     = PL_TEXT("Description saved.");
     if (!save_ok) {
       msg = PL_TEXT("%1 Project state save failed.", msg.Render());
     }
@@ -1354,9 +1326,8 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
   }
 }
 
-auto ImageController::SetImageRatingReasons(uint elementId, const QString& reasons)
-    -> QVariantMap {
-  QVariantMap result{{"success", false}, {"message", QString{}}, {"reasons", QString{}}};
+auto ImageController::SetImageRatingReasons(uint elementId, const QString& reasons) -> QVariantMap {
+  QVariantMap   result{{"success", false}, {"message", QString{}}, {"reasons", QString{}}};
 
   const QString trimmed_reasons = reasons.trimmed();
   if (trimmed_reasons.isEmpty()) {
@@ -1380,9 +1351,9 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
     return result;
   }
 
-  const auto raw_element_id = static_cast<sl_element_id_t>(elementId);
-  const auto* item = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
-  const auto file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
+  const auto  raw_element_id = static_cast<sl_element_id_t>(elementId);
+  const auto* item    = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
+  const auto  file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
   if (file_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
     status_->SetTaskState(msg, 0, false);
@@ -1456,20 +1427,19 @@ void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rat
     return;
   }
   try {
-    image_pool->Write_NoSync<void>(target.image_id_,
-                                   [rating](const std::shared_ptr<Image>& image) {
-                                     if (!image) {
-                                       return;
-                                     }
-                                     ExifDisplayMetaData metadata;
-                                     if (image->has_exif_display_.load()) {
-                                       metadata = image->exif_display_;
-                                     } else if (image->has_exif_json_.load()) {
-                                       metadata.FromJson(image->exif_json_);
-                                     }
-                                     metadata.rating_ = ExifDisplayMetaData::NormalizeRating(rating);
-                                     image->SetExifDisplayMetaData(std::move(metadata));
-                                   });
+    image_pool->Write_NoSync<void>(target.image_id_, [rating](const std::shared_ptr<Image>& image) {
+      if (!image) {
+        return;
+      }
+      ExifDisplayMetaData metadata;
+      if (image->has_exif_display_.load()) {
+        metadata = image->exif_display_;
+      } else if (image->has_exif_json_.load()) {
+        metadata.FromJson(image->exif_json_);
+      }
+      metadata.rating_ = ExifDisplayMetaData::NormalizeRating(rating);
+      image->SetExifDisplayMetaData(std::move(metadata));
+    });
     for (auto& item : library_->view_state().all_images_) {
       if ((target.element_id_ != 0 && item.element_id == target.element_id_) ||
           (target.element_id_ == 0 && item.image_id == target.image_id_)) {
@@ -1505,14 +1475,11 @@ void ImageController::FlushPendingStarRatings() {
   stats_->RefreshStats();
 }
 
-
 auto ImageController::GetImageRatingReasons(uint elementId) -> QVariantMap {
-  QVariantMap result{{QStringLiteral("hasReasons"), false},
-                     {QStringLiteral("reasons"), QString{}},
-                     {QStringLiteral("provider"), QString{}},
-                     {QStringLiteral("modelId"), QString{}},
-                     {QStringLiteral("rubricId"), QString{}},
-                     {QStringLiteral("rubricVersion"), QString{}}};
+  QVariantMap result{
+      {QStringLiteral("hasReasons"), false},   {QStringLiteral("reasons"), QString{}},
+      {QStringLiteral("provider"), QString{}}, {QStringLiteral("modelId"), QString{}},
+      {QStringLiteral("rubricId"), QString{}}, {QStringLiteral("rubricVersion"), QString{}}};
   if (!project_) {
     return result;
   }
@@ -1520,16 +1487,15 @@ auto ImageController::GetImageRatingReasons(uint elementId) -> QVariantMap {
   if (!project) {
     return result;
   }
-  const auto row =
-      project->GetStorage()->GetAiStore().GetActiveRating(elementId);
+  const auto row = project->GetStorage()->GetAiStore().GetActiveRating(elementId);
   if (!row.has_value() || row->reasons_.empty()) {
     return result;
   }
-  result[QStringLiteral("hasReasons")] = true;
-  result[QStringLiteral("reasons")] = QString::fromStdString(row->reasons_);
-  result[QStringLiteral("provider")] = QString::fromStdString(row->provider_id_);
-  result[QStringLiteral("modelId")] = QString::fromStdString(row->model_id_);
-  result[QStringLiteral("rubricId")] = QString::fromStdString(row->rubric_id_);
+  result[QStringLiteral("hasReasons")]    = true;
+  result[QStringLiteral("reasons")]       = QString::fromStdString(row->reasons_);
+  result[QStringLiteral("provider")]      = QString::fromStdString(row->provider_id_);
+  result[QStringLiteral("modelId")]       = QString::fromStdString(row->model_id_);
+  result[QStringLiteral("rubricId")]      = QString::fromStdString(row->rubric_id_);
   result[QStringLiteral("rubricVersion")] = QString::fromStdString(row->rubric_version_);
   return result;
 }
@@ -1547,16 +1513,15 @@ auto ImageController::GetImageDescription(uint elementId) -> QVariantMap {
   if (!project) {
     return result;
   }
-  const auto row =
-      project->GetStorage()->GetAiStore().GetActiveUnderstanding(elementId);
+  const auto row = project->GetStorage()->GetAiStore().GetActiveUnderstanding(elementId);
   if (!row.has_value() || row->caption_.empty()) {
     return result;
   }
   result[QStringLiteral("hasDescription")] = true;
-  result[QStringLiteral("caption")] = QString::fromStdString(row->caption_);
-  result[QStringLiteral("scene")] = QString::fromStdString(row->scene_);
-  result[QStringLiteral("provider")] = QString::fromStdString(row->provider_id_);
-  result[QStringLiteral("modelId")] = QString::fromStdString(row->model_id_);
+  result[QStringLiteral("caption")]        = QString::fromStdString(row->caption_);
+  result[QStringLiteral("scene")]          = QString::fromStdString(row->scene_);
+  result[QStringLiteral("provider")]       = QString::fromStdString(row->provider_id_);
+  result[QStringLiteral("modelId")]        = QString::fromStdString(row->model_id_);
   return result;
 }
 
@@ -1569,7 +1534,7 @@ bool ImageController::OpenDirectoryInFileManager(const QString& dirUrlOrPath) {
     return false;
   }
   const std::filesystem::path dir_path = dir_path_opt.value().lexically_normal();
-  std::error_code ec;
+  std::error_code             ec;
   if (!std::filesystem::exists(dir_path, ec) || ec ||
       !std::filesystem::is_directory(dir_path, ec) || ec) {
     if (status_) {

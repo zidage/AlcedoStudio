@@ -6,15 +6,14 @@
 // padding, normalized ↔ widget round-trip, and clamp-to-unit-circle behavior
 // match the legacy CdlTrackballDiscWidget coordinate conventions.
 
-#include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/color_wheel.hpp"
+#include <gtest/gtest.h>
 
 #include <QPointF>
 #include <QRectF>
-
-#include <gtest/gtest.h>
-
 #include <cmath>
+
+#include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_wheel.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -32,7 +31,7 @@ TEST(EditorCdlTrackballGeometryTest, DiscRectIsCenteredSquareWithInset) {
 }
 
 TEST(EditorCdlTrackballGeometryTest, NormalizedWidgetRoundTripPreservesInteriorPoints) {
-  const QRectF disc = CdlTrackballDiscRect(180.0, 180.0);
+  const QRectF  disc      = CdlTrackballDiscRect(180.0, 180.0);
   const QPointF samples[] = {
       QPointF(0.0, 0.0),
       QPointF(0.5, 0.0),
@@ -40,7 +39,7 @@ TEST(EditorCdlTrackballGeometryTest, NormalizedWidgetRoundTripPreservesInteriorP
       QPointF(-0.3, 0.4),
   };
   for (const QPointF& n : samples) {
-    const QPointF w = CdlTrackballToWidgetPoint(n, disc);
+    const QPointF w    = CdlTrackballToWidgetPoint(n, disc);
     const QPointF back = CdlTrackballToNormalizedPoint(w, disc);
     EXPECT_TRUE(Nearly(back.x(), n.x())) << n.x();
     EXPECT_TRUE(Nearly(back.y(), n.y())) << n.y();
@@ -66,8 +65,7 @@ TEST(EditorCdlTrackballGeometryTest, DiscToCdlDeltaIsZeroAtCenter) {
 }
 
 TEST(EditorCdlTrackballGeometryTest, DiscToCdlDeltaProducesChromaticOffsetOffCenter) {
-  const auto delta =
-      color_wheel::DiscToCdlDelta(QPointF(0.8, 0.0), color_wheel::kStrengthDefault);
+  const auto  delta = color_wheel::DiscToCdlDelta(QPointF(0.8, 0.0), color_wheel::kStrengthDefault);
   const float abs_sum = std::abs(delta[0]) + std::abs(delta[1]) + std::abs(delta[2]);
   EXPECT_GT(abs_sum, 1e-4f);
 }

@@ -7,11 +7,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QVariantMap>
-
 #include <algorithm>
 #include <cmath>
 
-#include "ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -117,9 +116,7 @@ auto EditorColorTempModel::cctSliderPos() const -> int {
   return color_temp::CctToSliderPos(static_cast<float>(cct_));
 }
 
-void EditorColorTempModel::setCctSliderPos(int pos) {
-  setCct(color_temp::SliderPosToCct(pos));
-}
+void EditorColorTempModel::setCctSliderPos(int pos) { setCct(color_temp::SliderPosToCct(pos)); }
 
 void EditorColorTempModel::selectMode(int index) {
   const int clamped = index == 1 ? 1 : 0;
@@ -157,7 +154,7 @@ void EditorColorTempModel::updateCctDrag(double kelvin) {
   if (std::abs(next - cct_) < 1e-6) {
     return;
   }
-  cct_ = next;
+  cct_          = next;
   cctDragMoved_ = true;
   emit cctChanged();
   submitInteractive();
@@ -197,7 +194,7 @@ void EditorColorTempModel::updateTintDrag(double value) {
   if (std::abs(next - tint_) < 1e-6) {
     return;
   }
-  tint_ = next;
+  tint_          = next;
   tintDragMoved_ = true;
   emit tintChanged();
   submitInteractive();
@@ -277,8 +274,8 @@ void EditorColorTempModel::loadFromParams(const QString& mode, double cct, doubl
   if (dragActive_) {
     return;
   }
-  supported_  = supported;
-  modeIndex_  = ModeIndexFromString(mode);
+  supported_ = supported;
+  modeIndex_ = ModeIndexFromString(mode);
   // loadFromParams only has one display pair: treat it as the active mode values.
   // When as_shot, also refresh the baseline; when custom, keep prior as-shot cache
   // unless loadFromOperatorParams supplies explicit as_shot_*.
@@ -301,8 +298,8 @@ void EditorColorTempModel::loadFromOperatorParams(const QVariantMap& params) {
     return;
   }
   // Accept either the full GetParams root {"color_temp":{...}} or the inner object.
-  QVariantMap ct = params;
-  const auto nested = params.value(QStringLiteral("color_temp"));
+  QVariantMap ct     = params;
+  const auto  nested = params.value(QStringLiteral("color_temp"));
   if (nested.canConvert<QVariantMap>()) {
     ct = nested.toMap();
   }
@@ -310,12 +307,11 @@ void EditorColorTempModel::loadFromOperatorParams(const QVariantMap& params) {
     return;
   }
 
-  const QString mode =
-      ct.value(QStringLiteral("mode"), QStringLiteral("as_shot")).toString();
-  modeIndex_ = ModeIndexFromString(mode);
+  const QString mode = ct.value(QStringLiteral("mode"), QStringLiteral("as_shot")).toString();
+  modeIndex_         = ModeIndexFromString(mode);
 
   // Image-local as-shot baseline (GetParams writes as_shot_*; accept resolved_* legacy).
-  auto read_double = [&](const QString& key, const QString& alt, double fallback) -> double {
+  auto read_double   = [&](const QString& key, const QString& alt, double fallback) -> double {
     if (ct.contains(key) && ct.value(key).isValid()) {
       return ct.value(key).toDouble();
     }
@@ -346,8 +342,8 @@ void EditorColorTempModel::loadFromOperatorParams(const QVariantMap& params) {
         read_double(QStringLiteral("as_shot_cct"), QStringLiteral("cct"), asShotCct_);
     const double display_tint =
         read_double(QStringLiteral("as_shot_tint"), QStringLiteral("tint"), asShotTint_);
-    cct_  = ClampCct(display_cct);
-    tint_ = ClampTint(display_tint);
+    cct_        = ClampCct(display_cct);
+    tint_       = ClampTint(display_tint);
     asShotCct_  = cct_;
     asShotTint_ = tint_;
   }

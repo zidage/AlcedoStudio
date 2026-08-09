@@ -173,6 +173,8 @@ ApplicationWindow {
     // quitting during Saving aborts the checkpoint.
     property bool allowApplicationClose: false
     property bool waitingEditorCloseSave: false
+    property string editorCloseSessionState: appModules.editorSession
+                                             ? appModules.editorSession.sessionState : ""
 
     function editorCloseNeedsConfirm() {
         if (root.automationModeEnabled || root.allowApplicationClose) {
@@ -278,10 +280,8 @@ ApplicationWindow {
         root.abortEditorCloseSave(session.lastError)
     }
 
-    Connections {
-        target: appModules.editorSession
-        enabled: root.waitingEditorCloseSave
-        function onStateChanged() {
+    onEditorCloseSessionStateChanged: {
+        if (root.waitingEditorCloseSave) {
             root.pollEditorCloseSave()
         }
     }

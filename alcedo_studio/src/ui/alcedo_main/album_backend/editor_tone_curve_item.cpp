@@ -10,34 +10,33 @@
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGNode>
-
 #include <algorithm>
 #include <cmath>
 
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
+#include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui {
 namespace {
 
 // Tight plot insets — the previous 22/12/14/24 left too much dead chrome and
 // made the interactive area feel cramped in the side panel.
-constexpr qreal kPlotLeft   = 8.0;
-constexpr qreal kPlotTop    = 8.0;
-constexpr qreal kPlotRight  = 8.0;
-constexpr qreal kPlotBottom = 8.0;
-constexpr int   kHandleFan  = 20;
-constexpr qreal kPi         = 3.14159265358979323846;
+constexpr qreal kPlotLeft       = 8.0;
+constexpr qreal kPlotTop        = 8.0;
+constexpr qreal kPlotRight      = 8.0;
+constexpr qreal kPlotBottom     = 8.0;
+constexpr int   kHandleFan      = 20;
+constexpr qreal kPi             = 3.14159265358979323846;
 // GL lineWidth is ignored on modern core profiles; draw the curve as a solid
 // triangle ribbon instead (half-width in item px).
 constexpr qreal kCurveHalfWidth = 1.75;
 constexpr qreal kHitRadius      = 14.0;
 // Pointer gain < 1: mouse motion is decelerated for finer curve control.
 // Full plot drag maps to this fraction of normalized [0,1] (≈3× slower than 1:1).
-constexpr qreal kPointerGain = 0.32;
+constexpr qreal kPointerGain    = 0.32;
 
-void FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
-                       QSGGeometry::DrawingMode mode, qreal line_width) {
+void            FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
+                                  QSGGeometry::DrawingMode mode, qreal line_width) {
   geometry->allocate(static_cast<int>(points.size()));
   geometry->setDrawingMode(mode);
   geometry->setLineWidth(static_cast<float>(line_width));
@@ -77,10 +76,10 @@ void AppendStrokeRibbon(std::vector<QPointF>& tris, const std::vector<QPointF>& 
     return;
   }
   for (size_t i = 0; i + 1 < samples.size(); ++i) {
-    const QPointF a = samples[i];
-    const QPointF b = samples[i + 1];
-    const qreal   dx = b.x() - a.x();
-    const qreal   dy = b.y() - a.y();
+    const QPointF a   = samples[i];
+    const QPointF b   = samples[i + 1];
+    const qreal   dx  = b.x() - a.x();
+    const qreal   dy  = b.y() - a.y();
     const qreal   len = std::hypot(dx, dy);
     if (len < 1.0e-6) {
       continue;
@@ -112,9 +111,9 @@ void UpsertSolidNode(QSGNode* root, QSGGeometryNode*& slot, const std::vector<QP
   }
 
   if (!slot) {
-    slot           = new QSGGeometryNode;
-    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
-                                     static_cast<int>(points.size()));
+    slot = new QSGGeometryNode;
+    auto* geometry =
+        new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), static_cast<int>(points.size()));
     slot->setGeometry(geometry);
     slot->setFlag(QSGNode::OwnsGeometry);
     auto* material = new QSGFlatColorMaterial;
@@ -151,8 +150,9 @@ auto ToneCurveToNormalizedPoint(const QPointF& widget_point, const QRectF& plot)
   return QPointF(nx, ny);
 }
 
-auto ToneCurveHitTestPoint(const QPointF& widget_point, const std::vector<QPointF>& normalized_points,
-                           const QRectF& plot, qreal hit_radius) -> int {
+auto ToneCurveHitTestPoint(const QPointF&              widget_point,
+                           const std::vector<QPointF>& normalized_points, const QRectF& plot,
+                           qreal hit_radius) -> int {
   const qreal hit_radius_sq = hit_radius * hit_radius;
   for (int i = static_cast<int>(normalized_points.size()) - 1; i >= 0; --i) {
     const QPointF p  = ToneCurveToWidgetPoint(normalized_points[static_cast<size_t>(i)], plot);
@@ -335,9 +335,8 @@ void EditorToneCurveItem::bindModel(EditorToneCurveModel* model) {
 void EditorToneCurveItem::onModelPointsChanged() { rebuildGeometry(); }
 
 void EditorToneCurveItem::rebuildGeometry() {
-  const auto& points =
-      model_ ? model_->controlPoints() : curve::DefaultCurveControlPoints();
-  const int active = model_ ? model_->activeIndex() : -1;
+  const auto& points = model_ ? model_->controlPoints() : curve::DefaultCurveControlPoints();
+  const int   active = model_ ? model_->activeIndex() : -1;
   last_geometry_ =
       BuildToneCurveSceneGeometry(points, width(), height(), active, /*sample_count=*/240);
   ++geometry_revision_;
@@ -364,8 +363,7 @@ auto EditorToneCurveItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
 
   std::vector<QPointF> bg_tris;
   AppendRect(bg_tris, QRectF(0, 0, width(), height()));
-  UpsertSolidNode(root, root->background, bg_tris, background_color_,
-                  QSGGeometry::DrawTriangles);
+  UpsertSolidNode(root, root->background, bg_tris, background_color_, QSGGeometry::DrawTriangles);
 
   std::vector<QPointF> plot_tris;
   AppendRect(plot_tris, last_geometry_.plot_rect);
@@ -410,8 +408,8 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
 
   const QPointF pos = event->position();
   if (event->button() == Qt::RightButton) {
-    const int hit = ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect,
-                                          kHitRadius);
+    const int hit =
+        ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect, kHitRadius);
     if (hit > 0 && hit + 1 < model_->pointCount()) {
       model_->removePoint(hit);
       dragging_ = false;
@@ -427,13 +425,13 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
     return;
   }
 
-  const int hit = ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect,
-                                        kHitRadius);
+  const int hit =
+      ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect, kHitRadius);
   if (hit >= 0) {
     model_->beginDrag(hit);
-    dragging_                 = true;
-    drag_origin_widget_       = pos;
-    drag_origin_normalized_   = model_->controlPoints()[static_cast<size_t>(hit)];
+    dragging_               = true;
+    drag_origin_widget_     = pos;
+    drag_origin_normalized_ = model_->controlPoints()[static_cast<size_t>(hit)];
     // Keep the grab so a parent Flickable cannot steal vertical motion and
     // scroll the tone panel while shaping the curve.
     setKeepMouseGrab(true);

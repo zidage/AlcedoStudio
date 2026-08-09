@@ -6,30 +6,29 @@
 
 #include <QCursor>
 #include <QMouseEvent>
+#include <QQuickWindow>
 #include <QSGFlatColorMaterial>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGNode>
 #include <QSGSimpleTextureNode>
-#include <QQuickWindow>
-
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 
-#include "ui/alcedo_main/editor_dialog/modules/color_wheel.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_wheel.hpp"
 
 namespace alcedo::ui {
 namespace {
 
-constexpr qreal kDiscInset = 3.0;
-constexpr int   kHandleFan = 48;
-constexpr qreal kPi        = 3.14159265358979323846;
+constexpr qreal kDiscInset  = 3.0;
+constexpr int   kHandleFan  = 48;
+constexpr qreal kPi         = 3.14159265358979323846;
 // Soft edge width in supersampled pixels for anti-aliased disc perimeter.
 constexpr float kSoftEdgePx = 1.75f;
 
-void FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
-                       QSGGeometry::DrawingMode mode, qreal line_width) {
+void            FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
+                                  QSGGeometry::DrawingMode mode, qreal line_width) {
   geometry->allocate(static_cast<int>(points.size()));
   geometry->setDrawingMode(mode);
   geometry->setLineWidth(static_cast<float>(line_width));
@@ -73,9 +72,9 @@ void UpsertSolidNode(QSGNode* root, QSGGeometryNode*& slot, const std::vector<QP
     return;
   }
   if (!slot) {
-    slot           = new QSGGeometryNode;
-    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
-                                     static_cast<int>(points.size()));
+    slot = new QSGGeometryNode;
+    auto* geometry =
+        new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), static_cast<int>(points.size()));
     slot->setGeometry(geometry);
     slot->setFlag(QSGNode::OwnsGeometry);
     auto* material = new QSGFlatColorMaterial;
@@ -120,13 +119,13 @@ auto BuildWheelImage(int size) -> QImage {
       if (h < 0.0f) {
         h += 1.0f;
       }
-      const float sat           = std::clamp(r, 0.0f, 1.0f);
-      const QColor color        = QColor::fromHsvF(h, sat, 1.0f);
-      const int    a            = static_cast<int>(std::lround(alpha * 255.0f));
-      const int    pr           = (color.red() * a + 127) / 255;
-      const int    pg           = (color.green() * a + 127) / 255;
-      const int    pb           = (color.blue() * a + 127) / 255;
-      row[x]                    = qRgba(pr, pg, pb, a);
+      const float  sat   = std::clamp(r, 0.0f, 1.0f);
+      const QColor color = QColor::fromHsvF(h, sat, 1.0f);
+      const int    a     = static_cast<int>(std::lround(alpha * 255.0f));
+      const int    pr    = (color.red() * a + 127) / 255;
+      const int    pg    = (color.green() * a + 127) / 255;
+      const int    pb    = (color.blue() * a + 127) / 255;
+      row[x]             = qRgba(pr, pg, pb, a);
     }
   }
   return image;
@@ -160,11 +159,11 @@ auto CdlTrackballToNormalizedPoint(const QPointF& widget_point, const QRectF& di
 }
 
 struct EditorCdlTrackballItem::DiscRootNode : public QSGNode {
-  QSGSimpleTextureNode* texture = nullptr;
-  QSGGeometryNode*      rim     = nullptr;
-  QSGGeometryNode*      cross   = nullptr;
-  QSGGeometryNode*      handle  = nullptr;
-  QSGGeometryNode*      outline = nullptr;
+  QSGSimpleTextureNode* texture       = nullptr;
+  QSGGeometryNode*      rim           = nullptr;
+  QSGGeometryNode*      cross         = nullptr;
+  QSGGeometryNode*      handle        = nullptr;
+  QSGGeometryNode*      outline       = nullptr;
   QSGTexture*           owned_texture = nullptr;
 
   ~DiscRootNode() override {
@@ -271,9 +270,8 @@ void EditorCdlTrackballItem::bindModel(EditorCdlTrackballModel* model) {
           &EditorCdlTrackballItem::onModelWheelChanged);
   connect(model_, &EditorCdlTrackballModel::gainChanged, this,
           &EditorCdlTrackballItem::onModelWheelChanged);
-  connect(model_, &EditorCdlTrackballModel::enabledChanged, this, [this]() {
-    setEnabled(model_ ? model_->enabled() : true);
-  });
+  connect(model_, &EditorCdlTrackballModel::enabledChanged, this,
+          [this]() { setEnabled(model_ ? model_->enabled() : true); });
   setEnabled(model_->enabled());
 }
 
@@ -330,8 +328,8 @@ auto EditorCdlTrackballItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeD
   }
   if (window() && !wheel_cache_.isNull()) {
     delete root->owned_texture;
-    root->owned_texture = window()->createTextureFromImage(
-        wheel_cache_, QQuickWindow::TextureHasAlphaChannel);
+    root->owned_texture =
+        window()->createTextureFromImage(wheel_cache_, QQuickWindow::TextureHasAlphaChannel);
     root->texture->setTexture(root->owned_texture);
     root->texture->setRect(last_disc_rect_);
     root->texture->setFiltering(QSGTexture::Linear);
@@ -358,8 +356,8 @@ auto EditorCdlTrackballItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeD
   std::vector<QPointF> outline_segs;
   AppendRing(outline_segs,
              QRectF(last_handle_point_.x() - 9.5, last_handle_point_.y() - 9.5, 19.0, 19.0), 48);
-  UpsertSolidNode(root, root->outline, outline_segs, handle_outline_color_,
-                  QSGGeometry::DrawLines, 1.0);
+  UpsertSolidNode(root, root->outline, outline_segs, handle_outline_color_, QSGGeometry::DrawLines,
+                  1.0);
 
   return root;
 }

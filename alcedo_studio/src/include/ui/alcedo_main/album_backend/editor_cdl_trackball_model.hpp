@@ -4,15 +4,13 @@
 
 #pragma once
 
+#include <QPointF>
+#include <QString>
 #include <array>
 #include <optional>
 
-#include <QPointF>
-#include <QString>
-
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/color_wheel.hpp"
-#include "ui/alcedo_main/editor_dialog/state.hpp"
+#include "ui/alcedo_main/editor_support/cdl_wheel_state.hpp"
 
 namespace alcedo::ui {
 
@@ -50,48 +48,47 @@ class EditorCdlTrackballModel : public EditorAdjustmentModelBase {
 
   explicit EditorCdlTrackballModel(QObject* parent = nullptr);
 
-  [[nodiscard]] auto liftX() const -> double { return lift_.disc_position_.x(); }
-  [[nodiscard]] auto liftY() const -> double { return lift_.disc_position_.y(); }
-  [[nodiscard]] auto liftMaster() const -> double { return lift_.master_offset_; }
-  [[nodiscard]] auto liftMasterUi() const -> int;
-  [[nodiscard]] auto liftDeltaText() const -> QString;
+  [[nodiscard]] auto                liftX() const -> double { return lift_.disc_position_.x(); }
+  [[nodiscard]] auto                liftY() const -> double { return lift_.disc_position_.y(); }
+  [[nodiscard]] auto                liftMaster() const -> double { return lift_.master_offset_; }
+  [[nodiscard]] auto                liftMasterUi() const -> int;
+  [[nodiscard]] auto                liftDeltaText() const -> QString;
 
-  [[nodiscard]] auto gammaX() const -> double { return gamma_.disc_position_.x(); }
-  [[nodiscard]] auto gammaY() const -> double { return gamma_.disc_position_.y(); }
-  [[nodiscard]] auto gammaMaster() const -> double { return gamma_.master_offset_; }
-  [[nodiscard]] auto gammaMasterUi() const -> int;
-  [[nodiscard]] auto gammaDeltaText() const -> QString;
+  [[nodiscard]] auto                gammaX() const -> double { return gamma_.disc_position_.x(); }
+  [[nodiscard]] auto                gammaY() const -> double { return gamma_.disc_position_.y(); }
+  [[nodiscard]] auto                gammaMaster() const -> double { return gamma_.master_offset_; }
+  [[nodiscard]] auto                gammaMasterUi() const -> int;
+  [[nodiscard]] auto                gammaDeltaText() const -> QString;
 
-  [[nodiscard]] auto gainX() const -> double { return gain_.disc_position_.x(); }
-  [[nodiscard]] auto gainY() const -> double { return gain_.disc_position_.y(); }
-  [[nodiscard]] auto gainMaster() const -> double { return gain_.master_offset_; }
-  [[nodiscard]] auto gainMasterUi() const -> int;
-  [[nodiscard]] auto gainDeltaText() const -> QString;
+  [[nodiscard]] auto                gainX() const -> double { return gain_.disc_position_.x(); }
+  [[nodiscard]] auto                gainY() const -> double { return gain_.disc_position_.y(); }
+  [[nodiscard]] auto                gainMaster() const -> double { return gain_.master_offset_; }
+  [[nodiscard]] auto                gainMasterUi() const -> int;
+  [[nodiscard]] auto                gainDeltaText() const -> QString;
 
-  [[nodiscard]] auto dragActive() const -> bool { return dragActive_; }
+  [[nodiscard]] auto                dragActive() const -> bool { return dragActive_; }
 
   /// Plain load setters. Do not submit.
-  Q_INVOKABLE void setWheelDisc(const QString& wheel, double x, double y);
-  Q_INVOKABLE void setWheelMaster(const QString& wheel, double master);
-  Q_INVOKABLE void setWheelMasterUi(const QString& wheel, int ui_value);
+  Q_INVOKABLE void                  setWheelDisc(const QString& wheel, double x, double y);
+  Q_INVOKABLE void                  setWheelMaster(const QString& wheel, double master);
+  Q_INVOKABLE void                  setWheelMasterUi(const QString& wheel, int ui_value);
 
-  Q_INVOKABLE void beginDiscDrag(const QString& wheel);
-  Q_INVOKABLE void updateDiscDrag(const QString& wheel, double x, double y);
-  Q_INVOKABLE void finishDiscDrag();
+  Q_INVOKABLE void                  beginDiscDrag(const QString& wheel);
+  Q_INVOKABLE void                  updateDiscDrag(const QString& wheel, double x, double y);
+  Q_INVOKABLE void                  finishDiscDrag();
 
-  Q_INVOKABLE void beginMasterDrag(const QString& wheel);
-  Q_INVOKABLE void updateMasterDragUi(const QString& wheel, int ui_value);
-  Q_INVOKABLE void finishMasterDrag();
+  Q_INVOKABLE void                  beginMasterDrag(const QString& wheel);
+  Q_INVOKABLE void                  updateMasterDragUi(const QString& wheel, int ui_value);
+  Q_INVOKABLE void                  finishMasterDrag();
 
   /// Double-click / reset affordance for one wheel (disc + master).
-  Q_INVOKABLE void resetWheel(const QString& wheel);
-  Q_INVOKABLE void resetAll();
+  Q_INVOKABLE void                  resetWheel(const QString& wheel);
+  Q_INVOKABLE void                  resetAll();
   [[nodiscard]] Q_INVOKABLE QString paramsJson() const;
   [[nodiscard]] Q_INVOKABLE QString wheelDeltaText(const QString& wheel) const;
 
   /// C++ load path used by tests and snapshot reload.
-  void setWheels(const CdlWheelState& lift, const CdlWheelState& gamma,
-                 const CdlWheelState& gain);
+  void setWheels(const CdlWheelState& lift, const CdlWheelState& gamma, const CdlWheelState& gain);
   [[nodiscard]] auto liftWheel() const -> const CdlWheelState& { return lift_; }
   [[nodiscard]] auto gammaWheel() const -> const CdlWheelState& { return gamma_; }
   [[nodiscard]] auto gainWheel() const -> const CdlWheelState& { return gain_; }
@@ -105,28 +102,28 @@ class EditorCdlTrackballModel : public EditorAdjustmentModelBase {
 
  private:
   [[nodiscard]] static auto ParseWheelId(const QString& wheel) -> std::optional<WheelId>;
-  [[nodiscard]] auto wheelState(WheelId id) -> CdlWheelState&;
-  [[nodiscard]] auto wheelState(WheelId id) const -> const CdlWheelState&;
-  void recomputeDerived(WheelId id);
-  void emitWheel(WheelId id);
-  void applyDisc(WheelId id, double x, double y);
-  void applyMasterUi(WheelId id, int ui_value);
-  void submitInteractive();
-  void submitSettled();
-  [[nodiscard]] auto buildParamsJson() const -> QString;
+  [[nodiscard]] auto        wheelState(WheelId id) -> CdlWheelState&;
+  [[nodiscard]] auto        wheelState(WheelId id) const -> const CdlWheelState&;
+  void                      recomputeDerived(WheelId id);
+  void                      emitWheel(WheelId id);
+  void                      applyDisc(WheelId id, double x, double y);
+  void                      applyMasterUi(WheelId id, int ui_value);
+  void                      submitInteractive();
+  void                      submitSettled();
+  [[nodiscard]] auto        buildParamsJson() const -> QString;
   [[nodiscard]] static auto addUnity(WheelId id) -> bool;
   [[nodiscard]] static auto invertDelta(WheelId id) -> bool;
 
-  CdlWheelState lift_  = DefaultLiftWheelState();
-  CdlWheelState gamma_ = DefaultGammaGainWheelState();
-  CdlWheelState gain_  = DefaultGammaGainWheelState();
+  CdlWheelState             lift_           = DefaultLiftWheelState();
+  CdlWheelState             gamma_          = DefaultGammaGainWheelState();
+  CdlWheelState             gain_           = DefaultGammaGainWheelState();
 
-  bool    dragActive_ = false;
-  WheelId dragWheel_  = WheelId::Lift;
-  bool    draggingDisc_ = false;
-  bool    draggingMaster_ = false;
+  bool                      dragActive_     = false;
+  WheelId                   dragWheel_      = WheelId::Lift;
+  bool                      draggingDisc_   = false;
+  bool                      draggingMaster_ = false;
   /// True once updateDisc/Master changed state in the open gesture.
-  bool    dragMoved_ = false;
+  bool                      dragMoved_      = false;
 };
 
 }  // namespace alcedo::ui

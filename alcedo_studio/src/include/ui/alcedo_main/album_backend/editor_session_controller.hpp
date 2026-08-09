@@ -32,13 +32,10 @@ class InteractionPolicyController;
 
 namespace alcedo::ui {
 
-class EditorController;
-
 /// QML-facing editor session facade used by workspace routing.
 ///
 /// Phase 1B owns route/session identity and filmstrip shell preferences for the
-/// unified QML editor workspace. It does not open the legacy modal dialog; that
-/// path remains on EditorController until the cutover phase removes it.
+/// unified QML editor workspace.
 ///
 /// Phase 3-Fix / 5C holds the production presentation viewport and resolves its
 /// `DirectFrameSink` so pipeline code can attach without QML calling storage or
@@ -119,9 +116,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(QVariantMap lastHistoryResult READ last_history_result NOTIFY HistoryOperationFinished)
 
  public:
-  explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
-  EditorSessionController(EditorController* editor, alcedo::IEditorSessionBackend* session_backend,
-                          QObject* parent = nullptr);
+  explicit EditorSessionController(QObject* parent = nullptr);
+  EditorSessionController(alcedo::IEditorSessionBackend* session_backend,
+                          QObject*                       parent = nullptr);
   ~EditorSessionController() override;
 
   void                  SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
@@ -152,7 +149,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto    history_snapshot() const -> alcedo::EditorHistorySnapshot;
   [[nodiscard]] auto    actions() -> EditorActionAvailabilityModel* { return &actions_; }
 
-  [[nodiscard]] bool presentation_viewport_bound() const {
+  [[nodiscard]] bool    presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
   // Phase 5D: true when the coordinator has in-flight/pending render work.
@@ -296,7 +293,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto       NormalizeHistoryPanelPage(const QString& page) -> QString;
 
-  EditorController*               editor_             = nullptr;
   alcedo::IEditorSessionBackend*  session_backend_    = nullptr;
   InteractionPolicyController*    interaction_policy_ = nullptr;
   EditorActionAvailabilityModel   actions_;

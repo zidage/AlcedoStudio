@@ -34,91 +34,6 @@ def_library(EditorViewerLogic
         opencv_core
 )
 
-if(ALCEDO_REAL_WIDGET_EDITOR)
-    set(EDIT_VIEWER_COMMON_SRCS
-        "${ALCEDO_UI_ROOT}/edit_viewer/edit_viewer.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/edit_viewer.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/edit_viewer_surface.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/color_manager.hpp"
-    )
-
-    set(EDIT_VIEWER_BACKEND_SRCS)
-    set(EDIT_VIEWER_PUBLIC_DEPS EditPipeline EditorViewerLogic Qt6::Widgets)
-
-    if(ALCEDO_REAL_OPENGL_EDITOR)
-        list(APPEND EDIT_VIEWER_BACKEND_SRCS
-            "${ALCEDO_UI_ROOT}/edit_viewer/frame_mailbox.cpp"
-            "${ALCEDO_UI_ROOT}/edit_viewer/gl_edit_viewer_surface.cpp"
-            "${ALCEDO_UI_ROOT}/edit_viewer/opengl_viewer_renderer.cpp"
-            "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/frame_mailbox.hpp"
-            "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/gl_edit_viewer_surface.hpp"
-        )
-        list(APPEND EDIT_VIEWER_PUBLIC_DEPS OpenGL::GL Qt6::OpenGLWidgets)
-    endif()
-
-    if(ALCEDO_RHI_WIDGET_EDITOR)
-        list(APPEND EDIT_VIEWER_BACKEND_SRCS
-            "${ALCEDO_UI_ROOT}/edit_viewer/color_manager.cpp"
-            "${ALCEDO_UI_ROOT}/edit_viewer/rhi_edit_viewer_surface.cpp"
-            "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/rhi_edit_viewer_surface.hpp"
-        )
-        if(APPLE)
-            list(REMOVE_ITEM EDIT_VIEWER_BACKEND_SRCS
-                "${ALCEDO_UI_ROOT}/edit_viewer/color_manager.cpp"
-            )
-            list(APPEND EDIT_VIEWER_BACKEND_SRCS
-                "${ALCEDO_UI_ROOT}/edit_viewer/color_manager.mm"
-            )
-            set_source_files_properties(
-                "${ALCEDO_UI_ROOT}/edit_viewer/color_manager.mm"
-                PROPERTIES LANGUAGE OBJCXX
-            )
-        endif()
-        list(APPEND EDIT_VIEWER_PUBLIC_DEPS Qt6::GuiPrivate Qt6::ShaderTools)
-    endif()
-
-    def_library(EditViewer
-        SOURCES ${EDIT_VIEWER_COMMON_SRCS} ${EDIT_VIEWER_BACKEND_SRCS}
-        PUBLIC_DEPS ${EDIT_VIEWER_PUBLIC_DEPS}
-    )
-
-    if(ALCEDO_CUDA_ENABLED)
-        set_target_properties(EditViewer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-        target_compile_definitions(EditViewer PUBLIC HAVE_CUDA)
-    endif()
-    if(ALCEDO_OPENCL_ENABLED)
-        target_compile_definitions(EditViewer PUBLIC HAVE_OPENCL)
-        target_link_libraries(EditViewer PRIVATE OpenClProgramLibrary)
-    endif()
-
-    if(ALCEDO_RHI_WIDGET_EDITOR AND APPLE)
-        target_link_libraries(EditViewer PRIVATE
-            "-framework AppKit"
-            "-framework QuartzCore"
-            "-framework CoreGraphics"
-        )
-    endif()
-    if(ALCEDO_RHI_WIDGET_EDITOR AND WIN32)
-        target_link_libraries(EditViewer PRIVATE d3d11 d3d12 dxgi)
-    endif()
-
-    if(ALCEDO_RHI_WIDGET_EDITOR)
-        qt_add_shaders(EditViewer "editviewer_rhi_shaders"
-            PREFIX
-                "/shaders/edit_viewer"
-            BASE
-                "${ALCEDO_UI_ROOT}/edit_viewer/shaders"
-            FILES
-                "${ALCEDO_UI_ROOT}/edit_viewer/shaders/rhi_image.vert"
-                "${ALCEDO_UI_ROOT}/edit_viewer/shaders/rhi_image.frag"
-        )
-    endif()
-endif()
-
-if(COMMAND alcedo_configure_editor_rhi_legacy_viewer)
-    alcedo_configure_editor_rhi_legacy_viewer()
-endif()
-
 def_library(BackgroundTaskController
     SOURCES
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/background_task_controller.cpp"
@@ -154,7 +69,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/model_download_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/import_export.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/nikon_he_recovery_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
@@ -171,16 +85,13 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_cdl_trackball_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_cdl_trackball_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lut_catalog_model.cpp"
-    # Pure tone-curve math shared with the legacy QWidget curve editor.
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/curve.cpp"
-    # Geometry and lens catalog math are shared by QML and the legacy editor.
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/geometry.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/lens_calib.cpp"
-    # Look-panel shared math / catalog (also used by the legacy QWidget editor).
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/color_temp.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/color_wheel.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/hls.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/lut_catalog.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/curve.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/geometry.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/lens_calib.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/color_temp.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/color_wheel.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/hls.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/modules/lut_catalog.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_pipeline_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_task_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_history_port.cpp"
@@ -197,9 +108,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_render_scheduler_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/workspace_router.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_controller.cpp"
-    # Reusable dialog-free pipeline helpers for the QML open path.
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/controllers/image_controller.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/controllers/pipeline_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/image_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/pipeline_controller.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_module_host.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_module.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/library_module.hpp"
@@ -222,7 +132,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/import_export.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_controller.hpp"
@@ -241,11 +150,14 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/curve.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/color_wheel.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/hls.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/lut_catalog.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/curve.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_temp.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/color_wheel.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/geometry.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/hls.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/lens_calib.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/modules/lut_catalog.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/cdl_wheel_state.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_task_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -262,8 +174,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/workspace_router.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/image_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
 )
 
 target_include_directories(AlbumBackendLib
@@ -282,7 +194,6 @@ target_link_libraries(AlbumBackendLib
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
-        Qt6::Widgets
         ProjectService
         ImportService
         ExportService
@@ -307,113 +218,9 @@ target_link_libraries(AlbumBackendLib
         CudaDriverRequirements
 )
 
-if(TARGET EditViewer)
-    target_link_libraries(AlbumBackendLib PUBLIC EditViewer)
-endif()
-
-set(ALCEDO_EDITOR_DIALOG_SRCS
-    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/editor_dialog_stub.cpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/editor_dialog.hpp"
-)
-
-if(ALCEDO_REAL_WIDGET_EDITOR)
-    set(ALCEDO_EDITOR_DIALOG_SRCS
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/editor_dialog.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/dialog.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/dialog_core.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/dialog_pipeline.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/dialog_ui_state.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/state.cpp"
-        # image_controller / pipeline_controller live in AlbumBackendLib.
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/controllers/history_controller.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/controllers/lut_controller.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/controllers/render_controller.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/frame/editor_frame_manager.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/history/editor_history_coordinator.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/render/editor_render_coordinator.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/session/editor_adjustment_session.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/histogram.cpp"
-        # color_temp / color_wheel / hls / lut_catalog / curve / geometry /
-        # lens_calib live in AlbumBackendLib.
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/pipeline_io.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/versioning.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/scope/scope_panel.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/scope/scope_plot_widgets.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/scope/scope_renderer.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/display_transform_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/collapsible_section_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/editor_control_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/editor_viewer_pane.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/geometry_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/look_control_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/raw_decode_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/tone_control_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/versioning_panel_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/spinner.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/histogram_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/trackball.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/tone_curve_widget.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/history_cards.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/widgets/lut_browser_widget.cpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/lut_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/lut_catalog.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/lut_browser_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/dialog.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/dialog_internal.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/editor_dialog.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/history_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/controllers/render_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/frame/editor_frame_manager.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/history/editor_history_coordinator.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/render/editor_render_coordinator.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/session/adjustment_panel.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/session/adjustment_patch.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/session/adjustment_snapshot.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/tone_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/color_temp_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/look_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/display_transform_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/geometry_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/state/raw_decode_adjustment_state.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/adjustment_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/tone_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/color_temp_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/look_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/display_transform_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/geometry_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/pipeline/raw_pipeline_adapter.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/histogram.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/color_wheel.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/curve.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/lens_calib.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/geometry.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/hls.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/pipeline_io.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/modules/versioning.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/scope/scope_panel.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/scope/scope_plot_widgets.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/scope/scope_renderer.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/display_transform_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/editor_control_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/editor_viewer_pane.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/geometry_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/look_control_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/raw_decode_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/tone_control_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/versioning_panel_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/spinner.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/histogram_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/trackball.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/tone_curve_widget.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_dialog/widgets/history_cards.hpp"
-    )
-endif()
+# The editor shell is QML-only. Widgets remains private to the album backend for
+# the native project and Nikon recovery file dialogs.
+target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
@@ -426,7 +233,6 @@ set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
-    ${ALCEDO_EDITOR_DIALOG_SRCS}
 )
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
     add_executable(alcedo_main MACOSX_BUNDLE ${ALCEDO_MAIN_SOURCES})
@@ -549,16 +355,13 @@ target_link_libraries(alcedo_main
         Qt6::Qml
         Qt6::QuickControls2
         Qt6::QuickDialogs2
+        # QApplication remains the process host; this is not an editor dependency.
         Qt6::Widgets
         Qt6::Svg
         Qt6::QuickEffects
 )
 
 alcedo_copy_linked_runtime_dlls(alcedo_main)
-
-if(ALCEDO_REAL_WIDGET_EDITOR)
-    target_link_libraries(alcedo_main PRIVATE EditHistoryMgmtService)
-endif()
 
 if(WIN32 AND ALCEDO_OPENCL_ENABLED)
     target_link_libraries(alcedo_main PRIVATE OpenGL::GL)

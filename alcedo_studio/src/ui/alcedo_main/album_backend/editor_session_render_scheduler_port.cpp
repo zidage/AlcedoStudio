@@ -8,7 +8,6 @@
 #include <QEventLoop>
 #include <QString>
 #include <QThread>
-
 #include <chrono>
 #include <stdexcept>
 #include <utility>
@@ -19,8 +18,8 @@
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
-#include "ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
-#include "ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
+#include "ui/alcedo_main/editor_support/controllers/image_controller.hpp"
+#include "ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
@@ -60,13 +59,14 @@ void TraceDetailRequest(const char* stage, const alcedo::EditorRenderRequest& re
   if (!editorPresentLog().isDebugEnabled()) {
     return;
   }
-  QString msg = QStringLiteral("[ROI_TRACE][%1] request=%2 image=%3 session_epoch=%4 requested=%5x%6")
-                    .arg(QLatin1String(stage))
-                    .arg(request.request_id)
-                    .arg(request.intent.image_id)
-                    .arg(request.intent.image_load_request_id.value)
-                    .arg(request.intent.requested_width)
-                    .arg(request.intent.requested_height);
+  QString msg =
+      QStringLiteral("[ROI_TRACE][%1] request=%2 image=%3 session_epoch=%4 requested=%5x%6")
+          .arg(QLatin1String(stage))
+          .arg(request.request_id)
+          .arg(request.intent.image_id)
+          .arg(request.intent.image_load_request_id.value)
+          .arg(request.intent.requested_width)
+          .arg(request.intent.requested_height);
   if (request.intent.view_region) {
     const auto& roi = *request.intent.view_region;
     msg += QStringLiteral(" region_px=%1,%2 scale=%3,%4 reference=%5x%6 target=%7x%8")
@@ -210,7 +210,7 @@ auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
 }
 
 auto EditorSessionRenderSchedulerPort::Schedule(
-    const alcedo::EditorRenderRequest& request,
+    const alcedo::EditorRenderRequest&       request,
     alcedo::EditorPipelineScheduleCompletion on_complete) -> std::uint64_t {
   if (!CanProduceFrame(request)) {
     TraceDetailRequest("scheduler-reject", request, "no-frame-source");
@@ -271,7 +271,7 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     }
   }
 
-  std::shared_ptr<EditorSessionPipelinePort>             pipeline_port;
+  std::shared_ptr<EditorSessionPipelinePort>                 pipeline_port;
   std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool_resolver;
   {
     std::scoped_lock lock(mutex_);
@@ -323,8 +323,7 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   std::shared_ptr<alcedo::ImageBuffer> input;
   try {
     image_desc = image_pool->Read<std::shared_ptr<alcedo::Image>>(
-        request.intent.image_id,
-        [](const std::shared_ptr<alcedo::Image>& image) { return image; });
+        request.intent.image_id, [](const std::shared_ptr<alcedo::Image>& image) { return image; });
     if (!image_desc || image_desc->image_path_.empty()) {
       if (error) {
         *error = "Image descriptor is missing or has an empty path";
@@ -403,9 +402,8 @@ void EditorSessionRenderSchedulerPort::DispatchJob(Job job) {
   sink = resolver ? resolver() : nullptr;
   if (!sink) {
     auto scheduler = EnsurePipelineScheduler();
-    scheduler->ScheduleWork([this, job]() mutable {
-      FinishJob(job, false, "No presentation frame sink bound");
-    });
+    scheduler->ScheduleWork(
+        [this, job]() mutable { FinishJob(job, false, "No presentation frame sink bound"); });
     return;
   }
 
@@ -424,14 +422,15 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
   auto        context = EnsureContextForRequest(job.request, &error);
   if (!context) {
     scheduler->ScheduleWork([this, job, error = std::move(error)]() mutable {
-      FinishJob(job, false, error.empty() ? "Session render context is unavailable" : std::move(error));
+      FinishJob(job, false,
+                error.empty() ? "Session render context is unavailable" : std::move(error));
     });
     return;
   }
 
   try {
     TraceDetailRequest("pipeline-submit", job.request);
-    auto exec = context->pipeline_guard->pipeline_;
+    auto                 exec = context->pipeline_guard->pipeline_;
 
     alcedo::PipelineTask task;
     task.input_                             = context->input;
@@ -444,35 +443,36 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.options_.render_desc_.viewport_region_ = job.request.intent.view_region;
     task.options_.render_desc_.frame_metadata_  = FrameRoleToPreviewMetadata(job.request.intent);
     task.options_.render_desc_.frame_metadata_.presentation_request_id = job.request.request_id;
-    task.request_id_                           = job.request.request_id;
-    task.options_.is_callback_                 = false;
-    task.options_.is_seq_callback_             = false;
-    task.options_.is_blocking_                 = false;
-    const bool apply_adjustment = alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
-    task.configure_under_render_lock_ =
-        [snapshot              = job.request.intent.adjustment, sink,
-         geometry_overlay_only = job.request.intent.geometry_overlay_only,
-         apply_adjustment](alcedo::PipelineTask& locked_task) {
-          auto locked_exec = locked_task.pipeline_executor_;
-          if (!locked_exec) {
-            return false;
-          }
-          if (apply_adjustment) {
-            std::string apply_error;
-            if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-              throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                           : apply_error);
-            }
-            if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
-              controllers::EnsureLoadingOperatorDefaults(locked_exec);
-            }
-          }
-          if (geometry_overlay_only) {
-            alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
-          }
-          controllers::AttachExecutionStages(locked_exec, sink);
-          return true;
-        };
+    task.request_id_                                                   = job.request.request_id;
+    task.options_.is_callback_                                         = false;
+    task.options_.is_seq_callback_                                     = false;
+    task.options_.is_blocking_                                         = false;
+    const bool apply_adjustment =
+        alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
+    task.configure_under_render_lock_ = [snapshot = job.request.intent.adjustment, sink,
+                                         geometry_overlay_only =
+                                             job.request.intent.geometry_overlay_only,
+                                         apply_adjustment](alcedo::PipelineTask& locked_task) {
+      auto locked_exec = locked_task.pipeline_executor_;
+      if (!locked_exec) {
+        return false;
+      }
+      if (apply_adjustment) {
+        std::string apply_error;
+        if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
+          throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
+                                                       : apply_error);
+        }
+        if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
+          controllers::EnsureLoadingOperatorDefaults(locked_exec);
+        }
+      }
+      if (geometry_overlay_only) {
+        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
+      }
+      controllers::AttachExecutionStages(locked_exec, sink);
+      return true;
+    };
     if (job.request.intent.cancellation) {
       task.cancel_requested_ = [token = job.request.intent.cancellation]() {
         return token && token->IsCancelled();
@@ -494,9 +494,8 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       FinishJob(job, false, std::move(message));
     });
   } catch (...) {
-    scheduler->ScheduleWork([this, job]() mutable {
-      FinishJob(job, false, "Pipeline render failed");
-    });
+    scheduler->ScheduleWork(
+        [this, job]() mutable { FinishJob(job, false, "Pipeline render failed"); });
   }
 }
 
@@ -566,9 +565,8 @@ void EditorSessionRenderSchedulerPort::FinishJob(const Job& job, bool success,
   {
     std::scoped_lock lock(mutex_);
     if (running_job_ && running_job_->job_id == job.job_id) {
-      if (running_job_->cancelled ||
-          (running_job_->request.intent.cancellation &&
-           running_job_->request.intent.cancellation->IsCancelled())) {
+      if (running_job_->cancelled || (running_job_->request.intent.cancellation &&
+                                      running_job_->request.intent.cancellation->IsCancelled())) {
         success = false;
         if (message.empty() || message == "Frame ready") {
           message = "Cancelled during execution";

@@ -8,8 +8,8 @@
 #include <filesystem>
 #include <optional>
 
-#include "ui/album_backend_test_fixture.hpp"
 #include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
 namespace alcedo::ui::test {
@@ -40,8 +40,10 @@ TEST_F(DeleteTests, DeleteImages_RemovesImageAndRelatedRows) {
     ASSERT_NE(deletedElementId, 0u);
     ASSERT_NE(deletedImageId, 0u);
 
-    // Touch editor once so pipeline/history entries are materialized in normal service flow.
-    backend.editor()->OpenEditor(static_cast<uint>(deletedElementId), static_cast<uint>(deletedImageId));
+    // Open the workspace session so pipeline/history entries are materialized in normal service
+    // flow.
+    backend.workspace_router()->OpenEditor(static_cast<uint>(deletedElementId),
+                                           static_cast<uint>(deletedImageId));
     ProcessEvents(400);
 
     QVariantList targets;
@@ -76,7 +78,7 @@ TEST_F(DeleteTests, DeleteTargetsRejectsUnacknowledgedImportAtDirectEntryPoint) 
     const auto destination = import_dir / ("direct_delete_" + std::to_string(i) +
                                            source_images.front().extension().string());
     std::filesystem::copy_file(source_images.front(), destination,
-                                std::filesystem::copy_options::overwrite_existing);
+                               std::filesystem::copy_options::overwrite_existing);
     import_paths.push_back(destination);
   }
 
@@ -84,11 +86,10 @@ TEST_F(DeleteTests, DeleteTargetsRejectsUnacknowledgedImportAtDirectEntryPoint) 
 
   ImageController::DeleteTarget target;
   target.element_id_ = 1;
-  const auto result = backend.images()->DeleteTargets({target});
+  const auto result  = backend.images()->DeleteTargets({target});
 
   EXPECT_FALSE(result.success_);
-  EXPECT_TRUE(result.message_.contains(QStringLiteral("import")))
-      << result.message_.toStdString();
+  EXPECT_TRUE(result.message_.contains(QStringLiteral("import"))) << result.message_.toStdString();
 
   backend.import_export()->CancelImport();
   WaitForImportFinished(backend);
@@ -130,8 +131,7 @@ TEST_F(DeleteTests, DeleteImages_BestEffortPartialFailure) {
 
 TEST_F(DeleteTests, DeleteImages_BlockedByInteractionPolicyLock) {
   ApplicationModuleHost backend;
-  auto* registry =
-      qobject_cast<BackgroundTaskController*>(backend.background_tasks());
+  auto* registry = qobject_cast<BackgroundTaskController*>(backend.background_tasks());
   ASSERT_NE(registry, nullptr);
 
   BackgroundTaskSnapshot snapshot;
@@ -378,7 +378,8 @@ TEST_F(DeleteTests, AddToAlbumSurvivesReload) {
     QVariantList targets;
     targets.push_back(QVariantMap{{"elementId", static_cast<uint>(file_id)},
                                   {"imageId", static_cast<uint>(image_id)}});
-    ASSERT_TRUE(backend.images()->AddImagesToFolder(targets, album_ui_id).value("success").toBool());
+    ASSERT_TRUE(
+        backend.images()->AddImagesToFolder(targets, album_ui_id).value("success").toBool());
 
     ASSERT_TRUE(backend.project()->SaveProject());
     ProcessEvents(500);

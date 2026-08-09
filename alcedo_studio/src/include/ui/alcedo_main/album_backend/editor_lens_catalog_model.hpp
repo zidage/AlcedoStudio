@@ -8,7 +8,7 @@
 #include <QString>
 #include <QVariantList>
 
-#include "ui/alcedo_main/editor_dialog/modules/lens_calib.hpp"
+#include "ui/alcedo_main/editor_support/modules/lens_calib.hpp"
 
 namespace alcedo::ui {
 
@@ -22,16 +22,16 @@ class EditorLensCatalogModel : public QObject {
  public:
   explicit EditorLensCatalogModel(QObject* parent = nullptr);
 
-  [[nodiscard]] auto brands() const -> QVariantList { return brands_; }
-  [[nodiscard]] auto statusText() const -> QString { return status_text_; }
-  [[nodiscard]] auto defaultParamsJson() const -> QString { return default_params_json_; }
+  [[nodiscard]] auto       brands() const -> QVariantList { return brands_; }
+  [[nodiscard]] auto       statusText() const -> QString { return status_text_; }
+  [[nodiscard]] auto       defaultParamsJson() const -> QString { return default_params_json_; }
   Q_INVOKABLE QVariantList modelsForBrand(const QString& brand) const;
 
  private:
   lens_calib::LensCatalog catalog_;
-  QVariantList brands_;
-  QString status_text_;
-  QString default_params_json_;
+  QVariantList            brands_;
+  QString                 status_text_;
+  QString                 default_params_json_;
 };
 
 }  // namespace alcedo::ui

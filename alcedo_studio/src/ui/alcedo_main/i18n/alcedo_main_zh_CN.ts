@@ -1200,7 +1200,7 @@
 <context>
     <name>Alcedo</name>
     <message>
-        <location filename="../album_backend/image_controller.cpp" line="+52"/>
+        <location filename="../album_backend/image_controller.cpp" line="+51"/>
         <source>Capture</source>
         <translation>拍摄信息</translation>
     </message>
@@ -1290,587 +1290,19 @@
         <translation>（未命名）</translation>
     </message>
     <message>
-        <location filename="../../../include/ui/alcedo_main/editor_dialog/editor_dialog.hpp" line="+251"/>
-        <source>Tone</source>
-        <translation>色调</translation>
-    </message>
-    <message>
-        <location line="+41"/>
-        <source>Display RT</source>
-        <translation>显示变换</translation>
-    </message>
-    <message>
-        <location line="-1"/>
-        <source>Display Rendering Transform</source>
-        <translation>显示渲染变换</translation>
-    </message>
-    <message>
-        <location line="-5"/>
-        <source>Color Wheels</source>
-        <translation>色轮</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>CDL: Lift / Gamma / Gain with master offset.</source>
-        <translation>CDL：Lift / Gamma / Gain 与主偏移。</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Geometry</source>
-        <translation>几何</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>RAW Decode</source>
-        <translation>RAW 解码</translation>
-    </message>
-    <message>
-        <location line="-5"/>
-        <source>Apply Crop</source>
-        <translation>应用裁剪</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Reset</source>
-        <translation>重置</translation>
-    </message>
-    <message>
-        <location line="-44"/>
-        <source>Color temperature/tint is unavailable for this image.</source>
-        <translation>当前图像不支持色温/色调调节。</translation>
-    </message>
-    <message>
-        <location line="-5"/>
-        <source>White Balance</source>
-        <translation>白平衡</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>As Shot</source>
-        <translation>按拍摄参数</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Custom</source>
-        <translation>自定义</translation>
-    </message>
-    <message>
-        <location line="+44"/>
-        <source>Width</source>
-        <translation>宽度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Height</source>
-        <translation>高度</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Configure RAW decode options. These settings are shared with thumbnail rendering.</source>
-        <translation>配置 RAW 解码选项。这些设置会与缩略图渲染共享。</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Enable Highlight Reconstruction</source>
-        <translation>启用高光重建</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Lens Calibration</source>
-        <translation>镜头校正</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Enable correction and optionally override lens metadata with catalog entries.</source>
-        <translation>启用校正，并可选择用目录条目覆盖镜头元数据。</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Enable Lens Calibration</source>
-        <translation>启用镜头校正</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <location filename="../album_backend/image_controller.cpp" line="+10"/>
+        <location line="+10"/>
         <source>Lens Brand</source>
         <translation>镜头品牌</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location filename="../album_backend/image_controller.cpp" line="+1"/>
         <source>Lens Model</source>
         <translation>镜头型号</translation>
     </message>
     <message>
-        <location line="-81"/>
-        <source>Adjustments</source>
-        <translation>调整</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>LUT</source>
-        <translation>LUT</translation>
-    </message>
-    <message>
-        <location line="-26"/>
-        <source>Primary tonal shaping controls.</source>
-        <translation>基础明暗塑形控制。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <location filename="../album_backend/image_controller.cpp" line="-8"/>
+        <location line="-8"/>
         <source>Exposure</source>
         <translation>曝光</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Contrast</source>
-        <translation>对比度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Highlights</source>
-        <translation>高光</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Shadows</source>
-        <translation>阴影</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Whites</source>
-        <translation>白色色阶</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Blacks</source>
-        <translation>黑色色阶</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Smooth tone curve mapped from input [0, 1] to output [0, 1].</source>
-        <translation>平滑色调曲线，将输入 [0, 1] 映射到输出 [0, 1]。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Left click/drag to shape. Right click a point to remove. Double click to reset.</source>
-        <translation>左键点击或拖拽可调整曲线，右键点击控制点可删除，双击可重置。</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Reset Curve</source>
-        <translation>重置曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Color</source>
-        <translation>颜色</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Color balance and saturation.</source>
-        <translation>色彩平衡与饱和度调整。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Saturation</source>
-        <translation>饱和度</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Color Temp</source>
-        <translation>色温</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Color Tint</source>
-        <translation>色调偏移</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Browse and apply look-up tables.</source>
-        <translation>浏览并应用查找表。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>HSL / Color</source>
-        <translation>HSL / 色彩</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Per-hue lightness and chroma adjustments.</source>
-        <translation>按色相调整明度与彩度。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Hue Shift</source>
-        <translation>色相偏移</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Lightness</source>
-        <translation>明度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Chroma</source>
-        <translation>彩度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Hue Smoothness</source>
-        <translation>色相平滑度</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Gamma</source>
-        <translation>Gamma</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Lift</source>
-        <translation>Lift</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Gain</source>
-        <translation>Gain</translation>
-    </message>
-    <message>
-        <location line="-16"/>
-        <source>Detail</source>
-        <translation>细节</translation>
-    </message>
-    <message>
-        <location line="-15"/>
-        <source>Tone Curve</source>
-        <translation>色调曲线</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Micro-contrast and sharpen controls.</source>
-        <translation>微对比度与锐化控制。</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Sharpen</source>
-        <translation>锐化</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Clarity</source>
-        <translation>清晰度</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Encoding Space</source>
-        <translation>编码色域</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Encoding EOTF</source>
-        <translation>编码 EOTF</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Peak Luminance</source>
-        <translation>峰值亮度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Rendering Method</source>
-        <translation>渲染方法</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Choose the transform family. Shared encoding settings stay above; method-specific settings stay preserved per method.</source>
-        <translation>选择显示变换算法</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>ACES 2.0</source>
-        <translation>ACES 2.0</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>OpenDRT</source>
-        <translation>OpenDRT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Limiting Space</source>
-        <translation>限制色域</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Look Preset</source>
-        <translation>Look 预设</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Tonescale Preset</source>
-        <translation>色调曲线预设</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Creative White</source>
-        <translation>创意白点</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Crop &amp; Aspect Ratio</source>
-        <translation>裁剪与宽高比</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Aspect</source>
-        <translation>宽高比</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Angle</source>
-        <translation>角度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Crop Offset</source>
-        <translation>裁剪偏移</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>X</source>
-        <translation>X</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Y</source>
-        <translation>Y</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Pixels update on Apply. Double click any slider or the viewer to reset. Ctrl+R resets all geometry.</source>
-        <translation>点击应用后才会更新像素。双击任意滑块或预览区域可重置。Ctrl+R 重置全部几何设置。</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Edit History</source>
-        <translation>编辑历史</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Undo Last</source>
-        <translation>撤销上一步</translation>
-    </message>
-    <message>
-        <location line="-1"/>
-        <source>Position</source>
-        <translation>位置</translation>
-    </message>
-    <message>
-        <location line="-24"/>
-        <source>Crop Rotation</source>
-        <translation>裁剪旋转</translation>
-    </message>
-    <message>
-        <location line="+26"/>
-        <source>Undo last transaction</source>
-        <translation>撤销上一次事务</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Current</source>
-        <translation>当前</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Returned to step %1 of %2</source>
-        <translation>已回到第 %1 / %2 步</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>No edits yet</source>
-        <translation>还没有编辑记录</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Versions</source>
-        <translation>版本</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>New Version</source>
-        <translation>新建版本</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Modified %1</source>
-        <translation>最近修改 %1</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>CURRENT</source>
-        <translation>当前</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Rename version</source>
-        <translation>重命名版本</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Version name</source>
-        <translation>版本名称</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Untitled</source>
-        <translation>未命名</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>No versions</source>
-        <translation>还没有版本</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Rec.709</source>
-        <translation>Rec.709</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>P3-D65</source>
-        <translation>P3-D65</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>P3-D60</source>
-        <translation>P3-D60</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>P3-DCI</source>
-        <translation>P3-DCI</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>XYZ</source>
-        <translation>XYZ</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Rec.2020</source>
-        <translation>Rec.2020</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>ProPhoto RGB</source>
-        <translation>ProPhoto RGB</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Adobe RGB</source>
-        <translation>Adobe RGB</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Standard</source>
-        <translation>标准</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Arriba</source>
-        <translation>Arriba</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Sylvan</source>
-        <translation>Sylvan</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Colorful</source>
-        <translation>鲜艳</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Aery</source>
-        <translation>Aery</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Dystopic</source>
-        <translation>Dystopic</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Umbra</source>
-        <translation>Umbra</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Use Look Preset</source>
-        <translation>使用 Look 预设</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Low Contrast</source>
-        <translation>低对比度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Medium Contrast</source>
-        <translation>中对比度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>High Contrast</source>
-        <translation>高对比度</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Arriba Tonescale</source>
-        <translation>Arriba 色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Sylvan Tonescale</source>
-        <translation>Sylvan 色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Colorful Tonescale</source>
-        <translation>鲜艳色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Aery Tonescale</source>
-        <translation>Aery 色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Dystopic Tonescale</source>
-        <translation>Dystopic 色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Umbra Tonescale</source>
-        <translation>Umbra 色调曲线</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Marvelous Tonscape</source>
-        <translation>Marvelous Tonscape</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Dagrinchi Tonegroan</source>
-        <translation>Dagrinchi Tonegroan</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>D93</source>
-        <translation>D93</translation>
     </message>
     <message>
         <location filename="../album_backend/project_module.cpp" line="+82"/>
@@ -2043,7 +1475,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+39"/>
+        <location filename="../qml/AppDialogs.qml" line="+40"/>
         <source>Select Images</source>
         <translation>选择图像</translation>
     </message>
@@ -2088,7 +1520,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+196"/>
+        <location line="+212"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -3392,22 +2824,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorRawDecodePanel</name>
     <message>
-        <location filename="../qml/EditorRawDecodePanel.qml" line="+55"/>
-        <source>Select an image to enable RAW Decode</source>
-        <translation>选择图像以启用 RAW 解码</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>RAW Decode is unavailable for this image.</source>
-        <translation>此图像无法使用 RAW 解码。</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>RAW metadata is unavailable; decoder defaults are active.</source>
-        <translation>RAW 元数据不可用；当前使用解码器默认值。</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location filename="../qml/EditorRawDecodePanel.qml" line="+22"/>
         <source>Legacy</source>
         <translation>旧版</translation>
     </message>
@@ -3417,13 +2834,13 @@ Original source files on disk will be kept.</source>
         <translation>神经引擎</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-2"/>
         <source>Default</source>
         <translation>默认</translation>
     </message>
     <message>
-        <location line="+112"/>
-        <location line="+20"/>
+        <location line="+89"/>
+        <location line="+10"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
     </message>
@@ -3523,7 +2940,7 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+13"/>
-        <location line="+133"/>
+        <location line="+148"/>
         <source>Tone Curve</source>
         <translation>色调曲线</translation>
     </message>
@@ -3755,7 +3172,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>FolderImportConfirmDialog</name>
     <message>
-        <location filename="../qml/FolderImportConfirmDialog.qml" line="+88"/>
+        <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
         <source>Import From Folder</source>
         <translation>从文件夹导入</translation>
     </message>
@@ -3765,12 +3182,12 @@ Original source files on disk will be kept.</source>
         <translation>在以下位置找到 %1 个文件：</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+44"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+12"/>
         <source>Import %1 File(s)</source>
         <translation>导入 %1 个文件</translation>
     </message>
@@ -3778,7 +3195,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>GlobalSearchDialog</name>
     <message>
-        <location filename="../qml/GlobalSearchDialog.qml" line="+878"/>
+        <location filename="../qml/GlobalSearchDialog.qml" line="+928"/>
         <source>Suggestion</source>
         <translation>建议</translation>
     </message>
@@ -3788,7 +3205,7 @@ Original source files on disk will be kept.</source>
         <translation>搜索设置 ▾</translation>
     </message>
     <message>
-        <location line="-418"/>
+        <location line="-468"/>
         <source>%1 matches</source>
         <translation>%1 个匹配项</translation>
     </message>
@@ -3803,7 +3220,7 @@ Original source files on disk will be kept.</source>
         <translation>匹配项 %1-%2，共 %3 项</translation>
     </message>
     <message>
-        <location line="+377"/>
+        <location line="+427"/>
         <source>Search photos, cameras, lenses, dates...</source>
         <translation>搜索照片、相机、镜头、日期...</translation>
     </message>
@@ -3923,7 +3340,8 @@ Original source files on disk will be kept.</source>
         <translation>自然语言搜索暂不可用</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="-157"/>
+        <location line="+159"/>
         <source>Press Enter or click Search for natural language search</source>
         <translation>按回车或点击搜索按钮以执行自然语言搜索</translation>
     </message>
@@ -4363,25 +3781,30 @@ Original source files on disk will be kept.</source>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../album_backend/thumbnail_manager.cpp" line="+154"/>
-        <location line="+105"/>
+        <location filename="../album_backend/thumbnail_manager.cpp" line="+155"/>
+        <location line="+106"/>
         <source>Source file was moved or deleted: %1</source>
         <translation>源文件已被移动或删除：%1</translation>
     </message>
     <message>
         <location line="+6"/>
-        <location filename="../album_backend/search_controller.cpp" line="+694"/>
+        <location filename="../album_backend/search_controller.cpp" line="+698"/>
         <location line="+4"/>
         <source>Thumbnail render returned no image.</source>
         <translation>缩略图渲染未返回图像。</translation>
     </message>
     <message>
-        <location line="+35"/>
+        <location line="+36"/>
         <source>Thumbnail render returned no image buffer.</source>
         <translation>缩略图渲染未返回图像缓冲区。</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+18"/>
+        <source>Thumbnail conversion produced no image provider URL.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
         <source>Thumbnail CPU buffer could not be converted to an image.</source>
         <translation>缩略图 CPU 缓冲区无法转换为图像。</translation>
     </message>
@@ -4392,7 +3815,7 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+27"/>
-        <location filename="../album_backend/search_controller.cpp" line="+25"/>
+        <location filename="../album_backend/search_controller.cpp" line="+30"/>
         <source>Thumbnail conversion produced no image.</source>
         <translation>缩略图转换未生成图像。</translation>
     </message>
@@ -5027,6 +4450,11 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location filename="../qml/TopToolbar.qml" line="+42"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Studio</source>
+        <translation type="unfinished">工作室</translation>
     </message>
     <message>
         <location line="+27"/>

@@ -9,7 +9,7 @@
 #include <QVariantMap>
 #include <cmath>
 
-#include "ui/alcedo_main/editor_dialog/modules/geometry.hpp"
+#include "ui/alcedo_main/editor_support/modules/geometry.hpp"
 
 namespace alcedo::ui {
 namespace {

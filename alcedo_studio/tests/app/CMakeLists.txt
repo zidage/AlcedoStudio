@@ -250,7 +250,6 @@ alcedo_register_test_target(EditorSessionCq5QualificationTest app)
 add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorSessionControllerPhase5ATest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_compile_definitions(EditorSessionControllerPhase5ATest PRIVATE

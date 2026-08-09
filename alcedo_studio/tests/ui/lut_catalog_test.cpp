@@ -2,13 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "ui/alcedo_main/editor_support/modules/lut_catalog.hpp"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-
-#include "ui/alcedo_main/editor_dialog/modules/lut_catalog.hpp"
 
 namespace alcedo::ui::lut_catalog {
 namespace {
@@ -17,10 +17,10 @@ class ScopedTempDir final {
  public:
   ScopedTempDir() {
     path_ = std::filesystem::temp_directory_path() /
-            std::filesystem::path("alcedo_lut_catalog_test_" +
-                                  std::to_string(
-                                      std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
-                                  std::to_string(counter_++));
+            std::filesystem::path(
+                "alcedo_lut_catalog_test_" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+                std::to_string(counter_++));
     std::filesystem::create_directories(path_);
   }
 
@@ -32,8 +32,8 @@ class ScopedTempDir final {
   auto path() const -> const std::filesystem::path& { return path_; }
 
  private:
-  inline static int         counter_ = 0;
-  std::filesystem::path     path_{};
+  inline static int     counter_ = 0;
+  std::filesystem::path path_{};
 };
 
 void WriteTextFile(const std::filesystem::path& path, const std::string& content) {
@@ -64,7 +64,7 @@ auto PathToUtf8(const std::filesystem::path& path) -> std::string {
 }  // namespace
 
 TEST(LutCatalogTests, EmptyDirectoryStillProvidesNoneEntry) {
-  ScopedTempDir temp_dir;
+  ScopedTempDir    temp_dir;
 
   const LutCatalog catalog = BuildCatalogForDirectory(temp_dir.path(), std::string{});
 
@@ -104,10 +104,10 @@ TEST(LutCatalogTests, InvalidCubeFilesRemainVisibleWithErrorState) {
 }
 
 TEST(LutCatalogTests, MissingCurrentPathProducesPlaceholderEntry) {
-  ScopedTempDir temp_dir;
+  ScopedTempDir     temp_dir;
   const std::string current_path = (temp_dir.path() / "outside" / "missing.cube").generic_string();
 
-  const LutCatalog catalog = BuildCatalogForDirectory(temp_dir.path(), current_path);
+  const LutCatalog  catalog      = BuildCatalogForDirectory(temp_dir.path(), current_path);
 
   ASSERT_EQ(catalog.entries_.size(), 2u);
   EXPECT_EQ(catalog.entries_[1].kind_, LutCatalogEntryKind::MissingCurrent);
@@ -119,17 +119,15 @@ TEST(LutCatalogTests, FindEntryIndexFallsBackToFilenameMatch) {
   ScopedTempDir temp_dir;
   WriteTextFile(temp_dir.path() / "5207.cube", ValidCubeContent());
 
-  const LutCatalog catalog =
-      BuildCatalogForDirectory(temp_dir.path(), "D:/custom/LUTs/5207.cube");
+  const LutCatalog catalog = BuildCatalogForDirectory(temp_dir.path(), "D:/custom/LUTs/5207.cube");
 
   EXPECT_EQ(FindEntryIndexForPath(catalog, "D:/custom/LUTs/5207.cube"), 1);
-  EXPECT_EQ(DefaultLutPath(catalog),
-            PathToUtf8(temp_dir.path() / "5207.cube"));
+  EXPECT_EQ(DefaultLutPath(catalog), PathToUtf8(temp_dir.path() / "5207.cube"));
 }
 
 TEST(LutCatalogTests, UnicodePathsRoundTripAsUtf8) {
   ScopedTempDir temp_dir;
-  const auto unicode_dir = temp_dir.path() / L"项目";
+  const auto    unicode_dir = temp_dir.path() / L"项目";
   std::filesystem::create_directories(unicode_dir);
   const auto lut_path = unicode_dir / L"5207.cube";
   WriteTextFile(lut_path, ValidCubeContent());

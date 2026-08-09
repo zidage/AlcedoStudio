@@ -210,12 +210,3 @@ if(WIN32 AND ALCEDO_OPENCL_ENABLED)
         USES_TERMINAL
     )
 endif()
-
-# The shell owns the optional legacy widget target and calls this after the
-# shell manifest has created it. This keeps the old optional RHI link intact
-# while retaining RHI-before-shell composition order.
-function(alcedo_configure_editor_rhi_legacy_viewer)
-    if(TARGET EditViewer)
-        target_link_libraries(EditorRhiViewport PUBLIC EditViewer)
-    endif()
-endfunction()

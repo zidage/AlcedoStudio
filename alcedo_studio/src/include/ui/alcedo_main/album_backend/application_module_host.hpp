@@ -17,7 +17,6 @@ class QQmlEngine;
 #include "app/model_download_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -51,13 +50,12 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(SearchController* search READ search CONSTANT)
   Q_PROPERTY(ImportExportHandler* importExport READ import_export CONSTANT)
   Q_PROPERTY(NikonHeRecoveryController* nikonHeRecovery READ nikon_he_recovery CONSTANT)
-  // The legacy EditorController remains C++-only for deletion/i18n compatibility.
-  // QML must use editorSession so it cannot schedule a parallel render path.
   Q_PROPERTY(BackgroundTaskController* backgroundTasks READ background_tasks CONSTANT)
   Q_PROPERTY(InteractionPolicyController* interactionPolicy READ interaction_policy CONSTANT)
   Q_PROPERTY(ModelDownloadController* modelDownload READ model_download CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
-  Q_PROPERTY(alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
+  Q_PROPERTY(
+      alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
   Q_PROPERTY(ImageAnalysisController* imageAnalysis READ image_analysis CONSTANT)
   Q_PROPERTY(AdjustmentTransferController* adjustmentTransfer READ adjustment_transfer CONSTANT)
   Q_PROPERTY(EditorSessionController* editorSession READ editor_session CONSTANT)
@@ -66,14 +64,13 @@ class ApplicationModuleHost final : public QObject {
  public:
   struct LifecycleEvent {
     enum class Kind { Constructed, Destroyed };
-    Kind              kind;
-    std::string       type_name;
-    const void*       object = nullptr;
+    Kind        kind;
+    std::string type_name;
+    const void* object = nullptr;
   };
   using LifecycleObserver = std::function<void(const LifecycleEvent&)>;
 
-  explicit ApplicationModuleHost(QObject* parent = nullptr,
-                                 LifecycleObserver observer = {});
+  explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {});
   ~ApplicationModuleHost() override;
 
   // Typed accessors (C++ / tests).
@@ -89,25 +86,20 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto nikon_he_recovery() -> NikonHeRecoveryController* {
     return nikon_he_recovery_.get();
   }
-  [[nodiscard]] auto editor() -> EditorController* { return editor_.get(); }
   [[nodiscard]] auto background_tasks() -> BackgroundTaskController* {
     return background_tasks_.get();
   }
   [[nodiscard]] auto interaction_policy() -> InteractionPolicyController* {
     return interaction_policy_.get();
   }
-  [[nodiscard]] auto model_download() -> ModelDownloadController* {
-    return model_download_.get();
-  }
+  [[nodiscard]] auto model_download() -> ModelDownloadController* { return model_download_.get(); }
   [[nodiscard]] auto semantic_generation() -> SemanticGenerationController* {
     return semantic_generation_.get();
   }
   [[nodiscard]] auto ai_provider_profiles() -> alcedo::AiProviderProfileController* {
     return ai_provider_profiles_.get();
   }
-  [[nodiscard]] auto image_analysis() -> ImageAnalysisController* {
-    return image_analysis_.get();
-  }
+  [[nodiscard]] auto image_analysis() -> ImageAnalysisController* { return image_analysis_.get(); }
   [[nodiscard]] auto adjustment_transfer() -> AdjustmentTransferController* {
     return adjustment_transfer_.get();
   }
@@ -120,9 +112,7 @@ class ApplicationModuleHost final : public QObject {
     return image_analysis_gate_;
   }
 
-  [[nodiscard]] auto editor_session() -> EditorSessionController* {
-    return editor_session_.get();
-  }
+  [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
   /// Phase 5A application-layer editor session (owned by the host, not QML).
   [[nodiscard]] auto editor_session_service() -> alcedo::EditorSessionService* {
@@ -150,33 +140,32 @@ class ApplicationModuleHost final : public QObject {
   void ShutdownModules();
 
   // Owned in construction dependency order. Destroyed in reverse.
-  std::unique_ptr<BackgroundTaskController>          background_tasks_;
-  std::unique_ptr<InteractionPolicyController>       interaction_policy_;
-  std::unique_ptr<alcedo::ModelDownloadService>      model_download_service_;
-  std::unique_ptr<ProjectModule>                     project_;
-  std::unique_ptr<LibraryModule>                     library_;
-  std::unique_ptr<FolderController>                  folders_;
-  std::unique_ptr<ImageController>                   images_;
-  std::unique_ptr<StatsEngine>                       stats_;
-  std::unique_ptr<SearchController>                  search_;
-  std::unique_ptr<ModelDownloadController>           model_download_;
+  std::unique_ptr<BackgroundTaskController>            background_tasks_;
+  std::unique_ptr<InteractionPolicyController>         interaction_policy_;
+  std::unique_ptr<alcedo::ModelDownloadService>        model_download_service_;
+  std::unique_ptr<ProjectModule>                       project_;
+  std::unique_ptr<LibraryModule>                       library_;
+  std::unique_ptr<FolderController>                    folders_;
+  std::unique_ptr<ImageController>                     images_;
+  std::unique_ptr<StatsEngine>                         stats_;
+  std::unique_ptr<SearchController>                    search_;
+  std::unique_ptr<ModelDownloadController>             model_download_;
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
-  std::unique_ptr<SemanticGenerationController>      semantic_generation_;
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate> image_analysis_gate_;
-  std::unique_ptr<ProjectDbWriteBarrier>             db_write_barrier_;
-  std::shared_ptr<IImageAnalysisSink>                image_analysis_sink_;
-  std::unique_ptr<ImageAnalysisController>           image_analysis_;
-  std::unique_ptr<ImportExportHandler>               import_export_;
-  std::unique_ptr<NikonHeRecoveryController>         nikon_he_recovery_;
-  std::unique_ptr<EditorController>                  editor_;
-  std::unique_ptr<AdjustmentTransferController>      adjustment_transfer_;
-  std::unique_ptr<alcedo::EditorSessionRuntime>      editor_session_runtime_;
-  std::shared_ptr<EditorSessionRenderSchedulerPort>  editor_session_scheduler_;
-  std::unique_ptr<EditorSessionController>           editor_session_;
-  std::unique_ptr<WorkspaceRouter>                   workspace_router_;
+  std::unique_ptr<SemanticGenerationController>        semantic_generation_;
+  std::shared_ptr<alcedo::ImageAnalysisInFlightGate>   image_analysis_gate_;
+  std::unique_ptr<ProjectDbWriteBarrier>               db_write_barrier_;
+  std::shared_ptr<IImageAnalysisSink>                  image_analysis_sink_;
+  std::unique_ptr<ImageAnalysisController>             image_analysis_;
+  std::unique_ptr<ImportExportHandler>                 import_export_;
+  std::unique_ptr<NikonHeRecoveryController>           nikon_he_recovery_;
+  std::unique_ptr<AdjustmentTransferController>        adjustment_transfer_;
+  std::unique_ptr<alcedo::EditorSessionRuntime>        editor_session_runtime_;
+  std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
+  std::unique_ptr<EditorSessionController>             editor_session_;
+  std::unique_ptr<WorkspaceRouter>                     workspace_router_;
 
-  LifecycleObserver lifecycle_observer_{};
-  bool              shutting_down_ = false;
+  LifecycleObserver                                    lifecycle_observer_{};
+  bool                                                 shutting_down_ = false;
 };
 
 }  // namespace alcedo::ui

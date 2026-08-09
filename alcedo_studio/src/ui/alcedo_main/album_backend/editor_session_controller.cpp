@@ -19,7 +19,6 @@
 #include "app/editor_session_service.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "type/hash_type.hpp"
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -40,13 +39,12 @@ constexpr double kFilmstripExpandedHeightDefault = 128.0;
 
 }  // namespace
 
-EditorSessionController::EditorSessionController(EditorController* editor, QObject* parent)
-    : EditorSessionController(editor, nullptr, parent) {}
+EditorSessionController::EditorSessionController(QObject* parent)
+    : EditorSessionController(nullptr, parent) {}
 
-EditorSessionController::EditorSessionController(EditorController*              editor,
-                                                 alcedo::IEditorSessionBackend* session_backend,
+EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* session_backend,
                                                  QObject*                       parent)
-    : QObject(parent), editor_(editor), session_backend_(session_backend), actions_(this) {
+    : QObject(parent), session_backend_(session_backend), actions_(this) {
   connect(&actions_, &EditorActionAvailabilityModel::AvailabilityChanged, this,
           &EditorSessionController::ActionAvailabilityChanged);
   scope_controller_ = std::make_unique<EditorScopeController>(this);
