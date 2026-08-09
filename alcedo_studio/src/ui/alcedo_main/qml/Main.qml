@@ -441,7 +441,6 @@ ApplicationWindow {
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
     readonly property var importFolderDialog: appDialogs.importFolderDialog
-    readonly property var exportDialog: appDialogs.exportDialog
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
 
     ExportQueueState {
@@ -524,7 +523,6 @@ ApplicationWindow {
         selectionState: selectionStateObj
         exportQueueState: exportQueueStateObj
         deleteConfirmDialog: appDialogs.deleteConfirmDialog
-        exportDialog: appDialogs.exportDialog
         windowAnimations: windowAnimations
     }
 

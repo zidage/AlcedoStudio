@@ -18,7 +18,9 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
+#include "ui/alcedo_main/album_backend/album_catalog.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -193,6 +195,10 @@ void EditorSessionController::SetCopiedPackageAvailable(bool available) {
   ApplyActionAvailability();
 }
 
+void EditorSessionController::SetAlbumCatalog(IAlbumCatalog* album_catalog) {
+  album_catalog_ = album_catalog;
+}
+
 void EditorSessionController::SyncBackgroundActionRestrictions() {
   if (!session_backend_ || !interaction_policy_) {
     return;
@@ -234,6 +240,7 @@ void EditorSessionController::OnBackendChanged() {
     adjustment_snapshot_ = std::move(panel_snapshot);
     if (!suppress_snapshot_publish_) {
       emit AdjustmentSnapshotChanged();
+      SyncAlbumHdrFlagFromSnapshot();
     }
   }
   SyncViewportDisplayConfig();
@@ -714,6 +721,7 @@ void EditorSessionController::Close() {
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
+    SyncAlbumHdrFlagFromSnapshot();
     session_backend_->Close(/*persist_changes=*/true);
     SyncIdentityFromBackend();
   } else {
@@ -755,6 +763,10 @@ void EditorSessionController::Finalize(bool persistChanges) {
     }
     Close();
     return;
+  }
+
+  if (persistChanges) {
+    SyncAlbumHdrFlagFromSnapshot();
   }
 
   const auto result = session_backend_->Close(persistChanges);
@@ -839,6 +851,26 @@ void EditorSessionController::SyncViewportDisplayConfig() {
     config.peak_luminance = std::clamp(peak, 100.0f, 10000.0f);
   }
   item->setDisplayConfig(config);
+}
+
+void EditorSessionController::SyncAlbumHdrFlagFromSnapshot() {
+  if (!album_catalog_ || element_id_ == 0 || image_id_ == 0) {
+    return;
+  }
+
+  const QVariantMap wrapper = adjustment_snapshot_.value(QStringLiteral("odt")).toMap();
+  QVariantMap       odt     = wrapper.value(QStringLiteral("odt")).toMap();
+  if (odt.isEmpty()) {
+    odt = wrapper;
+  }
+  const QString eotf_text = odt.value(QStringLiteral("encoding_eotf")).toString();
+  if (eotf_text.isEmpty()) {
+    return;
+  }
+  const auto eotf   = ColorUtils::EOTFFromString(eotf_text.toStdString());
+  const bool is_hdr = eotf == ColorUtils::EOTF::ST2084 || eotf == ColorUtils::EOTF::HLG;
+  album_catalog_->PersistImageHdrFlag(static_cast<sl_element_id_t>(element_id_),
+                                      static_cast<image_id_t>(image_id_), is_hdr);
 }
 
 void EditorSessionController::updatePresentationTargetSize(int width, int height) {

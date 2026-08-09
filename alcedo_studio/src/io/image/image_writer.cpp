@@ -3,14 +3,12 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "io/image/image_writer.hpp"
-#include "io/image/export_icc_profile_resolver.hpp"
-#include "io/image/ultra_hdr_writer.hpp"
 
 #include <OpenImageIO/imageio.h>
-#include <exiv2/exiv2.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -23,6 +21,8 @@
 #include <vector>
 
 #include "image/metadata.hpp"
+#include "io/image/export_icc_profile_resolver.hpp"
+#include "io/image/ultra_hdr_writer.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -209,11 +209,30 @@ auto MakeOIIOBuffer(const cv::Mat& rgba32f, const ExportFormatOptions& options,
 }
 
 auto ApplyOIIOFormatOptions(ImageSpec& spec, const ExportFormatOptions& options) -> void {
+  // Drop any compression/quality copied from the source so export options win.
+  spec.extra_attribs.remove("compression", TypeDesc::UNKNOWN, false);
+  spec.extra_attribs.remove("Compression", TypeDesc::UNKNOWN, false);
+  spec.extra_attribs.remove("CompressionQuality", TypeDesc::UNKNOWN, false);
+
   switch (options.format_) {
-    case ImageFormatType::JPEG:
-    case ImageFormatType::WEBP:
-      spec.attribute("CompressionQuality", options.quality_);
+    case ImageFormatType::JPEG: {
+      const int         quality  = std::clamp(options.quality_, 1, 100);
+      const std::string compress = "jpeg:" + std::to_string(quality);
+      // OIIO JPEG writer reads quality from compression="jpeg:N" (CompressionQuality
+      // is deprecated since 2.1 and is ignored by current jpegoutput).
+      spec.attribute("compression", compress);
+      spec.attribute("Compression", compress);
+      spec.attribute("CompressionQuality", quality);
       break;
+    }
+    case ImageFormatType::WEBP: {
+      const int         quality  = std::clamp(options.quality_, 0, 100);
+      const std::string compress = "webp:" + std::to_string(quality);
+      spec.attribute("compression", compress);
+      spec.attribute("Compression", compress);
+      spec.attribute("CompressionQuality", quality);
+      break;
+    }
     case ImageFormatType::PNG:
       spec.attribute("CompressionLevel", options.compression_level_);
       spec.attribute("png:compressionLevel", options.compression_level_);
@@ -272,7 +291,7 @@ void RemoveConflictingExifColorTags(Exiv2::ExifData& exif_data) {
   EraseExifKey(exif_data, "Exif.Iop.InteroperabilityVersion");
 }
 
-void ApplyExportColorProfile(ImageSpec& spec,
+void ApplyExportColorProfile(ImageSpec&                                     spec,
                              const std::optional<ExportColorProfileConfig>& color_profile) {
   if (!color_profile.has_value()) {
     return;
@@ -285,16 +304,16 @@ void ApplyExportColorProfile(ImageSpec& spec,
   }
 
   RemoveEmbeddedColorProfileMetadata(spec);
-  spec.attribute("oiio:ColorSpace",
-                 ColorUtils::ColorSpaceToString(color_profile->encoding_space) + ":" +
-                     ColorUtils::EOTFToString(color_profile->encoding_eotf));
+  spec.attribute("oiio:ColorSpace", ColorUtils::ColorSpaceToString(color_profile->encoding_space) +
+                                        ":" +
+                                        ColorUtils::EOTFToString(color_profile->encoding_eotf));
   spec.attribute("ICCProfile",
                  TypeDesc(TypeDesc::UINT8, TypeDesc::SCALAR, TypeDesc::NOSEMANTICS,
                           static_cast<int>(icc_bytes.size())),
                  icc_bytes.data());
 }
 
-void ApplyExportMetadataToOIIO(ImageSpec& spec,
+void ApplyExportMetadataToOIIO(ImageSpec&                                spec,
                                const std::optional<ExifDisplayMetaData>& export_metadata) {
   if (!export_metadata.has_value() || !HasMeaningfulExportMetadata(*export_metadata)) {
     return;
@@ -337,8 +356,7 @@ void ApplyExportMetadataToOIIO(ImageSpec& spec,
   }
 }
 
-void ApplyDisplayMetadataToExif(Exiv2::ExifData& exif_data,
-                                const ExifDisplayMetaData& metadata) {
+void ApplyDisplayMetadataToExif(Exiv2::ExifData& exif_data, const ExifDisplayMetaData& metadata) {
   if (!metadata.make_.empty()) {
     try {
       exif_data["Exif.Image.Make"] = metadata.make_;
@@ -397,8 +415,8 @@ void ApplyDisplayMetadataToExif(Exiv2::ExifData& exif_data,
   }
   if (metadata.shutter_speed_.first > 0 && metadata.shutter_speed_.second > 0) {
     try {
-      exif_data["Exif.Photo.ExposureTime"] = Exiv2::Rational(metadata.shutter_speed_.first,
-                                                             metadata.shutter_speed_.second);
+      exif_data["Exif.Photo.ExposureTime"] =
+          Exiv2::Rational(metadata.shutter_speed_.first, metadata.shutter_speed_.second);
     } catch (...) {
     }
   }
@@ -466,8 +484,7 @@ void SetIccProfileBytes(Exiv2::Image& image, const std::vector<uint8_t>& icc_byt
     return;
   }
 
-  Exiv2::DataBuf profile(reinterpret_cast<const Exiv2::byte*>(icc_bytes.data()),
-                         icc_bytes.size());
+  Exiv2::DataBuf profile(reinterpret_cast<const Exiv2::byte*>(icc_bytes.data()), icc_bytes.size());
   try {
     image.setIccProfile(std::move(profile));
   } catch (...) {
@@ -547,8 +564,8 @@ auto IsJpegBytes(const std::vector<uint8_t>& bytes) -> bool {
   return bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8;
 }
 
-auto IsExifApp1Segment(const std::vector<uint8_t>& bytes, size_t marker_pos,
-                       size_t segment_length) -> bool {
+auto IsExifApp1Segment(const std::vector<uint8_t>& bytes, size_t marker_pos, size_t segment_length)
+    -> bool {
   constexpr uint8_t kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
   const size_t      payload_pos   = marker_pos + 4;
   return segment_length >= 2 + sizeof(kExifPrefix) &&
@@ -667,7 +684,7 @@ auto BuildJpegExifPayloadNoExiv(const std::optional<ExifDisplayMetaData>& export
   if (!export_metadata.has_value() || !HasMeaningfulExportMetadata(*export_metadata)) {
     return {};
   }
-  const auto& metadata = *export_metadata;
+  const auto&               metadata = *export_metadata;
 
   std::vector<ExifIfdEntry> exif_ifd;
   if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
@@ -712,7 +729,7 @@ auto BuildJpegExifPayloadNoExiv(const std::optional<ExifDisplayMetaData>& export
     ifd0.push_back(MakeShortEntry(0x4749, RatingPercentFor(normalized_rating)));  // RatingPercent
   }
 
-  constexpr uint16_t kExifIfdTag = 0x8769;
+  constexpr uint16_t kExifIfdTag   = 0x8769;
   const bool         need_exif_ifd = !exif_ifd.empty();
   if (need_exif_ifd) {
     ifd0.push_back(MakeLongEntry(kExifIfdTag, 0));  // patched below
@@ -734,8 +751,8 @@ auto BuildJpegExifPayloadNoExiv(const std::optional<ExifDisplayMetaData>& export
   if (need_exif_ifd) {
     const uint32_t exif_ifd_offset = static_cast<uint32_t>(tiff.size());
     EncodeIfd(tiff, exif_ifd, 0);
-    const uint16_t count =
-        static_cast<uint16_t>(tiff[ifd0_start] | (static_cast<uint16_t>(tiff[ifd0_start + 1]) << 8));
+    const uint16_t count = static_cast<uint16_t>(
+        tiff[ifd0_start] | (static_cast<uint16_t>(tiff[ifd0_start + 1]) << 8));
     for (uint16_t i = 0; i < count; ++i) {
       uint8_t*       slot = tiff.data() + ifd0_start + 2 + i * 12;
       const uint16_t tag  = static_cast<uint16_t>(slot[0] | (static_cast<uint16_t>(slot[1]) << 8));
@@ -749,7 +766,7 @@ auto BuildJpegExifPayloadNoExiv(const std::optional<ExifDisplayMetaData>& export
     }
   }
 
-  constexpr uint8_t kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
+  constexpr uint8_t    kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
   std::vector<uint8_t> payload(std::begin(kExifPrefix), std::end(kExifPrefix));
   payload.insert(payload.end(), tiff.begin(), tiff.end());
   if (payload.size() > 65533) {
@@ -777,7 +794,7 @@ auto ReplaceJpegExifSegment(const std::filesystem::path& export_path,
   }
 
   std::vector<uint8_t> segment;
-  const uint16_t segment_length = static_cast<uint16_t>(exif_payload.size() + 2);
+  const uint16_t       segment_length = static_cast<uint16_t>(exif_payload.size() + 2);
   segment.reserve(exif_payload.size() + 4);
   segment.push_back(0xFF);
   segment.push_back(0xE1);
@@ -842,10 +859,9 @@ auto IsJpegExportPath(const std::filesystem::path& path) -> bool {
          ext == ".JPE";
 }
 
-void ApplyExportMetadata(
-    const std::filesystem::path& export_path,
-    const std::optional<ExportColorProfileConfig>& color_profile,
-    const std::optional<ExifDisplayMetaData>& export_metadata) {
+void ApplyExportMetadata(const std::filesystem::path&                   export_path,
+                         const std::optional<ExportColorProfileConfig>& color_profile,
+                         const std::optional<ExifDisplayMetaData>&      export_metadata) {
   const bool has_metadata =
       export_metadata.has_value() && HasMeaningfulExportMetadata(*export_metadata);
   const std::vector<uint8_t> icc_bytes =
@@ -909,7 +925,8 @@ void ApplyExportMetadata(
       }
       PersistExivMem(owned, export_path);
     } catch (...) {
-      // Metadata injection is best-effort; pixel export should not fail for unsupported tags/formats.
+      // Metadata injection is best-effort; pixel export should not fail for unsupported
+      // tags/formats.
     }
   }
 
@@ -931,8 +948,8 @@ void ApplyExportMetadata(
 auto TryWriteWithOpenImageIO(const image_path_t& src_path, const std::filesystem::path& export_path,
                              const cv::Mat& rgba32f, const ExportFormatOptions& options,
                              const std::optional<ExportColorProfileConfig>& color_profile,
-                             const std::optional<ExifDisplayMetaData>& export_metadata,
-                             std::string& out_error) -> bool {
+                             const std::optional<ExifDisplayMetaData>&      export_metadata,
+                             std::string&                                   out_error) -> bool {
   const std::string dst          = PathToUtf8(export_path);
 
   TypeDesc          spec_format  = TypeDesc::UINT8;
@@ -1051,19 +1068,19 @@ auto TryWriteWithOpenCV(const std::filesystem::path& export_path, const cv::Mat&
 }
 }  // namespace
 
-auto ImageWriter::ShouldWriteUltraHdr(
-    const ExportFormatOptions&                       options,
-    const std::optional<ExportColorProfileConfig>& color_profile) -> bool {
+auto ImageWriter::ShouldWriteUltraHdr(const ExportFormatOptions&                     options,
+                                      const std::optional<ExportColorProfileConfig>& color_profile)
+    -> bool {
   return options.format_ == ImageFormatType::JPEG && color_profile.has_value() &&
          options.hdr_export_mode_ == ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR &&
          IsUltraHdrTransfer(color_profile->encoding_eotf);
 }
 
-void ImageWriter::WriteImageToPath(const image_path_t&          src_path,
-                                   std::shared_ptr<ImageBuffer> image_data,
-                                   ExportFormatOptions          options,
+void ImageWriter::WriteImageToPath(const image_path_t&                     src_path,
+                                   std::shared_ptr<ImageBuffer>            image_data,
+                                   ExportFormatOptions                     options,
                                    std::optional<ExportColorProfileConfig> color_profile,
-                                   std::optional<ExifDisplayMetaData> export_metadata) {
+                                   std::optional<ExifDisplayMetaData>      export_metadata) {
   if (!image_data) {
     throw std::runtime_error("ImageWriter: image_data is null");
   }

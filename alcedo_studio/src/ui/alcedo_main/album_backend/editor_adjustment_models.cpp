@@ -4,12 +4,12 @@
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJSValue>
-#include <QTimer>
 #include <QtQml/qqml.h>
 
+#include <QJSValue>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTimer>
 #include <algorithm>
 #include <cmath>
 
@@ -58,8 +58,8 @@ void EditorAdjustmentModelBase::setEnabled(bool enabled) {
 
 void EditorAdjustmentModelBase::setSubmitter(QObject* submitter) {
   submitterObject_ = submitter;
-  submitter_ = submitter != nullptr ? dynamic_cast<IEditorAdjustmentSubmitter*>(submitter)
-                                    : nullptr;
+  submitter_ =
+      submitter != nullptr ? dynamic_cast<IEditorAdjustmentSubmitter*>(submitter) : nullptr;
   emit submitterChanged();
 }
 
@@ -87,8 +87,8 @@ auto EditorAdjustmentModelBase::toggleParamsJson(bool value) -> QString {
   return QJsonDocument(obj).toJson(QJsonDocument::Compact);
 }
 
-auto EditorAdjustmentModelBase::resolveParams(const QJSValue& arg,
-                                              const QString&   defaultJson) const -> QString {
+auto EditorAdjustmentModelBase::resolveParams(const QJSValue& arg, const QString& defaultJson) const
+    -> QString {
   if (paramsBuilder_.isCallable()) {
     const QJSValue result = paramsBuilder_.call(QJSValueList{arg});
     if (result.isString()) {
@@ -115,9 +115,7 @@ EditorAdjustmentValueModel::EditorAdjustmentValueModel(QObject* parent)
   connect(debounceTimer_, &QTimer::timeout, this, &EditorAdjustmentValueModel::onDebounceTimeout);
 }
 
-void EditorAdjustmentValueModel::setValue(double v) {
-  applyValue(v);
-}
+void EditorAdjustmentValueModel::setValue(double v) { applyValue(v); }
 
 void EditorAdjustmentValueModel::setDefaultValue(double v) {
   if (defaultValue_ == v) {
@@ -133,6 +131,7 @@ void EditorAdjustmentValueModel::setMinimum(double v) {
   }
   minimum_ = v;
   emit minimumChanged();
+  applyValue(value_);
 }
 
 void EditorAdjustmentValueModel::setMaximum(double v) {
@@ -141,6 +140,7 @@ void EditorAdjustmentValueModel::setMaximum(double v) {
   }
   maximum_ = v;
   emit maximumChanged();
+  applyValue(value_);
 }
 
 void EditorAdjustmentValueModel::setStep(double v) {
@@ -240,7 +240,7 @@ void EditorAdjustmentValueModel::setInvalid(const QString& message) {
   if (!valid_ && errorMessage_ == message) {
     return;
   }
-  valid_ = false;
+  valid_        = false;
   errorMessage_ = message;
   emit validChanged();
 }
@@ -267,8 +267,8 @@ auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
     return false;
   }
   const bool wasValid = valid_;
-  value_ = clamped;
-  valid_ = true;
+  value_              = clamped;
+  valid_              = true;
   errorMessage_.clear();
   emit valueChanged();
   if (!wasValid) {
@@ -387,23 +387,16 @@ void EditorAdjustmentToggleModel::commitValue(bool v) {
   submitNow(resolveParams(QJSValue(v), toggleParamsJson(v)), true);
 }
 
-void EditorAdjustmentToggleModel::toggle() {
-  commitValue(!value_);
-}
+void EditorAdjustmentToggleModel::toggle() { commitValue(!value_); }
 
-void EditorAdjustmentToggleModel::reset() {
-  commitValue(defaultValue_);
-}
+void EditorAdjustmentToggleModel::reset() { commitValue(defaultValue_); }
 
 // ── QML registration ─────────────────────────────────────────────────────────
 
 void RegisterEditorAdjustmentQmlTypes() {
-  qmlRegisterType<EditorAdjustmentValueModel>("Alcedo.Main", 1, 0,
-                                              "EditorAdjustmentValueModel");
-  qmlRegisterType<EditorAdjustmentEnumModel>("Alcedo.Main", 1, 0,
-                                              "EditorAdjustmentEnumModel");
-  qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0,
-                                               "EditorAdjustmentToggleModel");
+  qmlRegisterType<EditorAdjustmentValueModel>("Alcedo.Main", 1, 0, "EditorAdjustmentValueModel");
+  qmlRegisterType<EditorAdjustmentEnumModel>("Alcedo.Main", 1, 0, "EditorAdjustmentEnumModel");
+  qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0, "EditorAdjustmentToggleModel");
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
   qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");

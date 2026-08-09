@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "image/metadata_extractor.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -51,8 +52,7 @@ auto ReadRatingFromExif(const Exiv2::ExifData& exif_data) -> std::optional<int> 
   return ReadRatingValue(it->toInt64());
 }
 
-void PopulateStandardRating(const Exiv2::Image& exif_image,
-                            ExifDisplayMetaData& display_metadata) {
+void PopulateStandardRating(const Exiv2::Image& exif_image, ExifDisplayMetaData& display_metadata) {
   if (const auto xmp_rating = ReadRatingFromXmp(exif_image.xmpData()); xmp_rating.has_value()) {
     display_metadata.rating_ = *xmp_rating;
     return;
@@ -114,6 +114,21 @@ void GetDisplayMetadataFromExif(Exiv2::ExifData& exif_data, ExifDisplayMetaData&
     }
   }
 }
+
+namespace {
+void PopulateDisplayMetadata(Image& image, const std::filesystem::path& file_path) {
+  ExifDisplayMetaData display{};
+  if (image.exif_data_ && !image.exif_data_->exifData().empty()) {
+    GetDisplayMetadataFromExif(image.exif_data_->exifData(), display);
+  }
+  if (image.exif_data_) {
+    PopulateStandardRating(*image.exif_data_, display);
+  }
+  display.is_hdr_ = MetadataExtractor::DetectHdrDisplayMetadata(file_path, image.exif_data_.get());
+  image.SetExifDisplayMetaData(std::move(display));
+}
+}  // namespace
+
 /**
  * @brief A callback used to parse the basic information of a image file
  *
@@ -134,8 +149,7 @@ void MetadataDecoder::Decode(std::vector<char> buffer, std::filesystem::path fil
     img->exif_data_->readMetadata();
     img->has_exif_ = !img->exif_data_->exifData().empty();
 
-    GetDisplayMetadataFromExif(img->exif_data_->exifData(), img->exif_display_);
-    PopulateStandardRating(*img->exif_data_, img->exif_display_);
+    PopulateDisplayMetadata(*img, file_path);
 
     result->push(img);
     promise->set_value(id);
@@ -159,8 +173,7 @@ void MetadataDecoder::Decode(std::vector<char> buffer, std::shared_ptr<Image> so
     source_img->exif_data_ = Exiv2::ImageFactory::open((Exiv2::byte*)buffer.data(), buffer.size());
     source_img->exif_data_->readMetadata();
     source_img->has_exif_ = !source_img->exif_data_->exifData().empty();
-    GetDisplayMetadataFromExif(source_img->exif_data_->exifData(), source_img->exif_display_);
-    PopulateStandardRating(*source_img->exif_data_, source_img->exif_display_);
+    PopulateDisplayMetadata(*source_img, source_img->image_path_);
     result->push(source_img);
     promise->set_value(source_img->image_id_);
 

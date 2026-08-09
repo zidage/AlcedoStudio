@@ -10,6 +10,10 @@ import QtQuick.Layouts
 // panel selectedPath pattern so snapshot load and user select both invalidate
 // the highlight.
 //
+// Per-entry disable: an entry may set `enabled: false` so unsupported choices
+// stay visible but non-interactive (e.g. bit depth locked by export format).
+// Root `enabled` remains the master gate for the whole track.
+//
 // Tokens come from `appTheme`; callers can override the theme color properties
 // (e.g. editor panels pass their `theme`-derived colors) and geometry. The
 // caller owns the model: bind `entries` / `currentValue` / `currentIndex` and
@@ -60,6 +64,17 @@ Rectangle {
                 required property var modelData
                 required property int index
 
+                // Per-entry disable: entries may set `enabled: false` (e.g. bit
+                // depths unsupported by the current export format). Root.enabled
+                // remains the master gate for the whole track.
+                readonly property bool segmentEnabled: {
+                    if (!root.enabled)
+                        return false
+                    if (!modelData || modelData.enabled === undefined)
+                        return true
+                    return modelData.enabled !== false
+                }
+
                 // Value-led when both sides carry a value, index-led otherwise
                 // (matches the adjustment-panel selectedPath highlight rule).
                 readonly property bool sel: {
@@ -75,8 +90,9 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 radius: Math.max(2, root.trackRadius - 2)
+                opacity: segmentEnabled ? 1.0 : 0.38
                 color: sel ? root.selectedFillColor
-                           : (hovered && root.enabled ? root.hoverColor : "transparent")
+                           : (hovered && segmentEnabled ? root.hoverColor : "transparent")
                 border.width: 0
 
                 Label {
@@ -95,9 +111,10 @@ Rectangle {
                 MouseArea {
                     id: segMouse
                     anchors.fill: parent
-                    hoverEnabled: root.enabled
-                    cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    enabled: root.enabled
+                    hoverEnabled: segment.segmentEnabled
+                    cursorShape: segment.segmentEnabled ? Qt.PointingHandCursor
+                                                        : Qt.ArrowCursor
+                    enabled: segment.segmentEnabled
                     onClicked: {
                         var entryVal = segment.modelData && segment.modelData.value !== undefined
                                 ? String(segment.modelData.value) : ""

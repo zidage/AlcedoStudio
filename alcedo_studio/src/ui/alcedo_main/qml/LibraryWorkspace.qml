@@ -406,10 +406,14 @@ RowLayout {
                 clip: true
 
                 InspectorPanel {
+                    id: inspectorPanel
                     anchors.fill: parent
                     anchors.margins: 10
                     focusedImage: host.focusedImageInspection
                     interactionPolicy: appModules.interactionPolicy
+                    exportQueueState: host.exportQueueState
+                    selectionState: host.selectionState
+                    selectedCount: host.selectedCount
                     onRatingRequested: function(rating) {
                         host.requestSetFocusedImageRating(rating)
                     }
@@ -463,8 +467,15 @@ RowLayout {
                     id: exportQueueBtn
                     Layout.fillWidth: true
                     Layout.preferredHeight: 52
-                    text: qsTr("Export") + " (" + host.exportQueueCount + ")"
-                    enabled: host.backendInteractive && (appModules.library.shownCount > 0 || host.exportQueueCount > 0)
+                    visible: inspectorPanel.exportPageActive
+                    text: appModules.importExport.exportInFlight
+                          ? qsTr("Exporting...")
+                          : host.exportQueueCount === 1
+                            ? qsTr("Export 1 File")
+                            : qsTr("Export %1 Files").arg(host.exportQueueCount)
+                    enabled: host.backendInteractive
+                             && !appModules.importExport.exportInFlight
+                             && host.exportQueueCount > 0
                     icon.source: "qrc:/panel_icons/export.svg"
                     icon.width: 16
                     icon.height: 16
@@ -503,10 +514,7 @@ RowLayout {
                     Material.foreground: root.colText
                     scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
                     Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                    onClicked: {
-                        host.exportQueueState.refreshExportPreview()
-                        host.exportDialog.open()
-                    }
+                    onClicked: inspectorPanel.startExport()
                 }
             }
         }

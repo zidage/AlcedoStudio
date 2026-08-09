@@ -6,15 +6,15 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <exiv2/exif.hpp>
 #include <exiv2/exiv2.hpp>
 #include <json.hpp>
+#include <stdexcept>
 
-#include "utils/import/import_error_code.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "image.hpp"
 #include "type/type.hpp"
+#include "utils/import/import_error_code.hpp"
 
 // Forward declare LibRaw so callers that only need the header do not pull in libraw.h
 class LibRaw;
@@ -37,7 +37,7 @@ class MetadataExtractionError : public std::runtime_error {
   [[nodiscard]] auto nef_compression() const -> uint16_t { return nef_compression_; }
 
  private:
-  ImportErrorCode code_            = ImportErrorCode::UNKNOWN;
+  ImportErrorCode code_ = ImportErrorCode::UNKNOWN;
   image_path_t    path_{};
   std::string     message_{};
   uint16_t        nef_compression_ = 0;
@@ -52,8 +52,7 @@ class MetadataExtractor {
    * @return Exiv2::Image::UniquePtr
    */
   static auto ExtractEXIF(const image_path_t& image_path) -> Exiv2::Image::UniquePtr;
-  static auto ExtractEXIFFromBuffer(const uint8_t* buffer, size_t size)
-      -> Exiv2::Image::UniquePtr;
+  static auto ExtractEXIFFromBuffer(const uint8_t* buffer, size_t size) -> Exiv2::Image::UniquePtr;
 
   /**
    * @brief Convert EXIF data to JSON format
@@ -71,8 +70,16 @@ class MetadataExtractor {
    */
   static auto EXIFToDisplayMetaData(const Exiv2::Image::UniquePtr& exif_data)
       -> ExifDisplayMetaData;
-  static auto BufferToDisplayMetaData(const uint8_t* buffer, size_t size)
-      -> ExifDisplayMetaData;
+  static auto BufferToDisplayMetaData(const uint8_t* buffer, size_t size) -> ExifDisplayMetaData;
+
+  /**
+   * @brief Detect Ultra HDR / HDR gain-map / Rec.2100 markers for album badges.
+   *
+   * Prefer the open Exiv2 image when available so XMP gain-map tags are checked
+   * without a second file open; the path is still used for OIIO/signature probes.
+   */
+  static auto DetectHdrDisplayMetadata(const image_path_t& image_path,
+                                       const Exiv2::Image* exif_image = nullptr) -> bool;
 
   /**
    * @brief Extract EXIF metadata and populate the Image object
@@ -104,7 +111,7 @@ class MetadataExtractor {
    * @param raw_processor  A LibRaw instance after open_file + unpack
    * @param ctx            Output context to populate
    */
-  static void PopulateRuntimeContextFromOpenLibRaw(LibRaw& raw_processor,
+  static void PopulateRuntimeContextFromOpenLibRaw(LibRaw&                 raw_processor,
                                                    RawRuntimeColorContext& ctx);
 
   /**
@@ -115,6 +122,6 @@ class MetadataExtractor {
    * @param ctx            Context to merge into
    */
   static void MergeMetadataHint(const ExifDisplayMetaData* metadata_hint,
-                                RawRuntimeColorContext& ctx);
+                                RawRuntimeColorContext&    ctx);
 };
 }  // namespace alcedo

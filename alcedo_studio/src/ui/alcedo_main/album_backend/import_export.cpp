@@ -4,41 +4,44 @@
 
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 
-#include "ui/alcedo_main/album_backend/import_export.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
-#include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
-#include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
-#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
-#include "ui/alcedo_main/album_backend/path_utils.hpp"
-
 #include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
+#include <QSettings>
 #include <QStandardPaths>
-
 #include <algorithm>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
 
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
+
 namespace alcedo::ui {
 
 using namespace album_util;
 
-#define PL_TEXT(text, ...)                                                    \
-  i18n::MakeLocalizedText(ALCEDO_I18N_CONTEXT,                              \
-                          QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text)      \
-                              __VA_OPT__(, ) __VA_ARGS__)
+#define PL_TEXT(text, ...)                     \
+  i18n::MakeLocalizedText(ALCEDO_I18N_CONTEXT, \
+                          QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text) __VA_OPT__(, ) __VA_ARGS__)
 
 namespace {
 
-auto SanitizeBitDepth(ImageFormatType format,
-                      ExportFormatOptions::BIT_DEPTH requested) -> ExportFormatOptions::BIT_DEPTH {
+constexpr auto kExportSdrQualityKey      = "export/sdrQuality";
+constexpr auto kExportUltraHdrQualityKey = "export/ultraHdrQuality";
+constexpr int  kDefaultExportQuality     = 95;
+
+auto           SanitizeBitDepth(ImageFormatType format, ExportFormatOptions::BIT_DEPTH requested)
+    -> ExportFormatOptions::BIT_DEPTH {
   switch (format) {
     case ImageFormatType::JPEG:
     case ImageFormatType::WEBP:
@@ -68,23 +71,25 @@ auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
                                          FolderController* folders, IUiStatusSink* status,
                                          ProjectDbWriteBarrier* barrier, QObject* parent)
-    : QObject(parent), project_(project), library_(library), folders_(folders),
-      status_(status), barrier_(barrier) {
+    : QObject(parent),
+      project_(project),
+      library_(library),
+      folders_(folders),
+      status_(status),
+      barrier_(barrier) {
   // default export folder init continues below
 
-  const QString pictures =
-      QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+  const QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
   if (!pictures.isEmpty()) {
     default_export_folder_ = pictures;
   }
   export_status_text_ = PL_TEXT("Ready to export.");
 }
 
-void ImportExportHandler::BindCollaborators(StatsEngine* stats,
-                                            NikonHeRecoveryController* nikon,
+void ImportExportHandler::BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
                                             SemanticGenerationController* semantic) {
-  stats_ = stats;
-  nikon_ = nikon;
+  stats_    = stats;
+  nikon_    = nikon;
   semantic_ = semantic;
 }
 
@@ -118,7 +123,7 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
 
 QStringList ImportExportHandler::CollectFolderFiles(const QString& folderUrlOrPath) {
   QStringList result;
-  const auto folder_opt = InputToPath(folderUrlOrPath);
+  const auto  folder_opt = InputToPath(folderUrlOrPath);
   if (!folder_opt.has_value()) {
     return result;
   }
@@ -154,8 +159,8 @@ QStringList ImportExportHandler::CollectFolderFiles(const QString& folderUrlOrPa
 }
 
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
-                                           const bool                      preserveTarget) {
-  std::vector<image_path_t> deduped_paths;
+                                           const bool                       preserveTarget) {
+  std::vector<image_path_t>        deduped_paths;
   std::unordered_set<std::wstring> seen;
   deduped_paths.reserve(paths.size());
   for (const auto& path : paths) {
@@ -176,7 +181,7 @@ void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& path
 }
 
 void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> paths,
-                                                   const bool preserveTarget) {
+                                                   const bool                preserveTarget) {
   if (project_->handler().project_loading()) {
     status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
@@ -199,10 +204,10 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   auto job            = std::make_shared<ImportJob>();
   current_import_job_ = job;
 
-  import_running_   = true;
-  import_total_     = static_cast<int>(paths.size());
-  import_completed_ = 0;
-  import_failed_    = 0;
+  import_running_     = true;
+  import_total_       = static_cast<int>(paths.size());
+  import_completed_   = 0;
+  import_failed_      = 0;
   import_status_text_ = PL_TEXT("Importing %1 file(s)...", import_total_);
   emit ImportStateChanged();
   emit importStateChanged();
@@ -251,11 +256,10 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
 
   try {
     ImportOptions options;
-    current_import_job_ =
-        isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
+    current_import_job_ = isvc->ImportToFolder(paths, import_target_folder_path_, options, job);
   } catch (const std::exception& e) {
     current_import_job_.reset();
-    import_running_ = false;
+    import_running_     = false;
     import_status_text_ = PL_TEXT("Import failed: %1", QString::fromUtf8(e.what()));
     emit ImportStateChanged();
     emit importStateChanged();
@@ -279,10 +283,9 @@ void ImportExportHandler::StartExport(const QString& outputDirUrlOrPath) {
 
 void ImportExportHandler::StartExportWithOptions(const QString& outputDirUrlOrPath,
                                                  const QString& formatName,
-                                                 const QString& hdrExportMode,
-                                                 bool resizeEnabled, int maxLengthSide,
-                                                 int quality, int bitDepth,
-                                                 int pngCompressionLevel,
+                                                 const QString& hdrExportMode, bool resizeEnabled,
+                                                 int maxLengthSide, int quality, int bitDepth,
+                                                 int            pngCompressionLevel,
                                                  const QString& tiffCompression) {
   StartExportWithOptionsForTargets(outputDirUrlOrPath, formatName, hdrExportMode, resizeEnabled,
                                    maxLengthSide, quality, bitDepth, pngCompressionLevel,
@@ -291,9 +294,8 @@ void ImportExportHandler::StartExportWithOptions(const QString& outputDirUrlOrPa
 
 void ImportExportHandler::StartExportWithOptionsForTargets(
     const QString& outputDirUrlOrPath, const QString& formatName, const QString& hdrExportMode,
-    bool resizeEnabled, int maxLengthSide, int quality, int bitDepth,
-    int pngCompressionLevel, const QString& tiffCompression,
-    const QVariantList& targetEntries) {
+    bool resizeEnabled, int maxLengthSide, int quality, int bitDepth, int pngCompressionLevel,
+    const QString& tiffCompression, const QVariantList& targetEntries) {
   (void)hdrExportMode;
   StartExportWithSplitOptionsForTargets(outputDirUrlOrPath, resizeEnabled, maxLengthSide, 8192,
                                         formatName, quality, bitDepth, pngCompressionLevel,
@@ -311,7 +313,7 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
   }
 
   const auto& esvc = project_->handler().export_service();
-  auto  proj = project_->handler().project();
+  auto        proj = project_->handler().project();
   if (!esvc || !proj) {
     SetExportFailureState(PL_TEXT("Export service is unavailable."));
     return;
@@ -345,16 +347,14 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
   }
 
   const ImageFormatType sdr_format = FormatFromName(sdrFormatName);
-  const int             clamped_sdr_max =
-      sdrResizeEnabled ? std::clamp(sdrMaxLengthSide, 256, 16384) : 0;
-  const int             clamped_ultra_hdr_max =
+  const int clamped_sdr_max = sdrResizeEnabled ? std::clamp(sdrMaxLengthSide, 256, 16384) : 0;
+  const int clamped_ultra_hdr_max =
       std::clamp(ultraHdrMaxLengthSide > 0 ? ultraHdrMaxLengthSide : 8192, 256, 8192);
-  const int             clamped_sdr_quality = std::clamp(sdrQuality, 1, 100);
-  const int             clamped_ultra_hdr_quality = std::clamp(ultraHdrQuality, 1, 100);
-  const auto            sdr_bit_depth =
-      SanitizeBitDepth(sdr_format, BitDepthFromInt(sdrBitDepth));
-  const int             clamped_png = std::clamp(sdrPngCompressionLevel, 0, 9);
-  const auto            tiff_compress = TiffCompressFromName(sdrTiffCompression);
+  const int  clamped_sdr_quality       = std::clamp(sdrQuality, 1, 100);
+  const int  clamped_ultra_hdr_quality = std::clamp(ultraHdrQuality, 1, 100);
+  const auto sdr_bit_depth             = SanitizeBitDepth(sdr_format, BitDepthFromInt(sdrBitDepth));
+  const int  clamped_png               = std::clamp(sdrPngCompressionLevel, 0, 9);
+  const auto tiff_compress             = TiffCompressFromName(sdrTiffCompression);
 
   esvc->ClearAllExportTasks();
   // Phase 2 (Step 4): hold the project DB write barrier across the export so
@@ -364,8 +364,7 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
   const auto queue_result = BuildExportQueue(
       targets, outDirOpt.value(), sdrResizeEnabled, clamped_sdr_max, clamped_ultra_hdr_max,
       sdr_format, clamped_sdr_quality, sdr_bit_depth, clamped_png, tiff_compress,
-      clamped_ultra_hdr_quality,
-      ultraHdrDitherEnabled);
+      clamped_ultra_hdr_quality, ultraHdrDitherEnabled);
 
   if (queue_result.queued_count_ == 0) {
     // Nothing to export; release the barrier we just acquired.
@@ -416,10 +415,9 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
                   state_changed = true;
                 }
                 if (progress.task_finished_) {
-                  self->export_item_statuses_.insert(
-                      status_key,
-                      progress.task_success_ ? QStringLiteral("succeeded")
-                                             : QStringLiteral("failed"));
+                  self->export_item_statuses_.insert(status_key, progress.task_success_
+                                                                     ? QStringLiteral("succeeded")
+                                                                     : QStringLiteral("failed"));
                   state_changed = true;
                 }
               }
@@ -437,10 +435,9 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
                               self->export_completed_, self->export_total_, self->export_succeeded_,
                               self->export_failed_);
 
-                  const int percent =
-                      self->export_total_ > 0
-                          ? (self->export_completed_ * 100) / self->export_total_
-                          : 0;
+                  const int percent = self->export_total_ > 0
+                                          ? (self->export_completed_ * 100) / self->export_total_
+                                          : 0;
                   if (self->status_) {
                     self->status_->SetTaskState(self->export_status_text_, percent, false);
                   }
@@ -455,8 +452,8 @@ void ImportExportHandler::StartExportWithSplitOptionsForTargets(
             },
             Qt::QueuedConnection);
       },
-      [self, skipped = queue_result.skipped_count_](
-          std::shared_ptr<std::vector<ExportResult>> results) {
+      [self,
+       skipped = queue_result.skipped_count_](std::shared_ptr<std::vector<ExportResult>> results) {
         if (!self) return;
         QMetaObject::invokeMethod(
             self,
@@ -473,6 +470,26 @@ void ImportExportHandler::ResetExportState() {
   ResetExportProgressState(PL_TEXT("Ready to export."));
 }
 
+auto ImportExportHandler::LoadExportSdrQuality() const -> int {
+  return std::clamp(
+      QSettings{}.value(QLatin1String(kExportSdrQualityKey), kDefaultExportQuality).toInt(), 1,
+      100);
+}
+
+void ImportExportHandler::SaveExportSdrQuality(int quality) {
+  QSettings{}.setValue(QLatin1String(kExportSdrQualityKey), std::clamp(quality, 1, 100));
+}
+
+auto ImportExportHandler::LoadExportUltraHdrQuality() const -> int {
+  return std::clamp(
+      QSettings{}.value(QLatin1String(kExportUltraHdrQualityKey), kDefaultExportQuality).toInt(), 1,
+      100);
+}
+
+void ImportExportHandler::SaveExportUltraHdrQuality(int quality) {
+  QSettings{}.setValue(QLatin1String(kExportUltraHdrQualityKey), std::clamp(quality, 1, 100));
+}
+
 void ImportExportHandler::FinishImport(const ImportResult& result) {
   const auto importJob = current_import_job_;
   current_import_job_.reset();
@@ -482,12 +499,12 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
     return;
   }
 
-  const auto snapshot = importJob->import_log_->Snapshot();
-  const bool reimporting_nikon_he = nikon_ && nikon_->is_reimporting();
-  const auto recovery_target_folder_id = import_target_folder_id_;
+  const auto snapshot                    = importJob->import_log_->Snapshot();
+  const bool reimporting_nikon_he        = nikon_ && nikon_->is_reimporting();
+  const auto recovery_target_folder_id   = import_target_folder_id_;
   const auto recovery_target_folder_path = import_target_folder_path_;
 
-  bool state_saved = true;
+  bool       state_saved                 = true;
   try {
     auto* isvc = project_->handler().import_service();
     if (isvc) {
@@ -516,19 +533,18 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);
   import_target_folder_path_ = folders_->CurrentFolderFsPath();
 
-  auto task_text = PL_TEXT("Import complete: %1 imported, %2 failed", result.imported_,
-                           result.failed_);
+  auto task_text =
+      PL_TEXT("Import complete: %1 imported, %2 failed", result.imported_, result.failed_);
   if (!state_saved) {
-    status_->SetServiceMessage(
-        PL_TEXT("Import finished, but saving project state failed."));
+    status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
   } else if (!package_saved) {
-    status_->SetServiceMessage(
-        package_error.isEmpty() ? PL_TEXT("Import finished, but project packing failed.")
-                                : PL_TEXT("%1", package_error));
+    status_->SetServiceMessage(package_error.isEmpty()
+                                   ? PL_TEXT("Import finished, but project packing failed.")
+                                   : PL_TEXT("%1", package_error));
   }
-  import_running_   = false;
-  import_completed_ = static_cast<int>(result.imported_);
-  import_failed_    = static_cast<int>(result.failed_);
+  import_running_     = false;
+  import_completed_   = static_cast<int>(result.imported_);
+  import_failed_      = static_cast<int>(result.failed_);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();
@@ -565,8 +581,8 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   }
 }
 
-void ImportExportHandler::FinishExport(
-    const std::shared_ptr<std::vector<ExportResult>>& results, int skippedCount) {
+void ImportExportHandler::FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results,
+                                       int skippedCount) {
   export_inflight_ = false;
   // Phase 2 (Step 4): release the barrier; the 1->0 transition fires on_release_,
   // which drains any analysis-result writes that queued behind it.
@@ -588,29 +604,28 @@ void ImportExportHandler::FinishExport(
     }
   }
 
-  const int total   = ok + fail;
-  export_total_     = std::max(export_total_, total);
-  export_completed_ = total;
-  export_succeeded_ = ok;
-  export_failed_    = fail;
-  export_skipped_   = skippedCount;
+  const int total            = ok + fail;
+  export_total_              = std::max(export_total_, total);
+  export_completed_          = total;
+  export_succeeded_          = ok;
+  export_failed_             = fail;
+  export_skipped_            = skippedCount;
   export_error_summary_text_ = {};
   if (!errors.isEmpty()) {
     export_error_summary_text_ = PL_TEXT("%1", errors.join('\n'));
   }
 
-  export_status_text_ = PL_TEXT("Export complete. Written %1/%2 image(s), failed %3.", ok, total,
-                                fail);
+  export_status_text_ =
+      PL_TEXT("Export complete. Written %1/%2 image(s), failed %3.", ok, total, fail);
   if (skippedCount > 0) {
-    export_status_text_ = PL_TEXT(
-        "Export complete. Written %1/%2 image(s), failed %3. Skipped %4 invalid item(s).", ok,
-        total, fail, skippedCount);
+    export_status_text_ =
+        PL_TEXT("Export complete. Written %1/%2 image(s), failed %3. Skipped %4 invalid item(s).",
+                ok, total, fail, skippedCount);
   }
   emit ExportStateChanged();
   emit exportStateChanged();
 
-  status_->SetTaskState(
-      PL_TEXT("Export complete: %1 ok, %2 failed", ok, fail), 100, false);
+  status_->SetTaskState(PL_TEXT("Export complete: %1 ok, %2 failed", ok, fail), 100, false);
   status_->ScheduleIdleTaskStateReset(1800);
 }
 
@@ -621,7 +636,7 @@ void ImportExportHandler::AddImportedEntries(const ImportLogSnapshot& snapshot) 
 
 auto ImportExportHandler::CollectExportTargets(const QVariantList& targetEntries) const
     -> std::vector<ExportTarget> {
-  std::vector<ExportTarget> targets;
+  std::vector<ExportTarget>    targets;
 
   std::unordered_set<uint64_t> dedupe;
   if (targetEntries.empty()) {
@@ -654,10 +669,9 @@ auto ImportExportHandler::CollectExportTargets(const QVariantList& targetEntries
 auto ImportExportHandler::BuildExportQueue(
     const std::vector<ExportTarget>& targets, const std::filesystem::path& outputDir,
     bool sdrResizeEnabled, int sdrMaxLengthSide, int ultraHdrMaxLengthSide,
-    ImageFormatType sdrFormat, int sdrQuality,
-    ExportFormatOptions::BIT_DEPTH sdrBitDepth, int sdrPngCompressionLevel,
-    ExportFormatOptions::TIFF_COMPRESS sdrTiffCompression, int ultraHdrQuality,
-    bool ultraHdrDitherEnabled) -> ExportQueueBuildResult {
+    ImageFormatType sdrFormat, int sdrQuality, ExportFormatOptions::BIT_DEPTH sdrBitDepth,
+    int sdrPngCompressionLevel, ExportFormatOptions::TIFF_COMPRESS sdrTiffCompression,
+    int ultraHdrQuality, bool ultraHdrDitherEnabled) -> ExportQueueBuildResult {
   ExportQueueBuildResult summary;
   auto                   proj = project_->handler().project();
   const auto&            esvc = project_->handler().export_service();
@@ -709,18 +723,18 @@ auto ImportExportHandler::BuildExportQueue(
         name_source_path = std::filesystem::path(L"image");
       }
 
-      const bool is_hdr_export = std::get<2>(source_info);
+      const bool            is_hdr_export = std::get<2>(source_info);
 
-      const ImageFormatType task_format = is_hdr_export ? ImageFormatType::JPEG : sdrFormat;
-      auto       export_path =
+      const ImageFormatType task_format   = is_hdr_export ? ImageFormatType::JPEG : sdrFormat;
+      auto                  export_path =
           ExportPathForOptions(name_source_path, outputDir, elementId, imageId, task_format);
       const auto path_exists = [](const std::filesystem::path& p) {
         std::error_code ec;
         return std::filesystem::exists(p, ec);
       };
       if (planned_export_paths.contains(export_path.wstring()) || path_exists(export_path)) {
-        const std::wstring stem = export_path.stem().wstring();
-        const std::wstring ext  = export_path.extension().wstring();
+        const std::wstring stem       = export_path.stem().wstring();
+        const std::wstring ext        = export_path.extension().wstring();
         int                suffix_idx = 1;
         while (true) {
           const auto candidate =
@@ -735,21 +749,21 @@ auto ImportExportHandler::BuildExportQueue(
       planned_export_paths.insert(export_path.wstring());
 
       ExportTask task;
-      task.sleeve_id_                  = elementId;
-      task.image_id_                   = imageId;
-      task.options_.format_            = task_format;
-      task.options_.resize_enabled_    = is_hdr_export ? true : sdrResizeEnabled;
+      task.sleeve_id_               = elementId;
+      task.image_id_                = imageId;
+      task.options_.format_         = task_format;
+      task.options_.resize_enabled_ = is_hdr_export ? true : sdrResizeEnabled;
       task.options_.max_length_side_ =
           is_hdr_export ? ultraHdrMaxLengthSide : (sdrResizeEnabled ? sdrMaxLengthSide : 0);
-      task.options_.quality_           = is_hdr_export ? ultraHdrQuality : sdrQuality;
-      task.options_.bit_depth_         = is_hdr_export ? ExportFormatOptions::BIT_DEPTH::BIT_8
-                                                       : sdrBitDepth;
-      task.options_.compression_level_ = sdrPngCompressionLevel;
-      task.options_.tiff_compress_     = sdrTiffCompression;
-      task.options_.hdr_export_mode_   = ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR;
-      task.options_.ultra_hdr_quality_ = ultraHdrQuality;
+      task.options_.quality_ = is_hdr_export ? ultraHdrQuality : sdrQuality;
+      task.options_.bit_depth_ =
+          is_hdr_export ? ExportFormatOptions::BIT_DEPTH::BIT_8 : sdrBitDepth;
+      task.options_.compression_level_        = sdrPngCompressionLevel;
+      task.options_.tiff_compress_            = sdrTiffCompression;
+      task.options_.hdr_export_mode_          = ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR;
+      task.options_.ultra_hdr_quality_        = ultraHdrQuality;
       task.options_.ultra_hdr_dither_enabled_ = ultraHdrDitherEnabled;
-      task.options_.export_path_       = std::move(export_path);
+      task.options_.export_path_              = std::move(export_path);
 
       esvc->EnqueueExportTask(task);
       ++summary.queued_count_;
@@ -773,11 +787,11 @@ void ImportExportHandler::ResetExportProgressState(const i18n::LocalizedText& st
   export_status_text_        = status;
   export_error_summary_text_ = {};
   export_item_statuses_.clear();
-  export_total_              = 0;
-  export_completed_          = 0;
-  export_succeeded_          = 0;
-  export_failed_             = 0;
-  export_skipped_            = 0;
+  export_total_     = 0;
+  export_completed_ = 0;
+  export_succeeded_ = 0;
+  export_failed_    = 0;
+  export_skipped_   = 0;
   emit ExportStateChanged();
   emit exportStateChanged();
 }
@@ -790,7 +804,6 @@ void ImportExportHandler::SetExportFailureState(const i18n::LocalizedText& messa
   emit exportStateChanged();
   status_->SetTaskState(message, 0, false);
 }
-
 
 bool ImportExportHandler::CanUseHdrExportForTargets(const QVariantList& targetEntries) const {
   const auto targets = CollectExportTargets(targetEntries);

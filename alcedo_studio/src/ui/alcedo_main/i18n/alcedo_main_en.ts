@@ -901,260 +901,6 @@
     </message>
 </context>
 <context>
-    <name>AlbumExportDialog</name>
-    <message>
-        <location filename="../qml/AlbumExportDialog.qml" line="+99"/>
-        <source>...(%1 more)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Exporting</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Done</source>
-        <translation type="unfinished">Done</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Failed</source>
-        <translation type="unfinished">Failed</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Queued</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <location line="+2"/>
-        <location line="+3"/>
-        <location line="+7"/>
-        <source>8-bit</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-10"/>
-        <location line="+4"/>
-        <location line="+4"/>
-        <source>16-bit</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="-3"/>
-        <location line="+3"/>
-        <source>32-bit</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+73"/>
-        <source>Select Export Folder</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Export Images</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Configure settings for current batch</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <source>Destination</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Select output directory...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Browse</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>Put in Subfolder</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Processed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+37"/>
-        <source>HDR Export Settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Ultra HDR</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>HDR quality</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Encoding longest edge (px)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+24"/>
-        <source>Dithering</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+30"/>
-        <source>SDR Export Settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Image Format</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>JPEG</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>PNG</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>TIFF</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>WEBP</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>EXR</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Limit longest edge (px)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>No limit</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Quality</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+27"/>
-        <source>Bit Depth</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>PNG level</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Compression</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>None</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>LZW</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>ZIP</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>Export Queue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Items</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Add Selected (%1)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Clear</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+81"/>
-        <source>HDR</source>
-        <translation type="unfinished">HDR</translation>
-    </message>
-    <message>
-        <location line="+30"/>
-        <source>Queue is empty</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Export Progress</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>Close</source>
-        <translation type="unfinished">Close</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Cancel</source>
-        <translation type="unfinished">Cancel</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Exporting...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Export 1 File</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>AlbumInspectorPanel</name>
     <message>
         <location filename="../qml/AlbumInspectorPanel.qml" line="+43"/>
@@ -1475,7 +1221,7 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+40"/>
+        <location filename="../qml/AppDialogs.qml" line="+39"/>
         <source>Select Images</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1495,7 +1241,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+125"/>
+        <location line="+95"/>
         <source>Discard</source>
         <translation type="unfinished">Discard</translation>
     </message>
@@ -1520,7 +1266,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+212"/>
+        <location line="+211"/>
         <source>Select at least one image to analyze.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1668,7 +1414,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">Close</translation>
     </message>
     <message>
-        <location line="+226"/>
+        <location line="+171"/>
         <source>Details</source>
         <translation type="unfinished">Details</translation>
     </message>
@@ -3160,6 +2906,219 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>ExportInspectorPanel</name>
+    <message>
+        <location filename="../qml/ExportInspectorPanel.qml" line="+33"/>
+        <source>Processed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>JPEG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>PNG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>TIFF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>WEBP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>EXR</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>8 Bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>16 Bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>32 Bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>None</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LZW</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ZIP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>...(%1 more)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+79"/>
+        <source>Exporting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Done</source>
+        <translation type="unfinished">Done</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Failed</source>
+        <translation type="unfinished">Failed</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Queued</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+120"/>
+        <source>Quality</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>HDR Quality</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>PNG Level</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Select Export Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Destination</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Select output directory...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Browse</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Put in Subfolder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>SDR Export</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Format</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Bit Depth</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Compression</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Limit longest edge (px)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>No limit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>HDR Export</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Add Ultra HDR items to the queue to enable HDR export.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Encoding longest edge (px)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Dithering</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Export Queue (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export Queue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Add selected to queue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear export queue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+103"/>
+        <source>HDR</source>
+        <translation type="unfinished">HDR</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Queue is empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>Export Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>ExportQueueState</name>
     <message>
         <location filename="../qml/ExportQueueState.qml" line="+29"/>
@@ -3515,7 +3474,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorPanel</name>
     <message>
-        <location filename="../qml/InspectorPanel.qml" line="+107"/>
+        <location filename="../qml/InspectorPanel.qml" line="+125"/>
         <source>Album</source>
         <translation>Album</translation>
     </message>
@@ -3523,6 +3482,11 @@ Original source files on disk will be kept.</source>
         <location line="+7"/>
         <source>Image</source>
         <translation>Image</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Export</source>
+        <translation type="unfinished">Export</translation>
     </message>
 </context>
 <context>
@@ -3657,14 +3621,24 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Load Project</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+70"/>
         <source>Add to Queue</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>Export</source>
-        <translation type="unfinished">Export</translation>
+        <location line="+31"/>
+        <source>Exporting...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Export 1 File</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export %1 Files</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -3675,7 +3649,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+198"/>
+        <location line="+200"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>Could not save edits. Resolve the save error, then quit again.</translation>
     </message>
@@ -4338,7 +4312,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ShellSignals</name>
     <message>
-        <location filename="../qml/ShellSignals.qml" line="+137"/>
+        <location filename="../qml/ShellSignals.qml" line="+136"/>
         <source>Imported %1 image(s).</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4384,6 +4358,24 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="+1"/>
         <source>Show all %1 ▼</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ThemedProgressBar</name>
+    <message>
+        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <source>Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Indeterminate progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 percent</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4441,7 +4433,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="+2"/>
         <source>Studio</source>
-        <translation type="unfinished"></translation>
+        <translation>Studio</translation>
     </message>
     <message>
         <location line="+27"/>
@@ -4540,7 +4532,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="+8"/>
         <source>Studio</source>
-        <translation type="unfinished"></translation>
+        <translation>Studio</translation>
     </message>
     <message>
         <location line="+17"/>

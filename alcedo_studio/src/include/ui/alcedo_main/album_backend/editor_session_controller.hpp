@@ -27,6 +27,7 @@ class IEditorSessionBackend;
 }  // namespace alcedo
 
 namespace alcedo::ui {
+class IAlbumCatalog;
 class InteractionPolicyController;
 }  // namespace alcedo::ui
 
@@ -124,6 +125,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                  SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
   void                  SetInteractionPolicy(InteractionPolicyController* interaction_policy);
   void                  SetCopiedPackageAvailable(bool available);
+  /// Album catalog used to mirror ODT HDR EOTF into the library HDR badge.
+  void                  SetAlbumCatalog(IAlbumCatalog* album_catalog);
 
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
@@ -275,6 +278,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
   void                     SyncViewportDisplayConfig();
+  void                     SyncAlbumHdrFlagFromSnapshot();
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
   void                     SyncBackgroundActionRestrictions();
@@ -295,6 +299,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   alcedo::IEditorSessionBackend*  session_backend_    = nullptr;
   InteractionPolicyController*    interaction_policy_ = nullptr;
+  IAlbumCatalog*                  album_catalog_      = nullptr;
   EditorActionAvailabilityModel   actions_;
   /// Focused correlator for history/Version operation events (R4). Owns
   /// operation ids, pending-async state, and the last published map.
