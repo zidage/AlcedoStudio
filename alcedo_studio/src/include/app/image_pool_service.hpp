@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "image/image.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "type/type.hpp"
 
@@ -30,13 +30,13 @@ class ImagePoolService {
  private:
   std::unique_ptr<ImagePoolManager> pool_manager_;
   // This should be injected from sleeve service in future
-  std::shared_ptr<StorageService>   storage_service_;
+  std::shared_ptr<Storage>   storage_;
 
   std::mutex                        pool_lock_;
 
  public:
   ImagePoolService() = delete;
-  ImagePoolService(std::shared_ptr<StorageService> storage_service, image_id_t start_id);
+  ImagePoolService(std::shared_ptr<Storage> storage_service, image_id_t start_id);
 
   ~ImagePoolService() = default;
 
@@ -52,7 +52,7 @@ class ImagePoolService {
     std::shared_ptr<Image> img = pool_manager_->GetImage(image_id);
     if (!img) {
       // Check in the storage
-      auto& img_ctrl = storage_service_->GetImageController();
+      auto& img_ctrl = storage_->GetImageStore();
       img            = img_ctrl.GetImageById(image_id);
       if (img) {
         pool_manager_->Insert(img);
@@ -83,7 +83,7 @@ class ImagePoolService {
     img = pool_manager_->GetImage(image_id);
     if (!img) {
       // Check in the storage
-      auto result = storage_service_->GetImageController().GetImageById(image_id);
+      auto result = storage_->GetImageStore().GetImageById(image_id);
       if (!result) {
         throw std::runtime_error(std::format(
             "[ERROR] ImagePoolService: Image with ID {} not found in storage.", image_id));
@@ -115,7 +115,7 @@ class ImagePoolService {
     img = pool_manager_->GetImage(image_id);
     if (!img) {
       // Check in the storage
-      auto result = storage_service_->GetImageController().GetImageById(image_id);
+      auto result = storage_->GetImageStore().GetImageById(image_id);
       if (!result) {
         throw std::runtime_error(std::format(
             "[ERROR] ImagePoolService: Image with ID {} not found in storage.", image_id));

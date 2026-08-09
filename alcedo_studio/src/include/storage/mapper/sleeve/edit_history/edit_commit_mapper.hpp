@@ -10,7 +10,7 @@
 #include <string>
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 
 namespace alcedo {
 
@@ -33,7 +33,7 @@ struct EditCommitMapperParams {
 };
 
 class EditCommitMapper
-    : public MapperInterface<EditCommitMapper, EditCommitMapperParams, std::string>,
+    : public Mapper<EditCommitMapper, EditCommitMapperParams, EditCommitMapperParams, std::string>,
       public FieldReflectable<EditCommitMapper> {
  private:
   static constexpr uint32_t    field_count_      = 7;
@@ -51,7 +51,7 @@ class EditCommitMapper
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> EditCommitMapperParams;
   friend struct FieldReflectable<EditCommitMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 
 }  // namespace alcedo

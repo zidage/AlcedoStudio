@@ -167,9 +167,9 @@ auto MakeSemanticSearchRequestId(sl_element_id_t folder_id, const std::wstring& 
 class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
  public:
   ProjectSemanticSearchProvider(
-      std::shared_ptr<StorageService>                           storage_service,
+      std::shared_ptr<Storage>                           storage_service,
       std::function<std::shared_ptr<AiSidecarRuntimeService>()> runtime_factory)
-      : storage_service_(std::move(storage_service)),
+      : storage_(std::move(storage_service)),
         runtime_factory_(std::move(runtime_factory)) {}
 
   [[nodiscard]] auto Search(sl_element_id_t folder_id, const std::wstring& query, size_t offset,
@@ -183,11 +183,11 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
     if (query.empty() || limit == 0) {
       return {};
     }
-    if (!storage_service_) {
+    if (!storage_) {
       throw std::runtime_error("Semantic storage service is unavailable.");
     }
 
-    auto&       semantic = storage_service_->GetSemanticStorageController();
+    auto&       semantic = storage_->GetSemanticStore();
     std::string error;
     const auto  active_model = semantic.ActiveModel(&error);
     if (!active_model.has_value()) {
@@ -271,7 +271,7 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
   }
 
  private:
-  std::shared_ptr<StorageService>                           storage_service_;
+  std::shared_ptr<Storage>                           storage_;
   std::function<std::shared_ptr<AiSidecarRuntimeService>()> runtime_factory_;
 };
 
@@ -344,8 +344,8 @@ auto MakeAiSidecarRuntimeService() -> std::shared_ptr<AiSidecarRuntimeService> {
 // per-table row counts and min/max primary key ranges. This is NOT
 // a strong integrity check — mismatches produce a warning, not a
 // load failure. Use data_fingerprint (L3) for semantic verification.
-auto ComputeProjectDataSummary(StorageService& storage_service) -> nlohmann::json {
-  auto guard       = storage_service.GetDBController().GetConnectionGuard();
+auto ComputeProjectDataSummary(Storage& storage_service) -> nlohmann::json {
+  auto guard       = storage_service.GetDatabase().GetConnectionGuard();
   auto db_lock     = guard.Lock();
 
   auto query_int64 = [&](const std::string& sql) -> std::optional<int64_t> {
@@ -427,10 +427,10 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
                                const std::filesystem::path& meta_path, ProjectOpenMode open_mode)
     : db_path_(db_path), meta_path_(meta_path) {
   const auto create_new_project = [this]() {
-    storage_service_ = std::make_shared<StorageService>(db_path_);
+    storage_ = std::make_shared<Storage>(db_path_);
     RecreateSleeveService(0);
-    pool_service_   = std::make_shared<ImagePoolService>(storage_service_, 0);
-    filter_service_ = std::make_shared<SleeveFilterService>(storage_service_);
+    pool_service_   = std::make_shared<ImagePoolService>(storage_, 0);
+    filter_service_ = std::make_shared<SleeveFilterService>(storage_);
     RegisterSemanticSearchProvider();
     browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
     package_service_ = std::make_shared<ProjectPackageService>();
@@ -476,7 +476,7 @@ ProjectService::~ProjectService() {
   filter_service_.reset();
   pool_service_.reset();
   sleeve_service_.reset();
-  storage_service_.reset();
+  storage_.reset();
 }
 
 void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
@@ -497,7 +497,7 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
       std::string(project_pack::kMaxSupportedProjectFileVersion);
   metadata["start_id"]            = sleeve_service_->GetCurrentID();
   metadata["image_pool_start_id"] = pool_service_->GetCurrentID();
-  metadata["data_summary"]        = ComputeProjectDataSummary(*storage_service_);
+  metadata["data_summary"]        = ComputeProjectDataSummary(*storage_);
 
   std::ofstream file(meta_path_);
   if (!file.is_open()) {
@@ -587,7 +587,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
           ? static_cast<sl_element_id_t>(metadata.at("image_pool_start_id"))
           : 0;
 
-  storage_service_ = std::make_shared<StorageService>(db_path_);
+  storage_ = std::make_shared<Storage>(db_path_);
 
   // Best-effort: load the DuckDB vss extension when the project DB already has
   // HNSW indexes (semantic embedding tables). Without this, every semantic-
@@ -598,7 +598,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   // fatal: a missing vss extension only breaks semantic embedding writes, not
   // image analysis / editing / browsing.
   {
-    auto guard   = storage_service_->GetDBController().GetConnectionGuard();
+    auto guard   = storage_->GetDatabase().GetConnectionGuard();
     auto db_lock = guard.Lock();
     QString vss_error;
     if (!project_pack::EnsureVssExtensionForExistingHnswIndexes(guard.conn_, &vss_error)) {
@@ -610,7 +610,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   if (expected_summary.has_value()) {
     try {
-      nlohmann::json actual_summary = ComputeProjectDataSummary(*storage_service_);
+      nlohmann::json actual_summary = ComputeProjectDataSummary(*storage_);
       if (actual_summary != *expected_summary) {
         std::cerr << "[Alcedo] Project data summary differs from saved metadata. "
                      "This may indicate data changes since the project was saved.\n";
@@ -624,26 +624,26 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   }
 
   RecreateSleeveService(start_id);
-  pool_service_   = std::make_shared<ImagePoolService>(storage_service_, image_pool_start_id);
-  filter_service_ = std::make_shared<SleeveFilterService>(storage_service_);
+  pool_service_   = std::make_shared<ImagePoolService>(storage_, image_pool_start_id);
+  filter_service_ = std::make_shared<SleeveFilterService>(storage_);
   RegisterSemanticSearchProvider();
   browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
   package_service_ = std::make_shared<ProjectPackageService>();
 }
 
 void ProjectService::RecreateSleeveService(sl_element_id_t start_id) {
-  if (!storage_service_) {
-    throw std::runtime_error("StorageService is not initialized");
+  if (!storage_) {
+    throw std::runtime_error("Storage is not initialized");
   }
-  sleeve_service_ = std::make_shared<SleeveServiceImpl>(storage_service_, db_path_, start_id);
+  sleeve_service_ = std::make_shared<SleeveServiceImpl>(storage_, db_path_, start_id);
 }
 
 void ProjectService::RegisterSemanticSearchProvider() {
-  if (!filter_service_ || !storage_service_) {
+  if (!filter_service_ || !storage_) {
     return;
   }
   filter_service_->SetSemanticSearchProvider(std::make_shared<ProjectSemanticSearchProvider>(
-      storage_service_, [this]() { return GetAiSidecarRuntimeService(); }));
+      storage_, [this]() { return GetAiSidecarRuntimeService(); }));
 }
 
 auto ProjectService::GetAiSidecarRuntimeService() const

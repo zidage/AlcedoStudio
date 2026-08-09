@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "storage/controller/semantic/semantic_label_config.hpp"
+#include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -26,17 +27,6 @@ namespace alcedo::ui {
                           QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text) __VA_OPT__(, ) __VA_ARGS__)
 
 namespace {
-auto EscapedSqlString(std::wstring value) -> std::wstring {
-  for (size_t pos = 0; (pos = value.find(L'\'', pos)) != std::wstring::npos; pos += 2) {
-    value.insert(pos, 1, L'\'');
-  }
-  return value;
-}
-
-auto EscapedUtf8SqlString(const std::string& value) -> std::wstring {
-  return EscapedSqlString(QString::fromUtf8(value.c_str()).toStdWString());
-}
-
 auto ToStatsRows(const std::vector<alcedo::StatsBucket>& buckets, bool uppercase_labels = false,
                  bool semantic_labels = false) -> QVariantList {
   QString code =
@@ -112,21 +102,25 @@ void StatsEngine::BindCollaborators(SearchController* search,
 void StatsEngine::ToggleStatsFilter(const QString& category, const QString& label) {
   ToggleFilter(category, label);
   RebuildThumbnailView();
+  // The stats panel must apply the same merged predicate as the thumbnail
+  // grid so both surfaces stay consistent for one UI filter state.
+  RefreshStats();
   emit StatsFilterChanged();
 }
 
 void StatsEngine::ClearStatsFilter() {
   ClearFilters();
   RebuildThumbnailView();
+  RefreshStats();
   emit StatsFilterChanged();
 }
 
 void StatsEngine::RebuildThumbnailView() {
-  library_->LoadThumbnailWindow(BuildStatsFilterWhere(), true);
+  library_->LoadThumbnailWindow(BuildStatsFilterNode(), true);
 }
 
 bool StatsEngine::LoadMoreThumbnailView() {
-  return library_->LoadThumbnailWindow(BuildStatsFilterWhere(), false);
+  return library_->LoadThumbnailWindow(BuildStatsFilterNode(), false);
 }
 
 void StatsEngine::RefreshStats() {
@@ -161,16 +155,9 @@ void StatsEngine::RefreshStats() {
       return;
     }
 
-    const auto& active_search_filter_where = search_->ActiveSearchFilterWhere();
-    const auto  stats                      = filter_service->BuildFolderStats(
-        folder_id.value(),
-        active_search_filter_where.has_value()
-                                  ? std::optional<FilterNode>{FilterNode{.type_      = FilterNode::Type::RawSQL,
-                                                                         .op_        = FilterOp::AND,
-                                                                         .children_  = {},
-                                                                         .condition_ = std::nullopt,
-                                                                         .raw_sql_   = active_search_filter_where}}
-                                  : std::nullopt);
+    const auto merged_filter =
+        MergeFilterNodes(BuildStatsFilterNode(), search_->ActiveSearchFilterNode());
+    const auto stats = filter_service->BuildFolderStats(folder_id.value(), merged_filter);
     total_photo_count_ = stats.total_photo_count_;
     date_stats_        = ToStatsRows(stats.date_stats_);
     camera_stats_      = ToStatsRows(stats.camera_stats_);
@@ -264,75 +251,43 @@ bool StatsEngine::HasActiveFilter() const {
          !filter_label_.isEmpty() || !filter_rating_.isEmpty();
 }
 
-auto StatsEngine::BuildStatsFilterWhere() const -> std::optional<std::wstring> {
-  std::vector<std::wstring> conditions;
+auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
+  std::vector<FilterNode> children;
 
   if (!filter_date_.isEmpty()) {
-    const auto is_unknown = (filter_date_ == PL_TEXT("(unknown)").Render());
-    if (is_unknown) {
-      conditions.push_back(
-          L"(json_extract(i.metadata, '$.DateTimeString') IS NULL "
-          L"OR json_extract(i.metadata, '$.DateTimeString') = '')");
+    if (filter_date_ == PL_TEXT("(unknown)").Render()) {
+      children.push_back(sleeve_filter::BuildCaptureDateUnknownFilter());
     } else {
-      const auto date_str = filter_date_.toStdWString();
-      conditions.push_back(
-          L"CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR = '" + date_str +
-          L"'");
+      children.push_back(
+          sleeve_filter::BuildCaptureDateBucketFilter(filter_date_.toStdWString()));
     }
   }
 
   if (!filter_camera_.isEmpty()) {
-    const auto cam_str = filter_camera_.toStdWString();
-    conditions.push_back(
-        L"COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = '" +
-        cam_str + L"'");
+    children.push_back(
+        sleeve_filter::BuildCameraModelBucketFilter(filter_camera_.toStdWString()));
   }
 
   if (!filter_lens_.isEmpty()) {
-    const auto lens_str = filter_lens_.toStdWString();
-    conditions.push_back(
-        L"COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), '(unknown)') = '" +
-        lens_str + L"'");
+    children.push_back(sleeve_filter::BuildLensBucketFilter(filter_lens_.toStdWString()));
   }
 
   if (!filter_label_.isEmpty()) {
     const auto active_model_key = semantic_ ? semantic_->ActiveModelKey() : std::string{};
-    if (active_model_key.empty()) {
-      conditions.push_back(L"(1 = 0)");
-    } else {
-      const auto   aliases = SemanticLabelAliases(filter_label_.toUtf8().toStdString());
-      std::wstring label_match;
-      for (size_t i = 0; i < aliases.size(); ++i) {
-        if (i > 0) {
-          label_match += L" OR ";
-        }
-        label_match += L"LOWER(sl.label) = LOWER('" + EscapedUtf8SqlString(aliases[i]) + L"')";
-      }
-      conditions.push_back(
-          L"EXISTS (SELECT 1 FROM SemanticImageLabel sl WHERE sl.file_id = e.id "
-          L"AND sl.model_key = '" +
-          EscapedUtf8SqlString(active_model_key) + L"' AND (" + label_match + L"))");
-    }
+    const auto aliases = SemanticLabelAliases(filter_label_.toUtf8().toStdString());
+    children.push_back(
+        sleeve_filter::BuildSemanticLabelExistsFilter(active_model_key, aliases));
   }
 
   if (!filter_rating_.isEmpty()) {
-    bool ok  = false;
-    int  val = filter_rating_.toInt(&ok);
-    if (ok) {
-      conditions.push_back(L"json_extract(i.metadata, '$.Rating')::INT = " + std::to_wstring(val));
-    } else {
-      conditions.push_back(L"json_extract(i.metadata, '$.Rating') IS NULL");
-    }
+    children.push_back(sleeve_filter::BuildRatingBucketFilter(filter_rating_.toStdWString()));
   }
 
-  if (conditions.empty()) return std::nullopt;
-
-  std::wstring where;
-  for (size_t i = 0; i < conditions.size(); ++i) {
-    if (i > 0) where += L" AND ";
-    where += conditions[i];
+  if (children.empty()) {
+    return std::nullopt;
   }
-  return where;
+  return FilterNode{FilterNode::Type::Logical, FilterOp::AND, std::move(children), std::nullopt,
+                    std::nullopt};
 }
 
 bool StatsEngine::MatchesActiveFilters(const AlbumItem& image) const {

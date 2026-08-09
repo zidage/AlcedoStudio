@@ -17,6 +17,10 @@ use their own top-level category.
 - [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
 - [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
 
+## Alcedo Studio — Storage
+
+- [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
+
 ## Alcedo Studio — UI
 
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)

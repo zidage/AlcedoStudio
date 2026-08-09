@@ -27,6 +27,8 @@ using namespace album_util;
 
 namespace {
 
+constexpr uint32_t kEditorPreviewStoreEdge = 1180;
+
 auto PathToUtf8(const std::filesystem::path& path) -> std::string {
   const auto utf8 = path.generic_u8string();
   return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
@@ -567,11 +569,15 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
   editor_base_task_  = PipelineTask{};
   editor_active_     = false;
   editor_busy_       = false;
+  const sl_element_id_t preview_element = editor_element_id_;
   editor_element_id_ = 0;
   editor_image_id_   = 0;
   editor_title_text_  = {};
   editor_status_text_ = persistChanges ? PL_TEXT("Edits saved.") : PL_TEXT("Editor closed.");
   if (!editor_preview_url_.isEmpty()) {
+    if (library_ && preview_element != 0) {
+      library_->thumbs().image_store()->Remove(preview_element, kEditorPreviewStoreEdge);
+    }
     editor_preview_url_.clear();
     emit EditorPreviewChanged();
   }
@@ -580,9 +586,9 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
 
 auto EditorController::UpdateEditorPreviewFromBuffer(
     const std::shared_ptr<ImageBuffer>& buffer) -> bool {
-  if (!buffer) return false;
+  if (!buffer || !library_ || editor_element_id_ == 0) return false;
 
-  QString dataUrl;
+  QString thumb_url;
   try {
     if (!buffer->cpu_data_valid_ && buffer->gpu_data_valid_) {
       buffer->SyncToCPU();
@@ -592,15 +598,17 @@ auto EditorController::UpdateEditorPreviewFromBuffer(
     QImage image = MatRgba32fToQImageCopy(buffer->GetCPUData());
     if (image.isNull()) return false;
     QImage scaled = image.scaled(1180, 760, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    dataUrl = DataUrlFromImage(scaled);
+    thumb_url =
+        library_->thumbs().image_store()->Put(editor_element_id_, kEditorPreviewStoreEdge,
+                                              std::move(scaled));
   } catch (...) {
     return false;
   }
 
-  if (dataUrl.isEmpty()) return false;
+  if (thumb_url.isEmpty()) return false;
 
-  if (editor_preview_url_ != dataUrl) {
-    editor_preview_url_ = dataUrl;
+  if (editor_preview_url_ != thumb_url) {
+    editor_preview_url_ = thumb_url;
     emit EditorPreviewChanged();
   }
   return true;

@@ -262,12 +262,12 @@ bool children_loaded_ = false;
   - 导入不存在目标不会残留 Root 文件。
   - 导入子相册后，Root 和目标相册看到同一 `element_id`。
   - sync 前后 Root/album membership 都保持正确。
-- `EditHistoryService::GetEditHistoryByFileId` 在无记录时返回 `nullptr`，避免手工 filesystem 测试文件被加载时构造默认 `EditHistory` 导致崩溃。
-- `ElementController::UpdateElement` 仅在文件已有 history 时更新 history，避免对无 history 文件执行无意义 upsert。
+- `EditHistoryMapper::GetEditHistoryByFileId` 在无记录时返回 `nullptr`，避免手工 filesystem 测试文件被加载时构造默认 `EditHistory` 导致崩溃。
+- `ElementStore::UpdateElement` 仅在文件已有 history 时更新 history，避免对无 history 文件执行无意义 upsert。
 - `PathResolver::Tree()` 输出已排序，避免 DB 恢复后 membership 枚举顺序导致测试不稳定。
 - `FolderContent(folder_id, element_id)` 新项目 schema 已直接创建 `PRIMARY KEY(folder_id, element_id)`，并保留 `folder_id` / `element_id` 查询索引。
 - 旧项目不做数据 migration；`project_file_version`、`project_file_min_supported_version`、`project_file_max_supported_version` 均已递增到 `0.2.5`，`0.2.4` 会被版本检查拒绝打开。
-- `DBController` 不再对已有 DB 执行 `FolderContent` 去重/backfill migration。
+- `Database` 不再对已有 DB 执行 `FolderContent` 去重/backfill migration。
 - `SleeveFSTest` 已补齐 FileSystem 层的新 membership/link 语义测试：
   - 同一 File link 到多个 album 仍保持单一 `file_id`。
   - 重复 link 同一 File 到同一 album 幂等。
@@ -398,12 +398,12 @@ filter cache 自动失效：
 
 - `AlbumBrowseService` 新增 `filter_service_` 依赖，在 `LinkFilesToFolder`、`DeleteFilesInFolderByElementIds`、`DeleteFiles`、`DeleteFilesByElementIds` 四个 mutation 方法中自动调用 `InvalidateResultCache`。
 - `ProjectService` 在创建 `AlbumBrowseService` 时注入 `filter_service_`。
-- `ImageController` 中移除冗余的手动 `InvalidateResultCache` 调用。
+- `ImageStore` 中移除冗余的手动 `InvalidateResultCache` 调用。
 - 新增 `FilterServiceTests.AutoInvalidationOnLink` 测试，验证 `AlbumBrowseService::LinkFilesToFolder` 自动触发 cache 失效。
 
 stats-bar DB-first 筛选：
 
-- `ElementController` 新增 `ListFilteredFileIds(folder_id, extra_filter_where)` 方法，复用 `BuildScopedFileQuery` 基础设施。
+- `ElementStore` 新增 `ListFilteredFileIds(folder_id, extra_filter_where)` 方法，复用 `BuildScopedFileQuery` 基础设施。
 - `StatsEngine` 新增 `BuildStatsFilterWhere()` 方法，将当前 stats-bar filter 值转换为 SQL WHERE clause。
 - `StatsEngine::RebuildThumbnailView()` 在 stats-bar filter 激活时，走 DB 查询路径获取匹配的 element ID，再基于 `all_images_` 构建缩略图视图；无 filter 时保持原有快速路径。
 
@@ -499,7 +499,7 @@ Acceptance criteria:
 验证结果（2026-05-25）：
 
 - `SleeveServiceTest`: 22/22 passed
-- `PipelineServiceTest`: 8/8 passed
+- `PipelineMapperTest`: 8/8 passed
 - `EditHistoryMgmtServiceTest`: 4/4 passed
 
 ### Phase 4: Root Virtual View, DB-First Pagination And Bounded Cache
@@ -541,7 +541,7 @@ Acceptance criteria:
   - Root 查询直接从 `Element -> FileImage -> Image` 列出 live File。
   - Root list / filter / stats / count 不再依赖 `FolderContent(0, file_id)`。
   - 子相册仍通过 `FolderContent.folder_id = ?` join membership。
-- `ElementController` 新增 DB-first 分页/计数 API：
+- `ElementStore` 新增 DB-first 分页/计数 API：
   - `ListFilesInFolderPage(folder_id, offset, limit, extra_filter_where)`
   - `CountFilesInFolder(folder_id, extra_filter_where)`
   - 原 `ListFilesInFolder(folder_id)` 保留为兼容全量 wrapper。

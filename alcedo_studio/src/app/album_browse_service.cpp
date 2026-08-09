@@ -103,16 +103,16 @@ auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id) const
 
 auto AlbumBrowseService::ListFilesInFolderById(
     sl_element_id_t folder_id, size_t offset, size_t limit,
-    const std::optional<std::wstring>& extra_filter_where) const -> std::vector<AlbumFileView> {
+    const std::optional<duckorm::SqlFragment>& extra_filter) const -> std::vector<AlbumFileView> {
   std::vector<AlbumFileView> files;
   if (!sleeve_service_) {
     return files;
   }
 
   try {
-    const auto  storage = sleeve_service_->GetStorageService();
-    const auto& ctrl    = storage->GetElementController();
-    const auto  entries = ctrl.ListFilesInFolderPage(folder_id, offset, limit, extra_filter_where);
+    const auto  storage = sleeve_service_->GetStorage();
+    const auto& ctrl    = storage->GetElementStore();
+    const auto  entries = ctrl.ListFilesInFolderPage(folder_id, offset, limit, extra_filter);
     files.reserve(entries.size());
     for (const auto& entry : entries) {
       if (entry.file_id_ == 0 || entry.image_id_ == 0) {
@@ -136,16 +136,16 @@ auto AlbumBrowseService::ListFilesInFolderById(
 }
 
 auto AlbumBrowseService::CountFilesInFolderById(
-    sl_element_id_t folder_id, const std::optional<std::wstring>& extra_filter_where) const
+    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
     -> size_t {
   if (!sleeve_service_) {
     return 0;
   }
 
   try {
-    const auto  storage = sleeve_service_->GetStorageService();
-    const auto& ctrl    = storage->GetElementController();
-    return ctrl.CountFilesInFolder(folder_id, extra_filter_where);
+    const auto  storage = sleeve_service_->GetStorage();
+    const auto& ctrl    = storage->GetElementStore();
+    return ctrl.CountFilesInFolder(folder_id, extra_filter);
   } catch (...) {
     return 0;
   }

@@ -156,6 +156,7 @@ class UiFuzzAutomationFixture : public alcedo::ui::test::ApplicationModuleHostTe
 
     engine_.addImportPath(QStringLiteral("qrc:/"));
     language_manager_.AttachEngine(&engine_);
+    host_.AttachQmlEngine(&engine_);
     engine_.rootContext()->setContextProperty(QStringLiteral("appModules"), &host_);
     engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"),
                                                                            &alcedo::ui::AppTheme::Instance());

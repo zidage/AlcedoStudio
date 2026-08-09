@@ -16,7 +16,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
-#include "storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/id/id_generator.hpp"
 
@@ -35,14 +35,14 @@ class FileSystem {
   ///@{
   std::filesystem::path                db_path_;
   std::filesystem::path                meta_path_;
-  StorageService&                      storage_service_;
+  Storage&                             storage_service_;
   NodeStorageHandler                   storage_handler_;
   PathResolver                         resolver_;
   ///@}
 
  public:
   // FileSystem(std::filesystem::path db_path, sl_element_id_t start_id);
-  FileSystem(std::filesystem::path db_path, StorageService& storage_service,
+  FileSystem(std::filesystem::path db_path, Storage& storage_service,
              sl_element_id_t start_id);
 
   auto InitRoot() -> bool;

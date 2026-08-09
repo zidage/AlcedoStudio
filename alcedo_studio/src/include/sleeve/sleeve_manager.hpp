@@ -19,7 +19,7 @@
 #include "sleeve_base.hpp"
 #include "sleeve_view.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
-#include "storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -29,7 +29,7 @@ class SleeveManager {
   std::shared_ptr<SleeveView>       view_;
   std::shared_ptr<ImagePoolManager> image_pool_;
 
-  StorageService                    storage_service_;
+  Storage                    storage_;
 
  public:
   explicit SleeveManager(std::filesystem::path db_path);
@@ -38,7 +38,7 @@ class SleeveManager {
   auto GetView() -> std::shared_ptr<SleeveView>;
   auto GetPool() -> std::shared_ptr<ImagePoolManager>;
   auto GetImgCount() -> uint32_t;
-  auto GetStorageService() -> StorageService& { return storage_service_; }
+  auto GetStorage() -> Storage& { return storage_; }
 
   auto LoadToPath(std::vector<image_path_t> img_os_path, sl_path_t dest) -> uint32_t;
 

@@ -9,7 +9,7 @@
 #include <filesystem>
 
 #include "edit/history/mini_git_working_history.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
@@ -563,9 +563,9 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(unreachable.front(), *abandoned_head);
   }
 
-  auto               db_guard = project_.storage()->GetDBController().GetConnectionGuard();
+  auto               db_guard = project_.storage()->GetDatabase().GetConnectionGuard();
   auto               db_lock  = db_guard.Lock();
-  CommitGraphService graph_service(db_guard.conn_);
+  CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_EQ(graph_service.DeleteUnreachableCommits(element_id), 1u);
 
   auto stored = graph_service.LoadGraph(element_id);

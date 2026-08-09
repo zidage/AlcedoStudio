@@ -10,7 +10,7 @@
 
 namespace alcedo::ui {
 
-void EditorSessionPipelinePort::SetServices(EditorSessionPipelineServices services) {
+void EditorSessionPipelinePort::SetServices(EditorSessionPipelineMappers services) {
   std::scoped_lock lock(mutex_);
   services_ = std::move(services);
 }
@@ -50,7 +50,7 @@ auto EditorSessionPipelinePort::CurrentGuard(sl_element_id_t element_id) const
   return it == guards_.end() ? nullptr : it->second;
 }
 
-auto EditorSessionPipelinePort::PipelineService() const
+auto EditorSessionPipelinePort::PipelineMapper() const
     -> std::shared_ptr<alcedo::PipelineMgmtService> {
   std::scoped_lock lock(mutex_);
   return services_.pipeline_service ? services_.pipeline_service() : nullptr;

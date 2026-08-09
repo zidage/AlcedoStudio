@@ -4,6 +4,8 @@
 
 #include "storage/mapper/sleeve/base/base_mapper.hpp"
 
+#include <stdexcept>
+
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -18,4 +20,8 @@ auto BaseMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> BaseMappe
   }
   return {*id};
 }
+
+auto BaseMapper::ToParams(const sleeve_id_t source) -> BaseMapperParams { return {source}; }
+
+auto BaseMapper::FromParams(BaseMapperParams&& param) -> sleeve_id_t { return param.id; }
 }  // namespace alcedo

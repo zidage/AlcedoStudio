@@ -16,6 +16,6 @@ alcedo_register_test_target(ExportIccProfileResolverTest io)
 
 add_executable(ImagePathEncodingTest ${ALCEDO_TEST_ROOT}/io/image_path_encoding_test.cpp)
 target_include_directories(ImagePathEncodingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ImagePathEncodingTest PRIVATE GTest::gtest_main ImageLoader StorageService)
+target_link_libraries(ImagePathEncodingTest PRIVATE GTest::gtest_main ImageLoader Storage)
 gtest_discover_tests(ImagePathEncodingTest TEST_PREFIX "ImagePathEncodingTest.")
 alcedo_register_test_target(ImagePathEncodingTest io)

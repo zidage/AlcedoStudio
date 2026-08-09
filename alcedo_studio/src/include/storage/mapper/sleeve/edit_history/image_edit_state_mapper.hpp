@@ -10,7 +10,7 @@
 #include <string>
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -34,7 +34,7 @@ struct ImageEditStateMapperParams {
 };
 
 class ImageEditStateMapper
-    : public MapperInterface<ImageEditStateMapper, ImageEditStateMapperParams, sl_element_id_t>,
+    : public Mapper<ImageEditStateMapper, ImageEditStateMapperParams, ImageEditStateMapperParams, sl_element_id_t>,
       public FieldReflectable<ImageEditStateMapper> {
  private:
   static constexpr uint32_t    field_count_      = 7;
@@ -52,7 +52,7 @@ class ImageEditStateMapper
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageEditStateMapperParams;
   friend struct FieldReflectable<ImageEditStateMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 
 }  // namespace alcedo

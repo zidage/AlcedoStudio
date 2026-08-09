@@ -15,7 +15,7 @@ def_library(SleeveFilterService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_filter_service.cpp"
         "${ALCEDO_APP_ROOT}/search_query_classifier.cpp"
-    PUBLIC_DEPS SleeveElement StorageService SleeveFilter StrConv
+    PUBLIC_DEPS SleeveElement Storage SleeveFilter StrConv
 )
 
 def_library(AlbumBrowseService
@@ -27,7 +27,7 @@ def_library(AlbumBrowseService
 def_library(ImagePoolService
     SOURCES
         "${ALCEDO_APP_ROOT}/image_pool_service.cpp"
-    PUBLIC_DEPS ImagePool Image StorageService
+    PUBLIC_DEPS ImagePool Image Storage
 )
 
 set(ALCEDO_SEMANTIC_PROTO_DIR "${CMAKE_SOURCE_DIR}/rust/puerh_mind/proto")
@@ -184,7 +184,7 @@ def_library(ProjectService
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
-    PUBLIC_DEPS FSService StorageService ImagePoolService AlbumBrowseService SleeveFilterService
+    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
                 AiSidecarRuntimeService ModelDownloadService
                 StrConv JSON xxHash stduuid
     PRIVATE_DEPS
@@ -212,7 +212,7 @@ def_library(EditHistoryMgmtService
 
 def_library(EditorHistoryMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_history_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory StorageService
+    PUBLIC_DEPS ProjectService EditHistory Storage
 )
 
 def_library(EditorSaveCheckpointCoordinator
@@ -287,17 +287,17 @@ def_library(EditorMiniGitJournalFold
 
 def_library(EditorMiniGitCommitWriter
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_commit_writer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory StorageService
+    PUBLIC_DEPS ProjectService EditHistory Storage
 )
 
 def_library(EditorMiniGitJournalRecovery
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_recovery.cpp"
-    PUBLIC_DEPS EditHistory StorageService
+    PUBLIC_DEPS EditHistory Storage
 )
 
 def_library(EditorMiniGitMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory StorageService
+    PUBLIC_DEPS ProjectService EditHistory Storage
     PRIVATE_DEPS EditorSaveCheckpointCoordinator
                  EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
@@ -346,15 +346,15 @@ def_library(ImportService
 def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
     PUBLIC_DEPS EditPipeline ThreadPool StrConv ImagePoolService PipelineMgmtService
-                ThumbnailDiskCacheService StorageService
+                ThumbnailDiskCacheService Storage
 )
 
 def_library(SemanticGenerationService
     SOURCES
         "${ALCEDO_APP_ROOT}/semantic_generation_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/semantic_generation_service.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/storage/controller/semantic/semantic_label_config.hpp"
-    PUBLIC_DEPS AiSidecarRuntimeService ThumbnailService StorageService opencv_core opencv_imgproc
+        "${ALCEDO_INCLUDE_ROOT}/storage/store/semantic/semantic_label_config.hpp"
+    PUBLIC_DEPS AiSidecarRuntimeService ThumbnailService Storage opencv_core opencv_imgproc
     PRIVATE_DEPS AppDiagnostics
 )
 

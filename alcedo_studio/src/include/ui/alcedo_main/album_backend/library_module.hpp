@@ -100,9 +100,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   auto view_state() const -> const AlbumViewState& override { return view_state_; }
   void ReloadFolderTree(const std::filesystem::path& preferredFolderPath = {}) override;
   void ReloadCurrentFolder() override;
-  bool LoadThumbnailWindow(const std::optional<std::wstring>& filterWhere, bool reset) override;
-  auto EffectiveFilterWhere(const std::optional<std::wstring>& filterWhere) const
-      -> std::optional<std::wstring> override;
+  bool LoadThumbnailWindow(const std::optional<FilterNode>& statsFilter, bool reset) override;
 
   void LoadThumbnailDiskCacheSettings();
   void ApplyThumbnailDiskCacheSettingsToService();

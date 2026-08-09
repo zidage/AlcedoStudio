@@ -479,7 +479,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   const auto source_id = source->element_id_;
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
     auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
     stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
@@ -490,7 +490,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   source_history = history_service.LoadHistory(source_id);
     ASSERT_EQ(source_history->history_->GetVersions().size(), 1u);
     (void)history_service.CreateVersion(source_history, "Source Look");
@@ -509,7 +509,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   EXPECT_EQ(service->ResolveFile(L"/Album/Source.arw@")->element_id_, duplicate_id);
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
     ASSERT_NE(source_pipeline, nullptr);
@@ -519,7 +519,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   source_history    = history_service.LoadHistory(source_id);
     auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
     ASSERT_NE(source_history, nullptr);
@@ -530,7 +530,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
     auto&               stage =
         duplicate_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
@@ -542,7 +542,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
     (void)history_service.CreateVersion(duplicate_history, "Duplicate Look");
     history_service.SaveHistory(duplicate_history);
@@ -550,7 +550,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
     EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
@@ -558,7 +558,7 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   source_history    = history_service.LoadHistory(source_id);
     auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
     EXPECT_EQ(source_history->history_->GetVersions().size(), 2u);
@@ -578,7 +578,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync
   const auto source_id = source->element_id_;
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
     auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
     stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
@@ -592,7 +592,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync
   ASSERT_NE(duplicated.first, nullptr);
 
   {
-    PipelineMgmtService pipeline_service(project.GetStorageService());
+    PipelineMgmtService pipeline_service(project.GetStorage());
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicated.first->element_id_);
     ASSERT_NE(duplicate_pipeline, nullptr);
     EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 2.5f);
@@ -614,7 +614,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale)
     album_id  = album->element_id_;
     source_id = source->element_id_;
     {
-      EditHistoryMgmtService history_service(project.GetStorageService());
+      EditHistoryMgmtService history_service(project.GetStorage());
       auto                   source_history = history_service.LoadHistory(source_id);
       ASSERT_NE(source_history, nullptr);
       (void)history_service.CreateVersion(source_history, "Baseline");
@@ -631,7 +631,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale)
   ASSERT_EQ(resolved_source->GetEditHistory()->GetVersions().size(), 2u);
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   source_history = history_service.LoadHistory(source_id);
     ASSERT_NE(source_history, nullptr);
     ASSERT_EQ(source_history->history_->GetVersions().size(), 2u);
@@ -646,7 +646,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale)
   ASSERT_NE(duplicated.first, nullptr);
 
   {
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
     auto                   duplicate_history = history_service.LoadHistory(duplicated.first->element_id_);
     ASSERT_NE(duplicate_history, nullptr);
     EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 3u);

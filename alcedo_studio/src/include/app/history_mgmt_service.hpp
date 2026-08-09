@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 #include "edit/history/edit_history.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 
@@ -26,7 +26,7 @@ struct EditHistoryGuard {
 
 class EditHistoryMgmtService final {
  private:
-  std::shared_ptr<StorageService>            storage_service_;
+  std::shared_ptr<Storage>            storage_;
 
   LRUCache<sl_element_id_t, sl_element_id_t> cache_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<EditHistoryGuard>> cached_histories_;
@@ -39,8 +39,8 @@ class EditHistoryMgmtService final {
 
  public:
   EditHistoryMgmtService() = delete;
-  explicit EditHistoryMgmtService(std::shared_ptr<StorageService> storage_service)
-      : storage_service_(std::move(storage_service)),
+  explicit EditHistoryMgmtService(std::shared_ptr<Storage> storage_service)
+      : storage_(std::move(storage_service)),
         cache_(default_cache_capacity_),
         cached_histories_() {}
 

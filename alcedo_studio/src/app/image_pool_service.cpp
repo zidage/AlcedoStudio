@@ -16,9 +16,9 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
-ImagePoolService::ImagePoolService(std::shared_ptr<StorageService> storage_service,
+ImagePoolService::ImagePoolService(std::shared_ptr<Storage> storage_service,
                                            image_id_t                      start_id)
-    : storage_service_(storage_service) {
+    : storage_(storage_service) {
   pool_manager_ = std::make_unique<ImagePoolManager>(start_id);
 }
 
@@ -40,7 +40,7 @@ void ImagePoolService::Remove(image_id_t image_id) {
   } else {
     // Check in the storage
     try {
-      storage_service_->GetImageController().RemoveImageById(image_id);
+      storage_->GetImageStore().RemoveImageById(image_id);
     } catch (std::exception& e) {
       throw std::runtime_error(std::format(
           "[ERROR] ImagePoolService: Failed to remove image with ID {} from storage: {}", image_id,
@@ -73,7 +73,7 @@ void ImagePoolService::RemoveBatch(std::span<const image_id_t> image_ids) {
 
   if (!remove_from_storage.empty()) {
     try {
-      storage_service_->GetImageController().RemoveImagesByIds(remove_from_storage);
+      storage_->GetImageStore().RemoveImagesByIds(remove_from_storage);
     } catch (std::exception& e) {
       throw std::runtime_error(std::format(
           "[ERROR] ImagePoolService: Failed to remove images from storage: {}", e.what()));
@@ -83,7 +83,7 @@ void ImagePoolService::RemoveBatch(std::span<const image_id_t> image_ids) {
 
 auto ImagePoolService::SyncWithStorage() -> ImagePoolSyncStatus {
   std::unique_lock lock(pool_lock_);
-  auto&            img_ctrl = storage_service_->GetImageController();
+  auto&            img_ctrl = storage_->GetImageStore();
 
   // Classify the pool first so each sync state can be flushed as one batched
   // transaction instead of one autocommit transaction per image.

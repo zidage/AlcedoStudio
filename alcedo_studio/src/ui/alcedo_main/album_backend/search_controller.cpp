@@ -177,11 +177,11 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
 SearchController::~SearchController() { CancelSearchPreviewThumbnails(); }
 
 bool SearchController::HasActiveSearchFilter() const {
-  return active_search_filter_where_.has_value() && !active_search_filter_where_->empty();
+  return active_search_filter_node_.has_value();
 }
 
-auto SearchController::ActiveSearchFilterWhere() const -> const std::optional<std::wstring>& {
-  return active_search_filter_where_;
+auto SearchController::ActiveSearchFilterNode() const -> const std::optional<FilterNode>& {
+  return active_search_filter_node_;
 }
 
 auto SearchController::SearchFieldFilenameEnabled() const -> bool {
@@ -526,15 +526,15 @@ void SearchController::ApplyFuzzySearch(const QString& query) {
     return;
   }
 
-  auto where = filter_service->BuildFuzzySearchWhere(trimmed.toStdWString(),
-                                                       BuildSearchFieldMask());
-  if (!where.has_value()) {
+  auto filter_node = filter_service->BuildFuzzySearchWhere(trimmed.toStdWString(),
+                                                           BuildSearchFieldMask());
+  if (!filter_node.has_value()) {
     ClearFuzzySearch();
     return;
   }
 
-  active_search_query_        = trimmed;
-  active_search_filter_where_ = std::move(where);
+  active_search_query_       = trimmed;
+  active_search_filter_node_ = std::move(filter_node);
   stats_->ClearFilters();
   stats_->RebuildThumbnailView();
   stats_->RefreshStats();
@@ -558,7 +558,7 @@ void SearchController::ApplyExactSearch(uint elementId) {
 
   active_search_query_ =
       SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render();
-  active_search_filter_where_ =
+  active_search_filter_node_ =
       filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId));
   stats_->ClearFilters();
   stats_->RebuildThumbnailView();
@@ -568,7 +568,7 @@ void SearchController::ApplyExactSearch(uint elementId) {
 }
 
 void SearchController::ClearFuzzySearch() {
-  if (active_search_query_.isEmpty() && !active_search_filter_where_.has_value()) {
+  if (active_search_query_.isEmpty() && !active_search_filter_node_.has_value()) {
     return;
   }
   ClearSearchState(true);
@@ -587,6 +587,10 @@ void SearchController::SetSearchPreviewThumbnailVisible(uint elementId, uint ima
   if (!visible) {
     search_preview_visible_thumbnails_.erase(key);
     search_preview_thumbnail_requests_.erase(key);
+
+    if (library_) {
+      library_->thumbs().ReleaseStoreImageIfUnpinned(key);
+    }
 
     auto thumb_svc = project_->handler().thumbnail_service();
     if (!thumb_svc) {
@@ -702,9 +706,9 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
           }
 
           std::thread([self, service, elementId, imageId, maxEdge, key, request_generation,
-                       request_id,
+                       request_id, image_store = self->library_->thumbs().image_store(),
                        guard = std::move(result.guard)]() mutable {
-            QString data_url;
+            QString thumb_url;
             QString error_text;
             try {
               auto* buffer = guard->thumbnail_buffer_.get();
@@ -715,11 +719,16 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                 QImage image = album_util::MatRgba32fToQImageCopy(buffer->GetCPUData());
                 if (!image.isNull()) {
                   const int edge = static_cast<int>(std::max<uint>(1, maxEdge));
-                  data_url       = album_util::DataUrlFromImage(
-                      image.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                  QImage scaled =
+                      image.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                  if (image_store) {
+                    thumb_url = image_store->Put(static_cast<sl_element_id_t>(elementId),
+                                                 static_cast<uint32_t>(key.resolution),
+                                                 std::move(scaled));
+                  }
                 }
               }
-              if (data_url.isEmpty()) {
+              if (thumb_url.isEmpty()) {
                 error_text = QObject::tr("Thumbnail conversion produced no image.");
               }
             } catch (...) {
@@ -729,7 +738,7 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
             if (self) {
               QMetaObject::invokeMethod(
                   self,
-                  [self, service, elementId, imageId, key, request_generation, request_id, data_url,
+                  [self, service, elementId, imageId, key, request_generation, request_id, thumb_url,
                    error_text]() {
                     if (!self) {
                       if (service) {
@@ -773,9 +782,9 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
                       return;
                     }
                     self->search_preview_thumbnail_requests_.erase(key);
-                    emit self->SearchPreviewThumbnailUpdated(elementId, data_url, false, false,
+                    emit self->SearchPreviewThumbnailUpdated(elementId, thumb_url, false, false,
                                                              error_text);
-                    emit self->searchPreviewThumbnailUpdated(elementId, data_url, false, false,
+                    emit self->searchPreviewThumbnailUpdated(elementId, thumb_url, false, false,
                                                              error_text);
                   },
                   Qt::QueuedConnection);
@@ -816,6 +825,14 @@ void SearchController::CancelSearchPreviewThumbnails() {
   auto thumb_svc = project_->handler().thumbnail_service();
   search_preview_visible_thumbnails_.clear();
   search_preview_thumbnail_requests_.clear();
+
+  if (library_) {
+    for (const auto& [key, present] : keys_to_release) {
+      (void)present;
+      library_->thumbs().ReleaseStoreImageIfUnpinned(key);
+    }
+  }
+
   if (!thumb_svc) {
     return;
   }
@@ -831,7 +848,7 @@ void SearchController::CancelSearchPreviewThumbnails() {
 
 void SearchController::ClearSearchState(bool emitSignal) {
   active_search_query_.clear();
-  active_search_filter_where_.reset();
+  active_search_filter_node_.reset();
   if (emitSignal) {
     emit SearchStateChanged();
   }

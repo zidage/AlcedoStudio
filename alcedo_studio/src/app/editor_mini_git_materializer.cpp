@@ -11,7 +11,7 @@
 #include "app/editor_mini_git_journal_recovery.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo {
 namespace {
@@ -114,14 +114,14 @@ auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_has
 // ── Materializer ────────────────────────────────────────────────────────────
 
 EditorMiniGitMaterializer::EditorMiniGitMaterializer(
-    std::shared_ptr<StorageService>                  storage,
+    std::shared_ptr<Storage>                  storage,
     std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator)
     : storage_(std::move(storage)),
       coordinator_(std::move(coordinator)),
       writer_(std::make_unique<EditorMiniGitCommitWriter>(storage_)),
       recovery_(std::make_unique<EditorMiniGitJournalRecovery>(storage_)) {
   if (!storage_) {
-    throw std::invalid_argument("EditorMiniGitMaterializer requires StorageService");
+    throw std::invalid_argument("EditorMiniGitMaterializer requires Storage");
   }
   if (!coordinator_) {
     throw std::invalid_argument(
@@ -150,9 +150,9 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
   bool head_moved = false;
 
   try {
-    auto               db_guard = storage_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto               stored_graph = graph_service.LoadGraph(capture.element_id);
 
     head_commit_hash_t       prior_head  = std::nullopt;

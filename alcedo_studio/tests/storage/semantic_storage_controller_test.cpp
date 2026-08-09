@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "storage/controller/semantic/semantic_storage_controller.hpp"
+#include "storage/store/semantic/semantic_store.hpp"
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -18,7 +18,7 @@
 #include "app/project_package_backend.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
-#include "storage/controller/db_controller.hpp"
+#include "storage/store/database.hpp"
 
 namespace alcedo {
 namespace {
@@ -95,7 +95,7 @@ void RunRawSql(const std::filesystem::path& db_path, const char* sql) {
   duckdb_close(&db);
 }
 
-void RegisterTestModel(SemanticStorageController& semantic) {
+void RegisterTestModel(SemanticStore& semantic) {
   std::string error;
   ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = kModelKey,
                                                        .model_id_      = "mobileclip-test",
@@ -106,7 +106,7 @@ void RegisterTestModel(SemanticStorageController& semantic) {
       << error;
 }
 
-void RegisterSiglipTestModel(SemanticStorageController& semantic) {
+void RegisterSiglipTestModel(SemanticStore& semantic) {
   std::string error;
   ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = kSiglipModelKey,
                                                        .model_id_      = "siglip2-test",
@@ -118,7 +118,7 @@ void RegisterSiglipTestModel(SemanticStorageController& semantic) {
 }
 }  // namespace
 
-class SemanticStorageControllerTest : public ::testing::Test {
+class SemanticStoreTest : public ::testing::Test {
  protected:
   std::filesystem::path db_path_;
   std::filesystem::path meta_path_;
@@ -159,7 +159,7 @@ class SemanticStorageControllerTest : public ::testing::Test {
     return file.first ? file.first->element_id_ : 0;
   }
 
-  static void StoreEmbedding(SemanticStorageController& semantic, sl_element_id_t file_id,
+  static void StoreEmbedding(SemanticStore& semantic, sl_element_id_t file_id,
                              image_id_t image_id, std::vector<float> embedding) {
     std::string error;
     ASSERT_TRUE(semantic.UpsertImageEmbedding(
@@ -174,16 +174,16 @@ class SemanticStorageControllerTest : public ::testing::Test {
   }
 };
 
-TEST_F(SemanticStorageControllerTest, VssSearchRanksWithinRootAndFolderScope) {
+TEST_F(SemanticStoreTest, VssSearchRanksWithinRootAndFolderScope) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   const auto mountain_id = CreateSyntheticFile(project, L"mountain.raf");
   const auto beach_id    = CreateSyntheticFile(project, L"beach.raf");
   const auto portrait_id = CreateSyntheticFile(project, L"portrait.raf");
 
-  const auto rows        = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows        = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 3U);
   for (const auto& row : rows) {
     if (row.file_id_ == mountain_id) {
@@ -216,14 +216,14 @@ TEST_F(SemanticStorageControllerTest, VssSearchRanksWithinRootAndFolderScope) {
   EXPECT_EQ(scoped_results[0].file_id_, portrait_id);
 }
 
-TEST_F(SemanticStorageControllerTest, PackedSnapshotSucceedsAfterVectorSearchIndex) {
+TEST_F(SemanticStoreTest, PackedSnapshotSucceedsAfterVectorSearchIndex) {
   {
     ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-    auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+    auto&          semantic = project.GetStorage()->GetSemanticStore();
     RegisterTestModel(semantic);
 
     const auto file_id = CreateSyntheticFile(project, L"indexed.raf");
-    const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+    const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
     ASSERT_EQ(rows.size(), 1U);
     StoreEmbedding(semantic, file_id, rows.front().image_id_, OneHot(0));
 
@@ -245,9 +245,9 @@ TEST_F(SemanticStorageControllerTest, PackedSnapshotSucceedsAfterVectorSearchInd
   std::filesystem::remove(snapshot_path, ec);
 }
 
-TEST_F(SemanticStorageControllerTest, VssSearchCutsOffWeakTailBeforePaging) {
+TEST_F(SemanticStoreTest, VssSearchCutsOffWeakTailBeforePaging) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   const auto strong_id      = CreateSyntheticFile(project, L"strong_match.raf");
@@ -255,7 +255,7 @@ TEST_F(SemanticStorageControllerTest, VssSearchCutsOffWeakTailBeforePaging) {
   const auto weak_id        = CreateSyntheticFile(project, L"weak_term_match.raf");
   const auto weak_second_id = CreateSyntheticFile(project, L"weak_term_match_2.raf");
 
-  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 4U);
   for (const auto& row : rows) {
     if (row.file_id_ == strong_id) {
@@ -284,9 +284,9 @@ TEST_F(SemanticStorageControllerTest, VssSearchCutsOffWeakTailBeforePaging) {
   EXPECT_TRUE(weak_tail.empty()) << error;
 }
 
-TEST_F(SemanticStorageControllerTest, RejectsInvalidVectorsBeforeStorageOrSearch) {
+TEST_F(SemanticStoreTest, RejectsInvalidVectorsBeforeStorageOrSearch) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
 
   std::string    error;
   EXPECT_FALSE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "wrong-dim",
@@ -299,7 +299,7 @@ TEST_F(SemanticStorageControllerTest, RejectsInvalidVectorsBeforeStorageOrSearch
 
   RegisterTestModel(semantic);
   const auto file_id = CreateSyntheticFile(project, L"invalid_vectors.raf");
-  const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 1U);
   const auto image_id  = rows.front().image_id_;
 
@@ -333,15 +333,15 @@ TEST_F(SemanticStorageControllerTest, RejectsInvalidVectorsBeforeStorageOrSearch
   EXPECT_FALSE(error.empty());
 }
 
-TEST_F(SemanticStorageControllerTest, Supports768DimensionalModelStorageAndSearch) {
+TEST_F(SemanticStoreTest, Supports768DimensionalModelStorageAndSearch) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterSiglipTestModel(semantic);
 
   const auto landscape_id = CreateSyntheticFile(project, L"siglip_landscape.raf");
   const auto portrait_id  = CreateSyntheticFile(project, L"siglip_portrait.raf");
   ASSERT_NE(landscape_id, portrait_id);
-  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 2U);
 
   std::string                               error;
@@ -393,9 +393,9 @@ TEST_F(SemanticStorageControllerTest, Supports768DimensionalModelStorageAndSearc
   EXPECT_EQ(results.front().file_id_, landscape_id);
 }
 
-TEST_F(SemanticStorageControllerTest, NewProjectSeedsDefaultLabelQueries) {
+TEST_F(SemanticStoreTest, NewProjectSeedsDefaultLabelQueries) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
 
   EXPECT_EQ(semantic.CountLabelQueries(kDefaultSemanticPhotographyPromptConfigHash),
             DefaultSemanticPhotographyLabelQueries().size());
@@ -433,9 +433,9 @@ TEST_F(SemanticStorageControllerTest, NewProjectSeedsDefaultLabelQueries) {
             "\xE9\xA3\x8E\xE6\x99\xAF");
 }
 
-TEST_F(SemanticStorageControllerTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
+TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
 
   std::string    error;
   ASSERT_TRUE(
@@ -473,7 +473,7 @@ TEST_F(SemanticStorageControllerTest, ActiveModelKeyAndLanguageMetadataAreStored
   EXPECT_FALSE(semantic.SetActiveModelKey("missing-model", &error));
 }
 
-TEST_F(SemanticStorageControllerTest, ExistingSemanticModelWithoutActiveColumnPromotesLatestModel) {
+TEST_F(SemanticStoreTest, ExistingSemanticModelWithoutActiveColumnPromotesLatestModel) {
   RunRawSql(db_path_,
             "CREATE TABLE SemanticModel ("
             "model_key VARCHAR PRIMARY KEY,"
@@ -490,18 +490,18 @@ TEST_F(SemanticStorageControllerTest, ExistingSemanticModelWithoutActiveColumnPr
             "('latest-model', 'latest/model', 'rev-b', 512, 256, "
             "TIMESTAMP '2026-01-02 00:00:00');");
 
-  DBController              db_controller(db_path_);
-  SemanticStorageController semantic(db_controller);
+  Database              db_controller(db_path_);
+  SemanticStore semantic(db_controller);
   EXPECT_EQ(semantic.ActiveModelKey(), "latest-model");
 }
 
-TEST_F(SemanticStorageControllerTest, PersistsEmbeddingAndLabelTransactionally) {
+TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   const auto file_id = CreateSyntheticFile(project, L"labeled.raf");
-  const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 1U);
   const auto                                image_id = rows.front().image_id_;
 
@@ -550,13 +550,13 @@ TEST_F(SemanticStorageControllerTest, PersistsEmbeddingAndLabelTransactionally) 
   EXPECT_NEAR(stored_label->margin_, 0.79, 1.0e-6);
 }
 
-TEST_F(SemanticStorageControllerTest, AssignsLabelInDatabaseTransaction) {
+TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   const auto file_id = CreateSyntheticFile(project, L"db_labeled.raf");
-  const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 1U);
   const auto                                image_id = rows.front().image_id_;
 
@@ -623,9 +623,9 @@ TEST_F(SemanticStorageControllerTest, AssignsLabelInDatabaseTransaction) {
   EXPECT_TRUE(stored_label->confident_);
 }
 
-TEST_F(SemanticStorageControllerTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
+TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   std::vector<SemanticLabelPrototypeRecord> prototypes{
@@ -649,7 +649,7 @@ TEST_F(SemanticStorageControllerTest, AssignsElbowTruncatedLabelsByScoreDistribu
   // genuine runner-up survives as a second tag instead of being clipped by a hard top-1.
   {
     const auto file_id = CreateSyntheticFile(project, L"db_pair.raf");
-    const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+    const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
     ASSERT_EQ(rows.size(), 1U);
     SemanticImageEmbeddingRecord embedding{.file_id_   = file_id,
                                             .image_id_  = rows.front().image_id_,
@@ -668,7 +668,7 @@ TEST_F(SemanticStorageControllerTest, AssignsElbowTruncatedLabelsByScoreDistribu
   // hitting the kMaxSemanticImageLabelCount display cap.
   {
     const auto file_id = CreateSyntheticFile(project, L"db_triple.raf");
-    const auto rows    = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+    const auto rows    = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
     ASSERT_EQ(rows.size(), 2U);
     uint32_t image_id = 0;
     for (const auto& row : rows) {
@@ -695,15 +695,15 @@ TEST_F(SemanticStorageControllerTest, AssignsElbowTruncatedLabelsByScoreDistribu
   }
 }
 
-TEST_F(SemanticStorageControllerTest, DeletingFileRemovesSemanticRows) {
+TEST_F(SemanticStoreTest, DeletingFileRemovesSemanticRows) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&          semantic = project.GetStorage()->GetSemanticStore();
   RegisterTestModel(semantic);
 
   const auto delete_id = CreateSyntheticFile(project, L"delete_me.raf");
   const auto keep_id   = CreateSyntheticFile(project, L"keep_me.raf");
 
-  const auto rows      = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows      = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(rows.size(), 2U);
   for (const auto& row : rows) {
     StoreEmbedding(semantic, row.file_id_, row.image_id_,

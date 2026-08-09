@@ -92,7 +92,7 @@ class EditHistoryMgmtServiceTests : public ::testing::Test {
 
 TEST_F(EditHistoryMgmtServiceTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
-  EXPECT_NO_THROW(EditHistoryMgmtService history_service(project.GetStorageService()));
+  EXPECT_NO_THROW(EditHistoryMgmtService history_service(project.GetStorage()));
 }
 
 TEST_F(EditHistoryMgmtServiceTests, NewHistoryStartsWithVisibleDefaultVersion) {
@@ -230,7 +230,7 @@ TEST_F(EditHistoryMgmtServiceTests, BasicHistoryRWTest) {
 
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -270,7 +270,7 @@ TEST_F(EditHistoryMgmtServiceTests, BasicHistoryRWTest) {
   // Reopen and load again to verify persistence.
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -287,7 +287,7 @@ TEST_F(EditHistoryMgmtServiceTests, UpdateVersionPersistsFullTimeline) {
   constexpr sl_element_id_t file_id = 11;
 
   ProjectService            project(db_path_, meta_path_);
-  EditHistoryMgmtService    history_service(project.GetStorageService());
+  EditHistoryMgmtService    history_service(project.GetStorage());
 
   auto                      history_guard = history_service.LoadHistory(file_id);
   ASSERT_NE(history_guard, nullptr);
@@ -309,7 +309,7 @@ TEST_F(EditHistoryMgmtServiceTests, NewVersionStartsFromImportBaselineNotActiveL
   constexpr sl_element_id_t file_id = 14;
 
   ProjectService         project(db_path_, meta_path_);
-  EditHistoryMgmtService history_service(project.GetStorageService());
+  EditHistoryMgmtService history_service(project.GetStorage());
   auto                   history_guard = history_service.LoadHistory(file_id);
   ASSERT_NE(history_guard, nullptr);
 
@@ -404,7 +404,7 @@ TEST_F(EditHistoryMgmtServiceTests, VersionsStayIndependentAndNamesRoundTrip) {
 
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -435,7 +435,7 @@ TEST_F(EditHistoryMgmtServiceTests, VersionsStayIndependentAndNamesRoundTrip) {
 
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -451,7 +451,7 @@ TEST_F(EditHistoryMgmtServiceTests, PersistedCursorKeepsRedoTailUntilNewEdit) {
   constexpr sl_element_id_t file_id = 13;
 
   ProjectService            project(db_path_, meta_path_);
-  EditHistoryMgmtService    history_service(project.GetStorageService());
+  EditHistoryMgmtService    history_service(project.GetStorage());
 
   auto                      history_guard = history_service.LoadHistory(file_id);
   ASSERT_NE(history_guard, nullptr);
@@ -517,7 +517,7 @@ TEST_F(EditHistoryMgmtServiceTests, SyncPersistsDirtyHistoryWithoutSave) {
 
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -541,7 +541,7 @@ TEST_F(EditHistoryMgmtServiceTests, SyncPersistsDirtyHistoryWithoutSave) {
 
   {
     ProjectService         project(db_path_, meta_path_);
-    EditHistoryMgmtService history_service(project.GetStorageService());
+    EditHistoryMgmtService history_service(project.GetStorage());
 
     auto                   history_guard = history_service.LoadHistory(file_id);
     ASSERT_NE(history_guard, nullptr);
@@ -554,7 +554,7 @@ TEST_F(EditHistoryMgmtServiceTests, SyncPersistsDirtyHistoryWithoutSave) {
 
 TEST_F(EditHistoryMgmtServiceTests, SaveHistoryNullGuardNoThrow) {
   ProjectService                    project(db_path_, meta_path_);
-  EditHistoryMgmtService            history_service(project.GetStorageService());
+  EditHistoryMgmtService            history_service(project.GetStorage());
 
   std::shared_ptr<EditHistoryGuard> null_guard;
   EXPECT_NO_THROW(history_service.SaveHistory(null_guard));

@@ -16,7 +16,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "json.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -122,10 +122,10 @@ class IJournalTruncationHook {
 /// lock with AcquireBlocking and releases it before returning.
 class EditorMiniGitMaterializer final {
  public:
-  /// @param storage      Non-null StorageService used by the composed types.
+  /// @param storage      Non-null Storage used by the composed types.
   /// @param coordinator  Project-owned save lock. Required; materialization and
   ///                     recovery share one coordinator per open project.
-  EditorMiniGitMaterializer(std::shared_ptr<StorageService>                  storage,
+  EditorMiniGitMaterializer(std::shared_ptr<Storage>                  storage,
                             std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator);
 
   /// Persist history commits/Version/HEAD and the pipeline JSON checkpoint from
@@ -159,7 +159,7 @@ class EditorMiniGitMaterializer final {
   void SetTruncationHook(IJournalTruncationHook* hook) { truncation_hook_ = hook; }
 
  private:
-  std::shared_ptr<StorageService>                  storage_;
+  std::shared_ptr<Storage>                  storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator_;
   std::unique_ptr<EditorMiniGitCommitWriter>       writer_;
   std::unique_ptr<EditorMiniGitJournalRecovery>    recovery_;

@@ -21,8 +21,9 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
-#include "storage/controller/ai/ai_storage_controller.hpp"
-#include "storage/controller/semantic/semantic_storage_controller.hpp"
+#include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "storage/store/ai/ai_store.hpp"
+#include "storage/store/semantic/semantic_store.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
@@ -43,7 +44,7 @@ auto OneHot(size_t index) -> std::vector<float> {
   return embedding;
 }
 
-void RegisterSemanticSearchModel(SemanticStorageController& semantic, const std::string& model_key,
+void RegisterSemanticSearchModel(SemanticStore& semantic, const std::string& model_key,
                                  bool active = true) {
   std::string error;
   ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
@@ -57,7 +58,7 @@ void RegisterSemanticSearchModel(SemanticStorageController& semantic, const std:
 }
 
 auto FindImageId(ProjectService& project, sl_element_id_t file_id) -> image_id_t {
-  const auto rows = project.GetStorageService()->GetElementController().ListFilesInFolder(0);
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolder(0);
   const auto it   = std::find_if(rows.begin(), rows.end(), [file_id](const FileListEntry& row) {
     return row.file_id_ == file_id;
   });
@@ -67,7 +68,7 @@ auto FindImageId(ProjectService& project, sl_element_id_t file_id) -> image_id_t
 
 void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
                         sl_element_id_t file_id, const std::string& label, size_t embedding_index) {
-  auto&       semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto&       semantic = project.GetStorage()->GetSemanticStore();
   const auto  image_id = FindImageId(project, file_id);
   std::string error;
   ASSERT_NE(image_id, 0u);
@@ -90,12 +91,12 @@ void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
 }
 
 // Persist a remote image-understanding result (Phase 5f) for a file via the
-// AiStorageController, so a search test can exercise the AI caption/tags/scene
+// AiStore, so a search test can exercise the AI caption/tags/scene
 // contribution to the search document.
 void StoreAiUnderstanding(ProjectService& project, sl_element_id_t file_id,
                           const std::string& task_id, const std::string& caption,
                           const std::vector<std::string>& tags, const std::string& scene) {
-  auto&          ai = project.GetStorageService()->GetAiStorageController();
+  auto&          ai = project.GetStorage()->GetAiStore();
   AiDescription d;
   d.file_id_           = file_id;
   d.task_id_           = task_id;
@@ -115,7 +116,7 @@ void StoreAiUnderstanding(ProjectService& project, sl_element_id_t file_id,
 // full-text search; these tests use it to prove that exclusion.
 void StoreAiRating(ProjectService& project, sl_element_id_t file_id, const std::string& task_id,
                    int rating, const std::string& reasons) {
-  auto&       ai = project.GetStorageService()->GetAiStorageController();
+  auto&       ai = project.GetStorage()->GetAiStore();
   AiRating r;
   r.file_id_           = file_id;
   r.task_id_           = task_id;
@@ -136,7 +137,7 @@ void StoreAiRating(ProjectService& project, sl_element_id_t file_id, const std::
 // be excluded from full-text search.
 void StoreAiRatingReasons(ProjectService& project, sl_element_id_t file_id,
                           const std::string& task_id, const std::string& reasons) {
-  auto&       ai = project.GetStorageService()->GetAiStorageController();
+  auto&       ai = project.GetStorage()->GetAiStore();
   AiRating r;
   r.file_id_           = file_id;
   r.task_id_           = task_id;
@@ -316,11 +317,12 @@ TEST_F(FilterServiceTests, SQLCompilationTest) {
       .op_    = CompareOp::EQUALS,
       .value_ = std::wstring(L"Canon EOS 5D Mark IV"),
   };
-  FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql          = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql = L"(json_extract(metadata, '$.Model') = 'Canon EOS 5D Mark IV')";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
 
 TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
@@ -329,21 +331,24 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
       .op_    = CompareOp::EQUALS,
       .value_ = std::wstring(L"Nikon D850"),
   };
-  FilterNode     node1{FilterNode::Type::Condition, {}, {}, std::move(cond1), std::nullopt};
+  FilterNode node1{FilterNode::Type::Condition, {}, {}, std::move(cond1), std::nullopt};
 
   FieldCondition cond2{
       .field_ = FilterField::FileExtension,
       .op_    = CompareOp::ENDS_WITH,
       .value_ = std::wstring(L".NEF"),
   };
-  FilterNode   node2{FilterNode::Type::Condition, {}, {}, std::move(cond2), std::nullopt};
+  FilterNode node2{FilterNode::Type::Condition, {}, {}, std::move(cond2), std::nullopt};
 
-  FilterNode   root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
+  FilterNode root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
 
-  std::wstring sql = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql =
-      L"((json_extract(metadata, '$.Model') = 'Nikon D850') AND (UPPER(file_name) LIKE '%.NEF'))";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_,
+            "((json_extract(i.metadata, '$.Model') = ?) AND "
+            "(UPPER(i.file_name) LIKE ?))");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
+  EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "%.NEF");
 }
 
 TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
@@ -353,11 +358,34 @@ TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
       .value_        = int64_t(100),
       .second_value_ = int64_t(800),
   };
-  FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql          = FilterSQLCompiler::Compile(root);
-  std::wstring expected_sql = L"(json_extract(metadata, '$.ISO')::INT BETWEEN 100 AND 800)";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  ASSERT_EQ(sql.binds_.size(), 2u);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
+  EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
+}
+
+TEST_F(FilterServiceTests, BindsStringFilterValueWithEmbeddedQuote) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifCameraModel,
+      .op_    = CompareOp::EQUALS,
+      .value_ = std::wstring(L"O'Brien"),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "O'Brien");
+}
+
+TEST_F(FilterServiceTests, RawSQLBridgeNodeCompilesAsTrustedText) {
+  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"e.id > 0")};
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "e.id > 0");
+  EXPECT_TRUE(sql.binds_.empty());
 }
 
 TEST_F(FilterServiceTests, FolderIndexTest_Model) {
@@ -373,7 +401,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_Model) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
@@ -401,7 +429,7 @@ TEST_F(FilterServiceTests, AlbumScopeFilterUsesMembershipOnly) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
@@ -470,7 +498,7 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesMetadataFilenamePathAndDatesWithWid
   ASSERT_NE(huangshan_id, 0u);
   ASSERT_NE(city_id, 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   const auto          expect_only = [&](const std::wstring& query, sl_element_id_t expected_id) {
     const auto rows = filter_service.SearchFolder(0, query, 0, 10);
@@ -524,7 +552,7 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesSeparatorFoldedPhotoTerms) {
   ASSERT_NE(target_id, 0u);
   ASSERT_NE(decoy_id, 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   const auto          expect_only_target = [&](const std::wstring& query) {
     const auto rows = filter_service.SearchFolder(0, query, 0, 10);
@@ -546,7 +574,7 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesRealImportedRawFilenameWithoutSepar
   const uint32_t imported = LoadBatchToRoot(project);
   ASSERT_GT(imported, 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   const auto          rows = filter_service.SearchFolder(0, L"_DSC2296ARW", 0, 10);
 
   ASSERT_EQ(rows.size(), 1u);
@@ -569,14 +597,14 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesGeneratedSemanticLabelsAsOrdinaryTe
   ASSERT_NE(landscape_id, 0u);
   ASSERT_NE(portrait_id, 0u);
 
-  auto& semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto& semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticSearchModel(semantic, "mobileclip-test-a");
   RegisterSemanticSearchModel(semantic, "mobileclip-test-b");
   StoreSemanticLabel(project, "mobileclip-test-a", landscape_id, "landscape", 4);
   StoreSemanticLabel(project, "mobileclip-test-b", landscape_id, "landscape", 5);
   StoreSemanticLabel(project, "mobileclip-test-a", portrait_id, "portrait", 6);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   const auto          landscape_rows = filter_service.SearchFolder(0, L"landscape", 0, 10);
   ASSERT_EQ(landscape_rows.size(), 1u);
@@ -629,12 +657,12 @@ TEST_F(FilterServiceTests, FuzzySearchIgnoresSemanticLabelsWhenNoModelIsActive) 
                                                      .camera_model_ = "Neutral Camera"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto& semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticSearchModel(semantic, "inactive-mobileclip-test", false);
   StoreSemanticLabel(project, "inactive-mobileclip-test", landscape_id, "landscape", 4);
   ASSERT_TRUE(semantic.ActiveModelKey().empty());
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   EXPECT_TRUE(filter_service.SearchFolder(0, L"landscape", 0, 10).empty());
   EXPECT_EQ(filter_service.CountSearchResults(0, L"landscape"), 0u);
   EXPECT_TRUE(filter_service.BuildFolderStats(0).label_stats_.empty());
@@ -657,7 +685,7 @@ TEST_F(FilterServiceTests, AiUnderstandingCaptionAndTagsSearchableOnlyAfterActiv
   ASSERT_NE(alpha_id, 0u);
   ASSERT_NE(beta_id, 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   // Before any AI understanding is persisted, neither caption nor tag token is searchable.
   EXPECT_TRUE(filter_service.SearchFolder(0, L"sahara", 0, 10).empty());
   EXPECT_EQ(filter_service.CountSearchResults(0, L"sahara"), 0u);
@@ -701,7 +729,7 @@ TEST_F(FilterServiceTests, FieldMaskScopesResultsByFieldGroup) {
   StoreAiUnderstanding(project, alpha_id, "describe", "sahara dunes at sunset", {"desert"},
                        "saharasunset");
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   // Single-bit masks used below; SearchField is an enum class so the bits must
   // be cast to SearchFieldMask before they can be passed as the mask argument.
@@ -751,7 +779,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsAreNotInFullScreenSearch) {
   StoreAiUnderstanding(project, alpha_id, "describe", "sahara caption", {"desert"}, "");
   StoreAiRating(project, alpha_id, "rate", 5, "flibbertigibbet golden ratio");
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   // The understanding caption is searchable.
   const auto caption_rows = filter_service.SearchFolder(0, L"sahara", 0, 10);
   ASSERT_EQ(caption_rows.size(), 1u);
@@ -764,7 +792,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsAreNotInFullScreenSearch) {
   // Sanity: the rating was actually persisted, so the empty search result is meaningful —
   // the word exists in the DB, it is simply excluded from the search document.
   const auto rating =
-      project.GetStorageService()->GetAiStorageController().GetRating(alpha_id, "rate");
+      project.GetStorage()->GetAiStore().GetRating(alpha_id, "rate");
   ASSERT_TRUE(rating.has_value());
   EXPECT_EQ(rating->rating_, 5);
   EXPECT_NE(rating->reasons_.find("flibbertigibbet"), std::string::npos);
@@ -784,7 +812,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsOnlyRowIsNotInFullScreenSearch) {
   StoreAiUnderstanding(project, alpha_id, "describe", "sahara caption", {"desert"}, "");
   StoreAiRatingReasons(project, alpha_id, "rate", "flibbertigibbet golden ratio");
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   // The understanding caption is searchable.
   ASSERT_EQ(filter_service.SearchFolder(0, L"sahara", 0, 10).size(), 1u);
 
@@ -795,7 +823,7 @@ TEST_F(FilterServiceTests, AiRatingReasonsOnlyRowIsNotInFullScreenSearch) {
 
   // Sanity: the reasons row was persisted as an active rating row (rating = 0 sentinel).
   const auto rating =
-      project.GetStorageService()->GetAiStorageController().GetActiveRating(alpha_id);
+      project.GetStorage()->GetAiStore().GetActiveRating(alpha_id);
   ASSERT_TRUE(rating.has_value());
   EXPECT_EQ(rating->rating_, 0);
   EXPECT_NE(rating->reasons_.find("flibbertigibbet"), std::string::npos);
@@ -822,7 +850,7 @@ TEST_F(FilterServiceTests, FuzzySearchEscapesSqlLikeWildcardsAndQuotesInWideInpu
   ASSERT_NE(literal_id, 0u);
   ASSERT_NE(wildcard_decoy_id, 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   const auto          expect_only_literal = [&](const std::wstring& query) {
     const auto rows = filter_service.SearchFolder(0, query, 0, 10);
@@ -848,7 +876,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_FileExtension) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::FileExtension,
@@ -877,7 +905,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_Aperature) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::ExifAperture,
@@ -909,7 +937,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_ISO) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_        = FilterField::ExifISO,
@@ -940,7 +968,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_FocalLength) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::ExifFocalLength,
@@ -970,7 +998,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_Combined) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond1{
            .field_ = FilterField::ExifCameraModel,
@@ -1008,7 +1036,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_NoMatch) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
@@ -1037,7 +1065,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_DateRange) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   FieldCondition      cond{
            .field_        = FilterField::CaptureDate,
@@ -1098,9 +1126,9 @@ TEST_F(FilterServiceTests, ListCountMatchesStatsCount) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   const auto          stats = filter_service.BuildFolderStats(root_folder->element_id_);
-  const auto          list  = project.GetStorageService()->GetElementController().ListFilesInFolder(
+  const auto          list  = project.GetStorage()->GetElementStore().ListFilesInFolder(
       root_folder->element_id_);
   EXPECT_EQ(static_cast<size_t>(stats.total_photo_count_), list.size());
 }
@@ -1110,10 +1138,10 @@ TEST_F(FilterServiceTests, RootScopeUsesVirtualFileView) {
   const auto     file_id = CreateSyntheticFile(project, L"virtual_root.dng", "Nikon D850");
   ASSERT_NE(file_id, 0u);
 
-  auto storage = project.GetStorageService();
-  storage->GetElementController().RemoveFolderContent(0, file_id);
+  auto storage = project.GetStorage();
+  storage->GetElementStore().RemoveFolderContent(0, file_id);
 
-  const auto list = storage->GetElementController().ListFilesInFolder(0);
+  const auto list = storage->GetElementStore().ListFilesInFolder(0);
   ASSERT_EQ(list.size(), 1u);
   EXPECT_EQ(list.front().file_id_, file_id);
 
@@ -1156,7 +1184,7 @@ TEST_F(FilterServiceTests, FilterCacheInvalidationAfterLink) {
   ASSERT_NE(album.first, nullptr);
   const auto          album_id = album.first->element_id_;
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
            .op_    = CompareOp::CONTAINS,
@@ -1193,7 +1221,7 @@ TEST_F(FilterServiceTests, FilterCacheInvalidationAfterUnlink) {
 
   ASSERT_TRUE(sleeve_service->LinkFileToFolder(file_id, album_id).success_);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
            .op_    = CompareOp::CONTAINS,
@@ -1226,7 +1254,7 @@ TEST_F(FilterServiceTests, FilterCacheInvalidationAfterDeleteEverywhere) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   FieldCondition      cond{
            .field_ = FilterField::ExifCameraModel,
            .op_    = CompareOp::CONTAINS,
@@ -1265,9 +1293,9 @@ TEST_F(FilterServiceTests, AlbumScopeListAndStatsAreConsistent) {
   ASSERT_TRUE(sleeve_service->LinkFileToFolder(file1_id, album_id).success_);
   ASSERT_TRUE(sleeve_service->LinkFileToFolder(file2_id, album_id).success_);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
   const auto          stats = filter_service.BuildFolderStats(album_id);
-  const auto list = project.GetStorageService()->GetElementController().ListFilesInFolder(album_id);
+  const auto list = project.GetStorage()->GetElementStore().ListFilesInFolder(album_id);
   EXPECT_EQ(static_cast<size_t>(stats.total_photo_count_), list.size());
   EXPECT_EQ(list.size(), 2u);
 }
@@ -1340,7 +1368,7 @@ TEST_F(FilterServiceTests, SemanticSearchProviderDelegatesWhenRegistered) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
   ASSERT_NE(CreateSyntheticFile(project, L"semantic_seam.dng", "Nikon D850"), 0u);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   // No provider registered: the seam reports unavailable and returns nothing.
   EXPECT_FALSE(filter_service.HasSemanticSearchProvider());
@@ -1378,11 +1406,11 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
                                      .lens_         = "Plain Lens"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorageService()->GetSemanticStorageController();
+  auto& semantic = project.GetStorage()->GetSemanticStore();
   RegisterSemanticSearchModel(semantic, "mobileclip-route-test");
   StoreSemanticLabel(project, "mobileclip-route-test", landscape_id, "landscape", 4);
 
-  SleeveFilterService filter_service(project.GetStorageService());
+  SleeveFilterService filter_service(project.GetStorage());
 
   // Register a provider that would record any accidental semantic call.
   auto fake = std::make_shared<FakeSemanticSearchProvider>();
@@ -1400,6 +1428,303 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
   ASSERT_EQ(zh_rows.size(), 1u);
   EXPECT_EQ(zh_rows.front().file_id_, landscape_id);
   EXPECT_FALSE(fake->was_called_);
+}
+
+TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     d850_24 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/a.dng"},
+                                 .camera_model_ = "Nikon D850",
+                                 .lens_         = "NIKKOR 24mm"});
+  const auto d850_50 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/b.dng"},
+                                 .camera_model_ = "Nikon D850",
+                                 .lens_         = "NIKKOR 50mm"});
+  const auto sony_50 = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"merge_c.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/merge/c.dng"},
+                                 .camera_model_ = "Sony A7",
+                                 .lens_         = "SEL 50mm"});
+  ASSERT_NE(d850_24, 0u);
+  ASSERT_NE(d850_50, 0u);
+  ASSERT_NE(sony_50, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"Nikon D850");
+  const auto          search_node = filter_service.BuildFuzzySearchWhere(L"50mm");
+  ASSERT_TRUE(search_node.has_value());
+
+  // Search alone: two files carry "50mm" in the lens field.
+  const auto search_where = CompileFilterPredicate(search_node);
+  ASSERT_TRUE(search_where.has_value());
+  auto search_rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, search_where);
+  ASSERT_EQ(search_rows.size(), 2u);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, search_node).total_photo_count_, 2);
+
+  // Stats-bar alone: two Nikon D850 files.
+  EXPECT_EQ(filter_service.BuildFolderStats(0, stats_node).total_photo_count_, 2);
+
+  // Combined: only the Nikon D850 file whose lens contains "50mm".
+  const auto merged = MergeFilterNodes(stats_node, search_node);
+  ASSERT_TRUE(merged.has_value());
+  const auto merged_where = CompileFilterPredicate(merged);
+  ASSERT_TRUE(merged_where.has_value());
+  const auto merged_rows =
+      project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
+                                                                                merged_where);
+  ASSERT_EQ(merged_rows.size(), 1u);
+  EXPECT_EQ(merged_rows.front().file_id_, d850_50);
+
+  const auto merged_stats = filter_service.BuildFolderStats(0, merged);
+  EXPECT_EQ(merged_stats.total_photo_count_, 1);
+  (void)d850_24;
+  (void)sony_50;
+}
+
+TEST_F(FilterServiceTests, StatsCameraBucketFilterRestrictsFolderStatsAndGrid) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     nikon_id = CreateSyntheticFile(project, L"bucket_nikon.dng", "Nikon D850");
+  const auto     sony_id  = CreateSyntheticFile(project, L"bucket_sony.dng", "Sony A7");
+  ASSERT_NE(nikon_id, 0u);
+  ASSERT_NE(sony_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"Nikon D850");
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto camera_bucket = std::find_if(
+      stats.camera_stats_.begin(), stats.camera_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "Nikon D850"; });
+  ASSERT_NE(camera_bucket, stats.camera_stats_.end());
+  EXPECT_EQ(camera_bucket->count_, 1);
+
+  const auto where = CompileFilterPredicate(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, nikon_id);
+}
+
+TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     landscape_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_label_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .lens_         = "Plain Lens"});
+  const auto portrait_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_label_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .lens_         = "Plain Lens"});
+  ASSERT_NE(landscape_id, 0u);
+  ASSERT_NE(portrait_id, 0u);
+
+  auto& semantic = project.GetStorage()->GetSemanticStore();
+  RegisterSemanticSearchModel(semantic, "mobileclip-stats-filter");
+  StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          stats_node = sleeve_filter::BuildSemanticLabelExistsFilter(
+      "mobileclip-stats-filter", SemanticLabelAliases("landscape"));
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto label_bucket = std::find_if(
+      stats.label_stats_.begin(), stats.label_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "landscape" && row.count_ == 1; });
+  EXPECT_NE(label_bucket, stats.label_stats_.end());
+
+  const auto where = CompileFilterPredicate(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, landscape_id);
+}
+
+TEST_F(FilterServiceTests, StatsRatingBucketFilterRestrictsFolderStats) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     four_star = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_rating_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .rating_       = 4});
+  const auto two_star = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_rating_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .rating_       = 2});
+  ASSERT_NE(four_star, 0u);
+  ASSERT_NE(two_star, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          stats_node = sleeve_filter::BuildRatingBucketFilter(L"4");
+
+  const auto stats = filter_service.BuildFolderStats(0, stats_node);
+  EXPECT_EQ(stats.total_photo_count_, 1);
+  const auto rating_bucket = std::find_if(
+      stats.rating_stats_.begin(), stats.rating_stats_.end(),
+      [](const StatsBucket& row) { return row.label_ == "4" && row.count_ == 1; });
+  EXPECT_NE(rating_bucket, stats.rating_stats_.end());
+
+  const auto where = CompileFilterPredicate(stats_node);
+  ASSERT_TRUE(where.has_value());
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, where);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, four_star);
+}
+
+TEST_F(FilterServiceTests, StatsCaptureDateUnknownFilterMatchesFilesWithoutDate) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     dated_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_date_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/a.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .date_time_    = "2026-01-01 10:00:00"});
+  const auto undated_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"stats_date_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/stats/b.dng"},
+                                 .camera_model_ = "Neutral Body",
+                                 .date_time_    = ""});
+  ASSERT_NE(dated_id, 0u);
+  ASSERT_NE(undated_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+
+  const auto unknown_node = sleeve_filter::BuildCaptureDateUnknownFilter();
+  const auto unknown_where = CompileFilterPredicate(unknown_node);
+  ASSERT_TRUE(unknown_where.has_value());
+  const auto unknown_rows =
+      project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
+                                                                                unknown_where);
+  ASSERT_EQ(unknown_rows.size(), 1u);
+  EXPECT_EQ(unknown_rows.front().file_id_, undated_id);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, unknown_node).total_photo_count_, 1);
+
+  const auto known_node = sleeve_filter::BuildCaptureDateBucketFilter(L"2026-01-01");
+  const auto known_where = CompileFilterPredicate(known_node);
+  ASSERT_TRUE(known_where.has_value());
+  const auto known_rows =
+      project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0,
+                                                                                known_where);
+  ASSERT_EQ(known_rows.size(), 1u);
+  EXPECT_EQ(known_rows.front().file_id_, dated_id);
+  EXPECT_EQ(filter_service.BuildFolderStats(0, known_node).total_photo_count_, 1);
+}
+
+TEST_F(FilterServiceTests,
+       StatsCameraBucketWithEmbeddedQuoteUsesPreparedBindsOnAlbumScopeQuery) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     quoted_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"quote_cam_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/quote/a.dng"},
+                                 .camera_model_ = "O'Brien Body"});
+  const auto plain_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"quote_cam_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/quote/b.dng"},
+                                 .camera_model_ = "Plain Body"});
+  ASSERT_NE(quoted_id, 0u);
+  ASSERT_NE(plain_id, 0u);
+
+  const auto stats_node = sleeve_filter::BuildCameraModelBucketFilter(L"O'Brien Body");
+  const auto predicate  = CompileFilterPredicate(stats_node);
+  ASSERT_TRUE(predicate.has_value());
+  ASSERT_FALSE(predicate->binds_.empty());
+  EXPECT_EQ(std::get<std::string>(predicate->binds_.front()), "O'Brien Body");
+  EXPECT_NE(predicate->sql_.find('?'), std::string::npos);
+
+  const auto rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(
+      0, 0, 0, predicate);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, quoted_id);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  EXPECT_EQ(filter_service.BuildFolderStats(0, stats_node).total_photo_count_, 1);
+  EXPECT_EQ(project.GetStorage()->GetElementStore().CountFilesInFolder(0, predicate), 1u);
+}
+
+TEST_F(FilterServiceTests, FuzzySearchInjectPayloadDoesNotWidenFolderResults) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     d850_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"inject_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/inject/a.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  const auto     sony_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"inject_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/inject/b.dng"},
+                                 .camera_model_ = "Sony A7"});
+  ASSERT_NE(d850_id, 0u);
+  ASSERT_NE(sony_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+
+  const auto control = filter_service.SearchFolder(0, L"Nikon D850", 0, 10);
+  ASSERT_EQ(control.size(), 1u);
+  EXPECT_EQ(control.front().file_id_, d850_id);
+
+  const auto inject_rows = filter_service.SearchFolder(0, L"' OR 1=1 --", 0, 10);
+  EXPECT_TRUE(inject_rows.empty());
+  EXPECT_EQ(filter_service.CountSearchResults(0, L"' OR 1=1 --"), 0u);
+
+  const auto node = filter_service.BuildFuzzySearchWhere(L"' OR 1=1 --");
+  ASSERT_TRUE(node.has_value());
+  const auto predicate = CompileFilterPredicate(node);
+  ASSERT_TRUE(predicate.has_value());
+  EXPECT_NE(predicate->sql_.find('?'), std::string::npos);
+  EXPECT_EQ(predicate->sql_.find("OR 1=1"), std::string::npos);
+  ASSERT_FALSE(predicate->binds_.empty());
+}
+
+TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     file_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"mask_zero.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/mask/zero.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  ASSERT_NE(file_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          node = filter_service.BuildFuzzySearchWhere(L"Nikon", SearchFieldMask{0});
+  ASSERT_TRUE(node.has_value());
+  EXPECT_EQ(node->type_, FilterNode::Type::RawSQL);
+  ASSERT_TRUE(node->raw_sql_.has_value());
+  EXPECT_EQ(*node->raw_sql_, L"FALSE");
+  EXPECT_TRUE(node->raw_binds_.empty());
+
+  EXPECT_TRUE(filter_service.SearchFolder(0, L"Nikon", 0, 10, SearchFieldMask{0}).empty());
+  EXPECT_EQ(filter_service.CountSearchResults(0, L"Nikon", SearchFieldMask{0}), 0u);
+}
+
+TEST_F(FilterServiceTests, ExactFileWhereBindsFileIdAsParam) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     file_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"exact_id.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/exact/id.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  ASSERT_NE(file_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          node = filter_service.BuildExactFileWhere(file_id);
+  EXPECT_EQ(node.type_, FilterNode::Type::RawSQL);
+
+  const auto frag = FilterSQLCompiler::Compile(node);
+  EXPECT_EQ(frag.sql_, "(e.id = ?)");
+  ASSERT_EQ(frag.binds_.size(), 1u);
+  EXPECT_EQ(std::get<int64_t>(frag.binds_[0]), static_cast<int64_t>(file_id));
+
+  const auto predicate = CompileFilterPredicate(node);
+  ASSERT_TRUE(predicate.has_value());
+  const auto rows =
+      project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0, predicate);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, file_id);
 }
 
 }  // namespace alcedo

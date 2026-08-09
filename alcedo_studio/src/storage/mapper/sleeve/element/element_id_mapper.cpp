@@ -5,6 +5,9 @@
 #include "storage/mapper/sleeve/element/element_id_mapper.hpp"
 
 #include <stdexcept>
+#include <utility>
+
+#include "utils/string/convert.hpp"
 
 namespace alcedo {
 auto ElementIdMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementIdMapperParams {
@@ -18,5 +21,19 @@ auto ElementIdMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> Elem
   }
 
   return {*id};
+}
+
+auto ElementIdMapper::ToParams(const sl_element_id_t& source) -> ElementIdMapperParams {
+  return {source};
+}
+
+auto ElementIdMapper::FromParams(ElementIdMapperParams&& param) -> sl_element_id_t {
+  return param.id;
+}
+
+auto ElementIdMapper::GetElementIdsByQuery(const std::wstring& query_sql)
+    -> std::vector<sl_element_id_t> {
+  std::string query_sql_u8 = conv::ToBytes(query_sql);
+  return GetByQuery(std::move(query_sql_u8));
 }
 }  // namespace alcedo

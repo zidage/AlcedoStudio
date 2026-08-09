@@ -130,13 +130,13 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->workspace_to_cleanup_ = old_workspace;
 
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
-      result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorageService());
+      result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorage());
       result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
       qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
             AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
-          result->pipeline_, result->project_->GetStorageService(), result->project_->GetProjectUUID());
+          result->pipeline_, result->project_->GetStorage(), result->project_->GetProjectUUID());
       result->import_ = std::make_unique<ImportServiceImpl>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_);
@@ -242,7 +242,7 @@ bool ProjectHandler::PurgeUninstalledSemanticModels() {
   if (!project_) {
     return false;
   }
-  auto&      semantic = project_->GetStorageService()->GetSemanticStorageController();
+  auto&      semantic = project_->GetStorage()->GetSemanticStore();
   std::string err;
   const auto  models = semantic.ListModels(&err);
   bool        changed = false;

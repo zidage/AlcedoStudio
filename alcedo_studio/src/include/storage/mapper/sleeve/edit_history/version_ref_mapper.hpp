@@ -10,7 +10,7 @@
 #include <string>
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "storage/mapper/mapper_interface.hpp"
+#include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -32,7 +32,7 @@ struct VersionRefMapperParams {
 };
 
 class VersionRefMapper
-    : public MapperInterface<VersionRefMapper, VersionRefMapperParams, std::string>,
+    : public Mapper<VersionRefMapper, VersionRefMapperParams, VersionRefMapperParams, std::string>,
       public FieldReflectable<VersionRefMapper> {
  private:
   static constexpr uint32_t    field_count_      = 6;
@@ -49,7 +49,7 @@ class VersionRefMapper
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> VersionRefMapperParams;
   friend struct FieldReflectable<VersionRefMapper>;
-  using MapperInterface::MapperInterface;
+  using Mapper::Mapper;
 };
 
 }  // namespace alcedo

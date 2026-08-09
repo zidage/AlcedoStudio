@@ -26,8 +26,8 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/op_base.hpp"
-#include "storage/controller/db_controller.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/database.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -672,7 +672,7 @@ TEST(CommitGraphValidation, MissingOrCrossRootParentsFailImmediately) {
 class CommitGraphPersistenceTests : public ::testing::Test {
  protected:
   std::filesystem::path         db_path_;
-  std::unique_ptr<DBController> db_;
+  std::unique_ptr<Database> db_;
 
   void                          SetUp() override {
     edit_history_test::CommitClockAccess::ResetGlobal(0);
@@ -681,7 +681,7 @@ class CommitGraphPersistenceTests : public ::testing::Test {
     db_path_ = std::filesystem::temp_directory_path() / ("commit_graph_persist_" + stamp + ".db");
     std::error_code ec;
     std::filesystem::remove(db_path_, ec);
-    db_ = std::make_unique<DBController>(db_path_);
+    db_ = std::make_unique<Database>(db_path_);
   }
 
   void TearDown() override {
@@ -694,7 +694,7 @@ class CommitGraphPersistenceTests : public ::testing::Test {
 TEST_F(CommitGraphPersistenceTests, TwoVersionRefsShareOneStoredCommitRow) {
   auto               guard = db_->GetConnectionGuard();
   auto               lock  = guard.Lock();
-  CommitGraphService service(guard.conn_);
+  CommitGraphStore service(guard.conn_);
 
   auto               graph = CommitGraph::CreateEmpty(1001);
   auto commit              = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
@@ -725,7 +725,7 @@ TEST_F(CommitGraphPersistenceTests, TwoVersionRefsShareOneStoredCommitRow) {
 TEST_F(CommitGraphPersistenceTests, InconsistentMaterializationLeavesPriorRowsUnchanged) {
   auto               guard = db_->GetConnectionGuard();
   auto               lock  = guard.Lock();
-  CommitGraphService service(guard.conn_);
+  CommitGraphStore service(guard.conn_);
 
   auto               graph          = service.CreateEmptyPersisted(4004);
   const auto         baseline_count = service.CountCommits();
@@ -762,7 +762,7 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
   {
     auto               guard = db_->GetConnectionGuard();
     auto               lock  = guard.Lock();
-    CommitGraphService service(guard.conn_);
+    CommitGraphStore service(guard.conn_);
 
     auto               graph = CommitGraph::CreateEmpty(2002);
     auto               c1 = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
@@ -786,12 +786,12 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
 
   // Close and recreate the controller against the same file.
   db_.reset();
-  db_ = std::make_unique<DBController>(db_path_);
+  db_ = std::make_unique<Database>(db_path_);
 
   {
     auto               guard = db_->GetConnectionGuard();
     auto               lock  = guard.Lock();
-    CommitGraphService service(guard.conn_);
+    CommitGraphStore service(guard.conn_);
 
     auto               loaded = service.LoadGraph(2002);
     ASSERT_TRUE(loaded.has_value());
@@ -811,7 +811,7 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
 TEST_F(CommitGraphPersistenceTests, EmptyPersistedImageHasRootAndDefaultVersionRef) {
   auto               guard = db_->GetConnectionGuard();
   auto               lock  = guard.Lock();
-  CommitGraphService service(guard.conn_);
+  CommitGraphStore service(guard.conn_);
 
   CommitGraph        graph;
   ASSERT_NO_THROW(graph = service.CreateEmptyPersisted(3003));
@@ -829,7 +829,7 @@ TEST_F(CommitGraphPersistenceTests,
        DeleteGraphForElementRemovesOnlyTheDeletedImagesGraphAndImmutableRoot) {
   auto               guard = db_->GetConnectionGuard();
   auto               lock  = guard.Lock();
-  CommitGraphService service(guard.conn_);
+  CommitGraphStore service(guard.conn_);
 
   auto deleted = service.CreateRootPipelinePersisted(5005, {{"exposure", 0.0f}});
   auto commit = MakeEditAt(deleted.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),

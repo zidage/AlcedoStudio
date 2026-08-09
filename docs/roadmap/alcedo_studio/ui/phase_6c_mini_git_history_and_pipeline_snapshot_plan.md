@@ -473,7 +473,7 @@ Acceptance:
 - Attempting to persist a Version head that disagrees with the materialized head or chain hash
   fails before the DuckDB transaction commits and leaves all prior rows unchanged.
 - A valid materialization advances the commit rows, checked-out Version head, image materialized
-  head, transaction-chain hash, and serialized pipeline state together; close and recreate `DBController`,
+  head, transaction-chain hash, and serialized pipeline state together; close and recreate `Database`,
   then load and verify the same values.
 - Loading fails immediately when any reachable first parent or merge second parent is missing,
   belongs to another root, or violates the Edit/Merge parent rules.
@@ -1052,7 +1052,7 @@ Files to add:
 
 - [x] one unique temporary directory containing a project database, project metadata file, and
       per-image Mini-Git journals;
-- [x] real `ProjectService`, `StorageService`, `CommitGraphService`, and persisted default Versions for
+- [x] real `ProjectService`, `Storage`, `CommitGraphStore`, and persisted default Versions for
       image A and image B, with different element IDs and root IDs;
 - [x] deterministic commit timestamps through `CommitClockAccess`, not wall-clock sleeps;
 - [x] helpers named `AppendExposureEdit`, `CaptureWorkingState`, `CloseAndReopenProject`,
@@ -1868,15 +1868,15 @@ Test fixture (EditorMiniGitProjectFixture)
      -> save_coordinator_->AcquireBlocking(element_id)
      -> materializer_->Materialize(capture, &error)
         -> ValidateSaveCapture (identity, sequence range)
-        -> CommitGraphService::LoadGraph(element_id) [DuckDB read]
+        -> CommitGraphStore::LoadGraph(element_id) [DuckDB read]
         -> EditorMiniGitJournalFold::Fold (pure algorithm, no I/O)
         -> writer_->Write(materialization, &error) [hook called here]
-           -> CommitGraphService::Materialize [single DuckDB transaction]
+           -> CommitGraphStore::Materialize [single DuckDB transaction]
         -> TruncateCapturedJournalRange [hook called here]
      -> journal->TruncateThroughSequence (same-session cleanup)
   -> project_.CloseAndReopenProject()
   -> project_.LoadStoredGraph(element_id)
-     -> CommitGraphService::LoadGraph [DuckDB read]
+     -> CommitGraphStore::LoadGraph [DuckDB read]
   -> Assert(commit_count, version_head, chain_hash, serialized_state)
 ```
 
@@ -2356,7 +2356,7 @@ ApplicationModuleHost::ShutdownModules
   -> Finalize/Close (save checkpoint) + editor Shutdown
   -> PipelineMgmtService::Sync
   -> PipelineMgmtService::CollectUnreachableEditCommits
-  -> CommitGraphService::DeleteUnreachableCommitsForProject
+  -> CommitGraphStore::DeleteUnreachableCommitsForProject
   -> per image: LoadGraph -> ListUnreachableCommitHashes
     (mark all Version heads, walk both parents) -> Remove unreachable EditCommit rows
 ```
@@ -2590,7 +2590,7 @@ Settled editor adjustment
   -> MiniGitJournal::Append
   -> CaptureSaveCheckpoint
   -> EditorMiniGitMaterializer::Materialize
-  -> CommitGraphService::Materialize + durable-prefix truncation
+  -> CommitGraphStore::Materialize + durable-prefix truncation
   -> EditorSaveCheckpointService::HandleMaterialization
   -> IEditorThumbnailPort::RefreshAfterMaterialization
   -> ApplicationModuleHost queued LibraryModule thumbnail refresh
@@ -2621,10 +2621,10 @@ Checkpoint materialization failure
 | successful checkpoint refreshes once; failed checkpoint refreshes zero times | `EditorSaveCheckpointServiceTest`, `EditorSessionThumbnailPortTest` | PASS, 14/14 and 3/3 |
 | save navigation, stale callbacks, and terminal ordering | `EditorSessionNavigationControllerTest`, `EditorSessionEditControllerTest` | PASS, 18/18 and 8/8 |
 | root/head thumbnail disk keys after pipeline-row removal | `ThumbnailServiceTests.DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` | PASS, 1/1 |
-| per-image Mini-Git graph deletion and UI image deletion path | `CommitGraphPersistenceTests.DeleteGraphForElementRemovesOnlyTheDeletedImagesGraphAndImmutableRoot`, `PipelineServiceTests.DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly`, `AlbumBackendImageDeleteTest` | PASS, 1/1, 1/1, and 9/9 |
+| per-image Mini-Git graph deletion and UI image deletion path | `CommitGraphPersistenceTests.DeleteGraphForElementRemovesOnlyTheDeletedImagesGraphAndImmutableRoot`, `PipelineMapperTests.DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly`, `AlbumBackendImageDeleteTest` | PASS, 1/1, 1/1, and 9/9 |
 | Paste/Merge and semantic service regressions | `AdjustmentTransferServiceMiniGitTest`, `SemanticGenerationServiceTest` | PASS, 13/13 and 13/13 |
 
-Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlbumBackendLib --target PipelineServiceTest --target ThumbnailServiceTest --target CommitGraphTest --target EditorMiniGitMaterializerTest --target EditorMiniGitJournalRecoveryTest --target EditorSaveCheckpointServiceTest --target EditorSessionThumbnailPortTest --target EditorSessionNavigationControllerTest --target EditorSessionEditControllerTest --target AdjustmentTransferServiceMiniGitTest --target SemanticGenerationServiceTest --target AlbumBackendImageDeleteTest`; `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest`; each listed test binary was then executed directly with GoogleTest, using exact filters for the three named persistence/cache criteria.
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlbumBackendLib --target PipelineMapperTest --target ThumbnailServiceTest --target CommitGraphTest --target EditorMiniGitMaterializerTest --target EditorMiniGitJournalRecoveryTest --target EditorSaveCheckpointServiceTest --target EditorSessionThumbnailPortTest --target EditorSessionNavigationControllerTest --target EditorSessionEditControllerTest --target AdjustmentTransferServiceMiniGitTest --target SemanticGenerationServiceTest --target AlbumBackendImageDeleteTest`; `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest`; each listed test binary was then executed directly with GoogleTest, using exact filters for the three named persistence/cache criteria.
 
 Suite totals: 109/109 test cases passed; no test was skipped.
 

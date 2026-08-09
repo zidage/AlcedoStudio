@@ -46,7 +46,7 @@ TEST(SleeveFSTest, InitTest1) {
   TimeProvider::Refresh();
   {
     try {
-      StorageService storage_service{db_path};
+      Storage storage_service{db_path};
       FileSystem     fs{db_path, storage_service, 0};
       fs.InitRoot();
     } catch (std::exception& e) {
@@ -63,7 +63,7 @@ TEST(SleeveFSTest, InitTest1) {
 TEST(SleeveFSTest, AddGetTest1) {
   {
     try {
-      StorageService storage_service{db_path};
+      Storage storage_service{db_path};
       FileSystem     fs{db_path, storage_service, 0};
       fs.InitRoot();
 
@@ -86,7 +86,7 @@ TEST(SleeveFSTest, AddGetTest1) {
 
 TEST(SleeveFSTest, AddGetTest2) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -118,7 +118,7 @@ TEST(SleeveFSTest, AddGetTest2) {
 // TEST(SleeveFSTest, ReInitTest1) {
 //   {
 //     try {
-//       StorageService storage_service{db_path};
+//       Storage storage_service{db_path};
 //       FileSystem     fs{db_path, storage_service, 0};
 //       fs.InitRoot();
 
@@ -147,7 +147,7 @@ TEST(SleeveFSTest, AddGetTest2) {
 //   {
 //     try {
 //       // Auto recovered start id has not been implemented
-//       StorageService storage_service{db_path};
+//       Storage storage_service{db_path};
 //       FileSystem     fs{db_path, storage_service, 0};
 //       fs.ReadSleeveMeta(meta_path);
 //       fs.InitRoot();
@@ -173,7 +173,7 @@ TEST(SleeveFSTest, AddGetTest2) {
 
 TEST(SleeveFSTest, DeleteTest1) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -200,7 +200,7 @@ TEST(SleeveFSTest, DeleteTest1) {
 
 TEST(SleeveFSTest, DeleteTest2) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -224,7 +224,7 @@ TEST(SleeveFSTest, DeleteTest2) {
 
 TEST(SleeveFSTest, CopyTest1) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -249,7 +249,7 @@ TEST(SleeveFSTest, CopyTest1) {
 
 TEST(SleeveFSTest, CoWTest1) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -274,7 +274,7 @@ TEST(SleeveFSTest, CoWTest1) {
 
 TEST(SleeveFSTest, CoWTest2) {
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -301,7 +301,7 @@ TEST(SleeveFSTest, CoWTest2) {
 TEST(SleeveFSTest, LinkFileToFoldersKeepsSingleFileIdentity) {
   CleanupTestFiles();
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -350,7 +350,7 @@ TEST(SleeveFSTest, LinkFileToFoldersKeepsSingleFileIdentity) {
 TEST(SleeveFSTest, CopyFilePathLinksMembershipInsteadOfDuplicatingFile) {
   CleanupTestFiles();
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -379,7 +379,7 @@ TEST(SleeveFSTest, CopyFilePathLinksMembershipInsteadOfDuplicatingFile) {
 TEST(SleeveFSTest, DeletingFromAlbumOnlyUnlinksMembership) {
   CleanupTestFiles();
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -407,7 +407,7 @@ TEST(SleeveFSTest, DeletingFromAlbumOnlyUnlinksMembership) {
 TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
   CleanupTestFiles();
   try {
-    StorageService storage_service{db_path};
+    Storage storage_service{db_path};
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
@@ -445,7 +445,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 //     std::filesystem::remove(db_path);
 //   }
 //   try {
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 0};
 //     fs.InitRoot();
 
@@ -466,7 +466,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 //   }
 
 //   try {
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 0};
 //     fs.ReadSleeveMeta(meta_path);
 //     fs.InitRoot();
@@ -485,7 +485,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 // TEST(SleeveFSTest, ReCoWTest1) {
 //   std::string first_tree;
 //   try {
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 0};
 //     fs.InitRoot();
 
@@ -512,7 +512,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 //   std::string second_tree;
 //   try {
 //     // 8 is just a big enough number...
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 0};
 //     fs.InitRoot();
 
@@ -586,7 +586,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 //   // Part1: randomized operation sequence
 
 //   {
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 0};
 //     fs.InitRoot();
 
@@ -667,7 +667,7 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
 //   // Part2: Reloading
 //   std::string second_tree;
 //   try {
-//     StorageService storage_service{db_path};
+//     Storage storage_service{db_path};
 //       FileSystem fs{db_path, storage_service, 8};
 //     fs.InitRoot();
 //     fs.ReadSleeveMeta(meta_path);

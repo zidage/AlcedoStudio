@@ -76,7 +76,7 @@ class EditorHistoryMaterializerTest : public ::testing::Test {
     std::filesystem::remove(journal_path_, ec);
 
     project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
-    storage_ = project_->GetStorageService();
+    storage_ = project_->GetStorage();
     materializer_ = std::make_unique<EditorHistoryMaterializer>(storage_);
 
     history_ = std::make_shared<EditHistory>(file_id_);
@@ -114,7 +114,7 @@ class EditorHistoryMaterializerTest : public ::testing::Test {
   std::filesystem::path                         meta_path_;
   std::filesystem::path                         journal_path_;
   std::unique_ptr<ProjectService>               project_;
-  std::shared_ptr<StorageService>               storage_;
+  std::shared_ptr<Storage>               storage_;
   std::unique_ptr<EditorHistoryMaterializer>    materializer_;
   std::shared_ptr<EditHistory>                  history_;
   EditorJournalIdentity                         identity_{};
@@ -146,7 +146,7 @@ TEST_F(EditorHistoryMaterializerTest,
   ASSERT_TRUE(result.materialized);
   EXPECT_EQ(result.materialized_operation_sequence, op_seq);
 
-  auto reloaded_history = storage_->GetElementController().GetEditHistoryByFileId(file_id_);
+  auto reloaded_history = storage_->GetElementStore().GetEditHistoryByFileId(file_id_);
   ASSERT_NE(reloaded_history, nullptr);
   EXPECT_EQ(reloaded_history->GetActiveVersion().GetAllEditTransactions().size(), 1u);
   EXPECT_DOUBLE_EQ(reloaded_history->GetActiveVersion()
@@ -156,11 +156,11 @@ TEST_F(EditorHistoryMaterializerTest,
                        .get<double>(),
                    1.25);
 
-  auto reloaded_pipeline = storage_->GetElementController().GetPipelineByElementId(file_id_);
+  auto reloaded_pipeline = storage_->GetElementStore().GetPipelineByElementId(file_id_);
   ASSERT_NE(reloaded_pipeline, nullptr);
   EXPECT_EQ(reloaded_pipeline->GetBoundFile(), file_id_);
 
-  auto metadata = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  auto metadata = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(metadata.has_value());
   EXPECT_EQ(metadata->materialized_operation_sequence, op_seq);
   EXPECT_EQ(metadata->transaction_chain_hash, result.transaction_chain_hash);
@@ -346,7 +346,7 @@ TEST_F(EditorHistoryMaterializerTest, StaleHeadMarkerDoesNotDowngradeMaterialize
   ASSERT_TRUE(
       materializer_->RecoverAndMaterialize(identity_, &journal_, history_, MakePipelineParams(1.0f))
                   .accepted);
-  const auto head = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  const auto head = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(head.has_value());
 
   // Append a second durable edit and materialize it.
@@ -354,7 +354,7 @@ TEST_F(EditorHistoryMaterializerTest, StaleHeadMarkerDoesNotDowngradeMaterialize
   ASSERT_TRUE(
       materializer_->RecoverAndMaterialize(identity_, &journal_, history_, MakePipelineParams(2.0f))
                   .accepted);
-  const auto advanced = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  const auto advanced = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(advanced.has_value());
   EXPECT_GT(advanced->materialized_operation_sequence, head->materialized_operation_sequence);
 
@@ -403,7 +403,7 @@ TEST_F(EditorHistoryMaterializerTest, RecoveringCompactedJournalPreservesMateria
       materializer_->RecoverAndMaterialize(identity_, &journal_, history_, MakePipelineParams(2.0f))
           .accepted);
   ASSERT_EQ(history_->GetActiveVersion().GetAllEditTransactions().size(), 2u);
-  const auto stored = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  const auto stored = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(stored.has_value());
   ASSERT_EQ(stored->materialized_operation_sequence, 3u);
 
@@ -421,14 +421,14 @@ TEST_F(EditorHistoryMaterializerTest, RecoveringCompactedJournalPreservesMateria
 
   // Reload the materialized history from DuckDB, then recover the compacted
   // journal. The transaction chain must survive (not collapse to zero).
-  auto reloaded = storage_->GetElementController().GetEditHistoryByFileId(file_id_);
+  auto reloaded = storage_->GetElementStore().GetEditHistoryByFileId(file_id_);
   ASSERT_NE(reloaded, nullptr);
   history_          = reloaded;
   const auto result = materializer_->RecoverAndMaterialize(
       writer_->identity(), &writer_->mutable_journal(), history_, MakePipelineParams(2.0f));
   ASSERT_TRUE(result.accepted) << result.error;
   EXPECT_EQ(history_->GetActiveVersion().GetAllEditTransactions().size(), 2u);
-  const auto advanced = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  const auto advanced = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(advanced.has_value());
   EXPECT_EQ(advanced->journal_generation, compact_identity.journal_generation);
   EXPECT_EQ(advanced->materialized_operation_sequence, 0u);
@@ -456,14 +456,14 @@ TEST_F(EditorHistoryMaterializerTest,
   ASSERT_NE(writer_->AppendEdit(writer_->identity(), next), 0u);
   ASSERT_TRUE(writer_->CommitQueued().durable);
 
-  auto durable_history = storage_->GetElementController().GetEditHistoryByFileId(file_id_);
+  auto durable_history = storage_->GetElementStore().GetEditHistoryByFileId(file_id_);
   ASSERT_NE(durable_history, nullptr);
   EditorMaterializeRequest request;
   request.identity  = writer_->identity();
   const auto result = materializer_->Materialize(request, &writer_->mutable_journal(),
                                                  durable_history, MakePipelineParams(2.0f), &error);
   ASSERT_TRUE(result.accepted) << result.error;
-  auto reloaded = storage_->GetElementController().GetEditHistoryByFileId(file_id_);
+  auto reloaded = storage_->GetElementStore().GetEditHistoryByFileId(file_id_);
   ASSERT_NE(reloaded, nullptr);
   const auto& transactions = reloaded->GetActiveVersion().GetAllEditTransactions();
   ASSERT_EQ(transactions.size(), 2u);
@@ -577,7 +577,7 @@ TEST_F(EditorHistoryMaterializerTest, MaterializePreCommitFailureRollsBackAllThr
   request1.target_operation_sequence = op_seq1;
   ASSERT_TRUE(
       materializer_->Materialize(request1, &journal_, history_, MakePipelineParams(1.0f)).accepted);
-  auto baseline = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  auto baseline = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(baseline.has_value());
   ASSERT_EQ(baseline->materialized_operation_sequence, op_seq1);
 
@@ -589,7 +589,7 @@ TEST_F(EditorHistoryMaterializerTest, MaterializePreCommitFailureRollsBackAllThr
                           2};
   history_->UpdateVersionFromWorkingVersion(version.GetVersionID(), working2,
                                             MakePipelineParams(2.0f));
-  storage_->GetElementController().SetMaterializePreCommitHook(
+  storage_->GetElementStore().SetMaterializePreCommitHook(
       [] { throw std::runtime_error("injected pre-commit failure"); });
   EditorMaterializeRequest request2;
   request2.identity                  = identity_;
@@ -599,14 +599,14 @@ TEST_F(EditorHistoryMaterializerTest, MaterializePreCommitFailureRollsBackAllThr
       materializer_->Materialize(request2, &journal_, history_, MakePipelineParams(2.0f), &error);
   EXPECT_FALSE(failed.accepted);
   EXPECT_FALSE(error.empty());
-  storage_->GetElementController().SetMaterializePreCommitHook({});
+  storage_->GetElementStore().SetMaterializePreCommitHook({});
 
-  auto after = storage_->GetElementController().GetEditorRecoveryMetadata(file_id_);
+  auto after = storage_->GetElementStore().GetEditorRecoveryMetadata(file_id_);
   ASSERT_TRUE(after.has_value());
   EXPECT_EQ(after->materialized_operation_sequence, op_seq1);
   EXPECT_EQ(after->transaction_chain_hash, baseline->transaction_chain_hash);
   EXPECT_EQ(after->pipeline_parameter_hash, baseline->pipeline_parameter_hash);
-  auto reloaded = storage_->GetElementController().GetEditHistoryByFileId(file_id_);
+  auto reloaded = storage_->GetElementStore().GetEditHistoryByFileId(file_id_);
   ASSERT_NE(reloaded, nullptr);
   EXPECT_EQ(reloaded->GetActiveVersion().GetAllEditTransactions().size(), 1u);
 }

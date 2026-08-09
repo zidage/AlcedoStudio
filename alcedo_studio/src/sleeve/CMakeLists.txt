@@ -2,11 +2,12 @@
 
 set(FILTER_SRCS
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_sql.cpp"
-    "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_combo.cpp"
+    "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filter/filter_factory.cpp"
 )
 
 def_library(SleeveFilter
     SOURCES ${FILTER_SRCS}
+    PUBLIC_DEPS DuckORM StrConv
     PRIVATE_DEPS Image EditHistory JSON
 )
 
@@ -37,7 +38,7 @@ set(FS_SRCS
 
 def_library(SleeveFS
     SOURCES ${FS_SRCS}
-    PUBLIC_DEPS SleeveElement StorageService
+    PUBLIC_DEPS SleeveElement Storage
 )
 
 def_library(SleeveManager

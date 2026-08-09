@@ -34,10 +34,8 @@ TEST_F(SleeveFilterTests, SQLCompilationTest) {
   };
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql = FilterSQLCompiler::Compile(root);
-  std::wcout << L"Generated SQL: " << sql << std::endl;
-  std::wstring expected_sql = L"(json_extract(metadata, '$.Model') = 'Canon EOS 5D Mark IV')";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = 'Canon EOS 5D Mark IV')");
 }
 
 TEST_F(SleeveFilterTests, ComplexFilterSQLTest) {
@@ -57,11 +55,10 @@ TEST_F(SleeveFilterTests, ComplexFilterSQLTest) {
 
   FilterNode root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
 
-  std::wstring sql = FilterSQLCompiler::Compile(root);
-  std::wcout << L"Generated SQL for complex filter: " << sql << std::endl;
-  std::wstring expected_sql =
-      L"((json_extract(metadata, '$.Model') = 'Nikon D850') AND (UPPER(file_name) LIKE '%.NEF'))";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_,
+            "((json_extract(i.metadata, '$.Model') = 'Nikon D850') AND "
+            "(UPPER(i.file_name) LIKE '%.NEF'))");
 }
 
 TEST_F(SleeveFilterTests, BetweenConditionSQLTest) {
@@ -73,10 +70,8 @@ TEST_F(SleeveFilterTests, BetweenConditionSQLTest) {
   };
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-  std::wstring sql = FilterSQLCompiler::Compile(root);
-  std::wcout << L"Generated SQL for BETWEEN condition: " << sql << std::endl;
-  std::wstring expected_sql = L"(json_extract(metadata, '$.ISO')::INT BETWEEN 100 AND 800)";
-  EXPECT_EQ(sql, expected_sql);
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN 100 AND 800)");
 }
 
 TEST_F(SleeveFilterTests, FolderIndexTest_Model) {
@@ -97,7 +92,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_Model) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -124,7 +119,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_FileExtension) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -151,7 +146,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_Aperature) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -179,7 +174,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_ISO) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -206,7 +201,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_FocalLength) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -242,7 +237,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_Combined) {
 
     FilterNode root{FilterNode::Type::Logical, FilterOp::AND, {node1, node2}, {}, std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -269,7 +264,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_NoMatch) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();
@@ -297,7 +292,7 @@ TEST_F(SleeveFilterTests, FolderIndexTest_DateRange) {
     };
     FilterNode   root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
-    std::wstring sql = FilterSQLCompiler::Compile(root);
+    (void)FilterSQLCompiler::Compile(root);
 
     auto filter = std::make_shared<FilterCombo>(1, root);
     auto fs = manager.GetFilesystem();

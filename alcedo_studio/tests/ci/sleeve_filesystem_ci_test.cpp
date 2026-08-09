@@ -47,7 +47,7 @@ TEST_F(SleeveFilesystemCiTest, AlbumMembershipPersistsWithoutDuplicatingLibraryF
   sl_element_id_t file_id = 0;
 
   {
-    StorageService storage_service{db_path_};
+    Storage storage_service{db_path_};
     FileSystem     fs{db_path_, storage_service, 0};
     fs.InitRoot();
 
@@ -66,7 +66,7 @@ TEST_F(SleeveFilesystemCiTest, AlbumMembershipPersistsWithoutDuplicatingLibraryF
   }
 
   {
-    StorageService storage_service{db_path_};
+    Storage storage_service{db_path_};
     FileSystem     fs{db_path_, storage_service, 0};
     fs.ReadSleeveMeta(meta_path_);
     fs.InitRoot();
@@ -93,7 +93,7 @@ TEST_F(SleeveFilesystemCiTest, AlbumDeleteUnlinksButRootDeleteRemovesEveryMember
   sl_element_id_t file_id = 0;
 
   {
-    StorageService storage_service{db_path_};
+    Storage storage_service{db_path_};
     FileSystem     fs{db_path_, storage_service, 0};
     fs.InitRoot();
 

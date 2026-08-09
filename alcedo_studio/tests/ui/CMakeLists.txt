@@ -223,7 +223,7 @@ target_link_libraries(EditorSessionCheckpointStoreTest
   EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
-  StorageService
+  Storage
   Operators
   GTest::gtest_main)
 set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
@@ -315,6 +315,9 @@ alcedo_register_test_target(AlbumBackendRatingTest ui)
 
 def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
 alcedo_register_test_target(AlbumBackendThumbnailTest ui)
+
+def_ui_test(AlbumBackendStatsFilterTest album_backend_stats_filter_test.cpp)
+alcedo_register_test_target(AlbumBackendStatsFilterTest ui)
 
 def_ui_test(AlbumBackendI18nTest album_backend_i18n_test.cpp)
 alcedo_register_test_target(AlbumBackendI18nTest ui)

@@ -7,14 +7,14 @@
 #include <stdexcept>
 #include <utility>
 
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo {
 
-EditorMiniGitCommitWriter::EditorMiniGitCommitWriter(std::shared_ptr<StorageService> storage)
+EditorMiniGitCommitWriter::EditorMiniGitCommitWriter(std::shared_ptr<Storage> storage)
     : storage_(std::move(storage)) {
   if (!storage_) {
-    throw std::invalid_argument("EditorMiniGitCommitWriter requires StorageService");
+    throw std::invalid_argument("EditorMiniGitCommitWriter requires Storage");
   }
 }
 
@@ -44,9 +44,9 @@ auto EditorMiniGitCommitWriter::Write(const CommitGraphMaterialization& material
   }
 
   try {
-    auto               db_guard = storage_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     graph_service.Materialize(materialization);
   } catch (const std::exception& e) {
     WriteResult result;

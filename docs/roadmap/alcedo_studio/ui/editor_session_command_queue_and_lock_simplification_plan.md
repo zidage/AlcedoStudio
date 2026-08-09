@@ -799,7 +799,7 @@ cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumBackendLib 
 cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionHistoryPortTest --parallel 4
 cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorRenderCoordinatorTest --parallel 4
 cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCommandQueueBaselineTest --parallel 4
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --target PipelineServiceTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target PipelineMapperTest --parallel 4
 cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AdjustmentTransferServiceMiniGitTest --parallel 4
 ```
 
@@ -810,7 +810,7 @@ Direct runtime results from `build/debug`:
   rejection, and head-move preservation.
 - `EditorRenderCoordinatorTest`: 29/29 passed, including the 100-preview replacement burst.
 - `EditorSessionCommandQueueBaselineTest`: 12/12 passed.
-- `PipelineServiceTest`: 23/23 passed; 2 explicitly disabled tests remain disabled by the target.
+- `PipelineMapperTest`: 23/23 passed; 2 explicitly disabled tests remain disabled by the target.
 - `AdjustmentTransferServiceMiniGitTest`: 13/13 passed.
 - Aggregate: 97/97 executed tests passed across the five direct suites.
 

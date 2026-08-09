@@ -4,6 +4,8 @@
 
 #include "storage/mapper/sleeve/base/base_mapper.hpp"
 
+#include <stdexcept>
+
 namespace alcedo {
 auto RootMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> RootMapperParams {
   if (data.size() != FieldCount()) {
@@ -16,4 +18,8 @@ auto RootMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> RootMappe
   }
   return {*id};
 }
+
+auto RootMapper::ToParams(const sl_element_id_t source) -> RootMapperParams { return {source}; }
+
+auto RootMapper::FromParams(RootMapperParams&& param) -> sl_element_id_t { return param.id_; }
 }  // namespace alcedo

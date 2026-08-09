@@ -137,7 +137,7 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
 
   // Persist the empty paste Version so crash recovery can Replay WAL onto it
   // before the next ordinary DuckDB journal materialization.
-  if (auto pipeline_service = state_.PipelineService()) {
+  if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {
@@ -235,7 +235,7 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
     return SetError(error, "Paste Version could not be removed after cancel");
   }
 
-  if (auto pipeline_service = state_.PipelineService()) {
+  if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
                                                      graph_before.GetImageEditState(),
@@ -375,7 +375,7 @@ auto EditorHistoryTransfer::CompleteLiveMerge(
 
   // Persist ancestry commits so WAL recovery of the merge commit can resolve the
   // second parent after a crash (materialized head remains pre-merge).
-  if (auto pipeline_service = state_.PipelineService()) {
+  if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {

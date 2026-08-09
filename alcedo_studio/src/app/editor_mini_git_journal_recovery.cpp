@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "edit/history/mini_git_working_history.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo {
 namespace {
@@ -23,10 +23,10 @@ void SetError(std::string* error, std::string message) {
 
 // ── Construction ────────────────────────────────────────────────────────────
 
-EditorMiniGitJournalRecovery::EditorMiniGitJournalRecovery(std::shared_ptr<StorageService> storage)
+EditorMiniGitJournalRecovery::EditorMiniGitJournalRecovery(std::shared_ptr<Storage> storage)
     : storage_(std::move(storage)) {
   if (!storage_) {
-    throw std::invalid_argument("EditorMiniGitJournalRecovery requires StorageService");
+    throw std::invalid_argument("EditorMiniGitJournalRecovery requires Storage");
   }
 }
 
@@ -58,9 +58,9 @@ auto EditorMiniGitJournalRecovery::Recover(sl_element_id_t              element_
   }
 
   try {
-    auto               db_guard = storage_->GetDBController().GetConnectionGuard();
+    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
     auto               db_lock  = db_guard.Lock();
-    CommitGraphService graph_service(db_guard.conn_);
+    CommitGraphStore graph_service(db_guard.conn_);
     auto               stored_graph = graph_service.LoadGraph(element_id);
     if (!stored_graph.has_value()) {
       SetError(error, "mini-Git recovery requires a durable commit graph");

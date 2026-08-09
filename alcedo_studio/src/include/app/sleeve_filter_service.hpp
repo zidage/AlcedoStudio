@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/id/id_generator.hpp"
@@ -93,7 +93,7 @@ class SemanticSearchProvider {
 // This service should not be used in multi-threaded scenarios.
 class SleeveFilterService {
  private:
-  std::shared_ptr<StorageService>                       storage_service_;
+  std::shared_ptr<Storage>                       storage_;
   std::shared_ptr<SemanticSearchProvider>               semantic_search_provider_{};
 
   // Filter will not be saved in DB for now. It will be only stored in memory for the lifetime of
@@ -109,8 +109,8 @@ class SleeveFilterService {
   SleeveFilterService(const SleeveFilterService&)            = delete;
   SleeveFilterService& operator=(const SleeveFilterService&) = delete;
 
-  SleeveFilterService(std::shared_ptr<StorageService> storage_service)
-      : storage_service_(std::move(storage_service)), filter_id_generator_(0) {}
+  SleeveFilterService(std::shared_ptr<Storage> storage_service)
+      : storage_(std::move(storage_service)), filter_id_generator_(0) {}
 
   auto CreateFilterCombo(const FilterNode& root) -> filter_id_t;
   auto GetFilterCombo(filter_id_t filter_id) -> std::optional<std::shared_ptr<FilterCombo>>;
@@ -120,10 +120,15 @@ class SleeveFilterService {
   auto BuildFolderStats(sl_element_id_t                  parent_id,
                         const std::optional<FilterNode>& extra_filter = std::nullopt) const
       -> AlbumStatsView;
+  /// Build a filter tree for a fuzzy-search query. The returned node owns
+  /// compiler output only (literals escaped by duckorm expr). Returns
+  /// std::nullopt for an empty query, and a FALSE node when no field is
+  /// selected (match nothing, distinct from "no filter").
   [[nodiscard]] auto BuildFuzzySearchWhere(const std::wstring& query,
-                                          SearchFieldMask      mask = kAllSearchFields) const
-      -> std::optional<std::wstring>;
-  [[nodiscard]] auto BuildExactFileWhere(sl_element_id_t file_id) const -> std::wstring;
+                                           SearchFieldMask      mask = kAllSearchFields) const
+      -> std::optional<FilterNode>;
+  /// Build a filter tree that matches exactly one file row (`e.id = file_id`).
+  [[nodiscard]] auto BuildExactFileWhere(sl_element_id_t file_id) const -> FilterNode;
   [[nodiscard]] auto SearchFolder(sl_element_id_t parent_id, const std::wstring& query,
                                   size_t offset = 0, size_t limit = 48,
                                   SearchFieldMask mask = kAllSearchFields) const

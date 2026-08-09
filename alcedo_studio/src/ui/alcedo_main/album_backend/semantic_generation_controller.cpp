@@ -23,7 +23,7 @@
 
 #include "app/album_browse_service.hpp"
 #include "app/model_asset_catalog.hpp"
-#include "storage/controller/semantic/semantic_label_config.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -169,7 +169,7 @@ auto EmbeddingTimeoutForProfile(const SemanticResolvedModelManifest& manifest)
 }
 
 auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& items,
-                                    SemanticStorageController&                 semantic,
+                                    SemanticStore&                 semantic,
                                     const std::string& model_key, bool force_regenerate)
     -> std::vector<SemanticGenerationItem> {
   if (force_regenerate || model_key.empty()) {
@@ -256,7 +256,7 @@ QString SemanticGenerationController::ActiveModelProfileId() const {
   }
   std::string error;
   const auto  model =
-      project->GetStorageService()->GetSemanticStorageController().ActiveModel(&error);
+      project->GetStorage()->GetSemanticStore().ActiveModel(&error);
   if (!model.has_value()) {
     return {};
   }
@@ -270,7 +270,7 @@ QString SemanticGenerationController::ActiveModelDisplayName() const {
   }
   std::string error;
   const auto  model =
-      project->GetStorageService()->GetSemanticStorageController().ActiveModel(&error);
+      project->GetStorage()->GetSemanticStore().ActiveModel(&error);
   if (!model.has_value()) {
     return PL_TEXT("No active model").Render();
   }
@@ -347,7 +347,7 @@ void SemanticGenerationController::TryAutoActivateSelectedModel() {
   const auto        label_language = ModelLabelLanguage(*manifest);
   const auto        prompt_hash    = SemanticPromptConfigHashForLanguage(label_language);
 
-  auto&             semantic       = project->GetStorageService()->GetSemanticStorageController();
+  auto&             semantic       = project->GetStorage()->GetSemanticStore();
   const auto        query_count    = semantic.CountLabelQueries(prompt_hash);
   if (query_count == 0) {
     return;
@@ -486,7 +486,7 @@ void SemanticGenerationController::ActivateSelectedModel() {
           Qt::QueuedConnection);
     };
 
-    auto&       semantic       = project->GetStorageService()->GetSemanticStorageController();
+    auto&       semantic       = project->GetStorage()->GetSemanticStore();
     const auto  prompt_hash    = SemanticPromptConfigHashForLanguage(label_language);
     const bool  already_active = semantic.ActiveModelKey() == model_key;
     std::string error;
@@ -628,7 +628,7 @@ void SemanticGenerationController::RefreshAlbumSummary() {
     album_labeled_count_ = 0;
   } else {
     album_labeled_count_ = static_cast<int>(std::min<size_t>(
-        project->GetStorageService()->GetSemanticStorageController().CountImageLabelsInFolder(
+        project->GetStorage()->GetSemanticStore().CountImageLabelsInFolder(
             0, model_key),
         static_cast<size_t>(std::numeric_limits<int>::max())));
   }
@@ -724,7 +724,7 @@ auto SemanticGenerationController::StoredModelKey() const -> std::string {
   if (!project) {
     return {};
   }
-  return project->GetStorageService()->GetSemanticStorageController().ActiveModelKey();
+  return project->GetStorage()->GetSemanticStore().ActiveModelKey();
 }
 
 bool SemanticGenerationController::IsFreshProject() const {
@@ -732,7 +732,7 @@ bool SemanticGenerationController::IsFreshProject() const {
   if (!project) {
     return false;
   }
-  return project->GetStorageService()->GetSemanticStorageController().ListModels().empty();
+  return project->GetStorage()->GetSemanticStore().ListModels().empty();
 }
 
 auto SemanticGenerationController::ActiveModelKey() const -> std::string {
@@ -754,7 +754,7 @@ auto SemanticGenerationController::LabelDisplayText(sl_element_id_t elementId) c
   }
   std::string error;
   const auto  label =
-      project->GetStorageService()->GetSemanticStorageController().GetImageLabelForFile(
+      project->GetStorage()->GetSemanticStore().GetImageLabelForFile(
           elementId, model_key, &error);
   if (!label.has_value()) {
     return {};
@@ -928,7 +928,7 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     }
   }
 
-  auto&             semantic       = project->GetStorageService()->GetSemanticStorageController();
+  auto&             semantic       = project->GetStorage()->GetSemanticStore();
   const std::string model_key      = SemanticModelKeyFromInfo(*runtime_status.model_info);
   const auto        label_language = ModelLabelLanguage(*runtime_status.model_info);
   std::string       error;

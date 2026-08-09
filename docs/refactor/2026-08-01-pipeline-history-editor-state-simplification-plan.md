@@ -269,7 +269,7 @@ rg "SeedImageLocalBaselineFromLivePipeline|KeepsSeededAsShot" alcedo_studio
 
 修改：
 
-- `storage/controller/db_controller.hpp`
+- `storage/store/database.hpp`
 - `storage/service/sleeve/edit_history/commit_graph_service.*`
 - `storage/mapper/sleeve/edit_history/edit_commit_mapper.*`
 - `storage/mapper/sleeve/edit_history/image_edit_state_mapper.*`
@@ -756,7 +756,7 @@ EditorRealRawGpuE2eTest
 
 | Required group | Target / binary | Result |
 | --- | --- | --- |
-| pipeline | `EditorAdjustmentPipelineTest`, `EditorGeometryOverlayPipelineTest`, `PipelineFrameSinkTest`, `PipelineSchedulerRequestIdTest`, `PipelineServiceTest` | PASS 69/69; 2 disabled |
+| pipeline | `EditorAdjustmentPipelineTest`, `EditorGeometryOverlayPipelineTest`, `PipelineFrameSinkTest`, `PipelineSchedulerRequestIdTest`, `PipelineMapperTest` | PASS 69/69; 2 disabled |
 | history / WAL recovery | history, journal, materializer and transfer groups | PASS 126/126 |
 | editor history port | `EditorSessionHistoryPortTest` | PASS 35/35 |
 | editor session / QML checkpoint | `EditorSessionCommandQueueBaselineTest`, `EditorSessionCq5QualificationTest`, `EditorCheckpointQmlIntegrationTest`, `EditorCheckpointNavigationTest` | PASS 26/26 |

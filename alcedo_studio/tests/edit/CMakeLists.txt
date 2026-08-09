@@ -35,7 +35,7 @@ target_link_libraries(EditorMiniGitCommitWriterTest
   EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
-  StorageService
+  Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCommitWriterTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
@@ -49,7 +49,7 @@ target_link_libraries(EditorMiniGitJournalRecoveryTest
   EditorMiniGitCommitWriter
   ProjectService
   EditHistory
-  StorageService
+  Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalRecoveryTest TEST_PREFIX "EditorMiniGitJournalRecoveryTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -66,7 +66,7 @@ target_link_libraries(EditorSaveCheckpointCaptureTest
   EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
-  StorageService
+  Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorSaveCheckpointCaptureTest TEST_PREFIX "EditorSaveCheckpointCaptureTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
@@ -82,7 +82,7 @@ target_link_libraries(EditorMiniGitMaterializerTest
   EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
-  StorageService
+  Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
@@ -190,7 +190,7 @@ alcedo_register_test_target(VersionHashTest edit)
 # Commit graph: topology, LCA, serialization.
 add_executable(CommitGraphTest ${ALCEDO_TEST_ROOT}/edit/history/commit_graph_test.cpp)
 target_include_directories(CommitGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(CommitGraphTest ProjectService EditHistory StorageService GTest::gtest_main)
+target_link_libraries(CommitGraphTest ProjectService EditHistory Storage GTest::gtest_main)
 gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
 alcedo_register_test_target(CommitGraphTest edit)

@@ -68,7 +68,7 @@ class ThumbnailService {
   ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
                    std::shared_ptr<ImagePoolService>       image_pool_service,
                    std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                   std::shared_ptr<StorageService>          storage_service      = nullptr,
+                   std::shared_ptr<Storage>          storage_service      = nullptr,
                    const std::string&                      project_uuid         = {},
                    const std::filesystem::path&            thumbnail_cache_root = {});
   ~ThumbnailService() = default;

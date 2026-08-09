@@ -30,7 +30,7 @@ void EditHistoryMgmtService::HandleEviction(sl_element_id_t evicted_id) {
     auto history_guard = it->second;
     if (!history_guard->pinned_) {
       if (history_guard->dirty_) {
-        storage_service_->GetElementController().UpdateEditHistoryByFileId(candidate,
+        storage_->GetElementStore().UpdateEditHistoryByFileId(candidate,
                                                                           history_guard->history_);
         history_guard->dirty_ = false;
       }
@@ -72,10 +72,10 @@ auto EditHistoryMgmtService::LoadHistory(sl_element_id_t file_id)
 
   std::shared_ptr<EditHistory>      history;
   std::shared_ptr<EditHistoryGuard> history_guard;
-  history = storage_service_->GetLiveEditHistory(file_id);
+  history = storage_->GetLiveEditHistory(file_id);
   try {
     if (!history) {
-      history = storage_service_->GetElementController().GetEditHistoryByFileId(file_id);
+      history = storage_->GetElementStore().GetEditHistoryByFileId(file_id);
     }
   } catch (std::exception& e) {
     throw std::runtime_error(
@@ -92,7 +92,7 @@ auto EditHistoryMgmtService::LoadHistory(sl_element_id_t file_id)
   history_guard->history_  = std::move(history);
   history_guard->dirty_    = false;
   history_guard->pinned_   = true;
-  storage_service_->RememberLiveEditHistory(file_id, history_guard->history_);
+  storage_->RememberLiveEditHistory(file_id, history_guard->history_);
 
   std::optional<sl_element_id_t> evicted = cache_.RecordAccess_WithEvict(file_id, file_id);
   if (evicted.has_value()) {
@@ -198,10 +198,10 @@ void EditHistoryMgmtService::SaveHistory(const std::shared_ptr<EditHistoryGuard>
   }
 
   cached_histories_[file_id] = history_guard;
-  storage_service_->RememberLiveEditHistory(file_id, history_guard->history_);
+  storage_->RememberLiveEditHistory(file_id, history_guard->history_);
 
   if (history_guard->dirty_) {
-    storage_service_->GetElementController().UpdateEditHistoryByFileId(file_id,
+    storage_->GetElementStore().UpdateEditHistoryByFileId(file_id,
                                                                       history_guard->history_);
     history_guard->dirty_ = false;
   }
@@ -219,9 +219,9 @@ void EditHistoryMgmtService::DeleteHistory(sl_element_id_t file_id) {
   std::unique_lock<std::mutex> guard(lock_);
   cache_.RemoveRecord(file_id);
   cached_histories_.erase(file_id);
-  storage_service_->ForgetLiveEditHistory(file_id);
+  storage_->ForgetLiveEditHistory(file_id);
   try {
-    storage_service_->GetElementController().RemoveEditHistoryByFileId(file_id);
+    storage_->GetElementStore().RemoveEditHistoryByFileId(file_id);
   } catch (...) {
   }
 }
@@ -234,10 +234,10 @@ void EditHistoryMgmtService::DeleteHistories(std::span<const sl_element_id_t> fi
     }
     cache_.RemoveRecord(file_id);
     cached_histories_.erase(file_id);
-    storage_service_->ForgetLiveEditHistory(file_id);
+    storage_->ForgetLiveEditHistory(file_id);
   }
   try {
-    storage_service_->GetElementController().RemoveEditHistoriesByFileIds(file_ids);
+    storage_->GetElementStore().RemoveEditHistoriesByFileIds(file_ids);
   } catch (...) {
   }
 }
@@ -248,7 +248,7 @@ void EditHistoryMgmtService::Sync() {
     if (!history_guard || !history_guard->dirty_) {
       continue;
     }
-    storage_service_->GetElementController().UpdateEditHistoryByFileId(file_id,
+    storage_->GetElementStore().UpdateEditHistoryByFileId(file_id,
                                                                       history_guard->history_);
     history_guard->dirty_ = false;
   }

@@ -7,7 +7,7 @@
 // `describe`/`score` use the HTTP provider path), registers a real provider credential read from
 // `.env.test`, and asks the live LLM to describe AND score the image through `ImageAnalysisService`.
 //
-// Phase 5f extension: the live describe result is persisted through `AiStorageController` (the
+// Phase 5f extension: the live describe result is persisted through `AiStore` (the
 // duckorm ORM layer — no raw SQL) and round-tripped back, then a caption token is shown to be
 // searchable via `SleeveFilterService` (the search-document AI-understanding contribution) only
 // after persistence. A second test scores the image live, persists the 1..=5 integer rating
@@ -37,8 +37,8 @@
 #include "app/thumbnail_service.hpp"
 #include "app/thumbnail_types.hpp"
 #include "edit/operators/operator_registeration.hpp"
-#include "sleeve/storage_service.hpp"
-#include "storage/controller/ai/ai_storage_controller.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/ai/ai_store.hpp"
 
 #include <gtest/gtest.h>
 
@@ -181,7 +181,7 @@ auto ToWideAscii(const std::string& token) -> std::wstring {
 // True if `element_id` appears in the search results for `token` within folder 0 (root, where
 // the analyzed image lives). A fresh SleeveFilterService is constructed per call so no in-memory
 // result cache can stale the before/after comparison across persistence.
-auto SearchReturnsFile(const std::shared_ptr<StorageService>& storage, const std::string& token,
+auto SearchReturnsFile(const std::shared_ptr<Storage>& storage, const std::string& token,
                        sl_element_id_t element_id) -> bool {
   if (token.empty()) {
     return false;
@@ -198,7 +198,7 @@ auto SearchReturnsFile(const std::shared_ptr<StorageService>& storage, const std
 // table is empty, only filename/metadata can match). Returns "" if every candidate already
 // matches (then the attribution cannot be isolated and the caller skips the search sub-check
 // rather than false-failing on a filename coincidence).
-auto PickIsolatingToken(const std::shared_ptr<StorageService>& storage,
+auto PickIsolatingToken(const std::shared_ptr<Storage>& storage,
                         const std::vector<std::string>& candidates, sl_element_id_t element_id)
     -> std::string {
   for (const auto& tok : candidates) {
@@ -328,7 +328,7 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
   env->thumbnail_cache_root =
       std::filesystem::temp_directory_path() / "alcedo_ia_live_smoke_thumbcache";
   std::filesystem::create_directories(env->thumbnail_cache_root);
-  env->pipeline_service = std::make_shared<PipelineMgmtService>(env->project->GetStorageService());
+  env->pipeline_service = std::make_shared<PipelineMgmtService>(env->project->GetStorage());
   env->thumbnail_service = std::make_shared<ThumbnailService>(
       env->project->GetSleeveService(), env->project->GetImagePoolService(), env->pipeline_service,
       nullptr, env->project->GetProjectUUID(), env->thumbnail_cache_root);
@@ -485,8 +485,8 @@ TEST(ImageAnalysisLiveSmokeTest, DescribesOneImageFromPackedProject) {
   }
 
   // ---- Phase 5f: persist the live understanding through the ORM layer and round-trip it ----
-  auto storage = env->project->GetStorageService();
-  auto& ai_ctrl = storage->GetAiStorageController();
+  auto storage = env->project->GetStorage();
+  auto& ai_ctrl = storage->GetAiStore();
   const auto file_id = env->view_item.element_id;
 
   // Before persistence the AI table is empty, so search only matches filename/metadata. Find a
@@ -581,7 +581,7 @@ TEST(ImageAnalysisLiveSmokeTest, RatesOneImageFromPackedProject) {
 
   // If the live provider cannot score, that is a provider limitation, not a code defect —
   // record it and stop (the sidecar is already stopped; the env dtor cleans temp dirs). The
-  // 1..=5 contract is still unit-validated by AiStorageControllerTest.
+  // 1..=5 contract is still unit-validated by AiStoreTest.
   if (!r.rating.ok) {
     std::cout << "[LIVE SCORE] provider returned an error for ScoreImage (status=" << r.rating.status
               << " error=\"" << r.rating.error << "\"); skipping persistence assertions\n";
@@ -598,8 +598,8 @@ TEST(ImageAnalysisLiveSmokeTest, RatesOneImageFromPackedProject) {
   EXPECT_EQ(r.rating.error.find(api_key), std::string::npos);
 
   // ---- Phase 5f: persist the live rating through the ORM layer and round-trip it ----
-  auto storage = env->project->GetStorageService();
-  auto& ai_ctrl = storage->GetAiStorageController();
+  auto storage = env->project->GetStorage();
+  auto& ai_ctrl = storage->GetAiStore();
   const auto file_id = env->view_item.element_id;
 
   // Before persistence the AI tables are empty, so search only matches filename/metadata. Find a

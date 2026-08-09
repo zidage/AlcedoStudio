@@ -5,16 +5,15 @@
 #include "storage/mapper/image/image_mapper.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <format>
 #include <memory>
-#include <variant>
+#include <string>
+#include <utility>
+#include <vector>
 
-// struct ImageParams {
-//   image_id_t  id;
-//   const char* image_path;
-//   const char* file_name;
-//   uint32_t    type;
-//   const char* metadata;
-// };
+#include "image/image.hpp"
+#include "utils/string/convert.hpp"
 
 namespace alcedo {
 auto ImageMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMapperParams {
@@ -33,4 +32,41 @@ auto ImageMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMap
   }
   return {*id, std::move(*image_path), std::move(*file_name), *type, std::move(*metadata)};
 }
-};  // namespace alcedo
+
+auto ImageMapper::ToParams(const std::shared_ptr<Image> source) -> ImageMapperParams {
+  std::string utf8_path     = conv::ToBytes(source->image_path_.wstring());
+  std::string utf8_img_name = conv::ToBytes(source->image_name_);
+  return {source->image_id_, std::make_unique<std::string>(utf8_path),
+          std::make_unique<std::string>(utf8_img_name), static_cast<uint32_t>(source->image_type_),
+          std::make_unique<std::string>(source->ExifToJson())};
+}
+
+auto ImageMapper::FromParams(ImageMapperParams&& param) -> std::shared_ptr<Image> {
+  auto recovered = std::make_shared<Image>(
+      param.id, std::filesystem::path(conv::FromBytes(std::move(*param.image_path))),
+      conv::FromBytes(std::move(*param.file_name)), static_cast<ImageType>(param.type));
+  recovered->JsonToExif(std::move(*param.metadata));
+  return recovered;
+}
+
+auto ImageMapper::GetImageById(const image_id_t id) -> std::vector<std::shared_ptr<Image>> {
+  std::string predicate = std::format("id={}", id);
+  return GetByPredicate(std::move(predicate));
+}
+
+auto ImageMapper::GetImageByName(const std::wstring& name) -> std::vector<std::shared_ptr<Image>> {
+  std::wstring predicate_w = std::format(L"file_name={}", name);
+  return GetByPredicate(conv::ToBytes(predicate_w));
+}
+
+auto ImageMapper::GetImageByPath(const std::filesystem::path path)
+    -> std::vector<std::shared_ptr<Image>> {
+  std::wstring predicate_w = std::format(L"image_path={}", path.wstring());
+  return GetByPredicate(conv::ToBytes(predicate_w));
+}
+
+auto ImageMapper::GetImageByType(const ImageType type) -> std::vector<std::shared_ptr<Image>> {
+  std::string predicate = std::format("type={}", static_cast<uint32_t>(type));
+  return GetByPredicate(std::move(predicate));
+}
+}  // namespace alcedo

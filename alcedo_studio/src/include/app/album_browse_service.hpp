@@ -13,6 +13,7 @@
 
 #include "app/sleeve_filter_service.hpp"
 #include "app/sleeve_service.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -56,12 +57,13 @@ class AlbumBrowseService {
       -> std::vector<AlbumFileView>;
   [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id) const
       -> std::vector<AlbumFileView>;
-  [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id, size_t offset, size_t limit,
-                                           const std::optional<std::wstring>& extra_filter_where =
-                                               std::nullopt) const -> std::vector<AlbumFileView>;
+  [[nodiscard]] auto ListFilesInFolderById(
+      sl_element_id_t                            folder_id, size_t offset, size_t limit,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
+      -> std::vector<AlbumFileView>;
   [[nodiscard]] auto CountFilesInFolderById(
-      sl_element_id_t                    folder_id,
-      const std::optional<std::wstring>& extra_filter_where = std::nullopt) const -> size_t;
+      sl_element_id_t                            folder_id,
+      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
 
   [[nodiscard]] auto CreateFolder(const std::filesystem::path& parent_folder_path,
                                   const file_name_t& name) -> std::optional<AlbumFolderView>;

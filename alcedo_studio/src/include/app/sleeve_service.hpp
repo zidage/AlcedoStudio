@@ -17,7 +17,7 @@
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -47,7 +47,7 @@ class SleeveService {
 
 class SleeveServiceImpl final : public SleeveService {
  private:
-  std::shared_ptr<StorageService> storage_service_;
+  std::shared_ptr<Storage> storage_;
   std::unique_ptr<FileSystem>     fs_;
   std::filesystem::path           db_path_;
 
@@ -56,7 +56,7 @@ class SleeveServiceImpl final : public SleeveService {
 
  public:
   SleeveServiceImpl() = delete;
-  SleeveServiceImpl(std::shared_ptr<StorageService> storage_service,
+  SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
                     const std::filesystem::path&   db_path,
                     sl_element_id_t                start_id = 0);
 
@@ -126,8 +126,8 @@ class SleeveServiceImpl final : public SleeveService {
   auto DeletePath(const std::filesystem::path& target_path) -> SyncResult;
   auto DeleteElement(sl_element_id_t target_id) -> SyncResult;
 
-  auto GetStorageService() -> std::shared_ptr<StorageService> {
-    return storage_service_;
+  auto GetStorage() -> std::shared_ptr<Storage> {
+    return storage_;
   }
 };
 };  // namespace alcedo

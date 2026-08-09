@@ -151,7 +151,7 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
       state->recovered_head = true;
 
       // Normal save APIs for recovery result: history persist + pipeline checkpoint.
-      if (auto pipeline_service = PipelineService()) {
+      if (auto pipeline_service = PipelineMapper()) {
         std::string persist_error;
         if (!pipeline_service->PersistEditorHistoryState(guard, expected_materialized,
                                                          &persist_error)) {
@@ -223,10 +223,10 @@ auto EditorHistoryState::PipelinePort() const -> std::shared_ptr<EditorSessionPi
   return pipeline_port_.lock();
 }
 
-auto EditorHistoryState::PipelineService() const
+auto EditorHistoryState::PipelineMapper() const
     -> std::shared_ptr<alcedo::PipelineMgmtService> {
   auto port = PipelinePort();
-  return port ? port->PipelineService() : nullptr;
+  return port ? port->PipelineMapper() : nullptr;
 }
 
 auto EditorHistoryState::HasUnmaterializedChanges(sl_element_id_t element_id, std::string* error)

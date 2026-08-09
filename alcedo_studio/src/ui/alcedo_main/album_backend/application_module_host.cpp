@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
+#include <QQmlEngine>
 #include <QThread>
 #include <chrono>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
@@ -134,7 +136,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
     session_scheduler->SetPipelinePort(session_pipeline);
 
-    EditorSessionPipelineServices pipeline_services;
+    EditorSessionPipelineMappers pipeline_services;
     pipeline_services.pipeline_service = [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
     };
@@ -150,12 +152,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       }
       return project_->handler().project()->GetImagePoolService();
     };
-    std::function<std::shared_ptr<alcedo::StorageService>()> storage_service =
-        [this]() -> std::shared_ptr<alcedo::StorageService> {
+    std::function<std::shared_ptr<alcedo::Storage>()> storage_service =
+        [this]() -> std::shared_ptr<alcedo::Storage> {
       if (!project_ || !project_->handler().project()) {
         return nullptr;
       }
-      return project_->handler().project()->GetStorageService();
+      return project_->handler().project()->GetStorage();
     };
     std::function<std::filesystem::path(sl_element_id_t)> journal_path =
         [this](sl_element_id_t element_id) {
@@ -520,6 +522,21 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 }
 
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
+
+void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
+  if (engine == nullptr || library_ == nullptr) {
+    return;
+  }
+
+  auto store = library_->thumbs().image_store();
+  if (!store) {
+    return;
+  }
+
+  // QQmlEngine takes ownership of the provider.
+  engine->addImageProvider(QString::fromUtf8(kThumbnailImageProviderId),
+                           new ThumbnailImageProvider(std::move(store)));
+}
 
 void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {
   if (lifecycle_observer_) {

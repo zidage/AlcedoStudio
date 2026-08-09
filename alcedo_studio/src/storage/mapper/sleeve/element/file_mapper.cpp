@@ -4,19 +4,9 @@
 
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 
-#include <duckdb.h>
-
 #include <format>
-#include <memory>
 #include <stdexcept>
-#include <string>
 #include <variant>
-#include <vector>
-
-#include "sleeve/sleeve_element/sleeve_file.hpp"
-#include "storage/mapper/duckorm/duckdb_orm.hpp"
-#include "storage/mapper/duckorm/duckdb_types.hpp"
-#include "type/type.hpp"
 
 namespace alcedo {
 auto FileMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> FileMapperParams {
@@ -31,4 +21,27 @@ auto FileMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> FileMappe
   }
   return {*file_id, *img_id};
 }
-};  // namespace alcedo
+
+auto FileMapper::ToParams(const std::pair<sl_element_id_t, image_id_t>& source)
+    -> FileMapperParams {
+  return {source.first, source.second};
+}
+
+auto FileMapper::FromParams(FileMapperParams&& param) -> std::pair<sl_element_id_t, image_id_t> {
+  return {param.file_id, param.image_id};
+}
+
+auto FileMapper::GetFileById(const sl_element_id_t id) -> std::pair<sl_element_id_t, image_id_t> {
+  auto result = GetByPredicate(std::format("file_id={}", id));
+  if (result.size() != 1) {
+    throw std::runtime_error("FileMapper: Unable to recover a file image mapping: broken record");
+  }
+  return result.at(0);
+}
+
+auto FileMapper::GetBoundImageById(const sl_element_id_t id) -> image_id_t {
+  return GetFileById(id).second;
+}
+
+void FileMapper::RemoveBindByFileId(const sl_element_id_t id) { RemoveById(id); }
+}  // namespace alcedo

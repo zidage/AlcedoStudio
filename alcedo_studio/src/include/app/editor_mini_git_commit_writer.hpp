@@ -10,7 +10,7 @@
 
 #include "edit/history/commit_graph.hpp"
 #include "json.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -20,7 +20,7 @@ namespace alcedo {
 /// metadata. The caller must supply a validated CommitGraphMaterialization; this
 /// writer validates nothing beyond what DuckDB enforces.
 ///
-/// Owner/lifetime: constructed on the save worker thread with a StorageService
+/// Owner/lifetime: constructed on the save worker thread with a Storage
 /// reference. Connection and transaction state live only for the duration of one
 /// Write call. Does not perform any pipeline replay or mutation.
 ///
@@ -45,7 +45,7 @@ class ICommitWriterWriteHook {
 /// metadata. The caller must supply a validated CommitGraphMaterialization; this
 /// writer validates nothing beyond what DuckDB enforces.
 ///
-/// Owner/lifetime: constructed on the save worker thread with a StorageService
+/// Owner/lifetime: constructed on the save worker thread with a Storage
 /// reference. Connection and transaction state live only for the duration of one
 /// Write call. Does not perform any pipeline replay or mutation.
 ///
@@ -58,8 +58,8 @@ class EditorMiniGitCommitWriter final {
     std::string error;
   };
 
-  /// @param storage  Non-null StorageService used to obtain a DuckDB connection.
-  explicit EditorMiniGitCommitWriter(std::shared_ptr<StorageService> storage);
+  /// @param storage  Non-null Storage used to obtain a DuckDB connection.
+  explicit EditorMiniGitCommitWriter(std::shared_ptr<Storage> storage);
 
   /// Install a failure-injection hook. Ownership stays with the caller; the
   /// hook pointer must outlive this writer or be cleared before destruction.
@@ -78,7 +78,7 @@ class EditorMiniGitCommitWriter final {
       -> WriteResult;
 
  private:
-  std::shared_ptr<StorageService> storage_;
+  std::shared_ptr<Storage> storage_;
   ICommitWriterWriteHook*         write_hook_ = nullptr;
 };
 

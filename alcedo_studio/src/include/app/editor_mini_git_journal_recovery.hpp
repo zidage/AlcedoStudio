@@ -11,7 +11,7 @@
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "sleeve/storage_service.hpp"
+#include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -25,7 +25,7 @@ namespace alcedo {
 ///   apply on the unique history instance + live pipeline via operator APIs
 /// - broken / unaligned: isolate the journal file and return an error
 ///
-/// Owner/lifetime: constructed on the recovery thread with StorageService.
+/// Owner/lifetime: constructed on the recovery thread with Storage.
 /// Journal file handles are owned by MiniGitJournal, loaded anew on each
 /// Recovery call.
 ///
@@ -44,8 +44,8 @@ class EditorMiniGitJournalRecovery final {
     std::string error;
   };
 
-  /// @param storage  Non-null StorageService used to obtain a DuckDB connection.
-  explicit EditorMiniGitJournalRecovery(std::shared_ptr<StorageService> storage);
+  /// @param storage  Non-null Storage used to obtain a DuckDB connection.
+  explicit EditorMiniGitJournalRecovery(std::shared_ptr<Storage> storage);
 
   /// Validate WAL for the given element against durable history. See class docs.
   auto        Recover(sl_element_id_t element_id, const std::filesystem::path& journal_path,
@@ -57,7 +57,7 @@ class EditorMiniGitJournalRecovery final {
       -> bool;
 
  private:
-  std::shared_ptr<StorageService> storage_;
+  std::shared_ptr<Storage> storage_;
 };
 
 }  // namespace alcedo
