@@ -102,3 +102,25 @@ TEST_F(ImageMapperCrtpFixture, RemoveByClauseSqlFragmentDeletesMatchingImageRow)
   ASSERT_EQ(remaining.size(), 1u);
   EXPECT_EQ(remaining[0]->image_id_, 1u);
 }
+
+TEST_F(ImageMapperCrtpFixture, MapperSelectByPredicateRejectsInjectPayloadAsLiteralMatchOnly) {
+  auto source = std::make_shared<Image>(
+      image_id_t{11}, std::filesystem::path(L"D:/library/safe.dng"), L"safe.dng", ImageType::DNG);
+  mapper_->Insert(source);
+
+  const auto inject_where = duckorm::expr::eq(
+      duckorm::expr::col("file_name"), duckorm::expr::param(std::string("x' OR 1=1 --")));
+  EXPECT_EQ(inject_where.sql_, "(file_name = ?)");
+  ASSERT_EQ(inject_where.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(inject_where.binds_[0]), "x' OR 1=1 --");
+
+  auto inject_rows = mapper_->GetByPredicate(inject_where);
+  EXPECT_TRUE(inject_rows.empty());
+
+  const auto keep_where =
+      duckorm::expr::eq(duckorm::expr::col("id"), duckorm::expr::param(int64_t{11}));
+  auto keep_rows = mapper_->GetByPredicate(keep_where);
+  ASSERT_EQ(keep_rows.size(), 1u);
+  EXPECT_EQ(keep_rows[0]->image_id_, 11u);
+  EXPECT_EQ(keep_rows[0]->image_name_, L"safe.dng");
+}

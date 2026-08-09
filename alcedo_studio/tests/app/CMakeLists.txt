@@ -41,10 +41,11 @@ alcedo_register_test_target(SleeveServiceTest app)
 add_executable(FilterServiceTest ${ALCEDO_TEST_ROOT}/app/filter_service_test.cpp)
 target_include_directories(FilterServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(FilterServiceTest ImportService ProjectService SleeveFilterService GTest::gtest_main)
-gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest.")
+gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest."
+  PROPERTIES LABELS "ci_core_flow")
 
 alcedo_copy_duckdb_fts_extension(FilterServiceTest)
-alcedo_register_test_target(FilterServiceTest app)
+alcedo_register_test_target(FilterServiceTest app ci_core)
 
 add_executable(SearchQueryClassifierTest ${ALCEDO_TEST_ROOT}/app/search_query_classifier_test.cpp)
 target_include_directories(SearchQueryClassifierTest PUBLIC ${ALCEDO_INCLUDE_DIR})

@@ -1650,4 +1650,81 @@ TEST_F(FilterServiceTests,
   EXPECT_EQ(project.GetStorage()->GetElementStore().CountFilesInFolder(0, predicate), 1u);
 }
 
+TEST_F(FilterServiceTests, FuzzySearchInjectPayloadDoesNotWidenFolderResults) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     d850_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"inject_a.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/inject/a.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  const auto     sony_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"inject_b.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/inject/b.dng"},
+                                 .camera_model_ = "Sony A7"});
+  ASSERT_NE(d850_id, 0u);
+  ASSERT_NE(sony_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+
+  const auto control = filter_service.SearchFolder(0, L"Nikon D850", 0, 10);
+  ASSERT_EQ(control.size(), 1u);
+  EXPECT_EQ(control.front().file_id_, d850_id);
+
+  const auto inject_rows = filter_service.SearchFolder(0, L"' OR 1=1 --", 0, 10);
+  EXPECT_TRUE(inject_rows.empty());
+  EXPECT_EQ(filter_service.CountSearchResults(0, L"' OR 1=1 --"), 0u);
+
+  const auto node = filter_service.BuildFuzzySearchWhere(L"' OR 1=1 --");
+  ASSERT_TRUE(node.has_value());
+  const auto predicate = CompileFilterPredicate(node);
+  ASSERT_TRUE(predicate.has_value());
+  EXPECT_NE(predicate->sql_.find('?'), std::string::npos);
+  EXPECT_EQ(predicate->sql_.find("OR 1=1"), std::string::npos);
+  ASSERT_FALSE(predicate->binds_.empty());
+}
+
+TEST_F(FilterServiceTests, FuzzySearchZeroFieldMaskCompilesToFalseRawSql) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     file_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"mask_zero.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/mask/zero.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  ASSERT_NE(file_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          node = filter_service.BuildFuzzySearchWhere(L"Nikon", SearchFieldMask{0});
+  ASSERT_TRUE(node.has_value());
+  EXPECT_EQ(node->type_, FilterNode::Type::RawSQL);
+  ASSERT_TRUE(node->raw_sql_.has_value());
+  EXPECT_EQ(*node->raw_sql_, L"FALSE");
+  EXPECT_TRUE(node->raw_binds_.empty());
+
+  EXPECT_TRUE(filter_service.SearchFolder(0, L"Nikon", 0, 10, SearchFieldMask{0}).empty());
+  EXPECT_EQ(filter_service.CountSearchResults(0, L"Nikon", SearchFieldMask{0}), 0u);
+}
+
+TEST_F(FilterServiceTests, ExactFileWhereBindsFileIdAsParam) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     file_id = CreateSyntheticFile(
+      project, SyntheticFileSpec{.file_name_    = L"exact_id.dng",
+                                 .image_path_   = std::filesystem::path{L"D:/exact/id.dng"},
+                                 .camera_model_ = "Nikon D850"});
+  ASSERT_NE(file_id, 0u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          node = filter_service.BuildExactFileWhere(file_id);
+  EXPECT_EQ(node.type_, FilterNode::Type::RawSQL);
+
+  const auto frag = FilterSQLCompiler::Compile(node);
+  EXPECT_EQ(frag.sql_, "(e.id = ?)");
+  ASSERT_EQ(frag.binds_.size(), 1u);
+  EXPECT_EQ(std::get<int64_t>(frag.binds_[0]), static_cast<int64_t>(file_id));
+
+  const auto predicate = CompileFilterPredicate(node);
+  ASSERT_TRUE(predicate.has_value());
+  const auto rows =
+      project.GetStorage()->GetElementStore().ListFilesInFolderPage(0, 0, 0, predicate);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows.front().file_id_, file_id);
+}
+
 }  // namespace alcedo

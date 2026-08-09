@@ -112,3 +112,88 @@ TEST(SleeveFilterCompileTest, ImportDateAndFileNameUseElementAliasWithBinds) {
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "shot.nef");
   EXPECT_EQ(std::get<std::string>(sql.binds_[1]), "2025-01-01");
 }
+
+TEST(SleeveFilterCompileTest, TypedEqualsKeepsInjectPayloadOnlyInBind) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifCameraModel,
+      .op_    = CompareOp::EQUALS,
+      .value_ = std::wstring(L"x' OR 1=1 --"),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "x' OR 1=1 --");
+  EXPECT_EQ(sql.sql_.find("OR 1=1"), std::string::npos);
+  EXPECT_EQ(sql.sql_.find("--"), std::string::npos);
+}
+
+TEST(SleeveFilterCompileTest, RawSQLBridgeKeepsPreparedBindsWithoutSplicingValues) {
+  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt,
+                  std::wstring(L"(json_extract(i.metadata, '$.Model') = ?)")};
+  root.raw_binds_.push_back(std::string("x' OR 1=1 --"));
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "x' OR 1=1 --");
+  EXPECT_EQ(sql.sql_.find("OR 1=1"), std::string::npos);
+}
+
+TEST(SleeveFilterCompileTest, RegexConditionBindsPatternAsParam) {
+  FieldCondition cond{
+      .field_ = FilterField::FileName,
+      .op_    = CompareOp::REGEX,
+      .value_ = std::wstring(L"^DSC_.*\\.NEF$"),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(e.element_name REGEXP ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "^DSC_.*\\.NEF$");
+}
+
+TEST(SleeveFilterCompileTest, LogicalNotWrapsSingleChildPredicate) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifCameraModel,
+      .op_    = CompareOp::EQUALS,
+      .value_ = std::wstring(L"Nikon D850"),
+  };
+  FilterNode child{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+  FilterNode root{FilterNode::Type::Logical, FilterOp::NOT, {child}, {}, std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(NOT (json_extract(i.metadata, '$.Model') = ?))");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
+}
+
+TEST(SleeveFilterCompileTest, BetweenWithoutSecondValueCompilesToFalsePredicate) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifISO,
+      .op_    = CompareOp::BETWEEN,
+      .value_ = int64_t(100),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "1=0");
+  EXPECT_TRUE(sql.binds_.empty());
+}
+
+TEST(SleeveFilterCompileTest, ContainsDoesNotEmbedLikeWildcardsIntoSqlText) {
+  FieldCondition cond{
+      .field_ = FilterField::ExifCameraModel,
+      .op_    = CompareOp::CONTAINS,
+      .value_ = std::wstring(L"100%_dune"),
+  };
+  FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
+
+  const auto sql = FilterSQLCompiler::Compile(root);
+  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') LIKE ?)");
+  ASSERT_EQ(sql.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%100%_dune%");
+  EXPECT_EQ(sql.sql_.find("%100%_dune%"), std::string::npos);
+}

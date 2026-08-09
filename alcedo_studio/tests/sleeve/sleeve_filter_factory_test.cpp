@@ -36,6 +36,16 @@ TEST(SleeveFilterFactoryTest, CameraModelBucketBindsQuoteInsideLabelWithoutEmbed
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "O'Brien");
 }
 
+TEST(SleeveFilterFactoryTest, BucketLabelKeepsInjectPayloadOnlyInBind) {
+  const auto frag = Compile(sleeve_filter::BuildCameraModelBucketFilter(L"x' OR 1=1 --"));
+  EXPECT_EQ(frag.sql_,
+            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = ?)");
+  ASSERT_EQ(frag.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "x' OR 1=1 --");
+  EXPECT_EQ(frag.sql_.find("OR 1=1"), std::string::npos);
+  EXPECT_EQ(frag.sql_.find("--"), std::string::npos);
+}
+
 TEST(SleeveFilterFactoryTest, LensBucketEqualsUsesCoalescedBucketColumnAndBind) {
   const auto frag = Compile(sleeve_filter::BuildLensBucketFilter(L"Synthetic 50mm"));
   EXPECT_EQ(frag.sql_,

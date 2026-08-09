@@ -87,3 +87,17 @@ TEST(DuckormExprTest, EmptyAndOrYieldEmptyFragment) {
   EXPECT_TRUE(expr::and_(std::span<const SqlFragment>{}).empty());
   EXPECT_TRUE(expr::or_(std::span<const SqlFragment>{}).empty());
 }
+
+TEST(DuckormExprTest, SqlFragmentAppendKeepsBindOrderAcrossRawAndParam) {
+  SqlFragment fragment;
+  fragment.append(expr::raw("(name = "));
+  fragment.append(expr::param(std::string("x' OR 1=1 --")));
+  fragment.append(expr::raw(" AND id = "));
+  fragment.append(expr::param(int64_t{42}));
+  fragment.append(expr::raw(")"));
+
+  EXPECT_EQ(fragment.sql_, "(name = ? AND id = ?)");
+  ASSERT_EQ(fragment.binds_.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(fragment.binds_[0]), "x' OR 1=1 --");
+  EXPECT_EQ(std::get<int64_t>(fragment.binds_[1]), 42);
+}
