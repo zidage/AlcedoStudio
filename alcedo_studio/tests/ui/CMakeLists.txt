@@ -90,7 +90,6 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}
         ${ALCEDO_TEST_ROOT}/ui/${SOURCE_FILE}
         ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-        ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     )
     target_include_directories(${TARGET_NAME}
         PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -117,7 +116,6 @@ endmacro()
 add_executable(UiFuzzAutomationTest
     ${ALCEDO_TEST_ROOT}/ui/ui_fuzz_automation_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/application_module_qml_types.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/application_module_qml_types.hpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
@@ -414,7 +412,6 @@ endif()
 add_executable(GlobalSearchDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/global_search_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -445,7 +442,6 @@ alcedo_register_test_target(GlobalSearchDialogQmlTest ui)
 add_executable(MainQmlWorkflowTest
     ${ALCEDO_TEST_ROOT}/ui/main_qml_workflow_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -478,7 +474,6 @@ add_executable(EditorCheckpointQmlIntegrationTest
     ${ALCEDO_TEST_ROOT}/ui/editor_checkpoint_qml_integration_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -511,7 +506,6 @@ add_executable(WorkspaceShellTest
     ${ALCEDO_TEST_ROOT}/ui/workspace_shell_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -546,7 +540,6 @@ alcedo_register_test_target(WorkspaceShellTest ui)
 add_executable(EditorFilmstripQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -582,7 +575,6 @@ alcedo_register_test_target(EditorFilmstripQmlTest ui)
 add_executable(EditorAdjustmentModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorAdjustmentModelTest
@@ -605,7 +597,6 @@ alcedo_register_test_target(EditorAdjustmentModelTest ui)
 add_executable(EditorAdjustmentControlQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_control_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -638,7 +629,6 @@ set(ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS
     ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.hpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -762,7 +752,6 @@ alcedo_register_test_target(EditorScopeControllerTest ui)
 add_executable(EditorAdjustmentSnapshotQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_snapshot_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -796,7 +785,6 @@ alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
 add_executable(EditorDisplayTransformSnapshotQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_display_transform_snapshot_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -829,7 +817,6 @@ alcedo_register_test_target(EditorDisplayTransformSnapshotQmlTest ui)
 add_executable(EditorGeometryMathTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_math_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorGeometryMathTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorGeometryMathTest
@@ -851,7 +838,6 @@ alcedo_register_test_target(EditorGeometryMathTest ui)
 add_executable(EditorGeometryPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -886,7 +872,6 @@ alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
 add_executable(EditorRawDecodePanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_raw_decode_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -944,7 +929,6 @@ add_executable(EditorAdjustmentTransferRealProjectE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_real_project_e2e_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -1077,7 +1061,6 @@ alcedo_register_test_target(AdjustmentTransferDialogQmlTest ui)
 add_executable(EditorToneCurveModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorToneCurveModelTest
@@ -1099,7 +1082,6 @@ alcedo_register_test_target(EditorToneCurveModelTest ui)
 add_executable(EditorToneCurveGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_geometry_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorToneCurveGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorToneCurveGeometryTest
@@ -1121,7 +1103,6 @@ alcedo_register_test_target(EditorToneCurveGeometryTest ui)
 add_executable(EditorLookModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorLookModelTest
@@ -1143,7 +1124,6 @@ alcedo_register_test_target(EditorLookModelTest ui)
 add_executable(EditorCdlTrackballGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/editor_cdl_trackball_geometry_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
 )
 target_include_directories(EditorCdlTrackballGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorCdlTrackballGeometryTest
@@ -1198,7 +1178,6 @@ alcedo_register_test_target(EditorLutPanelQmlTest ui)
 add_executable(EditorLookPanelInteractionTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_panel_interaction_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -1277,7 +1256,6 @@ alcedo_register_test_target(EditorMultiSliderQuickTest ui)
 
 add_executable(EditorRealRawGpuE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_real_raw_gpu_e2e_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
@@ -1356,7 +1334,6 @@ add_executable(EditorCheckpointNavigationTest
     ${ALCEDO_TEST_ROOT}/integration/editor_checkpoint_navigation_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
-    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc

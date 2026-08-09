@@ -130,10 +130,17 @@ auto PrettyToken(QString raw) -> QString {
     return raw;
   }
   static const std::pair<const char*, const char*> kMap[] = {
-      {"as_shot", "As Shot"},     {"custom", "Custom"},        {"REC709", "Rec.709"},
-      {"DISPLAY_P3", "Display P3"}, {"SRGB", "sRGB"},          {"ACESCG", "ACEScg"},
-      {"GAMMA_2_2", "Gamma 2.2"}, {"GAMMA_2_4", "Gamma 2.4"}, {"ST2084", "PQ"},
-      {"OPEN_DRT", "OpenDRT"},    {"HLG", "HLG"},
+      {"as_shot", "As Shot"},
+      {"custom", "Custom"},
+      {"REC709", "Rec.709"},
+      {"DISPLAY_P3", "Display P3"},
+      {"SRGB", "sRGB"},
+      {"ACESCG", "ACEScg"},
+      {"GAMMA_2_2", "Gamma 2.2"},
+      {"GAMMA_2_4", "Gamma 2.4"},
+      {"ST2084", "PQ"},
+      {"OPEN_DRT", "OpenDRT"},
+      {"HLG", "HLG"},
   };
   for (const auto& [from, to] : kMap) {
     if (raw.compare(QLatin1String(from), Qt::CaseInsensitive) == 0) {
@@ -143,7 +150,7 @@ auto PrettyToken(QString raw) -> QString {
   raw.replace(QLatin1Char('_'), QLatin1Char(' '));
   raw.replace(QLatin1Char('-'), QLatin1Char(' '));
   const QStringList parts = raw.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-  QStringList normalized;
+  QStringList       normalized;
   normalized.reserve(parts.size());
   for (const QString& part : parts) {
     const QString lower = part.toLower();
@@ -156,9 +163,7 @@ auto PrettyToken(QString raw) -> QString {
   return normalized.join(QLatin1Char(' '));
 }
 
-// ---- Per-operator display name and glyph. Mirrors OperatorDisplayName and
-// MakeHistoryIconTile in editor_dialog/widgets/history_cards.cpp; kept in sync
-// here so the QML rail reuses one canonical name/glyph per operator. ----
+// Per-operator display name and glyph used by the QML history rail.
 
 auto DisplayName(OperatorType op) -> QString {
   switch (op) {
@@ -298,16 +303,16 @@ struct CommitSummary {
 };
 
 auto SignedScalar(const std::optional<double>& old_v, const std::optional<double>& new_v,
-                  const QString& unit = QString(), bool space_before_unit = false) -> CommitSummary {
+                  const QString& unit = QString(), bool space_before_unit = false)
+    -> CommitSummary {
   if (!new_v.has_value()) {
     return {};
   }
   const QString after = WithUnit(FormatSigned(*new_v), unit, space_before_unit);
   const QString before =
       old_v.has_value() ? WithUnit(FormatSigned(*old_v), unit, space_before_unit) : QString();
-  const QString delta =
-      before.isEmpty() ? QStringLiteral("Set to %1").arg(after)
-                       : QStringLiteral("%1 \u2192 %2").arg(before, after);
+  const QString delta = before.isEmpty() ? QStringLiteral("Set to %1").arg(after)
+                                         : QStringLiteral("%1 \u2192 %2").arg(before, after);
   return {before, after, delta};
 }
 
@@ -391,9 +396,10 @@ auto CurvePointCount(const nlohmann::json& params) -> std::optional<std::size_t>
   return points->size();
 }
 
-auto SummarizeRawDecode(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
+auto SummarizeRawDecode(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
   const auto next = JsonBoolAtPath(after, {"raw", "highlights_reconstruct"});
-  const auto old = JsonBoolAtPath(before, {"raw", "highlights_reconstruct"});
+  const auto old  = JsonBoolAtPath(before, {"raw", "highlights_reconstruct"});
   if (!next.has_value()) {
     return {};
   }
@@ -401,12 +407,11 @@ auto SummarizeRawDecode(const nlohmann::json& after, const nlohmann::json& befor
   const QString before_text =
       old.has_value() ? (old.value() ? QStringLiteral("Recover") : QStringLiteral("Basic"))
                       : QString();
-  const QString delta =
-      old.has_value() && *old != *next
-          ? QStringLiteral("Highlights %1 \u2192 %2")
-                .arg(old.value() ? QStringLiteral("on") : QStringLiteral("off"),
-                     next.value() ? QStringLiteral("on") : QStringLiteral("off"))
-          : after_text;
+  const QString delta = old.has_value() && *old != *next
+                            ? QStringLiteral("Highlights %1 \u2192 %2")
+                                  .arg(old.value() ? QStringLiteral("on") : QStringLiteral("off"),
+                                       next.value() ? QStringLiteral("on") : QStringLiteral("off"))
+                            : after_text;
   return {before_text, after_text, delta};
 }
 
@@ -417,8 +422,8 @@ auto SummarizeLens(const nlohmann::json& after, const nlohmann::json& before) ->
   const QString old_lens = LensName(before);
   if (!old_lens.isEmpty() && lens != old_lens) {
     return {old_lens, lens.isEmpty() ? QStringLiteral("Auto") : lens,
-            QStringLiteral("%1 \u2192 %2").arg(old_lens,
-                                              lens.isEmpty() ? QStringLiteral("Auto") : lens)};
+            QStringLiteral("%1 \u2192 %2")
+                .arg(old_lens, lens.isEmpty() ? QStringLiteral("Auto") : lens)};
   }
   if (!lens.isEmpty()) {
     return {old_lens.isEmpty() ? QString() : old_lens, lens, lens};
@@ -432,7 +437,8 @@ auto SummarizeLens(const nlohmann::json& after, const nlohmann::json& before) ->
   return {QString(), label, label};
 }
 
-auto SummarizeColorTemp(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
+auto SummarizeColorTemp(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
   const QString value     = ColorTempLabel(after);
   const QString old_value = ColorTempLabel(before);
   if (!old_value.isEmpty() && old_value != value) {
@@ -443,20 +449,21 @@ auto SummarizeColorTemp(const nlohmann::json& after, const nlohmann::json& befor
 }
 
 auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
-  constexpr std::array<const char*, 8> kHueLabels      = {"Red",    "Orange", "Yellow", "Green",
-                                                     "Cyan",   "Blue",   "Purple", "Magenta"};
+  constexpr std::array<const char*, 8> kHueLabels       = {"Red",  "Orange", "Yellow", "Green",
+                                                           "Cyan", "Blue",   "Purple", "Magenta"};
   constexpr std::array<const char*, 3> kComponentLabels = {"Hue", "Light", "Chroma"};
 
-  const auto* table       = JsonAtPath(after, {"HLS", "hls_adj_table"});
-  const auto* old_table   = JsonAtPath(before, {"HLS", "hls_adj_table"});
-  const auto* range_table = JsonAtPath(after, {"HLS", "h_range_table"});
-  const auto* old_range   = JsonAtPath(before, {"HLS", "h_range_table"});
+  const auto*                          table       = JsonAtPath(after, {"HLS", "hls_adj_table"});
+  const auto*                          old_table   = JsonAtPath(before, {"HLS", "hls_adj_table"});
+  const auto*                          range_table = JsonAtPath(after, {"HLS", "h_range_table"});
+  const auto*                          old_range   = JsonAtPath(before, {"HLS", "h_range_table"});
 
   if (table && table->is_array()) {
     for (std::size_t i = 0; i < table->size() && i < kHueLabels.size(); ++i) {
-      const auto& row = (*table)[i];
-      const nlohmann::json* old_row =
-          (old_table && old_table->is_array() && i < old_table->size()) ? &(*old_table)[i] : nullptr;
+      const auto&           row     = (*table)[i];
+      const nlohmann::json* old_row = (old_table && old_table->is_array() && i < old_table->size())
+                                          ? &(*old_table)[i]
+                                          : nullptr;
       if (!row.is_array()) {
         continue;
       }
@@ -466,15 +473,14 @@ auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> 
         if (!next.has_value() || (old.has_value() && std::fabs(*old - *next) <= 1e-6)) {
           continue;
         }
-        const bool   is_hue = j == 0;
-        const double scale  = is_hue ? 1.0 : 1000.0;
-        const QString unit  = is_hue ? QStringLiteral("\u00b0") : QString();
+        const bool    is_hue     = j == 0;
+        const double  scale      = is_hue ? 1.0 : 1000.0;
+        const QString unit       = is_hue ? QStringLiteral("\u00b0") : QString();
         const QString after_text = WithUnit(FormatSigned(*next * scale), unit);
         const QString before_text =
             old.has_value() ? WithUnit(FormatSigned(*old * scale), unit) : QString();
-        const QString prefix =
-            QStringLiteral("%1 %2").arg(QString::fromLatin1(kHueLabels[i]),
-                                        QString::fromLatin1(kComponentLabels[j]));
+        const QString prefix = QStringLiteral("%1 %2").arg(
+            QString::fromLatin1(kHueLabels[i]), QString::fromLatin1(kComponentLabels[j]));
         const QString delta =
             before_text.isEmpty()
                 ? QStringLiteral("%1 %2").arg(prefix, after_text)
@@ -492,7 +498,7 @@ auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> 
       if (!next.has_value() || (old.has_value() && std::fabs(*old - *next) <= 1e-6)) {
         continue;
       }
-      const QString after_text  = WithUnit(FormatNumber(*next), QStringLiteral("\u00b0"));
+      const QString after_text = WithUnit(FormatNumber(*next), QStringLiteral("\u00b0"));
       const QString before_text =
           old.has_value() ? WithUnit(FormatNumber(*old), QStringLiteral("\u00b0")) : QString();
       const QString hue = QString::fromLatin1(kHueLabels[i]);
@@ -501,7 +507,7 @@ auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> 
               ? QStringLiteral("%1 Smoothness %2").arg(hue, after_text)
               : QStringLiteral("%1 Smoothness %2 \u2192 %3").arg(hue, before_text, after_text);
       return {before_text.isEmpty() ? QString()
-                                     : QStringLiteral("%1 Smoothness %2").arg(hue, before_text),
+                                    : QStringLiteral("%1 Smoothness %2").arg(hue, before_text),
               QStringLiteral("%1 Smoothness %2").arg(hue, after_text), delta};
     }
   }
@@ -513,12 +519,11 @@ auto SummarizeColorWheel(const nlohmann::json& after, const nlohmann::json& befo
   static const std::array<std::pair<const char*, const char*>, 3> kWheels = {
       {{"lift", "Lift"}, {"gamma", "Gamma"}, {"gain", "Gain"}}};
   for (const auto& [key, label] : kWheels) {
-    const auto strength = JsonNumberAtPath(after, {"color_wheel", key, "strength"});
-    const auto old_strength =
-        JsonNumberAtPath(before, {"color_wheel", key, "strength"});
+    const auto strength     = JsonNumberAtPath(after, {"color_wheel", key, "strength"});
+    const auto old_strength = JsonNumberAtPath(before, {"color_wheel", key, "strength"});
     if (strength.has_value() &&
         (!old_strength.has_value() || std::fabs(*strength - *old_strength) > 1e-6)) {
-      const QString after_text  = FormatNumber(*strength);
+      const QString after_text = FormatNumber(*strength);
       const QString before_text =
           old_strength.has_value() ? FormatNumber(*old_strength) : QString();
       return {before_text.isEmpty()
@@ -528,7 +533,7 @@ auto SummarizeColorWheel(const nlohmann::json& after, const nlohmann::json& befo
               QStringLiteral("%1 Strength %2 \u2192 %3")
                   .arg(QString::fromLatin1(label), before_text, after_text)};
     }
-    const auto lum  = JsonNumberAtPath(after, {"color_wheel", key, "luminance_offset"});
+    const auto lum     = JsonNumberAtPath(after, {"color_wheel", key, "luminance_offset"});
     const auto old_lum = JsonNumberAtPath(before, {"color_wheel", key, "luminance_offset"});
     if (lum.has_value() && (!old_lum.has_value() || std::fabs(*lum - *old_lum) > 1e-6)) {
       const QString after_text  = FormatSigned(*lum);
@@ -550,7 +555,7 @@ auto SummarizeCurve(const nlohmann::json& after, const nlohmann::json& before) -
   if (!next_pts.has_value()) {
     return {};
   }
-  const QString after_text  = QStringLiteral("%1 pts").arg(static_cast<int>(*next_pts));
+  const QString after_text = QStringLiteral("%1 pts").arg(static_cast<int>(*next_pts));
   const QString before_text =
       old_pts.has_value() ? QStringLiteral("%1 pts").arg(static_cast<int>(*old_pts)) : QString();
   const QString delta =
@@ -572,23 +577,22 @@ auto SummarizeLut(const nlohmann::json& after, const nlohmann::json& before) -> 
   }
   const QString after_text = file_name.isEmpty() ? QStringLiteral("Loaded") : file_name;
   const QString before_text =
-      old_path.isEmpty() ? QString()
-                         : (old_file.isEmpty() ? QStringLiteral("None") : old_file);
+      old_path.isEmpty() ? QString() : (old_file.isEmpty() ? QStringLiteral("None") : old_file);
   return {before_text, after_text,
           before_text.isEmpty() ? after_text
                                 : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
 }
 
 auto SummarizeOdt(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
-  const auto peak     = JsonNumberAtPath(after, {"odt", "peak_luminance"});
-  const auto old_peak = JsonNumberAtPath(before, {"odt", "peak_luminance"});
+  const auto    peak       = JsonNumberAtPath(after, {"odt", "peak_luminance"});
+  const auto    old_peak   = JsonNumberAtPath(before, {"odt", "peak_luminance"});
   const QString target     = OdtTargetLabel(after);
   const QString old_target = OdtTargetLabel(before);
   if (peak.has_value() && (!old_peak.has_value() || std::fabs(*peak - *old_peak) > 1e-6)) {
     const QString after_text  = WithUnit(FormatNumber(*peak), QStringLiteral("nit"), true);
-    const QString before_text =
-        old_peak.has_value() ? WithUnit(FormatNumber(*old_peak), QStringLiteral("nit"), true)
-                             : QString();
+    const QString before_text = old_peak.has_value()
+                                    ? WithUnit(FormatNumber(*old_peak), QStringLiteral("nit"), true)
+                                    : QString();
     return {before_text, after_text,
             before_text.isEmpty() ? target
                                   : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
@@ -610,11 +614,11 @@ auto SummarizeCropRotate(const nlohmann::json& after, const nlohmann::json& befo
   }
   const bool crop_enabled = JsonBoolAtPath(after, {"crop_rotate", "enable_crop"}).value_or(false);
   const bool old_crop     = JsonBoolAtPath(before, {"crop_rotate", "enable_crop"}).value_or(false);
-  const auto area     = CropAreaPercent(after);
-  const auto old_area = CropAreaPercent(before);
+  const auto area         = CropAreaPercent(after);
+  const auto old_area     = CropAreaPercent(before);
   if ((crop_enabled || old_crop) && area.has_value() &&
       (!old_area.has_value() || std::fabs(*area - *old_area) > 1e-4 || crop_enabled != old_crop)) {
-    const QString after_text  = QStringLiteral("%1%").arg(FormatNumber(*area));
+    const QString after_text = QStringLiteral("%1%").arg(FormatNumber(*area));
     const QString before_text =
         old_area.has_value() ? QStringLiteral("%1%").arg(FormatNumber(*old_area)) : QString();
     return {before_text, after_text,
@@ -639,11 +643,9 @@ auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::
       return SignedScalar(JsonNumberAtPath(before, {"contrast"}),
                           JsonNumberAtPath(after, {"contrast"}));
     case OperatorType::WHITE:
-      return SignedScalar(JsonNumberAtPath(before, {"white"}),
-                          JsonNumberAtPath(after, {"white"}));
+      return SignedScalar(JsonNumberAtPath(before, {"white"}), JsonNumberAtPath(after, {"white"}));
     case OperatorType::BLACK:
-      return SignedScalar(JsonNumberAtPath(before, {"black"}),
-                          JsonNumberAtPath(after, {"black"}));
+      return SignedScalar(JsonNumberAtPath(before, {"black"}), JsonNumberAtPath(after, {"black"}));
     case OperatorType::SHADOWS:
       return SignedScalar(JsonNumberAtPath(before, {"shadows"}),
                           JsonNumberAtPath(after, {"shadows"}));
@@ -694,35 +696,33 @@ auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::
 
 }  // namespace
 
-auto PresentEditorHistoryCommit(const std::string& field_key,
-                                const std::string& before_value_json,
+auto PresentEditorHistoryCommit(const std::string& field_key, const std::string& before_value_json,
                                 const std::string& after_value_json, bool before_enabled,
                                 bool after_enabled, EditCommitKind kind,
                                 const std::vector<std::string>& merge_field_keys)
     -> EditorHistoryCommitPresentation {
   EditorHistoryCommitPresentation out;
   if (kind == EditCommitKind::kMerge || field_key == "merge") {
-    out.is_merge = true;
+    out.is_merge     = true;
     out.display_name = QStringLiteral("Merge");
     out.icon_key     = QStringLiteral(":/history_icons/git-commit-horizontal.svg");
     if (!merge_field_keys.empty()) {
-      out.merge_summary =
-          QStringLiteral("Resolved %1 field%2")
-              .arg(static_cast<int>(merge_field_keys.size()))
-              .arg(merge_field_keys.size() == 1 ? QString() : QStringLiteral("s"));
+      out.merge_summary = QStringLiteral("Resolved %1 field%2")
+                              .arg(static_cast<int>(merge_field_keys.size()))
+                              .arg(merge_field_keys.size() == 1 ? QString() : QStringLiteral("s"));
     } else {
       out.merge_summary = QStringLiteral("Resolved incoming adjustments");
     }
     return out;
   }
 
-  const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
-  const OperatorType op = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;
-  out.display_name = DisplayName(op);
-  out.icon_key     = IconResource(op);
+  const auto         spec = alcedo::ResolveEditorAdjustmentField(field_key);
+  const OperatorType op   = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;
+  out.display_name        = DisplayName(op);
+  out.icon_key            = IconResource(op);
 
-  nlohmann::json after  = nlohmann::json::object();
-  nlohmann::json before = nlohmann::json::object();
+  nlohmann::json after    = nlohmann::json::object();
+  nlohmann::json before   = nlohmann::json::object();
   if (!after_value_json.empty()) {
     try {
       after = nlohmann::json::parse(after_value_json);
@@ -738,24 +738,23 @@ auto PresentEditorHistoryCommit(const std::string& field_key,
   if (!after.is_object()) after = nlohmann::json::object();
   if (!before.is_object()) before = nlohmann::json::object();
   const CommitSummary summary = BuildSummary(op, after, before);
-  out.before_text = summary.before_text;
-  out.after_text  = summary.after_text;
-  out.delta_text  = summary.delta_text;
+  out.before_text             = summary.before_text;
+  out.after_text              = summary.after_text;
+  out.delta_text              = summary.delta_text;
 
   // A disabled operator is a meaningful state change even when the numeric
   // value is unchanged; surface it so the card never reads as a no-op.
   if (!after_enabled && out.after_text.isEmpty()) {
     out.after_text = before_enabled ? QStringLiteral("Off") : QStringLiteral("Off");
-    out.delta_text =
-        before_enabled ? QStringLiteral("Enabled \u2192 Off") : QStringLiteral("Off");
+    out.delta_text = before_enabled ? QStringLiteral("Enabled \u2192 Off") : QStringLiteral("Off");
   } else if (after_enabled && !before_enabled && out.delta_text.isEmpty()) {
     out.after_text = QStringLiteral("On");
     out.delta_text = QStringLiteral("Off \u2192 On");
   }
   if (out.delta_text.isEmpty() && !out.after_text.isEmpty()) {
-    out.delta_text =
-        out.before_text.isEmpty() ? out.after_text
-                                  : QStringLiteral("%1 \u2192 %2").arg(out.before_text, out.after_text);
+    out.delta_text = out.before_text.isEmpty()
+                         ? out.after_text
+                         : QStringLiteral("%1 \u2192 %2").arg(out.before_text, out.after_text);
   }
   return out;
 }

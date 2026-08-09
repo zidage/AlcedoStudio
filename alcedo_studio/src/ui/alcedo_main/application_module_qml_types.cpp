@@ -28,8 +28,6 @@ void RegisterApplicationModuleTypes() {
                                                   "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<NikonHeRecoveryController>(
       "Alcedo.Main", 1, 0, "NikonHeRecoveryController", "Owned by ApplicationModuleHost");
-  qmlRegisterUncreatableType<EditorController>("Alcedo.Main", 1, 0, "EditorController",
-                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<BackgroundTaskController>(
       "Alcedo.Main", 1, 0, "BackgroundTaskController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<InteractionPolicyController>(

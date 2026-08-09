@@ -19,24 +19,21 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
-
 #include <algorithm>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <string>
 #include <vector>
 
-#include <exiv2/exiv2.hpp>
-
 #include "edit/operators/operator_registeration.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
 
@@ -82,7 +79,7 @@ inline auto CollectRawTestImages(const std::string& subdir, size_t maxCount = 0)
   };
 
   const std::filesystem::path root{std::string(TEST_IMG_PATH) + "/raw/" + subdir};
-  auto paths = collect_from_root(root);
+  auto                        paths = collect_from_root(root);
   if (!paths.empty()) {
     return paths;
   }
@@ -94,7 +91,7 @@ inline auto CollectRawTestImages(const std::string& subdir, size_t maxCount = 0)
 /// Collect RAW test images only from a specific fixture subdirectory.
 inline auto CollectRawFixtureImages(const std::string& subdir, size_t maxCount = 0)
     -> std::vector<std::filesystem::path> {
-  const std::filesystem::path root{std::string(TEST_IMG_PATH) + "/raw/" + subdir};
+  const std::filesystem::path        root{std::string(TEST_IMG_PATH) + "/raw/" + subdir};
   std::vector<std::filesystem::path> paths;
   if (!std::filesystem::exists(root)) return paths;
 
@@ -124,8 +121,7 @@ inline auto PathToQString(const std::filesystem::path& p) -> QString {
 }
 
 /// Convert a vector of filesystem paths to a QStringList.
-inline auto PathsToQStringList(const std::vector<std::filesystem::path>& paths)
-    -> QStringList {
+inline auto PathsToQStringList(const std::vector<std::filesystem::path>& paths) -> QStringList {
   QStringList list;
   list.reserve(static_cast<int>(paths.size()));
   for (const auto& p : paths) {
@@ -148,7 +144,7 @@ class ApplicationModuleHostTestFixture : public ::testing::Test {
   std::filesystem::path db_path_;    ///< Temp DB file path.
   std::filesystem::path meta_path_;  ///< Temp metadata JSON path.
 
-  void SetUp() override {
+  void                  SetUp() override {
     alcedo::TimeProvider::Refresh();
     alcedo::RegisterAllOperators();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
@@ -156,9 +152,7 @@ class ApplicationModuleHostTestFixture : public ::testing::Test {
     // Create a unique temp directory for each test.
     temp_dir_ = std::filesystem::temp_directory_path() /
                 ("alcedo_ui_test_" +
-                 std::to_string(std::chrono::steady_clock::now()
-                                    .time_since_epoch()
-                                    .count()));
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(temp_dir_);
 
     db_path_   = temp_dir_ / "test.db";
@@ -180,11 +174,9 @@ class ApplicationModuleHostTestFixture : public ::testing::Test {
 
   /// Create a new packed project inside the temp directory, wait for
   /// ProjectChanged, and return true if the backend became serviceReady.
-  bool CreateTestProject(ApplicationModuleHost& backend,
-                         const QString& name = "ui_test_project") {
+  bool CreateTestProject(ApplicationModuleHost& backend, const QString& name = "ui_test_project") {
     QSignalSpy spy(backend.project(), &ProjectModule::ProjectChanged);
-    const bool ok =
-        backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), name);
+    const bool ok = backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), name);
     if (!ok) return false;
 
     // The project loading is async — wait for LoadProject + pipeline init

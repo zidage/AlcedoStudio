@@ -87,8 +87,7 @@ void FinalDisplayFrameTapSink::SetScopeAnalysisDeferred(bool deferred) {
   scope_analysis_deferred_ = deferred;
 }
 
-void FinalDisplayFrameTapSink::SetFrameIdentity(uint64_t image_identity,
-                                                uint64_t session_epoch) {
+void FinalDisplayFrameTapSink::SetFrameIdentity(uint64_t image_identity, uint64_t session_epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (image_identity_ != image_identity || session_epoch_ != session_epoch) {
     current_frame_          = {};
@@ -96,8 +95,8 @@ void FinalDisplayFrameTapSink::SetFrameIdentity(uint64_t image_identity,
     bound_submission_       = {};
     bound_submission_valid_ = false;
   }
-  image_identity_   = image_identity;
-  session_epoch_ = session_epoch;
+  image_identity_ = image_identity;
+  session_epoch_  = session_epoch;
 }
 
 auto FinalDisplayFrameTapSink::GetScopeRequest() const -> ScopeRequest {
@@ -200,13 +199,12 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
     if (bound_submission_valid_) {
       if (bound_submission_.metadata.image_identity != 0 ||
           bound_submission_.metadata.session_epoch != 0) {
-        stamped_frame.image_identity   = bound_submission_.metadata.image_identity;
-        stamped_frame.session_epoch = bound_submission_.metadata.session_epoch;
+        stamped_frame.image_identity = bound_submission_.metadata.image_identity;
+        stamped_frame.session_epoch  = bound_submission_.metadata.session_epoch;
       }
-      stamped_frame.display_generation =
-          bound_submission_.metadata.presentation_request_id != 0
-              ? bound_submission_.metadata.presentation_request_id
-              : bound_submission_.metadata.preview_generation;
+      stamped_frame.display_generation = bound_submission_.metadata.presentation_request_id != 0
+                                             ? bound_submission_.metadata.presentation_request_id
+                                             : bound_submission_.metadata.preview_generation;
       scope_update_allowed             = bound_submission_.metadata.scope_update_allowed;
       bound_submission_valid_          = false;
     }
@@ -276,20 +274,6 @@ auto FinalDisplayFrameTapSink::GetViewportRenderRegion() const
     return sink->GetViewportRenderRegion();
   }
   return std::nullopt;
-}
-
-auto FinalDisplayFrameTapSink::GetViewerSurface() -> IEditViewerSurface* {
-  if (auto* sink = downstream_sink()) {
-    return sink->GetViewerSurface();
-  }
-  return nullptr;
-}
-
-auto FinalDisplayFrameTapSink::GetViewerSurface() const -> const IEditViewerSurface* {
-  if (auto* sink = downstream_sink()) {
-    return sink->GetViewerSurface();
-  }
-  return nullptr;
 }
 
 }  // namespace alcedo

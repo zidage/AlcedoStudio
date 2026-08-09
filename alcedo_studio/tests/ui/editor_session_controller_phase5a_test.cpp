@@ -353,7 +353,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
@@ -381,7 +381,7 @@ TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
 
 TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTheFirstSession) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   WorkspaceRouter         router(&controller);
 
   router.OpenEditor(1, 2);
@@ -403,7 +403,7 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
 TEST(EditorSessionControllerPhase5ATest,
      AsyncImageSwitchKeepsViewportStampedForTargetUntilFirstFrameEnablesEditing) {
   FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  EditorSessionController        controller(&backend);
   editor_rhi::EditorViewportItem viewport;
   controller.bindPresentationViewport(&viewport);
 
@@ -443,7 +443,7 @@ TEST(EditorSessionControllerPhase5ATest,
 
 TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBackend) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   controller.Open(1, 2);
   controller.Finalize(false);
@@ -458,7 +458,7 @@ TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBa
 
 TEST(EditorSessionControllerPhase5ATest, PresentationSizeIsForwardedToTheBackend) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   controller.updatePresentationTargetSize(1920, 1080);
 
@@ -473,7 +473,7 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeRoutesThroughBackend) {
   // region (resolved from the bound frame sink — nullopt when no viewport is
   // bound).
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   controller.Open(7, 8);  // backend -> Loading with an image identity
   ASSERT_TRUE(controller.has_image());
 
@@ -497,7 +497,7 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeRoutesThroughBackend) {
 
 TEST(EditorSessionControllerPhase5ATest, ScopeSwitchRoutesScopeRefreshThroughBackend) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   controller.Open(7, 8);
   backend.SimulateFirstFrameReady();
   ASSERT_TRUE(controller.has_image());
@@ -512,7 +512,7 @@ TEST(EditorSessionControllerPhase5ATest, BoundInteractionRoutesDetailRefreshWith
   // The production workspace binds this signal directly. This protects the
   // double-click/zoom route from loss while a QML workspace item is rebuilt.
   FakeSessionBackend                      backend;
-  EditorSessionController                 controller(nullptr, &backend);
+  EditorSessionController                 controller(&backend);
   editor_rhi::EditorInteractionController interaction;
   controller.Open(7, 8);
   controller.bindInteractionController(&interaction);
@@ -537,7 +537,7 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
   // view state itself already updated in the interaction controller; the
   // viewport re-samples whatever frame it last received.
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   EXPECT_FALSE(controller.has_image());
   controller.submitViewChange(
       static_cast<int>(alcedo::editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan));
@@ -546,7 +546,7 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
 
 TEST(EditorSessionControllerPhase5ATest, GeometryPanelSelectionUsesSourceFramePreview) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   controller.Open(7, 8);
   EXPECT_FALSE(backend.geometry_overlay_active);
@@ -564,7 +564,7 @@ TEST(EditorSessionControllerPhase5ATest, GeometryPanelSelectionUsesSourceFramePr
 TEST(EditorSessionControllerPhase5ATest,
      GeometryPanelSelectionWhileInteractiveRequestsCropRotateRefresh) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   controller.Open(7, 8);
   backend.SimulateFirstFrameReady();
@@ -587,14 +587,14 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
   // Phase 5D D6: render_busy is a thin reflection of backend diagnostics; it
   // never exposes a pipeline task object to QML.
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   EXPECT_FALSE(controller.render_busy());
   backend.render_busy_ = true;
   EXPECT_TRUE(controller.render_busy());
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
-  EditorSessionController controller(static_cast<EditorController*>(nullptr));
+  EditorSessionController controller;
   controller.Open(1, 2);
   EXPECT_TRUE(controller.has_image());
   EXPECT_EQ(controller.viewport_identity_key().split(QLatin1Char(':')).value(1).toULongLong(), 1u);
@@ -604,7 +604,7 @@ TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
 
 TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQml) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
@@ -620,7 +620,7 @@ TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQm
 
 TEST(EditorSessionControllerPhase5ATest, WorkerNotificationIsDeliveredOnTheControllerThread) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   QThread*                delivered_thread = nullptr;
   int                     state_signals    = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] {
@@ -639,7 +639,7 @@ TEST(EditorSessionControllerPhase5ATest, WorkerNotificationIsDeliveredOnTheContr
 TEST(EditorSessionControllerPhase5ATest, DestroyedControllerIsDetachedFromBackendNotifications) {
   FakeSessionBackend backend;
   {
-    EditorSessionController controller(nullptr, &backend);
+    EditorSessionController controller(&backend);
     controller.Open(1, 2);
   }
 
@@ -651,7 +651,7 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
   auto runtime = alcedo::EditorSessionRuntime::Create();
   runtime->service->SetPresentationSinkId(1);
   runtime->service->SetPresentationSize(640, 480);
-  EditorSessionController controller(nullptr, runtime->service.get());
+  EditorSessionController controller(runtime->service.get());
   int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
@@ -733,15 +733,9 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       repo_root / "alcedo_studio/src/include/app/editor_render_coordinator.hpp",
       repo_root / "alcedo_studio/src/include/app/editor_session_bootstrap.hpp",
   };
-  // Temporary exceptions:
-  // - legacy QWidget editor scheduler callers (deleted at Phase 10 hard cutover)
-  // - Phase 5B/5E production IEditorPipelineSchedulerPort implementation (the only
+  // Phase 5B/5E production IEditorPipelineSchedulerPort is the only
   //   component allowed to call PipelineScheduler::ScheduleTask for the QML path)
   const std::vector<std::string> exception_substrings = {
-      "editor_controller.cpp",
-      "editor_controller.hpp",
-      "editor_dialog/render/editor_render_coordinator",
-      "editor_dialog\\render\\editor_render_coordinator",
       "editor_session_render_scheduler_port.cpp",
       "editor_session_render_scheduler_port.hpp",
   };
@@ -773,7 +767,7 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       EXPECT_EQ(text.find(needle), std::string::npos)
           << path_str << " must not reference " << needle
           << "; only alcedo::EditorRenderCoordinator may own scheduler calls "
-             "(legacy QWidget path is excepted until Phase 10 hard cutover)";
+             "(the production scheduler port is the sole exception)";
     }
   };
 
@@ -843,13 +837,13 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
 // ── Phase 6C-7: adjustment snapshot publication ────────────────────────
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotStartsEmpty) {
-  EditorSessionController controller(static_cast<EditorController*>(nullptr));
+  EditorSessionController controller;
   EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
 }
 
 TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController) {
   FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  EditorSessionController        controller(&backend);
 
   EditorRenderAdjustmentSnapshot snap;
   snap.patches = {
@@ -869,7 +863,7 @@ TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController)
 TEST(EditorSessionControllerPhase5ATest,
      DisplayTransformSnapshotConfiguresUnifiedViewportWindowOutput) {
   FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  EditorSessionController        controller(&backend);
   editor_rhi::EditorViewportItem viewport;
   controller.bindPresentationViewport(&viewport);
 
@@ -890,7 +884,7 @@ TEST(EditorSessionControllerPhase5ATest,
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
   FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  EditorSessionController        controller(&backend);
 
   EditorRenderAdjustmentSnapshot snap1;
   snap1.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true}};
@@ -910,7 +904,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
 
 TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     signal_count = 0;
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
@@ -929,7 +923,7 @@ TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
-  EditorSessionController controller(static_cast<EditorController*>(nullptr));
+  EditorSessionController controller;
   controller.Open(1, 2);
   EXPECT_TRUE(controller.has_image());
   EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
@@ -937,7 +931,7 @@ TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     signal_count = 0;
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
@@ -959,7 +953,7 @@ TEST(EditorSessionControllerPhase5ATest,
   backend.image_load_request_  = ImageLoadRequestId{1};
   backend.identity_.element_id = 1;
   backend.identity_.image_id   = 2;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     snapshot_signals = 0;
   int                     state_signals    = 0;
@@ -994,7 +988,7 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapsh
   backend.image_load_request_  = ImageLoadRequestId{1};
   backend.identity_.element_id = 1;
   backend.identity_.image_id   = 2;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     snapshot_signals = 0;
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
@@ -1013,7 +1007,7 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapsh
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNotify) {
   FakeSessionBackend      backend;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     signal_count = 0;
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
@@ -1037,7 +1031,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
   FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  EditorSessionController        controller(&backend);
 
   EditorRenderAdjustmentSnapshot snap;
   snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":-1.75})", true}};
@@ -1069,7 +1063,7 @@ TEST(EditorSessionControllerPhase5ATest,
   for (std::size_t i = 0; i < backend.history_projection_.commits.size(); ++i) {
     backend.history_projection_.commits[i].commit_hash = Hash128(i + 1, 0);
   }
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   EditorHistoryModel      model;
   model.setEditorSession(&controller);
   ASSERT_EQ(model.count(), 100);
@@ -1096,7 +1090,7 @@ TEST(EditorSessionControllerPhase5ATest, SettledCommitPublishesOneHistoryRevisio
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
   backend.identity_ = {42, 84};
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   EditorHistoryModel      model;
   model.setEditorSession(&controller);
 
@@ -1119,7 +1113,7 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefres
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
   backend.identity_ = {42, 84};
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   EditorHistoryModel      model;
   model.setEditorSession(&controller);
 
@@ -1149,7 +1143,7 @@ TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionCompletionClosesMatchin
   backend.state_             = EditorSessionState::Interactive;
   backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     finished = 0;
   QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
@@ -1187,7 +1181,7 @@ TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionFailureShowsExactBacken
   backend.state_             = EditorSessionState::Interactive;
   backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     finished = 0;
   QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
@@ -1212,7 +1206,7 @@ TEST(EditorSessionControllerPhase5ATest,
   backend.state_             = EditorSessionState::Interactive;
   backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
   const QString           selected_commit = QStringLiteral("abcdef0123456789fedcba9876543210");
 
   int                     finished        = 0;
@@ -1248,7 +1242,7 @@ TEST(EditorSessionControllerPhase5ATest, InvalidVersionOrCommitIdPublishesReject
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
   backend.identity_ = {42, 84};
-  EditorSessionController controller(nullptr, &backend);
+  EditorSessionController controller(&backend);
 
   int                     finished = 0;
   QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,

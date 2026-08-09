@@ -25,7 +25,7 @@ Item {
     readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
 
-    // ── EOTF option tables (mirror editor_dialog.hpp SupportedDisplayEotfOptions) ──
+    // EOTF choices supported by the unified display-transform model.
     readonly property var eotfOptionsRec709: [
         { value: "bt1886", label: qsTr("BT.1886") },
         { value: "gamma_2_2", label: qsTr("Gamma 2.2") }

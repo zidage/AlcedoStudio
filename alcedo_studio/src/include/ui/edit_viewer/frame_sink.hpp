@@ -13,7 +13,6 @@
 #include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {
-class IEditViewerSurface;
 struct FinalDisplayFrameView;
 
 struct ViewerDisplayConfig {
@@ -45,8 +44,8 @@ struct FramePreviewMetadata {
   FrameRoiRect  source_roi_norm         = {};
   // Presentation stamp of ImageLoadRequestId for this open/switch. Scope and
   // the present queue reject late frames when this epoch no longer matches.
-  std::uint64_t session_epoch  = 0;
-  std::uint64_t image_identity = 0;
+  std::uint64_t session_epoch           = 0;
+  std::uint64_t image_identity          = 0;
   // View-only renders (zoom/pan, resize, and detail ROI refreshes) must not
   // replace the last content frame used by scope analysis.
   bool          scope_update_allowed    = true;
@@ -151,7 +150,7 @@ class IFrameSink {
 
   virtual void UnmapResource()                                                                 = 0;
 
-  virtual void NotifyFrameReady(const FrameCompletionSubmission& submission)                     = 0;
+  virtual void NotifyFrameReady(const FrameCompletionSubmission& submission)                   = 0;
 
   // Binds the submission stamped for the in-flight Apply(). Production sinks
   // use this for EnsureSize/render-reference decisions before NotifyFrameReady.
@@ -173,9 +172,5 @@ class IFrameSink {
   virtual auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
     return std::nullopt;
   }
-
-  // Exposes the presentation surface when a sink is backed by a live viewer.
-  virtual auto GetViewerSurface() -> IEditViewerSurface* { return nullptr; }
-  virtual auto GetViewerSurface() const -> const IEditViewerSurface* { return nullptr; }
 };
 }  // namespace alcedo

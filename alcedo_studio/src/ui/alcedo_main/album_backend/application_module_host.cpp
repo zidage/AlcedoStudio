@@ -120,8 +120,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   nikon_he_recovery_ = std::make_unique<NikonHeRecoveryController>(project_.get(), images_.get(),
                                                                    project_.get(), this);
   RecordConstruction("NikonHeRecoveryController", nikon_he_recovery_.get());
-  editor_ = std::make_unique<EditorController>(project_.get(), library_.get(), this);
-  RecordConstruction("EditorController", editor_.get());
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
@@ -239,8 +237,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     RecordConstruction("EditorSaveCheckpointCoordinator",
                        editor_session_runtime_->save_coordinator.get());
   }
-  editor_session_ = std::make_unique<EditorSessionController>(
-      editor_.get(), editor_session_runtime_->service.get(), this);
+  editor_session_ =
+      std::make_unique<EditorSessionController>(editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
@@ -258,15 +256,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
 
-  editor_->InitializeEditorLuts();
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
       [semantic = semantic_generation_.get()](sl_element_id_t element_id) {
         return semantic ? semantic->LabelDisplayText(element_id) : QString{};
       });
   folders_->BindCollaborators(stats_.get(), search_.get(), import_export_.get());
-  images_->BindCollaborators(stats_.get(), import_export_.get(), editor_.get(),
-                             semantic_generation_.get(), interaction_policy_.get());
+  images_->BindCollaborators(stats_.get(), import_export_.get(), semantic_generation_.get(),
+                             interaction_policy_.get());
   stats_->BindCollaborators(search_.get(), semantic_generation_.get());
   semantic_generation_->BindCollaborators(nikon_he_recovery_.get());
   import_export_->BindCollaborators(stats_.get(), nikon_he_recovery_.get(),
@@ -284,15 +281,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     return QString{};
   };
-  lifecycle_hooks.finalize_editor_session = [editor           = editor_.get(),
-                                             editor_session   = editor_session_.get(),
+  lifecycle_hooks.finalize_editor_session = [editor_session   = editor_session_.get(),
                                              workspace_router = workspace_router_.get()] {
-    // Project switch/close must end both the legacy controller session (if any)
-    // and the unified QML workspace session, then return to the library route
-    // so stale element/image ids never survive into the next project.
-    if (editor && editor->editor_active()) {
-      editor->FinalizeEditorSession(true);
-    }
     // Forget the last-edited image so re-entering the editor in the next
     // project does not restore an image that belongs to the old project.
     if (editor_session) {
@@ -368,28 +358,25 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   lifecycle_hooks.export_inflight = [import_export = import_export_.get()] {
     return import_export && import_export->export_inflight();
   };
-  lifecycle_hooks.refresh_translations =
-      [folders = folders_.get(), library = library_.get(), stats = stats_.get(),
-       import_export = import_export_.get(), editor = editor_.get()] {
-        if (folders && !folders->folder_entries().empty()) {
-          folders->RebuildFolderView();
-        }
-        if (library && !library->model().items().empty() && stats) {
-          stats->RebuildThumbnailView();
-        }
-        if (stats) {
-          stats->RefreshStats();
-        }
-        if (import_export) {
-          emit import_export->ImportStateChanged();
-          emit import_export->importStateChanged();
-          emit import_export->ExportStateChanged();
-          emit import_export->exportStateChanged();
-        }
-        if (editor) {
-          emit editor->EditorStateChanged();
-        }
-      };
+  lifecycle_hooks.refresh_translations = [folders = folders_.get(), library = library_.get(),
+                                          stats         = stats_.get(),
+                                          import_export = import_export_.get()] {
+    if (folders && !folders->folder_entries().empty()) {
+      folders->RebuildFolderView();
+    }
+    if (library && !library->model().items().empty() && stats) {
+      stats->RebuildThumbnailView();
+    }
+    if (stats) {
+      stats->RefreshStats();
+    }
+    if (import_export) {
+      emit import_export->ImportStateChanged();
+      emit import_export->importStateChanged();
+      emit import_export->ExportStateChanged();
+      emit import_export->exportStateChanged();
+    }
+  };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
 
   db_write_barrier_->SetOnRelease([this] {
@@ -422,9 +409,6 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     if (library_) {
       library_->thumbs().ReleaseVisibleThumbnailPins();
-    }
-    if (editor_) {
-      editor_->FinalizeEditorSession(true);
     }
     if (workspace_router_) {
       workspace_router_->OpenLibrary();
@@ -500,7 +484,6 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     editor_session_runtime_.reset();
   }
   destroy(adjustment_transfer_, "AdjustmentTransferController");
-  destroy(editor_, "EditorController");
   destroy(nikon_he_recovery_, "NikonHeRecoveryController");
   destroy(import_export_, "ImportExportHandler");
   destroy(image_analysis_, "ImageAnalysisController");

@@ -10,7 +10,6 @@
 #include <chrono>
 #include <utility>
 
-#include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
@@ -20,6 +19,13 @@
 using alcedo::diag::editorPresentLog;
 
 namespace alcedo::editor_rhi {
+namespace {
+
+auto IsRenderReferenceFrame(FramePresentationMode presentation_mode, FrameRole role) -> bool {
+  return presentation_mode != FramePresentationMode::RoiFrame && role != FrameRole::DetailPatch;
+}
+
+}  // namespace
 
 DirectFrameSink::DirectFrameSink(EditorViewportItem* item) : item_(item) {}
 
@@ -71,11 +77,11 @@ auto DirectFrameSink::AcceptSubmissionRequestId(std::uint64_t request_id) -> boo
 
 auto DirectFrameSink::MakeSizeRequestLocked() const -> DirectPresentQueue::SizeRequest {
   DirectPresentQueue::SizeRequest request;
-  request.width            = width_;
-  request.height           = height_;
-  request.preferred_slot   = prepared_slot_index_;
-  request.session_epoch = item_ ? item_->sessionEpoch() : 0;
-  request.image_identity   = item_ ? item_->imageIdentity() : 0;
+  request.width          = width_;
+  request.height         = height_;
+  request.preferred_slot = prepared_slot_index_;
+  request.session_epoch  = item_ ? item_->sessionEpoch() : 0;
+  request.image_identity = item_ ? item_->imageIdentity() : 0;
   if (bound_submission_valid_) {
     request.layer_generation = bound_submission_.metadata.presentation_request_id;
     request.frame_role       = bound_submission_.metadata.frame_role;
@@ -87,11 +93,11 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   if (!item_ || !item_->present_queue() || width <= 0 || height <= 0) {
     return std::nullopt;
   }
-  auto*      queue            = item_->present_queue().get();
-  const auto session_epoch = item_->sessionEpoch();
-  const auto image_identity   = item_->imageIdentity();
+  auto*      queue          = item_->present_queue().get();
+  const auto session_epoch  = item_->sessionEpoch();
+  const auto image_identity = item_->imageIdentity();
 
-  auto       prepare = queue->PrepareWrite(width, height, session_epoch, image_identity);
+  auto       prepare        = queue->PrepareWrite(width, height, session_epoch, image_identity);
 
   DirectPresentQueue::SizeRequest request;
   {
@@ -143,8 +149,8 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   }
 
   qCDebug(editorPresentLog,
-          "[EditorPresent] producer waiting for native target %dx%d image=%llu epoch=%llu",
-          width, height, static_cast<unsigned long long>(image_identity),
+          "[EditorPresent] producer waiting for native target %dx%d image=%llu epoch=%llu", width,
+          height, static_cast<unsigned long long>(image_identity),
           static_cast<unsigned long long>(session_epoch));
   auto slot = queue->WaitForWritableSlot(request);
   if (!slot.has_value()) {
@@ -162,7 +168,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   if (width <= 0 || height <= 0 || !item_) {
     return;
   }
-  const std::uint64_t session_epoch = item_->sessionEpoch();
+  const std::uint64_t session_epoch    = item_->sessionEpoch();
   const std::uint64_t image_identity   = item_->imageIdentity();
   const bool          metal_present    = IsMetalPresentPath();
   bool                emit_target_size = false;
@@ -176,7 +182,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     const bool geometry_changed = width_ != width || height_ != height ||
                                   last_sized_session_epoch_ != session_epoch ||
                                   last_sized_image_identity_ != image_identity;
-    // Match QtEditViewer::IsRenderReferenceFrame: DetailPatch / RoiFrame sizes
+    // DetailPatch / RoiFrame sizes
     // reserve write slots but must not rewrite interaction render-reference
     // geometry. Otherwise a zoomed ROI EnsureSize (e.g. 1600x900) overwrites the
     // full-frame reference (QualityBase / InteractivePrimary) used for zoom,
@@ -202,15 +208,15 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       width_  = width;
       height_ = height;
     }
-    last_sized_session_epoch_ = session_epoch;
-    last_sized_image_identity_   = image_identity;
+    last_sized_session_epoch_  = session_epoch;
+    last_sized_image_identity_ = image_identity;
   }
 
   if (emit_target_size) {
-    qCDebug(editorPresentLog)
-        << "[ROI_TRACE][render-reference-size] request=" << request_id
-        << " role=" << static_cast<int>(frame_role) << " size=" << width << 'x' << height
-        << " image=" << image_identity << " session_epoch=" << session_epoch;
+    qCDebug(editorPresentLog) << "[ROI_TRACE][render-reference-size] request=" << request_id
+                              << " role=" << static_cast<int>(frame_role) << " size=" << width
+                              << 'x' << height << " image=" << image_identity
+                              << " session_epoch=" << session_epoch;
     // Pipeline workers are off-thread; unit tests and GUI-thread callers can
     // receive the geometry signal synchronously.
     const auto connection =
@@ -408,19 +414,19 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
     std::lock_guard lock(mutex_);
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
-        qCDebug(editorPresentLog)
-        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
-            << " reason=not-mapped-or-not-unmapped mapped=" << has_mapped_slot_
-            << " unmap_pending=" << unmapped_pending_submit_;
+        qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="
+                                  << metadata.presentation_request_id
+                                  << " reason=not-mapped-or-not-unmapped mapped="
+                                  << has_mapped_slot_
+                                  << " unmap_pending=" << unmapped_pending_submit_;
       }
       diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "sink-not-mapped");
       return;
     }
     if (!AcceptSubmissionRequestId(metadata.presentation_request_id)) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
-        qCDebug(editorPresentLog)
-        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
-            << " reason=stale-request-id";
+        qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="
+                                  << metadata.presentation_request_id << " reason=stale-request-id";
       }
       has_mapped_slot_         = false;
       unmapped_pending_submit_ = false;
@@ -428,7 +434,7 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
       diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "stale-request-id");
       return;
     }
-    slot_index = mapped_slot_index_;
+    slot_index               = mapped_slot_index_;
     has_mapped_slot_         = false;
     unmapped_pending_submit_ = false;
     mapped_slot_index_       = -1;
@@ -437,20 +443,22 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   }
   if (!item_ || !item_->present_queue() || slot_index < 0) {
     if (metadata.frame_role == FrameRole::DetailPatch) {
-      qCDebug(editorPresentLog)
-        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
-          << " reason=no-item-queue-or-slot slot=" << slot_index;
+      qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="
+                                << metadata.presentation_request_id
+                                << " reason=no-item-queue-or-slot slot=" << slot_index;
     }
     diag::NoteRenderE2eTerminal(metadata.presentation_request_id, "sink-no-queue");
     return;
   }
   if (metadata.frame_role == FrameRole::DetailPatch) {
-    qCDebug(editorPresentLog)
-        << "[ROI_TRACE][sink-notify-ready] request=" << metadata.presentation_request_id
-        << " image=" << item_->imageIdentity() << " session_epoch=" << item_->sessionEpoch()
-        << " slot=" << slot_index << " roi_norm=" << metadata.source_roi_norm.x << ','
-        << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width << ','
-        << metadata.source_roi_norm.height;
+    qCDebug(editorPresentLog) << "[ROI_TRACE][sink-notify-ready] request="
+                              << metadata.presentation_request_id
+                              << " image=" << item_->imageIdentity()
+                              << " session_epoch=" << item_->sessionEpoch()
+                              << " slot=" << slot_index
+                              << " roi_norm=" << metadata.source_roi_norm.x << ','
+                              << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width
+                              << ',' << metadata.source_roi_norm.height;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
   diag::NoteRenderE2eProducerReady(metadata.presentation_request_id);
@@ -484,15 +492,15 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   item_->setDisplayConfig(frame.display_config);
 
   ImportedGpuFrame imported;
-  imported.width             = frame.width;
-  imported.height            = frame.height;
-  imported.texture_handle    = frame.texture_handle;
-  imported.native_layout     = 0;
-  imported.owner             = frame.owner;
-  imported.presentation_mode = frame.presentation_mode;
-  imported.preview_metadata  = frame.preview_metadata;
-  imported.session_epoch  = item_->sessionEpoch();
-  imported.image_identity    = item_->imageIdentity();
+  imported.width                      = frame.width;
+  imported.height                     = frame.height;
+  imported.texture_handle             = frame.texture_handle;
+  imported.native_layout              = 0;
+  imported.owner                      = frame.owner;
+  imported.presentation_mode          = frame.presentation_mode;
+  imported.preview_metadata           = frame.preview_metadata;
+  imported.session_epoch              = item_->sessionEpoch();
+  imported.image_identity             = item_->imageIdentity();
 
   std::uint64_t request_id            = 0;
   bool          emit_render_reference = false;
@@ -509,8 +517,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     imported.sequence = ++imported_sequence_;
     const auto layer  = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
-      const auto superseded =
-          pending_imported_[layer]->preview_metadata.presentation_request_id;
+      const auto superseded = pending_imported_[layer]->preview_metadata.presentation_request_id;
       qCDebug(editorPresentLog,
               "[EditorPresent] superseding pending Metal import role=%d request=%llu",
               static_cast<int>(imported.preview_metadata.frame_role),
@@ -520,7 +527,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     pending_imported_[layer] = imported;
     ++submitted_frame_count_;
 
-    // Match QtEditViewer::RefreshFrameDerivedState: only full-frame textures
+    // Only full-frame textures
     // redefine crop/zoom render-reference geometry. Detail/Roi sizes must not.
     if (IsRenderReferenceFrame(imported.presentation_mode, imported.preview_metadata.frame_role)) {
       const bool geometry_changed = width_ != frame.width || height_ != frame.height;
@@ -572,8 +579,7 @@ auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t session_epoch,
       slot.reset();
       continue;
     }
-    if (session_epoch != 0 && slot->session_epoch != 0 &&
-        slot->session_epoch != session_epoch) {
+    if (session_epoch != 0 && slot->session_epoch != 0 && slot->session_epoch != session_epoch) {
       slot.reset();
       continue;
     }

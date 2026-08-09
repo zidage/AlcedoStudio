@@ -4,16 +4,17 @@
 
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
-#include "ui/editor_rhi/editor_overlay_item.hpp"
-#include "ui/editor_rhi/editor_viewport_item.hpp"
-
-#include <QAbstractAnimation>
-#include <QApplication>
 #include <QtQml/qqml.h>
 
+#include <QAbstractAnimation>
+#include <QGuiApplication>
+#include <QStyleHints>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+
+#include "ui/editor_rhi/editor_overlay_item.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -50,14 +51,14 @@ EditorInteractionController::EditorInteractionController(QObject* parent) : QObj
     applyViewTransformResult(result);
   });
 
-  // Keep the same settled-interaction semantics as QtEditViewer. Progress
+  // Keep settled-interaction semantics. Progress
   // updates restart this timer, so a DetailRefresh is sent only for the final
   // stable viewport and does not depend solely on animation-finished delivery.
   view_interaction_settle_timer_ = new QTimer(this);
   view_interaction_settle_timer_->setSingleShot(true);
   connect(view_interaction_settle_timer_, &QTimer::timeout, this, [this] {
     emitViewChange(zoom() > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
-                                            : ViewChangeKind::ZoomPan);
+                                           : ViewChangeKind::ZoomPan);
   });
 }
 
@@ -118,13 +119,14 @@ void EditorInteractionController::setCropToolEnabled(bool enabled) {
     return;
   }
   stopZoomAnimation();
-  // Match legacy QtEditViewer: disable cancels an in-flight crop drag so a later
+  // Disabling cancels an in-flight crop drag so a later
   // release cannot commit a stale rect after the tool is off.
   if (!enabled) {
     crop_interaction_controller_.Cancel(viewer_state_);
   }
   viewer_state_.SetCropToolEnabled(enabled);
-  const auto result = view_transform_controller_.HandleCropToolEnabledChanged(viewer_state_, enabled);
+  const auto result =
+      view_transform_controller_.HandleCropToolEnabledChanged(viewer_state_, enabled);
   applyViewTransformResult(result);
   emit cropToolChanged();
   emit cropChanged();
@@ -152,12 +154,12 @@ void EditorInteractionController::setCropOverlayVisible(bool visible) {
 }
 
 void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
-  auto crop = viewer_state_.GetCropOverlay();
+  auto         crop    = viewer_state_.GetCropOverlay();
   const QRectF clamped = CropGeometry::ClampCropRect(rect);
   // External setters must honor the active rotation so rotated corners stay inside
   // the image (legacy SetCropOverlayRectNormalized behavior).
-  const QRectF adjusted = CropGeometry::ClampCropRectForRotation(
-      clamped, crop.rotation_degrees, crop.metric_aspect);
+  const QRectF adjusted =
+      CropGeometry::ClampCropRectForRotation(clamped, crop.rotation_degrees, crop.metric_aspect);
   if (crop.rect == adjusted) {
     return;
   }
@@ -182,13 +184,13 @@ void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
 
 void EditorInteractionController::setCropRotationDegrees(float degrees) {
   const float normalized = CropGeometry::NormalizeAngleDegrees(degrees);
-  auto crop = viewer_state_.GetCropOverlay();
+  auto        crop       = viewer_state_.GetCropOverlay();
   if (std::abs(crop.rotation_degrees - normalized) < 1.0e-5f) {
     return;
   }
   crop.rotation_degrees = normalized;
-  crop.rect = CropGeometry::ClampCropRectForRotation(crop.rect, crop.rotation_degrees,
-                                                     crop.metric_aspect);
+  crop.rect =
+      CropGeometry::ClampCropRectForRotation(crop.rect, crop.rotation_degrees, crop.metric_aspect);
   viewer_state_.SetCropOverlayState(crop);
   emit cropChanged();
   emit cropRotationCommitted(normalized, true);
@@ -201,13 +203,13 @@ void EditorInteractionController::setCropRotationDegrees(float degrees) {
 }
 
 void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_ratio) {
-  auto crop = viewer_state_.GetCropOverlay();
+  auto        crop  = viewer_state_.GetCropOverlay();
   const float ratio = CropGeometry::ClampAspectRatio(aspect_ratio);
   if (crop.aspect_locked == enabled && std::abs(crop.aspect_ratio - ratio) < 1.0e-5f) {
     return;
   }
   crop.aspect_locked = enabled;
-  crop.aspect_ratio = ratio;
+  crop.aspect_ratio  = ratio;
   viewer_state_.SetCropOverlayState(crop);
   emit cropChanged();
   emit overlayGeometryChanged();
@@ -254,19 +256,20 @@ void EditorInteractionController::resetPresentationStateForNewImage() {
   crop_interaction_controller_.Cancel(viewer_state_);
   applyCursor(std::nullopt, true);
 
-  auto crop = viewer_state_.GetCropOverlay();
-  crop.tool_enabled = false;
-  crop.overlay_visible = false;
-  crop.rect = QRectF(0.0, 0.0, 1.0, 1.0);
+  auto crop             = viewer_state_.GetCropOverlay();
+  crop.tool_enabled     = false;
+  crop.overlay_visible  = false;
+  crop.rect             = QRectF(0.0, 0.0, 1.0, 1.0);
   crop.rotation_degrees = 0.0f;
-  crop.aspect_locked = false;
+  crop.aspect_locked    = false;
   viewer_state_.SetCropOverlayState(crop);
 
-  presentation_mode_ = FramePresentationMode::FullFrame;
+  presentation_mode_  = FramePresentationMode::FullFrame;
   detail_roi_visible_ = false;
-  detail_roi_uv_ = QRectF(0.0, 0.0, 1.0, 1.0);
+  detail_roi_uv_      = QRectF(0.0, 0.0, 1.0, 1.0);
 
-  viewer_state_.SetViewTransform(ViewTransformController::kMinInteractiveZoom, QVector2D(0.0f, 0.0f));
+  viewer_state_.SetViewTransform(ViewTransformController::kMinInteractiveZoom,
+                                 QVector2D(0.0f, 0.0f));
   viewer_state_.SetRenderReferenceSize(0, 0);
   updateViewportRenderRegionCache();
 
@@ -295,8 +298,8 @@ void EditorInteractionController::setInteractionEnabled(bool enabled) {
 
 void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
                                                      qreal devicePixelRatio) {
-  const int w = std::max(1, static_cast<int>(std::lround(width)));
-  const int h = std::max(1, static_cast<int>(std::lround(height)));
+  const int   w   = std::max(1, static_cast<int>(std::lround(width)));
+  const int   h   = std::max(1, static_cast<int>(std::lround(height)));
   const float dpr = static_cast<float>(std::max(devicePixelRatio, 1.0e-4));
   if (widget_info_.widget_width == w && widget_info_.widget_height == h &&
       std::abs(widget_info_.device_pixel_ratio - dpr) < 1.0e-5f) {
@@ -311,9 +314,9 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
   const auto before = viewer_state_.GetViewTransform();
   reconcileViewTransformForRenderReference();
   updateViewportRenderRegionCache();
-  emit viewportMetricsChanged();
-  emit overlayGeometryChanged();
-  emit viewStateChanged();
+  emit       viewportMetricsChanged();
+  emit       overlayGeometryChanged();
+  emit       viewStateChanged();
   // If reconcile did not emit (no clamp change), still notify the viewport so
   // photograph sampling matches the new letterbox after a pure size change.
   const auto after = viewer_state_.GetViewTransform();
@@ -332,14 +335,14 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
 }
 
 void EditorInteractionController::setImageSize(int width, int height) {
-  width = std::max(0, width);
+  width  = std::max(0, width);
   height = std::max(0, height);
   if (image_info_.image_width == width && image_info_.image_height == height) {
     return;
   }
   image_info_ = {width, height};
   if (width > 0 && height > 0) {
-    auto crop = viewer_state_.GetCropOverlay();
+    auto crop          = viewer_state_.GetCropOverlay();
     crop.metric_aspect = CropGeometry::SafeAspect(width, height);
     viewer_state_.SetCropOverlayState(crop);
   }
@@ -357,8 +360,8 @@ void EditorInteractionController::setImageSize(int width, int height) {
 }
 
 void EditorInteractionController::setRenderReferenceSize(int width, int height) {
-  width = std::max(0, width);
-  height = std::max(0, height);
+  width               = std::max(0, width);
+  height              = std::max(0, height);
   const auto snapshot = viewer_state_.Snapshot();
   if (snapshot.render_reference_width == width && snapshot.render_reference_height == height) {
     return;
@@ -389,9 +392,9 @@ void EditorInteractionController::handleHoverMove(qreal x, qreal y) {
     return;
   }
   const QPointF pos(x, y);
-  const auto snapshot = overlaySnapshot();
-  const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
-  const auto hover = EditViewerOverlayGeometry::ComputeHover(snapshot, geometry, pos);
+  const auto    snapshot = overlaySnapshot();
+  const auto    geometry = EditViewerOverlayGeometry::Build(snapshot);
+  const auto    hover    = EditViewerOverlayGeometry::ComputeHover(snapshot, geometry, pos);
   applyCursor(hover.cursor, !hover.cursor.has_value());
 }
 
@@ -400,14 +403,14 @@ void EditorInteractionController::handlePress(qreal x, qreal y, int button) {
     return;
   }
   const QPointF pos(x, y);
-  const auto qt_button = static_cast<Qt::MouseButton>(button);
+  const auto    qt_button = static_cast<Qt::MouseButton>(button);
 
   if (qt_button == Qt::LeftButton) {
-    const auto snapshot = overlaySnapshot();
-    const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
-    const auto hover = EditViewerOverlayGeometry::ComputeHover(snapshot, geometry, pos);
+    const auto             snapshot = overlaySnapshot();
+    const auto             geometry = EditViewerOverlayGeometry::Build(snapshot);
+    const auto             hover = EditViewerOverlayGeometry::ComputeHover(snapshot, geometry, pos);
     const CropPressContext press_context{pos, hover.image_uv, hover.crop_hit, hover.inside_image};
-    const auto crop_result =
+    const auto             crop_result =
         crop_interaction_controller_.HandlePress(viewer_state_, imageInfo(), press_context);
     if (crop_result.consumed) {
       applyCropInteractionResult(crop_result);
@@ -433,10 +436,10 @@ void EditorInteractionController::handleMove(qreal x, qreal y, int buttons) {
     return;
   }
   const QPointF pos(x, y);
-  const auto qt_buttons = static_cast<Qt::MouseButtons>(buttons);
+  const auto    qt_buttons  = static_cast<Qt::MouseButtons>(buttons);
 
-  const auto crop_result = crop_interaction_controller_.HandleMove(
-      viewer_state_, widgetInfo(), imageInfo(), qt_buttons, pos);
+  const auto    crop_result = crop_interaction_controller_.HandleMove(viewer_state_, widgetInfo(),
+                                                                      imageInfo(), qt_buttons, pos);
   if (crop_result.consumed) {
     applyCropInteractionResult(crop_result);
     return;
@@ -457,7 +460,7 @@ void EditorInteractionController::handleRelease(qreal x, qreal y, int button) {
     return;
   }
   const QPointF pos(x, y);
-  const auto qt_button = static_cast<Qt::MouseButton>(button);
+  const auto    qt_button = static_cast<Qt::MouseButton>(button);
 
   if (qt_button == Qt::LeftButton) {
     const auto crop_result = crop_interaction_controller_.HandleRelease(viewer_state_);
@@ -467,14 +470,14 @@ void EditorInteractionController::handleRelease(qreal x, qreal y, int button) {
   }
 
   const auto crop_state = viewer_state_.GetCropOverlay();
-  const auto result = view_transform_controller_.HandlePanRelease(
+  const auto result     = view_transform_controller_.HandlePanRelease(
       viewer_state_, crop_state.tool_enabled && crop_state.overlay_visible, qt_button, pos);
   if (result.consumed) {
     applyViewTransformResult(result);
   }
 
-  const bool request_final_detail = pointer_pan_active_ && pointer_pan_changed_ &&
-                                    zoom() > 1.0f + 1.0e-4f;
+  const bool request_final_detail =
+      pointer_pan_active_ && pointer_pan_changed_ && zoom() > 1.0f + 1.0e-4f;
   pointer_pan_active_  = false;
   pointer_pan_changed_ = false;
   if (request_final_detail) {
@@ -509,7 +512,7 @@ void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY,
     return;
   }
   const QPointF pos(x, y);
-  const auto qt_modifiers = static_cast<Qt::KeyboardModifiers>(modifiers);
+  const auto    qt_modifiers = static_cast<Qt::KeyboardModifiers>(modifiers);
 
   if ((qt_modifiers & Qt::ControlModifier) == Qt::ControlModifier) {
     interruptZoomAnimation();
@@ -567,9 +570,8 @@ void EditorInteractionController::beginViewInputSequence() {
 }
 
 void EditorInteractionController::finishViewInputSequence() {
-  const bool request_final_detail = view_input_sequence_active_ &&
-                                    view_input_sequence_changed_ &&
-                                    zoom() > 1.0f + 1.0e-4f;
+  const bool request_final_detail =
+      view_input_sequence_active_ && view_input_sequence_changed_ && zoom() > 1.0f + 1.0e-4f;
   view_input_sequence_active_  = false;
   view_input_sequence_changed_ = false;
   if (request_final_detail) {
@@ -596,10 +598,10 @@ void EditorInteractionController::zoomToActualPixels() {
   stopZoomAnimation();
   // 1:1 = zoom field 1/fitFraction. Clamp to [fit, maxField] so images that
   // already exceed 100% at fit land at fit instead of below the floor.
-  const float target_field = std::clamp(1.0f / ff, kMinInteractiveZoom, maxZoomField());
-  const QVector2D target_pan = ViewportMapper::ClampPanForZoom(
-      widgetInfo(), interactionImageInfo(), target_field, QVector2D(0.0f, 0.0f), kMinInteractiveZoom,
-      maxZoomField());
+  const float     target_field = std::clamp(1.0f / ff, kMinInteractiveZoom, maxZoomField());
+  const QVector2D target_pan =
+      ViewportMapper::ClampPanForZoom(widgetInfo(), interactionImageInfo(), target_field,
+                                      QVector2D(0.0f, 0.0f), kMinInteractiveZoom, maxZoomField());
   viewer_state_.SetViewTransform(target_field, target_pan);
   updateViewportRenderRegionCache();
   emitViewAndOverlay();
@@ -608,7 +610,7 @@ void EditorInteractionController::zoomToActualPixels() {
   // One-shot jump (no interaction ticks) routes immediately — DetailRefresh for
   // a zoomed-in 1:1 so the high-res patch renders, else a ZoomPan re-sample.
   emitViewChange(target_field > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
-                                              : ViewChangeKind::ZoomPan);
+                                               : ViewChangeKind::ZoomPan);
 }
 
 void EditorInteractionController::resetCropToFull() {
@@ -619,24 +621,24 @@ void EditorInteractionController::resetCropToFull() {
 
 QPointF EditorInteractionController::itemPointToImageUv(qreal x, qreal y) const {
   const auto view = viewer_state_.GetViewTransform();
-  float zoom = view.zoom;
-  QVector2D pan = view.pan;
+  float      zoom = view.zoom;
+  QVector2D  pan  = view.pan;
   if (presentation_mode_ == FramePresentationMode::RoiFrame) {
     zoom = 1.0f;
-    pan = QVector2D(0.0f, 0.0f);
+    pan  = QVector2D(0.0f, 0.0f);
   }
-  const auto uv = ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(),
-                                                       zoom, pan);
+  const auto uv =
+      ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(), zoom, pan);
   return uv.value_or(QPointF());
 }
 
 QPointF EditorInteractionController::imageUvToItemPoint(qreal u, qreal v) const {
   const auto view = viewer_state_.GetViewTransform();
-  float zoom = view.zoom;
-  QVector2D pan = view.pan;
+  float      zoom = view.zoom;
+  QVector2D  pan  = view.pan;
   if (presentation_mode_ == FramePresentationMode::RoiFrame) {
     zoom = 1.0f;
-    pan = QVector2D(0.0f, 0.0f);
+    pan  = QVector2D(0.0f, 0.0f);
   }
   const auto point =
       ViewportMapper::ImageUvToWidgetPoint(QPointF(u, v), widgetInfo(), imageInfo(), zoom, pan);
@@ -645,11 +647,11 @@ QPointF EditorInteractionController::imageUvToItemPoint(qreal u, qreal v) const 
 
 bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const {
   const auto view = viewer_state_.GetViewTransform();
-  float zoom = view.zoom;
-  QVector2D pan = view.pan;
+  float      zoom = view.zoom;
+  QVector2D  pan  = view.pan;
   if (presentation_mode_ == FramePresentationMode::RoiFrame) {
     zoom = 1.0f;
-    pan = QVector2D(0.0f, 0.0f);
+    pan  = QVector2D(0.0f, 0.0f);
   }
   return ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(), zoom, pan)
       .has_value();
@@ -657,12 +659,12 @@ bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const
 
 auto EditorInteractionController::overlaySnapshot() const -> EditViewerOverlaySnapshot {
   EditViewerOverlaySnapshot snapshot;
-  snapshot.viewer_state = viewer_state_.Snapshot();
-  snapshot.widget_info = widget_info_;
-  snapshot.image_info = image_info_;
-  snapshot.presentation_mode = presentation_mode_;
+  snapshot.viewer_state       = viewer_state_.Snapshot();
+  snapshot.widget_info        = widget_info_;
+  snapshot.image_info         = image_info_;
+  snapshot.presentation_mode  = presentation_mode_;
   snapshot.detail_roi_visible = detail_roi_visible_;
-  snapshot.detail_roi_uv = detail_roi_uv_;
+  snapshot.detail_roi_uv      = detail_roi_uv_;
   return snapshot;
 }
 
@@ -672,9 +674,9 @@ auto EditorInteractionController::overlayGeometry() const -> CropOverlayWidgetGe
 
 auto EditorInteractionController::viewerViewState() const -> ViewerViewState {
   ViewerViewState state;
-  state.snapshot = viewer_state_.Snapshot();
+  state.snapshot                   = viewer_state_.Snapshot();
   state.prefer_interactive_primary = state.snapshot.view_transform.zoom > 1.0f + 1.0e-4f;
-  state.allow_detail_patch = state.prefer_interactive_primary;
+  state.allow_detail_patch         = state.prefer_interactive_primary;
   return state;
 }
 
@@ -692,10 +694,10 @@ void EditorInteractionController::applyViewStateToViewport(QObject* viewportItem
 void EditorInteractionController::applyViewTransformForTest(float next_zoom, float pan_x,
                                                             float pan_y) {
   stopZoomAnimation();
-  const float clamped_zoom = std::clamp(next_zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
-  const QVector2D pan = ViewportMapper::ClampPanForZoom(
-      widgetInfo(), interactionImageInfo(), clamped_zoom, QVector2D(pan_x, pan_y),
-      kMinInteractiveZoom, kMaxInteractiveZoom);
+  const float     clamped_zoom = std::clamp(next_zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+  const QVector2D pan = ViewportMapper::ClampPanForZoom(widgetInfo(), interactionImageInfo(),
+                                                        clamped_zoom, QVector2D(pan_x, pan_y),
+                                                        kMinInteractiveZoom, kMaxInteractiveZoom);
   viewer_state_.SetViewTransform(clamped_zoom, pan);
   updateViewportRenderRegionCache();
   emitViewAndOverlay();
@@ -721,23 +723,25 @@ auto EditorInteractionController::fitFraction() const -> float {
   // round(src * crop_rect) per axis; rotation is un-baked into an axis-aligned
   // frame so it does not change the output size. A full crop rect (0,0,1,1)
   // reduces to the source, so this is safe even when no crop was ever committed.
-  const auto crop = viewer_state_.GetCropOverlay();
+  const auto        crop      = viewer_state_.GetCropOverlay();
   ViewportImageInfo effective = image_info_;
   if (!crop.overlay_visible) {
-    effective.image_width  = std::max(1, static_cast<int>(std::lround(
-        static_cast<float>(image_info_.image_width) * crop.rect.width())));
-    effective.image_height = std::max(1, static_cast<int>(std::lround(
-        static_cast<float>(image_info_.image_height) * crop.rect.height())));
+    effective.image_width =
+        std::max(1, static_cast<int>(std::lround(static_cast<float>(image_info_.image_width) *
+                                                 crop.rect.width())));
+    effective.image_height =
+        std::max(1, static_cast<int>(std::lround(static_cast<float>(image_info_.image_height) *
+                                                 crop.rect.height())));
   }
   // Letterbox scale is aspect-only, so it is identical whether computed from the
   // effective image or its 2K render reference. Use the effective image so 100%
   // is defined against the real pixels of what is actually displayed.
-  const auto  scale = ViewportMapper::ComputeLetterboxScale(widget_info_, effective);
-  const float dpr   = std::max(widget_info_.device_pixel_ratio, 1e-4f);
+  const auto  scale      = ViewportMapper::ComputeLetterboxScale(widget_info_, effective);
+  const float dpr        = std::max(widget_info_.device_pixel_ratio, 1e-4f);
   const float viewport_w = static_cast<float>(widget_info_.widget_width) * dpr;
   const float viewport_h = static_cast<float>(widget_info_.widget_height) * dpr;
-  const float fx = scale.x * viewport_w / static_cast<float>(effective.image_width);
-  const float fy = scale.y * viewport_h / static_cast<float>(effective.image_height);
+  const float fx         = scale.x * viewport_w / static_cast<float>(effective.image_width);
+  const float fy         = scale.y * viewport_h / static_cast<float>(effective.image_height);
   // fx and fy are equal (aspect preserved); min is robust to float rounding.
   return std::min(fx, fy);
 }
@@ -769,8 +773,9 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
     click_toggle_timer_->stop();
   }
   if (result.start_click_toggle_timer && click_toggle_timer_) {
-    const int interval =
-        QApplication::instance() ? QApplication::doubleClickInterval() : 400;
+    const int interval = QGuiApplication::styleHints()
+                             ? QGuiApplication::styleHints()->mouseDoubleClickInterval()
+                             : 400;
     click_toggle_timer_->start(interval);
   }
   applyCursor(result.cursor, result.unset_cursor);
@@ -949,7 +954,7 @@ void EditorInteractionController::reconcileViewTransformForRenderReference() {
     clamped_pan = QVector2D(0.0f, 0.0f);
   }
   const bool zoom_changed = std::abs(clamped_zoom - snapshot.view_transform.zoom) > 1.0e-5f;
-  const bool pan_changed = (clamped_pan - snapshot.view_transform.pan).lengthSquared() > 1.0e-8f;
+  const bool pan_changed  = (clamped_pan - snapshot.view_transform.pan).lengthSquared() > 1.0e-8f;
   if (!zoom_changed && !pan_changed) {
     return;
   }

@@ -8,8 +8,8 @@
 
 #include <gtest/gtest.h>
 
-#include <QGuiApplication>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QPoint>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -20,7 +20,6 @@
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
-
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -37,7 +36,7 @@
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -53,9 +52,9 @@ class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
   bool              canEditState = true;
   // Optional hang detector: if submit is re-entered while a previous submit is
   // still on the stack, set reentered=true (deadlock-class reentrancy).
-  bool              inSubmit   = false;
-  bool              reentered  = false;
-  int               submitCount = 0;
+  bool              inSubmit     = false;
+  bool              reentered    = false;
+  int               submitCount  = 0;
 
   auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
     if (inSubmit) {
@@ -116,7 +115,7 @@ auto MapToWindow(QQuickItem* item, qreal nx, qreal ny) -> QPoint {
 
 // Loads CollapsibleSection the same way EditorLookPanel does: children as
 // default-property content with bodyContentHeight set from the body column.
-constexpr char kCollapseHarness[] = R"(
+constexpr char kCollapseHarness[]       = R"(
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -236,7 +235,8 @@ TEST(EditorLookPanelInteractionTest, CollapsibleSectionBodyDoesNotOverlapHeader)
   // Reproduce: title and body content share the same origin and clip each other.
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.addImportPath(SrcQmlDir());
 
   // Register CollapsibleSection by loading from file path as a component in QML
@@ -322,7 +322,8 @@ ApplicationWindow {
     property var headerProbe: null
     property var detailSliderA: null
 }
-)").arg(sectionUrl);
+)")
+                              .arg(sectionUrl);
 
   // Declarative children of CollapsibleSection must go through its default
   // property (bodyContent). createQmlObject(parent=section) bypasses that and
@@ -421,7 +422,8 @@ ApplicationWindow {
       QStringLiteral("sectionSourceUrl"),
       QUrl::fromLocalFile(SrcQmlDir() + QStringLiteral("/CollapsibleSection.qml")));
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
 
   QStringList warnings;
   QObject::connect(&engine, &QQmlApplicationEngine::warnings, &engine,
@@ -440,8 +442,8 @@ ApplicationWindow {
 
   auto* section = window->findChild<QQuickItem*>(QStringLiteral("detailSection"));
   ASSERT_NE(section, nullptr) << warnings.join('\n').toStdString();
-  auto* header = section->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
-  auto* body   = section->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionBody"));
+  auto* header  = section->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionHeader"));
+  auto* body    = section->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionBody"));
   auto* sliderA = section->findChild<QQuickItem*>(QStringLiteral("detailSliderA"));
   ASSERT_NE(header, nullptr);
   ASSERT_NE(body, nullptr);
@@ -457,9 +459,9 @@ ApplicationWindow {
 
   // Observed failure: slider sits under the header (intersecting).
   // Expected: slider fully below header bottom.
-  const bool overlaps = headerScene.intersects(sliderScene);
-  const qreal headerBottom = headerScene.bottom();
-  const qreal sliderTop    = sliderScene.top();
+  const bool   overlaps     = headerScene.intersects(sliderScene);
+  const qreal  headerBottom = headerScene.bottom();
+  const qreal  sliderTop    = sliderScene.top();
 
   // Record the observation for the fix; the assertion encodes the product
   // requirement once the layout is corrected.
@@ -505,7 +507,7 @@ ApplicationWindow {
 )";
 
 TEST(EditorLookPanelInteractionTest, DoubleClickOnAdjustmentSliderResetsValue) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter         submitter;
   EditorAdjustmentValueModel model;
   model.setFieldKey(QStringLiteral("exposure"));
   model.setMinimum(-2);
@@ -519,7 +521,8 @@ TEST(EditorLookPanelInteractionTest, DoubleClickOnAdjustmentSliderResetsValue) {
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &model);
   engine.rootContext()->setContextProperty(
       QStringLiteral("sliderSourceUrl"),
@@ -550,7 +553,7 @@ TEST(EditorLookPanelInteractionTest, DoubleClickOnAdjustmentSliderResetsValue) {
 // ── 3. Color-temp continuous drag ───────────────────────────────────────────
 
 TEST(EditorLookPanelInteractionTest, ColorTempCctDragEmitsMultipleInteractiveUpdates) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter   submitter;
   EditorColorTempModel model;
   model.setSubmitter(&submitter);
   model.setAsShotCct(5600);
@@ -559,9 +562,9 @@ TEST(EditorLookPanelInteractionTest, ColorTempCctDragEmitsMultipleInteractiveUpd
 
   // Drive the model the way MonoSlider does during a press-drag-release.
   model.beginCctDrag();
-  const int startPos = model.cctSliderPos();
+  const int startPos    = model.cctSliderPos();
   // Simulate continuous drag across many slider positions.
-  int interactive = 0;
+  int       interactive = 0;
   for (int delta = 50; delta <= 800; delta += 50) {
     const int before = static_cast<int>(submitter.calls.size());
     model.updateCctSliderDrag(startPos + delta);
@@ -628,7 +631,7 @@ ApplicationWindow {
 )";
 
 TEST(EditorLookPanelInteractionTest, ColorTempQmlDragProducesInteractiveBurst) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter   submitter;
   EditorColorTempModel model;
   model.setSubmitter(&submitter);
   model.loadFromParams(QStringLiteral("custom"), 5600, 0, true);
@@ -636,7 +639,8 @@ TEST(EditorLookPanelInteractionTest, ColorTempQmlDragProducesInteractiveBurst) {
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(QStringLiteral("colorTempModel"), &model);
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.loadData(QByteArray(kCctSliderHarness));
   ASSERT_FALSE(engine.rootObjects().isEmpty());
   auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
@@ -655,7 +659,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempQmlDragProducesInteractiveBurst) {
   ProcessEvents(20);
   // Move in steps to simulate continuous drag.
   for (int i = 1; i <= 10; ++i) {
-    const qreal t = static_cast<qreal>(i) / 10.0;
+    const qreal  t = static_cast<qreal>(i) / 10.0;
     const QPoint p(start.x() + static_cast<int>((end.x() - start.x()) * t), start.y());
     QTest::mouseMove(window, p);
     ProcessEvents(15);
@@ -679,7 +683,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempQmlDragProducesInteractiveBurst) {
 // ── 5. CDL double-click reset reentrancy / hang ─────────────────────────────
 
 TEST(EditorLookPanelInteractionTest, CdlDoubleClickResetDoesNotReenterSubmit) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter      submitter;
   EditorCdlTrackballModel model;
   model.setSubmitter(&submitter);
 
@@ -702,7 +706,7 @@ TEST(EditorLookPanelInteractionTest, CdlDoubleClickResetDoesNotReenterSubmit) {
 
 TEST(EditorLookPanelInteractionTest, CdlItemDoubleClickResetsWithoutHang) {
   RecordingSubmitter submitter;
-  auto model = std::make_unique<EditorCdlTrackballModel>();
+  auto               model = std::make_unique<EditorCdlTrackballModel>();
   model->setSubmitter(&submitter);
   model->setWheelDisc(QStringLiteral("gamma"), 0.4, -0.2);
 
@@ -722,8 +726,8 @@ TEST(EditorLookPanelInteractionTest, CdlItemDoubleClickResetsWithoutHang) {
   ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
   ProcessEvents(50);
 
-  const QPoint pos = MapToWindow(disc, 0.5, 0.5);
-  const auto started = std::chrono::steady_clock::now();
+  const QPoint pos     = MapToWindow(disc, 0.5, 0.5);
+  const auto   started = std::chrono::steady_clock::now();
   QTest::mouseDClick(&window, Qt::LeftButton, Qt::NoModifier, pos);
   ProcessEvents(100);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -799,7 +803,7 @@ ApplicationWindow {
 )";
 
 TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlickable) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter         submitter;
   EditorAdjustmentValueModel model;
   model.setFieldKey(QStringLiteral("exposure"));
   model.setMinimum(-2);
@@ -811,7 +815,8 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &model);
   engine.rootContext()->setContextProperty(
       QStringLiteral("sliderSourceUrl"),
@@ -829,10 +834,11 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
   ASSERT_NE(scroller, nullptr);
   ASSERT_NE(handle, nullptr);
 
-  const qreal y0 = scroller->property("contentY").toReal();
+  const qreal  y0    = scroller->property("contentY").toReal();
   // Press on the handle center (value is mid-range), not the track.
   const QPoint start = MapToWindow(handle, 0.5, 0.5);
-  const QPoint end(start.x() + 80, start.y() + 30);  // diagonal: horizontal value + vertical scroll risk
+  const QPoint end(start.x() + 80,
+                   start.y() + 30);  // diagonal: horizontal value + vertical scroll risk
 
   QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
   ProcessEvents(20);
@@ -840,8 +846,8 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
       << "press should lock parent flick while the handle is grabbed";
   for (int i = 1; i <= 8; ++i) {
     const qreal t = static_cast<qreal>(i) / 8.0;
-    QPoint p(start.x() + static_cast<int>((end.x() - start.x()) * t),
-             start.y() + static_cast<int>((end.y() - start.y()) * t));
+    QPoint      p(start.x() + static_cast<int>((end.x() - start.x()) * t),
+                  start.y() + static_cast<int>((end.y() - start.y()) * t));
     QTest::mouseMove(window, p);
     ProcessEvents(15);
   }
@@ -850,7 +856,7 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
 
   const qreal y1 = scroller->property("contentY").toReal();
   EXPECT_NEAR(y1, y0, 1.0) << "Flickable contentY moved from " << y0 << " to " << y1
-                            << " while dragging the slider";
+                           << " while dragging the slider";
   // Slider should still have accepted the drag (value changed).
   EXPECT_NE(model.value(), 0.0);
   // Critical regression: unlock must restore interactive so wheel/flick still work.
@@ -862,7 +868,7 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
 TEST(EditorLookPanelInteractionTest, NestedInputLocksDoNotLeaveFlickableUninteractive) {
   // Repro for "adjust anything → wheel scroll dies": lock A saves interactive=false
   // from lock B, then A unlock restores false permanently. Refcount must survive.
-  RecordingSubmitter submitter;
+  RecordingSubmitter         submitter;
   EditorAdjustmentValueModel model;
   model.setFieldKey(QStringLiteral("exposure"));
   model.setMinimum(-2);
@@ -874,7 +880,8 @@ TEST(EditorLookPanelInteractionTest, NestedInputLocksDoNotLeaveFlickableUnintera
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &model);
   engine.rootContext()->setContextProperty(
       QStringLiteral("sliderSourceUrl"),
@@ -918,7 +925,7 @@ TEST(EditorLookPanelInteractionTest, NestedInputLocksDoNotLeaveFlickableUnintera
 // subsequent moves become no-ops — the user sees "click only, cannot drag".
 
 TEST(EditorLookPanelInteractionTest, ColorTempSnapshotReloadDuringDragKeepsDragAlive) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter   submitter;
   EditorColorTempModel model;
   model.setSubmitter(&submitter);
   model.setAsShotCct(5600);
@@ -936,7 +943,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempSnapshotReloadDuringDragKeepsDragA
   model.loadFromParams(QStringLiteral("custom"), model.cct(), model.tint(), true);
 
   EXPECT_TRUE(model.dragActive())
-      << "snapshot echo must not clear dragActive mid-gesture (click-only CCT)";
+      << "snapshot echo must not clear dragActive during the input sequence (click-only CCT)";
 
   const int calls_before = static_cast<int>(submitter.calls.size());
   model.updateCctSliderDrag(start + 600);
@@ -978,7 +985,7 @@ ApplicationWindow {
         snapMode: Slider.SnapAlways
 
         property real externalValue: colorTempModel.cctSliderPos
-        property bool _gestureMoved: false
+        property bool _inputMoved: false
         property real _pressValue: 0
         property double _lastClickMs: 0
 
@@ -990,12 +997,12 @@ ApplicationWindow {
         }
         onPressedChanged: {
             if (pressed) {
-                _gestureMoved = false
+                _inputMoved = false
                 _pressValue = value
                 colorTempModel.beginCctDrag()
             } else {
                 var now = Date.now()
-                var isDouble = !_gestureMoved
+                var isDouble = !_inputMoved
                         && (now - _lastClickMs) < 350
                         && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
                 _lastClickMs = now
@@ -1009,7 +1016,7 @@ ApplicationWindow {
             }
         }
         onMoved: {
-            _gestureMoved = true
+            _inputMoved = true
             colorTempModel.updateCctSliderDrag(Math.round(value))
         }
     }
@@ -1032,7 +1039,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempMonoSliderDragSurvivesSnapshotEcho
   };
 
   SnapshotEchoSubmitter submitter;
-  EditorColorTempModel model;
+  EditorColorTempModel  model;
   submitter.model = &model;
   model.setSubmitter(&submitter);
   model.setAsShotCct(5600);
@@ -1042,7 +1049,8 @@ TEST(EditorLookPanelInteractionTest, ColorTempMonoSliderDragSurvivesSnapshotEcho
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(QStringLiteral("colorTempModel"), &model);
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.loadData(QByteArray(kProductionMonoCctHarness));
   ASSERT_FALSE(engine.rootObjects().isEmpty());
   auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
@@ -1060,7 +1068,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempMonoSliderDragSurvivesSnapshotEcho
   ProcessEvents(20);
   for (int i = 1; i <= 12; ++i) {
     const qreal t = static_cast<qreal>(i) / 12.0;
-    QPoint p(start.x() + static_cast<int>((end.x() - start.x()) * t), start.y());
+    QPoint      p(start.x() + static_cast<int>((end.x() - start.x()) * t), start.y());
     QTest::mouseMove(window, p);
     ProcessEvents(12);
   }
@@ -1073,14 +1081,14 @@ TEST(EditorLookPanelInteractionTest, ColorTempMonoSliderDragSurvivesSnapshotEcho
       ++interactive;
     }
   }
-  EXPECT_GE(interactive, 4) << "production MonoSlider + snapshot echo interactive="
-                            << interactive << " total=" << submitter.calls.size();
+  EXPECT_GE(interactive, 4) << "production MonoSlider + snapshot echo interactive=" << interactive
+                            << " total=" << submitter.calls.size();
   EXPECT_EQ(submitter.settledCount(), 1);
   EXPECT_EQ(model.modeIndex(), 1);
 }
 
 TEST(EditorLookPanelInteractionTest, ColorTempDoubleClickResetMovesSliderToAsShotPos) {
-  RecordingSubmitter submitter;
+  RecordingSubmitter   submitter;
   EditorColorTempModel model;
   model.setSubmitter(&submitter);
   model.setAsShotCct(5200);
@@ -1090,7 +1098,8 @@ TEST(EditorLookPanelInteractionTest, ColorTempDoubleClickResetMovesSliderToAsSho
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(QStringLiteral("colorTempModel"), &model);
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.loadData(QByteArray(kProductionMonoCctHarness));
   ASSERT_FALSE(engine.rootObjects().isEmpty());
   auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
@@ -1105,8 +1114,8 @@ TEST(EditorLookPanelInteractionTest, ColorTempDoubleClickResetMovesSliderToAsSho
   // Confirm the handle started at the custom CCT position.
   EXPECT_NEAR(slider->property("value").toReal(), static_cast<qreal>(model.cctSliderPos()), 1.0);
 
-  const int asShotPos = color_temp::CctToSliderPos(5200.0f);
-  const QPoint pos = MapToWindow(slider, 0.5, 0.5);
+  const int    asShotPos = color_temp::CctToSliderPos(5200.0f);
+  const QPoint pos       = MapToWindow(slider, 0.5, 0.5);
   QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
   ProcessEvents(120);
 
@@ -1126,7 +1135,7 @@ TEST(EditorLookPanelInteractionTest, ColorTempDoubleClickResetMovesSliderToAsSho
 class ReentrantSnapshotSubmitter : public RecordingSubmitter {
  public:
   std::function<void(const Call&)> on_call;
-  int nestedProcessEventsMs = 5;
+  int                              nestedProcessEventsMs = 5;
 
   auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
     if (inSubmit) {
@@ -1154,13 +1163,13 @@ class ReentrantSnapshotSubmitter : public RecordingSubmitter {
 
 TEST(EditorLookPanelInteractionTest, CdlDoubleClickKeepsEventLoopResponsive) {
   ReentrantSnapshotSubmitter submitter;
-  auto model = std::make_unique<EditorCdlTrackballModel>();
+  auto                       model = std::make_unique<EditorCdlTrackballModel>();
   model->setSubmitter(&submitter);
   model->setWheelDisc(QStringLiteral("gamma"), 0.35, -0.2);
 
   // Snapshot echo on every submit (as EditorAdjustmentStack does).
   submitter.on_call = [&](const ReentrantSnapshotSubmitter::Call&) {
-    // Reload disc from "snapshot" without intending to abort the gesture.
+    // Reload disc from "snapshot" without intending to abort the active drag.
     // If the model incorrectly re-enters settle/drag from here, reentered trips.
   };
 
@@ -1223,7 +1232,8 @@ TEST(EditorLookPanelInteractionTest, AdjustmentSliderDoubleClickKeepsEventLoopRe
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &model);
   engine.rootContext()->setContextProperty(
       QStringLiteral("sliderSourceUrl"),
@@ -1256,7 +1266,8 @@ TEST(EditorLookPanelInteractionTest, AdjustmentSliderDoubleClickKeepsEventLoopRe
 TEST(EditorLookPanelInteractionTest, CollapsibleSectionSurfaceHasNoBorder) {
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(
       QStringLiteral("sectionSourceUrl"),
       QUrl::fromLocalFile(SrcQmlDir() + QStringLiteral("/CollapsibleSection.qml")));
@@ -1296,7 +1307,7 @@ ApplicationWindow {
 
   auto* chrome = window->findChild<QQuickItem*>(QStringLiteral("collapsibleSectionChrome"));
   ASSERT_NE(chrome, nullptr) << "section chrome rectangle missing objectName";
-  int width = -1;
+  int            width     = -1;
   const QVariant borderVar = chrome->property("border");
   if (auto* pen = borderVar.value<QObject*>()) {
     width = pen->property("width").toInt();
@@ -1373,7 +1384,7 @@ ApplicationWindow {
 )";
 
 TEST(EditorLookPanelInteractionTest,
-       RapidMultiSliderHandoffKeepsEventLoopResponsiveUnderSnapshotCascade) {
+     RapidMultiSliderHandoffKeepsEventLoopResponsiveUnderSnapshotCascade) {
   // Session-like submitter: every patch synchronously re-enters a snapshot
   // reload callback (old interactive echo path) and may pump the event loop.
   class CascadeSubmitter : public QObject, public IEditorAdjustmentSubmitter {
@@ -1420,7 +1431,7 @@ TEST(EditorLookPanelInteractionTest,
     auto canEdit() const -> bool override { return canEditState; }
   };
 
-  CascadeSubmitter submitter;
+  CascadeSubmitter           submitter;
   EditorAdjustmentValueModel sat;
   sat.setFieldKey(QStringLiteral("saturation"));
   sat.setMinimum(-100);
@@ -1443,7 +1454,8 @@ TEST(EditorLookPanelInteractionTest,
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty(
-      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+      QStringLiteral("appTheme"),
+      QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
   engine.rootContext()->setContextProperty(QStringLiteral("satModel"), &sat);
   engine.rootContext()->setContextProperty(QStringLiteral("vibModel"), &vib);
   engine.rootContext()->setContextProperty(
@@ -1461,14 +1473,14 @@ TEST(EditorLookPanelInteractionTest,
   auto* rootItem = window->contentItem();
   ASSERT_NE(rootItem, nullptr);
   // Access ApplicationWindow properties via root object.
-  auto* winObj = engine.rootObjects().constFirst();
+  auto* winObj      = engine.rootObjects().constFirst();
   submitter.on_each = [winObj](const CascadeSubmitter::Call&) {
     QMetaObject::invokeMethod(winObj, "loadFromSnapshotEcho");
   };
 
   auto* satHandle = window->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
   // Two sliders share the same handle objectName — find by walking parents.
-  QList<QQuickItem*> handles;
+  QList<QQuickItem*>               handles;
   std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
     if (!item) return;
     if (item->objectName() == QLatin1String("adjustmentSliderHandle")) {
@@ -1478,20 +1490,20 @@ TEST(EditorLookPanelInteractionTest,
   };
   collect(window->contentItem());
   ASSERT_EQ(handles.size(), 2) << "expected two AdjustmentSlider handles";
-  auto* handleA = handles[0];
-  auto* handleB = handles[1];
+  auto*        handleA = handles[0];
+  auto*        handleB = handles[1];
 
-  const QPoint a0 = MapToWindow(handleA, 0.2, 0.5);
-  const QPoint a1 = MapToWindow(handleA, 0.8, 0.5);
-  const QPoint b0 = MapToWindow(handleB, 0.2, 0.5);
-  const QPoint b1 = MapToWindow(handleB, 0.75, 0.5);
+  const QPoint a0      = MapToWindow(handleA, 0.2, 0.5);
+  const QPoint a1      = MapToWindow(handleA, 0.8, 0.5);
+  const QPoint b0      = MapToWindow(handleB, 0.2, 0.5);
+  const QPoint b1      = MapToWindow(handleB, 0.75, 0.5);
 
   // Drag slider A continuously, release, immediately drag slider B (handoff).
-  const auto t0 = std::chrono::steady_clock::now();
+  const auto   t0      = std::chrono::steady_clock::now();
   QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, a0);
   for (int i = 1; i <= 10; ++i) {
     const qreal t = static_cast<qreal>(i) / 10.0;
-    QPoint p(a0.x() + static_cast<int>((a1.x() - a0.x()) * t), a0.y());
+    QPoint      p(a0.x() + static_cast<int>((a1.x() - a0.x()) * t), a0.y());
     QTest::mouseMove(window, p);
     ProcessEvents(5);
   }
@@ -1500,14 +1512,14 @@ TEST(EditorLookPanelInteractionTest,
   QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, b0);
   for (int i = 1; i <= 10; ++i) {
     const qreal t = static_cast<qreal>(i) / 10.0;
-    QPoint p(b0.x() + static_cast<int>((b1.x() - b0.x()) * t), b0.y());
+    QPoint      p(b0.x() + static_cast<int>((b1.x() - b0.x()) * t), b0.y());
     QTest::mouseMove(window, p);
     ProcessEvents(5);
   }
   QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, b1);
-  const auto dragMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          std::chrono::steady_clock::now() - t0)
-                          .count();
+  const auto dragMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
+          .count();
 
   // Event loop must still service timers after the handoff sequence.
   bool timer_fired = false;
@@ -1533,7 +1545,7 @@ TEST(EditorLookPanelInteractionTest,
 }
 
 TEST(EditorLookPanelInteractionTest,
-       MultiSliderSubmitDetectsRenderLockVersusGuiHandshakeContention) {
+     MultiSliderSubmitDetectsRenderLockVersusGuiHandshakeContention) {
   // Production deadlock class (history Capture/Commit on GUI vs present):
   //   worker holds render_lock and BlockingQueuedConnection → GUI
   //   GUI submit blocks on render_lock
@@ -1548,8 +1560,8 @@ TEST(EditorLookPanelInteractionTest,
   std::atomic<bool> release_worker{false};
   std::atomic<bool> worker_saw_gui{false};
 
-  QObject gui_anchor;
-  std::thread worker([&] {
+  QObject           gui_anchor;
+  std::thread       worker([&] {
     render_lock.lock();
     worker_ready.store(true);
     // Hold the lock until the GUI-side submit has observed contention.
@@ -1612,9 +1624,8 @@ TEST(EditorLookPanelInteractionTest,
   model.updateDrag(40);
   model.finishDrag();
 
-  EXPECT_TRUE(contention.load())
-      << "expected try_lock contention while worker holds render_lock "
-         "(documents Capture/Commit vs present deadlock class)";
+  EXPECT_TRUE(contention.load()) << "expected try_lock contention while worker holds render_lock "
+                                    "(documents Capture/Commit vs present deadlock class)";
 
   bool timer_fired = false;
   QTimer::singleShot(0, [&] { timer_fired = true; });

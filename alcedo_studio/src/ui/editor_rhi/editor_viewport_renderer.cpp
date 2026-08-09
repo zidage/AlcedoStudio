@@ -4,23 +4,21 @@
 
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
-#include "ui/editor_rhi/direct_frame_sink.hpp"
-#include "ui/editor_rhi/editor_backend.hpp"
-#include "ui/editor_rhi/editor_viewport_item.hpp"
-
 #include <QDebug>
 #include <QFile>
 #include <QSize>
 #include <QString>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include "ui/edit_viewer/viewport_mapper.hpp"
-#include "ui/editor_rhi/native_resource_counters.hpp"
 
+#include "ui/edit_viewer/viewport_mapper.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/native_resource_counters.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/diagnostics/render_e2e_timing.hpp"
 
@@ -28,10 +26,10 @@ using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
 namespace {
 
-constexpr const char* kVertexShaderResource = ":/shaders/editor_rhi/editor_viewport.vert.qsb";
+constexpr const char* kVertexShaderResource   = ":/shaders/editor_rhi/editor_viewport.vert.qsb";
 constexpr const char* kFragmentShaderResource = ":/shaders/editor_rhi/editor_viewport.frag.qsb";
 
-auto BackendForRhi(QRhi* rhi) -> EditorBackend {
+auto                  BackendForRhi(QRhi* rhi) -> EditorBackend {
   if (!rhi) {
     return ActiveEditorBackend();
   }
@@ -155,7 +153,7 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
   // Drop producer-owned Metal (etc.) texture retain after QRhi wrapper is gone.
   layer.imported_owner.reset();
   layer.imported_native_handle = 0;
-  layer = {};
+  layer                        = {};
 }
 
 void EditorViewportRenderer::releaseQueuedNatives() {
@@ -208,23 +206,22 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   // before render() could fulfill it, leaving the viewport permanently black.
   if (rhi_ != next_rhi) {
     releaseResources();
-    rhi_ = next_rhi;
+    rhi_                = next_rhi;
     // Process-wide backend selected in main() is authoritative. Deriving only
     // from QRhi can silently flip CUDA↔OpenCL when setGraphicsApi did not take
     // effect, which produces host_upload frames and a black viewport.
-    const auto active = ActiveEditorBackend();
+    const auto active   = ActiveEditorBackend();
     const auto from_rhi = BackendForRhi(rhi_);
-    backend_ = active;
-    adapter_ = MakeLeaseTargetAdapter(backend_);
+    backend_            = active;
+    adapter_            = MakeLeaseTargetAdapter(backend_);
     if (active != from_rhi) {
       qCWarning(editorPresentLog,
                 "[EditorPresent] RHI/backend mismatch: active=%s rhi_inferred=%s rhi_api=%d. "
                 "Present will use active=%s; OpenCL requires OpenGL QRhi.",
                 ToString(active), ToString(from_rhi), static_cast<int>(rhi_->backend()),
                 ToString(active));
-      target_error_ =
-          std::string("RHI/backend mismatch: active=") + ToString(active) +
-          " rhi=" + ToString(from_rhi);
+      target_error_ = std::string("RHI/backend mismatch: active=") + ToString(active) +
+                      " rhi=" + ToString(from_rhi);
     }
     if (backend_ == EditorBackend::OpenCl && rhi_->backend() != QRhi::OpenGLES2) {
       qCWarning(editorPresentLog,
@@ -237,11 +234,10 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
               ToString(backend_), static_cast<int>(rhi_->backend()));
     if (item_) {
       item_->setBackendName(QString::fromUtf8(ToString(backend_)));
-      item_->setStatusText(
-          target_error_.empty()
-              ? QStringLiteral("render thread initialized (%1)")
-                    .arg(QString::fromUtf8(QtGraphicsApiName(backend_)))
-              : QString::fromStdString(target_error_));
+      item_->setStatusText(target_error_.empty()
+                               ? QStringLiteral("render thread initialized (%1)")
+                                     .arg(QString::fromUtf8(QtGraphicsApiName(backend_)))
+                               : QString::fromStdString(target_error_));
     }
   }
   content_dirty_ = true;
@@ -255,7 +251,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   }
   if (present_queue_ != item_->present_queue()) {
     present_queue_     = item_->present_queue();
-    session_epoch_  = 0;
+    session_epoch_     = 0;
     image_identity_    = 0;
     target_generation_ = 0;
     content_dirty_     = true;
@@ -263,8 +259,8 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
 
   present_queue_->SetConsumerAvailable(item_->presentationRequested());
 
-  const auto next_session_epoch = item_->sessionEpoch();
-  const auto next_image_identity   = item_->imageIdentity();
+  const auto next_session_epoch  = item_->sessionEpoch();
+  const auto next_image_identity = item_->imageIdentity();
   if (next_session_epoch != session_epoch_ || next_image_identity != image_identity_) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
@@ -273,9 +269,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     if (item_->frameSink()) {
       item_->frameSink()->ClearPendingImportedFrames();
     }
-    session_epoch_ = next_session_epoch;
-    image_identity_   = next_image_identity;
-    content_dirty_    = true;
+    session_epoch_  = next_session_epoch;
+    image_identity_ = next_image_identity;
+    content_dirty_  = true;
   }
 
   if (item_->takeAdjustmentFrameRequest()) {
@@ -286,10 +282,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     // pass. Keep the currently visible primary but release stale auxiliary
     // layers before the producer starts its next frame.
     const LayerState* visible_primary = selectedPrimaryLayer();
-    auto&             interactive =
-        layers_[layerIndex(LayerId::InteractivePrimary)];
-    auto& quality = layers_[layerIndex(LayerId::QualityBase)];
-    auto& detail  = layers_[layerIndex(LayerId::DetailPatch)];
+    auto&             interactive     = layers_[layerIndex(LayerId::InteractivePrimary)];
+    auto&             quality         = layers_[layerIndex(LayerId::QualityBase)];
+    auto&             detail          = layers_[layerIndex(LayerId::DetailPatch)];
     if (visible_primary != &interactive) {
       releaseLayer(interactive);
     }
@@ -362,15 +357,14 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget*  render_tar
     }
   }
   if (!primary_sampler_) {
-    primary_sampler_ = rhi_->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
-                                        QRhiSampler::None, QRhiSampler::ClampToEdge,
-                                        QRhiSampler::ClampToEdge);
+    primary_sampler_ = rhi_->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
+                                        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     primary_sampler_->create();
   }
   if (!detail_sampler_) {
-    detail_sampler_ = rhi_->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
-                                       QRhiSampler::None, QRhiSampler::ClampToEdge,
-                                       QRhiSampler::ClampToEdge);
+    detail_sampler_ =
+        rhi_->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
+                         QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     detail_sampler_->create();
   }
   if (!uniform_buffer_) {
@@ -392,15 +386,15 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget*  render_tar
         VertexData{{-1.0f, 1.0f}, {0.0f, 0.0f}},
         VertexData{{1.0f, 1.0f}, {1.0f, 0.0f}},
     };
-    static constexpr std::array<float, 4> black = {0.0f, 0.0f, 0.0f, 1.0f};
-    auto* updates = rhi_->nextResourceUpdateBatch();
+    static constexpr std::array<float, 4> black   = {0.0f, 0.0f, 0.0f, 1.0f};
+    auto*                                 updates = rhi_->nextResourceUpdateBatch();
     updates->uploadStaticBuffer(vertex_buffer_, vertices.data());
     QByteArray data(reinterpret_cast<const char*>(black.data()), static_cast<int>(sizeof(black)));
     QRhiTextureSubresourceUploadDescription description(data);
     description.setDataStride(static_cast<quint32>(sizeof(black)));
     description.setSourceSize(QSize(1, 1));
-    updates->uploadTexture(
-        placeholder_texture_, QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
+    updates->uploadTexture(placeholder_texture_,
+                           QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
     command_buffer->resourceUpdate(updates);
     static_upload_pending_ = false;
   }
@@ -414,9 +408,10 @@ void EditorViewportRenderer::fulfillTargetRequests() {
   if (requests.empty()) {
     return;
   }
-  qCDebug(editorPresentLog, "[EditorPresent] fulfilling %zu target request(s), image=%llu epoch=%llu",
-        requests.size(), static_cast<unsigned long long>(image_identity_),
-        static_cast<unsigned long long>(session_epoch_));
+  qCDebug(editorPresentLog,
+          "[EditorPresent] fulfilling %zu target request(s), image=%llu epoch=%llu",
+          requests.size(), static_cast<unsigned long long>(image_identity_),
+          static_cast<unsigned long long>(session_epoch_));
 
   if (target_generation_ == 0) {
     present_queue_->InvalidateTargetGeneration();
@@ -442,9 +437,9 @@ void EditorViewportRenderer::fulfillTargetRequests() {
 
   for (const auto& request : unique) {
     // Match the proven QRhiWidget path: allocate the selected slot lazily.
-    auto prepare = present_queue_->PrepareWrite(request.width, request.height, session_epoch_,
-                                                image_identity_);
-    int slot_index = prepare.slot_index;
+    auto prepare    = present_queue_->PrepareWrite(request.width, request.height, session_epoch_,
+                                                   image_identity_);
+    int  slot_index = prepare.slot_index;
     if (slot_index < 0) {
       slot_index = request.preferred_slot >= 0 ? request.preferred_slot : 0;
     }
@@ -460,8 +455,8 @@ void EditorViewportRenderer::fulfillTargetRequests() {
                                         RoleToLeaseLayer(request.frame_role));
     if (!lease.has_value()) {
       target_error_ = adapter_->lastError();
-      qCWarning(editorPresentLog, "[EditorPresent] target allocation failed %dx%d: %s", request.width, request.height,
-               target_error_.c_str());
+      qCWarning(editorPresentLog, "[EditorPresent] target allocation failed %dx%d: %s",
+                request.width, request.height, target_error_.c_str());
       present_queue_->FailSizeRequest(request);
       if (item_) {
         item_->setStatusText(QString::fromStdString(target_error_));
@@ -470,14 +465,14 @@ void EditorViewportRenderer::fulfillTargetRequests() {
     }
 
     DirectPresentQueue::SlotNative native;
-    native.backend = lease->backend;
-    native.handle_kind = lease->handle_kind;
-    native.writable_kind = lease->writable_kind;
-    native.native_handle = lease->native_handle;
+    native.backend           = lease->backend;
+    native.handle_kind       = lease->handle_kind;
+    native.writable_kind     = lease->writable_kind;
+    native.native_handle     = lease->native_handle;
     native.writable_resource = lease->writable_resource;
-    native.sync_object = lease->sync_object;
-    native.sync_value = lease->sync_value;
-    native.adapter_cookie = lease->native_handle;
+    native.sync_object       = lease->sync_object;
+    native.sync_value        = lease->sync_value;
+    native.adapter_cookie    = lease->native_handle;
 
     if (!present_queue_->PublishCreatedSlot(slot_index, request.width, request.height, native,
                                             session_epoch_, image_identity_)) {
@@ -491,15 +486,16 @@ void EditorViewportRenderer::fulfillTargetRequests() {
         }
       }
       if (!published) {
-        qCWarning(editorPresentLog, "[EditorPresent] queue rejected target %dx%d", request.width, request.height);
+        qCWarning(editorPresentLog, "[EditorPresent] queue rejected target %dx%d", request.width,
+                  request.height);
         adapter_->DestroyTarget(*lease);
         present_queue_->FailSizeRequest(request);
         continue;
       }
     }
     owned_natives_.push_back(*lease);
-    qCDebug(editorPresentLog, "[EditorPresent] published native target %dx%d slot=%d", request.width, request.height,
-          slot_index);
+    qCDebug(editorPresentLog, "[EditorPresent] published native target %dx%d slot=%d",
+            request.width, request.height, slot_index);
     target_error_.clear();
     content_dirty_ = true;
   }
@@ -519,17 +515,18 @@ void EditorViewportRenderer::consumeDirectFrames() {
     }
     const std::uint64_t request_id = frame->slot.preview_metadata.presentation_request_id;
     diag::NoteRenderE2eConsumeBegin(request_id);
-    qCDebug(editorPresentLog, "[EditorPresent] consuming frame request=%llu image=%llu epoch=%llu size=%dx%d",
-          static_cast<unsigned long long>(request_id),
-          static_cast<unsigned long long>(frame->slot.image_identity),
-          static_cast<unsigned long long>(frame->slot.session_epoch), frame->slot.width,
-           frame->slot.height);
+    qCDebug(editorPresentLog,
+            "[EditorPresent] consuming frame request=%llu image=%llu epoch=%llu size=%dx%d",
+            static_cast<unsigned long long>(request_id),
+            static_cast<unsigned long long>(frame->slot.image_identity),
+            static_cast<unsigned long long>(frame->slot.session_epoch), frame->slot.width,
+            frame->slot.height);
     if (role == FrameRole::DetailPatch) {
-      qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-import-begin] request="
-          << frame->slot.preview_metadata.presentation_request_id
-          << " slot=" << frame->slot.index << " size=" << frame->slot.width << 'x'
-          << frame->slot.height << " native=" << frame->slot.native.native_handle;
+      qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-import-begin] request="
+                                << frame->slot.preview_metadata.presentation_request_id
+                                << " slot=" << frame->slot.index << " size=" << frame->slot.width
+                                << 'x' << frame->slot.height
+                                << " native=" << frame->slot.native.native_handle;
     }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
@@ -538,19 +535,19 @@ void EditorViewportRenderer::consumeDirectFrames() {
         rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame->slot.width, frame->slot.height), 1);
     if (!texture ||
         !texture->createFrom({static_cast<quint64>(frame->slot.native.native_handle), 0})) {
-      qCWarning(editorPresentLog, "[EditorPresent] QRhi import failed for request=%llu handle=%llu",
-               static_cast<unsigned long long>(
-                   frame->slot.preview_metadata.presentation_request_id),
-               static_cast<unsigned long long>(frame->slot.native.native_handle));
+      qCWarning(
+          editorPresentLog, "[EditorPresent] QRhi import failed for request=%llu handle=%llu",
+          static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
+          static_cast<unsigned long long>(frame->slot.native.native_handle));
       diag::NoteRenderE2eTerminal(frame->slot.preview_metadata.presentation_request_id,
                                   "qrhi-import-failed");
       destroyResource(texture);
       present_queue_->CompleteRendererRead(frame->slot.index);
       if (role == FrameRole::DetailPatch) {
-        qCDebug(editorPresentLog)
-      << "[ROI_TRACE][renderer-drop] request="
-            << frame->slot.preview_metadata.presentation_request_id
-            << " reason=qrhi-import-failed native=" << frame->slot.native.native_handle;
+        qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-drop] request="
+                                  << frame->slot.preview_metadata.presentation_request_id
+                                  << " reason=qrhi-import-failed native="
+                                  << frame->slot.native.native_handle;
       }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import a completed native frame"));
@@ -558,27 +555,27 @@ void EditorViewportRenderer::consumeDirectFrames() {
       continue;
     }
     // Keep imported-resource state explicit, matching the proven
-    // RhiEditViewerSurface path. D3D11/OpenGL use layout 0.
+    // D3D11/OpenGL use layout 0.
     texture->setNativeLayout(0);
-    layer.texture = texture;
-    layer.width = frame->slot.width;
-    layer.height = frame->slot.height;
-    layer.imported = true;
-    layer.valid = true;
+    layer.texture    = texture;
+    layer.width      = frame->slot.width;
+    layer.height     = frame->slot.height;
+    layer.imported   = true;
+    layer.valid      = true;
     layer.slot_index = frame->slot.index;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     layer.presentation_mode = frame->slot.presentation_mode;
-    layer.preview_metadata = frame->slot.preview_metadata;
-    layer.ready_frame = *frame;
+    layer.preview_metadata  = frame->slot.preview_metadata;
+    layer.ready_frame       = *frame;
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
-    content_dirty_ = true;
+    content_dirty_               = true;
     diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
-      qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-imported] request="
-          << layer.preview_metadata.presentation_request_id << " slot=" << layer.slot_index
-          << " size=" << layer.width << 'x' << layer.height;
+      qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-imported] request="
+                                << layer.preview_metadata.presentation_request_id
+                                << " slot=" << layer.slot_index << " size=" << layer.width << 'x'
+                                << layer.height;
     }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
@@ -592,8 +589,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
   if (!rhi_ || !item_ || !item_->frameSink()) {
     return;
   }
-  auto pending =
-      item_->frameSink()->DrainPendingImportedFrames(session_epoch_, image_identity_);
+  auto pending = item_->frameSink()->DrainPendingImportedFrames(session_epoch_, image_identity_);
   for (auto& frame : pending) {
     if (!frame.valid()) {
       continue;
@@ -601,17 +597,18 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     const FrameRole     role       = frame.preview_metadata.frame_role;
     const std::uint64_t request_id = frame.preview_metadata.presentation_request_id;
     diag::NoteRenderE2eConsumeBegin(request_id);
-    qCDebug(editorPresentLog, "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
-          "size=%dx%d handle=%llu",
-          static_cast<unsigned long long>(request_id),
-          static_cast<unsigned long long>(frame.image_identity),
-          static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
-           static_cast<unsigned long long>(frame.texture_handle));
+    qCDebug(editorPresentLog,
+            "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
+            "size=%dx%d handle=%llu",
+            static_cast<unsigned long long>(request_id),
+            static_cast<unsigned long long>(frame.image_identity),
+            static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
+            static_cast<unsigned long long>(frame.texture_handle));
     if (role == FrameRole::DetailPatch) {
-      qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-metal-import-begin] request="
-          << frame.preview_metadata.presentation_request_id << " size=" << frame.width << 'x'
-          << frame.height << " native=" << frame.texture_handle;
+      qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-import-begin] request="
+                                << frame.preview_metadata.presentation_request_id
+                                << " size=" << frame.width << 'x' << frame.height
+                                << " native=" << frame.texture_handle;
     }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
@@ -619,80 +616,77 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     // metadata/owner only (zero-copy path can re-submit the same MTLTexture).
     if (layer.valid && layer.texture && layer.imported_native_handle == frame.texture_handle &&
         layer.width == frame.width && layer.height == frame.height) {
-      layer.imported_owner = std::move(frame.owner);
-      layer.presentation_mode = frame.presentation_mode;
-      layer.preview_metadata = frame.preview_metadata;
-      layer.ready_frame = {};
-      layer.ready_frame.slot.width = frame.width;
-      layer.ready_frame.slot.height = frame.height;
+      layer.imported_owner                     = std::move(frame.owner);
+      layer.presentation_mode                  = frame.presentation_mode;
+      layer.preview_metadata                   = frame.preview_metadata;
+      layer.ready_frame                        = {};
+      layer.ready_frame.slot.width             = frame.width;
+      layer.ready_frame.slot.height            = frame.height;
       layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
-      layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
-      layer.ready_frame.slot.session_epoch = frame.session_epoch;
-      layer.ready_frame.slot.image_identity = frame.image_identity;
-      layer.ready_frame.slot.sequence = frame.sequence;
+      layer.ready_frame.slot.preview_metadata  = frame.preview_metadata;
+      layer.ready_frame.slot.session_epoch     = frame.session_epoch;
+      layer.ready_frame.slot.image_identity    = frame.image_identity;
+      layer.ready_frame.slot.sequence          = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
       diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
       if (role == FrameRole::DetailPatch) {
-        qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-metal-reused] request="
-            << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
-            << layer.height;
+        qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-reused] request="
+                                  << layer.preview_metadata.presentation_request_id
+                                  << " size=" << layer.width << 'x' << layer.height;
       }
       continue;
     }
 
     releaseLayer(layer);
-    auto* texture =
-        rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);
+    auto* texture = rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);
     if (!texture ||
-        !texture->createFrom(
-            {static_cast<quint64>(frame.texture_handle), frame.native_layout})) {
-      qCWarning(editorPresentLog, "[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
-               static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
-               static_cast<unsigned long long>(frame.texture_handle));
+        !texture->createFrom({static_cast<quint64>(frame.texture_handle), frame.native_layout})) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
+                static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
+                static_cast<unsigned long long>(frame.texture_handle));
       diag::NoteRenderE2eTerminal(frame.preview_metadata.presentation_request_id,
                                   "metal-qrhi-import-failed");
       destroyResource(texture);
       if (role == FrameRole::DetailPatch) {
-        qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-drop] request="
-            << frame.preview_metadata.presentation_request_id
-            << " reason=metal-qrhi-import-failed native=" << frame.texture_handle;
+        qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-drop] request="
+                                  << frame.preview_metadata.presentation_request_id
+                                  << " reason=metal-qrhi-import-failed native="
+                                  << frame.texture_handle;
       }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import Metal frame (zero-copy)"));
       }
       continue;
     }
-    // Match RhiEditViewerSurface::ensureImportedTexture: keep layout explicit.
+    // Keep the imported texture layout explicit.
     texture->setNativeLayout(frame.native_layout);
-    layer.texture = texture;
-    layer.width = frame.width;
-    layer.height = frame.height;
-    layer.imported = true;
-    layer.valid = true;
-    layer.slot_index = -1;  // producer-owned; not a DirectPresentQueue slot
-    layer.imported_owner = std::move(frame.owner);
-    layer.imported_native_handle = frame.texture_handle;
-    layer.presentation_mode = frame.presentation_mode;
-    layer.preview_metadata = frame.preview_metadata;
-    layer.ready_frame = {};
-    layer.ready_frame.slot.width = frame.width;
-    layer.ready_frame.slot.height = frame.height;
+    layer.texture                            = texture;
+    layer.width                              = frame.width;
+    layer.height                             = frame.height;
+    layer.imported                           = true;
+    layer.valid                              = true;
+    layer.slot_index                         = -1;  // producer-owned; not a DirectPresentQueue slot
+    layer.imported_owner                     = std::move(frame.owner);
+    layer.imported_native_handle             = frame.texture_handle;
+    layer.presentation_mode                  = frame.presentation_mode;
+    layer.preview_metadata                   = frame.preview_metadata;
+    layer.ready_frame                        = {};
+    layer.ready_frame.slot.width             = frame.width;
+    layer.ready_frame.slot.height            = frame.height;
     layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
-    layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
-    layer.ready_frame.slot.session_epoch = frame.session_epoch;
-    layer.ready_frame.slot.image_identity = frame.image_identity;
-    layer.ready_frame.slot.sequence = frame.sequence;
+    layer.ready_frame.slot.preview_metadata  = frame.preview_metadata;
+    layer.ready_frame.slot.session_epoch     = frame.session_epoch;
+    layer.ready_frame.slot.image_identity    = frame.image_identity;
+    layer.ready_frame.slot.sequence          = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
     diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
-      qCDebug(editorPresentLog)
-        << "[ROI_TRACE][renderer-metal-imported] request="
-          << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
-          << layer.height;
+      qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-imported] request="
+                                << layer.preview_metadata.presentation_request_id
+                                << " size=" << layer.width << 'x' << layer.height;
     }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported Metal frame role=%1 gen=%2")
@@ -704,7 +698,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
 
 auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
   const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
-  const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
+  const auto& quality     = layers_[layerIndex(LayerId::QualityBase)];
   if (!interactive.valid && !quality.valid) {
     return nullptr;
   }
@@ -736,11 +730,10 @@ auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
   if (base.width <= 0 || base.height <= 0 || detail.width <= 0 || detail.height <= 0) {
     return false;
   }
-  const float base_aspect = static_cast<float>(base.width) / static_cast<float>(base.height);
-  const float detail_aspect =
-      static_cast<float>(detail.width) / static_cast<float>(detail.height);
-  const float roi_w = std::max(detail.preview_metadata.source_roi_norm.width, 1.0e-4f);
-  const float roi_h = std::max(detail.preview_metadata.source_roi_norm.height, 1.0e-4f);
+  const float base_aspect   = static_cast<float>(base.width) / static_cast<float>(base.height);
+  const float detail_aspect = static_cast<float>(detail.width) / static_cast<float>(detail.height);
+  const float roi_w         = std::max(detail.preview_metadata.source_roi_norm.width, 1.0e-4f);
+  const float roi_h         = std::max(detail.preview_metadata.source_roi_norm.height, 1.0e-4f);
   const float expected_aspect = base_aspect * (roi_w / roi_h);
   return std::abs(detail_aspect - expected_aspect) <= 0.15f * std::max(expected_aspect, 1.0e-3f);
 }
@@ -748,12 +741,12 @@ auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
 void EditorViewportRenderer::traceDetailDecision(
     const char* decision, const LayerState* detail, const LayerState* base,
     const std::optional<FrameRoiRect>& current_roi) const {
-  const std::uint64_t request_id = detail ? detail->preview_metadata.presentation_request_id : 0;
-  const bool          has_roi    = detail && current_roi.has_value();
-  const bool roi_changed = has_roi != last_detail_trace_has_roi_ ||
+  const std::uint64_t request_id  = detail ? detail->preview_metadata.presentation_request_id : 0;
+  const bool          has_roi     = detail && current_roi.has_value();
+  const bool          roi_changed = has_roi != last_detail_trace_has_roi_ ||
                            (has_roi && !SameRoi(*current_roi, last_detail_trace_roi_));
-  if (last_detail_trace_decision_ == decision &&
-      last_detail_trace_request_id_ == request_id && !roi_changed) {
+  if (last_detail_trace_decision_ == decision && last_detail_trace_request_id_ == request_id &&
+      !roi_changed) {
     return;
   }
   last_detail_trace_decision_   = decision;
@@ -829,9 +822,9 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
     traceDetailDecision("detail-disabled", nullptr, nullptr, std::nullopt);
     return false;
   }
-  const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
+  const auto& quality     = layers_[layerIndex(LayerId::QualityBase)];
   const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
-  const auto& detail = layers_[layerIndex(LayerId::DetailPatch)];
+  const auto& detail      = layers_[layerIndex(LayerId::DetailPatch)];
   if (!detail.valid) {
     traceDetailDecision("no-detail-layer", nullptr, nullptr, std::nullopt);
     return false;
@@ -853,7 +846,8 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   const LayerState* base = nullptr;
   if (quality.valid) {
     base = &quality;
-  } else if (interactive.valid && interactive.presentation_mode != FramePresentationMode::RoiFrame) {
+  } else if (interactive.valid &&
+             interactive.presentation_mode != FramePresentationMode::RoiFrame) {
     base = &interactive;
   }
   if (!base /*|| !detailPatchAspectOk(detail, *base)*/) {
@@ -885,7 +879,7 @@ void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiT
   destroyResource(shader_resource_bindings_);
   if (!rhi_ || !uniform_buffer_ || !primary_sampler_ || !detail_sampler_ || !primary || !detail) {
     bound_primary_texture_ = nullptr;
-    bound_detail_texture_ = nullptr;
+    bound_detail_texture_  = nullptr;
     return;
   }
   shader_resource_bindings_ = rhi_->newShaderResourceBindings();
@@ -906,7 +900,7 @@ void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiT
   // bindings. Rebuilding it for every triple-buffer slot rotation was pure
   // render-thread overhead during slider drags.
   bound_primary_texture_ = primary;
-  bound_detail_texture_ = detail;
+  bound_detail_texture_  = detail;
 }
 
 void EditorViewportRenderer::publishDiagnosticsIfChanged() {
@@ -931,12 +925,12 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   consumeDirectFrames();
   consumeImportedGpuFrames();
   ensureStaticResources(render_target, command_buffer);
-  auto* updates = rhi_->nextResourceUpdateBatch();
+  auto*        updates       = rhi_->nextResourceUpdateBatch();
 
-  const auto* primary_layer = selectedPrimaryLayer();
-  const auto* detail_layer = selectedDetailLayer();
-  QRhiTexture* primary = primary_layer ? primary_layer->texture : placeholder_texture_;
-  QRhiTexture* detail = detail_layer ? detail_layer->texture : placeholder_texture_;
+  const auto*  primary_layer = selectedPrimaryLayer();
+  const auto*  detail_layer  = selectedDetailLayer();
+  QRhiTexture* primary       = primary_layer ? primary_layer->texture : placeholder_texture_;
+  QRhiTexture* detail        = detail_layer ? detail_layer->texture : placeholder_texture_;
   if (primary != bound_primary_texture_ || detail != bound_detail_texture_ ||
       !shader_resource_bindings_) {
     recreateShaderResources(primary, detail);
@@ -973,21 +967,21 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     uniform.scale_zoom[0] = scale.x;
     uniform.scale_zoom[1] = scale.y;
     uniform.scale_zoom[2] = view_state_.snapshot.view_transform.zoom;
-    uniform.pan_mode[0] = view_state_.snapshot.view_transform.pan.x();
-    uniform.pan_mode[1] = view_state_.snapshot.view_transform.pan.y();
+    uniform.pan_mode[0]   = view_state_.snapshot.view_transform.pan.x();
+    uniform.pan_mode[1]   = view_state_.snapshot.view_transform.pan.y();
     if (primary_layer->presentation_mode == FramePresentationMode::RoiFrame) {
       uniform.scale_zoom[2] = 1.0f;
-      uniform.pan_mode[0] = 0.0f;
-      uniform.pan_mode[1] = 0.0f;
-      uniform.pan_mode[2] = 1.0f;
+      uniform.pan_mode[0]   = 0.0f;
+      uniform.pan_mode[1]   = 0.0f;
+      uniform.pan_mode[2]   = 1.0f;
     }
   }
   if (detail_layer) {
-    const auto& roi = detail_layer->preview_metadata.source_roi_norm;
-    uniform.detail_roi[0] = roi.x;
-    uniform.detail_roi[1] = roi.y;
-    uniform.detail_roi[2] = roi.width;
-    uniform.detail_roi[3] = roi.height;
+    const auto& roi         = detail_layer->preview_metadata.source_roi_norm;
+    uniform.detail_roi[0]   = roi.x;
+    uniform.detail_roi[1]   = roi.y;
+    uniform.detail_roi[2]   = roi.width;
+    uniform.detail_roi[3]   = roi.height;
     uniform.detail_flags[0] = 1.0f;
   }
   if (uniform_buffer_) {
@@ -999,7 +993,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
       primary_layer && pipeline_ && shader_resource_bindings_ && vertex_buffer_;
   if (drew_primary) {
     const QRhiCommandBuffer::VertexInput vertex_input[] = {{vertex_buffer_, 0}};
-    const QSize size = render_target->pixelSize();
+    const QSize                          size           = render_target->pixelSize();
     command_buffer->setGraphicsPipeline(pipeline_);
     command_buffer->setViewport(QRhiViewport(0, 0, size.width(), size.height()));
     command_buffer->setShaderResources(shader_resource_bindings_);

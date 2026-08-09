@@ -7,9 +7,9 @@
 // operator-shaped params JSON that matches curve::CurveControlPointsToParams /
 // pipeline ParamsForField(Curve). No QML or GPU.
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
+
+#include <gtest/gtest.h>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,12 +19,12 @@
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <memory>
 #include <vector>
+
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -73,10 +73,10 @@ auto MakeCurveModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorToneCurveM
 }
 
 auto ParsePoints(const QString& params) -> std::vector<QPointF> {
-  const auto  doc  = QJsonDocument::fromJson(params.toUtf8());
-  const auto  root = doc.object();
-  const auto  curve = root.value(QStringLiteral("curve")).toObject();
-  const auto  arr  = curve.value(QStringLiteral("points")).toArray();
+  const auto           doc   = QJsonDocument::fromJson(params.toUtf8());
+  const auto           root  = doc.object();
+  const auto           curve = root.value(QStringLiteral("curve")).toObject();
+  const auto           arr   = curve.value(QStringLiteral("points")).toArray();
   std::vector<QPointF> points;
   for (const auto& v : arr) {
     const auto o = v.toObject();
@@ -137,7 +137,7 @@ TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
   RecordingSubmitter sub;
   auto               model = MakeCurveModel(sub);
 
-  const int idx = model->insertPoint(0.5, 0.35);
+  const int          idx   = model->insertPoint(0.5, 0.35);
   ASSERT_GE(idx, 0);
   EXPECT_EQ(model->pointCount(), 3);
   EXPECT_TRUE(model->dragActive());
@@ -175,8 +175,8 @@ TEST(EditorToneCurveModelTest, ResetRestoresDefaultAndCommitsOnce) {
 
   model->reset();
   EXPECT_EQ(model->pointCount(), 2);
-  EXPECT_TRUE(curve::CurveControlPointsEqual(model->controlPoints(),
-                                              curve::DefaultCurveControlPoints()));
+  EXPECT_TRUE(
+      curve::CurveControlPointsEqual(model->controlPoints(), curve::DefaultCurveControlPoints()));
   EXPECT_EQ(sub.settledCount(), 1);
   // Second reset is a no-op (already default).
   model->reset();

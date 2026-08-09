@@ -7,16 +7,7 @@
 // settled commit per completed drag, load-only setters, and canEdit gating.
 // No QML / GPU.
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
-#include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
-
-#include "edit/operators/color/vibrance_op.hpp"
-#include "edit/operators/color/HLS_op.hpp"
-#include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
-#include "ui/alcedo_main/editor_dialog/modules/hls.hpp"
+#include <gtest/gtest.h>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -24,12 +15,19 @@
 #include <QSignalSpy>
 #include <QString>
 #include <QVariantList>
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <memory>
 #include <vector>
+
+#include "edit/operators/color/HLS_op.hpp"
+#include "edit/operators/color/vibrance_op.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
+#include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
+#include "ui/alcedo_main/editor_support/modules/hls.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -80,7 +78,7 @@ auto ParseObject(const QString& params) -> QJsonObject {
 // ── Color temperature ───────────────────────────────────────────────────────
 
 TEST(EditorLookModelTest, ColorTempDefaultParamsMatchOperatorShape) {
-  RecordingSubmitter sub;
+  RecordingSubmitter   sub;
   EditorColorTempModel model;
   model.setSubmitter(&sub);
 
@@ -96,7 +94,7 @@ TEST(EditorLookModelTest, ColorTempDefaultParamsMatchOperatorShape) {
 }
 
 TEST(EditorLookModelTest, ColorTempCctDragPromotesToCustomAndSettlesOnce) {
-  RecordingSubmitter sub;
+  RecordingSubmitter   sub;
   EditorColorTempModel model;
   model.setSubmitter(&sub);
   model.setAsShotCct(5600.0);
@@ -114,14 +112,15 @@ TEST(EditorLookModelTest, ColorTempCctDragPromotesToCustomAndSettlesOnce) {
   EXPECT_GE(sub.interactiveCount(), 1);
   EXPECT_EQ(sub.settledCount(), 1);
 
-  const auto ct = ParseObject(sub.lastSettledParams()).value(QStringLiteral("color_temp")).toObject();
+  const auto ct =
+      ParseObject(sub.lastSettledParams()).value(QStringLiteral("color_temp")).toObject();
   EXPECT_EQ(ct.value(QStringLiteral("mode")).toString(), QStringLiteral("custom"));
   EXPECT_NEAR(ct.value(QStringLiteral("custom_cct")).toDouble(), 6400.0, 1e-3);
   EXPECT_NEAR(ct.value(QStringLiteral("as_shot_cct")).toDouble(), 5600.0, 1e-3);
 }
 
 TEST(EditorLookModelTest, ColorTempLoadFromOperatorParamsUsesGetParamsKeys) {
-  RecordingSubmitter sub;
+  RecordingSubmitter   sub;
   EditorColorTempModel model;
   model.setSubmitter(&sub);
 
@@ -159,7 +158,7 @@ TEST(EditorLookModelTest, ColorTempLoadFromOperatorParamsUsesGetParamsKeys) {
 }
 
 TEST(EditorLookModelTest, ColorTempResetRestoresAsShotAndCommits) {
-  RecordingSubmitter sub;
+  RecordingSubmitter   sub;
   EditorColorTempModel model;
   model.setSubmitter(&sub);
   model.setAsShotCct(5000.0);
@@ -176,7 +175,7 @@ TEST(EditorLookModelTest, ColorTempResetRestoresAsShotAndCommits) {
 }
 
 TEST(EditorLookModelTest, ColorTempLoadOnlyDoesNotSubmit) {
-  RecordingSubmitter sub;
+  RecordingSubmitter   sub;
   EditorColorTempModel model;
   model.setSubmitter(&sub);
   model.loadFromParams(QStringLiteral("custom"), 4500.0, 12.0, true);
@@ -200,7 +199,7 @@ TEST(EditorLookModelTest, ColorTempCanEditFalseDropsSubmits) {
 
 TEST(EditorLookModelTest, HlsDefaultParamsMatchOperatorShape) {
   RecordingSubmitter sub;
-  EditorHlsModel model;
+  EditorHlsModel     model;
   model.setSubmitter(&sub);
 
   const auto root = ParseObject(model.paramsJson());
@@ -217,7 +216,7 @@ TEST(EditorLookModelTest, HlsDefaultParamsMatchOperatorShape) {
 
 TEST(EditorLookModelTest, HlsHueSwatchSwitchDoesNotSubmit) {
   RecordingSubmitter sub;
-  EditorHlsModel model;
+  EditorHlsModel     model;
   model.setSubmitter(&sub);
   model.beginHueShiftDrag();
   model.updateHueShiftDrag(10.0);
@@ -232,7 +231,7 @@ TEST(EditorLookModelTest, HlsHueSwatchSwitchDoesNotSubmit) {
 
 TEST(EditorLookModelTest, HlsProfilePersistsAcrossHueSwitch) {
   RecordingSubmitter sub;
-  EditorHlsModel model;
+  EditorHlsModel     model;
   model.setSubmitter(&sub);
 
   model.beginChromaDrag();
@@ -245,7 +244,7 @@ TEST(EditorLookModelTest, HlsProfilePersistsAcrossHueSwitch) {
 
 TEST(EditorLookModelTest, HlsDragSubmitsInteractiveThenOneSettled) {
   RecordingSubmitter sub;
-  EditorHlsModel model;
+  EditorHlsModel     model;
   model.setSubmitter(&sub);
 
   model.beginLightnessDrag();
@@ -267,7 +266,7 @@ TEST(EditorLookModelTest, HlsDragSubmitsInteractiveThenOneSettled) {
 // ── CDL trackball ───────────────────────────────────────────────────────────
 
 TEST(EditorLookModelTest, CdlDefaultParamsMatchOperatorShape) {
-  RecordingSubmitter sub;
+  RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
 
@@ -285,7 +284,7 @@ TEST(EditorLookModelTest, CdlDefaultParamsMatchOperatorShape) {
 }
 
 TEST(EditorLookModelTest, CdlDiscDragInteractiveThenOneSettled) {
-  RecordingSubmitter sub;
+  RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
 
@@ -309,7 +308,7 @@ TEST(EditorLookModelTest, CdlDiscDragInteractiveThenOneSettled) {
 }
 
 TEST(EditorLookModelTest, CdlGammaMasterUiIsInverted) {
-  RecordingSubmitter sub;
+  RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
 
@@ -324,7 +323,7 @@ TEST(EditorLookModelTest, CdlGammaMasterUiIsInverted) {
 }
 
 TEST(EditorLookModelTest, CdlResetWheelSettlesOnce) {
-  RecordingSubmitter sub;
+  RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
   model.beginDiscDrag(QStringLiteral("gain"));
@@ -339,7 +338,7 @@ TEST(EditorLookModelTest, CdlResetWheelSettlesOnce) {
 }
 
 TEST(EditorLookModelTest, CdlLoadOnlyDoesNotSubmit) {
-  RecordingSubmitter sub;
+  RecordingSubmitter      sub;
   EditorCdlTrackballModel model;
   model.setSubmitter(&sub);
   model.setWheelDisc(QStringLiteral("lift"), 0.1, 0.2);
@@ -351,19 +350,18 @@ TEST(EditorLookModelTest, CdlLoadOnlyDoesNotSubmit) {
 // ── LUT catalog ─────────────────────────────────────────────────────────────
 
 TEST(EditorLookModelTest, LutSelectPathCommitsOcioLmtShape) {
-  RecordingSubmitter sub;
+  RecordingSubmitter    sub;
   EditorLutCatalogModel model;
   model.setSubmitter(&sub);
 
   model.selectPath(QStringLiteral("D:/fake/look.cube"));
   EXPECT_EQ(sub.settledCount(), 1);
   const auto root = ParseObject(sub.lastSettledParams());
-  EXPECT_EQ(root.value(QStringLiteral("ocio_lmt")).toString(),
-            QStringLiteral("D:/fake/look.cube"));
+  EXPECT_EQ(root.value(QStringLiteral("ocio_lmt")).toString(), QStringLiteral("D:/fake/look.cube"));
 }
 
 TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {
-  RecordingSubmitter sub;
+  RecordingSubmitter    sub;
   EditorLutCatalogModel model;
   model.setSubmitter(&sub);
   model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
@@ -372,7 +370,7 @@ TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {
 }
 
 TEST(EditorLookModelTest, LutClearSelectionCommitsEmptyPath) {
-  RecordingSubmitter sub;
+  RecordingSubmitter    sub;
   EditorLutCatalogModel model;
   model.setSubmitter(&sub);
   model.setSelectedPath(QStringLiteral("D:/fake/a.cube"));
@@ -386,8 +384,8 @@ TEST(EditorLookModelTest, LutSelectPathDoesNotEmitEntriesChanged) {
   // on every click forces QML ListViews to reset contentY and pin the selected
   // row to the bottom of the viewport.
   EditorLutCatalogModel model;
-  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  QSignalSpy selected_spy(&model, &EditorLutCatalogModel::selectedPathChanged);
+  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  QSignalSpy            selected_spy(&model, &EditorLutCatalogModel::selectedPathChanged);
   ASSERT_TRUE(entries_spy.isValid());
   ASSERT_TRUE(selected_spy.isValid());
 
@@ -404,7 +402,7 @@ TEST(EditorLookModelTest, LutSelectPathDoesNotEmitEntriesChanged) {
 
 TEST(EditorLookModelTest, LutSetSelectedPathDoesNotEmitEntriesChanged) {
   EditorLutCatalogModel model;
-  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
   model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
   EXPECT_EQ(entries_spy.count(), 0);
   EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
@@ -412,7 +410,7 @@ TEST(EditorLookModelTest, LutSetSelectedPathDoesNotEmitEntriesChanged) {
 
 TEST(EditorLookModelTest, LutFavoriteToggleRoundTripsInMemory) {
   EditorLutCatalogModel model;
-  const QString path = QStringLiteral("D:/fake/favorite.cube");
+  const QString         path = QStringLiteral("D:/fake/favorite.cube");
   EXPECT_FALSE(model.isFavoritePath(path));
   EXPECT_FALSE(model.isFavoritePath(QString()));
   EXPECT_FALSE(model.isFavoritePath(QStringLiteral("   ")));
@@ -433,7 +431,7 @@ TEST(EditorLookModelTest, LutFavoriteToggleRoundTripsInMemory) {
 
 TEST(EditorLookModelTest, LutFilterRebuildsEntriesAndEmitsEntriesChanged) {
   EditorLutCatalogModel model;
-  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
   model.setFilterText(QStringLiteral("no-match-zzzz"));
   EXPECT_GE(entries_spy.count(), 1);
   // Filter is applied; selection is independent of the filtered view size.
@@ -449,7 +447,7 @@ TEST(EditorLookModelTest, VibranceSetGetParamsPreservesUiValue) {
   // Simulate user setting vibrance to 75 on the [-100, 100] UI range:
   // the submit path sends {"vibrance": 75}. Pipeline stores via SetParams
   // (divides by 100 → internal 0.75). GetParams must scale back to 75.
-  const float kUiValue = 75.0f;
+  const float        kUiValue = 75.0f;
   alcedo::VibranceOp op;
   op.SetParams({{"vibrance", kUiValue}});
 
@@ -467,7 +465,7 @@ TEST(EditorLookModelTest, HlsOperatorSetGetParamsPreservesUiValues) {
   // Operator stores L/S internally at 1/kAdjUiToParamScale; GetParams must
   // return them unchanged. The QML panel multiplies by 1000 on load.
 
-  const auto params = nlohmann::json::parse(R"({
+  const auto    params = nlohmann::json::parse(R"({
     "HLS": {
       "hue_bins": [0, 45, 90, 135, 180, 225, 270, 315],
       "hls_adj_table": [
@@ -510,7 +508,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   // then recreate the model from the submitted params (as happens on reopen).
 
   RecordingSubmitter sub;
-  EditorHlsModel model;
+  EditorHlsModel     model;
   model.setSubmitter(&sub);
 
   // Select hue swatch 2 (candidate hue ≈ 90°)
@@ -534,7 +532,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   // Round-trip through HLSOp as the pipeline does
   alcedo::HLSOp op;
   op.SetParams(json);
-  const auto rt = op.GetParams();
+  const auto  rt     = op.GetParams();
 
   // Build UI tables from the operator output (as QML loadHlsFromSnapshot does)
   const auto& rt_hls = rt["HLS"];
@@ -563,15 +561,14 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   }
 
   // Create a fresh model and load from tables (simulates panel reload)
-  EditorHlsModel loaded;
+  EditorHlsModel     loaded;
   RecordingSubmitter dummy_sub;
   loaded.setSubmitter(&dummy_sub);
   loaded.loadFromTables(ui_table, range_table, target_hue);
 
   // The values must be preserved
   EXPECT_NEAR(loaded.lightness(), 45.0, 1.0);
-  EXPECT_EQ(loaded.activeHueIndex(), 2)
-      << "Active hue swatch should be restored from target_hls";
+  EXPECT_EQ(loaded.activeHueIndex(), 2) << "Active hue swatch should be restored from target_hls";
 }
 
 // ── HLS snapshot rebuild integration ───────────────────────────────────────
@@ -602,23 +599,22 @@ TEST(EditorLookModelTest, HlsSnapshotRebuildPreservesUiValues) {
   })";
 
   // BuildSnapshotMap logic: patch.params_json -> QJsonObject -> QVariantMap
-  QJsonParseError error;
-  const auto      doc = QJsonDocument::fromJson(
-      QByteArray::fromStdString(hls_patch_json), &error);
+  QJsonParseError   error;
+  const auto doc = QJsonDocument::fromJson(QByteArray::fromStdString(hls_patch_json), &error);
   ASSERT_EQ(error.error, QJsonParseError::NoError);
   ASSERT_TRUE(doc.isObject());
-  const auto obj = doc.object();
+  const auto obj      = doc.object();
 
-  auto snapshot = QVariantMap{};
+  auto       snapshot = QVariantMap{};
   snapshot.insert(QStringLiteral("hls"), obj.toVariantMap());
 
   // Step 2: QML loadFromSnapshot -> loadHlsFromSnapshot
-  const auto entry = snapshot.value(QStringLiteral("hls")).toMap();
-  const auto hls = entry.value(QStringLiteral("HLS")).toMap();
+  const auto   entry     = snapshot.value(QStringLiteral("hls")).toMap();
+  const auto   hls       = entry.value(QStringLiteral("HLS")).toMap();
 
   // Extract tables (matching loadHlsFromSnapshot logic)
-  const auto raw_table = hls.value(QStringLiteral("hls_adj_table")).toList();
-  const auto ranges = hls.value(QStringLiteral("h_range_table")).toList();
+  const auto   raw_table = hls.value(QStringLiteral("hls_adj_table")).toList();
+  const auto   ranges    = hls.value(QStringLiteral("h_range_table")).toList();
 
   // Multiply L/S by 1000 (kAdjUiToParamScale) as QML does
   QVariantList ui_table;
@@ -633,15 +629,15 @@ TEST(EditorLookModelTest, HlsSnapshotRebuildPreservesUiValues) {
     }
   }
 
-  double target_hue = 0.0;
-  const auto target = hls.value(QStringLiteral("target_hls")).toList();
+  double     target_hue = 0.0;
+  const auto target     = hls.value(QStringLiteral("target_hls")).toList();
   if (target.size() > 0) {
     target_hue = target[0].toDouble();
   }
 
   // Step 3: Load into a fresh HLS model
   RecordingSubmitter dummy;
-  EditorHlsModel loaded;
+  EditorHlsModel     loaded;
   loaded.setSubmitter(&dummy);
   loaded.loadFromTables(ui_table, ranges, target_hue);
 

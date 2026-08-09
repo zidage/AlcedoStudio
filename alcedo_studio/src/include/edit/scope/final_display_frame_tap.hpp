@@ -44,8 +44,6 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   auto GetWidth() const -> int override;
   auto GetHeight() const -> int override;
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> override;
-  auto GetViewerSurface() -> IEditViewerSurface* override;
-  auto GetViewerSurface() const -> const IEditViewerSurface* override;
 
  private:
   IFrameSink*                     downstream_sink_ = nullptr;
@@ -55,11 +53,11 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   FinalDisplayFrameView           scope_frame_{};
   ScopeRequest                    scope_request_{};
   FrameCompletionSubmission       bound_submission_{};
-  bool                            bound_submission_valid_ = false;
+  bool                            bound_submission_valid_  = false;
   bool                            scope_active_            = false;
   bool                            scope_analysis_deferred_ = false;
   uint64_t                        image_identity_          = 0;
-  uint64_t                        session_epoch_        = 0;
+  uint64_t                        session_epoch_           = 0;
   uint64_t                        next_frame_id_           = 1;
 };
 

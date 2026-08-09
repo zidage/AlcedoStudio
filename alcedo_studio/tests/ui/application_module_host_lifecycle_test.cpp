@@ -9,13 +9,12 @@
 #include <gtest/gtest.h>
 
 #include <QMetaProperty>
-
 #include <algorithm>
 #include <string>
 #include <vector>
 
-#include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/application_module_host.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -35,10 +34,9 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.workspace_router(), nullptr);
   }
 
-  const auto first_destroy = std::find_if(
-      events.begin(), events.end(), [](const auto& event) {
-        return event.kind == ApplicationModuleHost::LifecycleEvent::Kind::Destroyed;
-      });
+  const auto first_destroy = std::find_if(events.begin(), events.end(), [](const auto& event) {
+    return event.kind == ApplicationModuleHost::LifecycleEvent::Kind::Destroyed;
+  });
   ASSERT_NE(first_destroy, events.end());
   const auto construction_end = static_cast<size_t>(first_destroy - events.begin());
   ASSERT_GT(construction_end, 0u);
@@ -74,7 +72,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
   EXPECT_LT(index_of("ProjectDbWriteBarrier"), index_of("ImageAnalysisSink"));
   EXPECT_LT(index_of("ImageAnalysisSink"), index_of("ImageAnalysisController"));
   EXPECT_LT(index_of("ImportExportHandler"), index_of("NikonHeRecoveryController"));
-  EXPECT_LT(index_of("LibraryModule"), index_of("EditorController"));
   EXPECT_LT(index_of("ImportExportHandler"), index_of("AdjustmentTransferController"));
 
   // Live host constructs and exposes every module pointer with its concrete
@@ -89,7 +86,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.search(), nullptr);
     EXPECT_NE(host.import_export(), nullptr);
     EXPECT_NE(host.nikon_he_recovery(), nullptr);
-    EXPECT_NE(host.editor(), nullptr);
     EXPECT_NE(host.background_tasks(), nullptr);
     EXPECT_NE(host.interaction_policy(), nullptr);
     EXPECT_NE(host.model_download(), nullptr);
@@ -101,7 +97,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.workspace_router(), nullptr);
     EXPECT_FALSE(host.project()->ServiceReady());
 
-    const auto* meta = host.metaObject();
+    const auto*                                            meta           = host.metaObject();
     const std::vector<std::pair<const char*, const char*>> property_types = {
         {"project", "alcedo::ui::ProjectModule*"},
         {"library", "alcedo::ui::LibraryModule*"},
@@ -126,8 +122,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
       ASSERT_GE(index, 0) << name;
       EXPECT_STREQ(meta->property(index).typeName(), type_name) << name;
     }
-    EXPECT_LT(meta->indexOfProperty("editor"), 0)
-        << "Legacy EditorController must not be reachable from QML";
   }
 }
 
@@ -140,13 +134,13 @@ TEST_F(ApplicationModuleHostLifecycleTests, ModulesCanBeConstructedWithoutTheCom
   } status;
 
   ProjectDbWriteBarrier barrier;
-  ProjectModule project;
-  LibraryModule library(nullptr);
-  FolderController folders(nullptr, nullptr, &status);
-  ImageController images(nullptr, nullptr, nullptr, &status);
-  StatsEngine stats(nullptr, nullptr, nullptr);
-  SearchController search(nullptr, nullptr, nullptr, nullptr);
-  ImportExportHandler import_export(nullptr, nullptr, nullptr, &status, &barrier);
+  ProjectModule         project;
+  LibraryModule         library(nullptr);
+  FolderController      folders(nullptr, nullptr, &status);
+  ImageController       images(nullptr, nullptr, nullptr, &status);
+  StatsEngine           stats(nullptr, nullptr, nullptr);
+  SearchController      search(nullptr, nullptr, nullptr, nullptr);
+  ImportExportHandler   import_export(nullptr, nullptr, nullptr, &status, &barrier);
 
   EXPECT_EQ(project.parent(), nullptr);
   EXPECT_EQ(library.parent(), nullptr);

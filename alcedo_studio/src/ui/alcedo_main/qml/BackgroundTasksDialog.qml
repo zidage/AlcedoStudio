@@ -276,12 +276,12 @@ Dialog {
                     required property var task
 
                     readonly property color rowStatusColor: root.statusColor(task ? task.state : "")
-                    readonly property bool rowFailed: task && task.state === "failed"
-                    readonly property bool showProgress: task
+                    readonly property bool rowFailed: !!task && task.state === "failed"
+                    readonly property bool showProgress: !!task
                                                          && (task.state === "running"
                                                              || task.state === "canceling")
-                    readonly property bool showDetails: task && task.kind === "imageAnalysis"
-                    readonly property bool showCancel: task && task.cancelable === true
+                    readonly property bool showDetails: !!task && task.kind === "imageAnalysis"
+                    readonly property bool showCancel: !!task && task.cancelable === true
                                                        && (task.state === "running"
                                                            || task.state === "queued")
                     readonly property string progressLabel: root.progressText(task)
@@ -377,6 +377,7 @@ Dialog {
 
                             // Themed progress track — Basic ProgressBar skin is too loud here.
                             Item {
+                                id: progressTrack
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: appTheme.spaceXs + 2
                                 visible: taskRow.showProgress
@@ -386,7 +387,7 @@ Dialog {
                                         return 0
                                     return Math.max(0, Math.min(100, taskRow.task.progressPercent))
                                 }
-                                readonly property bool indeterminate: taskRow.task
+                                readonly property bool indeterminate: !!taskRow.task
                                                                        && taskRow.task.progressPercent < 0
 
                                 Rectangle {
@@ -419,7 +420,7 @@ Dialog {
                                     id: indeterminateAnim
                                     property real phase: 0
                                     running: taskRow.showProgress
-                                             && parent.indeterminate
+                                             && progressTrack.indeterminate
                                              && !appTheme.reduceMotion
                                     loops: Animation.Infinite
 

@@ -26,18 +26,15 @@ if(APPLE)
     set(ALCEDO_ENABLE_CUDA_DEFAULT OFF)
     set(ALCEDO_ENABLE_METAL_DEFAULT ON)
     set(ALCEDO_ENABLE_OPENCL_DEFAULT OFF)
-    set(ALCEDO_ENABLE_OPENGL_EDITOR_DEFAULT OFF)
 else()
     set(ALCEDO_ENABLE_CUDA_DEFAULT ON)
     set(ALCEDO_ENABLE_METAL_DEFAULT OFF)
     set(ALCEDO_ENABLE_OPENCL_DEFAULT ON)
-    set(ALCEDO_ENABLE_OPENGL_EDITOR_DEFAULT ON)
 endif()
 
 option(ALCEDO_ENABLE_CUDA "Enable CUDA-accelerated pipeline backends when CUDA is available." ${ALCEDO_ENABLE_CUDA_DEFAULT})
 option(ALCEDO_ENABLE_METAL "Enable Metal-accelerated pipeline backends when building on Apple platforms." ${ALCEDO_ENABLE_METAL_DEFAULT})
 option(ALCEDO_ENABLE_OPENCL "Enable OpenCL support when the OpenCL SDK/ICD loader is available." ${ALCEDO_ENABLE_OPENCL_DEFAULT})
-option(ALCEDO_ENABLE_OPENGL_EDITOR "Build the OpenGL-based editor UI when the required backend is available." ${ALCEDO_ENABLE_OPENGL_EDITOR_DEFAULT})
 option(ALCEDO_BUILD_CUDA_DLLS
        "Build first-party CUDA implementation targets as DLLs to reduce incremental link time."
        ${WIN32})
@@ -199,6 +196,7 @@ endif()
 set(ALCEDO_QT_COMPONENTS
     Core
     LinguistTools
+    OpenGL
     Svg
     Widgets
     Quick
@@ -347,28 +345,12 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
 
-set(ALCEDO_REAL_WIDGET_EDITOR OFF)
-set(ALCEDO_REAL_OPENGL_EDITOR OFF)
-set(ALCEDO_RHI_WIDGET_EDITOR OFF)
-if(ALCEDO_ENABLE_OPENGL_EDITOR AND ALCEDO_CUDA_ENABLED)
-    find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
-    find_package(OpenGL REQUIRED)
-    set(ALCEDO_REAL_OPENGL_EDITOR ON)
-    set(ALCEDO_REAL_WIDGET_EDITOR ON)
-    add_compile_definitions(ALCEDO_HAS_LEGACY_GL_VIEWER)
-elseif(ALCEDO_ENABLE_OPENGL_EDITOR)
-    message(STATUS "OpenGL editor requested, but no accelerated backend is available. Building editor stub only.")
-endif()
-
 if(WIN32 AND ALCEDO_OPENCL_ENABLED)
     find_package(OpenGL REQUIRED)
 endif()
 
 if((WIN32 AND (ALCEDO_CUDA_ENABLED OR ALCEDO_OPENCL_ENABLED)) OR (APPLE AND ALCEDO_METAL_ENABLED))
     find_package(Qt6 REQUIRED COMPONENTS ShaderTools GuiPrivate)
-    set(ALCEDO_RHI_WIDGET_EDITOR ON)
-    set(ALCEDO_REAL_WIDGET_EDITOR ON)
-    add_compile_definitions(ALCEDO_HAS_RHI_VIEWER)
 endif()
 
 # Profiler/hwy/lcms2

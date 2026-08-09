@@ -5,22 +5,19 @@
 /// @file main_qml_workflow_test.cpp
 /// @brief Loads the production Main.qml and verifies its real module wiring.
 
-#include "ui/album_backend_test_fixture.hpp"
-
+#include <QFont>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
-#include <QFont>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QUrl>
-
 #include <filesystem>
 #include <sstream>
 #include <vector>
 
+#include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
-#include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 
 namespace alcedo::ui::test {
@@ -29,8 +26,8 @@ namespace {
 using MainQmlWorkflowTests = ApplicationModuleHostTestFixture;
 
 auto MainQmlUrl() -> QUrl {
-  const auto path = std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml" /
-                    "Main.qml";
+  const auto path =
+      std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml" / "Main.qml";
 #ifdef _WIN32
   return QUrl::fromLocalFile(QString::fromStdWString(path.wstring()));
 #else
@@ -46,8 +43,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_TRUE(CreateTestProject(host));
 
   alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
-  alcedo::ui::AppTheme::SetEffectiveLanguageCode(
-      language_manager.EffectiveLanguageCode());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
   QQuickStyle::setStyle(QStringLiteral("Material"));
 
   QQmlApplicationEngine engine;
@@ -56,9 +52,8 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
-                                            &alcedo::ui::AppTheme::Instance());
-  engine.rootContext()->setContextProperty(QStringLiteral("languageManager"),
-                                            &language_manager);
+                                           &alcedo::ui::AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("languageManager"), &language_manager);
 
   std::vector<QQmlError> qml_warnings;
   QObject::connect(&engine, &QQmlEngine::warnings,
@@ -110,15 +105,11 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   (void)host.images()->GetFocusedImageInspection(0, 0);
   (void)host.search()->SearchPreview(QStringLiteral(""), 0, 24);
 
-  ResetOpenEditorDialogCallCount();
   host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(50);
   EXPECT_EQ(host.workspace_router()->workspace(), QStringLiteral("editor"));
   EXPECT_TRUE(host.editor_session()->active());
   EXPECT_FALSE(host.editor_session()->has_image());
-  // Unified workspace route must not open the legacy modal editor.
-  EXPECT_FALSE(host.editor()->editor_active());
-  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
   auto* workspace_host = root->findChild<QObject*>(QStringLiteral("workspaceHost"));
   ASSERT_NE(workspace_host, nullptr);
   EXPECT_EQ(workspace_host->property("activeWorkspace").toString(), QStringLiteral("editor"));
@@ -133,8 +124,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_NE(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
   EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog",
-                                        Q_ARG(QVariant, QVariant(0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(0))));
   ProcessEvents(100);
   auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
   ASSERT_NE(settings, nullptr);
@@ -143,8 +133,8 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
 
   auto* collections = root->findChild<QObject*>(QStringLiteral("collectionsPanel"));
-  auto* search = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
-  auto* analysis = root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog"));
+  auto* search      = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
+  auto* analysis    = root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog"));
   auto* background_tasks_dialog =
       root->findChild<QObject*>(QStringLiteral("backgroundTasksDialog"));
   ASSERT_NE(collections, nullptr);
@@ -159,12 +149,11 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   for (int index = 0; index < 7; ++index) {
     BackgroundTaskSnapshot completed_task;
-    completed_task.kind_             = BackgroundTaskKind::SemanticGeneration;
-    completed_task.state_            = BackgroundTaskState::Running;
-    completed_task.title_            = QStringLiteral("Completed task %1").arg(index);
-    completed_task.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
-    const QString completed_task_id =
-        host.background_tasks()->RegisterTask(completed_task);
+    completed_task.kind_            = BackgroundTaskKind::SemanticGeneration;
+    completed_task.state_           = BackgroundTaskState::Running;
+    completed_task.title_           = QStringLiteral("Completed task %1").arg(index);
+    completed_task.shutdown_policy_ = BackgroundTaskShutdownPolicy::WaitForFinish;
+    const QString completed_task_id = host.background_tasks()->RegisterTask(completed_task);
     host.background_tasks()->FinishTask(completed_task_id, BackgroundTaskState::Succeeded);
   }
   BackgroundTaskSnapshot refreshing_task;
@@ -173,8 +162,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   refreshing_task.title_            = QStringLiteral("Refreshing task");
   refreshing_task.progress_percent_ = 20;
   refreshing_task.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
-  const QString refreshing_task_id =
-      host.background_tasks()->RegisterTask(refreshing_task);
+  const QString refreshing_task_id  = host.background_tasks()->RegisterTask(refreshing_task);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(collections, "backgroundTasksRequested"));
   ProcessEvents(50);
@@ -183,8 +171,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   auto* background_tasks_title =
       root->findChild<QObject*>(QStringLiteral("backgroundTasksDialogTitle"));
-  auto* background_tasks_list =
-      root->findChild<QObject*>(QStringLiteral("backgroundTasksList"));
+  auto* background_tasks_list = root->findChild<QObject*>(QStringLiteral("backgroundTasksList"));
   ASSERT_TRUE(qml_warnings.empty())
       << (qml_warnings.empty() ? std::string{} : qml_warnings.back().toString().toStdString());
   ASSERT_NE(background_tasks_title, nullptr);

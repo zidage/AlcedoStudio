@@ -67,7 +67,7 @@ Item {
         id: folderImportConfirmDialogObj
         parent: Overlay.overlay
         theme: host
-        host: host
+        host: root.host
         blurSource: root.blurSource
         onConfirmed: function(filePaths) {
             appModules.importExport.StartImport(filePaths)

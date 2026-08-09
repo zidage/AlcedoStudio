@@ -40,7 +40,6 @@
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
-#include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -117,7 +116,7 @@ auto WaitForInteractiveImage(ApplicationModuleHost&, EditorSessionController* se
          session->image_id() == imageId && session->can_edit();
 }
 
-auto InstallTestFrameProducer(ApplicationModuleHost& host,
+auto InstallTestFrameProducer(ApplicationModuleHost&             host,
                               alcedo::test::HarnessFrameProducer producer = {}) -> bool {
   auto* coordinator = host.editor_render_coordinator();
   if (coordinator == nullptr) {
@@ -355,28 +354,23 @@ TEST_F(WorkspaceShellTests, FilmstripCollapseViaKeyboardPersistsInIsolatedSettin
 
   loaded.reset();
   {
-    alcedo::ui::EditorSessionController restored(nullptr);
+    alcedo::ui::EditorSessionController restored;
     EXPECT_TRUE(restored.filmstrip_collapsed());
     EXPECT_DOUBLE_EQ(restored.filmstrip_expanded_height(), 140.0);
   }
 }
 
-TEST_F(WorkspaceShellTests, EditorSessionControllerTracksSessionWithoutLegacyModal) {
-  ResetOpenEditorDialogCallCount();
+TEST_F(WorkspaceShellTests, EditorSessionControllerTracksWorkspaceSession) {
   ApplicationModuleHost host;
   ASSERT_TRUE(CreateTestProject(host));
 
   host.workspace_router()->OpenEditor(9, 3);
   EXPECT_TRUE(host.editor_session()->active());
   EXPECT_TRUE(host.editor_session()->has_image());
-  EXPECT_FALSE(host.editor()->editor_active());
-  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
 
   host.workspace_router()->OpenLibrary();
   EXPECT_FALSE(host.editor_session()->active());
   EXPECT_FALSE(host.editor_session()->has_image());
-  EXPECT_FALSE(host.editor()->editor_active());
-  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
 }
 
 TEST_F(WorkspaceShellTests, ProjectSwitchFromEditorEndsSessionAndReturnsToLibrary) {
@@ -561,7 +555,6 @@ TEST_F(WorkspaceShellTests, DeferredThumbnailReleasesFlushWhenLibraryDestroyedDu
 
 TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeight) {
   ASSERT_TRUE(QCoreApplication::instance());
-  ResetOpenEditorDialogCallCount();
   auto loaded = LoadMainWindow();
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
@@ -581,7 +574,6 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
 
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
   EXPECT_TRUE(loaded->host.editor_session()->active());
-  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
   EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
 
   // Phase 4A: return-to-library is owned by the shared main-window navigation,
@@ -618,7 +610,6 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
   EXPECT_TRUE(loaded->host.editor_session()->filmstrip_collapsed());
   EXPECT_NEAR(filmstrip->height(), handle->height(), 1.0);
   EXPECT_LT(filmstrip->height() + 1.0, expanded);
-  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
 }
 
 TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBToA) {
@@ -748,71 +739,73 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ASSERT_NE(scheduler, nullptr);
 
   std::atomic<int> written_frame_count{0};
-  ASSERT_TRUE(InstallTestFrameProducer(
-      loaded->host, [&written_frame_count](alcedo::IFrameSink*                sink,
-                                           const alcedo::EditorRenderRequest& request) -> bool {
-    if (!sink) {
-      return false;
-    }
-    const int w       = std::max(1, request.intent.requested_width);
-    const int h       = std::max(1, request.intent.requested_height);
-    auto      mapping = sink->MapResourceForWrite();
-    if (!mapping) {
-      return false;
-    }
-    std::vector<float> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0.0f);
-    for (int y = 0; y < h; ++y) {
-      for (int x = 0; x < w; ++x) {
-        const size_t i =
-            (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
-        pixels[i + 0] = static_cast<float>(x) / static_cast<float>(w);
-        pixels[i + 1] = static_cast<float>(y) / static_cast<float>(h);
-        pixels[i + 2] = 0.25f;
-        pixels[i + 3] = 1.0f;
-      }
-    }
-    bool copied = false;
+  const bool       producer_installed = InstallTestFrameProducer(
+      loaded->host,
+      [&written_frame_count](alcedo::IFrameSink*                sink,
+                             const alcedo::EditorRenderRequest& request) -> bool {
+        if (!sink) {
+          return false;
+        }
+        const int w       = std::max(1, request.intent.requested_width);
+        const int h       = std::max(1, request.intent.requested_height);
+        auto      mapping = sink->MapResourceForWrite();
+        if (!mapping) {
+          return false;
+        }
+        std::vector<float> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0.0f);
+        for (int y = 0; y < h; ++y) {
+          for (int x = 0; x < w; ++x) {
+            const size_t i =
+                (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+            pixels[i + 0] = static_cast<float>(x) / static_cast<float>(w);
+            pixels[i + 1] = static_cast<float>(y) / static_cast<float>(h);
+            pixels[i + 2] = 0.25f;
+            pixels[i + 3] = 1.0f;
+          }
+        }
+        bool copied = false;
 #ifdef HAVE_CUDA
-    if (mapping.memory_domain == alcedo::FrameMemoryDomain::CudaDevice &&
-        mapping.target_type == alcedo::FrameWriteTargetType::CudaArray) {
-      const auto result = cudaMemcpy2DToArray(
-          reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0, pixels.data(),
-          static_cast<size_t>(w) * sizeof(float) * 4u, static_cast<size_t>(w) * sizeof(float) * 4u,
-          static_cast<size_t>(h), cudaMemcpyHostToDevice);
-      copied = result == cudaSuccess;
-    }
+        if (mapping.memory_domain == alcedo::FrameMemoryDomain::CudaDevice &&
+            mapping.target_type == alcedo::FrameWriteTargetType::CudaArray) {
+          const auto result =
+              cudaMemcpy2DToArray(reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0,
+                                  pixels.data(), static_cast<size_t>(w) * sizeof(float) * 4u,
+                                  static_cast<size_t>(w) * sizeof(float) * 4u,
+                                  static_cast<size_t>(h), cudaMemcpyHostToDevice);
+          copied = result == cudaSuccess;
+        }
 #endif
 #ifdef HAVE_OPENCL
-    if (mapping.memory_domain == alcedo::FrameMemoryDomain::OpenClDevice &&
-        mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage) {
-      const size_t origin[] = {0, 0, 0};
-      const size_t region[] = {static_cast<size_t>(w), static_cast<size_t>(h), 1};
-      copied                = clEnqueueWriteImage(alcedo::OpenClContext::Instance().Queue(),
-                                                  reinterpret_cast<cl_mem>(mapping.data), CL_TRUE, origin, region,
-                                                  static_cast<size_t>(w) * sizeof(float) * 4u, 0, pixels.data(), 0,
-                                                  nullptr, nullptr) == CL_SUCCESS;
-    }
+        if (mapping.memory_domain == alcedo::FrameMemoryDomain::OpenClDevice &&
+            mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage) {
+          const size_t origin[] = {0, 0, 0};
+          const size_t region[] = {static_cast<size_t>(w), static_cast<size_t>(h), 1};
+          copied                = clEnqueueWriteImage(alcedo::OpenClContext::Instance().Queue(),
+                                                      reinterpret_cast<cl_mem>(mapping.data), CL_TRUE, origin,
+                                                      region, static_cast<size_t>(w) * sizeof(float) * 4u, 0,
+                                                      pixels.data(), 0, nullptr, nullptr) == CL_SUCCESS;
+        }
 #endif
-    sink->UnmapResource();
-    if (!copied) {
-      return false;
-    }
-    alcedo::FramePreviewMetadata metadata{};
-    metadata.frame_role              = request.intent.frame_role;
-    metadata.image_identity          = static_cast<std::uint64_t>(request.intent.image_id);
-    metadata.session_epoch        = request.intent.image_load_request_id.value;
-    metadata.presentation_request_id = request.request_id;
-    metadata.scope_update_allowed   = alcedo::ScopeUpdateAllowedForReason(request.intent.reason);
-    metadata.scope_refresh_requested =
-        request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
-    const auto presentation_mode =
-        request.intent.frame_role == alcedo::FrameRole::DetailPatch
-            ? alcedo::FramePresentationMode::ViewportTransformed
-            : alcedo::FramePresentationMode::FullFrame;
-    sink->NotifyFrameReady({metadata, presentation_mode});
-    written_frame_count.fetch_add(1, std::memory_order_release);
-    return true;
-  }));
+        sink->UnmapResource();
+        if (!copied) {
+          return false;
+        }
+        alcedo::FramePreviewMetadata metadata{};
+        metadata.frame_role              = request.intent.frame_role;
+        metadata.image_identity          = static_cast<std::uint64_t>(request.intent.image_id);
+        metadata.session_epoch           = request.intent.image_load_request_id.value;
+        metadata.presentation_request_id = request.request_id;
+        metadata.scope_update_allowed = alcedo::ScopeUpdateAllowedForReason(request.intent.reason);
+        metadata.scope_refresh_requested =
+            request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
+        const auto presentation_mode = request.intent.frame_role == alcedo::FrameRole::DetailPatch
+                                           ? alcedo::FramePresentationMode::ViewportTransformed
+                                           : alcedo::FramePresentationMode::FullFrame;
+        sink->NotifyFrameReady({metadata, presentation_mode});
+        written_frame_count.fetch_add(1, std::memory_order_release);
+        return true;
+      });
+  ASSERT_TRUE(producer_installed);
 
   loaded->host.workspace_router()->OpenEditor(7, 70);
   const auto first_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -1701,7 +1694,7 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
 
   loaded.reset();
   {
-    alcedo::ui::EditorSessionController restored(nullptr);
+    alcedo::ui::EditorSessionController restored;
     EXPECT_EQ(restored.active_adjustment_panel(), QStringLiteral("geometry"));
   }
 }

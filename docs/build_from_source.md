@@ -17,8 +17,8 @@ This guide is synced with the current top-level `CMakeLists.txt` and `CMakePrese
 Required Qt components from CMake:
 - `Core`, `LinguistTools`, `Svg`, `Widgets`, `Quick`, `Qml`, `QuickControls2`, `QuickDialogs2`, `QuickEffects`
 - `Test` (when `ALCEDO_BUILD_TESTS=ON`)
-- `ShaderTools`, `GuiPrivate` (when accelerated viewer backend is enabled)
-- `OpenGL`, `OpenGLWidgets` (only when legacy OpenGL editor is enabled and CUDA is available)
+- `ShaderTools`, `GuiPrivate` (when an accelerated editor backend is enabled)
+- `OpenGL` (used by the Qt Quick OpenCL/OpenGL backend)
 
 ## 2) Initialize Submodules / 初始化子模块
 
@@ -203,7 +203,6 @@ Runtime resolution: Metal loads metallibs from the compile-time path first, then
 | `ALCEDO_ENABLE_CUDA` | Enable CUDA backend when toolkit is available. | 当工具链可用时启用 CUDA 后端。 |
 | `ALCEDO_ENABLE_METAL` | Enable Metal backend on Apple platforms. | 在 Apple 平台启用 Metal 后端。 |
 | `ALCEDO_ENABLE_WEBGPU` | Enable Dawn/WebGPU support on Windows. | 在 Windows 上启用 Dawn/WebGPU 支持。 |
-| `ALCEDO_ENABLE_OPENGL_EDITOR` | Enable legacy OpenGL editor path. | 启用传统 OpenGL 编辑器路径。 |
 | `ALCEDO_BUILD_TESTS` | Build tests/demos. | 构建测试与示例。 |
 | `ALCEDO_DEPLOY_SOFTWARE_OPENGL` | Bundle `opengl32sw.dll` during Windows deploy. | Windows 部署时打包 `opengl32sw.dll`。 |
 | `ALCEDO_QT_DEPLOY_TOOL_OPTIONS` | Semicolon-separated options passed to Qt deploy tool. | 传递给 Qt 部署工具的分号分隔参数。 |

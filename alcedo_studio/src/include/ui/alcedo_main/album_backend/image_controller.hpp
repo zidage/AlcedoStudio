@@ -15,7 +15,6 @@
 
 namespace alcedo::ui {
 
-class EditorController;
 class FolderController;
 class ImportExportHandler;
 class InteractionPolicyController;
@@ -49,9 +48,9 @@ class ImageController final : public QObject {
   ImageController(ProjectModule* project, LibraryModule* library, FolderController* folders,
                   IUiStatusSink* status, QObject* parent = nullptr);
 
-  void BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
-                         EditorController* editor, SemanticGenerationController* semantic,
-                         InteractionPolicyController* policy);
+  void                    BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
+                                            SemanticGenerationController* semantic,
+                                            InteractionPolicyController*  policy);
 
   Q_INVOKABLE QVariantMap DeleteImages(const QVariantList& targetEntries);
   Q_INVOKABLE QVariantMap AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId);
@@ -79,18 +78,17 @@ class ImageController final : public QObject {
 
   [[nodiscard]] auto CollectDeleteTargets(const QVariantList& targetEntries) const
       -> std::vector<DeleteTarget>;
-  [[nodiscard]] auto ResolveRatingTarget(uint elementId, uint imageId) const -> RatingTarget;
-  [[nodiscard]] auto SaveProjectSnapshot() -> bool;
+  [[nodiscard]] auto   ResolveRatingTarget(uint elementId, uint imageId) const -> RatingTarget;
+  [[nodiscard]] auto   SaveProjectSnapshot() -> bool;
 
-  ProjectModule*                 project_       = nullptr;
-  LibraryModule*                 library_       = nullptr;
-  FolderController*              folders_       = nullptr;
-  IUiStatusSink*                 status_        = nullptr;
-  StatsEngine*                   stats_         = nullptr;
-  ImportExportHandler*           import_export_ = nullptr;
-  EditorController*              editor_        = nullptr;
-  SemanticGenerationController*  semantic_      = nullptr;
-  InteractionPolicyController*   policy_        = nullptr;
+  ProjectModule*       project_           = nullptr;
+  LibraryModule*       library_           = nullptr;
+  FolderController*    folders_           = nullptr;
+  IUiStatusSink*       status_            = nullptr;
+  StatsEngine*         stats_             = nullptr;
+  ImportExportHandler* import_export_     = nullptr;
+  SemanticGenerationController* semantic_ = nullptr;
+  InteractionPolicyController*  policy_   = nullptr;
 };
 
 }  // namespace alcedo::ui

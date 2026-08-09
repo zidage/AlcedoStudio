@@ -43,21 +43,6 @@ struct AlbumItem {
   QString               thumb_error_text{};
 };
 
-/// Per-parameter snapshot used by the embedded editor.
-struct EditorState {
-  float       exposure_   = 1.0f;
-  float       contrast_   = 1.0f;
-  float       saturation_ = 0.0f;
-  float       tint_       = 0.0f;
-  float       blacks_     = 0.0f;
-  float       whites_     = 0.0f;
-  float       shadows_    = 0.0f;
-  float       highlights_ = 0.0f;
-  float       sharpen_    = 0.0f;
-  float       clarity_    = 0.0f;
-  std::string lut_path_{};
-};
-
 /// Folder entry in the sleeve tree.
 struct ExistingFolderEntry {
   uint32_t              ui_id_      = 0;

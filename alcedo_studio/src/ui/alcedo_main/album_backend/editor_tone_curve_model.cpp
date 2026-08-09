@@ -9,11 +9,10 @@
 #include <QJsonObject>
 #include <QMetaType>
 #include <QVariantMap>
-
 #include <algorithm>
 #include <cmath>
 
-#include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
+#include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -76,13 +75,11 @@ auto FindClosestPointIndex(const std::vector<QPointF>& points, const QPointF& ta
   if (points.empty()) {
     return -1;
   }
-  int   best_idx = 0;
-  qreal best_dist =
-      std::abs(points[0].x() - target.x()) + std::abs(points[0].y() - target.y());
+  int   best_idx  = 0;
+  qreal best_dist = std::abs(points[0].x() - target.x()) + std::abs(points[0].y() - target.y());
   for (int i = 1; i < static_cast<int>(points.size()); ++i) {
-    const qreal dist =
-        std::abs(points[static_cast<size_t>(i)].x() - target.x()) +
-        std::abs(points[static_cast<size_t>(i)].y() - target.y());
+    const qreal dist = std::abs(points[static_cast<size_t>(i)].x() - target.x()) +
+                       std::abs(points[static_cast<size_t>(i)].y() - target.y());
     if (dist < best_dist) {
       best_dist = dist;
       best_idx  = i;
@@ -164,17 +161,14 @@ auto EditorToneCurveModel::insertPoint(double x, double y) -> int {
     return -1;
   }
 
-  const float min_insert_x =
-      static_cast<float>(points_.front().x()) + curve::kCurveMinPointSpacing;
-  const float max_insert_x =
-      static_cast<float>(points_.back().x()) - curve::kCurveMinPointSpacing;
+  const float min_insert_x = static_cast<float>(points_.front().x()) + curve::kCurveMinPointSpacing;
+  const float max_insert_x = static_cast<float>(points_.back().x()) - curve::kCurveMinPointSpacing;
   if (x <= min_insert_x || x >= max_insert_x) {
     return -1;
   }
 
   std::vector<QPointF> next = points_;
-  next.emplace_back(curve::Clamp01(static_cast<float>(x)),
-                    curve::Clamp01(static_cast<float>(y)));
+  next.emplace_back(curve::Clamp01(static_cast<float>(x)), curve::Clamp01(static_cast<float>(y)));
   const auto normalized = curve::NormalizeCurveControlPoints(next);
   if (normalized.size() <= points_.size()) {
     return -1;
@@ -201,8 +195,8 @@ auto EditorToneCurveModel::removePoint(int index) -> bool {
   if (curve::CurveControlPointsEqual(normalized, points_)) {
     return false;
   }
-  points_        = normalized;
-  dragActive_    = false;
+  points_     = normalized;
+  dragActive_ = false;
   setActiveIndex(-1);
   emit pointsChanged();
   emit dragActiveChanged();
@@ -216,8 +210,8 @@ void EditorToneCurveModel::reset() {
   if (curve::CurveControlPointsEqual(defaults, points_) && !dragActive_) {
     return;
   }
-  points_        = defaults;
-  dragActive_    = false;
+  points_     = defaults;
+  dragActive_ = false;
   setActiveIndex(-1);
   emit pointsChanged();
   emit dragActiveChanged();
@@ -244,16 +238,14 @@ void EditorToneCurveModel::setActiveIndex(int index) {
   emit activeIndexChanged();
 }
 
-void EditorToneCurveModel::submitInteractive() {
-  submitNow(buildParamsJson(), false);
-}
+void EditorToneCurveModel::submitInteractive() { submitNow(buildParamsJson(), false); }
 
 void EditorToneCurveModel::submitSettled() { submitNow(buildParamsJson(), true); }
 
 auto EditorToneCurveModel::buildParamsJson() const -> QString {
   // Match curve::CurveControlPointsToParams / pipeline ParamsForField(Curve).
-  const auto     normalized = curve::NormalizeCurveControlPoints(points_);
-  QJsonArray     pts;
+  const auto normalized = curve::NormalizeCurveControlPoints(points_);
+  QJsonArray pts;
   for (const auto& p : normalized) {
     QJsonObject pt;
     pt.insert(QStringLiteral("x"), p.x());
@@ -279,21 +271,17 @@ auto EditorToneCurveModel::moveActivePoint(double x, double y) -> bool {
   QPointF     next     = points_[static_cast<size_t>(activeIndex_)];
 
   if (activeIndex_ == 0) {
-    const float max_x =
-        static_cast<float>(points_[1].x()) - curve::kCurveMinPointSpacing;
-    next = QPointF(std::clamp(nx, 0.0f, max_x), ny);
+    const float max_x = static_cast<float>(points_[1].x()) - curve::kCurveMinPointSpacing;
+    next              = QPointF(std::clamp(nx, 0.0f, max_x), ny);
   } else if (activeIndex_ == last_idx) {
-    const float min_x =
-        static_cast<float>(points_[static_cast<size_t>(last_idx - 1)].x()) +
-        curve::kCurveMinPointSpacing;
+    const float min_x = static_cast<float>(points_[static_cast<size_t>(last_idx - 1)].x()) +
+                        curve::kCurveMinPointSpacing;
     next = QPointF(std::clamp(nx, min_x, 1.0f), ny);
   } else {
-    const float min_x =
-        static_cast<float>(points_[static_cast<size_t>(activeIndex_ - 1)].x()) +
-        curve::kCurveMinPointSpacing;
-    const float max_x =
-        static_cast<float>(points_[static_cast<size_t>(activeIndex_ + 1)].x()) -
-        curve::kCurveMinPointSpacing;
+    const float min_x = static_cast<float>(points_[static_cast<size_t>(activeIndex_ - 1)].x()) +
+                        curve::kCurveMinPointSpacing;
+    const float max_x = static_cast<float>(points_[static_cast<size_t>(activeIndex_ + 1)].x()) -
+                        curve::kCurveMinPointSpacing;
     next = QPointF(std::clamp(nx, min_x, max_x), ny);
   }
 

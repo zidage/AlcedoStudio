@@ -13,27 +13,27 @@
 // users report when switching sliders quickly during a busy render.
 //
 // Build (win_release):
-//   cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target EditorMultiSliderQuickTest
+//   cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target
+//   EditorMultiSliderQuickTest
 // Run:
 //   build\release\...\EditorMultiSliderQuickTest.exe -o -,txt -v1
 
-#include <QtQuickTest>
 #include <QApplication>
-#include <QGuiApplication>
-#include <QMouseEvent>
-#include <QQmlEngine>
-#include <QQmlContext>
-#include <QQuickStyle>
-#include <QQuickItem>
-#include <QQuickWindow>
-#include <QTest>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QPointer>
+#include <QQmlContext>
+#include <QQmlEngine>
+#include <QQuickItem>
+#include <QQuickStyle>
+#include <QQuickWindow>
+#include <QTest>
 #include <QThread>
 #include <QtMath>
-
+#include <QtQuickTest>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -70,7 +70,7 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
   guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
-  guard->root_id_                  = guard->commit_graph_->GetRootId();
+  guard->root_id_ = guard->commit_graph_->GetRootId();
   return guard;
 }
 
@@ -87,10 +87,10 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     journal_path_ = std::filesystem::temp_directory_path() / ("qml_multi_slider_" + stamp + ".wal");
     guard_        = MakeGuard(42);
     pipeline_port_ = std::make_shared<EditorSessionPipelinePort>();
-    pipeline_port_->SetServices(EditorSessionPipelineMappers{
-        {}, [g = guard_](sl_element_id_t) { return g; }});
-    history_.SetServices(EditorSessionHistoryPort::Services{
-        [this](sl_element_id_t) { return journal_path_; }});
+    pipeline_port_->SetServices(
+        EditorSessionPipelineMappers{{}, [g = guard_](sl_element_id_t) { return g; }});
+    history_.SetServices(
+        EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_port_);
 
     std::string error;
@@ -99,10 +99,10 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
       last_error_ = error;
     }
 
-    identity_.element_id   = 42;
-    identity_.image_id     = 84;
-    image_load_request_    = alcedo::ImageLoadRequestId{1};
-    state_                 = alcedo::EditorSessionState::Interactive;
+    identity_.element_id = 42;
+    identity_.image_id   = 84;
+    image_load_request_  = alcedo::ImageLoadRequestId{1};
+    state_               = alcedo::EditorSessionState::Interactive;
   }
 
   ~ProductionSessionBackend() override {
@@ -129,7 +129,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
       // ReadAdjustmentSnapshot is non-const on the port; snapshot is still
       // logically const for the backend API.
       const_cast<EditorSessionHistoryPort&>(history_).ReadAdjustmentSnapshot(handle_, &snap,
-                                                                              &error);
+                                                                             &error);
     }
     return snap;
   }
@@ -165,7 +165,8 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     return ApplyPatch(std::move(patch), /*settled=*/false);
   }
 
-  auto CommitAdjustment(alcedo::EditorAdjustmentPatch patch) -> alcedo::EditorSessionResult override {
+  auto CommitAdjustment(alcedo::EditorAdjustmentPatch patch)
+      -> alcedo::EditorSessionResult override {
     return ApplyPatch(std::move(patch), /*settled=*/true);
   }
 
@@ -204,9 +205,9 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   }
 
   void StopRenderWorker() {
-    stop_render_       = true;
-    continuous_render_ = false;
-    stop_oneshot_      = true;
+    stop_render_        = true;
+    continuous_render_  = false;
+    stop_oneshot_       = true;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
     while ((render_worker_.joinable() || oneshot_worker_.joinable()) &&
            std::chrono::steady_clock::now() < deadline) {
@@ -246,7 +247,8 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     return result;
   }
 
-  auto ApplyPatch(alcedo::EditorAdjustmentPatch patch, bool settled) -> alcedo::EditorSessionResult {
+  auto ApplyPatch(alcedo::EditorAdjustmentPatch patch, bool settled)
+      -> alcedo::EditorSessionResult {
     const auto t0 = std::chrono::steady_clock::now();
     if (!handle_.valid) {
       ++history_fail_count_;
@@ -333,29 +335,29 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     });
   }
 
-  QObject*                                 gui_anchor_ = nullptr;
-  std::filesystem::path                    journal_path_;
-  std::shared_ptr<alcedo::PipelineGuard>   guard_;
+  QObject*                                   gui_anchor_ = nullptr;
+  std::filesystem::path                      journal_path_;
+  std::shared_ptr<alcedo::PipelineGuard>     guard_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port_;
-  EditorSessionHistoryPort                 history_;
-  alcedo::EditorHistoryGuardHandle         handle_{};
-  alcedo::EditorSessionState               state_ = alcedo::EditorSessionState::NoImage;
-  alcedo::EditorSessionIdentity            identity_{};
-  alcedo::ImageLoadRequestId               image_load_request_{};
-  std::string                              last_error_;
+  EditorSessionHistoryPort                   history_;
+  alcedo::EditorHistoryGuardHandle           handle_{};
+  alcedo::EditorSessionState                 state_ = alcedo::EditorSessionState::NoImage;
+  alcedo::EditorSessionIdentity              identity_{};
+  alcedo::ImageLoadRequestId                 image_load_request_{};
+  std::string                                last_error_;
 
-  int patch_count_        = 0;
-  int commit_count_       = 0;
-  int history_fail_count_ = 0;
-  int max_history_ms_     = 0;
+  int                                        patch_count_        = 0;
+  int                                        commit_count_       = 0;
+  int                                        history_fail_count_ = 0;
+  int                                        max_history_ms_     = 0;
 
-  std::thread       render_worker_;
-  std::thread       oneshot_worker_;
-  std::atomic<bool> stop_render_{true};
-  std::atomic<bool> stop_oneshot_{true};
-  std::atomic<bool> continuous_render_{false};
-  std::atomic<bool> oneshot_running_{false};
-  std::atomic<bool> render_busy_{false};
+  std::thread                                render_worker_;
+  std::thread                                oneshot_worker_;
+  std::atomic<bool>                          stop_render_{true};
+  std::atomic<bool>                          stop_oneshot_{true};
+  std::atomic<bool>                          continuous_render_{false};
+  std::atomic<bool>                          oneshot_running_{false};
+  std::atomic<bool>                          render_busy_{false};
 };
 
 /// QML-facing probe: pointer helpers + stats. Models submit through the session
@@ -398,9 +400,7 @@ class HangProbe : public QObject {
   [[nodiscard]] auto interactiveCount() const -> int {
     return backend_ ? backend_->patch_count() : 0;
   }
-  [[nodiscard]] auto settledCount() const -> int {
-    return backend_ ? backend_->commit_count() : 0;
-  }
+  [[nodiscard]] auto settledCount() const -> int { return backend_ ? backend_->commit_count() : 0; }
   [[nodiscard]] auto sequenceMs() const -> int { return sequence_ms_; }
   [[nodiscard]] auto historyFailCount() const -> int {
     return backend_ ? backend_->history_fail_count() : 0;
@@ -411,9 +411,7 @@ class HangProbe : public QObject {
   [[nodiscard]] auto fuzzyMaxOpMs() const -> int { return fuzzy_max_op_ms_; }
   [[nodiscard]] auto fuzzyLastOp() const -> QString { return fuzzy_last_op_; }
   [[nodiscard]] auto fuzzyHandleDrags() const -> int { return fuzzy_handle_drags_; }
-  [[nodiscard]] auto fuzzyValueChangingDrags() const -> int {
-    return fuzzy_value_changing_drags_;
-  }
+  [[nodiscard]] auto fuzzyValueChangingDrags() const -> int { return fuzzy_value_changing_drags_; }
   [[nodiscard]] auto fuzzyTrackClicks() const -> int { return fuzzy_track_clicks_; }
   [[nodiscard]] auto fuzzyHandoffs() const -> int { return fuzzy_handoffs_; }
   [[nodiscard]] auto fuzzyDoubleClicks() const -> int { return fuzzy_double_clicks_; }
@@ -432,10 +430,10 @@ class HangProbe : public QObject {
   }
 
   void markSequenceStart() {
-    sequence_ms_           = 0;
-    max_submit_ms_         = 0;
-    reentered_             = false;
-    contention_observed_   = false;
+    sequence_ms_            = 0;
+    max_submit_ms_          = 0;
+    reentered_              = false;
+    contention_observed_    = false;
     sequence_start_patches_ = backend_ ? backend_->patch_count() : 0;
     sequence_start_commits_ = backend_ ? backend_->commit_count() : 0;
     emit statsChanged();
@@ -453,7 +451,7 @@ class HangProbe : public QObject {
     emit statsChanged();
   }
 
-  void refreshStats() { emit statsChanged(); }
+  void             refreshStats() { emit statsChanged(); }
 
   Q_INVOKABLE void clickItem(QQuickItem* item, qreal nx, qreal ny) {
     if (!item || !item->window()) {
@@ -547,7 +545,7 @@ class HangProbe : public QObject {
 
   Q_INVOKABLE QPoint lastClickPos() const { return last_click_pos_; }
 
-  Q_INVOKABLE int patchesThisSequence() const {
+  Q_INVOKABLE int    patchesThisSequence() const {
     if (!backend_) {
       return 0;
     }
@@ -565,14 +563,14 @@ class HangProbe : public QObject {
   /// failed to change values (simulation is inert).
   Q_INVOKABLE bool runFuzzyStress(QQuickItem* sat_slider, QQuickItem* vib_slider, int iterations,
                                   bool contended, int hang_threshold_ms = 4000) {
-    fuzzy_ops_completed_         = 0;
-    fuzzy_max_op_ms_             = 0;
-    fuzzy_handle_drags_          = 0;
-    fuzzy_value_changing_drags_  = 0;
-    fuzzy_track_clicks_          = 0;
-    fuzzy_handoffs_              = 0;
-    fuzzy_double_clicks_         = 0;
-    fuzzy_last_op_               = QStringLiteral("init");
+    fuzzy_ops_completed_        = 0;
+    fuzzy_max_op_ms_            = 0;
+    fuzzy_handle_drags_         = 0;
+    fuzzy_value_changing_drags_ = 0;
+    fuzzy_track_clicks_         = 0;
+    fuzzy_handoffs_             = 0;
+    fuzzy_double_clicks_        = 0;
+    fuzzy_last_op_              = QStringLiteral("init");
     emit statsChanged();
 
     if (!sat_slider || !vib_slider || !sat_slider->window() || iterations < 1 || !sat_ || !vib_) {
@@ -598,23 +596,22 @@ class HangProbe : public QObject {
     }
 
     markSequenceStart();
-    const auto sequence_t0 = std::chrono::steady_clock::now();
+    const auto                            sequence_t0 = std::chrono::steady_clock::now();
 
     // Deterministic mix; weights bias toward real handle motion + handoff.
     // 0,1 track click | 2,3 short handle drag | 4,5 handoff | 6 double-click |
     // 7 drag then double-click | 8 track burst | 9 click then handoff drag
-    std::mt19937                             rng(0xA1CED0u ^ static_cast<uint32_t>(iterations));
-    std::uniform_int_distribution<int>       op_dist(0, 9);
-    std::uniform_real_distribution<qreal>    nx_dist(0.05, 0.95);
-    std::uniform_int_distribution<int>       steps_dist(4, 12);
-    std::uniform_int_distribution<int>       target_dist(0, 1);
-    std::uniform_int_distribution<int>       side_dist(0, 1);  // low vs high end
+    std::mt19937                          rng(0xA1CED0u ^ static_cast<uint32_t>(iterations));
+    std::uniform_int_distribution<int>    op_dist(0, 9);
+    std::uniform_real_distribution<qreal> nx_dist(0.05, 0.95);
+    std::uniform_int_distribution<int>    steps_dist(4, 12);
+    std::uniform_int_distribution<int>    target_dist(0, 1);
+    std::uniform_int_distribution<int>    side_dist(0, 1);  // low vs high end
 
-    auto pump_alive = [window](int budget_ms) -> bool {
+    auto                                  pump_alive = [window](int budget_ms) -> bool {
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
-      bool       flagged  = false;
-      QMetaObject::invokeMethod(
-          window, [&flagged]() { flagged = true; }, Qt::QueuedConnection);
+      bool       flagged = false;
+      QMetaObject::invokeMethod(window, [&flagged]() { flagged = true; }, Qt::QueuedConnection);
       while (!flagged && std::chrono::steady_clock::now() < deadline) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
         QTest::qWait(1);
@@ -623,19 +620,19 @@ class HangProbe : public QObject {
     };
 
     for (int i = 0; i < iterations; ++i) {
-      const int                    op      = op_dist(rng);
-      const bool                   use_sat = target_dist(rng) == 0;
-      QQuickItem*                  a_item  = use_sat ? sat_slider : vib_slider;
-      QQuickItem*                  b_item  = use_sat ? vib_slider : sat_slider;
-      EditorAdjustmentValueModel*  a_model = use_sat ? sat_ : vib_;
-      EditorAdjustmentValueModel*  b_model = use_sat ? vib_ : sat_;
-      const auto                   op0     = std::chrono::steady_clock::now();
+      const int                   op      = op_dist(rng);
+      const bool                  use_sat = target_dist(rng) == 0;
+      QQuickItem*                 a_item  = use_sat ? sat_slider : vib_slider;
+      QQuickItem*                 b_item  = use_sat ? vib_slider : sat_slider;
+      EditorAdjustmentValueModel* a_model = use_sat ? sat_ : vib_;
+      EditorAdjustmentValueModel* b_model = use_sat ? vib_ : sat_;
+      const auto                  op0     = std::chrono::steady_clock::now();
 
       switch (op) {
         case 0:
         case 1: {
           // Far from handle (value mid ≈ 0.5): track press must not jump.
-          fuzzy_last_op_ = QStringLiteral("trackClick");
+          fuzzy_last_op_       = QStringLiteral("trackClick");
           const qreal track_nx = side_dist(rng) == 0 ? 0.08 : 0.92;
           FastClick(a_item, track_nx, 0.5);
           ++fuzzy_track_clicks_;
@@ -644,15 +641,15 @@ class HangProbe : public QObject {
         case 2:
         case 3: {
           fuzzy_last_op_ = QStringLiteral("handleDrag");
-          const qreal to_nx = side_dist(rng) == 0 ? nx_dist(rng) * 0.35 + 0.05
-                                                  : nx_dist(rng) * 0.35 + 0.60;
+          const qreal to_nx =
+              side_dist(rng) == 0 ? nx_dist(rng) * 0.35 + 0.05 : nx_dist(rng) * 0.35 + 0.60;
           (void)DragHandleTo(a_item, a_model, to_nx, steps_dist(rng));
           break;
         }
         case 4:
         case 5: {
           // Classic hang pattern: finish drag A, immediately drag B.
-          fuzzy_last_op_ = QStringLiteral("handoffDrag");
+          fuzzy_last_op_   = QStringLiteral("handoffDrag");
           const qreal a_to = 0.15 + nx_dist(rng) * 0.35;
           const qreal b_to = 0.55 + nx_dist(rng) * 0.35;
           (void)DragHandleTo(a_item, a_model, a_to, steps_dist(rng));
@@ -694,9 +691,9 @@ class HangProbe : public QObject {
         }
       }
 
-      const int op_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      const int op_ms  = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                              std::chrono::steady_clock::now() - op0)
-                                             .count());
+                                              .count());
       fuzzy_max_op_ms_ = std::max(fuzzy_max_op_ms_, op_ms);
       ++fuzzy_ops_completed_;
 
@@ -704,10 +701,9 @@ class HangProbe : public QObject {
         if (contended && backend_) {
           backend_->StopRenderWorker();
         }
-        markSequenceEnd(static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - sequence_t0)
-                .count()));
+        markSequenceEnd(static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - sequence_t0)
+                                             .count()));
         fuzzy_last_op_ = QStringLiteral("opHang:%1@%2ms").arg(fuzzy_last_op_).arg(op_ms);
         emit statsChanged();
         return false;
@@ -718,10 +714,9 @@ class HangProbe : public QObject {
           if (contended && backend_) {
             backend_->StopRenderWorker();
           }
-          markSequenceEnd(static_cast<int>(
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - sequence_t0)
-                  .count()));
+          markSequenceEnd(static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - sequence_t0)
+                                               .count()));
           fuzzy_last_op_ = QStringLiteral("eventLoopDead@%1").arg(i + 1);
           emit statsChanged();
           return false;
@@ -763,7 +758,7 @@ class HangProbe : public QObject {
  private:
   static constexpr qreal kHandleSizePx = 22.0;
 
-  static auto MapToWindow(QQuickItem* item, qreal nx, qreal ny) -> QPoint {
+  static auto            MapToWindow(QQuickItem* item, qreal nx, qreal ny) -> QPoint {
     const QPointF local(item->width() * nx, item->height() * ny);
     if (item->window() && item->window()->contentItem()) {
       return item->mapToItem(item->window()->contentItem(), local).toPoint();
@@ -780,10 +775,10 @@ class HangProbe : public QObject {
     if (w <= 1.0) {
       return 0.5;
     }
-    const qreal from  = model->minimum();
-    const qreal to    = model->maximum();
-    const qreal range = to - from;
-    const qreal pos   = range != 0.0 ? (model->value() - from) / range : 0.5;
+    const qreal from        = model->minimum();
+    const qreal to          = model->maximum();
+    const qreal range       = to - from;
+    const qreal pos         = range != 0.0 ? (model->value() - from) / range : 0.5;
     const qreal clamped_pos = qBound(0.0, pos, 1.0);
     // Matches AdjustmentSlider handle geometry: padding 0, handle width 22.
     return (clamped_pos * (w - kHandleSizePx) + kHandleSizePx * 0.5) / w;
@@ -819,21 +814,20 @@ class HangProbe : public QObject {
 
   /// Press on the real handle (from current model value), drag to to_nx with
   /// button held, release. Counts toward fuzzy_handle_drags_ / value-changing.
-  auto DragHandleTo(QQuickItem* slider, EditorAdjustmentValueModel* model, qreal to_nx,
-                    int steps) -> bool {
+  auto DragHandleTo(QQuickItem* slider, EditorAdjustmentValueModel* model, qreal to_nx, int steps)
+      -> bool {
     if (!slider || !model || !slider->window() || steps < 1) {
       return false;
     }
-    auto* window = slider->window();
-    to_nx        = qBound(0.02, to_nx, 0.98);
+    auto* window        = slider->window();
+    to_nx               = qBound(0.02, to_nx, 0.98);
 
     // Guarantee travel distance: if handle is already near target, seed away first
     // (programmatic setValue, no submit) so the subsequent pointer drag is real.
     const qreal from_nx = HandleNx(slider, model);
     if (qAbs(from_nx - to_nx) < 0.12) {
       const qreal seed_nx = to_nx < 0.5 ? 0.88 : 0.12;
-      const qreal seed_v =
-          model->minimum() + seed_nx * (model->maximum() - model->minimum());
+      const qreal seed_v  = model->minimum() + seed_nx * (model->maximum() - model->minimum());
       model->setValue(seed_v);
       QCoreApplication::processEvents(QEventLoop::AllEvents, 4);
     }
@@ -881,25 +875,25 @@ class HangProbe : public QObject {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
   }
 
-  EditorSessionController*      session_ = nullptr;
-  ProductionSessionBackend*     backend_ = nullptr;
-  EditorAdjustmentValueModel*   sat_     = nullptr;
-  EditorAdjustmentValueModel*   vib_     = nullptr;
-  bool reentered_                        = false;
-  bool contention_observed_              = false;
-  int  max_submit_ms_                    = 0;
-  int  sequence_ms_                      = 0;
-  int  sequence_start_patches_           = 0;
-  int  sequence_start_commits_           = 0;
-  int  fuzzy_ops_completed_              = 0;
-  int  fuzzy_max_op_ms_                  = 0;
-  int  fuzzy_handle_drags_               = 0;
-  int  fuzzy_value_changing_drags_       = 0;
-  int  fuzzy_track_clicks_               = 0;
-  int  fuzzy_handoffs_                   = 0;
-  int  fuzzy_double_clicks_              = 0;
-  QString fuzzy_last_op_;
-  QPoint  last_click_pos_;
+  EditorSessionController*    session_                    = nullptr;
+  ProductionSessionBackend*   backend_                    = nullptr;
+  EditorAdjustmentValueModel* sat_                        = nullptr;
+  EditorAdjustmentValueModel* vib_                        = nullptr;
+  bool                        reentered_                  = false;
+  bool                        contention_observed_        = false;
+  int                         max_submit_ms_              = 0;
+  int                         sequence_ms_                = 0;
+  int                         sequence_start_patches_     = 0;
+  int                         sequence_start_commits_     = 0;
+  int                         fuzzy_ops_completed_        = 0;
+  int                         fuzzy_max_op_ms_            = 0;
+  int                         fuzzy_handle_drags_         = 0;
+  int                         fuzzy_value_changing_drags_ = 0;
+  int                         fuzzy_track_clicks_         = 0;
+  int                         fuzzy_handoffs_             = 0;
+  int                         fuzzy_double_clicks_        = 0;
+  QString                     fuzzy_last_op_;
+  QPoint                      last_click_pos_;
 };
 
 class QuickTestSetup : public QObject {
@@ -908,9 +902,9 @@ class QuickTestSetup : public QObject {
   QuickTestSetup() {
     // Backend must outlive controller notifier; both owned by setup.
     backend_ = std::make_unique<ProductionSessionBackend>(this);
-    session_ = new EditorSessionController(nullptr, backend_.get(), this);
+    session_ = new EditorSessionController(backend_.get(), this);
 
-    sat_ = new EditorAdjustmentValueModel(this);
+    sat_     = new EditorAdjustmentValueModel(this);
     sat_->setFieldKey(QStringLiteral("saturation"));
     sat_->setLabel(QStringLiteral("Saturation"));
     sat_->setMinimum(-100);
@@ -974,8 +968,8 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   QQuickStyle::setStyle(QStringLiteral("Basic"));
   alcedo::ui::quicktest::QuickTestSetup setup;
-  return quick_test_main_with_setup(argc, argv, "EditorMultiSliderQuickTest",
-                                    QUICK_TEST_SOURCE_DIR, &setup);
+  return quick_test_main_with_setup(argc, argv, "EditorMultiSliderQuickTest", QUICK_TEST_SOURCE_DIR,
+                                    &setup);
 }
 
 #include "editor_multi_slider_quicktest.moc"
