@@ -8,17 +8,16 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
-
 #include <filesystem>
 #include <memory>
 #include <vector>
 
-#include "ui/alcedo_main/i18n.hpp"
-#include "ui/alcedo_main/album_backend/album_types.hpp"
-#include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "type/supported_file_type.hpp"
+#include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
+#include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
 
@@ -55,29 +54,44 @@ class ImportExportHandler final : public QObject {
                       IUiStatusSink* status, ProjectDbWriteBarrier* barrier,
                       QObject* parent = nullptr);
 
-  void BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
-                         SemanticGenerationController* semantic);
+  void                    BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
+                                            SemanticGenerationController* semantic);
 
-  Q_INVOKABLE void StartImport(const QStringList& fileUrlsOrPaths);
+  Q_INVOKABLE void        StartImport(const QStringList& fileUrlsOrPaths);
   Q_INVOKABLE QStringList CollectFolderFiles(const QString& folderUrlOrPath);
-  Q_INVOKABLE void CancelImport();
-  Q_INVOKABLE void StartExport(const QString& outputDirUrlOrPath);
-  Q_INVOKABLE void StartExportWithOptions(const QString& outputDirUrlOrPath,
-                                          const QString& formatName, const QString& hdrExportMode,
-                                          bool resizeEnabled, int maxLengthSide, int quality,
-                                          int bitDepth, int pngCompressionLevel,
-                                          const QString& tiffCompression);
-  Q_INVOKABLE void StartExportWithOptionsForTargets(
-      const QString& outputDirUrlOrPath, const QString& formatName, const QString& hdrExportMode,
-      bool resizeEnabled, int maxLengthSide, int quality, int bitDepth, int pngCompressionLevel,
-      const QString& tiffCompression, const QVariantList& targetEntries);
+  Q_INVOKABLE void        CancelImport();
+  Q_INVOKABLE void        StartExport(const QString& outputDirUrlOrPath);
+  Q_INVOKABLE void        StartExportWithOptions(const QString& outputDirUrlOrPath,
+                                                 const QString& formatName, const QString& hdrExportMode,
+                                                 bool resizeEnabled, int maxLengthSide, int quality,
+                                                 int bitDepth, int pngCompressionLevel,
+                                                 const QString& tiffCompression);
+  Q_INVOKABLE void        StartExportWithOptionsForTargets(
+             const QString& outputDirUrlOrPath, const QString& formatName, const QString& hdrExportMode,
+             bool resizeEnabled, int maxLengthSide, int quality, int bitDepth, int pngCompressionLevel,
+             const QString& tiffCompression, const QVariantList& targetEntries);
   Q_INVOKABLE void StartExportWithSplitOptionsForTargets(
       const QString& outputDirUrlOrPath, bool sdrResizeEnabled, int sdrMaxLengthSide,
       int ultraHdrMaxLengthSide, const QString& sdrFormatName, int sdrQuality, int sdrBitDepth,
       int sdrPngCompressionLevel, const QString& sdrTiffCompression, int ultraHdrQuality,
       bool ultraHdrDitherEnabled, const QVariantList& targetEntries);
-  Q_INVOKABLE void ResetExportState();
-  Q_INVOKABLE bool CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
+  Q_INVOKABLE void StartExportWithRecipeOptionsForTargets(
+      const QString& outputDirUrlOrPath, bool sdrResizeEnabled, int sdrMaxLengthSide,
+      int ultraHdrMaxLengthSide, const QString& sdrFormatName, int sdrQuality, int sdrBitDepth,
+      int sdrPngCompressionLevel, const QString& sdrTiffCompression, int ultraHdrQuality,
+      bool ultraHdrDitherEnabled, const QVariantMap& recipeOptions,
+      const QVariantList& targetEntries);
+  Q_INVOKABLE void         ResetExportState();
+  Q_INVOKABLE bool         CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
+  /// Remembered JPEG quality (1–100). Defaults to 95 when unset.
+  Q_INVOKABLE int          LoadExportSdrQuality() const;
+  Q_INVOKABLE void         SaveExportSdrQuality(int quality);
+  Q_INVOKABLE int          LoadExportUltraHdrQuality() const;
+  Q_INVOKABLE void         SaveExportUltraHdrQuality(int quality);
+  Q_INVOKABLE QVariantList LoadExportFileNamePresets() const;
+  Q_INVOKABLE bool         SaveExportFileNamePreset(const QString& name, const QString& pattern,
+                                                    const QString& replacedName);
+  Q_INVOKABLE bool         DeleteExportFileNamePreset(const QString& name);
 
   void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false);
   void FinishImport(const ImportResult& result);
@@ -86,13 +100,14 @@ class ImportExportHandler final : public QObject {
 
   [[nodiscard]] auto CollectExportTargets(const QVariantList& targetEntries) const
       -> std::vector<ExportTarget>;
-  auto BuildExportQueue(const std::vector<ExportTarget>& targets,
-                        const std::filesystem::path& outputDir, bool sdrResizeEnabled,
-                        int sdrMaxLengthSide, int ultraHdrMaxLengthSide, ImageFormatType sdrFormat,
-                        int sdrQuality, ExportFormatOptions::BIT_DEPTH sdrBitDepth,
-                        int sdrPngCompressionLevel,
-                        ExportFormatOptions::TIFF_COMPRESS sdrTiffCompression, int ultraHdrQuality,
-                        bool ultraHdrDitherEnabled) -> ExportQueueBuildResult;
+  auto               BuildExportQueue(const std::vector<ExportTarget>& targets,
+                                      const std::filesystem::path& outputDir, bool sdrResizeEnabled,
+                                      int sdrMaxLengthSide, int ultraHdrMaxLengthSide, ImageFormatType sdrFormat,
+                                      int sdrQuality, ExportFormatOptions::BIT_DEPTH sdrBitDepth,
+                                      int                                sdrPngCompressionLevel,
+                                      ExportFormatOptions::TIFF_COMPRESS sdrTiffCompression, int ultraHdrQuality,
+                                      bool               ultraHdrDitherEnabled,
+                                      const QVariantMap& recipeOptions = QVariantMap{}) -> ExportQueueBuildResult;
 
   [[nodiscard]] bool export_inflight() const { return export_inflight_; }
   [[nodiscard]] bool ImportRunning() const { return import_running_; }
@@ -156,38 +171,38 @@ class ImportExportHandler final : public QObject {
   void exportStateChanged();
 
  private:
-  void StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget);
-  void ResetExportProgressState(const i18n::LocalizedText& status);
-  void SetExportFailureState(const i18n::LocalizedText& message);
+  void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget);
+  void              ResetExportProgressState(const i18n::LocalizedText& status);
+  void              SetExportFailureState(const i18n::LocalizedText& message);
 
-  ProjectModule*                 project_       = nullptr;
-  LibraryModule*                 library_       = nullptr;
-  FolderController*              folders_       = nullptr;
-  IUiStatusSink*                 status_        = nullptr;
-  ProjectDbWriteBarrier*         barrier_       = nullptr;
-  StatsEngine*                   stats_         = nullptr;
-  NikonHeRecoveryController*     nikon_         = nullptr;
-  SemanticGenerationController*  semantic_      = nullptr;
+  ProjectModule*    project_              = nullptr;
+  LibraryModule*    library_              = nullptr;
+  FolderController* folders_              = nullptr;
+  IUiStatusSink*    status_               = nullptr;
+  ProjectDbWriteBarrier*        barrier_  = nullptr;
+  StatsEngine*                  stats_    = nullptr;
+  NikonHeRecoveryController*    nikon_    = nullptr;
+  SemanticGenerationController* semantic_ = nullptr;
 
-  std::shared_ptr<ImportJob> current_import_job_{};
-  bool                       import_running_   = false;
-  int                        import_total_     = 0;
-  int                        import_completed_ = 0;
-  int                        import_failed_    = 0;
-  i18n::LocalizedText        import_status_text_{};
-  bool                       export_inflight_ = false;
-  QString                    default_export_folder_{};
-  i18n::LocalizedText        export_status_text_{};
-  i18n::LocalizedText        export_error_summary_text_{};
-  QVariantMap                export_item_statuses_{};
-  int                        export_total_     = 0;
-  int                        export_completed_ = 0;
-  int                        export_succeeded_ = 0;
-  int                        export_failed_    = 0;
-  int                        export_skipped_   = 0;
+  std::shared_ptr<ImportJob>    current_import_job_{};
+  bool                          import_running_   = false;
+  int                           import_total_     = 0;
+  int                           import_completed_ = 0;
+  int                           import_failed_    = 0;
+  i18n::LocalizedText           import_status_text_{};
+  bool                          export_inflight_ = false;
+  QString                       default_export_folder_{};
+  i18n::LocalizedText           export_status_text_{};
+  i18n::LocalizedText           export_error_summary_text_{};
+  QVariantMap                   export_item_statuses_{};
+  int                           export_total_            = 0;
+  int                           export_completed_        = 0;
+  int                           export_succeeded_        = 0;
+  int                           export_failed_           = 0;
+  int                           export_skipped_          = 0;
 
-  sl_element_id_t       import_target_folder_id_ = 0;
-  std::filesystem::path import_target_folder_path_{};
+  sl_element_id_t               import_target_folder_id_ = 0;
+  std::filesystem::path         import_target_folder_path_{};
 };
 
 }  // namespace alcedo::ui

@@ -375,74 +375,18 @@ Dialog {
                                 font.weight: appTheme.fontWeightRegular
                             }
 
-                            // Themed progress track — Basic ProgressBar skin is too loud here.
-                            Item {
-                                id: progressTrack
+                            ThemedProgressBar {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: appTheme.spaceXs + 2
                                 visible: taskRow.showProgress
-
-                                readonly property real progressValue: {
+                                active: taskRow.showProgress
+                                fillColor: taskRow.rowStatusColor
+                                progressValue: {
                                     if (!taskRow.task || taskRow.task.progressPercent === undefined)
                                         return 0
-                                    return Math.max(0, Math.min(100, taskRow.task.progressPercent))
+                                    return taskRow.task.progressPercent
                                 }
-                                readonly property bool indeterminate: !!taskRow.task
-                                                                       && taskRow.task.progressPercent < 0
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: height / 2
-                                    color: root.withAlpha(appTheme.textMutedColor, 0.18)
-                                }
-
-                                Rectangle {
-                                    id: progressFill
-                                    height: parent.height
-                                    radius: height / 2
-                                    color: taskRow.rowStatusColor
-                                    width: parent.indeterminate
-                                           ? parent.width * 0.28
-                                           : parent.width * (parent.progressValue / 100.0)
-                                    x: parent.indeterminate ? indeterminateAnim.phase * (parent.width - width)
-                                                            : 0
-
-                                    Behavior on width {
-                                        enabled: !parent.indeterminate && !appTheme.reduceMotion
-                                        NumberAnimation {
-                                            duration: appTheme.motionFadeMs
-                                            easing.type: Easing.OutCubic
-                                        }
-                                    }
-                                }
-
-                                SequentialAnimation {
-                                    id: indeterminateAnim
-                                    property real phase: 0
-                                    running: taskRow.showProgress
-                                             && progressTrack.indeterminate
-                                             && !appTheme.reduceMotion
-                                    loops: Animation.Infinite
-
-                                    NumberAnimation {
-                                        target: indeterminateAnim
-                                        property: "phase"
-                                        from: 0
-                                        to: 1
-                                        duration: appTheme.motionFoldOpenMs * 5
-                                                  + appTheme.motionFadeMs
-                                        easing.type: Easing.InOutSine
-                                    }
-                                    NumberAnimation {
-                                        target: indeterminateAnim
-                                        property: "phase"
-                                        from: 1
-                                        to: 0
-                                        duration: appTheme.motionFoldOpenMs * 5
-                                                  + appTheme.motionFadeMs
-                                        easing.type: Easing.InOutSine
-                                    }
-                                }
+                                indeterminate: !!taskRow.task
+                                               && taskRow.task.progressPercent < 0
                             }
                         }
 

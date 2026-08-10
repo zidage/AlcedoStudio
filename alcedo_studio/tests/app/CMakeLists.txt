@@ -405,6 +405,13 @@ gtest_discover_tests(ExportServiceTest TEST_PREFIX "ExportServiceTest.")
 
 alcedo_register_test_target(ExportServiceTest app)
 
+add_executable(ExportRecipeTest ${ALCEDO_TEST_ROOT}/app/export_recipe_test.cpp)
+target_include_directories(ExportRecipeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ExportRecipeTest PRIVATE ExportRecipe GTest::gtest_main)
+gtest_discover_tests(ExportRecipeTest TEST_PREFIX "ExportRecipeTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(ExportRecipeTest app ci_core)
+
 add_executable(HsResearchExportTool ${ALCEDO_TEST_ROOT}/app/hs_research_export_tool.cpp)
 target_include_directories(HsResearchExportTool PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(HsResearchExportTool PRIVATE ExportService ProjectService ImportService ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})

@@ -14,7 +14,6 @@ Item {
     property var selectionState: null
     property var exportQueueState: null
     property var deleteConfirmDialog: null
-    property var exportDialog: null
     property var windowAnimations: null
 
     property bool importSessionObserved: false
@@ -115,7 +114,7 @@ Item {
         target: appModules.library
         ignoreUnknownSignals: true
         function onThumbnailsChanged() {
-            if (root.exportDialog && root.exportDialog.visible && root.exportQueueState) {
+            if (root.exportQueueState && root.exportQueueState.exportQueueCount > 0) {
                 root.exportQueueState.refreshExportPreview()
             }
         }

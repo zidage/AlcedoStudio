@@ -901,260 +901,6 @@
     </message>
 </context>
 <context>
-    <name>AlbumExportDialog</name>
-    <message>
-        <location filename="../qml/AlbumExportDialog.qml" line="+230"/>
-        <source>Select Export Folder</source>
-        <translation>选择导出文件夹</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Export Images</source>
-        <translation>导出图像</translation>
-    </message>
-    <message>
-        <location line="+87"/>
-        <source>Select output directory...</source>
-        <translation>选择输出目录...</translation>
-    </message>
-    <message>
-        <location line="-246"/>
-        <source>...(%1 more)</source>
-        <translation>…（另有 %1 项）</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Exporting</source>
-        <translation>正在导出</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Done</source>
-        <translation>完成</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Failed</source>
-        <translation>失败</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Queued</source>
-        <translation>已排队</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <location line="+2"/>
-        <location line="+3"/>
-        <location line="+7"/>
-        <source>8-bit</source>
-        <translation>8 位</translation>
-    </message>
-    <message>
-        <location line="-10"/>
-        <location line="+4"/>
-        <location line="+4"/>
-        <source>16-bit</source>
-        <translation>16 位</translation>
-    </message>
-    <message>
-        <location line="-3"/>
-        <location line="+3"/>
-        <source>32-bit</source>
-        <translation>32 位</translation>
-    </message>
-    <message>
-        <location line="+109"/>
-        <source>Configure settings for current batch</source>
-        <translation>配置当前批次的设置</translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <source>Destination</source>
-        <translation>目标位置</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Browse</source>
-        <translation>浏览</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>Put in Subfolder</source>
-        <translation>放入子文件夹</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Processed</source>
-        <translation>已处理</translation>
-    </message>
-    <message>
-        <location line="+37"/>
-        <source>HDR Export Settings</source>
-        <translation>HDR 导出设置</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Ultra HDR</source>
-        <translation>Ultra HDR</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>HDR quality</source>
-        <translation>HDR 质量</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Encoding longest edge (px)</source>
-        <translation>编码最长边（像素）</translation>
-    </message>
-    <message>
-        <location line="+24"/>
-        <source>Dithering</source>
-        <translation>抖动</translation>
-    </message>
-    <message>
-        <location line="+30"/>
-        <source>SDR Export Settings</source>
-        <translation>SDR 导出设置</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Image Format</source>
-        <translation>图像格式</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>JPEG</source>
-        <translation>JPEG</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>PNG</source>
-        <translation>PNG</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>TIFF</source>
-        <translation>TIFF</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>WEBP</source>
-        <translation>WEBP</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>EXR</source>
-        <translation>EXR</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Limit longest edge (px)</source>
-        <translation>限制最长边（像素）</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>No limit</source>
-        <translation>不限制</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Quality</source>
-        <translation>质量</translation>
-    </message>
-    <message>
-        <location line="+27"/>
-        <source>Bit Depth</source>
-        <translation>位深</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>PNG level</source>
-        <translation>PNG 压缩级别</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Compression</source>
-        <translation>压缩方式</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>None</source>
-        <translation>无</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>LZW</source>
-        <translation>LZW</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>ZIP</source>
-        <translation>ZIP</translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>Export Queue</source>
-        <translation>导出队列</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Items</source>
-        <translation>项</translation>
-    </message>
-    <message>
-        <location line="+110"/>
-        <source>HDR</source>
-        <translation>HDR</translation>
-    </message>
-    <message>
-        <location line="+61"/>
-        <source>Export Progress</source>
-        <translation>导出进度</translation>
-    </message>
-    <message>
-        <location line="+57"/>
-        <source>Export 1 File</source>
-        <translation>导出 1 个文件</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Export %1 Files</source>
-        <translation>导出 %1 个文件</translation>
-    </message>
-    <message>
-        <location line="-216"/>
-        <source>Add Selected (%1)</source>
-        <translation>添加所选（%1）</translation>
-    </message>
-    <message>
-        <location line="+127"/>
-        <source>Queue is empty</source>
-        <translation>队列为空</translation>
-    </message>
-    <message>
-        <location line="-111"/>
-        <source>Clear</source>
-        <translation>清空</translation>
-    </message>
-    <message>
-        <location line="+178"/>
-        <source>Close</source>
-        <translation>关闭</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Exporting...</source>
-        <translation>正在导出...</translation>
-    </message>
-</context>
-<context>
     <name>AlbumInspectorPanel</name>
     <message>
         <location filename="../qml/AlbumInspectorPanel.qml" line="+43"/>
@@ -1475,7 +1221,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+40"/>
+        <location filename="../qml/AppDialogs.qml" line="+39"/>
         <source>Select Images</source>
         <translation>选择图像</translation>
     </message>
@@ -1495,7 +1241,7 @@ Alcedo 将改用 %1。</translation>
         <translation>所选文件夹中未找到文件。</translation>
     </message>
     <message>
-        <location line="+125"/>
+        <location line="+95"/>
         <source>Discard</source>
         <translation type="unfinished">放弃</translation>
     </message>
@@ -1520,7 +1266,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+212"/>
+        <location line="+211"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -1668,7 +1414,7 @@ Alcedo 将改用 %1。</translation>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+226"/>
+        <location line="+171"/>
         <source>Details</source>
         <translation>详细信息</translation>
     </message>
@@ -3161,6 +2907,449 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>ExportInspectorPanel</name>
+    <message>
+        <location filename="../qml/ExportInspectorPanel.qml" line="+36"/>
+        <source>Processed</source>
+        <translation>已处理</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>JPEG</source>
+        <translation>JPEG</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>PNG</source>
+        <translation>PNG</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>TIFF</source>
+        <translation>TIFF</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>WEBP</source>
+        <translation>WEBP</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>EXR</source>
+        <translation>EXR</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>8 Bit</source>
+        <translation>8 位</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>16 Bit</source>
+        <translation>16 位</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>32 Bit</source>
+        <translation>32 位</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>None</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LZW</source>
+        <translation>LZW</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ZIP</source>
+        <translation>ZIP</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Original</source>
+        <translation>原始尺寸</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Long Edge</source>
+        <translation>最长边</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Bounds</source>
+        <translation>像素边界</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>打印尺寸</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>mm</source>
+        <translation>毫米</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>cm</source>
+        <translation>厘米</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>in</source>
+        <translation>英寸</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>...(%1 more)</source>
+        <translation>…（另有 %1 项）</translation>
+    </message>
+    <message>
+        <location line="+78"/>
+        <source>Exporting</source>
+        <translation>正在导出</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Done</source>
+        <translation>完成</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Failed</source>
+        <translation>失败</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Queued</source>
+        <translation>已排队</translation>
+    </message>
+    <message>
+        <location line="+151"/>
+        <source>Quality</source>
+        <translation>质量</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>HDR Quality</source>
+        <translation>HDR 质量</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>PNG Level</source>
+        <translation>PNG 压缩级别</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Select Export Folder</source>
+        <translation>选择导出文件夹</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Destination</source>
+        <translation>目标位置</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Select output directory...</source>
+        <translation>选择输出目录...</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Browse</source>
+        <translation>浏览</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Put in Subfolder</source>
+        <translation>放入子文件夹</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>File Naming</source>
+        <translation>文件命名</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Metadata &amp; Color</source>
+        <translation>元数据与色彩</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Include photo metadata</source>
+        <translation>包含照片元数据</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Writes EXIF, XMP, and IPTC. Location, device serials, and edit history stay excluded.</source>
+        <translation>写入 EXIF、XMP 和 IPTC。位置信息、设备序列号和编辑历史仍会排除。</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Embed output ICC profile</source>
+        <translation>嵌入输出 ICC 配置文件</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Keeps the exported color space identifiable in color-managed applications.</source>
+        <translation>让色彩管理应用能够识别导出文件的色彩空间。</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>SDR Export</source>
+        <translation>SDR 导出</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Format</source>
+        <translation>格式</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Bit Depth</source>
+        <translation>位深</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Compression</source>
+        <translation>压缩方式</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Size</source>
+        <translation>尺寸</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Longest edge (px)</source>
+        <translation>最长边（像素）</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Width (px)</source>
+        <translation>宽度（像素）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height (px)</source>
+        <translation>高度（像素）</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Width</source>
+        <translation>宽度</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height</source>
+        <translation>高度</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Unit</source>
+        <translation>单位</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Resolution (DPI)</source>
+        <translation>分辨率（DPI）</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>HDR Export</source>
+        <translation>HDR 导出</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Add Ultra HDR items to the queue to enable HDR export.</source>
+        <translation>将 Ultra HDR 项目加入队列后即可启用 HDR 导出。</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Dithering</source>
+        <translation>抖动</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Export Queue (%1)</source>
+        <translation>导出队列（%1）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export Queue</source>
+        <translation>导出队列</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Add selected to queue</source>
+        <translation>将所选加入队列</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear export queue</source>
+        <translation>清空导出队列</translation>
+    </message>
+    <message>
+        <location line="+121"/>
+        <source>Queue is empty</source>
+        <translation>队列为空</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>Export Progress</source>
+        <translation>导出进度</translation>
+    </message>
+</context>
+<context>
+    <name>ExportNamingEditor</name>
+    <message>
+        <location filename="../qml/ExportNamingEditor.qml" line="+40"/>
+        <source>Export</source>
+        <translation>导出</translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <location line="+20"/>
+        <source>Source</source>
+        <translation>源文件名</translation>
+    </message>
+    <message>
+        <location line="-19"/>
+        <source>Date + No.</source>
+        <translation>日期 + 序号</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom + No.</source>
+        <translation>自定义 + 序号</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Date</source>
+        <translation>日期</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sequence</source>
+        <translation>序号</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Make</source>
+        <translation>厂商</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Camera</source>
+        <translation>相机</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lens</source>
+        <translation>镜头</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ISO</source>
+        <translation>ISO</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aperture</source>
+        <translation>光圈</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shutter</source>
+        <translation>快门</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Focal</source>
+        <translation>焦距</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rating</source>
+        <translation>评分</translation>
+    </message>
+    <message>
+        <location line="+148"/>
+        <source>Invalid pattern</source>
+        <translation>无效命名模式</translation>
+    </message>
+    <message>
+        <location line="+84"/>
+        <source>Name custom preset</source>
+        <translation>命名自定义预设</translation>
+    </message>
+    <message>
+        <location line="-72"/>
+        <source>Preset</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <location line="+71"/>
+        <source>Save naming preset</source>
+        <translation>保存命名预设</translation>
+    </message>
+    <message>
+        <location line="-38"/>
+        <location line="+1"/>
+        <source>Preset name</source>
+        <translation>预设名称</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Enter a valid preset name.</source>
+        <translation>请输入有效的预设名称。</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Delete naming preset</source>
+        <translation>删除命名预设</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Pattern</source>
+        <translation>命名模式</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>File name pattern</source>
+        <translation>文件命名模式</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Insert field</source>
+        <translation>插入字段</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Insert %1 field</source>
+        <translation>插入%1字段</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Example</source>
+        <translation>示例</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Pattern error</source>
+        <translation>命名模式错误</translation>
+    </message>
+</context>
+<context>
     <name>ExportQueueState</name>
     <message>
         <location filename="../qml/ExportQueueState.qml" line="+29"/>
@@ -3516,7 +3705,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorPanel</name>
     <message>
-        <location filename="../qml/InspectorPanel.qml" line="+107"/>
+        <location filename="../qml/InspectorPanel.qml" line="+127"/>
         <source>Album</source>
         <translation>相册</translation>
     </message>
@@ -3524,6 +3713,11 @@ Original source files on disk will be kept.</source>
         <location line="+7"/>
         <source>Image</source>
         <translation>图像</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Export</source>
+        <translation>导出</translation>
     </message>
 </context>
 <context>
@@ -3658,14 +3852,24 @@ Original source files on disk will be kept.</source>
         <translation>加载项目</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+70"/>
         <source>Add to Queue</source>
         <translation>加入队列</translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>Export</source>
-        <translation>导出</translation>
+        <location line="+31"/>
+        <source>Exporting...</source>
+        <translation>正在导出...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Export 1 File</source>
+        <translation>导出 1 个文件</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export %1 Files</source>
+        <translation>导出 %1 个文件</translation>
     </message>
 </context>
 <context>
@@ -3676,7 +3880,7 @@ Original source files on disk will be kept.</source>
         <translation>Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+198"/>
+        <location line="+200"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
@@ -4351,7 +4555,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ShellSignals</name>
     <message>
-        <location filename="../qml/ShellSignals.qml" line="+137"/>
+        <location filename="../qml/ShellSignals.qml" line="+136"/>
         <source>Imported %1 image(s).</source>
         <translation>已导入 %1 张图像。</translation>
     </message>
@@ -4401,9 +4605,27 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>ThemedProgressBar</name>
+    <message>
+        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <source>Progress</source>
+        <translation>进度</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Indeterminate progress</source>
+        <translation>不确定进度</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 percent</source>
+        <translation>%1%</translation>
+    </message>
+</context>
+<context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+81"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
         <source>Black &amp; White</source>
         <translation>黑白</translation>
     </message>
@@ -4434,12 +4656,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>%1 | 评分 %2/5</translation>
     </message>
     <message>
-        <location line="+25"/>
-        <source>HDR</source>
-        <translation>HDR</translation>
-    </message>
-    <message>
-        <location line="-359"/>
+        <location line="-334"/>
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
@@ -4454,7 +4671,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="+2"/>
         <source>Studio</source>
-        <translation type="unfinished">工作室</translation>
+        <translation>Studio</translation>
     </message>
     <message>
         <location line="+27"/>
@@ -4550,7 +4767,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="+8"/>
         <source>Studio</source>
-        <translation>工作室</translation>
+        <translation>Studio</translation>
     </message>
     <message>
         <location line="+17"/>

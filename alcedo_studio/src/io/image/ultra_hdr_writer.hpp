@@ -262,20 +262,16 @@ auto ReadFileBytes(const std::filesystem::path& path) -> std::vector<uint8_t> {
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
 }
 
-/// Base JPEG may already carry APP1 Exif. libultrahdr API-3 (HDR raw + SDR
-/// JPEG) ignores uhdr_enc_set_exif_data and only keeps Exif from the base JPEG.
+/// Write an Exif-free base JPEG. EXIF is supplied separately via
+/// uhdr_enc_set_exif_data so libultrahdr does not see two EXIF sources.
 auto BuildBaseJpegBytes(const cv::Mat& linear_rgba32f, const ExportFormatOptions& options,
-                        const ExportColorProfileConfig& color_profile, bool embed_icc_profile,
-                        const std::vector<uint8_t>& exif_payload) -> std::vector<uint8_t> {
-  const cv::Mat                  base_rgb8 =
-      BuildSdrBaseRgb8(linear_rgba32f, options.ultra_hdr_dither_enabled_);
+                        const ExportColorProfileConfig& color_profile, bool embed_icc_profile)
+    -> std::vector<uint8_t> {
+  const cv::Mat base_rgb8 = BuildSdrBaseRgb8(linear_rgba32f, options.ultra_hdr_dither_enabled_);
   const TempFileGuard            temp_file(MakeTempBaseJpegPath());
   const ExportColorProfileConfig base_profile = MakeSdrBaseColorProfile(color_profile);
   WriteBaseJpeg(temp_file.path(), base_rgb8, options.ultra_hdr_quality_, base_profile,
                 embed_icc_profile);
-  if (!exif_payload.empty() && !ReplaceJpegExifApp1Segment(temp_file.path(), exif_payload)) {
-    throw std::runtime_error("UltraHdrWriter: failed to inject EXIF into base JPEG.");
-  }
   return ReadFileBytes(temp_file.path());
 }
 
@@ -291,7 +287,9 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          /*src_path*/,
     throw std::runtime_error("UltraHdrWriter: expected non-empty CV_32FC4 image.");
   }
 
-  cv::Mat              linear_rgba32f = ConvertHdrIntentToLinear(rgba32f, color_profile.encoding_eotf);
+  cv::Mat linear_rgba32f = ConvertHdrIntentToLinear(rgba32f, color_profile.encoding_eotf);
+  std::vector<uint8_t> base_jpeg_bytes =
+      BuildBaseJpegBytes(linear_rgba32f, options, color_profile, embed_icc_profile);
 
   std::vector<uint8_t> exif_payload;
   if (include_exif_metadata) {
@@ -302,11 +300,6 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          /*src_path*/,
         .include_software_ = true,
     });
   }
-
-  // API-3 (HDR raw + compressed SDR) keeps Exif only from the base JPEG and
-  // ignores uhdr_enc_set_exif_data. Inject APP1 into the base before encode.
-  std::vector<uint8_t> base_jpeg_bytes =
-      BuildBaseJpegBytes(linear_rgba32f, options, color_profile, embed_icc_profile, exif_payload);
 
   cv::Mat rgba16f;
   linear_rgba32f.convertTo(rgba16f, CV_16FC4);
@@ -324,13 +317,13 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          /*src_path*/,
   hdr_image.planes[UHDR_PLANE_PACKED] = rgba16f.data;
   hdr_image.stride[UHDR_PLANE_PACKED] = static_cast<unsigned>(rgba16f.cols);
 
-  uhdr_compressed_image_t sdr_image = {};
-  sdr_image.data                    = base_jpeg_bytes.data();
-  sdr_image.data_sz                 = base_jpeg_bytes.size();
-  sdr_image.capacity                = base_jpeg_bytes.size();
-  sdr_image.cg                      = ResolveUhdrColorGamut(color_profile.encoding_space);
-  sdr_image.ct                      = UHDR_CT_SRGB;
-  sdr_image.range                   = UHDR_CR_FULL_RANGE;
+  uhdr_compressed_image_t sdr_image   = {};
+  sdr_image.data                      = base_jpeg_bytes.data();
+  sdr_image.data_sz                   = base_jpeg_bytes.size();
+  sdr_image.capacity                  = base_jpeg_bytes.size();
+  sdr_image.cg                        = ResolveUhdrColorGamut(color_profile.encoding_space);
+  sdr_image.ct                        = UHDR_CT_SRGB;
+  sdr_image.range                     = UHDR_CR_FULL_RANGE;
 
   using EncoderPtr = std::unique_ptr<uhdr_codec_private_t, decltype(&uhdr_release_encoder)>;
   EncoderPtr encoder(uhdr_create_encoder(), &uhdr_release_encoder);
@@ -360,6 +353,14 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          /*src_path*/,
                        encoder.get(), std::clamp(color_profile.peak_luminance, 203.0f, 10000.0f)),
                    "uhdr_enc_set_target_display_peak_brightness");
 
+  if (!exif_payload.empty()) {
+    uhdr_mem_block_t exif_block = {};
+    exif_block.data             = exif_payload.data();
+    exif_block.data_sz          = exif_payload.size();
+    exif_block.capacity         = exif_payload.size();
+    ThrowIfUhdrError(uhdr_enc_set_exif_data(encoder.get(), &exif_block), "uhdr_enc_set_exif_data");
+  }
+
   ThrowIfUhdrError(uhdr_encode(encoder.get()), "uhdr_encode");
 
   uhdr_compressed_image_t* encoded_stream = uhdr_get_encoded_stream(encoder.get());
@@ -367,23 +368,21 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          /*src_path*/,
     throw std::runtime_error("UltraHdrWriter: encoder produced an empty stream.");
   }
 
-  {
-    std::ofstream output(export_path, std::ios::binary);
-    if (!output.is_open()) {
-      throw std::runtime_error("UltraHdrWriter: failed to open output file \"" +
-                               export_path.string() + "\".");
-    }
-    output.write(static_cast<const char*>(encoded_stream->data),
-                 static_cast<std::streamsize>(encoded_stream->data_sz));
-    if (!output.good()) {
-      throw std::runtime_error("UltraHdrWriter: failed to write output file \"" +
-                               export_path.string() + "\".");
-    }
+  std::ofstream output(export_path, std::ios::binary);
+  if (!output.is_open()) {
+    throw std::runtime_error("UltraHdrWriter: failed to open output file \"" +
+                             export_path.string() + "\".");
+  }
+  output.write(static_cast<const char*>(encoded_stream->data),
+               static_cast<std::streamsize>(encoded_stream->data_sz));
+  if (!output.good()) {
+    throw std::runtime_error("UltraHdrWriter: failed to write output file \"" +
+                             export_path.string() + "\".");
   }
 
-  // Safety net: rewrite APP1 after encode (ofstream must be closed first).
-  if (!exif_payload.empty() && !ReplaceJpegExifApp1Segment(export_path, exif_payload)) {
-    throw std::runtime_error("UltraHdrWriter: failed to rewrite EXIF on Ultra HDR output.");
+  // Safety net: rewrite APP1 with the same Exiv2-free payload after encode.
+  if (!exif_payload.empty()) {
+    (void)ReplaceJpegExifApp1Segment(export_path, exif_payload);
   }
 }
 

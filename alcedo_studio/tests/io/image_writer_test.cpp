@@ -12,15 +12,17 @@
 #include <ultrahdr_api.h>
 #endif
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <opencv2/imgcodecs.hpp>
 #include <string>
-#include <algorithm>
 #include <vector>
 
+#include "alcedo_version.hpp"
 #include "image/image_buffer.hpp"
 #include "image/metadata.hpp"
 #include "utils/string/convert.hpp"
@@ -32,7 +34,7 @@ class ImageWriterTests : public ::testing::Test {
  protected:
   std::filesystem::path temp_dir_;
 
-  void SetUp() override {
+  void                  SetUp() override {
     temp_dir_ = std::filesystem::temp_directory_path() / "alcedo_image_writer_test";
     std::filesystem::create_directories(temp_dir_);
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
@@ -64,12 +66,12 @@ auto ReadFileBytes(const std::filesystem::path& path) -> std::vector<uint8_t> {
 /// JPEG metadata is written and verified via OIIO, matching the production
 /// ImageWriter write path (Exiv2 MemIo open/write SEHs on MSVC).
 
-void WriteTestJpeg(const std::filesystem::path& path, const std::vector<uint8_t>& rgb,
-                   int width, int height) {
+void WriteTestJpeg(const std::filesystem::path& path, const std::vector<uint8_t>& rgb, int width,
+                   int height) {
   OIIO_NAMESPACE_USING
 
   ImageSpec spec(width, height, 3, TypeDesc::UINT8);
-  spec.channelnames = {"R", "G", "B"};
+  spec.channelnames                   = {"R", "G", "B"};
   std::unique_ptr<ImageOutput> output = ImageOutput::create(PathToUtf8(path));
   ASSERT_TRUE(output != nullptr);
   ASSERT_TRUE(output->open(PathToUtf8(path), spec));
@@ -82,12 +84,10 @@ void WriteTestJpeg(const std::filesystem::path& path, const std::vector<uint8_t>
 /// we do not stamp EXIF via Exiv2::ExifParser::encode (Invalid key '' on this
 /// toolchain for freshly constructed ExifData).
 void WriteJpegWithOrientation(const std::filesystem::path& path, uint16_t /*orientation*/) {
-  const auto sample =
-      std::filesystem::path(TEST_IMG_PATH) / "jpeg" / "tile_tests" / "test_img.jpg";
+  const auto sample = std::filesystem::path(TEST_IMG_PATH) / "jpeg" / "tile_tests" / "test_img.jpg";
   if (std::filesystem::exists(sample)) {
     std::error_code ec;
-    std::filesystem::copy_file(sample, path, std::filesystem::copy_options::overwrite_existing,
-                               ec);
+    std::filesystem::copy_file(sample, path, std::filesystem::copy_options::overwrite_existing, ec);
     ASSERT_FALSE(ec) << ec.message();
     return;
   }
@@ -114,6 +114,35 @@ auto ReadOiioStringAttr(const std::filesystem::path& path, const char* key) -> s
   const std::string value = input->spec().get_string_attribute(key);
   input->close();
   return value;
+}
+
+auto ReadOiioFloatAttr(const std::filesystem::path& path, const char* key, float fallback = -1.0f)
+    -> float {
+  OIIO_NAMESPACE_USING
+  auto input = ImageInput::open(PathToUtf8(path));
+  if (!input) return fallback;
+  const float value = input->spec().get_float_attribute(key, fallback);
+  input->close();
+  return value;
+}
+
+auto HasOiioAttr(const std::filesystem::path& path, const char* key) -> bool {
+  OIIO_NAMESPACE_USING
+  auto input = ImageInput::open(PathToUtf8(path));
+  if (!input) return false;
+  const bool present = input->spec().find_attribute(key) != nullptr;
+  input->close();
+  return present;
+}
+
+auto ReadOiioShape(const std::filesystem::path& path) -> std::array<int, 3> {
+  OIIO_NAMESPACE_USING
+  auto input = ImageInput::open(PathToUtf8(path));
+  if (!input) return {0, 0, 0};
+  const auto shape =
+      std::array<int, 3>{input->spec().width, input->spec().height, input->spec().nchannels};
+  input->close();
+  return shape;
 }
 
 auto JpegContainsAscii(const std::filesystem::path& path, const std::string& needle) -> bool {
@@ -220,8 +249,7 @@ TEST_F(ImageWriterTests, UltraHdrTriggerMatchesHdrJpegCombinations) {
   EXPECT_TRUE(ImageWriter::ShouldWriteUltraHdr(
       jpeg_options, MakeColorProfile(ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::HLG)));
   EXPECT_FALSE(ImageWriter::ShouldWriteUltraHdr(
-      jpeg_options,
-      MakeColorProfile(ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2)));
+      jpeg_options, MakeColorProfile(ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2)));
 
   jpeg_options.hdr_export_mode_ = ExportFormatOptions::HDR_EXPORT_MODE::EMBEDDED_PROFILE_ONLY;
   EXPECT_FALSE(ImageWriter::ShouldWriteUltraHdr(
@@ -250,19 +278,19 @@ TEST_F(ImageWriterTests, LegacyJpegExportForcesUprightOrientation) {
   WriteJpegWithOrientation(src_path, /*orientation=*/6);
 
   cv::Mat rgba32f(1, 2, CV_32FC4);
-  rgba32f.at<cv::Vec4f>(0, 0) = cv::Vec4f(1.0f, 0.0f, 0.0f, 1.0f);
-  rgba32f.at<cv::Vec4f>(0, 1) = cv::Vec4f(0.0f, 1.0f, 0.0f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 0)    = cv::Vec4f(1.0f, 0.0f, 0.0f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 1)    = cv::Vec4f(0.0f, 1.0f, 0.0f, 1.0f);
 
-  auto image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  auto                image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   ExportFormatOptions options;
-  options.format_ = ImageFormatType::JPEG;
+  options.format_      = ImageFormatType::JPEG;
   options.export_path_ = dst_path;
 
-  ASSERT_NO_THROW(ImageWriter::WriteImageToPath(
-      src_path, image_data, options,
-      ExportColorProfileConfig{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2,
-                               100.0f}));
+  ASSERT_NO_THROW(
+      ImageWriter::WriteImageToPath(src_path, image_data, options,
+                                    ExportColorProfileConfig{ColorUtils::ColorSpace::REC709,
+                                                             ColorUtils::EOTF::GAMMA_2_2, 100.0f}));
 
   ASSERT_TRUE(std::filesystem::exists(dst_path));
   ASSERT_GT(std::filesystem::file_size(dst_path), 0u);
@@ -284,17 +312,29 @@ TEST_F(ImageWriterTests, EmbeddedHdrIccModeRejectsHdrJpegExport) {
   const auto src_path = temp_dir_ / "hdr_source.jpg";
   const auto dst_path = temp_dir_ / "embedded_hdr.jpg";
 
-  WriteTestJpeg(src_path, {
-                           144, 96, 48, 144, 96, 48,
-                           144, 96, 48, 144, 96, 48,
-                         }, 2, 2);
+  WriteTestJpeg(src_path,
+                {
+                    144,
+                    96,
+                    48,
+                    144,
+                    96,
+                    48,
+                    144,
+                    96,
+                    48,
+                    144,
+                    96,
+                    48,
+                },
+                2, 2);
 
-  cv::Mat rgba32f(2, 2, CV_32FC4, cv::Scalar(0.65f, 0.35f, 0.15f, 1.0f));
-  auto    image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  cv::Mat             rgba32f(2, 2, CV_32FC4, cv::Scalar(0.65f, 0.35f, 0.15f, 1.0f));
+  auto                image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   ExportFormatOptions options;
-  options.format_ = ImageFormatType::JPEG;
-  options.export_path_ = dst_path;
+  options.format_          = ImageFormatType::JPEG;
+  options.export_path_     = dst_path;
   options.hdr_export_mode_ = ExportFormatOptions::HDR_EXPORT_MODE::EMBEDDED_PROFILE_ONLY;
 
   const auto hdr_profile =
@@ -309,29 +349,41 @@ TEST_F(ImageWriterTests, EmbeddedHdrIccModeRejectsMetadataInjectedHdrJpegExport)
   const auto src_path = temp_dir_ / "hdr_metadata_source.jpg";
   const auto dst_path = temp_dir_ / "embedded_hdr_metadata.jpg";
 
-  WriteTestJpeg(src_path, {
-                           64, 32, 16, 64, 32, 16,
-                           64, 32, 16, 64, 32, 16,
-                         }, 2, 2);
+  WriteTestJpeg(src_path,
+                {
+                    64,
+                    32,
+                    16,
+                    64,
+                    32,
+                    16,
+                    64,
+                    32,
+                    16,
+                    64,
+                    32,
+                    16,
+                },
+                2, 2);
 
   // Source EXIF is optional for this rejection path; WriteImageToPath must
   // throw on EMBEDDED_PROFILE_ONLY + HDR before metadata injection matters.
 
-  cv::Mat rgba32f(2, 2, CV_32FC4, cv::Scalar(0.62f, 0.41f, 0.21f, 1.0f));
-  auto    image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  cv::Mat             rgba32f(2, 2, CV_32FC4, cv::Scalar(0.62f, 0.41f, 0.21f, 1.0f));
+  auto                image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   ExportFormatOptions options;
-  options.format_ = ImageFormatType::JPEG;
-  options.export_path_ = dst_path;
+  options.format_          = ImageFormatType::JPEG;
+  options.export_path_     = dst_path;
   options.hdr_export_mode_ = ExportFormatOptions::HDR_EXPORT_MODE::EMBEDDED_PROFILE_ONLY;
 
   const auto hdr_profile =
       MakeColorProfile(ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084);
 
   ExifDisplayMetaData metadata;
-  metadata.lens_ = "Alcedo Test 35mm F1.8";
+  metadata.lens_          = "Alcedo Test 35mm F1.8";
   metadata.date_time_str_ = "2024-05-06 07:08:09";
-  metadata.rating_ = 5;
+  metadata.rating_        = 5;
 
   EXPECT_THROW(ImageWriter::WriteImageToPath(src_path, image_data, options, hdr_profile, metadata),
                std::runtime_error);
@@ -342,7 +394,7 @@ TEST_F(ImageWriterTests, UltraHdrExportSupportsGainMapDitherToggle) {
 #if !defined(ALCEDO_HAS_ULTRAHDR)
   GTEST_SKIP() << "Ultra HDR support is not enabled in this build.";
 #else
-  const auto src_path = temp_dir_ / "ultra_hdr_source.jpg";
+  const auto           src_path = temp_dir_ / "ultra_hdr_source.jpg";
   std::vector<uint8_t> source_rgb;
   source_rgb.reserve(8 * 8 * 3);
   for (int y = 0; y < 8; ++y) {
@@ -356,11 +408,11 @@ TEST_F(ImageWriterTests, UltraHdrExportSupportsGainMapDitherToggle) {
   cv::Mat rgba32f(8, 8, CV_32FC4);
   for (int y = 0; y < rgba32f.rows; ++y) {
     for (int x = 0; x < rgba32f.cols; ++x) {
-      const float v = 0.08f + 0.025f * static_cast<float>(x + y);
+      const float v               = 0.08f + 0.025f * static_cast<float>(x + y);
       rgba32f.at<cv::Vec4f>(y, x) = cv::Vec4f(v, v * 0.85f, v * 0.65f, 1.0f);
     }
   }
-  auto image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  auto       image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   const auto hdr_profile =
       MakeColorProfile(ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084);
@@ -370,7 +422,7 @@ TEST_F(ImageWriterTests, UltraHdrExportSupportsGainMapDitherToggle) {
     options.format_ = ImageFormatType::JPEG;
     options.export_path_ =
         temp_dir_ / (dither_enabled ? "ultra_hdr_dither_on.jpg" : "ultra_hdr_dither_off.jpg");
-    options.hdr_export_mode_ = ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR;
+    options.hdr_export_mode_          = ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR;
     options.ultra_hdr_dither_enabled_ = dither_enabled;
 
     ImageWriter::WriteImageToPath(src_path, image_data, options, hdr_profile);
@@ -383,6 +435,147 @@ TEST_F(ImageWriterTests, UltraHdrExportSupportsGainMapDitherToggle) {
 #endif
 }
 
+TEST_F(ImageWriterTests, ExportWritesSoftwareNameAndVersion) {
+  const auto src_path = temp_dir_ / "software_source.jpg";
+  const auto dst_path = temp_dir_ / "software_exported.jpg";
+  WriteTestJpeg(src_path, {32, 64, 96, 96, 64, 32}, 2, 1);
+
+  cv::Mat rgba32f(1, 2, CV_32FC4);
+  rgba32f.at<cv::Vec4f>(0, 0) = cv::Vec4f(0.2f, 0.4f, 0.6f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 1) = cv::Vec4f(0.6f, 0.4f, 0.2f, 1.0f);
+  auto image_data             = std::make_shared<ImageBuffer>(std::move(rgba32f));
+
+  ExportFormatOptions options;
+  options.format_      = ImageFormatType::JPEG;
+  options.export_path_ = dst_path;
+
+  ASSERT_NO_THROW(ImageWriter::WriteImageToPath(src_path, image_data, options));
+  ASSERT_TRUE(std::filesystem::exists(dst_path));
+  EXPECT_TRUE(JpegContainsAscii(dst_path, AlcedoSoftwareExifString()))
+      << DumpOiioAttrSummary(dst_path);
+}
+
+TEST_F(ImageWriterTests, ExportWritesSoftwareAndCaptureMetadataForNonJpegFormats) {
+  const auto src_path = temp_dir_ / "multi_format_source.jpg";
+  WriteTestJpeg(src_path, {32, 64, 96, 96, 64, 32}, 2, 1);
+
+  cv::Mat rgba32f(1, 2, CV_32FC4);
+  rgba32f.at<cv::Vec4f>(0, 0) = cv::Vec4f(0.2f, 0.4f, 0.6f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 1) = cv::Vec4f(0.6f, 0.4f, 0.2f, 1.0f);
+
+  ExifDisplayMetaData metadata;
+  metadata.make_  = "AlcedoCam";
+  metadata.model_ = "Format Matrix";
+  metadata.iso_   = 200;
+
+  const std::string software = AlcedoSoftwareExifString();
+  // OIIO embeds the standard "Software" attribute for TIFF/PNG/EXR. JPEG uses
+  // the APP1 rewriter. WEBP/BMP export is deprecated.
+  struct Case {
+    ImageFormatType                    format;
+    const char*                        extension;
+    ExportFormatOptions::BIT_DEPTH     bit_depth;
+  };
+  const Case cases[] = {
+      {ImageFormatType::TIFF, ".tif", ExportFormatOptions::BIT_DEPTH::BIT_16},
+      {ImageFormatType::PNG, ".png", ExportFormatOptions::BIT_DEPTH::BIT_8},
+      {ImageFormatType::EXR, ".exr", ExportFormatOptions::BIT_DEPTH::BIT_16},
+  };
+
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.extension);
+    auto image_data = std::make_shared<ImageBuffer>(rgba32f.clone());
+    ExportFormatOptions options;
+    options.format_      = test_case.format;
+    options.bit_depth_   = test_case.bit_depth;
+    options.export_path_ = temp_dir_ / (std::string("software_exported") + test_case.extension);
+
+    ASSERT_NO_THROW(ImageWriter::WriteImageToPath(src_path, image_data, options, std::nullopt,
+                                                  metadata));
+    ASSERT_TRUE(std::filesystem::exists(options.export_path_));
+
+    const auto software_attr = !ReadOiioStringAttr(options.export_path_, "Software").empty()
+                                   ? ReadOiioStringAttr(options.export_path_, "Software")
+                                   : ReadOiioStringAttr(options.export_path_, "Exif:Software");
+    EXPECT_EQ(software_attr, software) << DumpOiioAttrSummary(options.export_path_);
+
+    const auto make = !ReadOiioStringAttr(options.export_path_, "Exif:Make").empty()
+                          ? ReadOiioStringAttr(options.export_path_, "Exif:Make")
+                          : ReadOiioStringAttr(options.export_path_, "Make");
+    EXPECT_EQ(make, metadata.make_) << DumpOiioAttrSummary(options.export_path_);
+  }
+}
+
+TEST_F(ImageWriterTests, UltraHdrExportWritesExifAndSoftware) {
+#if !defined(ALCEDO_HAS_ULTRAHDR)
+  GTEST_SKIP() << "Ultra HDR support is not enabled in this build.";
+#else
+  const auto           src_path = temp_dir_ / "ultra_hdr_exif_source.jpg";
+  std::vector<uint8_t> source_rgb;
+  source_rgb.reserve(8 * 8 * 3);
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      const auto v = static_cast<uint8_t>(16 + (x + y) * 12);
+      source_rgb.insert(source_rgb.end(), {v, v, v});
+    }
+  }
+  WriteTestJpeg(src_path, source_rgb, 8, 8);
+
+  cv::Mat rgba32f(8, 8, CV_32FC4);
+  for (int y = 0; y < rgba32f.rows; ++y) {
+    for (int x = 0; x < rgba32f.cols; ++x) {
+      const float v               = 0.08f + 0.025f * static_cast<float>(x + y);
+      rgba32f.at<cv::Vec4f>(y, x) = cv::Vec4f(v, v * 0.85f, v * 0.65f, 1.0f);
+    }
+  }
+  auto image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+
+  const auto dst_path = temp_dir_ / "ultra_hdr_exif_exported.jpg";
+  ExportFormatOptions options;
+  options.format_          = ImageFormatType::JPEG;
+  options.export_path_     = dst_path;
+  options.hdr_export_mode_ = ExportFormatOptions::HDR_EXPORT_MODE::ULTRA_HDR;
+
+  ExifDisplayMetaData metadata;
+  metadata.make_          = "AlcedoCam";
+  metadata.model_         = "UHDR Model";
+  metadata.date_time_str_ = "2024-05-06 07:08:09";
+  metadata.rating_        = 5;
+
+  ASSERT_NO_THROW(ImageWriter::WriteImageToPath(
+      src_path, image_data, options,
+      MakeColorProfile(ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084), metadata));
+
+  const std::vector<uint8_t> bytes = ReadFileBytes(dst_path);
+  ASSERT_FALSE(bytes.empty());
+  EXPECT_EQ(is_uhdr_image(const_cast<uint8_t*>(bytes.data()), static_cast<int>(bytes.size())), 1);
+  EXPECT_TRUE(JpegContainsAscii(dst_path, metadata.make_)) << DumpOiioAttrSummary(dst_path);
+  EXPECT_TRUE(JpegContainsAscii(dst_path, metadata.model_)) << DumpOiioAttrSummary(dst_path);
+  EXPECT_TRUE(JpegContainsAscii(dst_path, "2024:05:06 07:08:09") ||
+              JpegContainsAscii(dst_path, "2024-05-06"))
+      << DumpOiioAttrSummary(dst_path);
+  EXPECT_EQ(ReadExifRatingFromApp1(dst_path), 5) << DumpOiioAttrSummary(dst_path);
+  EXPECT_TRUE(JpegContainsAscii(dst_path, AlcedoSoftwareExifString()))
+      << DumpOiioAttrSummary(dst_path);
+#endif
+}
+
+TEST_F(ImageWriterTests, DeprecatedWebpAndBmpExportFormatsAreRejected) {
+  const auto src_path = temp_dir_ / "deprecated_source.jpg";
+  WriteTestJpeg(src_path, {32, 64, 96, 96, 64, 32}, 2, 1);
+
+  cv::Mat rgba32f(1, 2, CV_32FC4, cv::Scalar(0.2f, 0.4f, 0.6f, 1.0f));
+  auto    image_data = std::make_shared<ImageBuffer>(rgba32f.clone());
+
+  for (const ImageFormatType format : {ImageFormatType::WEBP, ImageFormatType::BMP}) {
+    ExportFormatOptions options;
+    options.format_      = format;
+    options.export_path_ = temp_dir_ / "deprecated_out.bin";
+    EXPECT_THROW(ImageWriter::WriteImageToPath(src_path, image_data, options), std::runtime_error);
+    EXPECT_FALSE(std::filesystem::exists(options.export_path_));
+  }
+}
+
 TEST_F(ImageWriterTests, ExportWritesCurrentRatingMetadata) {
   const auto src_path = temp_dir_ / "rating_source.jpg";
   const auto dst_path = temp_dir_ / "rating_exported.jpg";
@@ -393,12 +586,12 @@ TEST_F(ImageWriterTests, ExportWritesCurrentRatingMetadata) {
   // ExifDisplayMetaData via ImageWriter::ApplyExportMetadata / OIIO attrs.
 
   cv::Mat rgba32f(1, 2, CV_32FC4);
-  rgba32f.at<cv::Vec4f>(0, 0) = cv::Vec4f(0.2f, 0.4f, 0.6f, 1.0f);
-  rgba32f.at<cv::Vec4f>(0, 1) = cv::Vec4f(0.6f, 0.4f, 0.2f, 1.0f);
-  auto image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  rgba32f.at<cv::Vec4f>(0, 0)    = cv::Vec4f(0.2f, 0.4f, 0.6f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 1)    = cv::Vec4f(0.6f, 0.4f, 0.2f, 1.0f);
+  auto                image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   ExportFormatOptions options;
-  options.format_ = ImageFormatType::JPEG;
+  options.format_      = ImageFormatType::JPEG;
   options.export_path_ = dst_path;
 
   ExifDisplayMetaData metadata;
@@ -422,23 +615,23 @@ TEST_F(ImageWriterTests, ExportWritesCurrentLensAndCaptureDateMetadata) {
   WriteTestJpeg(src_path, {128, 96, 64, 64, 96, 128}, 2, 1);
 
   cv::Mat rgba32f(1, 2, CV_32FC4);
-  rgba32f.at<cv::Vec4f>(0, 0) = cv::Vec4f(0.5f, 0.4f, 0.3f, 1.0f);
-  rgba32f.at<cv::Vec4f>(0, 1) = cv::Vec4f(0.3f, 0.4f, 0.5f, 1.0f);
-  auto image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
+  rgba32f.at<cv::Vec4f>(0, 0)    = cv::Vec4f(0.5f, 0.4f, 0.3f, 1.0f);
+  rgba32f.at<cv::Vec4f>(0, 1)    = cv::Vec4f(0.3f, 0.4f, 0.5f, 1.0f);
+  auto                image_data = std::make_shared<ImageBuffer>(std::move(rgba32f));
 
   ExportFormatOptions options;
-  options.format_ = ImageFormatType::JPEG;
+  options.format_      = ImageFormatType::JPEG;
   options.export_path_ = dst_path;
 
   ExifDisplayMetaData metadata;
-  metadata.make_ = "AlcedoCam";
-  metadata.model_ = "Model T";
-  metadata.lens_make_ = "Alcedo Optics";
-  metadata.lens_ = "Alcedo Optics 50mm F2";
+  metadata.make_          = "AlcedoCam";
+  metadata.model_         = "Model T";
+  metadata.lens_make_     = "Alcedo Optics";
+  metadata.lens_          = "Alcedo Optics 50mm F2";
   metadata.date_time_str_ = "2023-12-31 23:59:58";
-  metadata.focal_ = 50.0f;
-  metadata.aperture_ = 2.0f;
-  metadata.iso_ = 400;
+  metadata.focal_         = 50.0f;
+  metadata.aperture_      = 2.0f;
+  metadata.iso_           = 400;
 
   ASSERT_NO_THROW(
       ImageWriter::WriteImageToPath(src_path, image_data, options, std::nullopt, metadata));
@@ -446,9 +639,9 @@ TEST_F(ImageWriterTests, ExportWritesCurrentLensAndCaptureDateMetadata) {
   ASSERT_TRUE(std::filesystem::exists(dst_path));
   ASSERT_GT(std::filesystem::file_size(dst_path), 0u);
 
-  const auto make = !ReadOiioStringAttr(dst_path, "Exif:Make").empty()
-                        ? ReadOiioStringAttr(dst_path, "Exif:Make")
-                        : ReadOiioStringAttr(dst_path, "Make");
+  const auto make  = !ReadOiioStringAttr(dst_path, "Exif:Make").empty()
+                         ? ReadOiioStringAttr(dst_path, "Exif:Make")
+                         : ReadOiioStringAttr(dst_path, "Make");
   const auto model = !ReadOiioStringAttr(dst_path, "Exif:Model").empty()
                          ? ReadOiioStringAttr(dst_path, "Exif:Model")
                          : ReadOiioStringAttr(dst_path, "Model");
@@ -469,6 +662,86 @@ TEST_F(ImageWriterTests, ExportWritesCurrentLensAndCaptureDateMetadata) {
               JpegContainsAscii(dst_path, "2023-12-31") ||
               !ReadOiioStringAttr(dst_path, "Exif:DateTimeOriginal").empty())
       << DumpOiioAttrSummary(dst_path);
+}
+
+TEST_F(ImageWriterTests, RecipePhysicalSizeWritesPixelsDpiCaptureMetadataAndDiscardsAlpha) {
+  const auto src_path = temp_dir_ / "recipe_source.jpg";
+  const auto dst_path = temp_dir_ / "recipe_exported.tif";
+  WriteTestJpeg(src_path, std::vector<uint8_t>(4 * 2 * 3, 96), 4, 2);
+
+  cv::Mat      rgba32f(2, 4, CV_32FC4, cv::Scalar(0.2f, 0.4f, 0.6f, 0.5f));
+  auto         image_data = std::make_shared<ImageBuffer>(rgba32f.clone());
+
+  ExportRecipe recipe;
+  recipe.codec_.format_          = ImageFormatType::TIFF;
+  recipe.codec_.export_path_     = dst_path;
+  recipe.codec_.bit_depth_       = ExportFormatOptions::BIT_DEPTH::BIT_16;
+  recipe.resize_.mode_           = ExportResizeMode::PHYSICAL_SIZE;
+  recipe.resize_.physical_width_ = 1.0;
+  recipe.resize_.physical_unit_  = ExportPhysicalUnit::INCHES;
+  recipe.resize_.dpi_            = 10.0;
+  recipe.resize_.allow_upscale_  = true;
+  recipe.alpha_                  = ExportAlphaPolicy::DISCARD;
+
+  ExifDisplayMetaData metadata;
+  metadata.make_          = "FUJIFILM";
+  metadata.model_         = "X-T5";
+  metadata.iso_           = 800;
+  metadata.aperture_      = 4.0f;
+  metadata.shutter_speed_ = {1, 13};
+  metadata.focal_         = 29.6f;
+  metadata.focal_35mm_    = 44.0f;
+
+  ASSERT_NO_THROW(ImageWriter::WriteImageToPath(
+      src_path, image_data, recipe,
+      MakeColorProfile(ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2), metadata));
+
+  const auto shape = ReadOiioShape(dst_path);
+  EXPECT_EQ(shape[0], 10);
+  EXPECT_EQ(shape[1], 5);
+  EXPECT_EQ(shape[2], 3);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:ISOSpeed"), 800) << DumpOiioAttrSummary(dst_path);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:SensitivityType"), 1);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:StandardOutputSensitivity"), 800);
+  EXPECT_NEAR(ReadOiioFloatAttr(dst_path, "FNumber"), 4.0f, 0.01f) << DumpOiioAttrSummary(dst_path);
+  EXPECT_NEAR(ReadOiioFloatAttr(dst_path, "ExposureTime"), 1.0f / 13.0f, 0.001f)
+      << DumpOiioAttrSummary(dst_path);
+  EXPECT_NEAR(ReadOiioFloatAttr(dst_path, "Exif:FocalLength"), 29.6f, 0.01f);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:FocalLengthIn35mmFilm"), 44);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:PixelXDimension"), 10);
+  EXPECT_EQ(ReadOiioIntAttr(dst_path, "Exif:PixelYDimension"), 5);
+  EXPECT_NEAR(ReadOiioFloatAttr(dst_path, "XResolution"), 10.0f, 0.01f);
+  EXPECT_TRUE(HasOiioAttr(dst_path, "ICCProfile"));
+}
+
+TEST_F(ImageWriterTests, RecipeCanOmitMetadataAndIccFromTiff) {
+  const auto src_path = temp_dir_ / "private_source.jpg";
+  const auto dst_path = temp_dir_ / "private_exported.tif";
+  WriteTestJpeg(src_path, {32, 64, 96, 96, 64, 32}, 2, 1);
+
+  cv::Mat      rgba32f(1, 2, CV_32FC4, cv::Scalar(0.2f, 0.4f, 0.6f, 1.0f));
+  auto         image_data = std::make_shared<ImageBuffer>(rgba32f.clone());
+
+  ExportRecipe recipe;
+  recipe.codec_.format_      = ImageFormatType::TIFF;
+  recipe.codec_.export_path_ = dst_path;
+  recipe.metadata_.mode_     = ExportMetadataMode::NONE;
+  recipe.icc_                = ExportIccPolicy::OMIT;
+
+  ExifDisplayMetaData metadata;
+  metadata.make_  = "Private Camera";
+  metadata.model_ = "Private Model";
+  metadata.iso_   = 12800;
+
+  ASSERT_NO_THROW(ImageWriter::WriteImageToPath(
+      src_path, image_data, recipe,
+      MakeColorProfile(ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2), metadata));
+
+  EXPECT_FALSE(HasOiioAttr(dst_path, "Exif:Make"));
+  EXPECT_FALSE(HasOiioAttr(dst_path, "Make"));
+  EXPECT_FALSE(HasOiioAttr(dst_path, "Exif:Model"));
+  EXPECT_FALSE(HasOiioAttr(dst_path, "Exif:ISOSpeedRatings"));
+  EXPECT_FALSE(HasOiioAttr(dst_path, "ICCProfile"));
 }
 
 }  // namespace alcedo

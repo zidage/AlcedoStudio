@@ -21,7 +21,6 @@ Item {
 
     property alias importDialog: importDialogObj
     property alias importFolderDialog: importFolderDialogObj
-    property alias exportDialog: exportDialogObj
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
@@ -71,36 +70,6 @@ Item {
         blurSource: root.blurSource
         onConfirmed: function(filePaths) {
             appModules.importExport.StartImport(filePaths)
-        }
-    }
-
-    AlbumExportDialog {
-        id: exportDialogObj
-        blurSource: root.blurSource
-        selectedCount: host.selectedCount
-        exportQueueCount: host.exportQueueCount
-        exportPreviewRows: host.exportPreviewRows
-        hdrExportAvailable: root.exportQueueState.hasHdrItems()
-        onAddSelectedToQueueRequested: {
-            root.exportQueueState.addTargets(root.selectionState.currentSelectedItems())
-            root.selectionState.clearSelectedImages()
-        }
-        onClearQueueRequested: root.exportQueueState.clearQueue()
-        onEnsurePreviewRequested: root.exportQueueState.refreshExportPreview()
-        onStartExportRequested: function(outDir, sdrResizeEnabled, sdrMaxSide, ultraHdrMaxSide, sdrFormat, sdrQuality, sdrBitDepth, sdrPngLevel, sdrTiffComp, ultraHdrQuality, ultraHdrDitherEnabled) {
-            appModules.importExport.StartExportWithSplitOptionsForTargets(
-                outDir,
-                sdrResizeEnabled,
-                sdrMaxSide,
-                ultraHdrMaxSide,
-                sdrFormat,
-                sdrQuality,
-                sdrBitDepth,
-                sdrPngLevel,
-                sdrTiffComp,
-                ultraHdrQuality,
-                ultraHdrDitherEnabled,
-                root.exportQueueState.exportQueueTargets())
         }
     }
 
@@ -390,8 +359,7 @@ Item {
     // True while any modal dialog/menu is open — used by Main's Select-All
     // shortcut gate (formerly selectionShortcutBlocked).
     function anyDialogOpened() {
-        return exportDialogObj.opened
-               || settingsDialogObj.opened
+        return settingsDialogObj.opened
                || adjustmentTransferDialogObj.opened
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened

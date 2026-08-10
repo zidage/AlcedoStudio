@@ -24,8 +24,8 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/operators/operator_registeration.hpp"
+#include "edit/pipeline/default_pipeline_params.hpp"
 #include "io/image/image_writer.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -73,8 +73,8 @@ auto CollectSupportedBatchImportImages(size_t max_count) -> std::vector<image_pa
   std::sort(paths.begin(), paths.end(), [](const image_path_t& a, const image_path_t& b) {
     std::error_code ea;
     std::error_code eb;
-    const auto sa = std::filesystem::file_size(a, ea);
-    const auto sb = std::filesystem::file_size(b, eb);
+    const auto      sa = std::filesystem::file_size(a, ea);
+    const auto      sb = std::filesystem::file_size(b, eb);
     if (ea || eb) {
       return a < b;
     }
@@ -184,9 +184,9 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
   std::filesystem::path dst_path_global;
   {
     ProjectService project(db_path_, meta_path_);
-    auto           sleeve_service = project.GetSleeveService();
-    auto           image_pool     = project.GetImagePoolService();
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           sleeve_service   = project.GetSleeveService();
+    auto           image_pool       = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ImportServiceImpl import_service(sleeve_service, image_pool);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
@@ -218,20 +218,33 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
         image_id, [](std::shared_ptr<Image> img) { return img->image_path_; });
     std::filesystem::path dst_name = src_path.filename();
     dst_name.replace_extension(".jpg");
-    const std::filesystem::path dst_path = export_dir_ / dst_name;
+    const std::filesystem::path requested_path = export_dir_ / dst_name;
+    const std::filesystem::path dst_path       = export_dir_ / "service-007.jpg";
 
     ExportService               export_service(sleeve_service, image_pool, pipeline_service);
 
     ExportTask                  task;
-    task.sleeve_id_            = element_id;
-    task.image_id_             = image_id;
-    task.options_.format_      = ImageFormatType::JPEG;
-    task.options_.export_path_ = dst_path;
+    task.sleeve_id_                 = element_id;
+    task.image_id_                  = image_id;
+    task.options_.format_           = ImageFormatType::JPEG;
+    task.options_.export_path_      = requested_path;
     // Production export UI commonly caps long edge; full-res 8K SDR JPEG has
     // crashed the OIIO/OpenCV write path on this fixture. Exercise the same
     // ExportService + ImageWriter path with the documented resize options.
-    task.options_.resize_enabled_  = true;
-    task.options_.max_length_side_ = 2048;
+    task.options_.resize_enabled_   = true;
+    task.options_.max_length_side_  = 2048;
+    task.recipe_                    = ExportRecipe::FromLegacyOptions(task.options_);
+    task.recipe_->file_name_.parts_ = {
+        {.field_ = ExportFileNameField::LITERAL, .literal_ = L"service-"},
+        {.field_ = ExportFileNameField::SEQUENCE, .number_width_ = 3},
+    };
+    task.file_name_context_ = ExportFileNameContext{.sequence_ = 7};
+
+    // Verify that the commit stage replaces an existing destination only after encode succeeds.
+    {
+      std::ofstream old_destination(dst_path, std::ios::binary);
+      old_destination << "old";
+    }
     export_service.EnqueueExportTask(task);
 
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
@@ -244,6 +257,11 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
     ASSERT_NE(results, nullptr);
     ASSERT_EQ(results->size(), 1u);
     EXPECT_TRUE((*results)[0].success_) << (*results)[0].message_;
+    EXPECT_EQ((*results)[0].output_path_, dst_path);
+    EXPECT_TRUE((*results)[0].failed_stage_.empty());
+    for (const auto& entry : std::filesystem::directory_iterator(export_dir_)) {
+      EXPECT_EQ(entry.path().filename().wstring().find(L".alcedo-export-"), std::wstring::npos);
+    }
     dst_path_global = dst_path;
   }
 
@@ -257,9 +275,9 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
   std::filesystem::path dst_path_global;
   {
     ProjectService project(db_path_, meta_path_);
-    auto           sleeve_service = project.GetSleeveService();
-    auto           image_pool     = project.GetImagePoolService();
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           sleeve_service   = project.GetSleeveService();
+    auto           image_pool       = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ImportServiceImpl import_service(sleeve_service, image_pool);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
@@ -284,14 +302,14 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
     auto snapshot = import_job->import_log_->Snapshot();
     ASSERT_FALSE(snapshot.created_.empty());
 
-    const auto element_id = snapshot.created_[0].element_id_;
-    const auto image_id   = snapshot.created_[0].image_id_;
+    const auto element_id     = snapshot.created_[0].element_id_;
+    const auto image_id       = snapshot.created_[0].image_id_;
 
-    auto pipeline_guard = pipeline_service->LoadPipeline(element_id);
+    auto       pipeline_guard = pipeline_service->LoadPipeline(element_id);
     ASSERT_NE(pipeline_guard, nullptr);
-    nlohmann::json odt_params = pipeline_defaults::MakeDefaultODTParams();
+    nlohmann::json odt_params           = pipeline_defaults::MakeDefaultODTParams();
     odt_params["odt"]["encoding_space"] = "rec2020";
-    odt_params["odt"]["encoding_eotf"] = "st2084";
+    odt_params["odt"]["encoding_eotf"]  = "st2084";
     odt_params["odt"]["peak_luminance"] = 600.0f;
     auto& output_stage = pipeline_guard->pipeline_->GetStage(PipelineStageName::Output_Transform);
     output_stage.SetOperator(OperatorType::ODT, odt_params);
@@ -305,9 +323,9 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
     dst_name.replace_extension(".jpg");
     const std::filesystem::path dst_path = export_dir_ / dst_name;
 
-    ExportService export_service(sleeve_service, image_pool, pipeline_service);
+    ExportService               export_service(sleeve_service, image_pool, pipeline_service);
 
-    ExportTask task;
+    ExportTask                  task;
     task.sleeve_id_            = element_id;
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
@@ -338,12 +356,12 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
   ASSERT_TRUE(decoder != nullptr);
 
   uhdr_compressed_image_t image = {};
-  image.data = const_cast<uint8_t*>(bytes.data());
-  image.data_sz = bytes.size();
-  image.capacity = bytes.size();
-  image.cg = UHDR_CG_UNSPECIFIED;
-  image.ct = UHDR_CT_UNSPECIFIED;
-  image.range = UHDR_CR_UNSPECIFIED;
+  image.data                    = const_cast<uint8_t*>(bytes.data());
+  image.data_sz                 = bytes.size();
+  image.capacity                = bytes.size();
+  image.cg                      = UHDR_CG_UNSPECIFIED;
+  image.ct                      = UHDR_CT_UNSPECIFIED;
+  image.range                   = UHDR_CR_UNSPECIFIED;
 
   ASSERT_EQ(uhdr_dec_set_image(decoder.get(), &image).error_code, UHDR_CODEC_OK);
   ASSERT_EQ(uhdr_dec_set_out_img_format(decoder.get(), UHDR_IMG_FMT_64bppRGBAHalfFloat).error_code,
@@ -360,10 +378,10 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
 }
 
 TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles) {
-  ProjectService project(db_path_, meta_path_);
-  auto           sleeve_service = project.GetSleeveService();
-  auto           image_pool     = project.GetImagePoolService();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ProjectService    project(db_path_, meta_path_);
+  auto              sleeve_service   = project.GetSleeveService();
+  auto              image_pool       = project.GetImagePoolService();
+  auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   ImportServiceImpl import_service(sleeve_service, image_pool);
 
@@ -439,10 +457,10 @@ TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles
 }
 
 TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
-  ProjectService project(db_path_, meta_path_);
-  auto           sleeve_service = project.GetSleeveService();
-  auto           image_pool     = project.GetImagePoolService();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ProjectService    project(db_path_, meta_path_);
+  auto              sleeve_service   = project.GetSleeveService();
+  auto              image_pool       = project.GetImagePoolService();
+  auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   ImportServiceImpl import_service(sleeve_service, image_pool);
   auto              paths = CollectSupportedBatchImportImages(/*max_count=*/2);

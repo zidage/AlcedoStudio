@@ -3,17 +3,17 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Inspector shell (Frontend 3). A low-emphasis horizontal tab strip at the top
-// switches the page stack between Album and Image — modeled on VSCode's
+// switches the page stack between Album, Image, and Export — modeled on VSCode's
 // secondary-sidebar / editor-tab selection: all-caps text labels, equal weight,
 // evenly split across the full width (extensible — add a tab and the strip
 // redistributes), no icons, no card, no filled background, no rounded
 // rectangle. The active tab is white text with a refined text-width underline;
 // inactive tabs are muted gray. The whole content tree below swaps with the
-// tab (Album stats vs. Image tiles).
+// tab (Album stats vs. Image tiles vs. Export settings).
 //
 // `focusedImage` is the compact focused-image inspection DTO supplied by Main.qml.
-// The shell owns only navigation; ImageInspectorPanel owns the page layout and edit
-// state.
+// The shell owns only navigation; ImageInspectorPanel / ExportInspectorPanel own
+// page layout and edit state.
 //
 // Top inset: the shell is placed with a 10px outer margin in Main.qml; the tab
 // strip's topMargin of 4 lands it at 14px from the panel-card top — matching
@@ -26,7 +26,10 @@ Item {
     // Phase 2: the interaction-policy controller (forwarded to ImageInspectorPanel
     // so its edit controls can bind enabled to the focused-image policy gates).
     property var interactionPolicy: null
-    property int currentPage: 0  // 0 = Album, 1 = Image
+    property var exportQueueState: null
+    property var selectionState: null
+    property int selectedCount: 0
+    property int currentPage: 0  // 0 = Album, 1 = Image, 2 = Export
     signal ratingRequested(int rating)
     signal descriptionSaveRequested(string caption)
     signal ratingReasonSaveRequested(string reasons)
@@ -39,6 +42,23 @@ Item {
     function withAlpha(color, alpha) {
         return Qt.rgba(color.r, color.g, color.b, alpha)
     }
+
+    function openExportPage() {
+        currentPage = 2
+    }
+
+    function startExport() {
+        if (exportInspectorPage)
+            exportInspectorPage.startExport()
+    }
+
+    readonly property bool exportPageActive: currentPage === 2
+    readonly property bool exportBusy: exportInspectorPage ? exportInspectorPage.exportBusy : false
+    readonly property int exportQueueCount: exportInspectorPage
+                                            ? exportInspectorPage.exportQueueCount
+                                            : (exportQueueState ? exportQueueState.exportQueueCount : 0)
+    readonly property bool exportSettingsValid: exportInspectorPage
+                                                 ? exportInspectorPage.settingsValid : true
 
     // Nested inline component (matches the Main.qml CaptionButton pattern;
     // file-level inline components are rejected by this qmlcachegen).
@@ -115,6 +135,13 @@ Item {
                 active: root.currentPage === 1
                 onClicked: root.currentPage = 1
             }
+
+            InspectorTab {
+                Layout.fillWidth: true
+                label: qsTr("Export")
+                active: root.currentPage === 2
+                onClicked: root.currentPage = 2
+            }
         }
 
         // ── Page stack: the whole content tree swaps with the tab ──
@@ -145,6 +172,16 @@ Item {
                 onContextMenuRequested: function(item, sceneX, sceneY) {
                     root.contextMenuRequested(item, sceneX, sceneY)
                 }
+            }
+
+            ExportInspectorPanel {
+                id: exportInspectorPage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                exportQueueState: root.exportQueueState
+                selectionState: root.selectionState
+                selectedCount: root.selectedCount
+                pageActive: root.currentPage === 2
             }
         }
     }

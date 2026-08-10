@@ -18,6 +18,8 @@
 #include <QWidget>
 #include <algorithm>
 
+#include "alcedo_version.hpp"
+
 // resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
 // object unless something in the final executable references
 // qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
@@ -1010,14 +1012,7 @@ auto AppTheme::monoFontFamily() const -> QString {
   return FontState().mono;
 }
 auto AppTheme::appVersion() const -> QString {
-  // Fed by the ALCEDO_APP_VERSION compile definition (set from PROJECT_VERSION
-  // in alcedo_studio/src/CMakeLists.txt). Fallback keeps the symbol linkable
-  // for any consumer built without that define.
-#ifdef ALCEDO_APP_VERSION
   return QStringLiteral(ALCEDO_APP_VERSION);
-#else
-  return QStringLiteral("0.0.0");
-#endif
 }
 
 auto AppTheme::toneGold() const -> QColor { return GetTheme(current_theme_index_).tone_gold; }

@@ -16,14 +16,14 @@ enum class ImageFormatType : uint8_t {
   JPEG,
   PNG,
   TIFF,
-  WEBP,
+  WEBP,  ///< Deprecated for export; kept for enum stability / import sniffing.
   DNG,
   ARW,
   RAW,
   CR2,
   CR3,
   NEF,
-  BMP,
+  BMP,  ///< Deprecated for export; kept for enum stability / import sniffing.
   RAF,
   _3FR,
   RW2,
@@ -47,7 +47,7 @@ struct ExportFormatOptions {
   bool                  resize_enabled_    = false;
   int                   max_length_side_   = 0;  // 0 means no resizing
 
-  int                   quality_           = 95;                   // For JPEG/WEBP
+  int                   quality_           = 95;                   // For JPEG
   BIT_DEPTH             bit_depth_         = BIT_DEPTH::BIT_16;    // For TIFF/PNG
   int                   compression_level_ = 5;                    // For PNG
   TIFF_COMPRESS         tiff_compress_     = TIFF_COMPRESS::NONE;  // For TIFF

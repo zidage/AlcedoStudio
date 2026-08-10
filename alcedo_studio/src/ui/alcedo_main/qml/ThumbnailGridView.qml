@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 
@@ -1168,21 +1169,21 @@ Item {
                 Rectangle {
                     id: hdrGridTag
                     visible: isHdr
-                    width: hdrGridTagText.implicitWidth + 8
-                    height: Math.max(13, hdrGridTagText.implicitHeight + 2)
+                    width: appTheme.iconSourceSizeCompact + appTheme.spaceSm
+                    height: appTheme.spaceLg
                     radius: 3
                     color: "#3A3020"
                     border.width: 1
                     border.color: "#D8A93B"
                     anchors.bottom: parent.bottom
-                    Label {
-                        id: hdrGridTagText
+                    ColorImage {
                         anchors.centerIn: parent
-                        text: qsTr("HDR")
+                        width: appTheme.iconSourceSize
+                        height: appTheme.iconSourceSize
+                        sourceSize.width: appTheme.iconSourceSize
+                        sourceSize.height: appTheme.iconSourceSize
+                        source: "qrc:/panel_icons/hdr.svg"
                         color: "#F2C766"
-                        font.family: appTheme.dataFontFamily
-                        font.pixelSize: Math.max(8, root.metadataFontSize - 1)
-                        font.weight: Font.DemiBold
                     }
                 }
             }

@@ -13,6 +13,7 @@ Item {
     objectName: "adjustmentCombo"
 
     property var model: null
+    property bool showResetButton: true
     // Panels may expose a stable object name for behavior tests and
     // accessibility tooling without changing the shared wrapper name.
     property string controlObjectName: "adjustmentCombo"
@@ -171,6 +172,7 @@ Item {
 
         AdjustmentResetButton {
             model: root.model
+            visible: root.showResetButton
         }
     }
 }

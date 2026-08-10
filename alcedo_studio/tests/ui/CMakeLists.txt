@@ -1174,6 +1174,38 @@ alcedo_ui_gtest_discover_tests(EditorLutPanelQmlTest
 )
 alcedo_register_test_target(EditorLutPanelQmlTest ui)
 
+# Export naming editor: pattern validity, ordered-field preview, and QML loading.
+add_executable(ExportNamingEditorQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/export_naming_editor_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(ExportNamingEditorQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ExportNamingEditorQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(ExportNamingEditorQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(ExportNamingEditorQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(ExportNamingEditorQmlTest
+    TEST_PREFIX "ExportNamingEditorQmlTest."
+    PROPERTIES LABELS "workspace_qml;export_panel"
+)
+alcedo_register_test_target(ExportNamingEditorQmlTest ui)
+
 # Phase 6D Look panel interaction reproduction (layout, drag, double-click, flick).
 add_executable(EditorLookPanelInteractionTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_panel_interaction_test.cpp

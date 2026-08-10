@@ -11,23 +11,23 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
-#include <sstream>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
-#include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/dng_default_crop.hpp"
+#include "decoders/libraw_unpack_guard.hpp"
 #include "edit/operators/basic/camera_matrices.hpp"
 #include "json.hpp"
 #include "type/supported_file_type.hpp"
@@ -43,9 +43,7 @@ auto RationalToFloat(const Exiv2::Rational& value) -> float {
   return static_cast<float>(value.first) / static_cast<float>(value.second);
 }
 
-auto IsFinitePositive(float value) -> bool {
-  return std::isfinite(value) && value > 0.0f;
-}
+auto IsFinitePositive(float value) -> bool { return std::isfinite(value) && value > 0.0f; }
 
 void SetDisplayDimensionsFromLibRaw(const LibRaw& raw_processor, ExifDisplayMetaData& display) {
   uint32_t width  = static_cast<uint32_t>(raw_processor.imgdata.sizes.width);
@@ -70,7 +68,8 @@ auto TrimTrailingZeroPadded(const char* s, size_t max_len = 256) -> std::string 
 
 auto TrimAscii(const std::string& value) -> std::string {
   std::string out = value;
-  while (!out.empty() && (out.back() == '\0' || std::isspace(static_cast<unsigned char>(out.back())))) {
+  while (!out.empty() &&
+         (out.back() == '\0' || std::isspace(static_cast<unsigned char>(out.back())))) {
     out.pop_back();
   }
   size_t begin = 0;
@@ -86,7 +85,7 @@ auto TrimAscii(const std::string& value) -> std::string {
 
 auto ContainsCaseInsensitive(const std::string& text, const std::string& pattern) -> bool {
   if (text.empty() || pattern.empty()) return false;
-  auto to_lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+  auto        to_lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
   std::string lower_text(text.size(), '\0');
   std::string lower_pattern(pattern.size(), '\0');
   std::transform(text.begin(), text.end(), lower_text.begin(), to_lower);
@@ -184,7 +183,7 @@ auto NormalizeHexIdKey(const std::string& key) -> std::string {
 
 auto UInt64ToHexIdKey(uint64_t value, bool little_endian) -> std::string {
   char buffer[3 * 8] = {};
-  int  offset = 0;
+  int  offset        = 0;
   for (int i = 0; i < 8; ++i) {
     const int  index = little_endian ? i : (7 - i);
     const auto byte  = static_cast<unsigned>((value >> (index * 8)) & 0xFFULL);
@@ -196,7 +195,7 @@ auto UInt64ToHexIdKey(uint64_t value, bool little_endian) -> std::string {
 }
 
 auto LoadNikonLensIdLookup() -> NikonLensIdLookup {
-  NikonLensIdLookup db;
+  NikonLensIdLookup                  db;
   std::vector<std::filesystem::path> candidates;
 #ifdef CONFIG_PATH
   candidates.emplace_back(std::filesystem::path(CONFIG_PATH) / "nikon_lens" / "id_map.json");
@@ -238,7 +237,7 @@ auto LoadNikonLensIdLookup() -> NikonLensIdLookup {
             continue;
           }
           try {
-            const uint64_t numeric_key = std::stoull(it.key());
+            const uint64_t numeric_key     = std::stoull(it.key());
             db.numeric_id_map[numeric_key] = it.value().get<std::string>();
           } catch (...) {
             continue;
@@ -291,13 +290,13 @@ auto LookupNikonLensModelById(const libraw_lensinfo_t& lens) -> std::string {
       continue;
     }
     const std::string key_be = UInt64ToHexIdKey(id, false);
-    auto it = db.hex_id_map.find(key_be);
+    auto              it     = db.hex_id_map.find(key_be);
     if (it != db.hex_id_map.end() && !it->second.empty()) {
       return it->second;
     }
 
     const std::string key_le = UInt64ToHexIdKey(id, true);
-    it = db.hex_id_map.find(key_le);
+    it                       = db.hex_id_map.find(key_le);
     if (it != db.hex_id_map.end() && !it->second.empty()) {
       return it->second;
     }
@@ -318,9 +317,9 @@ auto ResolveNikonLensModel(const libraw_lensinfo_t& lens) -> std::string {
   }
 
   const auto& nikon = lens.nikon;
-  const bool has_nikon_signature = (nikon.LensIDNumber != 0 || nikon.LensType != 0 ||
-                                    nikon.MCUVersion != 0 || nikon.LensFStops != 0 ||
-                                    IsFinitePositive(nikon.EffectiveMaxAp));
+  const bool  has_nikon_signature =
+      (nikon.LensIDNumber != 0 || nikon.LensType != 0 || nikon.MCUVersion != 0 ||
+       nikon.LensFStops != 0 || IsFinitePositive(nikon.EffectiveMaxAp));
   if (!has_nikon_signature) {
     return {};
   }
@@ -328,10 +327,8 @@ auto ResolveNikonLensModel(const libraw_lensinfo_t& lens) -> std::string {
   char model_buf[192] = {};
   std::snprintf(model_buf, sizeof(model_buf),
                 "Nikon LensID %u (type=0x%02X mcu=%u fStops=%u effMaxAp=%.2f)",
-                static_cast<unsigned>(nikon.LensIDNumber),
-                static_cast<unsigned>(nikon.LensType),
-                static_cast<unsigned>(nikon.MCUVersion),
-                static_cast<unsigned>(nikon.LensFStops),
+                static_cast<unsigned>(nikon.LensIDNumber), static_cast<unsigned>(nikon.LensType),
+                static_cast<unsigned>(nikon.MCUVersion), static_cast<unsigned>(nikon.LensFStops),
                 static_cast<double>(nikon.EffectiveMaxAp));
 
   std::string model = model_buf;
@@ -424,7 +421,8 @@ auto IsMeaningfulCameraMatchToken(const std::string& token) -> bool {
   return !token.empty() && std::isdigit(static_cast<unsigned char>(token.front())) != 0;
 }
 
-auto UniqueMeaningfulCameraTokens(const std::vector<std::string>& tokens) -> std::vector<std::string> {
+auto UniqueMeaningfulCameraTokens(const std::vector<std::string>& tokens)
+    -> std::vector<std::string> {
   std::vector<std::string> out;
   out.reserve(tokens.size());
   for (const auto& token : tokens) {
@@ -442,8 +440,8 @@ auto ContainsCameraToken(const std::vector<std::string>& tokens, const std::stri
   return std::find(tokens.begin(), tokens.end(), token) != tokens.end();
 }
 
-auto ContainsCameraTokenFragment(const std::vector<std::string>& tokens, const std::string& fragment)
-    -> bool {
+auto ContainsCameraTokenFragment(const std::vector<std::string>& tokens,
+                                 const std::string&              fragment) -> bool {
   if (fragment.empty()) {
     return false;
   }
@@ -452,15 +450,14 @@ auto ContainsCameraTokenFragment(const std::vector<std::string>& tokens, const s
   });
 }
 
-auto ResolveCameraColorMatrixAlias(const std::string& camera_make,
-                                   const std::string& camera_model) -> std::string {
-  const auto make_tokens  = TokenizeCameraNameLoose(camera_make);
-  const auto model_tokens = TokenizeCameraNameLoose(camera_model);
+auto ResolveCameraColorMatrixAlias(const std::string& camera_make, const std::string& camera_model)
+    -> std::string {
+  const auto make_tokens   = TokenizeCameraNameLoose(camera_make);
+  const auto model_tokens  = TokenizeCameraNameLoose(camera_model);
   const auto model_compact = CompactCameraName(camera_model);
 
-  const bool is_hasselblad =
-      ContainsCameraToken(make_tokens, "hasselblad") ||
-      ContainsCameraToken(model_tokens, "hasselblad");
+  const bool is_hasselblad = ContainsCameraToken(make_tokens, "hasselblad") ||
+                             ContainsCameraToken(model_tokens, "hasselblad");
   if (!is_hasselblad) {
     return {};
   }
@@ -468,10 +465,9 @@ auto ResolveCameraColorMatrixAlias(const std::string& camera_make,
   // Adobe's Hasselblad entries in this database are grouped by sensor generation rather than
   // modern retail model names. Current Hasselblad camera names still expose the sensor tier in
   // the model string (e.g. 39, 50C, 100C), so resolve to the closest Adobe family by that tier.
-  const bool has_39 = ContainsCameraToken(model_tokens, "39") ||
-                      ContainsCameraTokenFragment(model_tokens, "39") ||
-                      model_compact.ends_with("39") ||
-                      model_compact.find("39ms") != std::string::npos;
+  const bool has_39 =
+      ContainsCameraToken(model_tokens, "39") || ContainsCameraTokenFragment(model_tokens, "39") ||
+      model_compact.ends_with("39") || model_compact.find("39ms") != std::string::npos;
   if (has_39) {
     return NormalizeCameraName("Hasselblad 39-Coated");
   }
@@ -493,21 +489,20 @@ auto ResolveCameraColorMatrixAlias(const std::string& camera_make,
   const bool has_x2d = ContainsCameraToken(model_tokens, "x2d") ||
                        ContainsCameraTokenFragment(model_tokens, "x2d") ||
                        model_compact.find("x2d") != std::string::npos;
-  if (has_x2d &&
-      (ContainsCameraToken(model_tokens, "ii") ||
-       ContainsCameraTokenFragment(model_tokens, "x2dii") ||
-       model_compact.find("x2dii") != std::string::npos)) {
+  if (has_x2d && (ContainsCameraToken(model_tokens, "ii") ||
+                  ContainsCameraTokenFragment(model_tokens, "x2dii") ||
+                  model_compact.find("x2dii") != std::string::npos)) {
     return NormalizeCameraName("Hasselblad 100-22-Coated6");
   }
   return NormalizeCameraName("Hasselblad 100-20-Coated6");
 }
 
 struct CameraColorMatrixEntry {
-  std::string name_;
-  std::string compact_name_;
+  std::string              name_;
+  std::string              compact_name_;
   std::vector<std::string> match_tokens_;
-  double      cm1_[9];
-  double      cm2_[9];
+  double                   cm1_[9];
+  double                   cm2_[9];
 };
 
 auto CameraColorMatrixDatabaseSorted() -> const std::vector<CameraColorMatrixEntry>& {
@@ -525,7 +520,8 @@ auto CameraColorMatrixDatabaseSorted() -> const std::vector<CameraColorMatrixEnt
       CameraColorMatrixEntry entry;
       entry.name_         = std::move(key);
       entry.compact_name_ = CompactNormalizedCameraName(entry.name_);
-      entry.match_tokens_ = UniqueMeaningfulCameraTokens(TokenizeCameraNameLoose(item.camera_name_));
+      entry.match_tokens_ =
+          UniqueMeaningfulCameraTokens(TokenizeCameraNameLoose(item.camera_name_));
       std::memcpy(entry.cm1_, item.color_matrix_1_, sizeof(entry.cm1_));
       std::memcpy(entry.cm2_, item.color_matrix_2_, sizeof(entry.cm2_));
       out.push_back(std::move(entry));
@@ -555,9 +551,7 @@ auto FindInSortedColorMatrixDB(const std::vector<CameraColorMatrixEntry>& db,
   }
   auto it = std::lower_bound(
       db.begin(), db.end(), key,
-      [](const CameraColorMatrixEntry& entry, const std::string& k) {
-        return entry.name_ < k;
-      });
+      [](const CameraColorMatrixEntry& entry, const std::string& k) { return entry.name_ < k; });
   if (it != db.end() && it->name_ == key) {
     return &(*it);
   }
@@ -569,11 +563,11 @@ struct CameraMatrixCandidateScore {
   int model_signal = 0;
 };
 
-auto ScoreApproximateColorMatrixCandidate(const CameraColorMatrixEntry& entry,
-                                          const std::string& make_key,
-                                          const std::string& make_compact,
-                                          const std::string& full_compact,
-                                          const std::string& model_compact,
+auto ScoreApproximateColorMatrixCandidate(const CameraColorMatrixEntry&   entry,
+                                          const std::string&              make_key,
+                                          const std::string&              make_compact,
+                                          const std::string&              full_compact,
+                                          const std::string&              model_compact,
                                           const std::vector<std::string>& model_tokens)
     -> CameraMatrixCandidateScore {
   CameraMatrixCandidateScore score;
@@ -598,8 +592,7 @@ auto ScoreApproximateColorMatrixCandidate(const CameraColorMatrixEntry& entry,
   }
 
   if (!model_compact.empty()) {
-    if (entry.compact_name_ == model_compact ||
-        entry.compact_name_.ends_with(model_compact)) {
+    if (entry.compact_name_ == model_compact || entry.compact_name_.ends_with(model_compact)) {
       score.model_signal += 700;
     } else if (model_compact.size() >= 4 &&
                (entry.compact_name_.find(model_compact) != std::string::npos ||
@@ -616,45 +609,44 @@ auto ScoreApproximateColorMatrixCandidate(const CameraColorMatrixEntry& entry,
     if (token.size() < 3) {
       continue;
     }
-    const bool partial_match = std::any_of(
-        entry.match_tokens_.begin(), entry.match_tokens_.end(),
-        [&](const std::string& candidate_token) {
-          return candidate_token.find(token) != std::string::npos ||
-                 token.find(candidate_token) != std::string::npos;
-        });
+    const bool partial_match =
+        std::any_of(entry.match_tokens_.begin(), entry.match_tokens_.end(),
+                    [&](const std::string& candidate_token) {
+                      return candidate_token.find(token) != std::string::npos ||
+                             token.find(candidate_token) != std::string::npos;
+                    });
     if (partial_match) {
       score.model_signal += 40;
     }
   }
 
   score.total_score += score.model_signal;
-  score.total_score -=
-      static_cast<int>(std::abs(static_cast<int>(entry.match_tokens_.size()) -
-                                static_cast<int>(model_tokens.size()))) *
-      15;
+  score.total_score -= static_cast<int>(std::abs(static_cast<int>(entry.match_tokens_.size()) -
+                                                 static_cast<int>(model_tokens.size()))) *
+                       15;
   return score;
 }
 
 auto FindApproximateColorMatrixMatch(const std::vector<CameraColorMatrixEntry>& db,
-                                     const std::string& camera_make,
-                                     const std::string& camera_model)
+                                     const std::string&                         camera_make,
+                                     const std::string&                         camera_model)
     -> const CameraColorMatrixEntry* {
-  const auto make_key     = NormalizeCameraName(camera_make);
-  const auto make_compact = CompactNormalizedCameraName(make_key);
-  const auto full_compact = CompactCameraName(camera_make + " " + camera_model);
+  const auto make_key      = NormalizeCameraName(camera_make);
+  const auto make_compact  = CompactNormalizedCameraName(make_key);
+  const auto full_compact  = CompactCameraName(camera_make + " " + camera_model);
   const auto model_compact = CompactCameraName(camera_model);
   auto       model_tokens  = UniqueMeaningfulCameraTokens(TokenizeCameraNameLoose(camera_model));
   if (model_tokens.empty()) {
-    model_tokens = UniqueMeaningfulCameraTokens(TokenizeCameraNameLoose(camera_make + " " +
-                                                                        camera_model));
+    model_tokens =
+        UniqueMeaningfulCameraTokens(TokenizeCameraNameLoose(camera_make + " " + camera_model));
   }
   if (model_tokens.empty() && model_compact.empty()) {
     return nullptr;
   }
 
-  const CameraColorMatrixEntry* best          = nullptr;
-  int                           best_score    = -1;
-  int                           runner_up     = -1;
+  const CameraColorMatrixEntry* best       = nullptr;
+  int                           best_score = -1;
+  int                           runner_up  = -1;
   for (const auto& entry : db) {
     const auto score = ScoreApproximateColorMatrixCandidate(
         entry, make_key, make_compact, full_compact, model_compact, model_tokens);
@@ -681,15 +673,14 @@ auto FindApproximateColorMatrixMatch(const std::vector<CameraColorMatrixEntry>& 
 
 /// Look up Adobe DNG colour matrices for a camera make/model pair and store
 /// the result directly into the provided double[9] arrays.
-auto LookupCameraColorMatrices(const std::string& camera_make,
-                               const std::string& camera_model,
+auto LookupCameraColorMatrices(const std::string& camera_make, const std::string& camera_model,
                                double cm1_out[9], double cm2_out[9]) -> bool {
-  const auto full_key  = NormalizeCameraName(camera_make + " " + camera_model);
-  const auto model_key = NormalizeCameraName(camera_model);
+  const auto                    full_key  = NormalizeCameraName(camera_make + " " + camera_model);
+  const auto                    model_key = NormalizeCameraName(camera_model);
 
-  const auto& db = CameraColorMatrixDatabaseSorted();
+  const auto&                   db        = CameraColorMatrixDatabaseSorted();
 
-  const CameraColorMatrixEntry* found = FindInSortedColorMatrixDB(db, full_key);
+  const CameraColorMatrixEntry* found     = FindInSortedColorMatrixDB(db, full_key);
   if (!found) {
     found = FindInSortedColorMatrixDB(db, model_key);
   }
@@ -724,9 +715,10 @@ void MarkAdobeCameraMatrixDatabaseIlluminants(RawRuntimeColorContext& ctx) {
 }
 
 auto ParseExifNumericToken(std::string token, double& out_value) -> bool {
-  token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) {
-                return ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == ',';
-              }),
+  token.erase(std::remove_if(token.begin(), token.end(),
+                             [](unsigned char ch) {
+                               return ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == ',';
+                             }),
               token.end());
   if (token.empty()) {
     return false;
@@ -758,9 +750,9 @@ auto ParseExifNumericToken(std::string token, double& out_value) -> bool {
 }
 
 auto ParseExifNumericList(const std::string& text) -> std::vector<double> {
-  std::istringstream     iss(text);
-  std::string            token;
-  std::vector<double>    values;
+  std::istringstream  iss(text);
+  std::string         token;
+  std::vector<double> values;
 
   while (iss >> token) {
     double parsed_value = 0.0;
@@ -827,13 +819,13 @@ auto CalibrationIlluminantToCct(const uint32_t illuminant) -> double {
     case 1:   // Daylight
     case 21:  // D65
       return 6504.0;
-    case 2:   // Fluorescent
+    case 2:  // Fluorescent
       return 4150.0;
     case 3:   // Tungsten
     case 17:  // Standard Light A
       return 2856.0;
-    case 4:   // Flash
-    case 9:   // Fine weather
+    case 4:  // Flash
+    case 9:  // Fine weather
       return 5500.0;
     case 10:  // Cloudy
       return 6500.0;
@@ -878,8 +870,7 @@ auto HasMeaningfulCameraModelToken(const std::string& camera_model) -> bool {
   return normalized.find(' ') != std::string::npos;
 }
 
-auto ShouldPreferUniqueCameraModel(const std::string& current_model,
-                                   const std::string& exif_model,
+auto ShouldPreferUniqueCameraModel(const std::string& current_model, const std::string& exif_model,
                                    const std::string& unique_camera_model) -> bool {
   if (unique_camera_model.empty()) {
     return false;
@@ -897,8 +888,7 @@ auto ShouldPreferUniqueCameraModel(const std::string& current_model,
     return false;
   }
 
-  const bool current_matches_exif =
-      current_model == exif_model || current_compact == exif_compact;
+  const bool current_matches_exif = current_model == exif_model || current_compact == exif_compact;
   if (!current_matches_exif) {
     return false;
   }
@@ -920,9 +910,10 @@ auto HasEmbeddedDngProfileTables(const Exiv2::ExifData& exif_data) -> bool {
   return false;
 }
 
-void PopulateDngColorMetadataFromExif(const Exiv2::ExifData& exif_data, RawRuntimeColorContext& ctx) {
-  const std::string exif_make         = ReadExifStringTag(exif_data, "Exif.Image.Make");
-  const std::string exif_model        = ReadExifStringTag(exif_data, "Exif.Image.Model");
+void PopulateDngColorMetadataFromExif(const Exiv2::ExifData&  exif_data,
+                                      RawRuntimeColorContext& ctx) {
+  const std::string exif_make  = ReadExifStringTag(exif_data, "Exif.Image.Make");
+  const std::string exif_model = ReadExifStringTag(exif_data, "Exif.Image.Model");
   const std::string unique_camera_model =
       ReadExifStringTag(exif_data, "Exif.Image.UniqueCameraModel");
 
@@ -935,8 +926,8 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData& exif_data, RawRunti
     ctx.camera_model_ = exif_model;
   }
 
-  double cm1[9] = {};
-  double cm2[9] = {};
+  double     cm1[9]  = {};
+  double     cm2[9]  = {};
   const bool has_cm1 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ColorMatrix1", 9, cm1);
   const bool has_cm2 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ColorMatrix2", 9, cm2);
   if (!has_cm1 && !has_cm2) {
@@ -953,8 +944,8 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData& exif_data, RawRunti
   std::memcpy(ctx.color_matrix_2_, cm2, sizeof(ctx.color_matrix_2_));
   ctx.color_matrices_valid_ = true;
 
-  double fm1[9] = {};
-  double fm2[9] = {};
+  double     fm1[9]         = {};
+  double     fm2[9]         = {};
   const bool has_fm1 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix1", 9, fm1);
   const bool has_fm2 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix2", 9, fm2);
   if ((has_fm1 || has_fm2) && !HasEmbeddedDngProfileTables(exif_data)) {
@@ -972,13 +963,13 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData& exif_data, RawRunti
   double as_shot_neutral[3] = {};
   if (ReadExifNumericArrayTag(exif_data, "Exif.Image.AsShotNeutral", 3, as_shot_neutral)) {
     std::memcpy(ctx.as_shot_neutral_, as_shot_neutral, sizeof(ctx.as_shot_neutral_));
-    ctx.as_shot_neutral_valid_ = std::all_of(
-        std::begin(ctx.as_shot_neutral_), std::end(ctx.as_shot_neutral_),
-        [](const double value) { return std::isfinite(value) && value > 0.0; });
+    ctx.as_shot_neutral_valid_ =
+        std::all_of(std::begin(ctx.as_shot_neutral_), std::end(ctx.as_shot_neutral_),
+                    [](const double value) { return std::isfinite(value) && value > 0.0; });
   }
 
-  uint32_t illuminant1 = 0;
-  uint32_t illuminant2 = 0;
+  uint32_t   illuminant1 = 0;
+  uint32_t   illuminant2 = 0;
   const bool has_illuminant1 =
       ReadExifUnsignedIntTag(exif_data, "Exif.Image.CalibrationIlluminant1", illuminant1);
   const bool has_illuminant2 =
@@ -1000,19 +991,17 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData& exif_data, RawRunti
   }
 }
 
-auto PopulateDisplayDimensionsFromOiio(const image_path_t& image_path,
-                                       ExifDisplayMetaData& display) -> bool {
+auto PopulateDisplayDimensionsFromOiio(const image_path_t& image_path, ExifDisplayMetaData& display)
+    -> bool {
   try {
     auto input = ImageInput::open(PathToUtf8(image_path));
     if (!input) {
       return false;
     }
 
-    const ImageSpec& spec = input->spec();
-    const int        width =
-        spec.full_width > 0 ? spec.full_width : spec.width;
-    const int        height =
-        spec.full_height > 0 ? spec.full_height : spec.height;
+    const ImageSpec& spec   = input->spec();
+    const int        width  = spec.full_width > 0 ? spec.full_width : spec.width;
+    const int        height = spec.full_height > 0 ? spec.full_height : spec.height;
     if (width <= 0 || height <= 0) {
       return false;
     }
@@ -1028,10 +1017,10 @@ auto PopulateDisplayDimensionsFromOiio(const image_path_t& image_path,
 auto OiioMetadataSuggestsHdr(const ImageSpec& spec) -> bool {
   const auto inspect = [](std::string text) {
     text = ToLowerAscii(std::move(text));
-    return ContainsAny(text, {"ultrahdr", "ultra hdr", "hdrgm", "gainmap", "gain map",
-                              "iso 21496", "iso:ts:21496", "rec2100", "rec.2100", "bt2100",
-                              "bt.2100", "itur_2100", "itur-2100", "st2084", "st 2084",
-                              "smpte2084", "smpte 2084", "hlg"});
+    return ContainsAny(
+        text, {"ultrahdr", "ultra hdr", "hdrgm", "gainmap", "gain map", "iso 21496", "iso:ts:21496",
+               "rec2100", "rec.2100", "bt2100", "bt.2100", "itur_2100", "itur-2100", "st2084",
+               "st 2084", "smpte2084", "smpte 2084", "hlg"});
   };
 
   if (inspect(spec.get_string_attribute("oiio:ColorSpace")) ||
@@ -1064,9 +1053,8 @@ auto FileSignaturesSuggestHdr(const image_path_t& image_path) -> bool {
   }
 
   const std::string text = ToLowerAscii(std::move(bytes));
-  return ContainsAny(text, {"http://ns.adobe.com/hdr-gain-map", "hdrgm:version",
-                            "hdrgm:gainmapmin", "gainmap:version", "ultrahdr",
-                            "ultra hdr", "iso 21496", "iso:ts:21496",
+  return ContainsAny(text, {"http://ns.adobe.com/hdr-gain-map", "hdrgm:version", "hdrgm:gainmapmin",
+                            "gainmap:version", "ultrahdr", "ultra hdr", "iso 21496", "iso:ts:21496",
                             "urn:iso:std:iso:ts:21496", "gain map"});
 }
 
@@ -1075,10 +1063,9 @@ auto DetectHdrMetadata(const image_path_t& image_path, const Exiv2::Image* exif_
   if (exif_image) {
     for (const auto& datum : exif_image->xmpData()) {
       const std::string text = ToLowerAscii(datum.key() + " " + datum.toString());
-      if (ContainsAny(text, {"ultrahdr", "ultra hdr", "hdrgm", "gainmap", "gain map",
-                             "iso 21496", "iso:ts:21496", "rec2100", "rec.2100", "bt2100",
-                             "bt.2100", "st2084", "st 2084", "smpte2084", "smpte 2084",
-                             "hlg"})) {
+      if (ContainsAny(text, {"ultrahdr", "ultra hdr", "hdrgm", "gainmap", "gain map", "iso 21496",
+                             "iso:ts:21496", "rec2100", "rec.2100", "bt2100", "bt.2100", "st2084",
+                             "st 2084", "smpte2084", "smpte 2084", "hlg"})) {
         return true;
       }
     }
@@ -1148,7 +1135,7 @@ void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMet
           ? static_cast<float>(raw_processor.imgdata.lens.FocalLengthIn35mmFormat)
           : 0.0f;
   if (IsFinitePositive(focal_35mm_mm)) {
-    ctx.focal_35mm_mm_ = focal_35mm_mm;
+    ctx.focal_35mm_mm_  = focal_35mm_mm;
     display.focal_35mm_ = focal_35mm_mm;
   }
 
@@ -1170,7 +1157,7 @@ void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMet
 
   const time_t ts = raw_processor.imgdata.other.timestamp;
   if (ts > 0) {
-    struct tm t {};
+    struct tm t{};
 #if defined(_WIN32)
     gmtime_s(&t, &ts);
 #else
@@ -1194,12 +1181,12 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
     return false;
   }
 
-  ExifDisplayMetaData  display = MetadataExtractor::EXIFToDisplayMetaData(exif_image);
+  ExifDisplayMetaData    display = MetadataExtractor::EXIFToDisplayMetaData(exif_image);
   RawRuntimeColorContext ctx{};
 
   // LibRaw open_file is cheap and preserves the same camera/model strings
   // the old import path used, without paying the DNG unpack cost.
-  auto raw_processor = std::make_unique<LibRaw>();
+  auto                   raw_processor = std::make_unique<LibRaw>();
 #if defined(_WIN32)
   const int open_ret = raw_processor->open_file(image_path.wstring().c_str());
 #else
@@ -1214,16 +1201,16 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
 
   PopulateDngColorMetadataFromExif(exif_image->exifData(), ctx);
   if (!ctx.color_matrices_valid_) {
-    ctx.color_matrices_valid_ = LookupCameraColorMatrices(
-        ctx.camera_make_, ctx.camera_model_, ctx.color_matrix_1_, ctx.color_matrix_2_);
+    ctx.color_matrices_valid_ = LookupCameraColorMatrices(ctx.camera_make_, ctx.camera_model_,
+                                                          ctx.color_matrix_1_, ctx.color_matrix_2_);
     if (ctx.color_matrices_valid_) {
       MarkAdobeCameraMatrixDatabaseIlluminants(ctx);
     }
   }
 
-  ctx.crop_factor_hint_ = ResolveCropFactorHint(ctx.focal_length_mm_, ctx.focal_35mm_mm_);
-  ctx.lens_metadata_valid_ =
-      !ctx.lens_model_.empty() && std::isfinite(ctx.focal_length_mm_) && ctx.focal_length_mm_ > 0.0f;
+  ctx.crop_factor_hint_    = ResolveCropFactorHint(ctx.focal_length_mm_, ctx.focal_35mm_mm_);
+  ctx.lens_metadata_valid_ = !ctx.lens_model_.empty() && std::isfinite(ctx.focal_length_mm_) &&
+                             ctx.focal_length_mm_ > 0.0f;
   if (const auto dng_metadata = ExtractDngGeometryMetadataFromFile(image_path);
       dng_metadata.has_value()) {
     ctx.dng_warp_rectilinear_present_ = dng_metadata->warp_rectilinear.has_value();
@@ -1232,14 +1219,14 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
   ctx.valid_                  = true;
   ctx.output_in_camera_space_ = true;
 
-  display.make_             = ctx.camera_make_;
-  display.model_            = ctx.camera_model_;
-  display.lens_make_        = ctx.lens_make_;
-  display.lens_             = ctx.lens_model_;
-  display.focal_            = ctx.focal_length_mm_;
-  display.aperture_         = ctx.aperture_f_number_;
-  display.focus_distance_m_ = ctx.focus_distance_m_;
-  display.focal_35mm_       = ctx.focal_35mm_mm_;
+  display.make_               = ctx.camera_make_;
+  display.model_              = ctx.camera_model_;
+  display.lens_make_          = ctx.lens_make_;
+  display.lens_               = ctx.lens_model_;
+  display.focal_              = ctx.focal_length_mm_;
+  display.aperture_           = ctx.aperture_f_number_;
+  display.focus_distance_m_   = ctx.focus_distance_m_;
+  display.focal_35mm_         = ctx.focal_35mm_mm_;
 
   if (display.width_ == 0 || display.height_ == 0) {
     // Exiv2 often reports the embedded preview dimensions for DNG. Use OIIO
@@ -1254,7 +1241,7 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
 }
 
 void PopulateAsShotNeutralFromLibRawCamMul(const libraw_colordata_t& color,
-                                           RawRuntimeColorContext& ctx) {
+                                           RawRuntimeColorContext&   ctx) {
   if (!IsFinitePositive(color.cam_mul[0]) || !IsFinitePositive(color.cam_mul[1]) ||
       !IsFinitePositive(color.cam_mul[2])) {
     return;
@@ -1268,9 +1255,9 @@ void PopulateAsShotNeutralFromLibRawCamMul(const libraw_colordata_t& color,
   ctx.as_shot_neutral_[0] = green / static_cast<double>(color.cam_mul[0]);
   ctx.as_shot_neutral_[1] = 1.0;
   ctx.as_shot_neutral_[2] = green / static_cast<double>(color.cam_mul[2]);
-  ctx.as_shot_neutral_valid_ = std::all_of(
-      std::begin(ctx.as_shot_neutral_), std::end(ctx.as_shot_neutral_),
-      [](double value) { return std::isfinite(value) && value > 0.0; });
+  ctx.as_shot_neutral_valid_ =
+      std::all_of(std::begin(ctx.as_shot_neutral_), std::end(ctx.as_shot_neutral_),
+                  [](double value) { return std::isfinite(value) && value > 0.0; });
 }
 
 /// Populate a RawRuntimeColorContext directly from libraw's open-but-not-processed state.
@@ -1293,8 +1280,8 @@ void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContex
   ctx.camera_make_  = TrimAscii(raw_processor.imgdata.idata.make);
   ctx.camera_model_ = TrimAscii(raw_processor.imgdata.idata.model);
 
-  ctx.lens_make_  = TrimTrailingZeroPadded(raw_processor.imgdata.lens.LensMake);
-  ctx.lens_model_ = TrimTrailingZeroPadded(raw_processor.imgdata.lens.Lens);
+  ctx.lens_make_    = TrimTrailingZeroPadded(raw_processor.imgdata.lens.LensMake);
+  ctx.lens_model_   = TrimTrailingZeroPadded(raw_processor.imgdata.lens.Lens);
   if (ctx.lens_model_.empty()) {
     ctx.lens_model_ = TrimTrailingZeroPadded(raw_processor.imgdata.lens.makernotes.Lens);
   }
@@ -1329,7 +1316,7 @@ void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContex
     ctx.focal_35mm_mm_ =
         static_cast<float>(raw_processor.imgdata.lens.makernotes.FocalLengthIn35mmFormat);
   }
-  ctx.crop_factor_hint_ = ResolveCropFactorHint(ctx.focal_length_mm_, ctx.focal_35mm_mm_);
+  ctx.crop_factor_hint_    = ResolveCropFactorHint(ctx.focal_length_mm_, ctx.focal_35mm_mm_);
 
   ctx.lens_metadata_valid_ = !ctx.lens_model_.empty() && std::isfinite(ctx.focal_length_mm_) &&
                              ctx.focal_length_mm_ > 0.0f;
@@ -1337,9 +1324,8 @@ void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContex
   // Resolve Adobe DNG colour matrices from the camera-model database once and
   // store them in the context so that downstream operators (ColorTempOp) never
   // need to repeat the lookup.
-  ctx.color_matrices_valid_ = LookupCameraColorMatrices(
-      ctx.camera_make_, ctx.camera_model_,
-      ctx.color_matrix_1_, ctx.color_matrix_2_);
+  ctx.color_matrices_valid_ = LookupCameraColorMatrices(ctx.camera_make_, ctx.camera_model_,
+                                                        ctx.color_matrix_1_, ctx.color_matrix_2_);
   if (ctx.color_matrices_valid_) {
     MarkAdobeCameraMatrixDatabaseIlluminants(ctx);
   }
@@ -1352,18 +1338,18 @@ void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContex
 /// Populate ExifDisplayMetaData from a RawRuntimeColorContext + libraw other/sizes data.
 void PopulateDisplayMetadataFromLibRaw(LibRaw& raw_processor, const RawRuntimeColorContext& ctx,
                                        ExifDisplayMetaData& display) {
-  display.make_          = ctx.camera_make_;
-  display.model_         = ctx.camera_model_;
-  display.lens_          = ctx.lens_model_;
-  display.lens_make_     = ctx.lens_make_;
-  display.focal_         = ctx.focal_length_mm_;
-  display.focal_35mm_    = ctx.focal_35mm_mm_;
-  display.aperture_      = ctx.aperture_f_number_;
+  display.make_             = ctx.camera_make_;
+  display.model_            = ctx.camera_model_;
+  display.lens_             = ctx.lens_model_;
+  display.lens_make_        = ctx.lens_make_;
+  display.focal_            = ctx.focal_length_mm_;
+  display.focal_35mm_       = ctx.focal_35mm_mm_;
+  display.aperture_         = ctx.aperture_f_number_;
   display.focus_distance_m_ = ctx.focus_distance_m_;
 
-  display.iso_ = static_cast<uint64_t>(raw_processor.imgdata.other.iso_speed);
+  display.iso_              = static_cast<uint64_t>(raw_processor.imgdata.other.iso_speed);
 
-  const float shutter_sec = raw_processor.imgdata.other.shutter;
+  const float shutter_sec   = raw_processor.imgdata.other.shutter;
   if (std::isfinite(shutter_sec) && shutter_sec > 0.0f) {
     if (shutter_sec >= 1.0f) {
       display.shutter_speed_ = {static_cast<int>(shutter_sec), 1};
@@ -1377,7 +1363,7 @@ void PopulateDisplayMetadataFromLibRaw(LibRaw& raw_processor, const RawRuntimeCo
   // Timestamp
   const time_t ts = raw_processor.imgdata.other.timestamp;
   if (ts > 0) {
-    struct tm t {};
+    struct tm t{};
 #if defined(_WIN32)
     gmtime_s(&t, &ts);
 #else
@@ -1530,8 +1516,7 @@ auto ReadRatingFromExif(const Exiv2::ExifData& exif_data) -> std::optional<int> 
   return ReadRatingValue(it->toInt64());
 }
 
-void PopulateStandardRating(const Exiv2::Image& exif_image,
-                            ExifDisplayMetaData& display_metadata) {
+void PopulateStandardRating(const Exiv2::Image& exif_image, ExifDisplayMetaData& display_metadata) {
   if (const auto xmp_rating = ReadRatingFromXmp(exif_image.xmpData()); xmp_rating.has_value()) {
     display_metadata.rating_ = *xmp_rating;
     return;
@@ -1556,6 +1541,11 @@ auto MetadataExtractor::ExtractEXIFFromBuffer(const uint8_t* buffer, size_t size
       Exiv2::ImageFactory::open(reinterpret_cast<const Exiv2::byte*>(buffer), size);
   image->readMetadata();
   return image;
+}
+
+auto MetadataExtractor::DetectHdrDisplayMetadata(const image_path_t& image_path,
+                                                 const Exiv2::Image* exif_image) -> bool {
+  return DetectHdrMetadata(image_path, exif_image);
 }
 
 auto MetadataExtractor::EXIFToDisplayMetaData(const Exiv2::Image::UniquePtr& exif_data)
@@ -1588,7 +1578,6 @@ auto MetadataExtractor::BufferToDisplayMetaData(const uint8_t* buffer, size_t si
   }
   return display_metadata;
 }
-
 
 auto MetadataExtractor::EXIFToJSON(const Exiv2::Image::UniquePtr& exif_data) -> nlohmann::json {
   // The full EXIF is too large, we only convert the display-friendly metadata to JSON
@@ -1634,9 +1623,9 @@ void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Imag
   try {
     exif_data = ExtractEXIF(image_path);
   } catch (const std::exception& e) {
-    throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
-                                  std::string("No RAW or EXIF reader could open this file: ")
-                                      + e.what());
+    throw MetadataExtractionError(
+        ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
+        std::string("No RAW or EXIF reader could open this file: ") + e.what());
   }
   if (!exif_data) {
     throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
@@ -1671,15 +1660,15 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
   int ret = raw_processor->open_file(image_path.string().c_str());
 #endif
   if (ret != LIBRAW_SUCCESS) {
-    std::cerr << "MetadataExtractor: libraw open_file failed for '"
-              << image_path.string() << "' (error " << ret << ")" << std::endl;
+    std::cerr << "MetadataExtractor: libraw open_file failed for '" << image_path.string()
+              << "' (error " << ret << ")" << std::endl;
     return false;
   }
 
   ret = libraw_guard::Unpack(*raw_processor);
   if (ret != LIBRAW_SUCCESS) {
-    std::cerr << "MetadataExtractor: libraw unpack failed for '"
-              << image_path.string() << "' (error " << ret << ")" << std::endl;
+    std::cerr << "MetadataExtractor: libraw unpack failed for '" << image_path.string()
+              << "' (error " << ret << ")" << std::endl;
     raw_processor->recycle();
     return false;
   }

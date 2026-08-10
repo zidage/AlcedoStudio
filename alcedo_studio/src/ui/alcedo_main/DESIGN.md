@@ -7,7 +7,8 @@ introduce unexplained pixel, color, radius, or duration literals.
 Owner: `alcedo_studio/src/ui/alcedo_main`  
 Implementation source of truth: `AppTheme` (`app_theme.hpp` / `app_theme.cpp`)  
 Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
-`DialogActionButton.qml`, `IconButton.qml`
+`DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
+`AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`
 
 This document freezes the visual system for the unified QML workspace (Phase 4C).
 Phase 5–6 must consume these tokens; they must not invent a parallel palette.
@@ -435,6 +436,10 @@ row delegate and arrow affordance automatically.
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
 | `DialogActionButton.qml` | Text dialog actions (height 46 reference) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
+| `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
+| `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
+| `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks + Export) |
+| `ThemeCheckBox.qml` | Monochrome check row (Adjustment Transfer / Export): selected well + check, muted label when off |
 | `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, elided label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
