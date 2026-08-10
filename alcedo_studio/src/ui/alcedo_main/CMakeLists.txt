@@ -615,8 +615,8 @@ endif()
 
 target_compile_definitions(alcedo_main PRIVATE
     ALCEDO_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
 )
+target_link_libraries(alcedo_main PRIVATE AlcedoVersion)
 
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     set_property(TARGET alcedo_main APPEND PROPERTY BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")

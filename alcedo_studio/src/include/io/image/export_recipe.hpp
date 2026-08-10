@@ -145,6 +145,9 @@ auto ResolveExportFileName(const ExportFileNameTemplate& name_template,
 auto ParseExportFileNamePattern(const std::wstring& pattern, std::wstring fallback_stem = L"image")
     -> ExportFileNameTemplateParseResult;
 
+/** Return true when the format is allowed for export output. */
+auto IsSupportedExportOutputFormat(ImageFormatType format) -> bool;
+
 /** Return the canonical extension for an export format. */
 auto ExportFileExtension(ImageFormatType format) -> std::wstring;
 

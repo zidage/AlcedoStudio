@@ -83,7 +83,7 @@ class ImportExportHandler final : public QObject {
       const QVariantList& targetEntries);
   Q_INVOKABLE void         ResetExportState();
   Q_INVOKABLE bool         CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
-  /// Remembered JPEG/WEBP quality (1–100). Defaults to 95 when unset.
+  /// Remembered JPEG quality (1–100). Defaults to 95 when unset.
   Q_INVOKABLE int          LoadExportSdrQuality() const;
   Q_INVOKABLE void         SaveExportSdrQuality(int quality);
   Q_INVOKABLE int          LoadExportUltraHdrQuality() const;

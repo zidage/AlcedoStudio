@@ -177,10 +177,10 @@ TEST(ExportFileNameTests, EmptyFieldsUseConfiguredFallback) {
   name_template.parts_         = {{.field_ = ExportFileNameField::CAMERA_MODEL}};
   name_template.fallback_stem_ = L"untitled";
 
-  const auto result            = ResolveExportFileName(name_template, {}, ImageFormatType::WEBP);
+  const auto result            = ResolveExportFileName(name_template, {}, ImageFormatType::PNG);
 
   ASSERT_TRUE(result.success_) << result.message_;
-  EXPECT_EQ(result.file_name_.wstring(), L"untitled.webp");
+  EXPECT_EQ(result.file_name_.wstring(), L"untitled.png");
 }
 
 TEST(ExportFileNameTests, UnsupportedOutputFormatReturnsAnError) {
@@ -188,6 +188,19 @@ TEST(ExportFileNameTests, UnsupportedOutputFormatReturnsAnError) {
 
   EXPECT_FALSE(result.success_);
   EXPECT_FALSE(result.message_.empty());
+}
+
+TEST(ExportFileNameTests, DeprecatedWebpAndBmpExportFormatsReturnAnError) {
+  ExportFileNameTemplate name_template;
+  name_template.parts_ = {{.field_ = ExportFileNameField::LITERAL, .literal_ = L"out"}};
+
+  const auto webp = ResolveExportFileName(name_template, {}, ImageFormatType::WEBP);
+  EXPECT_FALSE(webp.success_);
+  EXPECT_FALSE(webp.message_.empty());
+
+  const auto bmp = ResolveExportFileName(name_template, {}, ImageFormatType::BMP);
+  EXPECT_FALSE(bmp.success_);
+  EXPECT_FALSE(bmp.message_.empty());
 }
 
 TEST(ExportFileNameTests, PatternParserBuildsOrderedFieldsFormatsAndLiteralBraces) {

@@ -49,7 +49,6 @@ auto           SanitizeBitDepth(ImageFormatType format, ExportFormatOptions::BIT
     -> ExportFormatOptions::BIT_DEPTH {
   switch (format) {
     case ImageFormatType::JPEG:
-    case ImageFormatType::WEBP:
       return ExportFormatOptions::BIT_DEPTH::BIT_8;
     case ImageFormatType::PNG:
       return requested == ExportFormatOptions::BIT_DEPTH::BIT_8

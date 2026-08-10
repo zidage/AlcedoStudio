@@ -310,7 +310,26 @@ auto ResolveExportResolution(const ExportResizeSpec& spec, ExportPixelSize sourc
   return ApplyMaximumEdgeLimit(result, spec.maximum_edge_pixels_);
 }
 
+auto IsSupportedExportOutputFormat(ImageFormatType format) -> bool {
+  switch (format) {
+    case ImageFormatType::JPEG:
+    case ImageFormatType::PNG:
+    case ImageFormatType::TIFF:
+    case ImageFormatType::EXR:
+      return true;
+    case ImageFormatType::WEBP:
+    case ImageFormatType::BMP:
+      // Deprecated export targets — do not emit these formats.
+      return false;
+    default:
+      return false;
+  }
+}
+
 auto ExportFileExtension(ImageFormatType format) -> std::wstring {
+  if (!IsSupportedExportOutputFormat(format)) {
+    return {};
+  }
   switch (format) {
     case ImageFormatType::JPEG:
       return L".jpg";
@@ -318,12 +337,8 @@ auto ExportFileExtension(ImageFormatType format) -> std::wstring {
       return L".png";
     case ImageFormatType::TIFF:
       return L".tif";
-    case ImageFormatType::WEBP:
-      return L".webp";
     case ImageFormatType::EXR:
       return L".exr";
-    case ImageFormatType::BMP:
-      return L".bmp";
     default:
       return {};
   }

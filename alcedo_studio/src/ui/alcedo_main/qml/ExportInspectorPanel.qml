@@ -76,7 +76,6 @@ Item {
         switch (root.sdrFormat) {
         case "PNG": return ".png"
         case "TIFF": return ".tif"
-        case "WEBP": return ".webp"
         case "EXR": return ".exr"
         default: return ".jpg"
         }
@@ -93,13 +92,12 @@ Item {
         { label: qsTr("JPEG"), value: "JPEG" },
         { label: qsTr("PNG"), value: "PNG" },
         { label: qsTr("TIFF"), value: "TIFF" },
-        { label: qsTr("WEBP"), value: "WEBP" },
         { label: qsTr("EXR"), value: "EXR" }
     ]
 
     readonly property var bitDepthEntries: {
         const format = root.sdrFormat
-        const allow8 = format === "JPEG" || format === "WEBP" || format === "PNG" || format === "TIFF"
+        const allow8 = format === "JPEG" || format === "PNG" || format === "TIFF"
         const allow16 = format === "PNG" || format === "TIFF" || format === "EXR"
         const allow32 = format === "TIFF" || format === "EXR"
         return [
@@ -172,7 +170,6 @@ Item {
     function preferredBitDepthFor(formatValue) {
         switch (formatValue) {
         case "JPEG":
-        case "WEBP":
             return 8
         default:
             return 16
@@ -182,7 +179,6 @@ Item {
     function isBitDepthAllowed(formatValue, depth) {
         switch (formatValue) {
         case "JPEG":
-        case "WEBP":
             return depth === 8
         case "PNG":
             return depth === 8 || depth === 16
@@ -248,8 +244,7 @@ Item {
         if (exportQueueState)
             exportQueueState.refreshExportPreview()
         appModules.importExport.ResetExportState()
-        sdrQualityModel.enabled = root.controlsEnabled
-                && (root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP")
+        sdrQualityModel.enabled = root.controlsEnabled && root.sdrFormat === "JPEG"
         ultraHdrQualityModel.enabled = root.controlsEnabled && root.hdrExportAvailable
         pngLevelModel.enabled = root.controlsEnabled && root.sdrFormat === "PNG"
     }
@@ -340,8 +335,7 @@ Item {
 
     onSdrFormatChanged: {
         ensureValidBitDepthSelection()
-        sdrQualityModel.enabled = root.controlsEnabled
-                && (root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP")
+        sdrQualityModel.enabled = root.controlsEnabled && root.sdrFormat === "JPEG"
         pngLevelModel.enabled = root.controlsEnabled && root.sdrFormat === "PNG"
     }
 
@@ -351,8 +345,7 @@ Item {
     }
 
     onControlsEnabledChanged: {
-        sdrQualityModel.enabled = root.controlsEnabled
-                && (root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP")
+        sdrQualityModel.enabled = root.controlsEnabled && root.sdrFormat === "JPEG"
         ultraHdrQualityModel.enabled = root.controlsEnabled && root.hdrExportAvailable
         pngLevelModel.enabled = root.controlsEnabled && root.sdrFormat === "PNG"
     }
@@ -380,8 +373,7 @@ Item {
         step: 1
         precision: 0
         suffix: "%"
-        enabled: root.controlsEnabled
-                 && (root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP")
+        enabled: root.controlsEnabled && root.sdrFormat === "JPEG"
     }
 
     EditorAdjustmentValueModel {
@@ -726,7 +718,7 @@ Item {
                         AdjustmentSlider {
                             objectName: "exportSdrQualitySlider"
                             Layout.fillWidth: true
-                            visible: root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP"
+                            visible: root.sdrFormat === "JPEG"
                             model: sdrQualityModel
                             flickable: settingsScroll
                         }

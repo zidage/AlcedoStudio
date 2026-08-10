@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <opencv2/core.hpp>
 #include <optional>
-#include <vector>
 
 #include "io/image/image_writer.hpp"
 #include "type/type.hpp"
@@ -22,12 +21,6 @@ class UltraHdrWriter {
                                const ExportColorProfileConfig&    color_profile,
                                std::optional<ExifDisplayMetaData> export_metadata = std::nullopt,
                                bool include_exif_metadata = true, bool embed_icc_profile = true);
-
-  static auto BuildSanitizedExifData(const image_path_t& source_path, int width, int height)
-      -> std::vector<uint8_t>;
-  static auto BuildSanitizedExifData(const image_path_t& source_path, int width, int height,
-                                     const std::optional<ExifDisplayMetaData>& export_metadata)
-      -> std::vector<uint8_t>;
 };
 
 }  // namespace alcedo

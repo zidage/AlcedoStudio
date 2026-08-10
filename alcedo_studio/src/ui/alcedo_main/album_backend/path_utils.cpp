@@ -210,10 +210,12 @@ auto ExtensionForExportFormat(ImageFormatType format) -> std::string {
       return ".png";
     case ImageFormatType::TIFF:
       return ".tiff";
-    case ImageFormatType::WEBP:
-      return ".webp";
     case ImageFormatType::EXR:
       return ".exr";
+    case ImageFormatType::WEBP:
+    case ImageFormatType::BMP:
+      // Deprecated export formats — callers should not reach here after validation.
+      return {};
     default:
       return ".jpg";
   }
@@ -227,12 +229,10 @@ auto FormatFromName(const QString& value) -> ImageFormatType {
   if (upper == "TIFF") {
     return ImageFormatType::TIFF;
   }
-  if (upper == "WEBP") {
-    return ImageFormatType::WEBP;
-  }
   if (upper == "EXR") {
     return ImageFormatType::EXR;
   }
+  // WEBP / BMP export is deprecated; map any leftover UI/settings values to JPEG.
   return ImageFormatType::JPEG;
 }
 
