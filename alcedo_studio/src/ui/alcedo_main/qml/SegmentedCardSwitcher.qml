@@ -89,11 +89,27 @@ Rectangle {
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                activeFocusOnTab: segmentEnabled
+                Accessible.role: Accessible.RadioButton
+                Accessible.name: modelData ? String(modelData.label || "") : ""
+                Accessible.checkable: true
+                Accessible.checked: sel
                 radius: Math.max(2, root.trackRadius - 2)
                 opacity: segmentEnabled ? 1.0 : 0.38
                 color: sel ? root.selectedFillColor
                            : (hovered && segmentEnabled ? root.hoverColor : "transparent")
-                border.width: 0
+                border.width: activeFocus ? 1 : 0
+                border.color: appTheme.accentColor
+
+                Keys.onPressed: function(event) {
+                    if (segmentEnabled && (event.key === Qt.Key_Space
+                            || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                        const entryValue = modelData && modelData.value !== undefined
+                                ? String(modelData.value) : ""
+                        root.selected(index, entryValue)
+                        event.accepted = true
+                    }
+                }
 
                 Label {
                     anchors.centerIn: parent

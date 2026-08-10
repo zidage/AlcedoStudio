@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Controls.impl
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import Alcedo.Main 1.0
@@ -29,13 +30,57 @@ Item {
     property int pngLevel: 5
     property bool subfolderEnabled: false
     property bool ultraHdrDitherEnabled: true
+    property bool includeMetadata: true
+    property bool embedIccProfile: true
     property string outDirText: ""
     property string subfolderText: qsTr("Processed")
-    property string sdrMaxSideText: ""
-    property string ultraHdrMaxSideText: "8192"
+    property string sdrResizeMode: "original"
+    property string sdrMaxSideText: "2048"
+    property string sdrWidthText: "2048"
+    property string sdrHeightText: "2048"
+    property string physicalWidthText: "210"
+    property string physicalHeightText: "297"
+    property string physicalUnit: "mm"
+    property string dpiText: "300"
+    property var exportFileNamePresets: []
 
     readonly property int queuePreviewLimit: 36
     readonly property int queueListMaxHeight: 180
+    readonly property bool resizeSettingsValid: {
+        switch (root.sdrResizeMode) {
+        case "longEdge":
+            return root.validInteger(root.sdrMaxSideText, 256, 16384)
+        case "bounds":
+            return root.validInteger(root.sdrWidthText, 1, 100000)
+                    && root.validInteger(root.sdrHeightText, 1, 100000)
+        case "physical":
+            return root.validPhysicalSize(root.physicalWidthText)
+                    && root.validPhysicalSize(root.physicalHeightText)
+                    && root.validInteger(root.dpiText, 1, 10000)
+        default:
+            return true
+        }
+    }
+    readonly property bool settingsValid: namingEditor.patternValid && root.resizeSettingsValid
+    readonly property string namingSampleSource: {
+        const rows = root.exportPreviewRows || []
+        return rows.length > 0 && rows[0].label ? String(rows[0].label) : "DSCF2074"
+    }
+    readonly property bool namingSampleIsHdr: {
+        const rows = root.exportPreviewRows || []
+        return rows.length > 0 && rows[0].isHdr === true
+    }
+    readonly property string outputExtension: {
+        if (root.namingSampleIsHdr)
+            return ".jpg"
+        switch (root.sdrFormat) {
+        case "PNG": return ".png"
+        case "TIFF": return ".tif"
+        case "WEBP": return ".webp"
+        case "EXR": return ".exr"
+        default: return ".jpg"
+        }
+    }
 
     readonly property string effectiveOutDir: {
         if (!subfolderEnabled || subfolderText.trim().length === 0)
@@ -70,6 +115,19 @@ Item {
         { label: qsTr("ZIP"), value: "ZIP" }
     ]
 
+    readonly property var resizeModeEntries: [
+        { label: qsTr("Original"), value: "original" },
+        { label: qsTr("Long Edge"), value: "longEdge" },
+        { label: qsTr("Bounds"), value: "bounds" },
+        { label: qsTr("Print"), value: "physical" }
+    ]
+
+    readonly property var physicalUnitEntries: [
+        { label: qsTr("mm"), value: "mm" },
+        { label: qsTr("cm"), value: "cm" },
+        { label: qsTr("in"), value: "in" }
+    ]
+
     readonly property var visibleExportRows: {
         const source = root.exportPreviewRows ? root.exportPreviewRows : []
         const limit = Math.max(1, Number(root.queuePreviewLimit))
@@ -95,6 +153,20 @@ Item {
 
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
+    }
+
+    function validInteger(textValue, minimum, maximum) {
+        const value = Number(textValue.trim())
+        return Number.isInteger(value) && value >= minimum && value <= maximum
+    }
+
+    function physicalSizeValue(textValue) {
+        return Number.fromLocaleString(Qt.locale(), textValue.trim())
+    }
+
+    function validPhysicalSize(textValue) {
+        const value = root.physicalSizeValue(textValue)
+        return isFinite(value) && value > 0 && value <= 100000
     }
 
     function preferredBitDepthFor(formatValue) {
@@ -127,21 +199,6 @@ Item {
         if (root.isBitDepthAllowed(root.sdrFormat, root.sdrBitDepth))
             return
         root.sdrBitDepth = root.preferredBitDepthFor(root.sdrFormat)
-    }
-
-    function normalizeUltraHdrMaxSide() {
-        const raw = ultraHdrMaxSideText.trim()
-        if (raw.length === 0) {
-            ultraHdrMaxSideText = "8192"
-            return
-        }
-        const v = parseInt(raw)
-        if (isNaN(v))
-            ultraHdrMaxSideText = "8192"
-        else if (v > 8192)
-            ultraHdrMaxSideText = "8192"
-        else if (v < 256)
-            ultraHdrMaxSideText = "256"
     }
 
     function exportStatusForRow(statusKey, summaryRow) {
@@ -185,9 +242,9 @@ Item {
     function preparePage() {
         if (outDirText.length === 0)
             outDirText = appModules.importExport.defaultExportFolder
-        normalizeUltraHdrMaxSide()
         ensureValidBitDepthSelection()
         applyRememberedQuality()
+        loadExportFileNamePresets()
         if (exportQueueState)
             exportQueueState.refreshExportPreview()
         appModules.importExport.ResetExportState()
@@ -195,6 +252,25 @@ Item {
                 && (root.sdrFormat === "JPEG" || root.sdrFormat === "WEBP")
         ultraHdrQualityModel.enabled = root.controlsEnabled && root.hdrExportAvailable
         pngLevelModel.enabled = root.controlsEnabled && root.sdrFormat === "PNG"
+    }
+
+    function loadExportFileNamePresets() {
+        root.exportFileNamePresets = appModules.importExport.LoadExportFileNamePresets()
+    }
+
+    function saveExportFileNamePreset(name, pattern, replacedName) {
+        const saved = appModules.importExport.SaveExportFileNamePreset(
+                    name, pattern, replacedName)
+        if (saved)
+            root.loadExportFileNamePresets()
+        return saved
+    }
+
+    function deleteExportFileNamePreset(name) {
+        const deleted = appModules.importExport.DeleteExportFileNamePreset(name)
+        if (deleted)
+            root.loadExportFileNamePresets()
+        return deleted
     }
 
     function applyRememberedQuality() {
@@ -229,18 +305,17 @@ Item {
     }
 
     function startExport() {
-        if (!exportQueueState || root.exportQueueCount <= 0 || root.exportBusy)
+        if (!exportQueueState || root.exportQueueCount <= 0 || root.exportBusy
+                || !root.settingsValid)
             return
-        normalizeUltraHdrMaxSide()
         persistExportQuality()
-        const hasSdrResize = sdrMaxSideText.trim().length > 0
-        const sdrMaxSide = hasSdrResize ? parseInt(sdrMaxSideText) : 0
-        const ultraHdrMaxSide = parseInt(ultraHdrMaxSideText)
-        appModules.importExport.StartExportWithSplitOptionsForTargets(
+        const hasSdrResize = root.sdrResizeMode !== "original"
+        const sdrMaxSide = root.sdrResizeMode === "longEdge" ? parseInt(sdrMaxSideText) : 0
+        appModules.importExport.StartExportWithRecipeOptionsForTargets(
             effectiveOutDir,
             hasSdrResize,
             isNaN(sdrMaxSide) ? 0 : sdrMaxSide,
-            isNaN(ultraHdrMaxSide) ? 8192 : ultraHdrMaxSide,
+            8192,
             sdrFormat,
             Math.round(sdrQualityModel.value),
             sdrBitDepth,
@@ -248,6 +323,18 @@ Item {
             tiffCompression,
             Math.round(ultraHdrQualityModel.value),
             ultraHdrDitherEnabled,
+            {
+                includeMetadata: root.includeMetadata,
+                embedIccProfile: root.embedIccProfile,
+                fileNamePattern: namingEditor.pattern,
+                resizeMode: root.sdrResizeMode,
+                widthPixels: parseInt(root.sdrWidthText),
+                heightPixels: parseInt(root.sdrHeightText),
+                physicalWidth: root.physicalSizeValue(root.physicalWidthText),
+                physicalHeight: root.physicalSizeValue(root.physicalHeightText),
+                physicalUnit: root.physicalUnit,
+                dpi: parseInt(root.dpiText)
+            },
             exportQueueState.exportQueueTargets())
     }
 
@@ -261,8 +348,6 @@ Item {
     onHdrExportAvailableChanged: {
         ensureValidBitDepthSelection()
         ultraHdrQualityModel.enabled = root.controlsEnabled && root.hdrExportAvailable
-        if (hdrExportAvailable)
-            normalizeUltraHdrMaxSide()
     }
 
     onControlsEnabledChanged: {
@@ -279,7 +364,10 @@ Item {
             persistExportQuality()
     }
 
-    Component.onCompleted: applyRememberedQuality()
+    Component.onCompleted: {
+        applyRememberedQuality()
+        loadExportFileNamePresets()
+    }
 
     EditorAdjustmentValueModel {
         id: sdrQualityModel
@@ -477,6 +565,95 @@ Item {
                     }
                 }
 
+                // ── File Naming ──────────────────────────────────────
+                CollapsibleSection {
+                    id: namingSection
+                    Layout.fillWidth: true
+                    Layout.leftMargin: appTheme.spaceSm
+                    Layout.rightMargin: appTheme.spaceSm
+                    title: qsTr("File Naming")
+                    expanded: true
+                    controlsEnabled: root.controlsEnabled
+                    bodyContentHeight: namingEditor.implicitHeight + appTheme.spaceSm
+
+                    ExportNamingEditor {
+                        id: namingEditor
+                        objectName: "exportNamingEditor"
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        controlsEnabled: root.controlsEnabled
+                        sampleSourceName: root.namingSampleSource
+                        outputExtension: root.outputExtension
+                        savedPresets: root.exportFileNamePresets
+                        savePreset: function(name, pattern, replacedName) {
+                            return root.saveExportFileNamePreset(
+                                        name, pattern, replacedName)
+                        }
+                        deletePreset: function(name) {
+                            return root.deleteExportFileNamePreset(name)
+                        }
+                    }
+                }
+
+                // ── Metadata and Color ───────────────────────────────
+                CollapsibleSection {
+                    id: metadataSection
+                    Layout.fillWidth: true
+                    Layout.leftMargin: appTheme.spaceSm
+                    Layout.rightMargin: appTheme.spaceSm
+                    title: qsTr("Metadata & Color")
+                    expanded: true
+                    controlsEnabled: root.controlsEnabled
+                    bodyContentHeight: metadataBody.implicitHeight + appTheme.spaceSm
+
+                    ColumnLayout {
+                        id: metadataBody
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        spacing: appTheme.spaceSm
+
+                        ThemeCheckBox {
+                            objectName: "exportMetadataCheck"
+                            Layout.fillWidth: true
+                            text: qsTr("Include photo metadata")
+                            checked: root.includeMetadata
+                            enabled: root.controlsEnabled
+                            alwaysPrimaryText: true
+                            onToggled: function(next) { root.includeMetadata = next }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("Writes EXIF, XMP, and IPTC. Location, device serials, and edit history stay excluded.")
+                            wrapMode: Text.WordWrap
+                            color: appTheme.textMutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                        }
+
+                        ThemeCheckBox {
+                            objectName: "exportIccCheck"
+                            Layout.fillWidth: true
+                            text: qsTr("Embed output ICC profile")
+                            checked: root.embedIccProfile
+                            enabled: root.controlsEnabled
+                            alwaysPrimaryText: true
+                            onToggled: function(next) { root.embedIccProfile = next }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("Keeps the exported color space identifiable in color-managed applications.")
+                            wrapMode: Text.WordWrap
+                            color: appTheme.textMutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                        }
+                    }
+                }
+
                 // ── SDR Export ───────────────────────────────────────
                 CollapsibleSection {
                     id: sdrSection
@@ -593,7 +770,33 @@ Item {
                             spacing: appTheme.spaceXs
 
                             Label {
-                                text: qsTr("Limit longest edge (px)")
+                                text: qsTr("Size")
+                                color: appTheme.textMutedColor
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeCaption
+                                font.weight: appTheme.fontWeightStrong
+                            }
+
+                            SegmentedCardSwitcher {
+                                objectName: "exportResizeModeSwitcher"
+                                Layout.fillWidth: true
+                                entries: root.resizeModeEntries
+                                currentValue: root.sdrResizeMode
+                                enabled: root.controlsEnabled
+                                onSelected: function(index, value) {
+                                    if (value && value.length > 0)
+                                        root.sdrResizeMode = value
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: appTheme.spaceXs
+                            visible: root.sdrResizeMode === "longEdge"
+
+                            Label {
+                                text: qsTr("Longest edge (px)")
                                 color: appTheme.textMutedColor
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeCaption
@@ -604,7 +807,6 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
                                 text: root.sdrMaxSideText
-                                placeholderText: qsTr("No limit")
                                 validator: IntValidator { bottom: 256; top: 16384 }
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 font.family: appTheme.dataFontFamily
@@ -618,6 +820,213 @@ Item {
                                     color: appTheme.bgBaseColor
                                     border.width: 1
                                     border.color: appTheme.cardBorderColor
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: appTheme.spaceSm
+                            visible: root.sdrResizeMode === "bounds"
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    text: qsTr("Width (px)")
+                                    color: appTheme.textMutedColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                }
+
+                                TextField {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                                    text: root.sdrWidthText
+                                    validator: IntValidator { bottom: 1; top: 100000 }
+                                    inputMethodHints: Qt.ImhDigitsOnly
+                                    font.family: appTheme.dataFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    color: appTheme.textColor
+                                    enabled: root.controlsEnabled
+                                    selectByMouse: true
+                                    onTextChanged: root.sdrWidthText = text
+                                    background: Rectangle {
+                                        radius: appTheme.controlRadiusSmall
+                                        color: appTheme.bgBaseColor
+                                        border.width: 1
+                                        border.color: appTheme.cardBorderColor
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    text: qsTr("Height (px)")
+                                    color: appTheme.textMutedColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                }
+
+                                TextField {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                                    text: root.sdrHeightText
+                                    validator: IntValidator { bottom: 1; top: 100000 }
+                                    inputMethodHints: Qt.ImhDigitsOnly
+                                    font.family: appTheme.dataFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    color: appTheme.textColor
+                                    enabled: root.controlsEnabled
+                                    selectByMouse: true
+                                    onTextChanged: root.sdrHeightText = text
+                                    background: Rectangle {
+                                        radius: appTheme.controlRadiusSmall
+                                        color: appTheme.bgBaseColor
+                                        border.width: 1
+                                        border.color: appTheme.cardBorderColor
+                                    }
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: appTheme.spaceSm
+                            visible: root.sdrResizeMode === "physical"
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: appTheme.spaceSm
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: appTheme.spaceXs
+
+                                    Label {
+                                        text: qsTr("Width")
+                                        color: appTheme.textMutedColor
+                                        font.family: appTheme.uiFontFamily
+                                        font.pixelSize: appTheme.fontSizeCaption
+                                        font.weight: appTheme.fontWeightStrong
+                                    }
+
+                                    TextField {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                                        text: root.physicalWidthText
+                                        validator: DoubleValidator { bottom: 0.01; top: 100000; decimals: 2 }
+                                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                        font.family: appTheme.dataFontFamily
+                                        font.pixelSize: appTheme.fontSizeCaption
+                                        color: appTheme.textColor
+                                        enabled: root.controlsEnabled
+                                        selectByMouse: true
+                                        onTextChanged: root.physicalWidthText = text
+                                        background: Rectangle {
+                                            radius: appTheme.controlRadiusSmall
+                                            color: appTheme.bgBaseColor
+                                            border.width: 1
+                                            border.color: appTheme.cardBorderColor
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: appTheme.spaceXs
+
+                                    Label {
+                                        text: qsTr("Height")
+                                        color: appTheme.textMutedColor
+                                        font.family: appTheme.uiFontFamily
+                                        font.pixelSize: appTheme.fontSizeCaption
+                                        font.weight: appTheme.fontWeightStrong
+                                    }
+
+                                    TextField {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                                        text: root.physicalHeightText
+                                        validator: DoubleValidator { bottom: 0.01; top: 100000; decimals: 2 }
+                                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                        font.family: appTheme.dataFontFamily
+                                        font.pixelSize: appTheme.fontSizeCaption
+                                        color: appTheme.textColor
+                                        enabled: root.controlsEnabled
+                                        selectByMouse: true
+                                        onTextChanged: root.physicalHeightText = text
+                                        background: Rectangle {
+                                            radius: appTheme.controlRadiusSmall
+                                            color: appTheme.bgBaseColor
+                                            border.width: 1
+                                            border.color: appTheme.cardBorderColor
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    text: qsTr("Unit")
+                                    color: appTheme.textMutedColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                }
+
+                                SegmentedCardSwitcher {
+                                    objectName: "exportPhysicalUnitSwitcher"
+                                    Layout.fillWidth: true
+                                    entries: root.physicalUnitEntries
+                                    currentValue: root.physicalUnit
+                                    enabled: root.controlsEnabled
+                                    onSelected: function(index, value) {
+                                        if (value && value.length > 0)
+                                            root.physicalUnit = value
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    text: qsTr("Resolution (DPI)")
+                                    color: appTheme.textMutedColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                }
+
+                                TextField {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                                    text: root.dpiText
+                                    validator: IntValidator { bottom: 1; top: 10000 }
+                                    inputMethodHints: Qt.ImhDigitsOnly
+                                    font.family: appTheme.dataFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    color: appTheme.textColor
+                                    enabled: root.controlsEnabled
+                                    selectByMouse: true
+                                    onTextChanged: root.dpiText = text
+                                    background: Rectangle {
+                                        radius: appTheme.controlRadiusSmall
+                                        color: appTheme.bgBaseColor
+                                        border.width: 1
+                                        border.color: appTheme.cardBorderColor
+                                    }
                                 }
                             }
                         }
@@ -658,43 +1067,6 @@ Item {
                             visible: root.hdrExportAvailable
                             model: ultraHdrQualityModel
                             flickable: settingsScroll
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: appTheme.spaceXs
-                            visible: root.hdrExportAvailable
-                            enabled: root.controlsEnabled && root.hdrExportAvailable
-
-                            Label {
-                                text: qsTr("Encoding longest edge (px)")
-                                color: appTheme.textMutedColor
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: appTheme.fontWeightStrong
-                            }
-
-                            TextField {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                                text: root.ultraHdrMaxSideText
-                                placeholderText: "8192"
-                                validator: IntValidator { bottom: 256; top: 8192 }
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                font.family: appTheme.dataFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                color: appTheme.textColor
-                                enabled: root.controlsEnabled && root.hdrExportAvailable
-                                selectByMouse: true
-                                onTextChanged: root.ultraHdrMaxSideText = text
-                                onEditingFinished: root.normalizeUltraHdrMaxSide()
-                                background: Rectangle {
-                                    radius: appTheme.controlRadiusSmall
-                                    color: appTheme.bgBaseColor
-                                    border.width: 1
-                                    border.color: appTheme.cardBorderColor
-                                }
-                            }
                         }
 
                         ThemeCheckBox {
@@ -813,14 +1185,19 @@ Item {
                                         border.width: 1
                                         border.color: appTheme.cardBorderColor
 
-                                        Image {
+                                        ColorImage {
                                             anchors.centerIn: parent
                                             width: appTheme.iconSourceSizeCompact
                                             height: appTheme.iconSourceSizeCompact
                                             sourceSize.width: appTheme.iconSourceSizeCompact
                                             sourceSize.height: appTheme.iconSourceSizeCompact
                                             fillMode: Image.PreserveAspectFit
-                                            source: "qrc:/panel_icons/image.svg"
+                                            source: summaryRow
+                                                    ? "qrc:/panel_icons/image.svg"
+                                                    : (modelData.isHdr === true
+                                                       ? "qrc:/panel_icons/hdr.svg"
+                                                       : "qrc:/panel_icons/sdr.svg")
+                                            color: appTheme.iconColor
                                             opacity: 0.9
                                         }
                                     }
@@ -843,27 +1220,6 @@ Item {
                                                 font.pixelSize: appTheme.fontSizeCaption
                                             }
 
-                                            Rectangle {
-                                                visible: !summaryRow && modelData.isHdr === true
-                                                Layout.preferredWidth: hdrTag.implicitWidth
-                                                                       + appTheme.spaceSm
-                                                Layout.preferredHeight: appTheme.spaceMd
-                                                                       + appTheme.spaceXs
-                                                radius: appTheme.badgeRadius
-                                                color: root.withAlpha(appTheme.accentColor, 0.18)
-                                                border.width: 1
-                                                border.color: root.withAlpha(appTheme.accentColor, 0.55)
-
-                                                Label {
-                                                    id: hdrTag
-                                                    anchors.centerIn: parent
-                                                    text: qsTr("HDR")
-                                                    color: appTheme.accentColor
-                                                    font.family: appTheme.dataFontFamily
-                                                    font.pixelSize: appTheme.fontSizeCaption
-                                                    font.weight: appTheme.fontWeightStrong
-                                                }
-                                            }
                                         }
 
                                         RowLayout {

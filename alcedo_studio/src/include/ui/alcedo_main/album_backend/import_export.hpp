@@ -75,13 +75,23 @@ class ImportExportHandler final : public QObject {
       int ultraHdrMaxLengthSide, const QString& sdrFormatName, int sdrQuality, int sdrBitDepth,
       int sdrPngCompressionLevel, const QString& sdrTiffCompression, int ultraHdrQuality,
       bool ultraHdrDitherEnabled, const QVariantList& targetEntries);
-  Q_INVOKABLE void ResetExportState();
-  Q_INVOKABLE bool CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
+  Q_INVOKABLE void StartExportWithRecipeOptionsForTargets(
+      const QString& outputDirUrlOrPath, bool sdrResizeEnabled, int sdrMaxLengthSide,
+      int ultraHdrMaxLengthSide, const QString& sdrFormatName, int sdrQuality, int sdrBitDepth,
+      int sdrPngCompressionLevel, const QString& sdrTiffCompression, int ultraHdrQuality,
+      bool ultraHdrDitherEnabled, const QVariantMap& recipeOptions,
+      const QVariantList& targetEntries);
+  Q_INVOKABLE void         ResetExportState();
+  Q_INVOKABLE bool         CanUseHdrExportForTargets(const QVariantList& targetEntries) const;
   /// Remembered JPEG/WEBP quality (1–100). Defaults to 95 when unset.
-  Q_INVOKABLE int  LoadExportSdrQuality() const;
-  Q_INVOKABLE void SaveExportSdrQuality(int quality);
-  Q_INVOKABLE int  LoadExportUltraHdrQuality() const;
-  Q_INVOKABLE void SaveExportUltraHdrQuality(int quality);
+  Q_INVOKABLE int          LoadExportSdrQuality() const;
+  Q_INVOKABLE void         SaveExportSdrQuality(int quality);
+  Q_INVOKABLE int          LoadExportUltraHdrQuality() const;
+  Q_INVOKABLE void         SaveExportUltraHdrQuality(int quality);
+  Q_INVOKABLE QVariantList LoadExportFileNamePresets() const;
+  Q_INVOKABLE bool         SaveExportFileNamePreset(const QString& name, const QString& pattern,
+                                                    const QString& replacedName);
+  Q_INVOKABLE bool         DeleteExportFileNamePreset(const QString& name);
 
   void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false);
   void FinishImport(const ImportResult& result);
@@ -96,7 +106,8 @@ class ImportExportHandler final : public QObject {
                                       int sdrQuality, ExportFormatOptions::BIT_DEPTH sdrBitDepth,
                                       int                                sdrPngCompressionLevel,
                                       ExportFormatOptions::TIFF_COMPRESS sdrTiffCompression, int ultraHdrQuality,
-                                      bool ultraHdrDitherEnabled) -> ExportQueueBuildResult;
+                                      bool               ultraHdrDitherEnabled,
+                                      const QVariantMap& recipeOptions = QVariantMap{}) -> ExportQueueBuildResult;
 
   [[nodiscard]] bool export_inflight() const { return export_inflight_; }
   [[nodiscard]] bool ImportRunning() const { return import_running_; }

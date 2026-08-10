@@ -57,6 +57,8 @@ Item {
     readonly property int exportQueueCount: exportInspectorPage
                                             ? exportInspectorPage.exportQueueCount
                                             : (exportQueueState ? exportQueueState.exportQueueCount : 0)
+    readonly property bool exportSettingsValid: exportInspectorPage
+                                                 ? exportInspectorPage.settingsValid : true
 
     // Nested inline component (matches the Main.qml CaptionButton pattern;
     // file-level inline components are rejected by this qmlcachegen).

@@ -364,7 +364,7 @@ void ApplyBaseJpegColorProfile(ImageSpec& spec, const ExportColorProfileConfig& 
 }
 
 void WriteBaseJpeg(const std::filesystem::path& path, const cv::Mat& rgb8, int quality,
-                   const ExportColorProfileConfig& color_profile) {
+                   const ExportColorProfileConfig& color_profile, bool embed_icc_profile) {
   const std::string dst = PathToUtf8(path);
   ImageSpec         spec(rgb8.cols, rgb8.rows, 3, TypeDesc::UINT8);
   spec.channelnames                 = {"R", "G", "B"};
@@ -374,7 +374,7 @@ void WriteBaseJpeg(const std::filesystem::path& path, const cv::Mat& rgb8, int q
   spec.attribute("Compression", compress);
   spec.attribute("CompressionQuality", clamped_quality);
   spec.attribute("Orientation", 1);
-  ApplyBaseJpegColorProfile(spec, color_profile);
+  if (embed_icc_profile) ApplyBaseJpegColorProfile(spec, color_profile);
 
   std::unique_ptr<ImageOutput> out = ImageOutput::create(dst);
   if (!out) {
@@ -443,11 +443,13 @@ auto ReadFileBytes(const std::filesystem::path& path) -> std::vector<uint8_t> {
 
 auto BuildBaseJpegBytes(const cv::Mat& linear_rgba32f, const ExportFormatOptions& options,
                         const ExportColorProfileConfig& color_profile,
-                        const std::vector<uint8_t>&     exif_bytes) -> std::vector<uint8_t> {
+                        const std::vector<uint8_t>& exif_bytes, bool embed_icc_profile)
+    -> std::vector<uint8_t> {
   const cv::Mat base_rgb8 = BuildSdrBaseRgb8(linear_rgba32f, options.ultra_hdr_dither_enabled_);
   const TempFileGuard            temp_file(MakeTempBaseJpegPath());
   const ExportColorProfileConfig base_profile = MakeSdrBaseColorProfile(color_profile);
-  WriteBaseJpeg(temp_file.path(), base_rgb8, options.ultra_hdr_quality_, base_profile);
+  WriteBaseJpeg(temp_file.path(), base_rgb8, options.ultra_hdr_quality_, base_profile,
+                embed_icc_profile);
   AttachExifToJpeg(temp_file.path(), exif_bytes);
   return ReadFileBytes(temp_file.path());
 }
@@ -494,16 +496,20 @@ void UltraHdrWriter::WriteImageToPath(const image_path_t&          src_path,
                                       const std::filesystem::path& export_path,
                                       const cv::Mat& rgba32f, const ExportFormatOptions& options,
                                       const ExportColorProfileConfig&    color_profile,
-                                      std::optional<ExifDisplayMetaData> export_metadata) {
+                                      std::optional<ExifDisplayMetaData> export_metadata,
+                                      bool include_exif_metadata, bool embed_icc_profile) {
   if (rgba32f.empty() || rgba32f.type() != CV_32FC4) {
     throw std::runtime_error("UltraHdrWriter: expected non-empty CV_32FC4 image.");
   }
 
   cv::Mat linear_rgba32f = ConvertHdrIntentToLinear(rgba32f, color_profile.encoding_eotf);
-  std::vector<uint8_t> exif_bytes =
-      BuildSanitizedExifData(src_path, linear_rgba32f.cols, linear_rgba32f.rows, export_metadata);
+  std::vector<uint8_t> exif_bytes;
+  if (include_exif_metadata) {
+    exif_bytes =
+        BuildSanitizedExifData(src_path, linear_rgba32f.cols, linear_rgba32f.rows, export_metadata);
+  }
   std::vector<uint8_t> base_jpeg_bytes =
-      BuildBaseJpegBytes(linear_rgba32f, options, color_profile, exif_bytes);
+      BuildBaseJpegBytes(linear_rgba32f, options, color_profile, exif_bytes, embed_icc_profile);
 
   cv::Mat rgba16f;
   linear_rgba32f.convertTo(rgba16f, CV_16FC4);

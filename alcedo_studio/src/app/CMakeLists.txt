@@ -380,5 +380,5 @@ def_library(ThumbnailDiskCacheService
 
 def_library(ExportService
     SOURCES "${ALCEDO_APP_ROOT}/export_service.cpp"
-    PUBLIC_DEPS ImageWriter ImageLoader ImagePoolService PipelineMgmtService PipelineScheduler ThreadPool
+    PUBLIC_DEPS ExportRecipe ImageWriter ImageLoader ImagePoolService PipelineMgmtService PipelineScheduler ThreadPool
 )

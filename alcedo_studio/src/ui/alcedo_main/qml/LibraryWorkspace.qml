@@ -476,6 +476,7 @@ RowLayout {
                     enabled: host.backendInteractive
                              && !appModules.importExport.exportInFlight
                              && host.exportQueueCount > 0
+                             && inspectorPanel.exportSettingsValid
                     icon.source: "qrc:/panel_icons/export.svg"
                     icon.width: 16
                     icon.height: 16

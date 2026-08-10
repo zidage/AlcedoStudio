@@ -2909,12 +2909,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ExportInspectorPanel</name>
     <message>
-        <location filename="../qml/ExportInspectorPanel.qml" line="+33"/>
+        <location filename="../qml/ExportInspectorPanel.qml" line="+36"/>
         <source>Processed</source>
         <translation>已处理</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+57"/>
         <source>JPEG</source>
         <translation>JPEG</translation>
     </message>
@@ -2969,12 +2969,47 @@ Original source files on disk will be kept.</source>
         <translation>ZIP</translation>
     </message>
     <message>
+        <location line="+4"/>
+        <source>Original</source>
+        <translation>原始尺寸</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Long Edge</source>
+        <translation>最长边</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Bounds</source>
+        <translation>像素边界</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>打印尺寸</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>mm</source>
+        <translation>毫米</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>cm</source>
+        <translation>厘米</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>in</source>
+        <translation>英寸</translation>
+    </message>
+    <message>
         <location line="+13"/>
         <source>...(%1 more)</source>
         <translation>…（另有 %1 项）</translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+78"/>
         <source>Exporting</source>
         <translation>正在导出</translation>
     </message>
@@ -2994,7 +3029,7 @@ Original source files on disk will be kept.</source>
         <translation>已排队</translation>
     </message>
     <message>
-        <location line="+120"/>
+        <location line="+151"/>
         <source>Quality</source>
         <translation>质量</translation>
     </message>
@@ -3035,6 +3070,36 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+34"/>
+        <source>File Naming</source>
+        <translation>文件命名</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Metadata &amp; Color</source>
+        <translation>元数据与色彩</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Include photo metadata</source>
+        <translation>包含照片元数据</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Writes EXIF, XMP, and IPTC. Location, device serials, and edit history stay excluded.</source>
+        <translation>写入 EXIF、XMP 和 IPTC。位置信息、设备序列号和编辑历史仍会排除。</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Embed output ICC profile</source>
+        <translation>嵌入输出 ICC 配置文件</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Keeps the exported color space identifiable in color-managed applications.</source>
+        <translation>让色彩管理应用能够识别导出文件的色彩空间。</translation>
+    </message>
+    <message>
+        <location line="+15"/>
         <source>SDR Export</source>
         <translation>SDR 导出</translation>
     </message>
@@ -3055,16 +3120,46 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+25"/>
-        <source>Limit longest edge (px)</source>
-        <translation>限制最长边（像素）</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>No limit</source>
-        <translation>不限制</translation>
+        <source>Size</source>
+        <translation>尺寸</translation>
     </message>
     <message>
         <location line="+26"/>
+        <source>Longest edge (px)</source>
+        <translation>最长边（像素）</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Width (px)</source>
+        <translation>宽度（像素）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height (px)</source>
+        <translation>高度（像素）</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Width</source>
+        <translation>宽度</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height</source>
+        <translation>高度</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Unit</source>
+        <translation>单位</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Resolution (DPI)</source>
+        <translation>分辨率（DPI）</translation>
+    </message>
+    <message>
+        <location line="+37"/>
         <source>HDR Export</source>
         <translation>HDR 导出</translation>
     </message>
@@ -3074,12 +3169,7 @@ Original source files on disk will be kept.</source>
         <translation>将 Ultra HDR 项目加入队列后即可启用 HDR 导出。</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Encoding longest edge (px)</source>
-        <translation>编码最长边（像素）</translation>
-    </message>
-    <message>
-        <location line="+34"/>
+        <location line="+19"/>
         <source>Dithering</source>
         <translation>抖动</translation>
     </message>
@@ -3104,12 +3194,7 @@ Original source files on disk will be kept.</source>
         <translation>清空导出队列</translation>
     </message>
     <message>
-        <location line="+103"/>
-        <source>HDR</source>
-        <translation>HDR</translation>
-    </message>
-    <message>
-        <location line="+34"/>
+        <location line="+121"/>
         <source>Queue is empty</source>
         <translation>队列为空</translation>
     </message>
@@ -3117,6 +3202,151 @@ Original source files on disk will be kept.</source>
         <location line="+36"/>
         <source>Export Progress</source>
         <translation>导出进度</translation>
+    </message>
+</context>
+<context>
+    <name>ExportNamingEditor</name>
+    <message>
+        <location filename="../qml/ExportNamingEditor.qml" line="+40"/>
+        <source>Export</source>
+        <translation>导出</translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <location line="+20"/>
+        <source>Source</source>
+        <translation>源文件名</translation>
+    </message>
+    <message>
+        <location line="-19"/>
+        <source>Date + No.</source>
+        <translation>日期 + 序号</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom + No.</source>
+        <translation>自定义 + 序号</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Custom</source>
+        <translation>自定义</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Date</source>
+        <translation>日期</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sequence</source>
+        <translation>序号</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Make</source>
+        <translation>厂商</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Camera</source>
+        <translation>相机</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lens</source>
+        <translation>镜头</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ISO</source>
+        <translation>ISO</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aperture</source>
+        <translation>光圈</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shutter</source>
+        <translation>快门</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Focal</source>
+        <translation>焦距</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rating</source>
+        <translation>评分</translation>
+    </message>
+    <message>
+        <location line="+148"/>
+        <source>Invalid pattern</source>
+        <translation>无效命名模式</translation>
+    </message>
+    <message>
+        <location line="+84"/>
+        <source>Name custom preset</source>
+        <translation>命名自定义预设</translation>
+    </message>
+    <message>
+        <location line="-72"/>
+        <source>Preset</source>
+        <translation>预设</translation>
+    </message>
+    <message>
+        <location line="+71"/>
+        <source>Save naming preset</source>
+        <translation>保存命名预设</translation>
+    </message>
+    <message>
+        <location line="-38"/>
+        <location line="+1"/>
+        <source>Preset name</source>
+        <translation>预设名称</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Enter a valid preset name.</source>
+        <translation>请输入有效的预设名称。</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Delete naming preset</source>
+        <translation>删除命名预设</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Pattern</source>
+        <translation>命名模式</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>File name pattern</source>
+        <translation>文件命名模式</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Insert field</source>
+        <translation>插入字段</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Insert %1 field</source>
+        <translation>插入%1字段</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Example</source>
+        <translation>示例</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Pattern error</source>
+        <translation>命名模式错误</translation>
     </message>
 </context>
 <context>
@@ -3475,7 +3705,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorPanel</name>
     <message>
-        <location filename="../qml/InspectorPanel.qml" line="+125"/>
+        <location filename="../qml/InspectorPanel.qml" line="+127"/>
         <source>Album</source>
         <translation>相册</translation>
     </message>
@@ -4395,7 +4625,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+81"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
         <source>Black &amp; White</source>
         <translation>黑白</translation>
     </message>
@@ -4426,12 +4656,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>%1 | 评分 %2/5</translation>
     </message>
     <message>
-        <location line="+25"/>
-        <source>HDR</source>
-        <translation>HDR</translation>
-    </message>
-    <message>
-        <location line="-359"/>
+        <location line="-334"/>
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>

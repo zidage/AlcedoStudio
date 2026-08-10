@@ -2,6 +2,12 @@
 # Dependencies on opencv, OpenImageIO, and ImageBuffer are resolved
 # before this manifest in the domain composition order.
 
+def_library(ExportRecipe
+    SOURCES
+        "${ALCEDO_INCLUDE_ROOT}/io/image/export_recipe.hpp"
+        "${ALCEDO_SRC_ROOT}/io/image/export_recipe.cpp"
+)
+
 def_library(ExportIccProfileResolver
     SOURCES
         "${ALCEDO_INCLUDE_ROOT}/io/image/export_color_profile_config.hpp"
@@ -29,7 +35,7 @@ endif()
 
 def_library(ImageWriter
     SOURCES "${ALCEDO_SRC_ROOT}/io/image/image_writer.cpp"
-    PUBLIC_DEPS OpenImageIO::OpenImageIO ImageBuffer ExportIccProfileResolver
+    PUBLIC_DEPS OpenImageIO::OpenImageIO ImageBuffer ExportIccProfileResolver ExportRecipe
     PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} StrConv
 )
 if(PUERHLAB_ULTRAHDR_AVAILABLE)

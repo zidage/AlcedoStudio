@@ -1787,7 +1787,7 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <location line="+27"/>
         <source>Custom</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Custom</translation>
     </message>
     <message>
         <location line="-16"/>
@@ -2295,7 +2295,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+6"/>
         <source>Custom</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Custom</translation>
     </message>
     <message>
         <location line="+12"/>
@@ -2908,12 +2908,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ExportInspectorPanel</name>
     <message>
-        <location filename="../qml/ExportInspectorPanel.qml" line="+33"/>
+        <location filename="../qml/ExportInspectorPanel.qml" line="+36"/>
         <source>Processed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+57"/>
         <source>JPEG</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2968,12 +2968,47 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+4"/>
+        <source>Original</source>
+        <translation>Original</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Long Edge</source>
+        <translation>Long Edge</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Bounds</source>
+        <translation>Bounds</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>Print</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>mm</source>
+        <translation>mm</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>cm</source>
+        <translation>cm</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>in</source>
+        <translation>in</translation>
+    </message>
+    <message>
         <location line="+13"/>
         <source>...(%1 more)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+78"/>
         <source>Exporting</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2993,7 +3028,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+120"/>
+        <location line="+151"/>
         <source>Quality</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3034,6 +3069,36 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+34"/>
+        <source>File Naming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Metadata &amp; Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Include photo metadata</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Writes EXIF, XMP, and IPTC. Location, device serials, and edit history stay excluded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Embed output ICC profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Keeps the exported color space identifiable in color-managed applications.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
         <source>SDR Export</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3054,16 +3119,46 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+25"/>
-        <source>Limit longest edge (px)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>No limit</source>
-        <translation type="unfinished"></translation>
+        <source>Size</source>
+        <translation>Size</translation>
     </message>
     <message>
         <location line="+26"/>
+        <source>Longest edge (px)</source>
+        <translation>Longest edge (px)</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Width (px)</source>
+        <translation>Width (px)</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height (px)</source>
+        <translation>Height (px)</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Width</source>
+        <translation>Width</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Height</source>
+        <translation>Height</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Unit</source>
+        <translation>Unit</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Resolution (DPI)</source>
+        <translation>Resolution (DPI)</translation>
+    </message>
+    <message>
+        <location line="+37"/>
         <source>HDR Export</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3073,12 +3168,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Encoding longest edge (px)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+34"/>
+        <location line="+19"/>
         <source>Dithering</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3103,18 +3193,158 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+103"/>
-        <source>HDR</source>
-        <translation type="unfinished">HDR</translation>
-    </message>
-    <message>
-        <location line="+34"/>
+        <location line="+121"/>
         <source>Queue is empty</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+36"/>
         <source>Export Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ExportNamingEditor</name>
+    <message>
+        <location filename="../qml/ExportNamingEditor.qml" line="+40"/>
+        <source>Export</source>
+        <translation type="unfinished">Export</translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <location line="+20"/>
+        <source>Source</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-19"/>
+        <source>Date + No.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom + No.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Custom</source>
+        <translation>Custom</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Date</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sequence</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Make</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Camera</source>
+        <translation type="unfinished">Camera</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lens</source>
+        <translation type="unfinished">Lens</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ISO</source>
+        <translation type="unfinished">ISO</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aperture</source>
+        <translation type="unfinished">Aperture</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shutter</source>
+        <translation type="unfinished">Shutter</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Focal</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rating</source>
+        <translation type="unfinished">Rating</translation>
+    </message>
+    <message>
+        <location line="+148"/>
+        <source>Invalid pattern</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+84"/>
+        <source>Name custom preset</source>
+        <translation>Name custom preset</translation>
+    </message>
+    <message>
+        <location line="-72"/>
+        <source>Preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+71"/>
+        <source>Save naming preset</source>
+        <translation>Save naming preset</translation>
+    </message>
+    <message>
+        <location line="-38"/>
+        <location line="+1"/>
+        <source>Preset name</source>
+        <translation>Preset name</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Enter a valid preset name.</source>
+        <translation>Enter a valid preset name.</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Delete naming preset</source>
+        <translation>Delete naming preset</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Pattern</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>File name pattern</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Insert field</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Insert %1 field</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Example</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Pattern error</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3474,7 +3704,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorPanel</name>
     <message>
-        <location filename="../qml/InspectorPanel.qml" line="+125"/>
+        <location filename="../qml/InspectorPanel.qml" line="+127"/>
         <source>Album</source>
         <translation>Album</translation>
     </message>
@@ -3998,7 +4228,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+1"/>
         <source>Custom</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Custom</translation>
     </message>
     <message>
         <location line="+20"/>
@@ -4382,7 +4612,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+81"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
         <source>Black &amp; White</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4416,11 +4646,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+1"/>
         <source>%1 | Rating %2/5</source>
         <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+25"/>
-        <source>HDR</source>
-        <translation type="unfinished">HDR</translation>
     </message>
 </context>
 <context>

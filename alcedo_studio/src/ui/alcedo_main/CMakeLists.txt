@@ -394,6 +394,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCloseConfirmDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportQueueState.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportInspectorPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ExportNamingEditor.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemedProgressBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
