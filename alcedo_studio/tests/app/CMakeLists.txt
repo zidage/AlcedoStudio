@@ -2,6 +2,14 @@
 set(ALCEDO_TEST_APP_ROOT "${ALCEDO_TEST_ROOT}/app")
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
+add_executable(UpdateManifestTest ${ALCEDO_TEST_ROOT}/app/update_manifest_test.cpp)
+target_include_directories(UpdateManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(UpdateManifestTest PRIVATE UpdateService unofficial::ed25519::ed25519
+    GTest::gtest_main)
+gtest_discover_tests(UpdateManifestTest TEST_PREFIX "UpdateManifestTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(UpdateManifestTest app ci_core)
+
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
 target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest

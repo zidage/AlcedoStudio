@@ -5,6 +5,59 @@
 
 set(ALCEDO_APP_ROOT "${ALCEDO_SRC_ROOT}/app")
 
+# The updater uses a small, static Ed25519 verifier. Prefer a package supplied
+# by the active toolchain. The pinned fallback keeps macOS builds independent
+# of vcpkg and prevents an unreviewed upstream revision from entering a build.
+find_package(unofficial-ed25519 CONFIG QUIET)
+if(NOT TARGET unofficial::ed25519::ed25519)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
+    include(FetchContent)
+    FetchContent_Declare(alcedo_ed25519_source
+        URL
+            "https://github.com/orlp/ed25519/archive/b1f19fab4aebe607805620d25a5e42566ce46a0e.tar.gz"
+        URL_HASH
+            "SHA512=fcbeba58591543304dd93ae7c1b62a720d89c80c4c07c323eabb6e1f41b93562660181973bda345976e5361e925f243ba9abaec19fc8a05235011957367c6e7e"
+    )
+    FetchContent_GetProperties(alcedo_ed25519_source)
+    if(NOT alcedo_ed25519_source_POPULATED)
+        FetchContent_Populate(alcedo_ed25519_source)
+    endif()
+    add_library(alcedo_ed25519 STATIC
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/add_scalar.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/fe.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/ge.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/key_exchange.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/keypair.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/sc.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/seed.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/sha512.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/sign.c"
+        "${alcedo_ed25519_source_SOURCE_DIR}/src/verify.c"
+    )
+    target_include_directories(alcedo_ed25519 PUBLIC
+        "${alcedo_ed25519_source_SOURCE_DIR}/src")
+    set_target_properties(alcedo_ed25519 PROPERTIES AUTOMOC OFF)
+    add_library(unofficial::ed25519::ed25519 ALIAS alcedo_ed25519)
+endif()
+
+def_library(UpdateService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/update_manifest.cpp"
+        "${ALCEDO_APP_ROOT}/update_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/update_manifest.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/update_service.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Network
+    PRIVATE_DEPS unofficial::ed25519::ed25519 Qt6::Gui
+)
+target_compile_definitions(UpdateService PRIVATE
+    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
+    ALCEDO_BUILD_NUMBER=${ALCEDO_BUILD_NUMBER}
+    ALCEDO_UPDATE_MANIFEST_URL="${ALCEDO_UPDATE_MANIFEST_URL}"
+    ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
+)
+
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"

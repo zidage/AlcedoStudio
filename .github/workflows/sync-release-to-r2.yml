@@ -35,9 +35,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      UPDATE_PUBLIC_KEY: ${{ vars.ALCEDO_UPDATE_PUBLIC_KEY_BASE64 }}
       AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
 
     steps:
+      - name: Check out release verification tools
+        uses: actions/checkout@v4
+
       - name: Check R2 configuration
         shell: bash
         run: |
@@ -48,6 +52,10 @@ jobs:
               exit 1
             fi
           done
+          if [[ -z "$UPDATE_PUBLIC_KEY" ]]; then
+            echo "Missing required GitHub Actions variable: ALCEDO_UPDATE_PUBLIC_KEY_BASE64" >&2
+            exit 1
+          fi
 
       - name: Resolve release and promotion target
         id: release
@@ -78,11 +86,13 @@ jobs:
           version="${tag#v}"
           windows_file="AlcedoStudio-${version}-Windows-AMD64.exe"
           macos_file="AlcedoStudio-${version}-Darwin-arm64.dmg"
+          macos_update_file="AlcedoStudio-${version}-Darwin-arm64.zip"
 
           {
             echo "tag=$tag"
             echo "windows_file=$windows_file"
             echo "macos_file=$macos_file"
+            echo "macos_update_file=$macos_update_file"
             echo "promote_latest=$promote_latest"
           } >> "$GITHUB_OUTPUT"
 
@@ -92,6 +102,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
           MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+          MACOS_UPDATE_FILE: ${{ steps.release.outputs.macos_update_file }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -99,27 +110,47 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern "$WINDOWS_FILE" \
             --pattern "$MACOS_FILE" \
+            --pattern "$MACOS_UPDATE_FILE" \
+            --pattern "update-manifest.json" \
+            --pattern "update-manifest.json.sig" \
             --dir release-assets
 
       - name: Validate installers and generate SHA-256 sums
+        id: manifest
         shell: bash
         env:
           WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
           MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+          MACOS_UPDATE_FILE: ${{ steps.release.outputs.macos_update_file }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           test -f "release-assets/$WINDOWS_FILE"
           test -f "release-assets/$MACOS_FILE"
+          test -f "release-assets/$MACOS_UPDATE_FILE"
+          test -f "release-assets/update-manifest.json"
+          test -f "release-assets/update-manifest.json.sig"
 
           file_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
-          if [[ "$file_count" != "2" ]]; then
-            echo "Expected exactly the Windows and macOS installers, found $file_count files." >&2
+          if [[ "$file_count" != "5" ]]; then
+            echo "Expected three packages, a manifest, and a signature; found $file_count files." >&2
             exit 1
           fi
 
+          python scripts/update/verify_release_manifest.py \
+            --manifest release-assets/update-manifest.json \
+            --signature release-assets/update-manifest.json.sig \
+            --public-key-base64 "$UPDATE_PUBLIC_KEY" \
+            --artifacts release-assets \
+            --tag "$RELEASE_TAG"
+
+          sequence="$(jq -er '.sequence | select(type == "number" and . >= 1 and floor == .)' \
+            release-assets/update-manifest.json)"
+          echo "sequence=$sequence" >> "$GITHUB_OUTPUT"
+
           (
             cd release-assets
-            sha256sum "$WINDOWS_FILE" "$MACOS_FILE" > SHA256SUMS.txt
+            sha256sum "$WINDOWS_FILE" "$MACOS_FILE" "$MACOS_UPDATE_FILE" > SHA256SUMS.txt
           )
 
       - name: Upload immutable version archive
@@ -128,6 +159,8 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
           MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+          MACOS_UPDATE_FILE: ${{ steps.release.outputs.macos_update_file }}
+          MANIFEST_SEQUENCE: ${{ steps.manifest.outputs.sequence }}
         run: |
           set -euo pipefail
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
@@ -152,11 +185,21 @@ jobs:
           upload "release-assets/$MACOS_FILE" "$version_prefix/$MACOS_FILE" \
             "application/x-apple-diskimage" \
             "attachment; filename=\"$MACOS_FILE\""
+          upload "release-assets/$MACOS_UPDATE_FILE" "$version_prefix/$MACOS_UPDATE_FILE" \
+            "application/zip" \
+            "attachment; filename=\"$MACOS_UPDATE_FILE\""
           upload "release-assets/SHA256SUMS.txt" "$version_prefix/SHA256SUMS.txt" \
             "text/plain; charset=utf-8" \
             "attachment; filename=\"SHA256SUMS.txt\""
+          manifest_prefix="updates/v1/releases/$RELEASE_TAG/$MANIFEST_SEQUENCE"
+          upload "release-assets/update-manifest.json" "$manifest_prefix/manifest.json" \
+            "application/json; charset=utf-8" \
+            "inline; filename=\"manifest.json\""
+          upload "release-assets/update-manifest.json.sig" "$manifest_prefix/manifest.json.sig" \
+            "text/plain; charset=utf-8" \
+            "inline; filename=\"manifest.json.sig\""
 
-          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/SHA256SUMS.txt"; do
+          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/$MACOS_UPDATE_FILE" "$version_prefix/SHA256SUMS.txt" "$manifest_prefix/manifest.json" "$manifest_prefix/manifest.json.sig"; do
             aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
           done
 
@@ -166,6 +209,7 @@ jobs:
         env:
           WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
           MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+          MACOS_UPDATE_FILE: ${{ steps.release.outputs.macos_update_file }}
         run: |
           set -euo pipefail
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
@@ -189,6 +233,19 @@ jobs:
           upload_latest "release-assets/$MACOS_FILE" "releases/latest/AlcedoStudio-macos-arm64.dmg" \
             "application/x-apple-diskimage" \
             "attachment; filename=\"AlcedoStudio-macos-arm64.dmg\""
+          upload_latest "release-assets/$MACOS_UPDATE_FILE" "releases/latest/AlcedoStudio-macos-arm64.zip" \
+            "application/zip" \
+            "attachment; filename=\"AlcedoStudio-macos-arm64.zip\""
           upload_latest "release-assets/SHA256SUMS.txt" "releases/latest/SHA256SUMS.txt" \
             "text/plain; charset=utf-8" \
             "attachment; filename=\"SHA256SUMS.txt\""
+
+          # Publish the signature first and the manifest last. A client can see
+          # a short signature mismatch during promotion, but it cannot accept
+          # an unsigned or partially published update.
+          upload_latest "release-assets/update-manifest.json.sig" "updates/v1/stable/manifest.json.sig" \
+            "text/plain; charset=utf-8" \
+            "inline; filename=\"manifest.json.sig\""
+          upload_latest "release-assets/update-manifest.json" "updates/v1/stable/manifest.json" \
+            "application/json; charset=utf-8" \
+            "inline; filename=\"manifest.json\""

@@ -956,6 +956,7 @@ Dialog {
 
                             AboutPage {
                                 Layout.fillWidth: true
+                                updateService: appModules.updates
                                 primaryAccent: dialog.primaryAccent
                                 secondaryAccent: dialog.secondaryAccent
                                 textColor: dialog.textColor

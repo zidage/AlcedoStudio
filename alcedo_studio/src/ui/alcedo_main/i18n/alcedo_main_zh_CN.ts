@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+77"/>
+        <location filename="../qml/AboutPage.qml" line="+78"/>
         <source>New to Alcedo Studio?</source>
         <translation>初次使用 Alcedo Studio？</translation>
     </message>
@@ -54,7 +54,7 @@
         <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+23"/>
         <source>Links</source>
         <translation>链接</translation>
     </message>
@@ -1266,7 +1266,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+211"/>
+        <location line="+212"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -2914,7 +2914,7 @@ Original source files on disk will be kept.</source>
         <translation>已处理</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+56"/>
         <source>JPEG</source>
         <translation>JPEG</translation>
     </message>
@@ -2927,11 +2927,6 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>TIFF</source>
         <translation>TIFF</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>WEBP</source>
-        <translation>WEBP</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3009,7 +3004,7 @@ Original source files on disk will be kept.</source>
         <translation>…（另有 %1 项）</translation>
     </message>
     <message>
-        <location line="+78"/>
+        <location line="+76"/>
         <source>Exporting</source>
         <translation>正在导出</translation>
     </message>
@@ -3029,12 +3024,12 @@ Original source files on disk will be kept.</source>
         <translation>已排队</translation>
     </message>
     <message>
-        <location line="+151"/>
+        <location line="+148"/>
         <source>Quality</source>
         <translation>质量</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
         <source>HDR Quality</source>
         <translation>HDR 质量</translation>
     </message>
@@ -4508,12 +4503,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>刷新</translation>
     </message>
     <message>
-        <location line="+196"/>
+        <location line="+197"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-823"/>
+        <location line="-824"/>
         <location line="+146"/>
         <source>About</source>
         <translation>关于</translation>
@@ -4700,9 +4695,32 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>UpdateNotice</name>
+    <message>
+        <location filename="../qml/UpdateNotice.qml" line="+89"/>
+        <source>Release notes</source>
+        <translation>发行说明</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Download update</source>
+        <translation>下载更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Install and restart</source>
+        <translation>安装并重启</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+</context>
+<context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+167"/>
+        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
         <source>Opened recently</source>
         <translation>最近打开</translation>
     </message>
@@ -4776,7 +4794,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+508"/>
+        <location line="+514"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
@@ -4837,9 +4855,145 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::UpdateService</name>
+    <message>
+        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <source>Updates are ready to check.</source>
+        <translation>可以检查更新。</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+338"/>
+        <source>Updates are disabled in this build.</source>
+        <translation>此版本未启用更新功能。</translation>
+    </message>
+    <message>
+        <location line="-305"/>
+        <source>The update operation failed.</source>
+        <translation>更新操作失败。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The update server URL is not allowed.</source>
+        <translation>不允许使用此更新服务器地址。</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <location line="+123"/>
+        <source>The update server returned HTTP %1.</source>
+        <translation>更新服务器返回 HTTP %1。</translation>
+    </message>
+    <message>
+        <location line="-120"/>
+        <source>The update server redirected to an untrusted host.</source>
+        <translation>更新服务器重定向到了不受信任的主机。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The update server response is too large.</source>
+        <translation>更新服务器的响应过大。</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Checking for updates…</source>
+        <translation>正在检查更新…</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Alcedo Studio is up to date.</source>
+        <translation>Alcedo Studio 已是最新版本。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alcedo Studio %1 is available.</source>
+        <translation>Alcedo Studio %1 已发布。</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>The update download directory cannot be created.</source>
+        <translation>无法创建更新下载目录。</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Downloading Alcedo Studio %1…</source>
+        <translation>正在下载 Alcedo Studio %1…</translation>
+    </message>
+    <message>
+        <location line="+44"/>
+        <source>The update package redirected to an untrusted host.</source>
+        <translation>更新包重定向到了不受信任的主机。</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The update download state is not valid.</source>
+        <translation>更新下载状态无效。</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The downloaded package does not match the signed manifest.</source>
+        <translation>下载的更新包与签名清单不匹配。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The verified update package cannot be saved.</source>
+        <translation>无法保存已验证的更新包。</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Alcedo Studio %1 is ready to install.</source>
+        <translation>Alcedo Studio %1 已可安装。</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>No verified update package is available.</source>
+        <translation>没有可用的已验证更新包。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package is missing or has changed.</source>
+        <translation>更新包缺失或已发生变化。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package failed its final SHA-256 check.</source>
+        <translation>更新包未通过最终 SHA-256 校验。</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for manual installation.</source>
+        <translation>Alcedo Studio 无法替换此文件夹中的应用。更新 ZIP 已打开，请手动安装。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+23"/>
+        <source>The update installer helper is missing.</source>
+        <translation>更新安装助手缺失。</translation>
+    </message>
+    <message>
+        <location line="-5"/>
+        <source>The Qt runtime for the update installer helper is missing.</source>
+        <translation>更新安装助手所需的 Qt 运行库缺失。</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>The update installer helper could not start.</source>
+        <translation>无法启动更新安装助手。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alcedo Studio will close and install the update.</source>
+        <translation>Alcedo Studio 将关闭并安装更新。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Update hidden for this session.</source>
+        <translation>本次运行期间不再显示此更新。</translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1176"/>
+        <location filename="../app_theme.cpp" line="+1171"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>

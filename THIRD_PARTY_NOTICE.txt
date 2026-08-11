@@ -123,6 +123,12 @@ Upstream: https://github.com/duckdb/duckdb
 License: MIT
 License text file: third_party_licenses/DuckDB-LICENSE.txt
 
+20a) ed25519
+Upstream: https://github.com/orlp/ed25519
+Pinned revision: b1f19fab4aebe607805620d25a5e42566ce46a0e
+License: Zlib
+License text file: third_party_licenses/ed25519-LICENSE.txt
+
 21) CUDAToolkit / OpenMP / OpenGL
 Status: Referenced by CMake as system/runtime/toolchain components. They are not mirrored here from GitHub in this folder.
 Note: Distribution must comply with the respective vendor/runtime licenses used in the actual build environment.

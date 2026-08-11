@@ -26,6 +26,7 @@ Dialog {
     property string acceleratorWarning: ""
     property bool acceleratorWarningShown: false
     property string serviceMessage: ""
+    property var updateService: null
     property string headlineFontFamily: appTheme.headlineFontFamily
     readonly property string dataFontFamily: appTheme.dataFontFamily
     property color primaryAccent: "#6D93B7"
@@ -443,6 +444,12 @@ Dialog {
                                     font.family: dialog.font.family
                                     font.pixelSize: 13
                                     lineHeight: 1.2
+                                }
+
+                                UpdateNotice {
+                                    Layout.fillWidth: true
+                                    updates: dialog.updateService
+                                    autoCheck: true
                                 }
 
                                 Item {

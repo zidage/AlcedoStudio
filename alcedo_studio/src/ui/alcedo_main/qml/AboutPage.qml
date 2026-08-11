@@ -20,6 +20,7 @@ ColumnLayout {
     property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
     property color dangerColor: "#D96C75"
     property string headlineFontFamily: appTheme.headlineFontFamily
+    property var updateService: null
     readonly property string dataFontFamily: appTheme.dataFontFamily
 
     // Collapsed by default so the long license list is not front and center.
@@ -191,6 +192,14 @@ ColumnLayout {
                 lineHeight: 1.3
             }
         }
+    }
+
+    UpdateNotice {
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        updates: page.updateService
+        showIdle: true
     }
 
     // 3. Links — repo + documentation.
@@ -472,6 +481,7 @@ ColumnLayout {
         ListElement { name: "darktable"; license: "GPL-3.0" }
         ListElement { name: "DuckDB"; license: "MIT" }
         ListElement { name: "easy_profiler"; license: "MIT" }
+        ListElement { name: "ed25519 (Orson Peters)"; license: "Zlib" }
         ListElement { name: "Eigen"; license: "MPL-2.0" }
         ListElement { name: "Exiv2"; license: "GPL-2.0+" }
         ListElement { name: "glad"; license: "MIT" }

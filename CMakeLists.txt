@@ -9,7 +9,52 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.8 LANGUAGES C CXX)
+project(alcedo VERSION 0.2.9 LANGUAGES C CXX)
+
+# Update metadata is compiled into the application. Release builds must set a
+# real Ed25519 public key. An empty key disables network update checks instead
+# of accepting an unsigned feed.
+math(EXPR _alcedo_default_build_number
+    "${PROJECT_VERSION_MAJOR} * 1000000 + ${PROJECT_VERSION_MINOR} * 1000 + ${PROJECT_VERSION_PATCH}")
+set(ALCEDO_BUILD_NUMBER "${_alcedo_default_build_number}"
+    CACHE STRING "Monotonic application build number used by updates and macOS CFBundleVersion.")
+set(ALCEDO_UPDATE_MANIFEST_URL
+    "https://static.aoraw.org/updates/v1/stable/manifest.json"
+    CACHE STRING "HTTPS URL of the signed stable update manifest.")
+set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
+    "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
+    CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")
+set(ALCEDO_UPDATE_PUBLIC_KEY_BASE64 ""
+    CACHE STRING "Base64-encoded 32-byte Ed25519 update public key. Empty disables updates.")
+if(EXISTS "${ALCEDO_UPDATE_PUBLIC_KEY_FILE}")
+    file(READ "${ALCEDO_UPDATE_PUBLIC_KEY_FILE}" _alcedo_update_public_key_from_file LIMIT 4096)
+    string(STRIP "${_alcedo_update_public_key_from_file}" _alcedo_update_public_key_from_file)
+    if(NOT "${_alcedo_update_public_key_from_file}" STREQUAL "")
+        # The tracked public-key file is the canonical trust root. Keep VS Code,
+        # command-line, and CI release configurations on the same key.
+        set(ALCEDO_UPDATE_PUBLIC_KEY_BASE64 "${_alcedo_update_public_key_from_file}"
+            CACHE STRING "Base64-encoded 32-byte Ed25519 update public key. Empty disables updates."
+            FORCE)
+    endif()
+endif()
+if(NOT "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" STREQUAL "")
+    string(LENGTH "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" _alcedo_update_public_key_length)
+    if(NOT _alcedo_update_public_key_length EQUAL 44 OR
+       NOT "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" MATCHES "^[A-Za-z0-9+/]+=$")
+        message(FATAL_ERROR
+            "The update public key must be the standard Base64 encoding of a 32-byte Ed25519 key.")
+    endif()
+endif()
+option(ALCEDO_REQUIRE_UPDATE_KEY
+       "Fail configuration when the update public key is empty. Release presets enable this."
+       OFF)
+if(ALCEDO_REQUIRE_UPDATE_KEY AND "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" STREQUAL "")
+    message(FATAL_ERROR
+        "ALCEDO_UPDATE_PUBLIC_KEY_BASE64 is required by this release preset. "
+        "Generate the offline update key first; see docs/update-system.md.")
+endif()
+unset(_alcedo_update_public_key_from_file)
+unset(_alcedo_update_public_key_length)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build alcedo libraries as static by default." FORCE)
 
@@ -770,6 +815,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             BUNDLE  DESTINATION .
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        install(TARGETS alcedo_update_installer
+            RUNTIME DESTINATION "${ALCEDO_MACOS_BUNDLE_NAME}.app/Contents/Helpers"
+        )
 
         # Copy asset folders into Contents/MacOS/ (next to the executable)
         set(_config_dir "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config")
@@ -943,6 +991,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         if(APPLE)
             alcedo_install_metal_runtime_libs("${CMAKE_INSTALL_BINDIR}/metallib")
         endif()
+        install(TARGETS alcedo_update_installer
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
     endif()
 endif()
 

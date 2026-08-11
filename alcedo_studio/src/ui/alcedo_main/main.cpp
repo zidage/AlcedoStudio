@@ -25,6 +25,7 @@
 #include <string_view>
 
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "alcedo_version.hpp"
 #include "ui/alcedo_main/application_module_qml_types.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
@@ -125,6 +126,7 @@ int main(int argc, char* argv[]) {
   QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
   QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
   QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
 
   // Priority matches the old manual override model:
   //   1) --editor-backend (debug/force, same as before)
