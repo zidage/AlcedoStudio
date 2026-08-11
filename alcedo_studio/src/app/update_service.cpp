@@ -341,7 +341,8 @@ void UpdateService::InstallUpdate() {
 
 #ifdef Q_OS_MACOS
   const QFileInfo current_bundle(CurrentInstallPath());
-  if (!current_bundle.dir().isWritable()) {
+  // QDir has no isWritable(); check the parent install folder via QFileInfo.
+  if (!QFileInfo(current_bundle.absoluteDir().absolutePath()).isWritable()) {
     QDesktopServices::openUrl(QUrl::fromLocalFile(package_path_));
     Fail(
         tr("Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for "
