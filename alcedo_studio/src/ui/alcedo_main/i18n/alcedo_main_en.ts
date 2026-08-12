@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+78"/>
+        <location filename="../qml/AboutPage.qml" line="+80"/>
         <source>New to Alcedo Studio?</source>
         <translation type="unfinished"></translation>
     </message>
@@ -14,12 +14,12 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Open documentation</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+34"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
@@ -39,7 +39,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
         <source>Unavailable</source>
         <translation type="unfinished">Unavailable</translation>
     </message>
@@ -54,7 +54,12 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+14"/>
+        <source>Updates</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
         <source>Links</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3874,7 +3879,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+200"/>
+        <location line="+225"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>Could not save edits. Resolve the save error, then quit again.</translation>
     </message>
@@ -4301,17 +4306,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+84"/>
         <source>Preparing model runtime…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>File %1 / %2</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+9"/>
         <source>↓ %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4319,7 +4319,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+80"/>
+        <location filename="../qml/SettingDialog.qml" line="+79"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>Select Thumbnail Cache Folder</translation>
     </message>
@@ -4346,12 +4346,12 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="-143"/>
         <location line="+157"/>
-        <location line="+151"/>
+        <location line="+165"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-305"/>
+        <location line="-319"/>
         <location line="+155"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
@@ -4387,7 +4387,7 @@ Original source files on disk will be kept.</source>
         <translation>Acceleration</translation>
     </message>
     <message>
-        <location line="+568"/>
+        <location line="+584"/>
         <source>Image processing backend</source>
         <translation>Image processing backend</translation>
     </message>
@@ -4402,7 +4402,7 @@ Original source files on disk will be kept.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-753"/>
+        <location line="-769"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4424,7 +4424,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+272"/>
+        <location line="+187"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+99"/>
         <source>Application language</source>
         <translation>Application language</translation>
     </message>
@@ -4489,7 +4494,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Disabled</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+14"/>
         <source>Max entries</source>
         <translation>Max entries</translation>
     </message>
@@ -4589,7 +4594,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThemedProgressBar</name>
     <message>
-        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <location filename="../qml/ThemedProgressBar.qml" line="+25"/>
+        <source>%1%</source>
+        <translation type="unfinished">%1%</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Progress</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4680,27 +4690,79 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Settings</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="+12"/>
+        <location line="+7"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>UpdateNotice</name>
     <message>
-        <location filename="../qml/UpdateNotice.qml" line="+89"/>
-        <source>Release notes</source>
+        <location filename="../qml/UpdateNotice.qml" line="+34"/>
+        <source>Beta channel — </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+7"/>
+        <source>Updates are disabled in this build.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+5"/>
+        <source>Not checked yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <source>Checking for updates…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Checking…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel download</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
         <source>Download update</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Install and restart</source>
+        <source>Check for updates</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Check again</source>
+        <location line="+36"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Installed: %1 · Available: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>This build can check for updates but cannot install them.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>Open release notes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-148"/>
+        <source>Install and restart</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4784,7 +4846,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+514"/>
+        <location line="+518"/>
         <source>Create Project</source>
         <translation>Create Project</translation>
     </message>
@@ -4847,18 +4909,37 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+66"/>
-        <source>Updates are ready to check.</source>
+        <location filename="../../../app/update_service.cpp" line="+67"/>
+        <source>%1 (build %2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>About %1 h %2 min remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>About %1 min %2 s remaining</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+338"/>
+        <source>About %1 s remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>Updates are disabled in this build.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-305"/>
+        <location line="+26"/>
+        <source>The update download was canceled by the user.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+54"/>
         <source>The update operation failed.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4869,12 +4950,11 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+24"/>
-        <location line="+123"/>
         <source>The update server returned HTTP %1.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-120"/>
+        <location line="+3"/>
         <source>The update server redirected to an untrusted host.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4884,43 +4964,38 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+18"/>
         <source>Checking for updates…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+35"/>
+        <location line="+39"/>
         <source>Alcedo Studio is up to date.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+6"/>
         <source>Alcedo Studio %1 is available.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+14"/>
         <source>The update download directory cannot be created.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
+        <source>Another download is already running. Wait for it to finish and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Downloading Alcedo Studio %1…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+44"/>
-        <source>The update package redirected to an untrusted host.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
+        <location line="+11"/>
         <source>The update download state is not valid.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>The downloaded package does not match the signed manifest.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4929,12 +5004,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+7"/>
+        <location line="+126"/>
         <source>Alcedo Studio %1 is ready to install.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-110"/>
         <source>No verified update package is available.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4949,7 +5025,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for manual installation.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4965,18 +5041,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+30"/>
         <source>The update installer helper could not start.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Update hidden for this session.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

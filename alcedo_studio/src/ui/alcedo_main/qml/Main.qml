@@ -387,8 +387,8 @@ ApplicationWindow {
         appDialogs.openBackgroundTasksDialog()
     }
 
-    function openUpdateOfferDialog() {
-        appDialogs.openUpdateOfferDialog()
+    function openUpdateSettings() {
+        appDialogs.openSettingsDialog(6)
     }
 
 

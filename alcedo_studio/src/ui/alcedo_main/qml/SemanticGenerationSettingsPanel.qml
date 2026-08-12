@@ -851,82 +851,16 @@ ColumnLayout {
                 visible: card.busy
                 spacing: 5
 
-                ProgressBar {
+                ThemedProgressBar {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 8
-                    from: 0
-                    to: 100
-                    value: panel.modelDownloadProgress
+                    showDetails: panel.modelDownloadRunning
+                    progressValue: panel.modelDownloadProgress
                     indeterminate: panel.modelDownloadIndeterminate
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 12
-
-                    Label {
-                        text: {
-                            if (panel.modelActivationRunning) {
-                                return qsTr("Preparing model runtime…")
-                            }
-                            return panel.modelDownloadBytesLabel
-                        }
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    Label {
-                        visible: panel.modelDownloadFilesTotal > 0
-                                 && !panel.modelActivationRunning
-                        text: qsTr("File %1 / %2").arg(panel.modelDownloadFilesDone)
-                              .arg(panel.modelDownloadFilesTotal)
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    // Speed + ETA, shown only while actually downloading (not
-                    // during activation). Both are pre-formatted in C++.
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadSpeedLabel.length > 0
-                        text: panel.modelDownloadSpeedLabel
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadSpeedLabel.length > 0
-                                 && panel.modelDownloadEtaLabel.length > 0
-                        text: "·"
-                        color: panel.mutedTextColor
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadEtaLabel.length > 0
-                        text: panel.modelDownloadEtaLabel
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-
-                    Item { Layout.fillWidth: true }
+                    leadingText: panel.modelActivationRunning
+                                 ? qsTr("Preparing model runtime…")
+                                 : panel.modelDownloadBytesLabel
+                    speedText: card.downloading ? panel.modelDownloadSpeedLabel : ""
+                    etaText: card.downloading ? panel.modelDownloadEtaLabel : ""
                 }
 
                 Label {

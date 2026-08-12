@@ -10,6 +10,35 @@ gtest_discover_tests(UpdateManifestTest TEST_PREFIX "UpdateManifestTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(UpdateManifestTest app ci_core)
 
+add_executable(DownloadServiceFakeAria2
+    ${ALCEDO_TEST_ROOT}/app/download_service_fake_aria2.cpp)
+target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)
+alcedo_register_test_target(DownloadServiceFakeAria2 app)
+
+add_executable(DownloadServiceTest
+    ${ALCEDO_TEST_ROOT}/app/download_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(DownloadServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(DownloadServiceTest PRIVATE
+    ALCEDO_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceFakeAria2>")
+target_link_libraries(DownloadServiceTest PRIVATE DownloadService GTest::gtest Qt6::Test)
+add_dependencies(DownloadServiceTest DownloadServiceFakeAria2)
+gtest_discover_tests(DownloadServiceTest TEST_PREFIX "DownloadServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(DownloadServiceTest app ci_core)
+
+if(WIN32)
+    add_executable(UpdateInstallerWindowsTest
+        ${ALCEDO_TEST_ROOT}/app/update_installer_windows_test.cpp)
+    target_include_directories(UpdateInstallerWindowsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+    target_link_libraries(UpdateInstallerWindowsTest
+        PRIVATE UpdateInstallerWindows GTest::gtest_main)
+    gtest_discover_tests(UpdateInstallerWindowsTest
+        TEST_PREFIX "UpdateInstallerWindowsTest."
+        PROPERTIES LABELS "ci_core_flow")
+    alcedo_register_test_target(UpdateInstallerWindowsTest app ci_core)
+endif()
+
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
 target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest

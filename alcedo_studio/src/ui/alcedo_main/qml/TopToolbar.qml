@@ -132,7 +132,7 @@ Rectangle {
                 iconSrc: "qrc:/panel_icons/update.svg"
                 onClicked: {
                     if (root.host)
-                        root.host.openUpdateOfferDialog()
+                        root.host.openUpdateSettings()
                 }
             }
 

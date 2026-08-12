@@ -1681,6 +1681,17 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CPACK_NSIS_MODIFY_PATH OFF)
     set(CPACK_NSIS_MUI_FINISHPAGE_RUN "alcedo_main.exe")
     set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+    # CPack already derives the previous installation root from its registered
+    # UninstallString into $3 before silently uninstalling an older build. Old
+    # updater helpers only pass /S, so inherit that root when no explicit /D
+    # override was supplied. New helpers pass /D and therefore keep priority.
+    string(CONCAT CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS
+        "StrCmp \\\"$IS_DEFAULT_INSTALLDIR\\\" \\\"1\\\" 0 alcedo_install_path_ready\n"
+        "StrCmp \\\"$3\\\" \\\"\\\" alcedo_install_path_ready\n"
+        "StrCpy $INSTDIR \\\"$3\\\"\n"
+        "SetOutPath \\\"$INSTDIR\\\"\n"
+        "alcedo_install_path_ready:\n"
+    )
     set(CPACK_NSIS_MENU_LINKS
         "https://alcedo.studio" "Alcedo Studio Website"
         "https://zidage.github.io/AlcedoStudio_docs/" "Documentation"

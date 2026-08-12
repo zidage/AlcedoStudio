@@ -225,13 +225,20 @@ next number automatically.
      --private-key D:\secure\alcedo-update-private.seed
    ```
 
-6. In installed A, click Check for updates. Verify all of these behaviors:
+6. In installed A, open Settings > About and click Check for updates. Verify all
+   of these behaviors directly in the About page:
 
-   - the offer dialog text and changelog are readable;
-   - Later closes the dialog and leaves the toolbar update indicator available;
-   - View update reopens the same offer;
-   - Update downloads the `.exe`, rejects any size/hash mismatch, and changes to
-     Install and restart only after verification;
+   - the installed and available versions include their build numbers;
+   - the changelog and release notes are readable without opening another dialog;
+   - Download update shows percentage, transferred bytes, speed, and remaining time;
+   - Cancel download reports a user cancellation, and a later check and download
+     can start normally and resume the partial package;
+   - the downloader rejects any size/hash mismatch and changes to Install and
+     restart only after verification;
+   - a copy of A installed outside `C:\Program Files` is replaced in that same
+     directory; the updater must not create a second installation on drive C;
+   - the same directory is retained when A uses the legacy helper that launches
+     NSIS with `/S` only, because the new installer inherits A's registered path;
    - Install and restart closes A, runs the helper, installs B, and relaunches;
    - checking again from B reports up to date because its local build equals the
      signed remote build.

@@ -452,7 +452,7 @@ Dialog {
                                     running: dialog.visible
                                              && dialog.updateService
                                              && dialog.updateService.enabled
-                                             && dialog.updateService.state === UpdateService.Unchecked
+                                             && dialog.updateService.unchecked
                                     onTriggered: dialog.updateService.CheckForUpdates()
                                 }
 

@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// About-page update row. Missing remote update data reports an error in place;
-// it never removes the manual update action.
+// Complete inline update workflow for Settings > About. Startup checks stay
+// silent; all release details and actions remain on this page.
 Rectangle {
     id: root
     objectName: "aboutUpdateNotice"
@@ -13,12 +13,11 @@ Rectangle {
 
     readonly property bool enabledUpdates: updates && updates.enabled
     readonly property bool hasOffer: enabledUpdates
-                                     && (updates.updateDeferred || updates.updateAvailable)
+                                     && (updates.offerAvailable
+                                         || updates.downloading
+                                         || updates.downloadReady)
     readonly property bool showRow: updates !== null
-                                    && (showWhenUnchecked
-                                        || !updates.unchecked)
-
-    signal offerRequested()
+                                    && (showWhenUnchecked || !updates.unchecked)
 
     visible: showRow
     implicitWidth: 200
@@ -30,10 +29,6 @@ Rectangle {
                   ? appTheme.dangerColor
                   : appTheme.cardBorderColor
 
-    // Surface the build's update channel only on the idle status lines so the
-    // user can tell a test (beta) build from an official (stable) one at a
-    // glance. The Available / UpToDate / Error status text already carries the
-    // outcome, so it is not prefixed.
     function channelPrefix() {
         return (updates && updates.channel && String(updates.channel) !== "stable")
                ? qsTr("Beta channel — ") : ""
@@ -53,131 +48,165 @@ Rectangle {
         return channelPrefix() + qsTr("Not checked yet.")
     }
 
-    function actionLabel() {
-        if (updates && updates.checking)
+    function primaryLabel() {
+        if (!updates)
+            return ""
+        if (updates.checking)
             return qsTr("Checking…")
-        if (hasOffer)
-            return qsTr("View update")
+        if (updates.downloading)
+            return qsTr("Cancel download")
+        if (updates.downloadReady)
+            return qsTr("Install and restart")
+        if (updates.offerAvailable && updates.installAllowed)
+            return qsTr("Download update")
         return qsTr("Check for updates")
     }
 
-    RowLayout {
+    function runPrimaryAction() {
+        if (!updates || !enabledUpdates)
+            return
+        if (updates.downloading) {
+            updates.CancelDownload()
+        } else if (updates.downloadReady) {
+            updates.InstallUpdate()
+        } else if (updates.offerAvailable && updates.installAllowed) {
+            updates.DownloadUpdate()
+        } else {
+            updates.CheckForUpdates()
+        }
+    }
+
+    ColumnLayout {
         id: content
         anchors.fill: parent
         anchors.margins: appTheme.spaceLg
         spacing: appTheme.spaceMd
 
-        Rectangle {
-            Layout.preferredWidth: appTheme.spaceSm
-            Layout.preferredHeight: appTheme.spaceSm
-            Layout.alignment: Qt.AlignVCenter
-            radius: width / 2
-            visible: root.hasOffer
-            color: appTheme.backgroundTaskFinishedColor
-            Accessible.name: qsTr("Update available")
-            Accessible.role: Accessible.StaticText
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: appTheme.spaceMd
+
+            Rectangle {
+                Layout.preferredWidth: appTheme.spaceSm
+                Layout.preferredHeight: appTheme.spaceSm
+                Layout.alignment: Qt.AlignVCenter
+                radius: width / 2
+                visible: root.hasOffer
+                color: root.updates && root.updates.downloading
+                       ? appTheme.backgroundTaskWorkingColor
+                       : appTheme.backgroundTaskFinishedColor
+                Accessible.name: qsTr("Update available")
+                Accessible.role: Accessible.StaticText
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                spacing: appTheme.spaceXs
+
+                Label {
+                    objectName: "aboutUpdateStatusLabel"
+                    Layout.fillWidth: true
+                    text: root.statusLabel()
+                    color: appTheme.textColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightStrong
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: root.hasOffer && root.updates
+                    text: root.updates
+                          ? qsTr("Installed: %1 · Available: %2")
+                                .arg(root.updates.currentVersion)
+                                .arg(root.updates.availableVersion)
+                          : ""
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.dataFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            DialogActionButton {
+                objectName: "aboutUpdateActionButton"
+                Layout.alignment: Qt.AlignVCenter
+                enabled: root.enabledUpdates && !root.updates.checking
+                text: root.primaryLabel()
+                kind: root.updates
+                      && (root.updates.offerAvailable || root.updates.downloadReady)
+                      ? "accent" : "normal"
+                onClicked: root.runPrimaryAction()
+            }
         }
 
-        ColumnLayout {
+        Label {
+            objectName: "aboutUpdateErrorLabel"
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-            spacing: appTheme.spaceXs
+            visible: root.updates && root.updates.errorText.length > 0
+            text: root.updates ? root.updates.errorText : ""
+            color: appTheme.dangerColor
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            font.weight: appTheme.fontWeightRegular
+            wrapMode: Text.WordWrap
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.updates && root.updates.offerAvailable
+                     && !root.updates.installAllowed
+            text: qsTr("This build can check for updates but cannot install them.")
+            color: appTheme.textMutedColor
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+
+        ThemedProgressBar {
+            objectName: "aboutUpdateProgressBar"
+            Layout.fillWidth: true
+            visible: root.updates && root.updates.downloading
+            active: visible
+            showDetails: true
+            progressValue: root.updates ? root.updates.progress * 100 : 0
+            indeterminate: root.updates && root.updates.progress <= 0
+            leadingText: root.updates ? root.updates.downloadedBytesText : ""
+            speedText: root.updates ? root.updates.downloadSpeedText : ""
+            etaText: root.updates ? root.updates.downloadEtaText : ""
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: changelogText.implicitHeight + appTheme.spaceMd * 2
+            visible: root.updates && root.updates.changelog.length > 0
+            color: appTheme.bgBaseColor
+            radius: appTheme.controlRadiusSmall
+            border.width: 1
+            border.color: appTheme.dividerColor
 
             Label {
-                objectName: "aboutUpdateStatusLabel"
-                Layout.fillWidth: true
-                text: root.statusLabel()
+                id: changelogText
+                objectName: "aboutUpdateChangelogLabel"
+                anchors.fill: parent
+                anchors.margins: appTheme.spaceMd
+                text: root.updates ? root.updates.changelog : ""
                 color: appTheme.textColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeBody
-                font.weight: appTheme.fontWeightStrong
                 wrapMode: Text.WordWrap
-            }
-
-            Label {
-                objectName: "aboutUpdateErrorLabel"
-                Layout.fillWidth: true
-                visible: root.updates && root.updates.errorText.length > 0
-                text: root.updates ? root.updates.errorText : ""
-                color: appTheme.dangerColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                font.weight: appTheme.fontWeightRegular
-                wrapMode: Text.WordWrap
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: appTheme.spaceXs
-                visible: root.updates && root.updates.downloading
-                radius: appTheme.badgeRadius
-                color: appTheme.bgBaseColor
-
-                Rectangle {
-                    width: parent.width
-                           * Math.max(0, Math.min(1, root.updates ? root.updates.progress : 0))
-                    height: parent.height
-                    radius: parent.radius
-                    color: appTheme.accentColor
-                }
+                lineHeight: 1.35
             }
         }
 
-        Button {
-            id: actionButton
-            objectName: "aboutUpdateActionButton"
-
-            Layout.alignment: Qt.AlignVCenter
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-            Layout.preferredWidth: Math.max(148,
-                                            actionLabel.implicitWidth
-                                            + appTheme.spaceLg * 2)
-            enabled: root.enabledUpdates
-                     && !root.updates.checking
-                     && !root.updates.downloading
-                     && !root.updates.installing
-            text: root.actionLabel()
-            onClicked: {
-                if (!root.updates || !root.enabledUpdates)
-                    return
-                if (root.hasOffer) {
-                    root.offerRequested()
-                    return
-                }
-                root.updates.CheckForUpdates()
-            }
-
-            contentItem: Label {
-                id: actionLabel
-                text: actionButton.text
-                color: {
-                    if (!actionButton.enabled)
-                        return appTheme.textMutedColor
-                    if (actionButton.down || actionButton.hovered)
-                        return appTheme.textColor
-                    return appTheme.editorListSelectedInkColor
-                }
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeBody
-                font.weight: appTheme.fontWeightStrong
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            background: Rectangle {
-                radius: appTheme.controlRadiusSmall
-                color: {
-                    if (!actionButton.enabled)
-                        return appTheme.bgBaseColor
-                    if (actionButton.down)
-                        return appTheme.buttonPressedFillColor
-                    if (actionButton.hovered)
-                        return appTheme.buttonHoveredFillColor
-                    return appTheme.editorListSelectedFillColor
-                }
-                border.width: actionButton.activeFocus ? 1 : 0
-                border.color: appTheme.accentColor
-            }
+        DialogActionButton {
+            Layout.alignment: Qt.AlignLeft
+            visible: root.updates && root.updates.notesUrl.toString().length > 0
+            text: qsTr("Open release notes")
+            kind: "normal"
+            onClicked: root.updates.OpenReleaseNotes()
         }
     }
 }

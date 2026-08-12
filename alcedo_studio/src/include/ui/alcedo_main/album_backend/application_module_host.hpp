@@ -12,6 +12,7 @@
 class QQmlEngine;
 
 #include "app/ai_provider_profile.hpp"
+#include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/image_analysis_service.hpp"
 #include "app/model_download_service.hpp"
@@ -145,6 +146,7 @@ class ApplicationModuleHost final : public QObject {
   // Owned in construction dependency order. Destroyed in reverse.
   std::unique_ptr<BackgroundTaskController>            background_tasks_;
   std::unique_ptr<InteractionPolicyController>         interaction_policy_;
+  std::unique_ptr<alcedo::DownloadService>             download_service_;
   std::unique_ptr<alcedo::ModelDownloadService>        model_download_service_;
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<ProjectModule>                       project_;

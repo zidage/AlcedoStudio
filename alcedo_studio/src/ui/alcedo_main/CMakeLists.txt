@@ -253,6 +253,9 @@ add_executable(alcedo_update_installer
     "${ALCEDO_SRC_ROOT}/app/update_installer_main.cpp"
 )
 target_link_libraries(alcedo_update_installer PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(alcedo_update_installer PRIVATE UpdateInstallerWindows)
+endif()
 set_target_properties(alcedo_update_installer PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
 )
@@ -434,7 +437,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateOfferDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"

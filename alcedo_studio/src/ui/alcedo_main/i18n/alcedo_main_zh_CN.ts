@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+78"/>
+        <location filename="../qml/AboutPage.qml" line="+80"/>
         <source>New to Alcedo Studio?</source>
         <translation>初次使用 Alcedo Studio？</translation>
     </message>
@@ -14,12 +14,12 @@
         <translation>文档网站是了解本软件工作原理的最佳去处——循序渐进地学习如何导入、编辑和管理你的照片。它是 Alcedo Studio 的教程，并随每个版本保持更新。</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Open documentation</source>
         <translation>打开文档</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+34"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
@@ -39,7 +39,7 @@
         <translation>版本</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -54,7 +54,12 @@
         <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+14"/>
+        <source>Updates</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
         <source>Links</source>
         <translation>链接</translation>
     </message>
@@ -3875,7 +3880,7 @@ Original source files on disk will be kept.</source>
         <translation>Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+200"/>
+        <location line="+225"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
@@ -4302,17 +4307,12 @@ Original source files on disk will be kept.</source>
         <translation>未下载</translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+84"/>
         <source>Preparing model runtime…</source>
         <translation>正在准备模型运行时…</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>File %1 / %2</source>
-        <translation>文件 %1 / %2</translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+9"/>
         <source>↓ %1</source>
         <translation>↓ %1</translation>
     </message>
@@ -4320,7 +4320,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+80"/>
+        <location filename="../qml/SettingDialog.qml" line="+79"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>选择缩略图缓存文件夹</translation>
     </message>
@@ -4347,12 +4347,12 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="-143"/>
         <location line="+157"/>
-        <location line="+151"/>
+        <location line="+165"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-305"/>
+        <location line="-319"/>
         <location line="+155"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
@@ -4398,7 +4398,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+272"/>
+        <location line="+187"/>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <location line="+99"/>
         <source>Application language</source>
         <translation>应用语言</translation>
     </message>
@@ -4463,7 +4468,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>已禁用</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+14"/>
         <source>Max entries</source>
         <translation>最大条目数</translation>
     </message>
@@ -4508,7 +4513,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-824"/>
+        <location line="-840"/>
         <location line="+146"/>
         <source>About</source>
         <translation>关于</translation>
@@ -4532,7 +4537,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>加速</translation>
     </message>
     <message>
-        <location line="+568"/>
+        <location line="+584"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
@@ -4602,7 +4607,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThemedProgressBar</name>
     <message>
-        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <location filename="../qml/ThemedProgressBar.qml" line="+25"/>
+        <source>%1%</source>
+        <translation type="unfinished">%1%</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Progress</source>
         <translation>进度</translation>
     </message>
@@ -4693,28 +4703,80 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Settings</source>
         <translation>设置</translation>
     </message>
+    <message>
+        <location line="+12"/>
+        <location line="+7"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>UpdateNotice</name>
     <message>
-        <location filename="../qml/UpdateNotice.qml" line="+89"/>
-        <source>Release notes</source>
-        <translation>发行说明</translation>
+        <location filename="../qml/UpdateNotice.qml" line="+34"/>
+        <source>Beta channel — </source>
+        <translation>Beta 通道 — </translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+7"/>
+        <source>Updates are disabled in this build.</source>
+        <translation>此构建已禁用更新。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+5"/>
+        <source>Not checked yet.</source>
+        <translation>尚未检查。</translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <source>Checking for updates…</source>
+        <translation>正在检查更新…</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Checking…</source>
+        <translation>正在检查…</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel download</source>
+        <translation>取消下载</translation>
+    </message>
+    <message>
+        <location line="+4"/>
         <source>Download update</source>
         <translation>下载更新</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Install and restart</source>
-        <translation>安装并重启</translation>
+        <source>Check for updates</source>
+        <translation>检查更新</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Check again</source>
-        <translation>重新检查</translation>
+        <location line="+36"/>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Installed: %1 · Available: %2</source>
+        <translation>已安装：%1 · 可用版本：%2</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>This build can check for updates but cannot install them.</source>
+        <translation>此构建可以检查更新，但不能自动安装。</translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>Open release notes</source>
+        <translation>打开发行说明</translation>
+    </message>
+    <message>
+        <location line="-148"/>
+        <source>Install and restart</source>
+        <translation>安装并重启</translation>
     </message>
 </context>
 <context>
@@ -4794,7 +4856,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+514"/>
+        <location line="+518"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
@@ -4857,18 +4919,37 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+66"/>
-        <source>Updates are ready to check.</source>
-        <translation>可以检查更新。</translation>
+        <location filename="../../../app/update_service.cpp" line="+67"/>
+        <source>%1 (build %2)</source>
+        <translation>%1（构建 %2）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>About %1 h %2 min remaining</source>
+        <translation>预计剩余 %1 小时 %2 分钟</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>About %1 min %2 s remaining</source>
+        <translation>预计剩余 %1 分 %2 秒</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+338"/>
+        <source>About %1 s remaining</source>
+        <translation>预计剩余 %1 秒</translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>Updates are disabled in this build.</source>
         <translation>此版本未启用更新功能。</translation>
     </message>
     <message>
-        <location line="-305"/>
+        <location line="+26"/>
+        <source>The update download was canceled by the user.</source>
+        <translation>用户已取消更新下载。</translation>
+    </message>
+    <message>
+        <location line="+54"/>
         <source>The update operation failed.</source>
         <translation>更新操作失败。</translation>
     </message>
@@ -4879,12 +4960,11 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+24"/>
-        <location line="+123"/>
         <source>The update server returned HTTP %1.</source>
         <translation>更新服务器返回 HTTP %1。</translation>
     </message>
     <message>
-        <location line="-120"/>
+        <location line="+3"/>
         <source>The update server redirected to an untrusted host.</source>
         <translation>更新服务器重定向到了不受信任的主机。</translation>
     </message>
@@ -4894,44 +4974,39 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>更新服务器的响应过大。</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+18"/>
         <source>Checking for updates…</source>
         <translation>正在检查更新…</translation>
     </message>
     <message>
-        <location line="+35"/>
+        <location line="+39"/>
         <source>Alcedo Studio is up to date.</source>
         <translation>Alcedo Studio 已是最新版本。</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+6"/>
         <source>Alcedo Studio %1 is available.</source>
         <translation>Alcedo Studio %1 已发布。</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+14"/>
         <source>The update download directory cannot be created.</source>
         <translation>无法创建更新下载目录。</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
+        <source>Another download is already running. Wait for it to finish and try again.</source>
+        <translation>另一个下载任务正在运行。请等待其完成后重试。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Downloading Alcedo Studio %1…</source>
         <translation>正在下载 Alcedo Studio %1…</translation>
     </message>
     <message>
-        <location line="+44"/>
-        <source>The update package redirected to an untrusted host.</source>
-        <translation>更新包重定向到了不受信任的主机。</translation>
-    </message>
-    <message>
-        <location line="+13"/>
+        <location line="+11"/>
         <source>The update download state is not valid.</source>
         <translation>更新下载状态无效。</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>The downloaded package does not match the signed manifest.</source>
-        <translation>下载的更新包与签名清单不匹配。</translation>
     </message>
     <message>
         <location line="+6"/>
@@ -4939,12 +5014,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>无法保存已验证的更新包。</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+7"/>
+        <location line="+126"/>
         <source>Alcedo Studio %1 is ready to install.</source>
         <translation>Alcedo Studio %1 已可安装。</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-110"/>
         <source>No verified update package is available.</source>
         <translation>没有可用的已验证更新包。</translation>
     </message>
@@ -4959,7 +5035,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>更新包未通过最终 SHA-256 校验。</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for manual installation.</source>
         <translation>Alcedo Studio 无法替换此文件夹中的应用。更新 ZIP 已打开，请手动安装。</translation>
     </message>
@@ -4975,19 +5051,14 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>更新安装助手所需的 Qt 运行库缺失。</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+30"/>
         <source>The update installer helper could not start.</source>
         <translation>无法启动更新安装助手。</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
         <translation>Alcedo Studio 将关闭并安装更新。</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Update hidden for this session.</source>
-        <translation>本次运行期间不再显示此更新。</translation>
     </message>
 </context>
 <context>

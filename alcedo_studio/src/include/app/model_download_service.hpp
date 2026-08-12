@@ -12,6 +12,8 @@
 #include <memory>
 #include <string>
 
+#include "app/download_service.hpp"
+
 namespace alcedo {
 
 // Progress for an in-flight model profile download. Mirrors the byte/file
@@ -36,7 +38,7 @@ class ModelDownloadService final : public QObject {
   Q_OBJECT
 
  public:
-  explicit ModelDownloadService(QObject* parent = nullptr);
+  explicit ModelDownloadService(DownloadService& downloads, QObject* parent = nullptr);
   ~ModelDownloadService() override;
 
   ModelDownloadService(const ModelDownloadService&)            = delete;
@@ -59,8 +61,11 @@ class ModelDownloadService final : public QObject {
   void Finished(bool ok, const QString& error);
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  DownloadService& downloads_;
+  QString          request_id_;
+  std::string      profile_id_;
+  std::filesystem::path model_root_;
+  bool             running_ = false;
 };
 
 }  // namespace alcedo

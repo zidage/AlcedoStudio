@@ -5,6 +5,7 @@
 #include "app/update_service.hpp"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
@@ -13,7 +14,10 @@
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QLocale>
+#include <QUuid>
 #include <algorithm>
+#include <cmath>
 
 #ifndef ALCEDO_APP_VERSION
 #define ALCEDO_APP_VERSION "0.0.0"
@@ -59,10 +63,58 @@ auto SafePackageName(const QUrl& url) -> QString {
   return QStringLiteral("package.bin");
 }
 
+auto DisplayVersion(const QString& version, quint64 build) -> QString {
+  return QCoreApplication::translate("alcedo::UpdateService", "%1 (build %2)")
+      .arg(version)
+      .arg(build);
+}
+
+auto FormatBytes(qint64 downloaded, qint64 total) -> QString {
+  if (total <= 0) {
+    return {};
+  }
+  const QLocale locale;
+  return QStringLiteral("%1 / %2")
+      .arg(locale.formattedDataSize(std::max<qint64>(0, downloaded), 1,
+                                    QLocale::DataSizeBase1000),
+           locale.formattedDataSize(total, 1, QLocale::DataSizeBase1000));
+}
+
+auto FormatSpeed(qint64 bytes_per_second) -> QString {
+  if (bytes_per_second <= 0) {
+    return {};
+  }
+  return QLocale().formattedDataSize(bytes_per_second, 1, QLocale::DataSizeBase1000)
+         + QStringLiteral("/s");
+}
+
+auto FormatEta(qint64 downloaded, qint64 total, qint64 bytes_per_second) -> QString {
+  if (downloaded < 0 || total <= downloaded || bytes_per_second <= 0) {
+    return {};
+  }
+  const qint64 seconds = (total - downloaded + bytes_per_second - 1) / bytes_per_second;
+  if (seconds > 24 * 60 * 60) {
+    return {};
+  }
+  if (seconds >= 3600) {
+    return QCoreApplication::translate("alcedo::UpdateService", "About %1 h %2 min remaining")
+        .arg(seconds / 3600)
+        .arg((seconds % 3600) / 60);
+  }
+  if (seconds >= 60) {
+    return QCoreApplication::translate("alcedo::UpdateService", "About %1 min %2 s remaining")
+        .arg(seconds / 60)
+        .arg(seconds % 60);
+  }
+  return QCoreApplication::translate("alcedo::UpdateService", "About %1 s remaining")
+      .arg(seconds);
+}
+
 }  // namespace
 
-UpdateService::UpdateService(QObject* parent)
+UpdateService::UpdateService(DownloadService& downloads, QObject* parent)
     : QObject(parent),
+      downloads_(downloads),
       public_key_(QByteArray::fromBase64(QByteArrayLiteral(ALCEDO_UPDATE_PUBLIC_KEY_BASE64),
                                          QByteArray::AbortOnBase64DecodingErrors)),
       feed_url_(QStringLiteral(ALCEDO_UPDATE_MANIFEST_URL)) {
@@ -74,18 +126,55 @@ UpdateService::UpdateService(QObject* parent)
     state_       = State::Disabled;
     status_text_ = tr("Updates are disabled in this build.");
   }
+  connect(&downloads_, &DownloadService::ProgressChanged, this,
+          [this](const DownloadProgress& download) {
+            if (state_ != State::Downloading || download.id != download_request_id_) {
+              return;
+            }
+            progress_ = download.bytes_total > 0
+                            ? std::clamp(static_cast<double>(download.bytes_downloaded)
+                                             / static_cast<double>(download.bytes_total),
+                                         0.0, 1.0)
+                            : 0.0;
+            downloaded_bytes_text_ = FormatBytes(download.bytes_downloaded, download.bytes_total);
+            download_speed_text_    = FormatSpeed(download.bytes_per_second);
+            download_eta_text_ = FormatEta(download.bytes_downloaded, download.bytes_total,
+                                           download.bytes_per_second);
+            emit changed();
+          });
+  connect(&downloads_, &DownloadService::Finished, this,
+          [this](const QString& id, bool ok, bool canceled, const QString& error) {
+            if (state_ != State::Downloading || id != download_request_id_) {
+              return;
+            }
+            const QString partial_path = package_path_ + QStringLiteral(".part");
+            download_request_id_.clear();
+            if (!ok) {
+              Fail(canceled ? tr("The update download was canceled by the user.") : error);
+              return;
+            }
+            FinishPackageDownload(partial_path);
+          });
 }
 
 UpdateService::~UpdateService() { ResetPackageDownload(); }
 
 bool UpdateService::install_allowed() const { return ALCEDO_UPDATE_ALLOW_INSTALL != 0; }
 
-QString UpdateService::current_version() const { return QStringLiteral(ALCEDO_APP_VERSION); }
+QString UpdateService::current_version() const {
+  return DisplayVersion(QStringLiteral(ALCEDO_APP_VERSION), current_build());
+}
+
+quint64 UpdateService::current_build() const { return static_cast<quint64>(ALCEDO_BUILD_NUMBER); }
 
 QString UpdateService::channel() const { return QStringLiteral(ALCEDO_UPDATE_CHANNEL); }
 
 QString UpdateService::available_version() const {
-  return manifest_.has_value() ? manifest_->version : QString{};
+  return manifest_.has_value() ? DisplayVersion(manifest_->version, manifest_->build) : QString{};
+}
+
+quint64 UpdateService::available_build() const {
+  return manifest_.has_value() ? manifest_->build : 0;
 }
 
 QString UpdateService::changelog() const {
@@ -165,6 +254,9 @@ void UpdateService::CheckForUpdates() {
   manifest_.reset();
   package_path_.clear();
   progress_ = 0.0;
+  downloaded_bytes_text_.clear();
+  download_speed_text_.clear();
+  download_eta_text_.clear();
   SetState(State::Checking, tr("Checking for updates…"));
 
   FetchSmallFile(
@@ -209,7 +301,8 @@ void UpdateService::HandleManifest(QByteArray manifest_bytes, QByteArray signatu
   }
 
   deferred_ = false;
-  SetState(State::Available, tr("Alcedo Studio %1 is available.").arg(manifest_->version));
+  SetState(State::Available,
+           tr("Alcedo Studio %1 is available.").arg(available_version()));
   emit offerReady();
 }
 
@@ -228,85 +321,33 @@ void UpdateService::DownloadUpdate() {
   }
   package_path_              = QDir(update_dir).filePath(SafePackageName(manifest_->artifact.url));
   const QString partial_path = package_path_ + QStringLiteral(".part");
-  QFile::remove(partial_path);
-  download_file_ = std::make_unique<QFile>(partial_path);
-  if (!download_file_->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    Fail(download_file_->errorString());
+  progress_              = 0.0;
+  downloaded_bytes_text_ = FormatBytes(0, manifest_->artifact.size);
+  download_speed_text_.clear();
+  download_eta_text_.clear();
+  download_request_id_ = QStringLiteral("update-")
+                         + QUuid::createUuid().toString(QUuid::WithoutBraces);
+  DownloadRequest request;
+  request.id = download_request_id_;
+  request.items.push_back({manifest_->artifact.url, partial_path, manifest_->artifact.size,
+                           manifest_->artifact.sha256});
+  if (!downloads_.Start(request)) {
+    download_request_id_.clear();
+    Fail(tr("Another download is already running. Wait for it to finish and try again."));
     return;
   }
-  download_hash_ = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha256);
-  progress_      = 0.0;
-  SetState(State::Downloading, tr("Downloading Alcedo Studio %1…").arg(manifest_->version));
-
-  QNetworkReply* reply = network_.get(NewRequest(manifest_->artifact.url));
-  active_reply_        = reply;
-  connect(reply, &QNetworkReply::readyRead, this, [this, reply]() {
-    if (!download_file_ || !download_hash_ || !manifest_.has_value()) {
-      return;
-    }
-    const QByteArray data = reply->readAll();
-    if (download_file_->size() + data.size() > manifest_->artifact.size ||
-        download_file_->write(data) != data.size()) {
-      reply->abort();
-      return;
-    }
-    download_hash_->addData(data);
-  });
-  connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
-    if (!manifest_.has_value()) {
-      return;
-    }
-    const qint64 expected = total > 0 ? total : manifest_->artifact.size;
-    progress_ = expected > 0 ? std::clamp(static_cast<double>(received) / expected, 0.0, 1.0) : 0.0;
-    emit changed();
-  });
-  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-    if (active_reply_ == reply) {
-      active_reply_.clear();
-    }
-    if (download_file_ && reply->bytesAvailable() > 0) {
-      const QByteArray data = reply->readAll();
-      if (manifest_.has_value() &&
-          download_file_->size() + data.size() <= manifest_->artifact.size &&
-          download_file_->write(data) == data.size()) {
-        download_hash_->addData(data);
-      }
-    }
-    QString   error;
-    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (reply->error() != QNetworkReply::NoError) {
-      error = reply->errorString();
-    } else if (status != 200) {
-      error = tr("The update server returned HTTP %1.").arg(status);
-    } else if (reply->url().scheme() != QStringLiteral("https") ||
-               reply->url().host().compare(feed_url_.host(), Qt::CaseInsensitive) != 0) {
-      error = tr("The update package redirected to an untrusted host.");
-    }
-    reply->deleteLater();
-    if (!error.isEmpty()) {
-      Fail(error);
-      return;
-    }
-    FinishPackageDownload();
-  });
+  SetState(State::Downloading, tr("Downloading Alcedo Studio %1…").arg(available_version()));
 }
 
-void UpdateService::FinishPackageDownload() {
-  if (!download_file_ || !download_hash_ || !manifest_.has_value()) {
-    Fail(tr("The update download state is not valid."));
-    return;
+void UpdateService::CancelDownload() {
+  if (state_ == State::Downloading && !download_request_id_.isEmpty()) {
+    downloads_.Cancel(download_request_id_);
   }
-  const QString partial_path = download_file_->fileName();
-  download_file_->flush();
-  download_file_->close();
-  const qint64     size   = QFileInfo(partial_path).size();
-  const QByteArray digest = download_hash_->result();
-  download_file_.reset();
-  download_hash_.reset();
+}
 
-  if (size != manifest_->artifact.size || digest != manifest_->artifact.sha256) {
-    QFile::remove(partial_path);
-    Fail(tr("The downloaded package does not match the signed manifest."));
+void UpdateService::FinishPackageDownload(const QString& partial_path) {
+  if (!manifest_.has_value()) {
+    Fail(tr("The update download state is not valid."));
     return;
   }
   QFile::remove(package_path_);
@@ -316,7 +357,10 @@ void UpdateService::FinishPackageDownload() {
     return;
   }
   progress_ = 1.0;
-  SetState(State::Ready, tr("Alcedo Studio %1 is ready to install.").arg(manifest_->version));
+  downloaded_bytes_text_ = FormatBytes(manifest_->artifact.size, manifest_->artifact.size);
+  download_speed_text_.clear();
+  download_eta_text_.clear();
+  SetState(State::Ready, tr("Alcedo Studio %1 is ready to install.").arg(available_version()));
 }
 
 void UpdateService::ResetPackageDownload() {
@@ -324,13 +368,10 @@ void UpdateService::ResetPackageDownload() {
     active_reply_->abort();
     active_reply_.clear();
   }
-  if (download_file_) {
-    const QString path = download_file_->fileName();
-    download_file_->close();
-    download_file_.reset();
-    QFile::remove(path);
+  if (!download_request_id_.isEmpty()) {
+    downloads_.Cancel(download_request_id_);
+    download_request_id_.clear();
   }
-  download_hash_.reset();
 }
 
 bool UpdateService::PackageMatchesManifest(QString* error) const {
@@ -445,7 +486,7 @@ void UpdateService::CancelInstall() {
   }
   staged_helper_.clear();
   installer_arguments_.clear();
-  SetState(State::Ready, tr("Alcedo Studio %1 is ready to install.").arg(manifest_->version));
+  SetState(State::Ready, tr("Alcedo Studio %1 is ready to install.").arg(available_version()));
 }
 
 void UpdateService::DeferUpdate() {

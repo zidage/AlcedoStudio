@@ -42,13 +42,29 @@ if(NOT TARGET unofficial::ed25519::ed25519)
     add_library(unofficial::ed25519::ed25519 ALIAS alcedo_ed25519)
 endif()
 
+def_library(DownloadService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/download_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/download_service.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Network
+)
+
+if(WIN32)
+    def_library(UpdateInstallerWindows
+        SOURCES
+            "${ALCEDO_APP_ROOT}/update_installer_windows.cpp"
+            "${ALCEDO_INCLUDE_ROOT}/app/update_installer_windows.hpp"
+        PUBLIC_DEPS Qt6::Core
+    )
+endif()
+
 def_library(UpdateService
     SOURCES
         "${ALCEDO_APP_ROOT}/update_manifest.cpp"
         "${ALCEDO_APP_ROOT}/update_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_manifest.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_service.hpp"
-    PUBLIC_DEPS Qt6::Core Qt6::Network
+    PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
     PRIVATE_DEPS unofficial::ed25519::ed25519 Qt6::Gui
 )
 if(ALCEDO_UPDATE_ALLOW_INSTALL)
@@ -236,7 +252,7 @@ def_library(ModelDownloadService
         "${ALCEDO_APP_ROOT}/model_asset_catalog.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/model_download_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/model_asset_catalog.hpp"
-    PUBLIC_DEPS Qt6::Core Qt6::Network
+    PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
 )
 
 def_library(ProjectService

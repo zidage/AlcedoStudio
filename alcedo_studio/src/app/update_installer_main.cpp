@@ -15,6 +15,10 @@
 #include <string>
 
 #ifdef Q_OS_WIN
+#include "app/update_installer_windows.hpp"
+#endif
+
+#ifdef Q_OS_WIN
 #include <windows.h>
 #else
 #include <cerrno>
@@ -81,14 +85,16 @@ auto StartApplication(const QString& path) -> bool {
 }
 
 #ifdef Q_OS_WIN
-auto InstallWindows(const QString& package_path, const QString& app_executable) -> int {
+auto InstallWindows(const QString& package_path, const QString& install_path,
+                    const QString& app_executable) -> int {
   const std::wstring package = QDir::toNativeSeparators(package_path).toStdWString();
+  const std::wstring parameters = alcedo::BuildSilentNsisArguments(install_path).toStdWString();
   SHELLEXECUTEINFOW  launch{};
   launch.cbSize       = sizeof(launch);
   launch.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
   launch.lpVerb       = L"runas";
   launch.lpFile       = package.c_str();
-  launch.lpParameters = L"/S";
+  launch.lpParameters = parameters.c_str();
   launch.nShow        = SW_SHOWNORMAL;
   if (!ShellExecuteExW(&launch) || launch.hProcess == nullptr) {
     StartApplication(app_executable);
@@ -199,7 +205,7 @@ int main(int argc, char* argv[]) {
   }
 
 #ifdef Q_OS_WIN
-  return InstallWindows(package_path, app_executable);
+  return InstallWindows(package_path, install_path, app_executable);
 #elif defined(Q_OS_MACOS)
   return InstallMac(package_path, install_path);
 #else

@@ -5,8 +5,6 @@
 #pragma once
 
 #include <QByteArray>
-#include <QCryptographicHash>
-#include <QFile>
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QPointer>
@@ -18,6 +16,7 @@
 #include <optional>
 
 #include "app/update_manifest.hpp"
+#include "app/download_service.hpp"
 
 class QNetworkReply;
 
@@ -31,11 +30,16 @@ class UpdateService final : public QObject {
   Q_PROPERTY(bool installAllowed READ install_allowed CONSTANT)
   Q_PROPERTY(QString channel READ channel CONSTANT)
   Q_PROPERTY(QString currentVersion READ current_version CONSTANT)
+  Q_PROPERTY(quint64 currentBuild READ current_build CONSTANT)
   Q_PROPERTY(QString availableVersion READ available_version NOTIFY changed)
+  Q_PROPERTY(quint64 availableBuild READ available_build NOTIFY changed)
   Q_PROPERTY(QString changelog READ changelog NOTIFY changed)
   Q_PROPERTY(QString statusText READ status_text NOTIFY changed)
   Q_PROPERTY(QString errorText READ error_text NOTIFY changed)
   Q_PROPERTY(double progress READ progress NOTIFY changed)
+  Q_PROPERTY(QString downloadedBytesText READ downloaded_bytes_text NOTIFY changed)
+  Q_PROPERTY(QString downloadSpeedText READ download_speed_text NOTIFY changed)
+  Q_PROPERTY(QString downloadEtaText READ download_eta_text NOTIFY changed)
   Q_PROPERTY(bool unchecked READ unchecked NOTIFY changed)
   Q_PROPERTY(bool checking READ checking NOTIFY changed)
   Q_PROPERTY(bool offerAvailable READ offer_available NOTIFY changed)
@@ -62,7 +66,7 @@ class UpdateService final : public QObject {
   };
   Q_ENUM(State)
 
-  explicit UpdateService(QObject* parent = nullptr);
+  explicit UpdateService(DownloadService& downloads, QObject* parent = nullptr);
   ~UpdateService() override;
 
   [[nodiscard]] State   state() const { return state_; }
@@ -70,11 +74,16 @@ class UpdateService final : public QObject {
   [[nodiscard]] bool    install_allowed() const;
   [[nodiscard]] QString channel() const;
   [[nodiscard]] QString current_version() const;
+  [[nodiscard]] quint64 current_build() const;
   [[nodiscard]] QString available_version() const;
+  [[nodiscard]] quint64 available_build() const;
   [[nodiscard]] QString changelog() const;
   [[nodiscard]] QString status_text() const { return status_text_; }
   [[nodiscard]] QString error_text() const { return error_text_; }
   [[nodiscard]] double  progress() const { return progress_; }
+  [[nodiscard]] QString downloaded_bytes_text() const { return downloaded_bytes_text_; }
+  [[nodiscard]] QString download_speed_text() const { return download_speed_text_; }
+  [[nodiscard]] QString download_eta_text() const { return download_eta_text_; }
   [[nodiscard]] bool    unchecked() const { return state_ == State::Unchecked; }
   [[nodiscard]] bool    checking() const { return state_ == State::Checking; }
   [[nodiscard]] bool    offer_available() const { return state_ == State::Available; }
@@ -89,6 +98,7 @@ class UpdateService final : public QObject {
 
   Q_INVOKABLE void CheckForUpdates();
   Q_INVOKABLE void DownloadUpdate();
+  Q_INVOKABLE void CancelDownload();
   Q_INVOKABLE void InstallUpdate();
   Q_INVOKABLE bool CommitInstall();
   Q_INVOKABLE void CancelInstall();
@@ -107,7 +117,7 @@ class UpdateService final : public QObject {
   void                  FetchSmallFile(const QUrl& url, qint64 maximum_size, SmallReply callback);
   void                  HandleManifest(QByteArray manifest_bytes, QByteArray signature_text);
   void                  Fail(QString message);
-  void                  FinishPackageDownload();
+  void                  FinishPackageDownload(const QString& downloaded_path);
   void                  ResetPackageDownload();
   [[nodiscard]] bool    PackageMatchesManifest(QString* error) const;
   [[nodiscard]] QString PlatformKey() const;
@@ -116,16 +126,19 @@ class UpdateService final : public QObject {
 
   QNetworkAccessManager               network_;
   QPointer<QNetworkReply>             active_reply_;
-  std::unique_ptr<QFile>              download_file_;
-  std::unique_ptr<QCryptographicHash> download_hash_;
+  DownloadService&                    downloads_;
   std::optional<UpdateManifest>       manifest_;
   QByteArray                          public_key_;
   QUrl                                feed_url_;
   QString                             package_path_;
+  QString                             download_request_id_;
   QString                             staged_helper_;
   QStringList                         installer_arguments_;
   QString                             status_text_;
   QString                             error_text_;
+  QString                             downloaded_bytes_text_;
+  QString                             download_speed_text_;
+  QString                             download_eta_text_;
   State                               state_     = State::Disabled;
   double                              progress_  = 0.0;
   bool                                deferred_  = false;

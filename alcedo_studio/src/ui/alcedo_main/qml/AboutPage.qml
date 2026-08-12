@@ -31,8 +31,6 @@ ColumnLayout {
     readonly property string docsUrl: "https://zidage.github.io/AlcedoStudio_docs/"
     readonly property string repoUrl: "https://github.com/zidage/AlcedoStudio"
 
-    signal offerRequested()
-
     width: parent ? parent.width : implicitWidth
     spacing: appTheme.spaceXl
 
@@ -177,8 +175,11 @@ ColumnLayout {
                 }
 
                 Label {
+                    objectName: "aboutVersionLabel"
                     Layout.fillWidth: true
-                    text: page.appVersion.length > 0 ? page.appVersion : qsTr("Unavailable")
+                    text: page.updateService
+                          ? page.updateService.currentVersion
+                          : (page.appVersion.length > 0 ? page.appVersion : qsTr("Unavailable"))
                     color: page.textColor
                     font.family: page.dataFontFamily
                     font.pixelSize: 15
@@ -219,7 +220,6 @@ ColumnLayout {
             Layout.fillWidth: true
             updates: page.updateService
             showWhenUnchecked: true
-            onOfferRequested: page.offerRequested()
         }
     }
 

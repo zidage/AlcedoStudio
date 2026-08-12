@@ -18,8 +18,6 @@ Dialog {
     x: 0
     y: 0
 
-    signal updateOfferRequested()
-
     property Item blurSource: null
     property var languageOptions: []
     property color primaryAccent: appTheme.accentColor
@@ -983,7 +981,6 @@ Dialog {
                                 dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
                                 headlineFontFamily: dialog.headlineFontFamily
-                                onOfferRequested: dialog.updateOfferRequested()
                             }
                         }
                     }
