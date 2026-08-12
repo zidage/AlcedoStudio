@@ -7,13 +7,36 @@ key offline. Do not put it in this repository or in GitHub Actions.
 
 Build the signer, then generate a key pair on a trusted computer. If a public key
 already exists in `alcedo_studio/src/config/update_public_key.txt`, reuse that
-pair. Do not generate a new key for an installed app base.
+pair. Do not generate a new key for an installed app base. Windows and macOS
+share one Ed25519 pair; generate it on either platform and keep the private seed
+offline.
+
+### Windows
 
 ```powershell
 cmd /c scripts\msvc_env.cmd --build build\debug --target alcedo_update_signer
 build\debug\alcedo_studio\src\alcedo_update_signer.exe generate `
   --private-key D:\secure\alcedo-update-private.seed `
   --public-key alcedo_studio\src\config\update_public_key.txt
+```
+
+### macOS
+
+```bash
+cmake --preset macos_debug
+cmake --build --preset macos_debug --target alcedo_update_signer
+./build/macos-debug/alcedo_studio/src/alcedo_update_signer generate \
+  --private-key /Volumes/secure/alcedo-update-private.seed \
+  --public-key alcedo_studio/src/config/update_public_key.txt
+```
+
+A release-tree signer also works when you already have a packaged build:
+
+```bash
+cmake --build --preset macos_release --target alcedo_update_signer
+./build/macos-release/alcedo_studio/src/alcedo_update_signer generate \
+  --private-key /Volumes/secure/alcedo-update-private.seed \
+  --public-key alcedo_studio/src/config/update_public_key.txt
 ```
 
 Commit the public key file. Store the same Base64 value as the GitHub variable
@@ -121,18 +144,35 @@ This script:
 Dry run (no credentials):
 
 ```powershell
+# Windows package machine
 python scripts\update\publish_update.py `
   --platform windows `
   --private-key D:\secure\alcedo-update-private.seed `
   --dry-run
 ```
 
+```bash
+# macOS package machine
+python3 scripts/update/publish_update.py \
+  --platform macos \
+  --private-key /Volumes/secure/alcedo-update-private.seed \
+  --dry-run
+```
+
 Real upload (reads `R2_*` from the environment or `rust/puerh_mind/.env.test`):
 
 ```powershell
+# Windows package machine
 python scripts\update\publish_update.py `
   --platform windows `
   --private-key D:\secure\alcedo-update-private.seed
+```
+
+```bash
+# macOS package machine
+python3 scripts/update/publish_update.py \
+  --platform macos \
+  --private-key /Volumes/secure/alcedo-update-private.seed
 ```
 
 The channel is read from the package's CMake cache, so the normal upload command
@@ -245,23 +285,85 @@ next number automatically.
 
 ### macOS
 
-Repeat the same A/B flow with:
+The ZIP is the automatic-update package. The DMG remains the manual-download
+package. Both are written under `build/macos-release/package/` and both are
+archived under `updates/v1/beta/builds/<build>/macos-arm64/` when you publish a
+beta build. Install A from the DMG into a **user-writable** folder before
+packaging B. `/Applications` is often not writable without elevation; use
+`~/Applications` or another directory you own so the helper can rename and
+replace the `.app` in place.
 
-```bash
-./scripts/package_macos.sh --channel beta
-# Install/open A before replacing the package output.
-./scripts/package_macos.sh --channel beta
-python3 scripts/update/publish_update.py --platform macos \
-  --private-key /Volumes/secure/alcedo-update-private.seed --dry-run
-python3 scripts/update/publish_update.py --platform macos \
-  --private-key /Volumes/secure/alcedo-update-private.seed
-```
+1. Package A, then install it before packaging B:
 
-The manifest and live alias are under `beta/macos-arm64`; the ZIP is the
-automatic-update package and the DMG remains the manual-download package. Both
-packages are archived under
-`updates/v1/beta/builds/<build>/macos-arm64/`. The installed `.app` directory
-must be writable for automatic replacement.
+   ```bash
+   ./scripts/package_macos.sh --channel beta
+   ```
+
+   Open the generated DMG under `build/macos-release/package/`, copy
+   `AlcedoStudio.app` to a writable location (for example `~/Applications`), and
+   launch that copy. If Gatekeeper blocks the ad-hoc-signed build, open it once
+   with Finder **Open** (right-click) and confirm. Note the build number printed
+   by the package script.
+
+2. Start installed A. Open Settings > About. Confirm the Updates row has readable
+   text and says it is on the beta channel before/while checking.
+
+3. Package B. This intentionally replaces the same-version package files in the
+   fixed package directory:
+
+   ```bash
+   ./scripts/package_macos.sh --channel beta
+   ```
+
+4. Validate the complete signing and upload plan without R2 credentials:
+
+   ```bash
+   python3 scripts/update/publish_update.py --platform macos \
+     --private-key /Volumes/secure/alcedo-update-private.seed --dry-run
+   ```
+
+   Inspect
+   `build/tmp/update/beta/macos-arm64/update-manifest.json`: its `build` must
+   equal the number printed by the B package run and be greater than A; it must
+   contain only `macos-arm64`, and the printed live alias must end in
+   `updates/v1/beta/macos-arm64/manifest.json`. Its package URL must start with
+   `https://static.aoraw.org/updates/v1/beta/builds/<build>/macos-arm64/` and
+   point at the `.zip`, not the `.dmg`.
+
+5. Put `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, and
+   `R2_SECRET_ACCESS_KEY` in the environment or the ignored
+   `rust/puerh_mind/.env.test`, then publish:
+
+   ```bash
+   python3 scripts/update/publish_update.py --platform macos \
+     --private-key /Volumes/secure/alcedo-update-private.seed
+   ```
+
+6. In installed A, open Settings > About and click Check for updates. Verify all
+   of these behaviors directly in the About page:
+
+   - the installed and available versions include their build numbers;
+   - the changelog and release notes are readable without opening another dialog;
+   - Download update shows percentage, transferred bytes, speed, and remaining time;
+   - Cancel download reports a user cancellation, and a later check and download
+     can start normally and resume the partial package;
+   - the downloader rejects any size/hash mismatch and changes to Install and
+     restart only after verification;
+   - Install and restart closes A, runs
+     `AlcedoStudio.app/Contents/Helpers/alcedo_update_installer`, extracts the
+     ZIP with `ditto`, replaces the same `.app` path, and relaunches with
+     `/usr/bin/open`;
+   - the updated app remains at the same path as A (for example under
+     `~/Applications`); the helper must not create a second copy under
+     `/Applications` or another default location;
+   - a backup bundle named
+     `AlcedoStudio.app.update-backup-<UTC timestamp>` remains next to the new
+     app after a successful install;
+   - if A was installed in a non-writable folder, Install and restart fails
+     cleanly, opens the verified ZIP for manual install, and does not delete the
+     existing app;
+   - checking again from B reports up to date because its local build equals the
+     signed remote build.
 
 ## Manifest fields
 
