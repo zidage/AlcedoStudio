@@ -5,6 +5,7 @@
 .DESCRIPTION
     This script automates the CMake install + CPack workflow on Windows.
     It detects available packaging tools and prints installation hints if they are missing.
+    Build numbers increment after each successful package. Pass -BuildNumber to override.
     Run from the repository root.
 .EXAMPLE
     .\scripts\package_windows.ps1 -BuildDir build\release -Preset win_release
@@ -16,11 +17,43 @@ param(
     [string]$PackageOutDir = "$PSScriptRoot\..\build\release\package",
     [string]$DuckDbVssExtension = $env:ALCEDO_DUCKDB_VSS_EXTENSION,
     [string]$DuckDbFtsExtension = $env:ALCEDO_DUCKDB_FTS_EXTENSION,
-    [bool]$RequireOpenCLAssets = $true
+    [bool]$RequireOpenCLAssets = $true,
+    [ValidateRange(0, [long]::MaxValue)][long]$BuildNumber = 0,
+    [ValidateSet('stable','beta')][string]$Channel = 'stable'
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
+$BuildDir = [IO.Path]::GetFullPath($BuildDir)
+$PackageOutDir = [IO.Path]::GetFullPath($PackageOutDir)
+
+function Invoke-BuildNumberState {
+    param([ValidateSet('resolve','commit')][string]$Mode)
+
+    $stateScript = Join-Path $repoRoot "scripts\update\build_number_state.cmake"
+    $cmakeArgs = @(
+        "-DALCEDO_BUILD_NUMBER_MODE=$Mode",
+        "-DALCEDO_REPO_ROOT=$($repoRoot.Path.Replace('\', '/'))",
+        "-DALCEDO_BUILD_DIR=$($BuildDir.Replace('\', '/'))",
+        "-DALCEDO_BUILD_PLATFORM=windows",
+        "-DALCEDO_BUILD_NUMBER_OVERRIDE=$BuildNumber",
+        '-P',
+        $stateScript
+    )
+    & (Join-Path $repoRoot "scripts\msvc_env.cmd") @cmakeArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to $Mode the Windows package build number."
+    }
+}
+
+Invoke-BuildNumberState -Mode resolve
+$pendingBuildNumberFile = Join-Path $repoRoot "build\tmp\update-build-number\windows.pending.txt"
+$resolvedBuildNumberText = (Get-Content -LiteralPath $pendingBuildNumberFile -Raw).Trim()
+$resolvedBuildNumber = 0L
+if (-not [long]::TryParse($resolvedBuildNumberText, [ref]$resolvedBuildNumber) -or
+    $resolvedBuildNumber -lt 1) {
+    throw "Resolved Windows package build number is invalid: '$resolvedBuildNumberText'"
+}
 
 function Test-CommandAvailable {
     param([string]$Name)
@@ -90,13 +123,14 @@ $resolvedDuckDbFtsExtension = Resolve-DuckDbExtension `
 
 Write-Host "DuckDB VSS extension: $resolvedDuckDbVssExtension" -ForegroundColor Gray
 Write-Host "DuckDB FTS extension: $resolvedDuckDbFtsExtension" -ForegroundColor Gray
+Write-Host "Update build number: $resolvedBuildNumber" -ForegroundColor Gray
 Write-Host ""
 
 # ------------------------------------------------------------------
 # 1. Configure (re-run to pick up new packaging tools like WiX/NSIS)
 # ------------------------------------------------------------------
 Write-Host "Configuring CMake with preset '$Preset' ..." -ForegroundColor Yellow
-$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`""
+$configureCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --preset $Preset -DCMAKE_PREFIX_PATH=`"$QtPrefix`" -DALCEDO_DUCKDB_VSS_EXTENSION=`"$resolvedDuckDbVssExtension`" -DALCEDO_DUCKDB_FTS_EXTENSION=`"$resolvedDuckDbFtsExtension`" -DALCEDO_UPDATE_ALLOW_INSTALL=ON -DALCEDO_UPDATE_CHANNEL=$Channel -DALCEDO_BUILD_NUMBER=$resolvedBuildNumber"
 Write-Host "> $configureCmd"
 Invoke-Expression $configureCmd
 if ($LASTEXITCODE -ne 0) {
@@ -160,8 +194,13 @@ if ($packages) {
         Write-Host "  Generated: $($pkg.Name) ($sizeMB MB)" -ForegroundColor Green
     }
 } else {
-    Write-Host "  No package files found in $PackageOutDir" -ForegroundColor Red
+    throw "No package files were generated in $PackageOutDir."
 }
+
+# Only consume the number after configure, build, install verification, CPack,
+# and package discovery all succeeded. A failed run keeps the pending number so
+# a retry rebuilds the same package identity.
+Invoke-BuildNumberState -Mode commit
 
 Write-Host ""
 

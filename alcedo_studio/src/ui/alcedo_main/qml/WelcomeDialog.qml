@@ -446,10 +446,14 @@ Dialog {
                                     lineHeight: 1.2
                                 }
 
-                                UpdateNotice {
-                                    Layout.fillWidth: true
-                                    updates: dialog.updateService
-                                    autoCheck: true
+                                Timer {
+                                    interval: 700
+                                    repeat: false
+                                    running: dialog.visible
+                                             && dialog.updateService
+                                             && dialog.updateService.enabled
+                                             && dialog.updateService.state === UpdateService.Unchecked
+                                    onTriggered: dialog.updateService.CheckForUpdates()
                                 }
 
                                 Item {

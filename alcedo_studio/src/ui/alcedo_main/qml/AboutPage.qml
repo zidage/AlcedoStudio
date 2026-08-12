@@ -1,6 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Controls.Material
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // About page for the settings dialog. Hosted as the fifth StackLayout child
@@ -11,16 +12,17 @@ ColumnLayout {
     id: page
 
     property string appVersion: appTheme.appVersion
-    property color primaryAccent: "#457B9D"
-    property color secondaryAccent: "#9FC7D8"
-    property color textColor: "#F5F1EA"
-    property color mutedTextColor: "#B6B0A7"
-    property color canvasColor: "#111214"
-    property color panelColor: "#1C1C1D"
-    property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
-    property color dangerColor: "#D96C75"
+    property color primaryAccent: appTheme.accentColor
+    property color secondaryAccent: appTheme.accentSecondaryColor
+    property color textColor: appTheme.textColor
+    property color mutedTextColor: appTheme.textMutedColor
+    property color canvasColor: appTheme.bgBaseColor
+    property color panelColor: appTheme.cardSurfaceColor
+    property color dividerColor: appTheme.cardBorderColor
+    property color dangerColor: appTheme.dangerColor
     property string headlineFontFamily: appTheme.headlineFontFamily
     property var updateService: null
+    readonly property string uiFontFamily: appTheme.uiFontFamily
     readonly property string dataFontFamily: appTheme.dataFontFamily
 
     // Collapsed by default so the long license list is not front and center.
@@ -29,8 +31,10 @@ ColumnLayout {
     readonly property string docsUrl: "https://zidage.github.io/AlcedoStudio_docs/"
     readonly property string repoUrl: "https://github.com/zidage/AlcedoStudio"
 
+    signal offerRequested()
+
     width: parent ? parent.width : implicitWidth
-    spacing: 20
+    spacing: appTheme.spaceXl
 
     function openUrl(url) {
         Qt.openUrlExternally(url)
@@ -45,10 +49,10 @@ ColumnLayout {
         Layout.leftMargin: 34
         Layout.rightMargin: 34
         Layout.preferredHeight: heroInner.implicitHeight + 32
-        radius: 14
-        color: Qt.rgba(page.primaryAccent.r, page.primaryAccent.g, page.primaryAccent.b, 0.18)
+        radius: appTheme.panelRadius
+        color: appTheme.cardSurfaceColor
         border.width: 1
-        border.color: Qt.rgba(page.secondaryAccent.r, page.secondaryAccent.g, page.secondaryAccent.b, 0.35)
+        border.color: appTheme.accentSecondaryColor
 
         RowLayout {
             id: heroInner
@@ -59,12 +63,12 @@ ColumnLayout {
             spacing: 18
 
             Image {
-                Layout.preferredWidth: 40
-                Layout.preferredHeight: 40
+                Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
+                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
                 Layout.alignment: Qt.AlignTop
                 source: "qrc:/panel_icons/aperture.svg"
-                sourceSize.width: 40
-                sourceSize.height: 40
+                sourceSize.width: appTheme.iconSourceSize
+                sourceSize.height: appTheme.iconSourceSize
                 asynchronous: true
                 opacity: 0.95
             }
@@ -78,8 +82,8 @@ ColumnLayout {
                     text: qsTr("New to Alcedo Studio?")
                     color: page.textColor
                     font.family: page.headlineFontFamily
-                    font.pixelSize: 20
-                    font.weight: 800
+                    font.pixelSize: appTheme.fontSizeHeadline
+                    font.weight: appTheme.fontWeightHeading
                     wrapMode: Text.WordWrap
                 }
 
@@ -87,32 +91,40 @@ ColumnLayout {
                     Layout.fillWidth: true
                     text: qsTr("The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.")
                     color: page.mutedTextColor
-                    font.pixelSize: 13
-                    font.weight: 500
+                    font.family: page.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightRegular
                     wrapMode: Text.WordWrap
                     lineHeight: 1.3
                 }
 
                 Button {
+                    id: docsButton
                     Layout.topMargin: 4
-                    Layout.preferredHeight: 40
+                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
                     text: qsTr("Open documentation")
-                    font.pixelSize: 14
-                    font.weight: 800
-                    Material.foreground: page.textColor
+                    font.family: page.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeSection
+                    font.weight: appTheme.fontWeightHeading
                     onClicked: page.openUrl(page.docsUrl)
+
+                    contentItem: Label {
+                        text: docsButton.text
+                        color: appTheme.editorListSelectedInkColor
+                        font: docsButton.font
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
                     background: Rectangle {
-                        radius: 10
-                        color: parent.down
-                               ? Qt.darker(page.primaryAccent, 1.16)
-                               : (parent.hovered
-                                  ? Qt.lighter(page.primaryAccent, 1.06)
-                                  : page.primaryAccent)
+                        radius: appTheme.controlRadius
+                        color: docsButton.down
+                               ? appTheme.buttonPressedFillColor
+                               : (docsButton.hovered
+                                  ? appTheme.buttonHoveredFillColor
+                                  : appTheme.editorListSelectedFillColor)
                         border.width: 1
-                        border.color: Qt.rgba(page.secondaryAccent.r,
-                                              page.secondaryAccent.g,
-                                              page.secondaryAccent.b,
-                                              0.18)
+                        border.color: appTheme.cardBorderColor
                     }
                 }
             }
@@ -194,12 +206,21 @@ ColumnLayout {
         }
     }
 
-    UpdateNotice {
+    SettingsSection {
         Layout.fillWidth: true
         Layout.leftMargin: 34
         Layout.rightMargin: 34
-        updates: page.updateService
-        showIdle: true
+        title: qsTr("Updates")
+        textColor: page.textColor
+        mutedTextColor: page.mutedTextColor
+        dividerColor: page.dividerColor
+
+        UpdateNotice {
+            Layout.fillWidth: true
+            updates: page.updateService
+            showWhenUnchecked: true
+            onOfferRequested: page.offerRequested()
+        }
     }
 
     // 3. Links — repo + documentation.
@@ -385,10 +406,10 @@ ColumnLayout {
                 Layout.preferredHeight: 44
                 radius: 10
                 color: licensesToggleMouse.containsMouse
-                       ? Qt.rgba(1, 1, 1, 0.08)
-                       : Qt.rgba(1, 1, 1, 0.04)
+                       ? appTheme.buttonHoveredFillColor
+                       : appTheme.buttonIdleFillColor
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.08)
+                border.color: appTheme.cardBorderColor
 
                 RowLayout {
                     anchors.fill: parent
@@ -438,9 +459,9 @@ ColumnLayout {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 40
                         radius: 8
-                        color: Qt.rgba(page.canvasColor.r, page.canvasColor.g, page.canvasColor.b, 0.55)
+                        color: appTheme.bgBaseColor
                         border.width: 1
-                        border.color: Qt.rgba(1, 1, 1, 0.06)
+                        border.color: appTheme.cardBorderColor
 
                         RowLayout {
                             anchors.fill: parent
@@ -506,25 +527,28 @@ ColumnLayout {
     }
 
     component SettingsSection: ColumnLayout {
+        id: section
+
         property string title: ""
-        property color textColor: "white"
-        property color mutedTextColor: "#999999"
-        property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
+        property color textColor: appTheme.textColor
+        property color mutedTextColor: appTheme.textMutedColor
+        property color dividerColor: appTheme.dividerColor
 
         spacing: 14
 
         Label {
             Layout.fillWidth: true
-            text: title
-            color: textColor
-            font.pixelSize: 18
-            font.weight: 800
+            text: section.title
+            color: section.textColor
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeSection
+            font.weight: appTheme.fontWeightHeading
         }
 
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: dividerColor
+            color: section.dividerColor
         }
     }
 
@@ -533,11 +557,11 @@ ColumnLayout {
 
         property string labelText: ""
         property string subtitle: ""
-        property color accent: "#457B9D"
-        property color textColor: "white"
-        property color mutedTextColor: "#999999"
-        property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
-        property string dataFontFamily: ""
+        property color accent: appTheme.accentColor
+        property color textColor: appTheme.textColor
+        property color mutedTextColor: appTheme.textMutedColor
+        property color dividerColor: appTheme.dividerColor
+        property string dataFontFamily: appTheme.dataFontFamily
 
         signal activated()
 
@@ -545,10 +569,10 @@ ColumnLayout {
         Layout.preferredHeight: rowInner.implicitHeight + 18
         radius: 10
         color: linkMouse.containsMouse
-               ? Qt.rgba(1, 1, 1, 0.08)
-               : Qt.rgba(1, 1, 1, 0.04)
+               ? appTheme.buttonHoveredFillColor
+               : appTheme.buttonIdleFillColor
         border.width: 1
-        border.color: Qt.rgba(1, 1, 1, 0.08)
+        border.color: row.dividerColor
 
         RowLayout {
             id: rowInner

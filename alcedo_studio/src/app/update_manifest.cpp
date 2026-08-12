@@ -18,7 +18,8 @@ extern "C" {
 namespace alcedo {
 namespace {
 
-constexpr qint64 kMaximumArtifactSize = 8LL * 1024LL * 1024LL * 1024LL;
+constexpr qint64 kMaximumArtifactSize  = 8LL * 1024LL * 1024LL * 1024LL;
+constexpr int    kMaximumChangelogChars = 16 * 1024;
 
 auto             Failure(QString message) -> UpdateManifestResult {
   return UpdateManifestResult{std::nullopt, std::move(message)};
@@ -156,6 +157,20 @@ UpdateManifestResult VerifyUpdateManifest(const QByteArray& manifest_bytes,
     if (!manifest.notes_url.isValid() || manifest.notes_url.scheme() != QStringLiteral("https") ||
         !manifest.notes_url.userInfo().isEmpty()) {
       return Failure(QStringLiteral("The release notes URL is not valid."));
+    }
+  }
+
+  if (root.contains(QStringLiteral("changelog"))) {
+    const QJsonValue changelog_value = root.value(QStringLiteral("changelog"));
+    if (!changelog_value.isString()) {
+      return Failure(QStringLiteral("The update changelog is not valid."));
+    }
+    manifest.changelog = changelog_value.toString();
+    if (manifest.changelog.size() > kMaximumChangelogChars) {
+      return Failure(QStringLiteral("The update changelog is too large."));
+    }
+    if (manifest.changelog.trimmed().isEmpty()) {
+      manifest.changelog.clear();
     }
   }
 

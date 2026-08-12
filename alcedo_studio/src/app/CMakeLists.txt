@@ -51,12 +51,20 @@ def_library(UpdateService
     PUBLIC_DEPS Qt6::Core Qt6::Network
     PRIVATE_DEPS unofficial::ed25519::ed25519 Qt6::Gui
 )
+if(ALCEDO_UPDATE_ALLOW_INSTALL)
+    set(_alcedo_update_allow_install 1)
+else()
+    set(_alcedo_update_allow_install 0)
+endif()
 target_compile_definitions(UpdateService PRIVATE
     ALCEDO_APP_VERSION="${PROJECT_VERSION}"
     ALCEDO_BUILD_NUMBER=${ALCEDO_BUILD_NUMBER}
+    ALCEDO_UPDATE_CHANNEL="${ALCEDO_UPDATE_CHANNEL}"
     ALCEDO_UPDATE_MANIFEST_URL="${ALCEDO_UPDATE_MANIFEST_URL}"
     ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
+    ALCEDO_UPDATE_ALLOW_INSTALL=${_alcedo_update_allow_install}
 )
+unset(_alcedo_update_allow_install)
 
 def_library(FSService
     SOURCES

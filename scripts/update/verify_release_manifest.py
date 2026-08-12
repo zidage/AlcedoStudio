@@ -7,12 +7,31 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
 
 SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+
+
+def openssl_executable() -> str:
+    discovered = shutil.which("openssl")
+    if discovered:
+        return discovered
+    if os.name == "nt":
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "OpenSSL-Win64" / "bin" / "openssl.exe",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Git" / "mingw64" / "bin" / "openssl.exe",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError("openssl was not found; install OpenSSL or Git for Windows")
 
 
 def digest(path: Path) -> str:
@@ -30,6 +49,12 @@ def main() -> int:
     parser.add_argument("--public-key-base64", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--tag", required=True)
+    parser.add_argument(
+        "--platform",
+        choices=("windows-x86_64", "macos-arm64"),
+        default="",
+        help="Verify only this platform artifact. By default both are required.",
+    )
     args = parser.parse_args()
 
     raw_key = base64.b64decode(args.public_key_base64, validate=True)
@@ -37,14 +62,16 @@ def main() -> int:
     if len(raw_key) != 32 or len(raw_signature) != 64:
         raise RuntimeError("the public key or signature length is not valid")
 
-    with tempfile.TemporaryDirectory(prefix="alcedo-update-verify-") as directory:
+    temporary_root = Path(__file__).resolve().parents[2] / "build" / "tmp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="alcedo-update-verify-", dir=temporary_root) as directory:
         root = Path(directory)
         der_path = root / "public.der"
         signature_path = root / "signature.bin"
         der_path.write_bytes(SPKI_PREFIX + raw_key)
         signature_path.write_bytes(raw_signature)
         result = subprocess.run(
-            ["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER",
+            [openssl_executable(), "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER",
              "-inkey", str(der_path), "-sigfile", str(signature_path), "-in", str(args.manifest)],
             check=False,
         )
@@ -54,7 +81,7 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("schema") != 1 or not isinstance(manifest.get("sequence"), int):
         raise RuntimeError("the manifest schema or sequence is not valid")
-    expected_keys = {"windows-x86_64", "macos-arm64"}
+    expected_keys = {args.platform} if args.platform else {"windows-x86_64", "macos-arm64"}
     if set(manifest.get("artifacts", {})) != expected_keys:
         raise RuntimeError("the manifest does not contain the required platform artifacts")
     prefix = f"https://static.aoraw.org/releases/{args.tag}/"

@@ -17,6 +17,8 @@ codesign_options=""
 codesign_options_set=0
 codesign_timestamp="OFF"
 codesign_timestamp_set=0
+channel="stable"
+build_number=""
 
 usage() {
   cat <<USAGE
@@ -37,6 +39,8 @@ Options:
   --no-codesign              Disable bundle signing
   --jobs N                   Parallel build jobs (default: 8)
   --skip-metal-asset-check   Do not require Metal metallib assets in verification
+  --channel stable|beta      Update channel the build checks (default: stable). Use beta for test builds.
+  --build-number N           Override the automatically incremented build number.
   -h, --help                 Show this help
 USAGE
 }
@@ -93,6 +97,22 @@ while [[ $# -gt 0 ]]; do
       require_metal_assets=0
       shift
       ;;
+    --channel)
+      channel="$2"
+      if [[ "$channel" != "stable" && "$channel" != "beta" ]]; then
+        echo "--channel must be 'stable' or 'beta', got: $channel" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --build-number)
+      build_number="$2"
+      if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
+        echo "--build-number must be a positive integer, got: $build_number" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -104,6 +124,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+build_number_state_script="${repo_root}/scripts/update/build_number_state.cmake"
+cmake \
+  "-DALCEDO_BUILD_NUMBER_MODE=resolve" \
+  "-DALCEDO_REPO_ROOT=${repo_root}" \
+  "-DALCEDO_BUILD_DIR=${build_dir}" \
+  "-DALCEDO_BUILD_PLATFORM=macos" \
+  "-DALCEDO_BUILD_NUMBER_OVERRIDE=${build_number}" \
+  -P "$build_number_state_script"
+pending_build_number_file="${repo_root}/build/tmp/update-build-number/macos.pending.txt"
+resolved_build_number="$(tr -d '[:space:]' < "$pending_build_number_file")"
+if [[ ! "$resolved_build_number" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Resolved macOS package build number is invalid: ${resolved_build_number}" >&2
+  exit 1
+fi
 
 if [[ -n "$codesign_identity" && "$codesign_identity" != "-" ]]; then
   if [[ "$codesign_options_set" -eq 0 ]]; then
@@ -178,6 +213,7 @@ echo "========================================"
 echo
 echo "DuckDB VSS extension: ${ALCEDO_DUCKDB_VSS_EXTENSION}"
 echo "DuckDB FTS extension: ${ALCEDO_DUCKDB_FTS_EXTENSION}"
+echo "Update build number: ${resolved_build_number}"
 echo
 
 configure_args=(
@@ -191,6 +227,9 @@ configure_args=(
   "-DALCEDO_MACOS_CODESIGN_TIMESTAMP=${codesign_timestamp}"
   "-DALCEDO_DUCKDB_VSS_EXTENSION=${ALCEDO_DUCKDB_VSS_EXTENSION}"
   "-DALCEDO_DUCKDB_FTS_EXTENSION=${ALCEDO_DUCKDB_FTS_EXTENSION}"
+  "-DALCEDO_UPDATE_ALLOW_INSTALL=ON"
+  "-DALCEDO_UPDATE_CHANNEL=${channel}"
+  "-DALCEDO_BUILD_NUMBER=${resolved_build_number}"
 )
 if [[ -n "$qt_prefix" ]]; then
   configure_args+=("-DALCEDO_QT_PREFIX=${qt_prefix}")
@@ -252,5 +291,19 @@ echo
 echo "========================================"
 echo "  Packaging Complete"
 echo "========================================"
-find "$package_out_dir" -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -print | sort
+generated_packages="$(find "$package_out_dir" -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -print | sort)"
+if [[ -z "$generated_packages" ]]; then
+  echo "No package files were generated in ${package_out_dir}." >&2
+  exit 1
+fi
+printf '%s\n' "$generated_packages"
+
+# Consume the number only after every packaging and verification step passed.
+# A failed run retains the pending value so the retry uses the same identity.
+cmake \
+  "-DALCEDO_BUILD_NUMBER_MODE=commit" \
+  "-DALCEDO_REPO_ROOT=${repo_root}" \
+  "-DALCEDO_BUILD_DIR=${build_dir}" \
+  "-DALCEDO_BUILD_PLATFORM=macos" \
+  -P "$build_number_state_script"
 echo

@@ -387,6 +387,10 @@ ApplicationWindow {
         appDialogs.openBackgroundTasksDialog()
     }
 
+    function openUpdateOfferDialog() {
+        appDialogs.openUpdateOfferDialog()
+    }
+
 
     function beginProjectLaunch(loadAction) {
         projectLaunchController.beginProjectLaunch(loadAction)

@@ -130,7 +130,23 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_NE(settings, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "open"));
   EXPECT_TRUE(settings->property("visible").toBool());
+  settings->setProperty("currentCategory", 6);
+  ProcessEvents(50);
+  auto* update_status = settings->findChild<QObject*>(QStringLiteral("aboutUpdateStatusLabel"));
+  ASSERT_NE(update_status, nullptr);
+  EXPECT_TRUE(update_status->property("visible").toBool());
+  EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
   ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openUpdateOfferDialog"));
+  ProcessEvents(50);
+  auto* offer_title = root->findChild<QObject*>(QStringLiteral("updateOfferTitleLabel"));
+  ASSERT_NE(offer_title, nullptr);
+  EXPECT_TRUE(offer_title->property("visible").toBool());
+  EXPECT_FALSE(offer_title->property("text").toString().trimmed().isEmpty());
+  auto* offer_dialog = root->findChild<QObject*>(QStringLiteral("updateOfferDialog"));
+  ASSERT_NE(offer_dialog, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(offer_dialog, "close"));
 
   auto* collections = root->findChild<QObject*>(QStringLiteral("collectionsPanel"));
   auto* search      = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));

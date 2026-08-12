@@ -1,6 +1,5 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Controls.Material
+import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Effects
@@ -19,19 +18,21 @@ Dialog {
     x: 0
     y: 0
 
+    signal updateOfferRequested()
+
     property Item blurSource: null
     property var languageOptions: []
-    property color primaryAccent: "#457B9D"
-    property color secondaryAccent: "#9FC7D8"
-    property color textColor: "#F5F1EA"
-    property color mutedTextColor: "#B6B0A7"
-    property color panelColor: "#1C1C1D"
-    property color canvasColor: "#111214"
-    property color overlayColor: Qt.rgba(11 / 255, 12 / 255, 14 / 255, 0.60)
-    property color hoverColor: Qt.rgba(1, 1, 1, 0.07)
-    property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
-    property color dangerColor: "#D96C75"
-    property color panelBorderColor: Qt.rgba(1, 1, 1, 0.08)
+    property color primaryAccent: appTheme.accentColor
+    property color secondaryAccent: appTheme.accentSecondaryColor
+    property color textColor: appTheme.textColor
+    property color mutedTextColor: appTheme.textMutedColor
+    property color panelColor: appTheme.cardSurfaceColor
+    property color canvasColor: appTheme.bgBaseColor
+    property color overlayColor: appTheme.overlayColor
+    property color hoverColor: appTheme.hoverColor
+    property color dividerColor: appTheme.dividerColor
+    property color dangerColor: appTheme.dangerColor
+    property color panelBorderColor: appTheme.cardBorderColor
     property string headlineFontFamily: appTheme.headlineFontFamily
     readonly property string dataFontFamily: appTheme.dataFontFamily
     property real cornerRadius: 0
@@ -350,6 +351,20 @@ Dialog {
                                             font.pixelSize: 15
                                             font.weight: dialog.currentCategory === index ? 700 : 500
                                             elide: Text.ElideRight
+                                        }
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 8
+                                            Layout.preferredHeight: 8
+                                            Layout.alignment: Qt.AlignVCenter
+                                            radius: 4
+                                            visible: index === 6
+                                                     && appModules.updates
+                                                     && (appModules.updates.updateDeferred
+                                                         || appModules.updates.updateAvailable)
+                                            color: appTheme.backgroundTaskFinishedColor
+                                            Accessible.name: qsTr("Update available")
+                                            Accessible.role: Accessible.Indicator
                                         }
                                     }
 
@@ -693,7 +708,9 @@ Dialog {
                                         Switch {
                                             checked: dialog.pendingCacheEnabled
                                             text: checked ? qsTr("Enabled") : qsTr("Disabled")
-                                            Material.foreground: dialog.textColor
+                                            palette.windowText: dialog.textColor
+                                            palette.buttonText: dialog.textColor
+                                            palette.highlight: appTheme.accentColor
                                             onToggled: dialog.pendingCacheEnabled = checked
                                         }
                                     }
@@ -772,7 +789,7 @@ Dialog {
                                             Layout.preferredHeight: 42
                                             text: qsTr("Clear current project")
                                             enabled: appModules.project.serviceReady
-                                            Material.foreground: dialog.textColor
+                                            palette.buttonText: dialog.textColor
                                             onClicked: {
                                                 appModules.library.ClearProjectThumbnailDiskCache()
                                                 dialog.refreshCacheStats()
@@ -784,7 +801,7 @@ Dialog {
                                             id: clearAllButton
                                             Layout.preferredHeight: 42
                                             text: qsTr("Clear all cache")
-                                            Material.foreground: dialog.dangerColor
+                                            palette.buttonText: dialog.dangerColor
                                             onClicked: {
                                                 appModules.library.ClearAllThumbnailDiskCache()
                                                 dialog.refreshCacheStats()
@@ -795,7 +812,7 @@ Dialog {
                                         Button {
                                             Layout.preferredHeight: 42
                                             text: qsTr("Refresh")
-                                            Material.foreground: dialog.textColor
+                                            palette.buttonText: dialog.textColor
                                             onClicked: dialog.refreshCacheStats()
                                         }
                                     }
@@ -966,6 +983,7 @@ Dialog {
                                 dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
                                 headlineFontFamily: dialog.headlineFontFamily
+                                onOfferRequested: dialog.updateOfferRequested()
                             }
                         }
                     }
@@ -995,7 +1013,7 @@ Dialog {
                             enabled: dialog.canCompleteSettings
                             font.pixelSize: 15
                             font.weight: 800
-                            Material.foreground: dialog.textColor
+                            palette.buttonText: appTheme.editorListSelectedInkColor
                             onClicked: dialog.applySettings()
                             background: Rectangle {
                                 radius: 10

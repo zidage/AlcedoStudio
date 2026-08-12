@@ -70,12 +70,18 @@ jobs:
             tag="$(jq -er '.release.tag_name' "$GITHUB_EVENT_PATH")"
             prerelease="$(jq -er '.release.prerelease' "$GITHUB_EVENT_PATH")"
             promote_latest=false
+            channel="beta"
             if [[ "$prerelease" == "false" ]]; then
               promote_latest=true
+              channel="stable"
             fi
           else
             tag="$MANUAL_TAG"
             promote_latest="$MANUAL_PROMOTE_LATEST"
+            channel="stable"
+            if [[ "$promote_latest" != "true" ]]; then
+              channel="beta"
+            fi
           fi
 
           if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
@@ -94,6 +100,7 @@ jobs:
             echo "macos_file=$macos_file"
             echo "macos_update_file=$macos_update_file"
             echo "promote_latest=$promote_latest"
+            echo "channel=$channel"
           } >> "$GITHUB_OUTPUT"
 
       - name: Download only the expected installers
@@ -192,16 +199,63 @@ jobs:
             "text/plain; charset=utf-8" \
             "attachment; filename=\"SHA256SUMS.txt\""
           manifest_prefix="updates/v1/releases/$RELEASE_TAG/$MANIFEST_SEQUENCE"
-          upload "release-assets/update-manifest.json" "$manifest_prefix/manifest.json" \
-            "application/json; charset=utf-8" \
-            "inline; filename=\"manifest.json\""
-          upload "release-assets/update-manifest.json.sig" "$manifest_prefix/manifest.json.sig" \
-            "text/plain; charset=utf-8" \
-            "inline; filename=\"manifest.json.sig\""
+          for platform in windows-x86_64 macos-arm64; do
+            upload "release-assets/update-manifest.json" "$manifest_prefix/$platform/manifest.json" \
+              "application/json; charset=utf-8" \
+              "inline; filename=\"manifest.json\""
+            upload "release-assets/update-manifest.json.sig" "$manifest_prefix/$platform/manifest.json.sig" \
+              "text/plain; charset=utf-8" \
+              "inline; filename=\"manifest.json.sig\""
+          done
 
-          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/$MACOS_UPDATE_FILE" "$version_prefix/SHA256SUMS.txt" "$manifest_prefix/manifest.json" "$manifest_prefix/manifest.json.sig"; do
+          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/$MACOS_UPDATE_FILE" "$version_prefix/SHA256SUMS.txt" "$manifest_prefix/windows-x86_64/manifest.json" "$manifest_prefix/windows-x86_64/manifest.json.sig" "$manifest_prefix/macos-arm64/manifest.json" "$manifest_prefix/macos-arm64/manifest.json.sig"; do
             aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
           done
+
+      - name: Publish update channel manifest
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          upload_channel() {
+            local source="$1"
+            local key="$2"
+            local content_type="$3"
+            local disposition="$4"
+            aws s3 cp "$source" "s3://${R2_BUCKET}/${key}" \
+              --endpoint-url "$endpoint" \
+              --content-type "$content_type" \
+              --content-disposition "$disposition" \
+              --cache-control "public, max-age=300, must-revalidate" \
+              --no-progress
+          }
+
+          # Publish the signature first and the manifest last. A client can see
+          # a short signature mismatch during promotion, but it cannot accept an
+          # unsigned or partially published update. Beta and stable each have
+          # their own updates/v1/<channel>/<platform>/ aliases, so independent
+          # platform uploads cannot overwrite each other.
+          for platform in windows-x86_64 macos-arm64; do
+            upload_channel "release-assets/update-manifest.json.sig" "updates/v1/${CHANNEL}/${platform}/manifest.json.sig" \
+              "text/plain; charset=utf-8" \
+              "inline; filename=\"manifest.json.sig\""
+            upload_channel "release-assets/update-manifest.json" "updates/v1/${CHANNEL}/${platform}/manifest.json" \
+              "application/json; charset=utf-8" \
+              "inline; filename=\"manifest.json\""
+          done
+
+          # Compatibility feed for already-installed clients built before the
+          # platform alias was introduced. Only this full two-platform release
+          # workflow may update it; a local one-platform publisher must not.
+          upload_channel "release-assets/update-manifest.json.sig" "updates/v1/${CHANNEL}/manifest.json.sig" \
+            "text/plain; charset=utf-8" \
+            "inline; filename=\"manifest.json.sig\""
+          upload_channel "release-assets/update-manifest.json" "updates/v1/${CHANNEL}/manifest.json" \
+            "application/json; charset=utf-8" \
+            "inline; filename=\"manifest.json\""
 
       - name: Update stable download aliases
         if: ${{ steps.release.outputs.promote_latest == 'true' }}
@@ -227,6 +281,8 @@ jobs:
               --no-progress
           }
 
+          # releases/latest/ is the stable website download alias. Only the
+          # stable channel (promote_latest) repoints it; beta never does.
           upload_latest "release-assets/$WINDOWS_FILE" "releases/latest/AlcedoStudio-Windows-x64.exe" \
             "application/vnd.microsoft.portable-executable" \
             "attachment; filename=\"AlcedoStudio-Windows-x64.exe\""
@@ -239,13 +295,3 @@ jobs:
           upload_latest "release-assets/SHA256SUMS.txt" "releases/latest/SHA256SUMS.txt" \
             "text/plain; charset=utf-8" \
             "attachment; filename=\"SHA256SUMS.txt\""
-
-          # Publish the signature first and the manifest last. A client can see
-          # a short signature mismatch during promotion, but it cannot accept
-          # an unsigned or partially published update.
-          upload_latest "release-assets/update-manifest.json.sig" "updates/v1/stable/manifest.json.sig" \
-            "text/plain; charset=utf-8" \
-            "inline; filename=\"manifest.json.sig\""
-          upload_latest "release-assets/update-manifest.json" "updates/v1/stable/manifest.json" \
-            "application/json; charset=utf-8" \
-            "inline; filename=\"manifest.json\""

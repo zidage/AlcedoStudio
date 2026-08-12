@@ -25,12 +25,13 @@ struct SignedManifest {
 
 auto MakeSignedManifest(
     QString artifact_url = QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"),
-    quint64 sequence     = 42) -> SignedManifest {
+    quint64 sequence     = 42, QString changelog_json = {}) -> SignedManifest {
   const QByteArray json =
       QStringLiteral(
-          R"({"schema":1,"sequence":%1,"version":"0.2.9","build":2009,"publishedAt":"2026-08-10T00:00:00Z","expiresAt":"2026-09-10T00:00:00Z","notesUrl":"https://alcedo.studio/releases/0.2.9","artifacts":{"windows-x86_64":{"url":"%2","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":123456}}})")
+          R"({"schema":1,"sequence":%1,"version":"0.2.9","build":2009,"publishedAt":"2026-08-10T00:00:00Z","expiresAt":"2026-09-10T00:00:00Z","notesUrl":"https://alcedo.studio/releases/0.2.9"%3,"artifacts":{"windows-x86_64":{"url":"%2","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":123456}}})")
           .arg(sequence)
           .arg(artifact_url)
+          .arg(changelog_json)
           .toUtf8();
   unsigned char seed[32] = {};
   for (size_t index = 0; index < sizeof(seed); ++index) {
@@ -109,6 +110,39 @@ TEST(UpdateManifestTest, RejectsExpiredSignedManifest) {
                                            QStringLiteral("windows-x86_64"), kFeedUrl, 1, later);
   EXPECT_FALSE(result);
   EXPECT_TRUE(result.error.contains(QStringLiteral("expired"), Qt::CaseInsensitive));
+}
+
+TEST(UpdateManifestTest, AcceptsSignedManifestWithoutChangelog) {
+  const SignedManifest input = MakeSignedManifest();
+  const auto           result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  ASSERT_TRUE(result) << result.error.toStdString();
+  EXPECT_TRUE(result.manifest->changelog.isEmpty());
+}
+
+TEST(UpdateManifestTest, AcceptsOptionalChangelogField) {
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
+      QStringLiteral(R"(,"changelog":"Fixed export crash.\nImproved import.")"));
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  ASSERT_TRUE(result) << result.error.toStdString();
+  EXPECT_EQ(result.manifest->changelog,
+            QStringLiteral("Fixed export crash.\nImproved import."));
+}
+
+TEST(UpdateManifestTest, RejectsOversizedChangelog) {
+  const QString oversized = QStringLiteral(R"(,"changelog":")") + QString(17000, QLatin1Char('a')) +
+                            QStringLiteral(R"(")");
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42, oversized);
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 1, kValidationTime);
+  EXPECT_FALSE(result);
+  EXPECT_TRUE(result.error.contains(QStringLiteral("changelog"), Qt::CaseInsensitive));
 }
 
 }  // namespace

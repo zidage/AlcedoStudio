@@ -25,6 +25,7 @@ struct UpdateManifest {
   QDateTime      published_at;
   QDateTime      expires_at;
   QUrl           notes_url;
+  QString        changelog;
   UpdateArtifact artifact;
 };
 

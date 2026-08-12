@@ -33,6 +33,7 @@ Item {
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
     property alias backgroundTasksDialog: backgroundTasksDialogObj
+    property alias updateOfferDialog: updateOfferLoader
 
     FileDialog {
         id: importDialogObj
@@ -97,6 +98,30 @@ Item {
         }
         onSemanticGenerationBackgroundRequested: {
             semanticGenerationDialogObj.runInBackground()
+        }
+        onUpdateOfferRequested: root.openUpdateOfferDialog()
+    }
+
+    Loader {
+        id: updateOfferLoader
+        active: false
+        asynchronous: false
+        sourceComponent: UpdateOfferDialog {
+            updates: appModules.updates
+            blurSource: root.blurSource
+            cornerRadius: host ? host.windowCornerRadius : 0
+            onClosed: updateOfferLoader.active = false
+        }
+        onLoaded: {
+            if (item)
+                item.open()
+        }
+    }
+
+    Connections {
+        target: appModules.updates
+        function onOfferReady() {
+            root.openUpdateOfferDialog()
         }
     }
 
@@ -370,6 +395,7 @@ Item {
                || folderImportConfirmDialogObj.opened
                || editorCloseConfirmDialogObj.opened
                || welcomeDialogObj.opened
+               || (updateOfferLoader.item && updateOfferLoader.item.opened)
     }
 
     function openEditorCloseConfirmDialog() {
@@ -391,5 +417,16 @@ Item {
 
     function openBackgroundTasksDialog() {
         backgroundTasksDialogObj.open()
+    }
+
+    function openUpdateOfferDialog() {
+        if (!appModules.updates || !appModules.updates.enabled)
+            return
+        if (updateOfferLoader.active && updateOfferLoader.status === Loader.Ready
+                && updateOfferLoader.item) {
+            updateOfferLoader.item.open()
+            return
+        }
+        updateOfferLoader.active = true
     }
 }

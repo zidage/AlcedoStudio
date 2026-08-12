@@ -18,9 +18,30 @@ math(EXPR _alcedo_default_build_number
     "${PROJECT_VERSION_MAJOR} * 1000000 + ${PROJECT_VERSION_MINOR} * 1000 + ${PROJECT_VERSION_PATCH}")
 set(ALCEDO_BUILD_NUMBER "${_alcedo_default_build_number}"
     CACHE STRING "Monotonic application build number used by updates and macOS CFBundleVersion.")
+# Update channels keep test and official builds on separate feeds. A beta
+# build checks the beta manifest; an official build checks stable. The channel
+# also namespaces the per-channel trusted sequence so one feed cannot roll back
+# the other. Override ALCEDO_UPDATE_BASE_URL for local staging; the manifest URL
+# itself always follows the channel.
+set(ALCEDO_UPDATE_CHANNEL "stable"
+    CACHE STRING "Update channel the build checks: 'stable' (official) or 'beta' (test).")
+set_property(CACHE ALCEDO_UPDATE_CHANNEL PROPERTY STRINGS stable beta)
+if(NOT ALCEDO_UPDATE_CHANNEL STREQUAL "stable" AND NOT ALCEDO_UPDATE_CHANNEL STREQUAL "beta")
+    message(FATAL_ERROR "ALCEDO_UPDATE_CHANNEL must be 'stable' or 'beta', got: '${ALCEDO_UPDATE_CHANNEL}'")
+endif()
+set(ALCEDO_UPDATE_BASE_URL "https://static.aoraw.org/updates"
+    CACHE STRING "Base URL hosting the per-channel signed update manifests.")
+if(WIN32)
+    set(_alcedo_update_platform "windows-x86_64")
+elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(_alcedo_update_platform "macos-arm64")
+elseif(APPLE)
+    set(_alcedo_update_platform "macos-x86_64")
+else()
+    set(_alcedo_update_platform "unsupported")
+endif()
 set(ALCEDO_UPDATE_MANIFEST_URL
-    "https://static.aoraw.org/updates/v1/stable/manifest.json"
-    CACHE STRING "HTTPS URL of the signed stable update manifest.")
+    "${ALCEDO_UPDATE_BASE_URL}/v1/${ALCEDO_UPDATE_CHANNEL}/${_alcedo_update_platform}/manifest.json")
 set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
     "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
     CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")
@@ -53,6 +74,11 @@ if(ALCEDO_REQUIRE_UPDATE_KEY AND "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" STREQUAL "
         "ALCEDO_UPDATE_PUBLIC_KEY_BASE64 is required by this release preset. "
         "Generate the offline update key first; see docs/update-system.md.")
 endif()
+# Packaged installers may download and install updates. Build-tree Release
+# binaries may only check the production feed (UI validation).
+option(ALCEDO_UPDATE_ALLOW_INSTALL
+       "Allow download and install of signed updates. Enable only when packaging."
+       OFF)
 unset(_alcedo_update_public_key_from_file)
 unset(_alcedo_update_public_key_length)
 

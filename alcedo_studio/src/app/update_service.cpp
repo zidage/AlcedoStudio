@@ -24,8 +24,14 @@
 #ifndef ALCEDO_UPDATE_MANIFEST_URL
 #define ALCEDO_UPDATE_MANIFEST_URL ""
 #endif
+#ifndef ALCEDO_UPDATE_CHANNEL
+#define ALCEDO_UPDATE_CHANNEL "stable"
+#endif
 #ifndef ALCEDO_UPDATE_PUBLIC_KEY_BASE64
 #define ALCEDO_UPDATE_PUBLIC_KEY_BASE64 ""
+#endif
+#ifndef ALCEDO_UPDATE_ALLOW_INSTALL
+#define ALCEDO_UPDATE_ALLOW_INSTALL 0
 #endif
 
 namespace alcedo {
@@ -33,12 +39,12 @@ namespace {
 
 constexpr qint64 kMaximumManifestBytes  = 256 * 1024;
 constexpr qint64 kMaximumSignatureBytes = 1024;
-constexpr auto   kTrustedSequenceKey    = "updates/highestTrustedSequence";
+constexpr auto   kTrustedSequenceKey    = "updates/" ALCEDO_UPDATE_CHANNEL "/highestTrustedSequence";
 
 auto             NewRequest(const QUrl& url) -> QNetworkRequest {
   QNetworkRequest request(url);
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                                   QNetworkRequest::NoLessSafeRedirectPolicy);
+                       QNetworkRequest::NoLessSafeRedirectPolicy);
   request.setTransferTimeout(15000);
   request.setRawHeader("Accept", "application/json, text/plain;q=0.9");
   request.setRawHeader("Cache-Control", "no-cache");
@@ -62,8 +68,7 @@ UpdateService::UpdateService(QObject* parent)
       feed_url_(QStringLiteral(ALCEDO_UPDATE_MANIFEST_URL)) {
   if (public_key_.size() == 32 && feed_url_.isValid() &&
       feed_url_.scheme() == QStringLiteral("https") && feed_url_.userInfo().isEmpty()) {
-    state_       = State::Idle;
-    status_text_ = tr("Updates are ready to check.");
+    state_ = State::Unchecked;
   } else {
     public_key_.clear();
     state_       = State::Disabled;
@@ -73,10 +78,18 @@ UpdateService::UpdateService(QObject* parent)
 
 UpdateService::~UpdateService() { ResetPackageDownload(); }
 
+bool UpdateService::install_allowed() const { return ALCEDO_UPDATE_ALLOW_INSTALL != 0; }
+
 QString UpdateService::current_version() const { return QStringLiteral(ALCEDO_APP_VERSION); }
+
+QString UpdateService::channel() const { return QStringLiteral(ALCEDO_UPDATE_CHANNEL); }
 
 QString UpdateService::available_version() const {
   return manifest_.has_value() ? manifest_->version : QString{};
+}
+
+QString UpdateService::changelog() const {
+  return manifest_.has_value() ? manifest_->changelog : QString{};
 }
 
 bool UpdateService::update_available() const {
@@ -148,6 +161,7 @@ void UpdateService::CheckForUpdates() {
   if (!enabled() || busy()) {
     return;
   }
+  deferred_ = false;
   manifest_.reset();
   package_path_.clear();
   progress_ = 0.0;
@@ -185,17 +199,25 @@ void UpdateService::HandleManifest(QByteArray manifest_bytes, QByteArray signatu
 
   manifest_ = std::move(*result.manifest);
   QSettings{}.setValue(QLatin1String(kTrustedSequenceKey), manifest_->sequence);
-  if (manifest_->build <= static_cast<quint64>(ALCEDO_BUILD_NUMBER)) {
+
+  const bool newer_than_local =
+      manifest_->build > static_cast<quint64>(ALCEDO_BUILD_NUMBER);
+  if (install_allowed() && !newer_than_local) {
+    deferred_ = false;
     SetState(State::UpToDate, tr("Alcedo Studio is up to date."));
     return;
   }
+
+  deferred_ = false;
   SetState(State::Available, tr("Alcedo Studio %1 is available.").arg(manifest_->version));
+  emit offerReady();
 }
 
 void UpdateService::DownloadUpdate() {
-  if (state_ != State::Available || !manifest_.has_value()) {
+  if (!install_allowed() || state_ != State::Available || !manifest_.has_value()) {
     return;
   }
+  deferred_ = false;
 
   const QString update_dir =
       QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
@@ -330,7 +352,7 @@ bool UpdateService::PackageMatchesManifest(QString* error) const {
 }
 
 void UpdateService::InstallUpdate() {
-  if (state_ != State::Ready) {
+  if (!install_allowed() || state_ != State::Ready) {
     return;
   }
   QString error;
@@ -426,12 +448,15 @@ void UpdateService::CancelInstall() {
   SetState(State::Ready, tr("Alcedo Studio %1 is ready to install.").arg(manifest_->version));
 }
 
-void UpdateService::Dismiss() {
-  if (!busy()) {
-    SetState(enabled() ? State::Idle : State::Disabled,
-             enabled() ? tr("Update hidden for this session.")
-                       : tr("Updates are disabled in this build."));
+void UpdateService::DeferUpdate() {
+  if (state_ != State::Available && state_ != State::Ready && state_ != State::Error) {
+    return;
   }
+  if (!manifest_.has_value() && state_ != State::Error) {
+    return;
+  }
+  deferred_ = true;
+  emit changed();
 }
 
 void UpdateService::OpenReleaseNotes() {

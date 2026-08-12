@@ -115,6 +115,40 @@ Rectangle {
             onClicked: if (root.host) root.host.openSettingsDialog()
         }
 
+        Item {
+            id: updateEntry
+            Layout.preferredWidth: updateButton.hitSize
+            Layout.preferredHeight: updateButton.hitSize
+            visible: appModules.updates
+                     && (appModules.updates.updateDeferred || appModules.updates.updateAvailable)
+            Accessible.name: qsTr("Update available")
+            Accessible.role: Accessible.Button
+
+            IconActionButton {
+                id: updateButton
+                anchors.centerIn: parent
+                compact: true
+                actionName: qsTr("Update available")
+                iconSrc: "qrc:/panel_icons/update.svg"
+                onClicked: {
+                    if (root.host)
+                        root.host.openUpdateOfferDialog()
+                }
+            }
+
+            Rectangle {
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.rightMargin: 4
+                anchors.topMargin: 4
+                width: 8
+                height: 8
+                radius: 4
+                color: appTheme.backgroundTaskFinishedColor
+                Accessible.ignored: true
+            }
+        }
+
         Item { Layout.fillWidth: true }
 
         // Inspector toggle lives on the application top toolbar (52×42,
