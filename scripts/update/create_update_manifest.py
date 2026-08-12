@@ -22,6 +22,13 @@ def artifact(path: Path, url: str) -> dict[str, object]:
     return {"url": url, "sha256": digest.hexdigest(), "size": path.stat().st_size}
 
 
+def artifact_url(channel: str, stable_base_url: str, beta_base_url: str, tag: str,
+                 build: int, platform: str, filename: str) -> str:
+    if channel == "beta":
+        return f"{beta_base_url.rstrip('/')}/{build}/{platform}/{filename}"
+    return f"{stable_base_url.rstrip('/')}/{tag}/{filename}"
+
+
 def utc_text(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -53,6 +60,11 @@ def main() -> int:
     parser.add_argument("--macos-arm64", type=Path)
     parser.add_argument("--output", default="update-manifest.json", type=Path)
     parser.add_argument("--base-url", default="https://static.aoraw.org/releases")
+    parser.add_argument(
+        "--beta-base-url",
+        default="https://static.aoraw.org/updates/v1/beta/builds",
+    )
+    parser.add_argument("--channel", choices=("stable", "beta"), default="stable")
     parser.add_argument("--notes-url", default="")
     parser.add_argument("--changelog-file", type=Path, default=None)
     parser.add_argument(
@@ -86,7 +98,6 @@ def main() -> int:
         changelog = extract_changelog(args.changelog_from, args.version)
 
     now = dt.datetime.now(dt.timezone.utc)
-    prefix = f"{args.base_url.rstrip('/')}/{args.tag}"
     manifest: dict[str, object] = {
         "schema": 1,
         "sequence": args.sequence,
@@ -96,7 +107,18 @@ def main() -> int:
         "expiresAt": utc_text(now + dt.timedelta(days=args.valid_days)),
         "notesUrl": args.notes_url or f"https://github.com/zidage/AlcedoStudio/releases/tag/{args.tag}",
         "artifacts": {
-            key: artifact(path, f"{prefix}/{path.name}")
+            key: artifact(
+                path,
+                artifact_url(
+                    args.channel,
+                    args.base_url,
+                    args.beta_base_url,
+                    args.tag,
+                    args.build,
+                    key,
+                    path.name,
+                ),
+            )
             for key, path in selected_paths.items()
         },
     }

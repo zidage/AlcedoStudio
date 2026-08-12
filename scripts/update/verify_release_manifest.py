@@ -49,6 +49,11 @@ def main() -> int:
     parser.add_argument("--public-key-base64", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--channel", choices=("stable", "beta"), default="stable")
+    parser.add_argument(
+        "--beta-base-url",
+        default="https://static.aoraw.org/updates/v1/beta/builds",
+    )
     parser.add_argument(
         "--platform",
         choices=("windows-x86_64", "macos-arm64"),
@@ -84,11 +89,15 @@ def main() -> int:
     expected_keys = {args.platform} if args.platform else {"windows-x86_64", "macos-arm64"}
     if set(manifest.get("artifacts", {})) != expected_keys:
         raise RuntimeError("the manifest does not contain the required platform artifacts")
-    prefix = f"https://static.aoraw.org/releases/{args.tag}/"
     for platform in sorted(expected_keys):
         item = manifest["artifacts"][platform]
+        prefix = (
+            f"{args.beta_base_url.rstrip('/')}/{manifest['build']}/{platform}/"
+            if args.channel == "beta"
+            else f"https://static.aoraw.org/releases/{args.tag}/"
+        )
         if not item["url"].startswith(prefix):
-            raise RuntimeError(f"{platform} does not use the immutable release URL")
+            raise RuntimeError(f"{platform} does not use the immutable {args.channel} URL")
         path = args.artifacts / item["url"].removeprefix(prefix)
         if not path.is_file() or path.stat().st_size != item["size"] or digest(path) != item["sha256"]:
             raise RuntimeError(f"{platform} does not match its signed metadata")

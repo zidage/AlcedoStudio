@@ -203,6 +203,8 @@ def main() -> int:
         str(sequence),
         "--tag",
         tag,
+        "--channel",
+        channel,
         "--output",
         str(manifest),
         "--valid-days",
@@ -247,6 +249,8 @@ def main() -> int:
             str(artifacts_dir),
             "--tag",
             tag,
+            "--channel",
+            channel,
             "--platform",
             str(config["artifact_key"]),
         ]

@@ -149,29 +149,36 @@ jobs:
             --signature release-assets/update-manifest.json.sig \
             --public-key-base64 "$UPDATE_PUBLIC_KEY" \
             --artifacts release-assets \
-            --tag "$RELEASE_TAG"
+            --tag "$RELEASE_TAG" \
+            --channel "${{ steps.release.outputs.channel }}"
 
           sequence="$(jq -er '.sequence | select(type == "number" and . >= 1 and floor == .)' \
             release-assets/update-manifest.json)"
+          build="$(jq -er '.build | select(type == "number" and . >= 1 and floor == .)' \
+            release-assets/update-manifest.json)"
           echo "sequence=$sequence" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
 
           (
             cd release-assets
             sha256sum "$WINDOWS_FILE" "$MACOS_FILE" "$MACOS_UPDATE_FILE" > SHA256SUMS.txt
+            sha256sum "$WINDOWS_FILE" > SHA256SUMS-windows-x86_64.txt
+            sha256sum "$MACOS_FILE" "$MACOS_UPDATE_FILE" > SHA256SUMS-macos-arm64.txt
           )
 
-      - name: Upload immutable version archive
+      - name: Upload immutable channel archive
         shell: bash
         env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
           MACOS_FILE: ${{ steps.release.outputs.macos_file }}
           MACOS_UPDATE_FILE: ${{ steps.release.outputs.macos_update_file }}
+          MANIFEST_BUILD: ${{ steps.manifest.outputs.build }}
           MANIFEST_SEQUENCE: ${{ steps.manifest.outputs.sequence }}
         run: |
           set -euo pipefail
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          version_prefix="releases/${RELEASE_TAG}"
 
           upload() {
             local source="$1"
@@ -186,31 +193,71 @@ jobs:
               --no-progress
           }
 
-          upload "release-assets/$WINDOWS_FILE" "$version_prefix/$WINDOWS_FILE" \
-            "application/vnd.microsoft.portable-executable" \
-            "attachment; filename=\"$WINDOWS_FILE\""
-          upload "release-assets/$MACOS_FILE" "$version_prefix/$MACOS_FILE" \
-            "application/x-apple-diskimage" \
-            "attachment; filename=\"$MACOS_FILE\""
-          upload "release-assets/$MACOS_UPDATE_FILE" "$version_prefix/$MACOS_UPDATE_FILE" \
-            "application/zip" \
-            "attachment; filename=\"$MACOS_UPDATE_FILE\""
-          upload "release-assets/SHA256SUMS.txt" "$version_prefix/SHA256SUMS.txt" \
-            "text/plain; charset=utf-8" \
-            "attachment; filename=\"SHA256SUMS.txt\""
-          manifest_prefix="updates/v1/releases/$RELEASE_TAG/$MANIFEST_SEQUENCE"
-          for platform in windows-x86_64 macos-arm64; do
-            upload "release-assets/update-manifest.json" "$manifest_prefix/$platform/manifest.json" \
-              "application/json; charset=utf-8" \
-              "inline; filename=\"manifest.json\""
-            upload "release-assets/update-manifest.json.sig" "$manifest_prefix/$platform/manifest.json.sig" \
-              "text/plain; charset=utf-8" \
-              "inline; filename=\"manifest.json.sig\""
-          done
+          if [[ "$CHANNEL" == "beta" ]]; then
+            windows_prefix="updates/v1/beta/builds/$MANIFEST_BUILD/windows-x86_64"
+            macos_prefix="updates/v1/beta/builds/$MANIFEST_BUILD/macos-arm64"
 
-          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/$MACOS_UPDATE_FILE" "$version_prefix/SHA256SUMS.txt" "$manifest_prefix/windows-x86_64/manifest.json" "$manifest_prefix/windows-x86_64/manifest.json.sig" "$manifest_prefix/macos-arm64/manifest.json" "$manifest_prefix/macos-arm64/manifest.json.sig"; do
-            aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
-          done
+            upload "release-assets/$WINDOWS_FILE" "$windows_prefix/$WINDOWS_FILE" \
+              "application/vnd.microsoft.portable-executable" \
+              "attachment; filename=\"$WINDOWS_FILE\""
+            upload "release-assets/SHA256SUMS-windows-x86_64.txt" \
+              "$windows_prefix/SHA256SUMS-windows-x86_64.txt" \
+              "text/plain; charset=utf-8" \
+              "attachment; filename=\"SHA256SUMS-windows-x86_64.txt\""
+            upload "release-assets/$MACOS_FILE" "$macos_prefix/$MACOS_FILE" \
+              "application/x-apple-diskimage" \
+              "attachment; filename=\"$MACOS_FILE\""
+            upload "release-assets/$MACOS_UPDATE_FILE" "$macos_prefix/$MACOS_UPDATE_FILE" \
+              "application/zip" \
+              "attachment; filename=\"$MACOS_UPDATE_FILE\""
+            upload "release-assets/SHA256SUMS-macos-arm64.txt" \
+              "$macos_prefix/SHA256SUMS-macos-arm64.txt" \
+              "text/plain; charset=utf-8" \
+              "attachment; filename=\"SHA256SUMS-macos-arm64.txt\""
+
+            for platform in windows-x86_64 macos-arm64; do
+              manifest_prefix="updates/v1/beta/builds/$MANIFEST_BUILD/$platform/manifests/$MANIFEST_SEQUENCE"
+              upload "release-assets/update-manifest.json" "$manifest_prefix/manifest.json" \
+                "application/json; charset=utf-8" \
+                "inline; filename=\"manifest.json\""
+              upload "release-assets/update-manifest.json.sig" "$manifest_prefix/manifest.json.sig" \
+                "text/plain; charset=utf-8" \
+                "inline; filename=\"manifest.json.sig\""
+            done
+
+            windows_manifest_prefix="$windows_prefix/manifests/$MANIFEST_SEQUENCE"
+            macos_manifest_prefix="$macos_prefix/manifests/$MANIFEST_SEQUENCE"
+            for key in "$windows_prefix/$WINDOWS_FILE" "$windows_prefix/SHA256SUMS-windows-x86_64.txt" "$windows_manifest_prefix/manifest.json" "$windows_manifest_prefix/manifest.json.sig" "$macos_prefix/$MACOS_FILE" "$macos_prefix/$MACOS_UPDATE_FILE" "$macos_prefix/SHA256SUMS-macos-arm64.txt" "$macos_manifest_prefix/manifest.json" "$macos_manifest_prefix/manifest.json.sig"; do
+              aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
+            done
+          else
+            version_prefix="releases/${RELEASE_TAG}"
+            upload "release-assets/$WINDOWS_FILE" "$version_prefix/$WINDOWS_FILE" \
+              "application/vnd.microsoft.portable-executable" \
+              "attachment; filename=\"$WINDOWS_FILE\""
+            upload "release-assets/$MACOS_FILE" "$version_prefix/$MACOS_FILE" \
+              "application/x-apple-diskimage" \
+              "attachment; filename=\"$MACOS_FILE\""
+            upload "release-assets/$MACOS_UPDATE_FILE" "$version_prefix/$MACOS_UPDATE_FILE" \
+              "application/zip" \
+              "attachment; filename=\"$MACOS_UPDATE_FILE\""
+            upload "release-assets/SHA256SUMS.txt" "$version_prefix/SHA256SUMS.txt" \
+              "text/plain; charset=utf-8" \
+              "attachment; filename=\"SHA256SUMS.txt\""
+            manifest_prefix="updates/v1/releases/$RELEASE_TAG/$MANIFEST_SEQUENCE"
+            for platform in windows-x86_64 macos-arm64; do
+              upload "release-assets/update-manifest.json" "$manifest_prefix/$platform/manifest.json" \
+                "application/json; charset=utf-8" \
+                "inline; filename=\"manifest.json\""
+              upload "release-assets/update-manifest.json.sig" "$manifest_prefix/$platform/manifest.json.sig" \
+                "text/plain; charset=utf-8" \
+                "inline; filename=\"manifest.json.sig\""
+            done
+
+            for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/$MACOS_UPDATE_FILE" "$version_prefix/SHA256SUMS.txt" "$manifest_prefix/windows-x86_64/manifest.json" "$manifest_prefix/windows-x86_64/manifest.json.sig" "$manifest_prefix/macos-arm64/manifest.json" "$manifest_prefix/macos-arm64/manifest.json.sig"; do
+              aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
+            done
+          fi
 
       - name: Publish update channel manifest
         shell: bash

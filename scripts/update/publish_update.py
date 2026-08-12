@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,20 +51,29 @@ def packaged_channel(platform: str) -> str:
     return "stable"
 
 
-def planned_keys(tag: str, sequence: int, platform_key: str, package_name: str,
+def immutable_prefixes(tag: str, build: int, sequence: int, platform_key: str,
+                       channel: str) -> tuple[str, str]:
+    if channel == "beta":
+        build_prefix = f"updates/v1/beta/builds/{build}/{platform_key}"
+        return build_prefix, f"{build_prefix}/manifests/{sequence}"
+    return f"releases/{tag}", f"updates/v1/releases/{tag}/{sequence}/{platform_key}"
+
+
+def planned_keys(tag: str, build: int, sequence: int, platform_key: str, package_name: str,
                  dmg_name: str, channel: str, promote_latest: bool) -> list[tuple[str, str]]:
-    version_prefix = f"releases/{tag}"
-    manifest_prefix = f"updates/v1/releases/{tag}/{sequence}/{platform_key}"
+    package_prefix, manifest_prefix = immutable_prefixes(
+        tag, build, sequence, platform_key, channel
+    )
     keys = [
-        (f"{version_prefix}/{package_name}", "immutable package"),
-        (f"{version_prefix}/SHA256SUMS-{platform_key}.txt", "immutable checksums"),
+        (f"{package_prefix}/{package_name}", "immutable package"),
+        (f"{package_prefix}/SHA256SUMS-{platform_key}.txt", "immutable checksums"),
         (f"{manifest_prefix}/manifest.json.sig", "immutable signature"),
         (f"{manifest_prefix}/manifest.json", "immutable manifest"),
         (f"updates/v1/{channel}/{platform_key}/manifest.json.sig", f"{channel} signature"),
         (f"updates/v1/{channel}/{platform_key}/manifest.json", f"{channel} manifest"),
     ]
     if dmg_name:
-        keys.insert(1, (f"{version_prefix}/{dmg_name}", "immutable package"))
+        keys.insert(1, (f"{package_prefix}/{dmg_name}", "immutable package"))
     # releases/latest/ is the stable website download alias; never repoint it at
     # a beta build, even if the caller left --promote-latest on.
     if channel == "stable" and promote_latest:
@@ -75,8 +86,16 @@ def planned_keys(tag: str, sequence: int, platform_key: str, package_name: str,
     return keys
 
 
+def file_digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+
 def aws_upload(endpoint: str, bucket: str, source: Path, key: str, content_type: str,
-               disposition: str, cache_control: str) -> None:
+               disposition: str, cache_control: str, sha256: str) -> None:
     command = [
         "aws",
         "s3",
@@ -91,13 +110,21 @@ def aws_upload(endpoint: str, bucket: str, source: Path, key: str, content_type:
         disposition,
         "--cache-control",
         cache_control,
-        "--no-progress",
+        "--metadata",
+        f"alcedo-sha256={sha256}",
+        "--cli-connect-timeout",
+        "60",
+        "--cli-read-timeout",
+        "0",
     ]
+    if source.stat().st_size < 1024 * 1024:
+        command.append("--no-progress")
+    print(f"Uploading {source.name} ({source.stat().st_size / (1024 * 1024):.1f} MiB)")
     print("+", " ".join(command))
     subprocess.run(command, check=True)
 
 
-def aws_head(endpoint: str, bucket: str, key: str) -> None:
+def aws_head(endpoint: str, bucket: str, key: str) -> dict[str, object] | None:
     command = [
         "aws",
         "s3api",
@@ -108,14 +135,70 @@ def aws_head(endpoint: str, bucket: str, key: str) -> None:
         key,
         "--endpoint-url",
         endpoint,
+        "--output",
+        "json",
+        "--cli-connect-timeout",
+        "60",
+        "--cli-read-timeout",
+        "60",
     ]
-    subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        return json.loads(result.stdout)
+    error = result.stderr.strip()
+    if "404" in error or "Not Found" in error or "NoSuchKey" in error:
+        return None
+    raise RuntimeError(f"failed to inspect s3://{bucket}/{key}: {error}")
+
+
+def matching_object(head: dict[str, object] | None, size: int, sha256: str,
+                    allow_missing_digest: bool = False) -> bool:
+    if head is None or int(head.get("ContentLength", -1)) != size:
+        return False
+    metadata = head.get("Metadata", {})
+    if not isinstance(metadata, dict):
+        return False
+    remote_digest = str(metadata.get("alcedo-sha256", ""))
+    return remote_digest == sha256 or (allow_missing_digest and not remote_digest)
+
+
+def wait_for_object(endpoint: str, bucket: str, key: str, size: int, sha256: str) -> None:
+    delays = (1, 2, 4, 8, 16, 30)
+    for attempt, delay in enumerate(delays, start=1):
+        head = aws_head(endpoint, bucket, key)
+        if matching_object(head, size, sha256):
+            print(f"Verified s3://{bucket}/{key}")
+            return
+        if head is not None:
+            raise RuntimeError(
+                f"uploaded object metadata does not match the local file: s3://{bucket}/{key}"
+            )
+        print(f"Object is not visible yet ({attempt}/{len(delays)}); retrying in {delay}s: {key}")
+        time.sleep(delay)
+    raise RuntimeError(f"uploaded object is still missing: s3://{bucket}/{key}")
+
+
+def publish_object(endpoint: str, bucket: str, source: Path, key: str, content_type: str,
+                   disposition: str, cache_control: str, immutable: bool) -> None:
+    sha256 = file_digest(source)
+    existing = aws_head(endpoint, bucket, key) if immutable else None
+    if existing is not None:
+        # Objects uploaded before digest metadata was introduced can still be
+        # resumed when the immutable key and exact length match.
+        if not matching_object(existing, source.stat().st_size, sha256, True):
+            raise RuntimeError(
+                f"refusing to replace a different immutable object: s3://{bucket}/{key}"
+            )
+        print(f"Reusing existing immutable object: s3://{bucket}/{key}")
+        return
+    aws_upload(endpoint, bucket, source, key, content_type, disposition, cache_control, sha256)
+    wait_for_object(endpoint, bucket, key, source.stat().st_size, sha256)
 
 
 def write_sha256sums(artifacts_dir: Path, names: list[str], output: Path) -> None:
     lines: list[str] = []
     for name in names:
-        digest = __import__("hashlib").sha256((artifacts_dir / name).read_bytes()).hexdigest()
+        digest = file_digest(artifacts_dir / name)
         lines.append(f"{digest}  {name}")
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -196,6 +279,8 @@ def main() -> int:
         str(artifacts_dir),
         "--tag",
         tag,
+        "--channel",
+        channel,
         "--platform",
         platform_key,
     ]
@@ -203,13 +288,14 @@ def main() -> int:
     subprocess.run(verify, check=True)
 
     sequence = int(manifest["sequence"])
+    build = int(manifest["build"])
     package_name = Path(manifest["artifacts"][platform_key]["url"]).name
     if not (artifacts_dir / package_name).is_file():
         raise SystemExit(f"missing artifact: {artifacts_dir / package_name}")
     macos_dmg_name = f"AlcedoStudio-{version}-Darwin-arm64.dmg" if args.platform == "macos" else ""
     has_dmg = bool(macos_dmg_name) and (artifacts_dir / macos_dmg_name).is_file()
 
-    keys = planned_keys(tag, sequence, platform_key, package_name,
+    keys = planned_keys(tag, build, sequence, platform_key, package_name,
                         macos_dmg_name if has_dmg else "", channel, args.promote_latest)
     print("Validated update objects:")
     for key, role in keys:
@@ -232,6 +318,8 @@ def main() -> int:
     os.environ.setdefault("AWS_REGION", "auto")
     os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
     os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
+    os.environ.setdefault("AWS_RETRY_MODE", "standard")
+    os.environ.setdefault("AWS_MAX_ATTEMPTS", "10")
     endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
 
     checksums = artifacts_dir / f"SHA256SUMS-{platform_key}.txt"
@@ -242,8 +330,9 @@ def main() -> int:
 
     immutable = "public, max-age=31536000, immutable"
     mutable = "public, max-age=300, must-revalidate"
-    version_prefix = f"releases/{tag}"
-    manifest_prefix = f"updates/v1/releases/{tag}/{sequence}/{platform_key}"
+    package_prefix, manifest_prefix = immutable_prefixes(
+        tag, build, sequence, platform_key, channel
+    )
 
     package_content_type = (
         "application/vnd.microsoft.portable-executable"
@@ -253,14 +342,14 @@ def main() -> int:
     uploads: list[tuple[Path, str, str, str, str]] = [
         (
             artifacts_dir / package_name,
-            f"{version_prefix}/{package_name}",
+            f"{package_prefix}/{package_name}",
             package_content_type,
             f'attachment; filename="{package_name}"',
             immutable,
         ),
         (
             checksums,
-            f"{version_prefix}/SHA256SUMS-{platform_key}.txt",
+            f"{package_prefix}/SHA256SUMS-{platform_key}.txt",
             "text/plain; charset=utf-8",
             f'attachment; filename="SHA256SUMS-{platform_key}.txt"',
             immutable,
@@ -285,7 +374,7 @@ def main() -> int:
             1,
             (
                 artifacts_dir / macos_dmg_name,
-                f"{version_prefix}/{macos_dmg_name}",
+                f"{package_prefix}/{macos_dmg_name}",
                 "application/x-apple-diskimage",
                 f'attachment; filename="{macos_dmg_name}"',
                 immutable,
@@ -346,13 +435,20 @@ def main() -> int:
             ),
         ])
 
-    uploaded_keys: list[str] = []
-    for source, key, content_type, disposition, cache_control in uploads:
-        aws_upload(endpoint, bucket, source, key, content_type, disposition, cache_control)
-        uploaded_keys.append(key)
+    immutable_uploads = [item for item in uploads if item[4] == immutable]
+    mutable_uploads = [item for item in uploads if item[4] != immutable]
 
-    for key in uploaded_keys:
-        aws_head(endpoint, bucket, key)
+    # Never promote a live channel manifest until every package and archived
+    # signed manifest is independently visible. This keeps a failed or slow
+    # multipart upload from publishing a feed that points at a missing package.
+    for source, key, content_type, disposition, cache_control in immutable_uploads:
+        publish_object(
+            endpoint, bucket, source, key, content_type, disposition, cache_control, True
+        )
+    for source, key, content_type, disposition, cache_control in mutable_uploads:
+        publish_object(
+            endpoint, bucket, source, key, content_type, disposition, cache_control, False
+        )
 
     print(f"Published build {manifest['build']} with sequence {sequence}.")
     return 0

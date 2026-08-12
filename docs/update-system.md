@@ -113,8 +113,8 @@ This script:
    exists. The field is omitted when missing.
 6. Signs with `alcedo_update_signer` and verifies the signature and package
    hashes.
-7. Uploads immutable files first, the platform channel signature next, and the
-   platform channel manifest last.
+7. Uploads immutable build files first, the platform channel signature next,
+   and the platform channel manifest last.
 
 ## Publish to R2
 
@@ -140,8 +140,35 @@ still requires only platform and private key. `--channel` is an optional safety
 override and must match the packaged channel. Upload order puts the channel
 signature before the channel manifest, so a client never accepts an unsigned or
 partially published update. Stable also repoints this platform's
-`releases/latest/` aliases; beta only updates its beta/platform feed. The script
-generates a UTC timestamp sequence for each run.
+`releases/latest/` aliases. Beta never writes under `releases/`; all of its
+objects stay under `updates/v1/beta/`. The script generates a UTC timestamp
+sequence for each run.
+
+Stable and beta deliberately use different immutable layouts:
+
+| Purpose | Stable object key | Beta object key |
+|---|---|---|
+| Update package | `releases/v<version>/<package>` | `updates/v1/beta/builds/<build>/<platform>/<package>` |
+| Checksums | `releases/v<version>/SHA256SUMS-<platform>.txt` | `updates/v1/beta/builds/<build>/<platform>/SHA256SUMS-<platform>.txt` |
+| Signed archive manifest | `updates/v1/releases/v<version>/<sequence>/<platform>/manifest.*` | `updates/v1/beta/builds/<build>/<platform>/manifests/<sequence>/manifest.*` |
+| Live feed pointer | `updates/v1/stable/<platform>/manifest.*` | `updates/v1/beta/<platform>/manifest.*` |
+
+The Beta build directory is immutable, so multiple Beta packages with the same
+marketing version do not overwrite or share a cached object. Only the short-
+cached live feed pointer changes when a newer Beta build is promoted. A signed
+Beta manifest must point to the package in its own
+`beta/builds/<build>/<platform>/` directory; verification rejects a prerelease
+manifest that still points to `releases/v<version>/`.
+
+The local publisher shows transfer progress for packages larger than 1 MiB. It
+disables the AWS CLI socket read timeout and enables ten standard retry attempts
+for slow upstream connections. Every immutable object is checked immediately
+after upload, with additional visibility retries. Only after all package,
+checksum, and archived manifest checks pass does the script publish the mutable
+channel signature and manifest. Re-running a failed publish reuses an existing
+immutable object when its key, exact size, and recorded SHA-256 match; older
+objects without digest metadata can be reused when their immutable key and exact
+size match.
 
 The `Sync release assets to R2` workflow publishes prereleases to the beta
 channel and full releases to the stable channel automatically. You may also run
@@ -187,7 +214,8 @@ next number automatically.
    `build/tmp/update/beta/windows-x86_64/update-manifest.json`: its `build` must
    equal the number printed by the B package run and be greater than A; it must
    contain only `windows-x86_64`, and the printed live alias must end in
-   `updates/v1/beta/windows-x86_64/manifest.json`.
+   `updates/v1/beta/windows-x86_64/manifest.json`. Its package URL must start
+   with `https://static.aoraw.org/updates/v1/beta/builds/<build>/windows-x86_64/`.
 5. Put `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, and
    `R2_SECRET_ACCESS_KEY` in the environment or the ignored
    `rust/puerh_mind/.env.test`, then publish:
@@ -223,8 +251,10 @@ python3 scripts/update/publish_update.py --platform macos \
 ```
 
 The manifest and live alias are under `beta/macos-arm64`; the ZIP is the
-automatic-update package and the DMG remains the manual-download package. The
-installed `.app` directory must be writable for automatic replacement.
+automatic-update package and the DMG remains the manual-download package. Both
+packages are archived under
+`updates/v1/beta/builds/<build>/macos-arm64/`. The installed `.app` directory
+must be writable for automatic replacement.
 
 ## Manifest fields
 
