@@ -205,6 +205,74 @@ ColumnLayout {
         }
     }
 
+    QtObject {
+        id: modelComboModel
+        property string label: ""
+        property bool enabled: panel.hasDownloadController
+                               && (!panel.interactionPolicy
+                                   || panel.interactionPolicy.canChangeSemanticModel)
+        readonly property var entries: {
+            if (!panel.hasDownloadController)
+                return []
+            const src = panel.downloadController.modelProfileOptions || []
+            const mapped = []
+            for (let i = 0; i < src.length; ++i) {
+                mapped.push({
+                    value: src[i].profileId,
+                    label: src[i].label
+                })
+            }
+            return mapped
+        }
+        property int currentIndex: panel.hasDownloadController
+            ? panel.modelProfileIndex(panel.downloadController.selectedModelProfileId)
+            : 0
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item && panel.hasDownloadController) {
+                panel.downloadController.SetSelectedModelProfileId(item.value)
+                panel.downloadController.RefreshSelectedModelStatus()
+            }
+        }
+    }
+
+    QtObject {
+        id: endpointComboModel
+        property string label: ""
+        property bool enabled: panel.hasDownloadController
+                               && (!panel.interactionPolicy
+                                   || panel.interactionPolicy.canChangeModelDownloadSettings)
+        readonly property var entries: [
+            { value: "mirror", label: qsTr("HF Mirror") },
+            { value: "huggingface", label: qsTr("Hugging Face") },
+            { value: "sufy", label: qsTr("Sufy CDN") },
+            { value: "custom", label: qsTr("Custom") }
+        ]
+        property int currentIndex: panel.hasDownloadController
+            ? panel.endpointPresetIndex(panel.downloadController.modelEndpointPreset)
+            : 0
+        function selectIndex(index) {
+            if (panel.hasDownloadController)
+                panel.downloadController.SetModelEndpointPreset(
+                            panel.endpointPresetForIndex(index))
+        }
+    }
+
+    QtObject {
+        id: importComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: [
+            { value: "always", label: qsTr("Always") },
+            { value: "ask", label: qsTr("Always Ask") },
+            { value: "never", label: qsTr("Always Skip") }
+        ]
+        property int currentIndex: panel.importPreferenceIndex(panel.importPreference)
+        function selectIndex(index) {
+            panel.importPreferenceRequested(panel.preferenceForIndex(index))
+        }
+    }
+
     Component.onCompleted: {
         if (panel.hasController) {
             panel.semanticController.RefreshAlbumSummary()
@@ -432,25 +500,14 @@ ColumnLayout {
                 font.weight: 600
             }
 
-            ComboBox {
+            AdjustmentCombo {
                 id: modelBox
+                objectName: "semanticModelControl"
+                controlObjectName: "semanticModelCombo"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 44
-                enabled: panel.hasDownloadController
-                         && (!panel.interactionPolicy
-                             || panel.interactionPolicy.canChangeSemanticModel)
-                model: panel.hasDownloadController ? panel.downloadController.modelProfileOptions : []
-                textRole: "label"
-                currentIndex: panel.hasDownloadController
-                              ? panel.modelProfileIndex(panel.downloadController.selectedModelProfileId)
-                              : 0
-                onActivated: function(index) {
-                    const item = model[index]
-                    if (item && panel.hasDownloadController) {
-                        panel.downloadController.SetSelectedModelProfileId(item.profileId)
-                        panel.downloadController.RefreshSelectedModelStatus()
-                    }
-                }
+                controlHeight: 36
+                showResetButton: false
+                model: modelComboModel
             }
         }
 
@@ -544,27 +601,15 @@ ColumnLayout {
                 font.weight: 600
             }
 
-            ComboBox {
+            AdjustmentCombo {
                 id: endpointBox
+                objectName: "semanticEndpointControl"
+                controlObjectName: "semanticEndpointCombo"
                 Layout.preferredWidth: 210
-                Layout.preferredHeight: 44
-                enabled: panel.hasDownloadController
-                         && (!panel.interactionPolicy
-                             || panel.interactionPolicy.canChangeModelDownloadSettings)
-                model: [
-                    qsTr("HF Mirror"),
-                    qsTr("Hugging Face"),
-                    qsTr("Sufy CDN"),
-                    qsTr("Custom")
-                ]
-                currentIndex: panel.hasDownloadController
-                              ? panel.endpointPresetIndex(panel.downloadController.modelEndpointPreset)
-                              : 0
-                onActivated: function(index) {
-                    if (panel.hasDownloadController) {
-                        panel.downloadController.SetModelEndpointPreset(panel.endpointPresetForIndex(index))
-                    }
-                }
+                Layout.fillWidth: false
+                controlHeight: 36
+                showResetButton: false
+                model: endpointComboModel
             }
 
             TextField {
@@ -667,19 +712,14 @@ ColumnLayout {
                 font.weight: 600
             }
 
-            ComboBox {
+            AdjustmentCombo {
                 id: importBehaviorBox
+                objectName: "semanticImportControl"
+                controlObjectName: "semanticImportCombo"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 44
-                model: [
-                    qsTr("Always"),
-                    qsTr("Always Ask"),
-                    qsTr("Always Skip")
-                ]
-                currentIndex: panel.importPreferenceIndex(panel.importPreference)
-                onActivated: function(index) {
-                    panel.importPreferenceRequested(panel.preferenceForIndex(index))
-                }
+                controlHeight: 36
+                showResetButton: false
+                model: importComboModel
             }
         }
     }
@@ -851,82 +891,16 @@ ColumnLayout {
                 visible: card.busy
                 spacing: 5
 
-                ProgressBar {
+                ThemedProgressBar {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 8
-                    from: 0
-                    to: 100
-                    value: panel.modelDownloadProgress
+                    showDetails: panel.modelDownloadRunning
+                    progressValue: panel.modelDownloadProgress
                     indeterminate: panel.modelDownloadIndeterminate
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 12
-
-                    Label {
-                        text: {
-                            if (panel.modelActivationRunning) {
-                                return qsTr("Preparing model runtime…")
-                            }
-                            return panel.modelDownloadBytesLabel
-                        }
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    Label {
-                        visible: panel.modelDownloadFilesTotal > 0
-                                 && !panel.modelActivationRunning
-                        text: qsTr("File %1 / %2").arg(panel.modelDownloadFilesDone)
-                              .arg(panel.modelDownloadFilesTotal)
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    // Speed + ETA, shown only while actually downloading (not
-                    // during activation). Both are pre-formatted in C++.
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadSpeedLabel.length > 0
-                        text: panel.modelDownloadSpeedLabel
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadSpeedLabel.length > 0
-                                 && panel.modelDownloadEtaLabel.length > 0
-                        text: "·"
-                        color: panel.mutedTextColor
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-
-                    Label {
-                        visible: card.downloading
-                                 && panel.modelDownloadEtaLabel.length > 0
-                        text: panel.modelDownloadEtaLabel
-                        color: panel.mutedTextColor
-                        font.family: panel.dataFontFamily
-                        font.pixelSize: 12
-                        font.weight: 500
-                    }
-
-                    Item { Layout.fillWidth: true }
+                    leadingText: panel.modelActivationRunning
+                                 ? qsTr("Preparing model runtime…")
+                                 : panel.modelDownloadBytesLabel
+                    speedText: card.downloading ? panel.modelDownloadSpeedLabel : ""
+                    etaText: card.downloading ? panel.modelDownloadEtaLabel : ""
                 }
 
                 Label {

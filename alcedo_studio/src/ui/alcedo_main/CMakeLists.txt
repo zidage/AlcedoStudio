@@ -209,6 +209,7 @@ target_link_libraries(AlbumBackendLib
         AiProviderProfile
         AiCredentialStore
         ModelDownloadService
+        UpdateService
         SleeveFilterService
         FSService
         EditPipeline
@@ -234,11 +235,44 @@ set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
+if(WIN32)
+    configure_file(
+        "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_version.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc"
+        @ONLY
+    )
+    list(APPEND ALCEDO_MAIN_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc")
+endif()
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
     add_executable(alcedo_main MACOSX_BUNDLE ${ALCEDO_MAIN_SOURCES})
 else()
     add_executable(alcedo_main ${ALCEDO_MAIN_SOURCES})
 endif()
+
+add_executable(alcedo_update_installer
+    "${ALCEDO_SRC_ROOT}/app/update_installer_main.cpp"
+)
+target_link_libraries(alcedo_update_installer PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(alcedo_update_installer PRIVATE UpdateInstallerWindows)
+endif()
+set_target_properties(alcedo_update_installer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
+)
+if(APPLE)
+    set_property(TARGET alcedo_update_installer APPEND PROPERTY
+        INSTALL_RPATH "@loader_path/../Frameworks")
+endif()
+alcedo_copy_linked_runtime_dlls(alcedo_update_installer)
+
+add_executable(alcedo_update_signer
+    "${ALCEDO_SRC_ROOT}/app/update_signer_main.cpp"
+)
+target_link_libraries(alcedo_update_signer PRIVATE Qt6::Core unofficial::ed25519::ed25519)
+set_target_properties(alcedo_update_signer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
+)
+alcedo_copy_linked_runtime_dlls(alcedo_update_signer)
 
 if(WIN32)
     # Keep the development executable at the historical, stable location.
@@ -360,6 +394,9 @@ target_link_libraries(alcedo_main
         Qt6::Svg
         Qt6::QuickEffects
 )
+target_compile_definitions(alcedo_main PRIVATE
+    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
+)
 
 alcedo_copy_linked_runtime_dlls(alcedo_main)
 
@@ -399,6 +436,9 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/CacheSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"
@@ -572,7 +612,7 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_NAME "${ALCEDO_MACOS_BUNDLE_NAME}"
         MACOSX_BUNDLE_GUI_IDENTIFIER "${ALCEDO_MACOS_BUNDLE_IDENTIFIER}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${ALCEDO_BUILD_NUMBER}"
     )
 endif()
 
@@ -586,6 +626,7 @@ qt_add_translations(TARGETS alcedo_main
         alcedo_main
         AlbumBackendLib
         UiLocalization
+        UpdateService
     # QML_FILES are embedded by qt_add_qml_module(), but are not guaranteed to
     # be visible to lupdate through SOURCE_TARGETS when the module is changed
     # without a full configure. Keep this list derived from the QML module list

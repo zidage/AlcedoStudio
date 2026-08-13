@@ -9,7 +9,78 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.8 LANGUAGES C CXX)
+project(alcedo VERSION 0.2.9 LANGUAGES C CXX)
+
+# Update metadata is compiled into the application. Release builds must set a
+# real Ed25519 public key. An empty key disables network update checks instead
+# of accepting an unsigned feed.
+math(EXPR _alcedo_default_build_number
+    "${PROJECT_VERSION_MAJOR} * 1000000 + ${PROJECT_VERSION_MINOR} * 1000 + ${PROJECT_VERSION_PATCH}")
+set(ALCEDO_BUILD_NUMBER "${_alcedo_default_build_number}"
+    CACHE STRING "Monotonic application build number used by updates and macOS CFBundleVersion.")
+# Update channels keep test and official builds on separate feeds. A beta
+# build checks the beta manifest; an official build checks stable. The channel
+# also namespaces the per-channel trusted sequence so one feed cannot roll back
+# the other. Override ALCEDO_UPDATE_BASE_URL for local staging; the manifest URL
+# itself always follows the channel.
+set(ALCEDO_UPDATE_CHANNEL "stable"
+    CACHE STRING "Update channel the build checks: 'stable' (official) or 'beta' (test).")
+set_property(CACHE ALCEDO_UPDATE_CHANNEL PROPERTY STRINGS stable beta)
+if(NOT ALCEDO_UPDATE_CHANNEL STREQUAL "stable" AND NOT ALCEDO_UPDATE_CHANNEL STREQUAL "beta")
+    message(FATAL_ERROR "ALCEDO_UPDATE_CHANNEL must be 'stable' or 'beta', got: '${ALCEDO_UPDATE_CHANNEL}'")
+endif()
+set(ALCEDO_UPDATE_BASE_URL "https://static.aoraw.org/updates"
+    CACHE STRING "Base URL hosting the per-channel signed update manifests.")
+if(WIN32)
+    set(_alcedo_update_platform "windows-x86_64")
+elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(_alcedo_update_platform "macos-arm64")
+elseif(APPLE)
+    set(_alcedo_update_platform "macos-x86_64")
+else()
+    set(_alcedo_update_platform "unsupported")
+endif()
+set(ALCEDO_UPDATE_MANIFEST_URL
+    "${ALCEDO_UPDATE_BASE_URL}/v1/${ALCEDO_UPDATE_CHANNEL}/${_alcedo_update_platform}/manifest.json")
+set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
+    "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
+    CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")
+set(ALCEDO_UPDATE_PUBLIC_KEY_BASE64 ""
+    CACHE STRING "Base64-encoded 32-byte Ed25519 update public key. Empty disables updates.")
+if(EXISTS "${ALCEDO_UPDATE_PUBLIC_KEY_FILE}")
+    file(READ "${ALCEDO_UPDATE_PUBLIC_KEY_FILE}" _alcedo_update_public_key_from_file LIMIT 4096)
+    string(STRIP "${_alcedo_update_public_key_from_file}" _alcedo_update_public_key_from_file)
+    if(NOT "${_alcedo_update_public_key_from_file}" STREQUAL "")
+        # The tracked public-key file is the canonical trust root. Keep VS Code,
+        # command-line, and CI release configurations on the same key.
+        set(ALCEDO_UPDATE_PUBLIC_KEY_BASE64 "${_alcedo_update_public_key_from_file}"
+            CACHE STRING "Base64-encoded 32-byte Ed25519 update public key. Empty disables updates."
+            FORCE)
+    endif()
+endif()
+if(NOT "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" STREQUAL "")
+    string(LENGTH "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" _alcedo_update_public_key_length)
+    if(NOT _alcedo_update_public_key_length EQUAL 44 OR
+       NOT "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" MATCHES "^[A-Za-z0-9+/]+=$")
+        message(FATAL_ERROR
+            "The update public key must be the standard Base64 encoding of a 32-byte Ed25519 key.")
+    endif()
+endif()
+option(ALCEDO_REQUIRE_UPDATE_KEY
+       "Fail configuration when the update public key is empty. Release presets enable this."
+       OFF)
+if(ALCEDO_REQUIRE_UPDATE_KEY AND "${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}" STREQUAL "")
+    message(FATAL_ERROR
+        "ALCEDO_UPDATE_PUBLIC_KEY_BASE64 is required by this release preset. "
+        "Generate the offline update key first; see docs/update-system.md.")
+endif()
+# Packaged installers may download and install updates. Build-tree Release
+# binaries may only check the production feed (UI validation).
+option(ALCEDO_UPDATE_ALLOW_INSTALL
+       "Allow download and install of signed updates. Enable only when packaging."
+       OFF)
+unset(_alcedo_update_public_key_from_file)
+unset(_alcedo_update_public_key_length)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build alcedo libraries as static by default." FORCE)
 
@@ -770,6 +841,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             BUNDLE  DESTINATION .
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        install(TARGETS alcedo_update_installer
+            RUNTIME DESTINATION "${ALCEDO_MACOS_BUNDLE_NAME}.app/Contents/Helpers"
+        )
 
         # Copy asset folders into Contents/MacOS/ (next to the executable)
         set(_config_dir "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config")
@@ -943,6 +1017,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         if(APPLE)
             alcedo_install_metal_runtime_libs("${CMAKE_INSTALL_BINDIR}/metallib")
         endif()
+        install(TARGETS alcedo_update_installer
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
     endif()
 endif()
 
@@ -1604,6 +1681,17 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CPACK_NSIS_MODIFY_PATH OFF)
     set(CPACK_NSIS_MUI_FINISHPAGE_RUN "alcedo_main.exe")
     set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+    # CPack already derives the previous installation root from its registered
+    # UninstallString into $3 before silently uninstalling an older build. Old
+    # updater helpers only pass /S, so inherit that root when no explicit /D
+    # override was supplied. New helpers pass /D and therefore keep priority.
+    string(CONCAT CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS
+        "StrCmp \\\"$IS_DEFAULT_INSTALLDIR\\\" \\\"1\\\" 0 alcedo_install_path_ready\n"
+        "StrCmp \\\"$3\\\" \\\"\\\" alcedo_install_path_ready\n"
+        "StrCpy $INSTDIR \\\"$3\\\"\n"
+        "SetOutPath \\\"$INSTDIR\\\"\n"
+        "alcedo_install_path_ready:\n"
+    )
     set(CPACK_NSIS_MENU_LINKS
         "https://alcedo.studio" "Alcedo Studio Website"
         "https://zidage.github.io/AlcedoStudio_docs/" "Documentation"
@@ -1634,7 +1722,8 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # Fixed upgrade GUID so subsequent installers replace the same product.
     set(CPACK_WIX_UPGRADE_GUID "0EF54FAE-B541-4077-BB2A-7EDB85133B8E")
 
-    # Auto-detect available generators
+    # Auto-detect installer generators. Windows update packages are installers;
+    # portable ZIP archives are not produced.
     set(_alcedo_win_generators "")
     find_program(_ALCEDO_WIX_CANDLE candle.exe
         PATHS
@@ -1659,8 +1748,10 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     if(_ALCEDO_NSIS_MAKENSIS)
         list(APPEND _alcedo_win_generators "NSIS")
     endif()
-    # Always provide ZIP as a fallback
-    list(APPEND _alcedo_win_generators "ZIP")
+    if(NOT _ALCEDO_NSIS_MAKENSIS)
+        message(FATAL_ERROR
+            "Windows packaging requires NSIS for the automatic-update EXE; ZIP fallback packages are disabled.")
+    endif()
 
     set(CPACK_GENERATOR "${_alcedo_win_generators}")
     message(STATUS "[alcedo] Windows package generators: ${CPACK_GENERATOR}")

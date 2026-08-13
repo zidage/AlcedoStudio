@@ -34,6 +34,8 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "InteractionPolicyController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<ModelDownloadController>(
       "Alcedo.Main", 1, 0, "ModelDownloadController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::UpdateService>(
+      "Alcedo.Main", 1, 0, "UpdateService", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<SemanticGenerationController>(
       "Alcedo.Main", 1, 0, "SemanticGenerationController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<alcedo::AiProviderProfileController>(

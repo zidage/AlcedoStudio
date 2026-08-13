@@ -1,7 +1,5 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Controls.Material
-import QtQuick.Dialogs
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Effects
 
@@ -21,17 +19,17 @@ Dialog {
 
     property Item blurSource: null
     property var languageOptions: []
-    property color primaryAccent: "#457B9D"
-    property color secondaryAccent: "#9FC7D8"
-    property color textColor: "#F5F1EA"
-    property color mutedTextColor: "#B6B0A7"
-    property color panelColor: "#1C1C1D"
-    property color canvasColor: "#111214"
-    property color overlayColor: Qt.rgba(11 / 255, 12 / 255, 14 / 255, 0.60)
-    property color hoverColor: Qt.rgba(1, 1, 1, 0.07)
-    property color dividerColor: Qt.rgba(1, 1, 1, 0.08)
-    property color dangerColor: "#D96C75"
-    property color panelBorderColor: Qt.rgba(1, 1, 1, 0.08)
+    property color primaryAccent: appTheme.accentColor
+    property color secondaryAccent: appTheme.accentSecondaryColor
+    property color textColor: appTheme.textColor
+    property color mutedTextColor: appTheme.textMutedColor
+    property color panelColor: appTheme.cardSurfaceColor
+    property color canvasColor: appTheme.bgBaseColor
+    property color overlayColor: appTheme.overlayColor
+    property color hoverColor: appTheme.hoverColor
+    property color dividerColor: appTheme.dividerColor
+    property color dangerColor: appTheme.dangerColor
+    property color panelBorderColor: appTheme.cardBorderColor
     property string headlineFontFamily: appTheme.headlineFontFamily
     readonly property string dataFontFamily: appTheme.dataFontFamily
     property real cornerRadius: 0
@@ -39,13 +37,8 @@ Dialog {
     property int currentCategory: 0
     property int pendingThemeIndex: appTheme.currentThemeIndex
     property string pendingLanguageCode: languageManager.currentLanguageCode
-    property bool pendingCacheEnabled: appModules.library.thumbnailDiskCacheEnabled
-    property string pendingCacheRoot: appModules.library.thumbnailDiskCacheRoot
-    property int pendingCacheMaxEntries: appModules.library.thumbnailDiskCacheMaxEntries
-    property int pendingCacheJpegQuality: appModules.library.thumbnailDiskCacheJpegQuality
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
-    property string cacheStatsSnapshot: ""
     property int requestedCategory: 0
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
     readonly property bool acceleratorRestartHintVisible:
@@ -64,7 +57,7 @@ Dialog {
 
     onCurrentCategoryChanged: {
         if (currentCategory === 2) {
-            refreshCacheStats()
+            cachePanel.refreshStats()
         } else if (currentCategory === 3) {
             appModules.semanticGeneration.RefreshAlbumSummary()
         } else if (currentCategory === 4) {
@@ -75,22 +68,12 @@ Dialog {
         }
     }
 
-    FolderDialog {
-        id: cacheFolderDialog
-        title: qsTr("Select Thumbnail Cache Folder")
-        onAccepted: dialog.pendingCacheRoot = selectedFolder.toString()
-    }
-
     function resetPendingValues() {
         pendingThemeIndex = appTheme.currentThemeIndex
         pendingLanguageCode = languageManager.currentLanguageCode
-        pendingCacheEnabled = appModules.library.thumbnailDiskCacheEnabled
-        pendingCacheRoot = appModules.library.thumbnailDiskCacheRoot
-        pendingCacheMaxEntries = appModules.library.thumbnailDiskCacheMaxEntries
-        pendingCacheJpegQuality = appModules.library.thumbnailDiskCacheJpegQuality
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
-        refreshCacheStats()
+        cachePanel.reloadPending()
     }
 
     function acceleratorIndexForValue(value) {
@@ -101,10 +84,6 @@ Dialog {
             }
         }
         return options.length > 0 ? 0 : -1
-    }
-
-    function refreshCacheStats() {
-        cacheStatsSnapshot = appModules.library.thumbnailDiskCacheStats
     }
 
     function languageIndexForCode(code) {
@@ -126,28 +105,6 @@ Dialog {
         return 0
     }
 
-    function statLineValue(label) {
-        const lines = cacheStatsSnapshot.split("\n")
-        for (let i = 0; i < lines.length; ++i) {
-            const line = lines[i]
-            if (line.indexOf(label + ": ") === 0) {
-                return line.substring(label.length + 2)
-            }
-        }
-        return qsTr("Unavailable")
-    }
-
-    function hitsMissesValue() {
-        const value = statLineValue("Hits")
-        const separator = " / Misses: "
-        const separatorIndex = value.indexOf(separator)
-        if (separatorIndex < 0) {
-            return value
-        }
-        return qsTr("%1 / %2").arg(value.substring(0, separatorIndex))
-                              .arg(value.substring(separatorIndex + separator.length))
-    }
-
     function currentPageTitle() {
         if (currentCategory === 0) {
             return qsTr("Language")
@@ -166,6 +123,9 @@ Dialog {
         }
         if (currentCategory === 5) {
             return qsTr("Acceleration")
+        }
+        if (currentCategory === 6) {
+            return qsTr("Updates")
         }
         return qsTr("About")
     }
@@ -187,18 +147,7 @@ Dialog {
         if (languageManager.currentLanguageCode !== pendingLanguageCode) {
             languageManager.setLanguage(pendingLanguageCode)
         }
-        if (appModules.library.thumbnailDiskCacheEnabled !== pendingCacheEnabled) {
-            appModules.library.SetThumbnailDiskCacheEnabled(pendingCacheEnabled)
-        }
-        if (appModules.library.thumbnailDiskCacheRoot !== pendingCacheRoot) {
-            appModules.library.SetThumbnailDiskCacheRoot(pendingCacheRoot)
-        }
-        if (appModules.library.thumbnailDiskCacheMaxEntries !== pendingCacheMaxEntries) {
-            appModules.library.SetThumbnailDiskCacheMaxEntries(pendingCacheMaxEntries)
-        }
-        if (appModules.library.thumbnailDiskCacheJpegQuality !== pendingCacheJpegQuality) {
-            appModules.library.SetThumbnailDiskCacheJpegQuality(pendingCacheJpegQuality)
-        }
+        cachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
             appModules.semanticGeneration.SetImportPreference(pendingSemanticImportPreference)
         }
@@ -208,9 +157,59 @@ Dialog {
                 return
             }
         }
-        refreshCacheStats()
         messageRequested(qsTr("Settings applied"))
         close()
+    }
+
+    function mapLabeledEntries(source, valueKey) {
+        const src = source || []
+        const mapped = []
+        for (let i = 0; i < src.length; ++i) {
+            mapped.push({
+                value: src[i][valueKey],
+                label: src[i].label
+            })
+        }
+        return mapped
+    }
+
+    QtObject {
+        id: languageComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: dialog.mapLabeledEntries(dialog.languageOptions, "code")
+        property int currentIndex: dialog.languageIndexForCode(dialog.pendingLanguageCode)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingLanguageCode = item.value
+        }
+    }
+
+    QtObject {
+        id: themeComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: dialog.mapLabeledEntries(appTheme.availableThemes, "index")
+        property int currentIndex: dialog.themeModelIndexForTheme(dialog.pendingThemeIndex)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingThemeIndex = item.value
+        }
+    }
+
+    QtObject {
+        id: acceleratorComboModel
+        property string label: ""
+        property bool enabled: appModules.project.acceleratorOptions.length > 0
+        readonly property var entries: appModules.project.acceleratorOptions || []
+        property int currentIndex: dialog.acceleratorIndexForValue(dialog.pendingAcceleratorBackend)
+        function selectIndex(index) {
+            const options = entries
+            if (index >= 0 && index < options.length)
+                dialog.pendingAcceleratorBackend = String(options[index].value || "")
+        }
     }
 
     Overlay.modal: Item {
@@ -313,6 +312,7 @@ Dialog {
                                     { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
                                     { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
+                                    { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                     { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                 ]
 
@@ -350,6 +350,20 @@ Dialog {
                                             font.pixelSize: 15
                                             font.weight: dialog.currentCategory === index ? 700 : 500
                                             elide: Text.ElideRight
+                                        }
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 8
+                                            Layout.preferredHeight: 8
+                                            Layout.alignment: Qt.AlignVCenter
+                                            radius: 4
+                                            visible: index === 6
+                                                     && appModules.updates
+                                                     && (appModules.updates.updateDeferred
+                                                         || appModules.updates.updateAvailable)
+                                            color: appTheme.backgroundTaskFinishedColor
+                                            Accessible.name: qsTr("Update available")
+                                            Accessible.role: Accessible.Indicator
                                         }
                                     }
 
@@ -464,18 +478,13 @@ Dialog {
                                             font.weight: 600
                                         }
 
-                                        ComboBox {
+                                        AdjustmentCombo {
+                                            objectName: "settingsLanguageControl"
+                                            controlObjectName: "settingsLanguageCombo"
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 44
-                                            model: dialog.languageOptions
-                                            textRole: "label"
-                                            currentIndex: dialog.languageIndexForCode(dialog.pendingLanguageCode)
-                                            onActivated: function(index) {
-                                                const item = model[index]
-                                                if (item) {
-                                                    dialog.pendingLanguageCode = item.code
-                                                }
-                                            }
+                                            controlHeight: 36
+                                            showResetButton: false
+                                            model: languageComboModel
                                         }
                                     }
                                 }
@@ -513,18 +522,13 @@ Dialog {
                                             font.weight: 600
                                         }
 
-                                        ComboBox {
+                                        AdjustmentCombo {
+                                            objectName: "settingsThemeControl"
+                                            controlObjectName: "settingsThemeCombo"
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 44
-                                            model: appTheme.availableThemes
-                                            textRole: "label"
-                                            currentIndex: dialog.themeModelIndexForTheme(dialog.pendingThemeIndex)
-                                            onActivated: function(index) {
-                                                const item = model[index]
-                                                if (item) {
-                                                    dialog.pendingThemeIndex = item.index
-                                                }
-                                            }
+                                            controlHeight: 36
+                                            showResetButton: false
+                                            model: themeComboModel
                                         }
                                     }
                                 }
@@ -536,269 +540,19 @@ Dialog {
                             contentWidth: availableWidth
                             clip: true
 
-                            ColumnLayout {
+                            CacheSettingsPanel {
+                                id: cachePanel
                                 width: cacheScroll.availableWidth
-                                spacing: 20
-
-                                SettingsSection {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: 26
-                                    Layout.leftMargin: 34
-                                    Layout.rightMargin: 34
-                                    title: qsTr("Current cache")
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    dividerColor: dialog.dividerColor
-
-                                    GridLayout {
-                                        Layout.fillWidth: true
-                                        columns: 3
-                                        columnSpacing: 12
-                                        rowSpacing: 12
-
-                                        CacheMetric {
-                                            Layout.fillWidth: true
-                                            label: qsTr("Entries")
-                                            value: dialog.statLineValue("Entries")
-                                            textColor: dialog.textColor
-                                            mutedTextColor: dialog.mutedTextColor
-                                            panelColor: dialog.canvasColor
-                                        }
-
-                                        CacheMetric {
-                                            Layout.fillWidth: true
-                                            label: qsTr("Size")
-                                            value: dialog.statLineValue("Size")
-                                            textColor: dialog.textColor
-                                            mutedTextColor: dialog.mutedTextColor
-                                            panelColor: dialog.canvasColor
-                                        }
-
-                                        CacheMetric {
-                                            Layout.fillWidth: true
-                                            label: qsTr("Hits / misses")
-                                            value: dialog.hitsMissesValue()
-                                            textColor: dialog.textColor
-                                            mutedTextColor: dialog.mutedTextColor
-                                            panelColor: dialog.canvasColor
-                                        }
-                                    }
-
-                                }
-
-                                SettingsSection {
-                                    Layout.fillWidth: true
-                                    Layout.leftMargin: 34
-                                    Layout.rightMargin: 34
-                                    title: qsTr("Storage")
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    dividerColor: dialog.dividerColor
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 16
-
-                                        ColumnLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 8
-
-                                            Label {
-                                                text: qsTr("Cache directory")
-                                                color: dialog.textColor
-                                                font.pixelSize: 15
-                                                font.weight: 600
-                                            }
-
-                                            Rectangle {
-                                                Layout.fillWidth: true
-                                                Layout.preferredHeight: 50
-                                                radius: 10
-                                                color: Qt.rgba(1, 1, 1, 0.10)
-                                                border.width: 1
-                                                border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.12)
-
-                                                Label {
-                                                    anchors.fill: parent
-                                                    anchors.leftMargin: 14
-                                                    anchors.rightMargin: 14
-                                                    text: dialog.pendingCacheRoot.length > 0
-                                                          ? dialog.pendingCacheRoot
-                                                          : dialog.statLineValue("Root")
-                                                    elide: Text.ElideMiddle
-                                                    verticalAlignment: Text.AlignVCenter
-                                                    color: dialog.textColor
-                                                    font.family: dialog.dataFontFamily
-                                                    font.pixelSize: 14
-                                                }
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            id: browseButton
-                                            Layout.preferredWidth: 50
-                                            Layout.preferredHeight: 50
-                                            Layout.alignment: Qt.AlignBottom
-                                            radius: 10
-                                            color: browseMouse.pressed
-                                                   ? Qt.rgba(1, 1, 1, 0.06)
-                                                   : (browseMouse.containsMouse
-                                                      ? Qt.rgba(1, 1, 1, 0.12)
-                                                      : Qt.rgba(1, 1, 1, 0.07))
-                                            border.width: 1
-                                            border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.14)
-
-                                            Image {
-                                                anchors.centerIn: parent
-                                                width: 23
-                                                height: 23
-                                                source: "qrc:/panel_icons/folder-open.svg"
-                                                sourceSize.width: 23
-                                                sourceSize.height: 23
-                                                asynchronous: true
-                                            }
-
-                                            MouseArea {
-                                                id: browseMouse
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: cacheFolderDialog.open()
-                                            }
-                                        }
-                                    }
-                                }
-
-                                SettingsSection {
-                                    Layout.fillWidth: true
-                                    Layout.leftMargin: 34
-                                    Layout.rightMargin: 34
-                                    title: qsTr("Limits")
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    dividerColor: dialog.dividerColor
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 16
-
-                                        Label {
-                                            Layout.preferredWidth: 180
-                                            text: qsTr("Disk cache")
-                                            color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
-                                        }
-
-                                        Switch {
-                                            checked: dialog.pendingCacheEnabled
-                                            text: checked ? qsTr("Enabled") : qsTr("Disabled")
-                                            Material.foreground: dialog.textColor
-                                            onToggled: dialog.pendingCacheEnabled = checked
-                                        }
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 16
-
-                                        Label {
-                                            Layout.preferredWidth: 180
-                                            text: qsTr("Max entries")
-                                            color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
-                                        }
-
-                                        SpinBox {
-                                            Layout.preferredWidth: 170
-                                            from: 1
-                                            to: 100000
-                                            stepSize: 500
-                                            editable: true
-                                            value: dialog.pendingCacheMaxEntries
-                                            onValueModified: dialog.pendingCacheMaxEntries = value
-                                        }
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 16
-
-                                        Label {
-                                            Layout.preferredWidth: 180
-                                            text: qsTr("JPEG quality")
-                                            color: dialog.textColor
-                                            font.pixelSize: 15
-                                            font.weight: 600
-                                        }
-
-                                        Slider {
-                                            Layout.fillWidth: true
-                                            from: 1
-                                            to: 100
-                                            stepSize: 1
-                                            value: dialog.pendingCacheJpegQuality
-                                            onMoved: dialog.pendingCacheJpegQuality = Math.round(value)
-                                        }
-
-                                        Label {
-                                            Layout.preferredWidth: 36
-                                            text: dialog.pendingCacheJpegQuality
-                                            color: dialog.textColor
-                                            font.family: dialog.dataFontFamily
-                                            font.pixelSize: 15
-                                            horizontalAlignment: Text.AlignRight
-                                        }
-                                    }
-                                }
-
-                                SettingsSection {
-                                    Layout.fillWidth: true
-                                    Layout.leftMargin: 34
-                                    Layout.rightMargin: 34
-                                    Layout.bottomMargin: 26
-                                    title: qsTr("Maintenance")
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    dividerColor: dialog.dividerColor
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 12
-
-                                        Button {
-                                            id: clearProjectButton
-                                            Layout.preferredHeight: 42
-                                            text: qsTr("Clear current project")
-                                            enabled: appModules.project.serviceReady
-                                            Material.foreground: dialog.textColor
-                                            onClicked: {
-                                                appModules.library.ClearProjectThumbnailDiskCache()
-                                                dialog.refreshCacheStats()
-                                                dialog.messageRequested(qsTr("Current project cache cleared"))
-                                            }
-                                        }
-
-                                        Button {
-                                            id: clearAllButton
-                                            Layout.preferredHeight: 42
-                                            text: qsTr("Clear all cache")
-                                            Material.foreground: dialog.dangerColor
-                                            onClicked: {
-                                                appModules.library.ClearAllThumbnailDiskCache()
-                                                dialog.refreshCacheStats()
-                                                dialog.messageRequested(qsTr("All thumbnail cache cleared"))
-                                            }
-                                        }
-
-                                        Button {
-                                            Layout.preferredHeight: 42
-                                            text: qsTr("Refresh")
-                                            Material.foreground: dialog.textColor
-                                            onClicked: dialog.refreshCacheStats()
-                                        }
-                                    }
+                                libraryModule: appModules.library
+                                projectReady: appModules.project.serviceReady
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                canvasColor: dialog.canvasColor
+                                dividerColor: dialog.dividerColor
+                                dangerColor: dialog.dangerColor
+                                dataFontFamily: dialog.dataFontFamily
+                                onMessageRequested: function(message) {
+                                    dialog.messageRequested(message)
                                 }
                             }
                         }
@@ -901,23 +655,14 @@ Dialog {
                                                 font.weight: 600
                                             }
 
-                                            ComboBox {
+                                            AdjustmentCombo {
                                                 id: acceleratorCombo
+                                                objectName: "settingsAcceleratorControl"
+                                                controlObjectName: "settingsAcceleratorCombo"
                                                 Layout.fillWidth: true
-                                                Layout.preferredHeight: 44
-                                                model: appModules.project.acceleratorOptions
-                                                textRole: "label"
-                                                valueRole: "value"
-                                                enabled: appModules.project.acceleratorOptions.length > 0
-                                                currentIndex: dialog.acceleratorIndexForValue(
-                                                                  dialog.pendingAcceleratorBackend)
-                                                onActivated: function(index) {
-                                                    const options = appModules.project.acceleratorOptions
-                                                    if (index >= 0 && index < options.length) {
-                                                        dialog.pendingAcceleratorBackend =
-                                                            String(options[index].value || "")
-                                                    }
-                                                }
+                                                controlHeight: 36
+                                                showResetButton: false
+                                                model: acceleratorComboModel
                                             }
                                         }
 
@@ -950,12 +695,28 @@ Dialog {
                         }
 
                         ScrollView {
+                            id: updatesScroll
+                            contentWidth: availableWidth
+                            clip: true
+
+                            UpdatesSettingsPanel {
+                                Layout.fillWidth: true
+                                updateService: appModules.updates
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                dividerColor: dialog.dividerColor
+                                dataFontFamily: dialog.dataFontFamily
+                            }
+                        }
+
+                        ScrollView {
                             id: aboutScroll
                             contentWidth: availableWidth
                             clip: true
 
                             AboutPage {
                                 Layout.fillWidth: true
+                                updateService: appModules.updates
                                 primaryAccent: dialog.primaryAccent
                                 secondaryAccent: dialog.secondaryAccent
                                 textColor: dialog.textColor
@@ -994,7 +755,7 @@ Dialog {
                             enabled: dialog.canCompleteSettings
                             font.pixelSize: 15
                             font.weight: 800
-                            Material.foreground: dialog.textColor
+                            palette.buttonText: appTheme.editorListSelectedInkColor
                             onClicked: dialog.applySettings()
                             background: Rectangle {
                                 radius: 10
@@ -1156,40 +917,4 @@ Dialog {
         }
     }
 
-    component CacheMetric: Rectangle {
-        property string label: ""
-        property string value: ""
-        property color textColor: "white"
-        property color mutedTextColor: "#999999"
-        property color panelColor: "#111214"
-
-        implicitHeight: 84
-        radius: 8
-        color: Qt.rgba(panelColor.r, panelColor.g, panelColor.b, 0.62)
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 14
-            spacing: 6
-
-            Label {
-                Layout.fillWidth: true
-                text: label
-                color: mutedTextColor
-                font.pixelSize: 12
-                font.weight: 700
-                elide: Text.ElideRight
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: value
-                color: textColor
-                font.family: dialog.dataFontFamily
-                font.pixelSize: 18
-                font.weight: 700
-                elide: Text.ElideRight
-            }
-        }
-    }
 }

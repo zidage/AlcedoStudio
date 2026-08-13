@@ -1,0 +1,10 @@
+Alcedo Studio 0.2.9 (Build 2015)
+
+Updates
+-------
+- Release notes now appear directly on the Updates page and follow the selected
+  application language, with English and Simplified Chinese content.
+- Update manifests now carry notes for the exact build being offered, so the
+  displayed information no longer depends on a separately maintained page.
+- Windows releases now use installer packages only. Portable ZIP packages are
+  no longer generated.

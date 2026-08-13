@@ -164,6 +164,12 @@ Windows:
 powershell -ExecutionPolicy Bypass -File scripts/package_windows.ps1 -BuildDir build/release -Preset win_release
 ```
 
+The Windows and macOS package scripts allocate the update build number
+automatically. They record a number only after successful packaging, so a
+failed run retries the same number. Use `-BuildNumber N` or `--build-number N`
+only to reproduce an exact build. VS Code provides separate stable and beta
+package tasks for each platform.
+
 Fallback manual packaging:
 ```powershell
 cmd /c scripts\msvc_env.cmd --install build/release --prefix build/install

@@ -314,6 +314,7 @@ Item {
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
+        updateService: appModules.updates
         headlineFontFamily: host.headlineFontFamily
         primaryAccent: host.colButtonPrimary
         secondaryAccent: host.colAccentSecondary
@@ -391,4 +392,5 @@ Item {
     function openBackgroundTasksDialog() {
         backgroundTasksDialogObj.open()
     }
+
 }

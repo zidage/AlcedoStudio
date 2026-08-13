@@ -1,9 +1,9 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Shared themed progress track used by BackgroundTasksDialog rows and the
-// Export inspector footer. Deterministic fill when progressValue is in [0, 100];
-// indeterminate sweeps a short bar when active and reduceMotion is off.
+// Shared themed progress indicator. Download callers can opt into the metric
+// row; existing background/export callers retain the compact track-only form.
 Item {
     id: root
     objectName: "themedProgressBar"
@@ -11,14 +11,22 @@ Item {
     property real progressValue: 0
     property bool indeterminate: false
     property bool active: true
+    property bool showDetails: false
+    property string leadingText: ""
+    property string speedText: ""
+    property string etaText: ""
     property color fillColor: appTheme.backgroundTaskWorkingColor
     property color trackColor: Qt.rgba(appTheme.textMutedColor.r,
                                        appTheme.textMutedColor.g,
                                        appTheme.textMutedColor.b, 0.18)
 
+    readonly property real clampedValue: Math.max(0, Math.min(100, progressValue))
+    readonly property real trackHeight: appTheme.spaceXs + 2
+    readonly property string percentText: qsTr("%1%").arg(Math.round(clampedValue))
+
     Layout.fillWidth: true
-    Layout.preferredHeight: appTheme.spaceXs + 2
-    implicitHeight: appTheme.spaceXs + 2
+    Layout.preferredHeight: implicitHeight
+    implicitHeight: trackHeight + (showDetails ? appTheme.lineHeightCaption + appTheme.spaceXs : 0)
     implicitWidth: 120
     Accessible.role: Accessible.ProgressBar
     Accessible.name: qsTr("Progress")
@@ -26,31 +34,79 @@ Item {
                             ? qsTr("Indeterminate progress")
                             : qsTr("%1 percent").arg(Math.round(progressValue))
 
-    readonly property real clampedValue: Math.max(0, Math.min(100, progressValue))
+    Item {
+        id: track
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: root.trackHeight
 
-    Rectangle {
-        anchors.fill: parent
-        radius: height / 2
-        color: root.trackColor
-        Accessible.ignored: true
+        Rectangle {
+            anchors.fill: parent
+            radius: height / 2
+            color: root.trackColor
+            Accessible.ignored: true
+        }
+
+        Rectangle {
+            id: progressFill
+            height: parent.height
+            radius: height / 2
+            color: root.fillColor
+            width: root.indeterminate
+                   ? parent.width * 0.28
+                   : parent.width * (root.clampedValue / 100.0)
+            x: root.indeterminate ? indeterminateAnim.phase * (parent.width - width) : 0
+
+            Behavior on width {
+                enabled: !root.indeterminate && !appTheme.reduceMotion
+                NumberAnimation {
+                    duration: appTheme.motionFadeMs
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
     }
 
-    Rectangle {
-        id: progressFill
-        height: parent.height
-        radius: height / 2
-        color: root.fillColor
-        width: root.indeterminate
-               ? parent.width * 0.28
-               : parent.width * (root.clampedValue / 100.0)
-        x: root.indeterminate ? indeterminateAnim.phase * (parent.width - width) : 0
+    RowLayout {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: root.showDetails
+        spacing: appTheme.spaceSm
 
-        Behavior on width {
-            enabled: !root.indeterminate && !appTheme.reduceMotion
-            NumberAnimation {
-                duration: appTheme.motionFadeMs
-                easing.type: Easing.OutCubic
-            }
+        Label {
+            text: root.percentText
+            color: appTheme.textColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            font.weight: appTheme.fontWeightStrong
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: root.leadingText
+            color: appTheme.textMutedColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            elide: Text.ElideRight
+        }
+
+        Label {
+            visible: text.length > 0
+            text: root.speedText
+            color: appTheme.textMutedColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            font.weight: appTheme.fontWeightStrong
+        }
+
+        Label {
+            visible: text.length > 0
+            text: root.etaText
+            color: appTheme.textMutedColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
     }
 

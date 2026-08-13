@@ -29,7 +29,8 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
         "ALCEDO_BUILD_TESTS": "OFF",
-        "ALCEDO_ENABLE_WEBGPU": "OFF"
+        "ALCEDO_ENABLE_WEBGPU": "OFF",
+        "ALCEDO_REQUIRE_UPDATE_KEY": "ON"
       }
     },
     {
@@ -133,6 +134,7 @@
         "ALCEDO_ENABLE_CUDA": "OFF",
         "ALCEDO_BUILD_TESTS": "OFF",
         "ALCEDO_MACOS_BUNDLE": "ON",
+        "ALCEDO_REQUIRE_UPDATE_KEY": "ON",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         "ALCEDO_QT_PREFIX": "/Users/zidage/Qt/6.9.3/macos",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",

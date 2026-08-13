@@ -12,9 +12,11 @@
 class QQmlEngine;
 
 #include "app/ai_provider_profile.hpp"
+#include "app/download_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/image_analysis_service.hpp"
 #include "app/model_download_service.hpp"
+#include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
@@ -53,6 +55,7 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(BackgroundTaskController* backgroundTasks READ background_tasks CONSTANT)
   Q_PROPERTY(InteractionPolicyController* interactionPolicy READ interaction_policy CONSTANT)
   Q_PROPERTY(ModelDownloadController* modelDownload READ model_download CONSTANT)
+  Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
@@ -93,6 +96,7 @@ class ApplicationModuleHost final : public QObject {
     return interaction_policy_.get();
   }
   [[nodiscard]] auto model_download() -> ModelDownloadController* { return model_download_.get(); }
+  [[nodiscard]] auto updates() -> alcedo::UpdateService* { return updates_.get(); }
   [[nodiscard]] auto semantic_generation() -> SemanticGenerationController* {
     return semantic_generation_.get();
   }
@@ -142,7 +146,9 @@ class ApplicationModuleHost final : public QObject {
   // Owned in construction dependency order. Destroyed in reverse.
   std::unique_ptr<BackgroundTaskController>            background_tasks_;
   std::unique_ptr<InteractionPolicyController>         interaction_policy_;
+  std::unique_ptr<alcedo::DownloadService>             download_service_;
   std::unique_ptr<alcedo::ModelDownloadService>        model_download_service_;
+  std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;
   std::unique_ptr<FolderController>                    folders_;

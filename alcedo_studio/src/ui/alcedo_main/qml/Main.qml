@@ -173,8 +173,18 @@ ApplicationWindow {
     // quitting during Saving aborts the checkpoint.
     property bool allowApplicationClose: false
     property bool waitingEditorCloseSave: false
+    property bool updateInstallPending: false
     property string editorCloseSessionState: appModules.editorSession
                                              ? appModules.editorSession.sessionState : ""
+
+    Connections {
+        target: appModules.updates
+
+        function onApplicationCloseRequested() {
+            root.updateInstallPending = true
+            root.close()
+        }
+    }
 
     function editorCloseNeedsConfirm() {
         if (root.automationModeEnabled || root.allowApplicationClose) {
@@ -193,6 +203,10 @@ ApplicationWindow {
 
     function cancelEditorCloseConfirm() {
         root.waitingEditorCloseSave = false
+        if (root.updateInstallPending) {
+            root.updateInstallPending = false
+            appModules.updates.CancelInstall()
+        }
         if (appDialogs.editorCloseConfirmDialog) {
             appDialogs.editorCloseConfirmDialog.busy = false
         }
@@ -200,6 +214,13 @@ ApplicationWindow {
 
     function finishApplicationClose() {
         root.waitingEditorCloseSave = false
+        if (root.updateInstallPending) {
+            root.updateInstallPending = false
+            if (!appModules.updates.CommitInstall()) {
+                root.abortEditorCloseSave(appModules.updates.errorText)
+                return
+            }
+        }
         root.allowApplicationClose = true
         if (appDialogs.editorCloseConfirmDialog
                 && appDialogs.editorCloseConfirmDialog.opened) {
@@ -210,6 +231,10 @@ ApplicationWindow {
 
     function abortEditorCloseSave(messageText) {
         root.waitingEditorCloseSave = false
+        if (root.updateInstallPending) {
+            root.updateInstallPending = false
+            appModules.updates.CancelInstall()
+        }
         if (appDialogs.editorCloseConfirmDialog) {
             appDialogs.editorCloseConfirmDialog.busy = false
             if (appDialogs.editorCloseConfirmDialog.opened) {
@@ -288,6 +313,13 @@ ApplicationWindow {
 
     onClosing: function(close) {
         if (!root.editorCloseNeedsConfirm()) {
+            if (root.updateInstallPending) {
+                root.updateInstallPending = false
+                if (!appModules.updates.CommitInstall()) {
+                    close.accepted = false
+                    root.showSnackbar(appModules.updates.errorText)
+                }
+            }
             return
         }
         close.accepted = false
@@ -353,6 +385,10 @@ ApplicationWindow {
 
     function openBackgroundTasksDialog() {
         appDialogs.openBackgroundTasksDialog()
+    }
+
+    function openUpdateSettings() {
+        appDialogs.openSettingsDialog(6)
     }
 
 

@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+77"/>
+        <location filename="../qml/AboutPage.qml" line="+79"/>
         <source>New to Alcedo Studio?</source>
         <translation type="unfinished"></translation>
     </message>
@@ -14,12 +14,12 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Open documentation</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+34"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
@@ -39,7 +39,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Unavailable</source>
         <translation type="unfinished">Unavailable</translation>
     </message>
@@ -1266,7 +1266,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+211"/>
+        <location line="+212"/>
         <source>Select at least one image to analyze.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1432,6 +1432,116 @@ Alcedo will use %1 instead.</translation>
         <location line="+11"/>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation type="unfinished">Imports, exports, model work, and AI jobs will appear here.</translation>
+    </message>
+</context>
+<context>
+    <name>CacheSettingsPanel</name>
+    <message>
+        <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
+        <source>Unavailable</source>
+        <translation>Unavailable</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+97"/>
+        <source>Select Thumbnail Cache Folder</source>
+        <translation>Select Thumbnail Cache Folder</translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Thumbnail cache</source>
+        <translation>Thumbnail cache</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Entries</source>
+        <translation>Entries</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Size</source>
+        <translation>Size</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Hits / misses</source>
+        <translation>Hits / misses</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Storage</source>
+        <translation>Storage</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Cache directory</source>
+        <translation>Cache directory</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>Limits</source>
+        <translation>Limits</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+10"/>
+        <source>Disk cache</source>
+        <translation>Disk cache</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Enabled</source>
+        <translation>Enabled</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Disabled</source>
+        <translation>Disabled</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Max entries</source>
+        <translation>Max entries</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>JPEG quality</source>
+        <translation>JPEG quality</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Maintenance</source>
+        <translation>Maintenance</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear current project</source>
+        <translation>Clear current project</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Current project cache cleared</source>
+        <translation>Current project cache cleared</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Clear all cache</source>
+        <translation>Clear all cache</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>All thumbnail cache cleared</source>
+        <translation>All thumbnail cache cleared</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Refresh</source>
+        <translation>Refresh</translation>
     </message>
 </context>
 <context>
@@ -2913,7 +3023,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+56"/>
         <source>JPEG</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2925,11 +3035,6 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+1"/>
         <source>TIFF</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>WEBP</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3008,7 +3113,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+78"/>
+        <location line="+76"/>
         <source>Exporting</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3028,12 +3133,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+151"/>
+        <location line="+148"/>
         <source>Quality</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
         <source>HDR Quality</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3879,7 +3984,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+200"/>
+        <location line="+225"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>Could not save edits. Resolve the save error, then quit again.</translation>
     </message>
@@ -4134,7 +4239,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+102"/>
         <source>AI content recognition</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4175,12 +4280,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+281"/>
+        <location line="+258"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
     <message>
-        <location line="-281"/>
+        <location line="-258"/>
         <source>Generate</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4201,7 +4306,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+30"/>
         <source>Download directory</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4211,7 +4316,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-352"/>
         <source>HF Mirror</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4231,7 +4336,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Custom</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+374"/>
         <source>https://example.com</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4266,7 +4371,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="-443"/>
         <source>Always</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4281,7 +4386,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+537"/>
         <source>Activating…</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4306,17 +4411,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+84"/>
         <source>Preparing model runtime…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>File %1 / %2</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+9"/>
         <source>↓ %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4324,75 +4424,66 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+80"/>
-        <source>Select Thumbnail Cache Folder</source>
-        <translation>Select Thumbnail Cache Folder</translation>
-    </message>
-    <message>
-        <location line="+57"/>
-        <source>Unavailable</source>
-        <translation>Unavailable</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>%1 / %2</source>
-        <translation>%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+65"/>
+        <location filename="../qml/SettingDialog.qml" line="+160"/>
         <source>Settings applied</source>
         <translation>Settings applied</translation>
     </message>
     <message>
-        <location line="+84"/>
+        <location line="+135"/>
         <source>Setting</source>
         <translation>Setting</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+157"/>
-        <location line="+151"/>
+        <location line="-185"/>
+        <location line="+199"/>
+        <location line="+166"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-305"/>
-        <location line="+155"/>
+        <location line="-362"/>
+        <location line="+197"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
     </message>
     <message>
-        <location line="-152"/>
-        <location line="+153"/>
+        <location line="-194"/>
+        <location line="+195"/>
         <source>Cache</source>
         <translation>Cache</translation>
     </message>
     <message>
-        <location line="-150"/>
-        <location line="+151"/>
+        <location line="-192"/>
+        <location line="+193"/>
         <source>Local Content Recognition</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+149"/>
+        <location line="-190"/>
+        <location line="+191"/>
         <source>Advanced Content Analysis</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-144"/>
-        <location line="+146"/>
+        <location line="-183"/>
+        <location line="+186"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+147"/>
+        <location line="-191"/>
+        <location line="+189"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
     </message>
     <message>
-        <location line="+568"/>
+        <location line="-186"/>
+        <location line="+187"/>
+        <source>Updates</source>
+        <translation>Updates</translation>
+    </message>
+    <message>
+        <location line="+322"/>
         <source>Image processing backend</source>
         <translation>Image processing backend</translation>
     </message>
@@ -4402,12 +4493,12 @@ Original source files on disk will be kept.</source>
         <translation>Backend</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+21"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-753"/>
+        <location line="-538"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4429,12 +4520,17 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+272"/>
+        <location line="+227"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+99"/>
         <source>Application language</source>
         <translation>Application language</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+44"/>
         <source>Workspace appearance</source>
         <translation>Workspace appearance</translation>
     </message>
@@ -4444,97 +4540,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Theme</translation>
     </message>
     <message>
-        <location line="+38"/>
-        <source>Current cache</source>
-        <translation>Current cache</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Entries</source>
-        <translation>Entries</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Size</source>
-        <translation>Size</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Hits / misses</source>
-        <translation>Hits / misses</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Storage</source>
-        <translation>Storage</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Cache directory</source>
-        <translation>Cache directory</translation>
-    </message>
-    <message>
-        <location line="+69"/>
-        <source>Limits</source>
-        <translation>Limits</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Disk cache</source>
-        <translation>Disk cache</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Enabled</source>
-        <translation>Enabled</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Disabled</source>
-        <translation>Disabled</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Max entries</source>
-        <translation>Max entries</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>JPEG quality</source>
-        <translation>JPEG quality</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Maintenance</source>
-        <translation>Maintenance</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Clear current project</source>
-        <translation>Clear current project</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Current project cache cleared</source>
-        <translation>Current project cache cleared</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Clear all cache</source>
-        <translation>Clear all cache</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>All thumbnail cache cleared</source>
-        <translation>All thumbnail cache cleared</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Refresh</source>
-        <translation>Refresh</translation>
-    </message>
-    <message>
-        <location line="+196"/>
+        <location line="+235"/>
         <source>Done</source>
         <translation>Done</translation>
     </message>
@@ -4594,7 +4600,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThemedProgressBar</name>
     <message>
-        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <location filename="../qml/ThemedProgressBar.qml" line="+25"/>
+        <source>%1%</source>
+        <translation type="unfinished">%1%</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Progress</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4685,11 +4696,205 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Settings</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="+12"/>
+        <location line="+7"/>
+        <source>Update available</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>UpdateNotice</name>
+    <message>
+        <location filename="../qml/UpdateNotice.qml" line="+55"/>
+        <source>Updates are unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Checking for updates</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Downloading the update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Ready to install</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Installing the update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The last update step failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>A newer version is available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Not checked yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Alcedo Studio is up to date</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This build was compiled without a signed update feed, so it cannot check or install releases.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Contacting the signed release feed. This usually takes a few seconds.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is downloading now. You can cancel and try again later.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is verified. Install will close Alcedo Studio, replace this copy, and reopen.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Alcedo Studio is closing so the installer can replace this copy.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Review the error below, then check again. A later check can resume a partial download.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This development build can list a newer release, but it cannot replace itself. Use a packaged installer to install updates.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download the signed package, then install and restart when the file is ready.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Check the signed release feed to see whether a newer build is available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Updates are disabled in this build.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+5"/>
+        <source>Not checked yet.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <source>Checking for updates…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Checking…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel download</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Download update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Check again</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check for updates</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+4"/>
+        <source>Not checked</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Same as installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>Installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Unavailable</source>
+        <translation type="unfinished">Unavailable</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Latest</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+58"/>
+        <source>What&apos;s new in %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Release notes for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-201"/>
+        <source>Install and restart</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>UpdatesSettingsPanel</name>
+    <message>
+        <location filename="../qml/UpdatesSettingsPanel.qml" line="+29"/>
+        <source>Software updates</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+167"/>
+        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
         <source>Opened recently</source>
         <translation>Opened recently</translation>
     </message>
@@ -4766,7 +4971,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+508"/>
+        <location line="+518"/>
         <source>Create Project</source>
         <translation>Create Project</translation>
     </message>
@@ -4827,9 +5032,154 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::UpdateService</name>
+    <message>
+        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <source>%1 (build %2)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>About %1 h %2 min remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>About %1 min %2 s remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>About %1 s remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Updates are disabled in this build.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>The update download was canceled by the user.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+62"/>
+        <source>The update operation failed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The update server URL is not allowed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>The update server returned HTTP %1.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The update server redirected to an untrusted host.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The update server response is too large.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Checking for updates…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Alcedo Studio is up to date.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Alcedo Studio %1 is available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>The update download directory cannot be created.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Another download is already running. Wait for it to finish and try again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Downloading Alcedo Studio %1…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The update download state is not valid.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The verified update package cannot be saved.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+126"/>
+        <source>Alcedo Studio %1 is ready to install.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-110"/>
+        <source>No verified update package is available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package is missing or has changed.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package failed its final SHA-256 check.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for manual installation.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+23"/>
+        <source>The update installer helper is missing.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-5"/>
+        <source>The Qt runtime for the update installer helper is missing.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>The update installer helper could not start.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-12"/>
+        <source>Alcedo Studio will close and install the update.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1176"/>
+        <location filename="../app_theme.cpp" line="+1171"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>

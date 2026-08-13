@@ -75,8 +75,13 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   interaction_policy_ =
       std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);
   RecordConstruction("InteractionPolicyController", interaction_policy_.get());
-  model_download_service_ = std::make_unique<alcedo::ModelDownloadService>();
+  download_service_ = std::make_unique<alcedo::DownloadService>();
+  RecordConstruction("DownloadService", download_service_.get());
+  model_download_service_ =
+      std::make_unique<alcedo::ModelDownloadService>(*download_service_);
   RecordConstruction("ModelDownloadService", model_download_service_.get());
+  updates_ = std::make_unique<alcedo::UpdateService>(*download_service_, this);
+  RecordConstruction("UpdateService", updates_.get());
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
@@ -500,7 +505,9 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
   destroy(project_, "ProjectModule");
+  destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");
+  destroy(download_service_, "DownloadService");
   destroy(interaction_policy_, "InteractionPolicyController");
   destroy(background_tasks_, "BackgroundTaskController");
 }

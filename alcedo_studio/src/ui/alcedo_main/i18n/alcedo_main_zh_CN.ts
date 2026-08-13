@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+77"/>
+        <location filename="../qml/AboutPage.qml" line="+79"/>
         <source>New to Alcedo Studio?</source>
         <translation>初次使用 Alcedo Studio？</translation>
     </message>
@@ -14,12 +14,12 @@
         <translation>文档网站是了解本软件工作原理的最佳去处——循序渐进地学习如何导入、编辑和管理你的照片。它是 Alcedo Studio 的教程，并随每个版本保持更新。</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Open documentation</source>
         <translation>打开文档</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+34"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
@@ -39,7 +39,7 @@
         <translation>版本</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -1266,7 +1266,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+211"/>
+        <location line="+212"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -1432,6 +1432,116 @@ Alcedo 将改用 %1。</translation>
         <location line="+11"/>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation>导入、导出、模型与 AI 任务会显示在这里。</translation>
+    </message>
+</context>
+<context>
+    <name>CacheSettingsPanel</name>
+    <message>
+        <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
+        <source>Unavailable</source>
+        <translation>不可用</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+97"/>
+        <source>Select Thumbnail Cache Folder</source>
+        <translation>选择缩略图缓存文件夹</translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Thumbnail cache</source>
+        <translation>缩略图缓存</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Entries</source>
+        <translation>条目数</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Size</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Hits / misses</source>
+        <translation>命中 / 未命中</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Storage</source>
+        <translation>存储</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Cache directory</source>
+        <translation>缓存目录</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>Limits</source>
+        <translation>限制</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+10"/>
+        <source>Disk cache</source>
+        <translation>磁盘缓存</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Enabled</source>
+        <translation>已启用</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Disabled</source>
+        <translation>已禁用</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Max entries</source>
+        <translation>最大条目数</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>JPEG quality</source>
+        <translation>JPEG 质量</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Maintenance</source>
+        <translation>维护</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear current project</source>
+        <translation>清除当前项目缓存</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Current project cache cleared</source>
+        <translation>当前项目缓存已清除</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Clear all cache</source>
+        <translation>清除全部缓存</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>All thumbnail cache cleared</source>
+        <translation>全部缩略图缓存已清除</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Refresh</source>
+        <translation>刷新</translation>
     </message>
 </context>
 <context>
@@ -2914,7 +3024,7 @@ Original source files on disk will be kept.</source>
         <translation>已处理</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+56"/>
         <source>JPEG</source>
         <translation>JPEG</translation>
     </message>
@@ -2927,11 +3037,6 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>TIFF</source>
         <translation>TIFF</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>WEBP</source>
-        <translation>WEBP</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3009,7 +3114,7 @@ Original source files on disk will be kept.</source>
         <translation>…（另有 %1 项）</translation>
     </message>
     <message>
-        <location line="+78"/>
+        <location line="+76"/>
         <source>Exporting</source>
         <translation>正在导出</translation>
     </message>
@@ -3029,12 +3134,12 @@ Original source files on disk will be kept.</source>
         <translation>已排队</translation>
     </message>
     <message>
-        <location line="+151"/>
+        <location line="+148"/>
         <source>Quality</source>
         <translation>质量</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
         <source>HDR Quality</source>
         <translation>HDR 质量</translation>
     </message>
@@ -3880,7 +3985,7 @@ Original source files on disk will be kept.</source>
         <translation>Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+200"/>
+        <location line="+225"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
@@ -4135,7 +4240,7 @@ Original source files on disk will be kept.</source>
         <translation>选择模型下载文件夹</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+102"/>
         <source>AI content recognition</source>
         <translation>AI 内容识别</translation>
     </message>
@@ -4176,12 +4281,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+281"/>
+        <location line="+258"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="-281"/>
+        <location line="-258"/>
         <source>Generate</source>
         <translation>生成</translation>
     </message>
@@ -4202,7 +4307,7 @@ Original source files on disk will be kept.</source>
         <translation>模型</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+30"/>
         <source>Download directory</source>
         <translation>下载目录</translation>
     </message>
@@ -4212,7 +4317,7 @@ Original source files on disk will be kept.</source>
         <translation>来源</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-352"/>
         <source>HF Mirror</source>
         <translation>HF 镜像</translation>
     </message>
@@ -4232,7 +4337,7 @@ Original source files on disk will be kept.</source>
         <translation>自定义</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+374"/>
         <source>https://example.com</source>
         <translation>https://example.com</translation>
     </message>
@@ -4267,7 +4372,7 @@ Original source files on disk will be kept.</source>
         <translation>是否生成标签</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="-443"/>
         <source>Always</source>
         <translation>总是生成</translation>
     </message>
@@ -4282,7 +4387,7 @@ Original source files on disk will be kept.</source>
         <translation>总是跳过</translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+537"/>
         <source>Activating…</source>
         <translation>激活中…</translation>
     </message>
@@ -4307,17 +4412,12 @@ Original source files on disk will be kept.</source>
         <translation>未下载</translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+84"/>
         <source>Preparing model runtime…</source>
         <translation>正在准备模型运行时…</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>File %1 / %2</source>
-        <translation>文件 %1 / %2</translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+9"/>
         <source>↓ %1</source>
         <translation>↓ %1</translation>
     </message>
@@ -4325,51 +4425,36 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+80"/>
-        <source>Select Thumbnail Cache Folder</source>
-        <translation>选择缩略图缓存文件夹</translation>
-    </message>
-    <message>
-        <location line="+57"/>
-        <source>Unavailable</source>
-        <translation>不可用</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>%1 / %2</source>
-        <translation>%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+65"/>
+        <location filename="../qml/SettingDialog.qml" line="+160"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
     <message>
-        <location line="+84"/>
+        <location line="+135"/>
         <source>Setting</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+157"/>
-        <location line="+151"/>
+        <location line="-185"/>
+        <location line="+199"/>
+        <location line="+166"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-305"/>
-        <location line="+155"/>
+        <location line="-362"/>
+        <location line="+197"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-152"/>
-        <location line="+153"/>
+        <location line="-194"/>
+        <location line="+195"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
     <message>
-        <location line="-137"/>
+        <location line="-176"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4403,12 +4488,17 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+272"/>
+        <location line="+227"/>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <location line="+99"/>
         <source>Application language</source>
         <translation>应用语言</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+44"/>
         <source>Workspace appearance</source>
         <translation>工作区外观</translation>
     </message>
@@ -4418,126 +4508,42 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>主题</translation>
     </message>
     <message>
-        <location line="+38"/>
-        <source>Current cache</source>
-        <translation>当前缓存</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Entries</source>
-        <translation>条目数</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Size</source>
-        <translation>大小</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Hits / misses</source>
-        <translation>命中 / 未命中</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Storage</source>
-        <translation>存储</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Cache directory</source>
-        <translation>缓存目录</translation>
-    </message>
-    <message>
-        <location line="+69"/>
-        <source>Limits</source>
-        <translation>限制</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Disk cache</source>
-        <translation>磁盘缓存</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Enabled</source>
-        <translation>已启用</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Disabled</source>
-        <translation>已禁用</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Max entries</source>
-        <translation>最大条目数</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>JPEG quality</source>
-        <translation>JPEG 质量</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Maintenance</source>
-        <translation>维护</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Clear current project</source>
-        <translation>清除当前项目缓存</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Current project cache cleared</source>
-        <translation>当前项目缓存已清除</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Clear all cache</source>
-        <translation>清除全部缓存</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>All thumbnail cache cleared</source>
-        <translation>全部缩略图缓存已清除</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Refresh</source>
-        <translation>刷新</translation>
-    </message>
-    <message>
-        <location line="+196"/>
+        <location line="+235"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-823"/>
-        <location line="+146"/>
+        <location line="-624"/>
+        <location line="+186"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-154"/>
-        <location line="+151"/>
+        <location line="-197"/>
+        <location line="+193"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+149"/>
+        <location line="-190"/>
+        <location line="+191"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="-146"/>
-        <location line="+147"/>
+        <location line="-188"/>
+        <location line="+189"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
-        <location line="+568"/>
+        <location line="-186"/>
+        <location line="+187"/>
+        <source>Updates</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <location line="+322"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
@@ -4547,7 +4553,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>后端</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+21"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
     </message>
@@ -4607,7 +4613,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThemedProgressBar</name>
     <message>
-        <location filename="../qml/ThemedProgressBar.qml" line="+24"/>
+        <location filename="../qml/ThemedProgressBar.qml" line="+25"/>
+        <source>%1%</source>
+        <translation type="unfinished">%1%</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Progress</source>
         <translation>进度</translation>
     </message>
@@ -4698,11 +4709,205 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Settings</source>
         <translation>设置</translation>
     </message>
+    <message>
+        <location line="+12"/>
+        <location line="+7"/>
+        <source>Update available</source>
+        <translation type="unfinished">有可用更新</translation>
+    </message>
+</context>
+<context>
+    <name>UpdateNotice</name>
+    <message>
+        <location filename="../qml/UpdateNotice.qml" line="+55"/>
+        <source>Updates are unavailable</source>
+        <translation>此构建无法更新</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Checking for updates</source>
+        <translation>正在检查更新</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Downloading the update</source>
+        <translation>正在下载更新</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Ready to install</source>
+        <translation>可以安装</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Installing the update</source>
+        <translation>正在安装更新</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The last update step failed</source>
+        <translation>上一步更新失败</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>A newer version is available</source>
+        <translation>有新版本可用</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Not checked yet</source>
+        <translation>尚未检查</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Alcedo Studio is up to date</source>
+        <translation>Alcedo Studio 已是最新版本</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This build was compiled without a signed update feed, so it cannot check or install releases.</source>
+        <translation>此构建未包含签名更新源，因此无法检查或安装新版本。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Contacting the signed release feed. This usually takes a few seconds.</source>
+        <translation>正在连接签名发布源，通常只需几秒。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is downloading now. You can cancel and try again later.</source>
+        <translation>正在下载安装包。你可以取消，稍后再试。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is verified. Install will close Alcedo Studio, replace this copy, and reopen.</source>
+        <translation>安装包已通过校验。安装会关闭 Alcedo Studio，替换当前副本，然后重新打开。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Alcedo Studio is closing so the installer can replace this copy.</source>
+        <translation>Alcedo Studio 即将关闭，以便安装程序替换当前副本。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Review the error below, then check again. A later check can resume a partial download.</source>
+        <translation>请查看下方错误，然后重新检查。稍后检查可以继续未完成的下载。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This development build can list a newer release, but it cannot replace itself. Use a packaged installer to install updates.</source>
+        <translation>此开发构建可以列出新版本，但不能替换自身。请使用打包安装程序来安装更新。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download the signed package, then install and restart when the file is ready.</source>
+        <translation>请先下载签名安装包，文件就绪后再安装并重启。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Check the signed release feed to see whether a newer build is available.</source>
+        <translation>检查签名发布源，确认是否有更新的构建。</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Updates are disabled in this build.</source>
+        <translation>此构建已禁用更新。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+5"/>
+        <source>Not checked yet.</source>
+        <translation>尚未检查。</translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <source>Checking for updates…</source>
+        <translation>正在检查更新…</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Checking…</source>
+        <translation>正在检查…</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel download</source>
+        <translation>取消下载</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Install and restart</source>
+        <translation>安装并重启</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download update</source>
+        <translation>下载更新</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check for updates</source>
+        <translation>检查更新</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+4"/>
+        <source>Not checked</source>
+        <translation>尚未检查</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Same as installed</source>
+        <translation>与已安装版本相同</translation>
+    </message>
+    <message>
+        <location line="+156"/>
+        <source>What&apos;s new in %1</source>
+        <translation>%1 更新内容</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Release notes for %1</source>
+        <translation>%1 的发行说明</translation>
+    </message>
+    <message>
+        <location line="-95"/>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Available</source>
+        <translation>可用版本</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Latest</source>
+        <translation>最新版本</translation>
+    </message>
+    <message>
+        <location line="-6"/>
+        <source>Unavailable</source>
+        <translation>不可用</translation>
+    </message>
+</context>
+<context>
+    <name>UpdatesSettingsPanel</name>
+    <message>
+        <location filename="../qml/UpdatesSettingsPanel.qml" line="+29"/>
+        <source>Software updates</source>
+        <translation>软件更新</translation>
+    </message>
 </context>
 <context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+167"/>
+        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
         <source>Opened recently</source>
         <translation>最近打开</translation>
     </message>
@@ -4776,7 +4981,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+508"/>
+        <location line="+518"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
@@ -4837,9 +5042,154 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::UpdateService</name>
+    <message>
+        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <source>%1 (build %2)</source>
+        <translation>%1（构建 %2）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>About %1 h %2 min remaining</source>
+        <translation>预计剩余 %1 小时 %2 分钟</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>About %1 min %2 s remaining</source>
+        <translation>预计剩余 %1 分 %2 秒</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>About %1 s remaining</source>
+        <translation>预计剩余 %1 秒</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Updates are disabled in this build.</source>
+        <translation>此版本未启用更新功能。</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>The update download was canceled by the user.</source>
+        <translation>用户已取消更新下载。</translation>
+    </message>
+    <message>
+        <location line="+62"/>
+        <source>The update operation failed.</source>
+        <translation>更新操作失败。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The update server URL is not allowed.</source>
+        <translation>不允许使用此更新服务器地址。</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>The update server returned HTTP %1.</source>
+        <translation>更新服务器返回 HTTP %1。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The update server redirected to an untrusted host.</source>
+        <translation>更新服务器重定向到了不受信任的主机。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The update server response is too large.</source>
+        <translation>更新服务器的响应过大。</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Checking for updates…</source>
+        <translation>正在检查更新…</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Alcedo Studio is up to date.</source>
+        <translation>Alcedo Studio 已是最新版本。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Alcedo Studio %1 is available.</source>
+        <translation>Alcedo Studio %1 已发布。</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>The update download directory cannot be created.</source>
+        <translation>无法创建更新下载目录。</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Another download is already running. Wait for it to finish and try again.</source>
+        <translation>另一个下载任务正在运行。请等待其完成后重试。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Downloading Alcedo Studio %1…</source>
+        <translation>正在下载 Alcedo Studio %1…</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The update download state is not valid.</source>
+        <translation>更新下载状态无效。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The verified update package cannot be saved.</source>
+        <translation>无法保存已验证的更新包。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+126"/>
+        <source>Alcedo Studio %1 is ready to install.</source>
+        <translation>Alcedo Studio %1 已可安装。</translation>
+    </message>
+    <message>
+        <location line="-110"/>
+        <source>No verified update package is available.</source>
+        <translation>没有可用的已验证更新包。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package is missing or has changed.</source>
+        <translation>更新包缺失或已发生变化。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The update package failed its final SHA-256 check.</source>
+        <translation>更新包未通过最终 SHA-256 校验。</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Alcedo Studio cannot replace the app in this folder. The update ZIP was opened for manual installation.</source>
+        <translation>Alcedo Studio 无法替换此文件夹中的应用。更新 ZIP 已打开，请手动安装。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+23"/>
+        <source>The update installer helper is missing.</source>
+        <translation>更新安装助手缺失。</translation>
+    </message>
+    <message>
+        <location line="-5"/>
+        <source>The Qt runtime for the update installer helper is missing.</source>
+        <translation>更新安装助手所需的 Qt 运行库缺失。</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>The update installer helper could not start.</source>
+        <translation>无法启动更新安装助手。</translation>
+    </message>
+    <message>
+        <location line="-12"/>
+        <source>Alcedo Studio will close and install the update.</source>
+        <translation>Alcedo Studio 将关闭并安装更新。</translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1176"/>
+        <location filename="../app_theme.cpp" line="+1171"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
