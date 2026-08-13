@@ -193,12 +193,13 @@ int main(int argc, char* argv[]) {
                                              ? startup.diagnostics.notes
                                              : startup.diagnostics.adapter_description));
 
-  // Platform window / taskbar / Dock fallback icon.
+  // Platform window / taskbar fallback icon.
   // Windows: multi-res ICO (Explorer taskbar + Alt-Tab). EXE also embeds the
-  // same ICO via alcedo_main.rc.
-  // macOS: PNG master; the .app Dock icon comes from Contents/Resources
-  // alcedo_icon.icns (MACOSX_BUNDLE_ICON_FILE). setWindowIcon still covers
-  // non-bundle runs and window chrome.
+  // same ICO via alcedo_main.rc. Other non-Apple platforms use the PNG master.
+  // On macOS, do not replace the bundle icon at runtime: Dock and Finder load
+  // the ICNS resource through CFBundleIconFile, preserving the system-rendered
+  // icon appearance while the application is running.
+#if !defined(Q_OS_MACOS)
   {
 #if defined(Q_OS_WIN)
     QIcon app_icon(QStringLiteral(":/ICON/alcedo_icon.ico"));
@@ -210,6 +211,7 @@ int main(int argc, char* argv[]) {
 #endif
     app.setWindowIcon(app_icon);
   }
+#endif
   {
     QFont default_font = app.font();
     default_font.setStyleStrategy(QFont::PreferAntialias);
