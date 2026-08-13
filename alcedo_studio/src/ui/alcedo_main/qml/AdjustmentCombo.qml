@@ -14,6 +14,9 @@ Item {
 
     property var model: null
     property bool showResetButton: true
+    // Editor panels stay dense (28). Settings and other spacious surfaces can
+    // raise this without changing the sunken-field chrome.
+    property int controlHeight: 28
     // Panels may expose a stable object name for behavior tests and
     // accessibility tooling without changing the shared wrapper name.
     property string controlObjectName: "adjustmentCombo"
@@ -49,7 +52,7 @@ Item {
             id: combo
             objectName: root.controlObjectName
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
+            Layout.preferredHeight: root.controlHeight
             enabled: root.model && root.model.enabled
             model: root.model ? root.model.entries : []
             textRole: "label"
@@ -78,7 +81,7 @@ Item {
 
             // Dark sunken field — Basic style paints a light chrome by default.
             background: Rectangle {
-                implicitHeight: 28
+                implicitHeight: root.controlHeight
                 radius: appTheme.controlRadiusSmall
                 color: root.colField
                 border.width: 1
@@ -136,7 +139,7 @@ Item {
             delegate: ItemDelegate {
                 id: del
                 width: combo.width
-                height: 28
+                height: root.controlHeight
                 // ComboBox list models of maps expose role data via modelData.
                 text: {
                     if (typeof modelData === "undefined" || modelData === null)

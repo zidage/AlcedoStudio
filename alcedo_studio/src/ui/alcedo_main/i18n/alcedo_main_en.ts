@@ -1435,6 +1435,116 @@ Alcedo will use %1 instead.</translation>
     </message>
 </context>
 <context>
+    <name>CacheSettingsPanel</name>
+    <message>
+        <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
+        <source>Unavailable</source>
+        <translation>Unavailable</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+97"/>
+        <source>Select Thumbnail Cache Folder</source>
+        <translation>Select Thumbnail Cache Folder</translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Thumbnail cache</source>
+        <translation>Thumbnail cache</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Entries</source>
+        <translation>Entries</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Size</source>
+        <translation>Size</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Hits / misses</source>
+        <translation>Hits / misses</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Storage</source>
+        <translation>Storage</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Cache directory</source>
+        <translation>Cache directory</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>Limits</source>
+        <translation>Limits</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+10"/>
+        <source>Disk cache</source>
+        <translation>Disk cache</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Enabled</source>
+        <translation>Enabled</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Disabled</source>
+        <translation>Disabled</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Max entries</source>
+        <translation>Max entries</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>JPEG quality</source>
+        <translation>JPEG quality</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Maintenance</source>
+        <translation>Maintenance</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear current project</source>
+        <translation>Clear current project</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Current project cache cleared</source>
+        <translation>Current project cache cleared</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Clear all cache</source>
+        <translation>Clear all cache</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>All thumbnail cache cleared</source>
+        <translation>All thumbnail cache cleared</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Refresh</source>
+        <translation>Refresh</translation>
+    </message>
+</context>
+<context>
     <name>CollapsibleSection</name>
     <message>
         <location filename="../qml/CollapsibleSection.qml" line="+114"/>
@@ -4129,7 +4239,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+102"/>
         <source>AI content recognition</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4170,12 +4280,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+281"/>
+        <location line="+258"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
     <message>
-        <location line="-281"/>
+        <location line="-258"/>
         <source>Generate</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4196,7 +4306,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+30"/>
         <source>Download directory</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4206,7 +4316,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-352"/>
         <source>HF Mirror</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4226,7 +4336,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">Custom</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+374"/>
         <source>https://example.com</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4261,7 +4371,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="-443"/>
         <source>Always</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4276,7 +4386,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+537"/>
         <source>Activating…</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4314,81 +4424,66 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+79"/>
-        <source>Select Thumbnail Cache Folder</source>
-        <translation>Select Thumbnail Cache Folder</translation>
-    </message>
-    <message>
-        <location line="+57"/>
-        <source>Unavailable</source>
-        <translation>Unavailable</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>%1 / %2</source>
-        <translation>%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+68"/>
+        <location filename="../qml/SettingDialog.qml" line="+160"/>
         <source>Settings applied</source>
         <translation>Settings applied</translation>
     </message>
     <message>
-        <location line="+84"/>
+        <location line="+135"/>
         <source>Setting</source>
         <translation>Setting</translation>
     </message>
     <message>
-        <location line="-146"/>
-        <location line="+160"/>
+        <location line="-185"/>
+        <location line="+199"/>
         <location line="+166"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-323"/>
-        <location line="+158"/>
+        <location line="-362"/>
+        <location line="+197"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
     </message>
     <message>
-        <location line="-155"/>
-        <location line="+156"/>
+        <location line="-194"/>
+        <location line="+195"/>
         <source>Cache</source>
         <translation>Cache</translation>
     </message>
     <message>
-        <location line="-153"/>
-        <location line="+154"/>
+        <location line="-192"/>
+        <location line="+193"/>
         <source>Local Content Recognition</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-151"/>
-        <location line="+152"/>
+        <location line="-190"/>
+        <location line="+191"/>
         <source>Advanced Content Analysis</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-144"/>
-        <location line="+147"/>
+        <location line="-183"/>
+        <location line="+186"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-152"/>
-        <location line="+150"/>
+        <location line="-191"/>
+        <location line="+189"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+148"/>
+        <location line="-186"/>
+        <location line="+187"/>
         <source>Updates</source>
         <translation>Updates</translation>
     </message>
     <message>
-        <location line="+584"/>
+        <location line="+322"/>
         <source>Image processing backend</source>
         <translation>Image processing backend</translation>
     </message>
@@ -4398,12 +4493,12 @@ Original source files on disk will be kept.</source>
         <translation>Backend</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+21"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-770"/>
+        <location line="-538"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4425,7 +4520,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+188"/>
+        <location line="+227"/>
         <source>Update available</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4435,7 +4530,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Application language</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+44"/>
         <source>Workspace appearance</source>
         <translation>Workspace appearance</translation>
     </message>
@@ -4445,97 +4540,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Theme</translation>
     </message>
     <message>
-        <location line="+38"/>
-        <source>Current cache</source>
-        <translation>Current cache</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Entries</source>
-        <translation>Entries</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Size</source>
-        <translation>Size</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Hits / misses</source>
-        <translation>Hits / misses</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Storage</source>
-        <translation>Storage</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Cache directory</source>
-        <translation>Cache directory</translation>
-    </message>
-    <message>
-        <location line="+69"/>
-        <source>Limits</source>
-        <translation>Limits</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Disk cache</source>
-        <translation>Disk cache</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Enabled</source>
-        <translation>Enabled</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Disabled</source>
-        <translation>Disabled</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Max entries</source>
-        <translation>Max entries</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>JPEG quality</source>
-        <translation>JPEG quality</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Maintenance</source>
-        <translation>Maintenance</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Clear current project</source>
-        <translation>Clear current project</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Current project cache cleared</source>
-        <translation>Current project cache cleared</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Clear all cache</source>
-        <translation>Clear all cache</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>All thumbnail cache cleared</source>
-        <translation>All thumbnail cache cleared</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Refresh</source>
-        <translation>Refresh</translation>
-    </message>
-    <message>
-        <location line="+212"/>
+        <location line="+235"/>
         <source>Done</source>
         <translation>Done</translation>
     </message>

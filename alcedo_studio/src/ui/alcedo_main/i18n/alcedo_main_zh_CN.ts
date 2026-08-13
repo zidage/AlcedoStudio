@@ -1435,6 +1435,116 @@ Alcedo 将改用 %1。</translation>
     </message>
 </context>
 <context>
+    <name>CacheSettingsPanel</name>
+    <message>
+        <location filename="../qml/CacheSettingsPanel.qml" line="+75"/>
+        <source>Unavailable</source>
+        <translation>不可用</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+97"/>
+        <source>Select Thumbnail Cache Folder</source>
+        <translation>选择缩略图缓存文件夹</translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Thumbnail cache</source>
+        <translation>缩略图缓存</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Entries</source>
+        <translation>条目数</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Size</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Hits / misses</source>
+        <translation>命中 / 未命中</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Storage</source>
+        <translation>存储</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Cache directory</source>
+        <translation>缓存目录</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>Limits</source>
+        <translation>限制</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+10"/>
+        <source>Disk cache</source>
+        <translation>磁盘缓存</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Enabled</source>
+        <translation>已启用</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Disabled</source>
+        <translation>已禁用</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Max entries</source>
+        <translation>最大条目数</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>JPEG quality</source>
+        <translation>JPEG 质量</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Maintenance</source>
+        <translation>维护</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Clear current project</source>
+        <translation>清除当前项目缓存</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Current project cache cleared</source>
+        <translation>当前项目缓存已清除</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Clear all cache</source>
+        <translation>清除全部缓存</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>All thumbnail cache cleared</source>
+        <translation>全部缩略图缓存已清除</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+</context>
+<context>
     <name>CollapsibleSection</name>
     <message>
         <location filename="../qml/CollapsibleSection.qml" line="+114"/>
@@ -4130,7 +4240,7 @@ Original source files on disk will be kept.</source>
         <translation>选择模型下载文件夹</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+102"/>
         <source>AI content recognition</source>
         <translation>AI 内容识别</translation>
     </message>
@@ -4171,12 +4281,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+281"/>
+        <location line="+258"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="-281"/>
+        <location line="-258"/>
         <source>Generate</source>
         <translation>生成</translation>
     </message>
@@ -4197,7 +4307,7 @@ Original source files on disk will be kept.</source>
         <translation>模型</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+30"/>
         <source>Download directory</source>
         <translation>下载目录</translation>
     </message>
@@ -4207,7 +4317,7 @@ Original source files on disk will be kept.</source>
         <translation>来源</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-352"/>
         <source>HF Mirror</source>
         <translation>HF 镜像</translation>
     </message>
@@ -4227,7 +4337,7 @@ Original source files on disk will be kept.</source>
         <translation>自定义</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+374"/>
         <source>https://example.com</source>
         <translation>https://example.com</translation>
     </message>
@@ -4262,7 +4372,7 @@ Original source files on disk will be kept.</source>
         <translation>是否生成标签</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="-443"/>
         <source>Always</source>
         <translation>总是生成</translation>
     </message>
@@ -4277,7 +4387,7 @@ Original source files on disk will be kept.</source>
         <translation>总是跳过</translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+537"/>
         <source>Activating…</source>
         <translation>激活中…</translation>
     </message>
@@ -4315,51 +4425,36 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+79"/>
-        <source>Select Thumbnail Cache Folder</source>
-        <translation>选择缩略图缓存文件夹</translation>
-    </message>
-    <message>
-        <location line="+57"/>
-        <source>Unavailable</source>
-        <translation>不可用</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>%1 / %2</source>
-        <translation>%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+68"/>
+        <location filename="../qml/SettingDialog.qml" line="+160"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
     <message>
-        <location line="+84"/>
+        <location line="+135"/>
         <source>Setting</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-146"/>
-        <location line="+160"/>
+        <location line="-185"/>
+        <location line="+199"/>
         <location line="+166"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-323"/>
-        <location line="+158"/>
+        <location line="-362"/>
+        <location line="+197"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-155"/>
-        <location line="+156"/>
+        <location line="-194"/>
+        <location line="+195"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
     <message>
-        <location line="-137"/>
+        <location line="-176"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4393,7 +4488,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+188"/>
+        <location line="+227"/>
         <source>Update available</source>
         <translation>有可用更新</translation>
     </message>
@@ -4403,7 +4498,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>应用语言</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+44"/>
         <source>Workspace appearance</source>
         <translation>工作区外观</translation>
     </message>
@@ -4413,132 +4508,42 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>主题</translation>
     </message>
     <message>
-        <location line="+38"/>
-        <source>Current cache</source>
-        <translation>当前缓存</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Entries</source>
-        <translation>条目数</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Size</source>
-        <translation>大小</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Hits / misses</source>
-        <translation>命中 / 未命中</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Storage</source>
-        <translation>存储</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Cache directory</source>
-        <translation>缓存目录</translation>
-    </message>
-    <message>
-        <location line="+69"/>
-        <source>Limits</source>
-        <translation>限制</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Disk cache</source>
-        <translation>磁盘缓存</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Enabled</source>
-        <translation>已启用</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Disabled</source>
-        <translation>已禁用</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Max entries</source>
-        <translation>最大条目数</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>JPEG quality</source>
-        <translation>JPEG 质量</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>Maintenance</source>
-        <translation>维护</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Clear current project</source>
-        <translation>清除当前项目缓存</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Current project cache cleared</source>
-        <translation>当前项目缓存已清除</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Clear all cache</source>
-        <translation>清除全部缓存</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>All thumbnail cache cleared</source>
-        <translation>全部缩略图缓存已清除</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Refresh</source>
-        <translation>刷新</translation>
-    </message>
-    <message>
-        <location line="+212"/>
+        <location line="+235"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-856"/>
-        <location line="+147"/>
+        <location line="-624"/>
+        <location line="+186"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-158"/>
-        <location line="+154"/>
+        <location line="-197"/>
+        <location line="+193"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-151"/>
-        <location line="+152"/>
+        <location line="-190"/>
+        <location line="+191"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="-149"/>
-        <location line="+150"/>
+        <location line="-188"/>
+        <location line="+189"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+148"/>
+        <location line="-186"/>
+        <location line="+187"/>
         <source>Updates</source>
         <translation>更新</translation>
     </message>
     <message>
-        <location line="+584"/>
+        <location line="+322"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
@@ -4548,7 +4553,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>后端</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+21"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
     </message>
