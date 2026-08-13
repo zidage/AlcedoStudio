@@ -307,11 +307,11 @@ if(APPLE)
     set(ALCEDO_MAIN_ICON_PNG "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.png")
     set(ALCEDO_MAIN_ICON_ICNS_SRC "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.icns")
     set(ALCEDO_MAIN_ICONSET_DIR "${ALCEDO_BINARY_ROOT}/alcedo_icon.iconset")
-    # Keep the bundled resource name distinct from legacy PuerhLab builds.
-    # Launch Services caches application icons by bundle metadata and resource
-    # identity; reusing alcedo_icon.icns allowed an old bird icon registered
-    # under the same bundle identifier to remain visible after an upgrade.
-    set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_studio_or.icns")
+    # Keep the bundled resource name distinct from every previously shipped
+    # mark. Launch Services caches application icons by bundle metadata and
+    # resource identity; reusing alcedo_icon.icns kept the old bird, and
+    # reusing alcedo_studio_or.icns kept the OR mark after the AO refresh.
+    set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_studio_ao.icns")
 
     if(EXISTS "${ALCEDO_MAIN_ICON_ICNS_SRC}")
         add_custom_command(
@@ -364,7 +364,7 @@ if(APPLE)
     target_sources(alcedo_main PRIVATE "${ALCEDO_MAIN_ICON_ICNS}")
     # CFBundleIconFile — Finder, Dock, and Launchpad use this for the .app.
     set_target_properties(alcedo_main PROPERTIES
-        MACOSX_BUNDLE_ICON_FILE "alcedo_studio_or.icns"
+        MACOSX_BUNDLE_ICON_FILE "alcedo_studio_ao.icns"
     )
 endif()
 
@@ -888,10 +888,12 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND
     endif()
     add_custom_command(TARGET alcedo_main POST_BUILD
         # Incremental builds do not clear files that were copied by an older
-        # target definition. Remove the legacy icon resource before sealing
+        # target definition. Remove retired icon resources before sealing
         # the bundle so only CFBundleIconFile's current resource can be used.
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/Resources/alcedo_icon.icns"
+            "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/Resources/alcedo_studio_or.icns"
+        COMMAND ${CMAKE_COMMAND} -E touch "$<TARGET_BUNDLE_DIR:alcedo_main>"
         COMMAND "${ALCEDO_CODESIGN_EXECUTABLE}"
             --force
             --deep
