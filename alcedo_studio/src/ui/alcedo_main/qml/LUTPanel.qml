@@ -224,16 +224,23 @@ Item {
             root.syncSelectionChrome()
             return
         }
-        const entry = snapshot.lut !== undefined ? snapshot.lut : snapshot.ocio_lmt
+        // Bracket access: C++ adjustmentSnapshot is a QVariantMap. Dot lookup
+        // inside a JS function does not always track nested keys, so a pasted
+        // LUT path would parse as empty and leave "None" highlighted.
+        const entry = snapshot["lut"] !== undefined ? snapshot["lut"] : snapshot["ocio_lmt"]
         var path = ""
         if (entry === undefined || entry === null) {
             path = ""
         } else if (typeof entry === "string") {
             path = entry
-        } else if (entry.ocio_lmt !== undefined) {
-            path = String(entry.ocio_lmt)
-        } else if (entry.path !== undefined) {
-            path = String(entry.path)
+        } else if (entry["ocio_lmt"] !== undefined && entry["ocio_lmt"] !== null) {
+            const nested = entry["ocio_lmt"]
+            path = (typeof nested === "object")
+                   ? String(nested["ocio_lmt"] !== undefined ? nested["ocio_lmt"]
+                            : (nested["path"] !== undefined ? nested["path"] : ""))
+                   : String(nested)
+        } else if (entry["path"] !== undefined) {
+            path = String(entry["path"])
         }
         // Load-only write. Do NOT refresh on every snapshot echo — that rebuilds
         // the catalog, reassigns lutEntries, and makes contentY hitch (抽搐).

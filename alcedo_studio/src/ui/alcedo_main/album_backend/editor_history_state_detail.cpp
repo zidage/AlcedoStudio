@@ -67,9 +67,33 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   state->pipeline_guard = guard;
   state->journal = journal;
   const auto& image_state = guard->commit_graph_->GetImageEditState();
-  if (image_state.serialized_pipeline_state.has_value() &&
+  const bool have_serialized_params =
+      image_state.serialized_pipeline_state.has_value() &&
       image_state.serialized_pipeline_state->is_object() &&
-      image_state.serialized_pipeline_state->contains("pipeline_params")) {
+      image_state.serialized_pipeline_state->contains("pipeline_params");
+  // A matching checkpoint can be scraped as JSON. After a history rebuild
+  // (library Paste, stale/missing checkpoint) LoadEditorPipeline has already
+  // applied the Version tip to the live executor — that table is the panel
+  // authority. Using an empty/stale snapshot here leaves LUT on the image
+  // while LUTPanel highlights None.
+  if (have_serialized_params && !guard->serialized_state_needs_writeback_) {
+    if (!MakeAdjustmentSnapshotFromPipelineParams(
+            image_state.serialized_pipeline_state->at("pipeline_params"),
+            &state->committed_snapshot, error)) {
+      return nullptr;
+    }
+  } else if (guard->serialized_state_needs_writeback_ && guard->pipeline_) {
+    try {
+      std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+      if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
+                                                  error)) {
+        return nullptr;
+      }
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return nullptr;
+    }
+  } else if (have_serialized_params) {
     if (!MakeAdjustmentSnapshotFromPipelineParams(
             image_state.serialized_pipeline_state->at("pipeline_params"),
             &state->committed_snapshot, error)) {

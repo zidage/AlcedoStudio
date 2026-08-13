@@ -832,7 +832,13 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
                                                         ? "Failed to persist pasted Version"
                                                         : std::move(persistence_error)});
           } else {
-            guard->dirty_ = false;
+            // Persist writes the new Version and clears the stale serialized
+            // checkpoint. The live pipeline was just rebuilt from that Version,
+            // so SavePipeline must store the new checkpoint. Otherwise the next
+            // editor open rebuilds the image correctly but projects an empty
+            // adjustment snapshot (LUT panel highlights None).
+            guard->serialized_state_needs_writeback_ = true;
+            guard->dirty_                            = false;
             result.applied_ids_.push_back(element_id);
           }
         }
@@ -933,7 +939,10 @@ auto AdjustmentTransferController::MergeViaMiniGit(const std::vector<sl_element_
                                                         ? "Failed to persist merged Version"
                                                         : std::move(persistence_error)});
           } else {
-            guard->dirty_ = false;
+            // Same as Paste: Persist cleared the checkpoint; SavePipeline must
+            // write the rebuilt live params so editor panels restore selection.
+            guard->serialized_state_needs_writeback_ = true;
+            guard->dirty_                            = false;
             result.applied_ids_.push_back(element_id);
           }
         }
