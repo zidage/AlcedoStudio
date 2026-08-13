@@ -55,11 +55,6 @@
     </message>
     <message>
         <location line="+14"/>
-        <source>Updates</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+17"/>
         <source>Links</source>
         <translation>链接</translation>
     </message>
@@ -4537,6 +4532,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>加速</translation>
     </message>
     <message>
+        <source>Updates</source>
+        <translation>更新</translation>
+    </message>
+    <message>
         <location line="+584"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
@@ -4713,70 +4712,168 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>UpdateNotice</name>
     <message>
-        <location filename="../qml/UpdateNotice.qml" line="+34"/>
-        <source>Beta channel — </source>
-        <translation>Beta 通道 — </translation>
+        <source>Updates are unavailable</source>
+        <translation>此构建无法更新</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <source>Checking for updates</source>
+        <translation>正在检查更新</translation>
+    </message>
+    <message>
+        <source>Downloading the update</source>
+        <translation>正在下载更新</translation>
+    </message>
+    <message>
+        <source>Ready to install</source>
+        <translation>可以安装</translation>
+    </message>
+    <message>
+        <source>Installing the update</source>
+        <translation>正在安装更新</translation>
+    </message>
+    <message>
+        <source>The last update step failed</source>
+        <translation>上一步更新失败</translation>
+    </message>
+    <message>
+        <source>A newer version is available</source>
+        <translation>有新版本可用</translation>
+    </message>
+    <message>
+        <source>Not checked yet</source>
+        <translation>尚未检查</translation>
+    </message>
+    <message>
+        <source>Alcedo Studio is up to date</source>
+        <translation>Alcedo Studio 已是最新版本</translation>
+    </message>
+    <message>
+        <source>This build was compiled without a signed update feed, so it cannot check or install releases.</source>
+        <translation>此构建未包含签名更新源，因此无法检查或安装新版本。</translation>
+    </message>
+    <message>
+        <source>Contacting the signed release feed. This usually takes a few seconds.</source>
+        <translation>正在连接签名发布源，通常只需几秒。</translation>
+    </message>
+    <message>
+        <source>The package is downloading now. You can cancel and try again later.</source>
+        <translation>正在下载安装包。你可以取消，稍后再试。</translation>
+    </message>
+    <message>
+        <source>The package is verified. Install will close Alcedo Studio, replace this copy, and reopen.</source>
+        <translation>安装包已通过校验。安装会关闭 Alcedo Studio，替换当前副本，然后重新打开。</translation>
+    </message>
+    <message>
+        <source>Alcedo Studio is closing so the installer can replace this copy.</source>
+        <translation>Alcedo Studio 即将关闭，以便安装程序替换当前副本。</translation>
+    </message>
+    <message>
+        <source>Review the error below, then check again. A later check can resume a partial download.</source>
+        <translation>请查看下方错误，然后重新检查。稍后检查可以继续未完成的下载。</translation>
+    </message>
+    <message>
+        <source>This development build can list a newer release, but it cannot replace itself. Use a packaged installer to install updates.</source>
+        <translation>此开发构建可以列出新版本，但不能替换自身。请使用打包安装程序来安装更新。</translation>
+    </message>
+    <message>
+        <source>Download the signed package, then install and restart when the file is ready.</source>
+        <translation>请先下载签名安装包，文件就绪后再安装并重启。</translation>
+    </message>
+    <message>
+        <source>Check the signed release feed to see whether a newer build is available.</source>
+        <translation>检查签名发布源，确认是否有更新的构建。</translation>
+    </message>
+
+    <message>
         <source>Updates are disabled in this build.</source>
         <translation>此构建已禁用更新。</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <location line="+5"/>
         <source>Not checked yet.</source>
         <translation>尚未检查。</translation>
     </message>
     <message>
-        <location line="-3"/>
         <source>Checking for updates…</source>
         <translation>正在检查更新…</translation>
     </message>
     <message>
-        <location line="+10"/>
         <source>Checking…</source>
         <translation>正在检查…</translation>
     </message>
     <message>
-        <location line="+2"/>
         <source>Cancel download</source>
         <translation>取消下载</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <source>Install and restart</source>
+        <translation>安装并重启</translation>
+    </message>
+    <message>
         <source>Download update</source>
         <translation>下载更新</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message>
         <source>Check for updates</source>
         <translation>检查更新</translation>
     </message>
     <message>
-        <location line="+36"/>
-        <source>Update available</source>
-        <translation>有可用更新</translation>
+        <source>Not checked</source>
+        <translation>尚未检查</translation>
     </message>
     <message>
-        <location line="+24"/>
-        <source>Installed: %1 · Available: %2</source>
-        <translation>已安装：%1 · 可用版本：%2</translation>
+        <source>Same as installed</source>
+        <translation>与已安装版本相同</translation>
     </message>
     <message>
-        <location line="+39"/>
-        <source>This build can check for updates but cannot install them.</source>
-        <translation>此构建可以检查更新，但不能自动安装。</translation>
+        <source>Beta</source>
+        <translation>Beta</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <source>Check</source>
+        <translation>检查</translation>
+    </message>
+    <message>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <source>Install</source>
+        <translation>安装</translation>
+    </message>
+    <message>
+        <source>Installed</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <source>Available</source>
+        <translation>可用版本</translation>
+    </message>
+    <message>
+        <source>Latest</source>
+        <translation>最新版本</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>不可用</translation>
+    </message>
+    <message>
         <source>Open release notes</source>
         <translation>打开发行说明</translation>
     </message>
     <message>
-        <location line="-148"/>
-        <source>Install and restart</source>
-        <translation>安装并重启</translation>
+        <source>What's new</source>
+        <translation>更新内容</translation>
+    </message>
+</context>
+<context>
+    <name>UpdatesSettingsPanel</name>
+    <message>
+        <source>Software updates</source>
+        <translation>软件更新</translation>
     </message>
 </context>
 <context>

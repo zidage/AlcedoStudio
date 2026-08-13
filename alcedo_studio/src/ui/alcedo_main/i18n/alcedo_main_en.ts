@@ -55,11 +55,6 @@
     </message>
     <message>
         <location line="+14"/>
-        <source>Updates</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+17"/>
         <source>Links</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4385,6 +4380,10 @@ Original source files on disk will be kept.</source>
         <location line="+147"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
+    </message>
+    <message>
+        <source>Updates</source>
+        <translation>Updates</translation>
     </message>
     <message>
         <location line="+584"/>

@@ -4,10 +4,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// About page for the settings dialog. Hosted as the fifth StackLayout child
-// inside SettingDialog.qml. Self-contained: takes the dialog's theme colors as
-// properties and declares its own inline SettingsSection / LinkRow helpers, the
-// same factoring pattern SemanticGenerationSettingsPanel.qml uses.
+// About page for the settings dialog. Hosted as the last StackLayout child
+// inside SettingDialog.qml. Identity, links, and licenses only — software
+// updates live in UpdatesSettingsPanel.qml.
 ColumnLayout {
     id: page
 
@@ -204,22 +203,6 @@ ColumnLayout {
                 wrapMode: Text.WordWrap
                 lineHeight: 1.3
             }
-        }
-    }
-
-    SettingsSection {
-        Layout.fillWidth: true
-        Layout.leftMargin: 34
-        Layout.rightMargin: 34
-        title: qsTr("Updates")
-        textColor: page.textColor
-        mutedTextColor: page.mutedTextColor
-        dividerColor: page.dividerColor
-
-        UpdateNotice {
-            Layout.fillWidth: true
-            updates: page.updateService
-            showWhenUnchecked: true
         }
     }
 

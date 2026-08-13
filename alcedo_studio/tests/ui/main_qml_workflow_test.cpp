@@ -132,10 +132,14 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_TRUE(settings->property("visible").toBool());
   settings->setProperty("currentCategory", 6);
   ProcessEvents(50);
-  auto* update_status = settings->findChild<QObject*>(QStringLiteral("aboutUpdateStatusLabel"));
+  auto* updates_panel = settings->findChild<QObject*>(QStringLiteral("updatesSettingsPanel"));
+  ASSERT_NE(updates_panel, nullptr);
+  auto* update_status = settings->findChild<QObject*>(QStringLiteral("updatesStatusLabel"));
   ASSERT_NE(update_status, nullptr);
   EXPECT_TRUE(update_status->property("visible").toBool());
   EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
+  settings->setProperty("currentCategory", 7);
+  ProcessEvents(50);
   auto* version_label = settings->findChild<QObject*>(QStringLiteral("aboutVersionLabel"));
   ASSERT_NE(version_label, nullptr);
   EXPECT_TRUE(version_label->property("text").toString().contains(

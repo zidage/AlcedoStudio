@@ -233,8 +233,8 @@ next number automatically.
      -Channel beta
    ```
 
-2. Start installed A. Open Settings > About. Confirm the Updates row has readable
-   text and says it is on the beta channel before/while checking.
+2. Start installed A. Open Settings > Updates. Confirm the status card has
+   readable text before/while checking.
 3. Package B. This intentionally replaces the same-version package file in the
    fixed package directory:
 
@@ -265,8 +265,8 @@ next number automatically.
      --private-key D:\secure\alcedo-update-private.seed
    ```
 
-6. In installed A, open Settings > About and click Check for updates. Verify all
-   of these behaviors directly in the About page:
+6. In installed A, open Settings > Updates and click Check for updates. Verify
+   all of these behaviors directly on the Updates page:
 
    - the installed and available versions include their build numbers;
    - the changelog and release notes are readable without opening another dialog;

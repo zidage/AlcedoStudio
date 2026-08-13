@@ -166,6 +166,9 @@ Dialog {
         if (currentCategory === 5) {
             return qsTr("Acceleration")
         }
+        if (currentCategory === 6) {
+            return qsTr("Updates")
+        }
         return qsTr("About")
     }
 
@@ -312,6 +315,7 @@ Dialog {
                                     { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
                                     { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
+                                    { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                     { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                 ]
 
@@ -961,6 +965,21 @@ Dialog {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        ScrollView {
+                            id: updatesScroll
+                            contentWidth: availableWidth
+                            clip: true
+
+                            UpdatesSettingsPanel {
+                                Layout.fillWidth: true
+                                updateService: appModules.updates
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                dividerColor: dialog.dividerColor
+                                dataFontFamily: dialog.dataFontFamily
                             }
                         }
 
