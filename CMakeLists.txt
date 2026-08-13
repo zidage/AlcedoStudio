@@ -1722,7 +1722,8 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # Fixed upgrade GUID so subsequent installers replace the same product.
     set(CPACK_WIX_UPGRADE_GUID "0EF54FAE-B541-4077-BB2A-7EDB85133B8E")
 
-    # Auto-detect available generators
+    # Auto-detect installer generators. Windows update packages are installers;
+    # portable ZIP archives are not produced.
     set(_alcedo_win_generators "")
     find_program(_ALCEDO_WIX_CANDLE candle.exe
         PATHS
@@ -1747,8 +1748,10 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     if(_ALCEDO_NSIS_MAKENSIS)
         list(APPEND _alcedo_win_generators "NSIS")
     endif()
-    # Always provide ZIP as a fallback
-    list(APPEND _alcedo_win_generators "ZIP")
+    if(NOT _ALCEDO_NSIS_MAKENSIS)
+        message(FATAL_ERROR
+            "Windows packaging requires NSIS for the automatic-update EXE; ZIP fallback packages are disabled.")
+    endif()
 
     set(CPACK_GENERATOR "${_alcedo_win_generators}")
     message(STATUS "[alcedo] Windows package generators: ${CPACK_GENERATOR}")

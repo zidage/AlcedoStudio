@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+80"/>
+        <location filename="../qml/AboutPage.qml" line="+79"/>
         <source>New to Alcedo Studio?</source>
         <translation type="unfinished"></translation>
     </message>
@@ -39,7 +39,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+11"/>
         <source>Unavailable</source>
         <translation type="unfinished">Unavailable</translation>
     </message>
@@ -54,7 +54,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+15"/>
         <source>Links</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4329,7 +4329,7 @@ Original source files on disk will be kept.</source>
         <translation>%1 / %2</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+68"/>
         <source>Settings applied</source>
         <translation>Settings applied</translation>
     </message>
@@ -4339,49 +4339,51 @@ Original source files on disk will be kept.</source>
         <translation>Setting</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+157"/>
-        <location line="+165"/>
+        <location line="-146"/>
+        <location line="+160"/>
+        <location line="+166"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-319"/>
-        <location line="+155"/>
+        <location line="-323"/>
+        <location line="+158"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
     </message>
     <message>
-        <location line="-152"/>
-        <location line="+153"/>
+        <location line="-155"/>
+        <location line="+156"/>
         <source>Cache</source>
         <translation>Cache</translation>
     </message>
     <message>
-        <location line="-150"/>
-        <location line="+151"/>
+        <location line="-153"/>
+        <location line="+154"/>
         <source>Local Content Recognition</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+149"/>
+        <location line="-151"/>
+        <location line="+152"/>
         <source>Advanced Content Analysis</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="-144"/>
-        <location line="+146"/>
+        <location line="+147"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+147"/>
+        <location line="-152"/>
+        <location line="+150"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
     </message>
     <message>
+        <location line="-147"/>
+        <location line="+148"/>
         <source>Updates</source>
         <translation>Updates</translation>
     </message>
@@ -4401,7 +4403,7 @@ Original source files on disk will be kept.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-769"/>
+        <location line="-770"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4423,7 +4425,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+187"/>
+        <location line="+188"/>
         <source>Update available</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4533,7 +4535,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Refresh</translation>
     </message>
     <message>
-        <location line="+197"/>
+        <location line="+212"/>
         <source>Done</source>
         <translation>Done</translation>
     </message>
@@ -4699,12 +4701,97 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>UpdateNotice</name>
     <message>
-        <location filename="../qml/UpdateNotice.qml" line="+34"/>
-        <source>Beta channel — </source>
+        <location filename="../qml/UpdateNotice.qml" line="+55"/>
+        <source>Updates are unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Checking for updates</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Downloading the update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Ready to install</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Installing the update</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The last update step failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>A newer version is available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Not checked yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Alcedo Studio is up to date</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+7"/>
+        <source>This build was compiled without a signed update feed, so it cannot check or install releases.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Contacting the signed release feed. This usually takes a few seconds.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is downloading now. You can cancel and try again later.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The package is verified. Install will close Alcedo Studio, replace this copy, and reopen.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Alcedo Studio is closing so the installer can replace this copy.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Review the error below, then check again. A later check can resume a partial download.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This development build can list a newer release, but it cannot replace itself. Use a packaged installer to install updates.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download the signed package, then install and restart when the file is ready.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Check the signed release feed to see whether a newer build is available.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
         <source>Updates are disabled in this build.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4735,33 +4822,67 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+2"/>
+        <source>Check again</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location line="+1"/>
         <source>Check for updates</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+36"/>
-        <source>Update available</source>
+        <location line="+5"/>
+        <location line="+4"/>
+        <source>Not checked</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+24"/>
-        <source>Installed: %1 · Available: %2</source>
+        <location line="+1"/>
+        <source>Same as installed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+39"/>
-        <source>This build can check for updates but cannot install them.</source>
+        <location line="+91"/>
+        <source>Installed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+46"/>
-        <source>Open release notes</source>
+        <location line="+1"/>
+        <source>Unavailable</source>
+        <translation type="unfinished">Unavailable</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Available</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-148"/>
+        <location line="+0"/>
+        <source>Latest</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+58"/>
+        <source>What&apos;s new in %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Release notes for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-201"/>
         <source>Install and restart</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>UpdatesSettingsPanel</name>
+    <message>
+        <location filename="../qml/UpdatesSettingsPanel.qml" line="+29"/>
+        <source>Software updates</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4908,7 +5029,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+67"/>
+        <location filename="../../../app/update_service.cpp" line="+66"/>
         <source>%1 (build %2)</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4938,7 +5059,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+62"/>
         <source>The update operation failed.</source>
         <translation type="unfinished"></translation>
     </message>

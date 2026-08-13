@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import tempfile
 
+from release_notes import ReleaseNotesError, validate_release_notes
+
 
 SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
@@ -86,6 +88,27 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("schema") != 1 or not isinstance(manifest.get("sequence"), int):
         raise RuntimeError("the manifest schema or sequence is not valid")
+    if not isinstance(manifest.get("version"), str) or not isinstance(manifest.get("build"), int):
+        raise RuntimeError("the manifest version or build is not valid")
+    changelogs = manifest.get("changelogs")
+    if not isinstance(changelogs, dict) or set(changelogs) != {"en", "zh-CN"}:
+        raise RuntimeError("the manifest does not contain both en and zh-CN release notes")
+    if manifest.get("changelog") != changelogs.get("en"):
+        raise RuntimeError("the legacy changelog fallback does not match the English notes")
+    for language in ("en", "zh-CN"):
+        if not isinstance(changelogs.get(language), str):
+            raise RuntimeError(f"the manifest {language} release notes are not text")
+        try:
+            validate_release_notes(
+                changelogs[language] + "\n",
+                manifest["version"],
+                manifest["build"],
+                language,
+            )
+        except ReleaseNotesError as error:
+            raise RuntimeError(
+                f"the manifest {language} release notes are not valid: {error}"
+            ) from error
     expected_keys = {args.platform} if args.platform else {"windows-x86_64", "macos-arm64"}
     if set(manifest.get("artifacts", {})) != expected_keys:
         raise RuntimeError("the manifest does not contain the required platform artifacts")

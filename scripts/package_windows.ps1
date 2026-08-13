@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Build Windows installer packages (WiX MSI / NSIS EXE / ZIP) for Alcedo Studio.
+    Build Windows installer packages (WiX MSI / NSIS EXE) for Alcedo Studio.
 .DESCRIPTION
     This script automates the CMake install + CPack workflow on Windows.
     It detects available packaging tools and prints installation hints if they are missing.
@@ -58,6 +58,12 @@ if (-not [long]::TryParse($resolvedBuildNumberText, [ref]$resolvedBuildNumber) -
 function Test-CommandAvailable {
     param([string]$Name)
     return ($null -ne (Get-Command $Name -ErrorAction SilentlyContinue))
+}
+
+$hasWix = (Test-CommandAvailable "candle.exe") -and (Test-CommandAvailable "light.exe")
+$hasNsis = Test-CommandAvailable "makensis.exe"
+if (-not $hasNsis) {
+    throw "NSIS is required to create the Windows .exe used by automatic updates. Install NSIS and ensure makensis.exe is on PATH. ZIP fallback packages are disabled."
 }
 
 function Resolve-DuckDbExtension {
@@ -171,6 +177,12 @@ if ($LASTEXITCODE -ne 0) {
 # 4. Run CPack
 # ------------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $PackageOutDir | Out-Null
+$legacyZipPackages = Get-ChildItem -LiteralPath $PackageOutDir `
+    -Filter "AlcedoStudio-*-Windows-*.zip" -File -ErrorAction SilentlyContinue
+foreach ($legacyZipPackage in $legacyZipPackages) {
+    Write-Host "Removing legacy Windows ZIP: $($legacyZipPackage.Name)" -ForegroundColor Gray
+    Remove-Item -LiteralPath $legacyZipPackage.FullName -Force
+}
 Write-Host "Running CPack ..." -ForegroundColor Yellow
 $cpackCmd = "cpack --config `"$BuildDir\CPackConfig.cmake`" -B `"$PackageOutDir`""
 Write-Host "> $cpackCmd"
@@ -187,7 +199,7 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "  Packaging Complete" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 
-$packages = Get-ChildItem -Path "$PackageOutDir\*" -Include *.msi,*.exe,*.zip
+$packages = Get-ChildItem -Path "$PackageOutDir\*" -Include *.msi,*.exe
 if ($packages) {
     foreach ($pkg in $packages) {
         $sizeMB = [math]::Round($pkg.Length / 1MB, 2)
@@ -207,26 +219,14 @@ Write-Host ""
 # ------------------------------------------------------------------
 # 6. Tooling hints
 # ------------------------------------------------------------------
-$hasWix = (Test-CommandAvailable "candle.exe") -and (Test-CommandAvailable "light.exe")
-$hasNsis = Test-CommandAvailable "makensis.exe"
-
-if (-not $hasWix -and -not $hasNsis) {
-    Write-Host "Notice: Neither WiX nor NSIS was detected. Only ZIP was generated." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "To generate a high-compression installer, install one of the following:" -ForegroundColor Cyan
-    Write-Host ""
+if (-not $hasWix) {
+    Write-Host "Optional WiX MSI package was skipped. To enable it, install:" -ForegroundColor Yellow
     Write-Host "  WiX Toolset v3.11 (MSI):" -ForegroundColor White
     Write-Host "    https://github.com/wixtoolset/wix3/releases/tag/wix3112rtm"
     Write-Host "    Install and ensure candle.exe / light.exe are on PATH."
-    Write-Host ""
-    Write-Host "  NSIS (high-compression EXE):" -ForegroundColor White
-    Write-Host "    https://nsis.sourceforge.io/Download"
-    Write-Host "    Install and ensure makensis.exe is on PATH."
-    Write-Host ""
-    Write-Host "After installing, re-run this script to produce MSI or EXE installers." -ForegroundColor Cyan
 } else {
-    if ($hasWix) { Write-Host "WiX detected   : MSI package enabled" -ForegroundColor Green }
-    if ($hasNsis) { Write-Host "NSIS detected  : EXE package enabled" -ForegroundColor Green }
+    Write-Host "WiX detected   : MSI package enabled" -ForegroundColor Green
 }
+Write-Host "NSIS detected  : EXE package enabled" -ForegroundColor Green
 
 Write-Host ""

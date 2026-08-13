@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import os
 from pathlib import Path
 import re
 import shutil
@@ -123,14 +122,6 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--signer", type=Path, default=None)
-    parser.add_argument("--notes-url", default="")
-    parser.add_argument("--changelog-file", type=Path, default=None)
-    parser.add_argument(
-        "--changelog-from",
-        type=Path,
-        default=REPO_ROOT / "CHANGELOG.md",
-        help="Extract optional ## [version] section. Use empty path to skip.",
-    )
     parser.add_argument("--valid-days", default=30, type=int)
     args = parser.parse_args()
 
@@ -212,13 +203,6 @@ def main() -> int:
     ]
     artifact_argument = "--windows" if args.platform == "windows" else "--macos-arm64"
     create_cmd.extend([artifact_argument, str(package_copy)])
-    if args.notes_url:
-        create_cmd.extend(["--notes-url", args.notes_url])
-    if args.changelog_file is not None:
-        create_cmd.extend(["--changelog-file", str(args.changelog_file)])
-    elif args.changelog_from and str(args.changelog_from) not in {"", os.devnull}:
-        if args.changelog_from.is_file():
-            create_cmd.extend(["--changelog-from", str(args.changelog_from)])
 
     run(create_cmd)
     run(

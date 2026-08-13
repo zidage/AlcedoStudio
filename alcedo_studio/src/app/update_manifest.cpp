@@ -174,6 +174,35 @@ UpdateManifestResult VerifyUpdateManifest(const QByteArray& manifest_bytes,
     }
   }
 
+  if (root.contains(QStringLiteral("changelogs"))) {
+    const QJsonValue changelogs_value = root.value(QStringLiteral("changelogs"));
+    if (!changelogs_value.isObject()) {
+      return Failure(QStringLiteral("The localized update changelogs are not valid."));
+    }
+    const QJsonObject changelogs_object = changelogs_value.toObject();
+    for (const QString& language : {QStringLiteral("en"), QStringLiteral("zh-CN")}) {
+      const QJsonValue value = changelogs_object.value(language);
+      if (!value.isString()) {
+        return Failure(QStringLiteral("The update changelog for %1 is not valid.").arg(language));
+      }
+      const QString text = value.toString();
+      if (text.trimmed().isEmpty() || text.size() > kMaximumChangelogChars) {
+        return Failure(
+            QStringLiteral("The update changelog for %1 is empty or too large.").arg(language));
+      }
+      manifest.changelogs.insert(language, text);
+    }
+    if (!manifest.changelog.isEmpty() &&
+        manifest.changelog != manifest.changelogs.value(QStringLiteral("en"))) {
+      return Failure(
+          QStringLiteral("The English update changelog does not match the compatibility text."));
+    }
+  }
+
+  if (manifest.changelogs.isEmpty() && !manifest.changelog.isEmpty()) {
+    manifest.changelogs.insert(QStringLiteral("en"), manifest.changelog);
+  }
+
   return UpdateManifestResult{std::move(manifest), {}};
 }
 

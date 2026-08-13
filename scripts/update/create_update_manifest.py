@@ -7,11 +7,9 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import re
 from pathlib import Path
 
-
-MAXIMUM_CHANGELOG_CHARS = 16 * 1024
+from release_notes import ReleaseNotesError, load_release_notes
 
 
 def artifact(path: Path, url: str) -> dict[str, object]:
@@ -33,23 +31,6 @@ def utc_text(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def extract_changelog(changelog_path: Path, version: str) -> str:
-    text = changelog_path.read_text(encoding="utf-8")
-    pattern = re.compile(
-        rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
-        re.MULTILINE | re.DOTALL,
-    )
-    match = pattern.search(text)
-    if not match:
-        return ""
-    body = match.group(1).strip()
-    if len(body) > MAXIMUM_CHANGELOG_CHARS:
-        raise SystemExit(
-            f"changelog for {version} exceeds {MAXIMUM_CHANGELOG_CHARS} characters"
-        )
-    return body
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
@@ -65,14 +46,6 @@ def main() -> int:
         default="https://static.aoraw.org/updates/v1/beta/builds",
     )
     parser.add_argument("--channel", choices=("stable", "beta"), default="stable")
-    parser.add_argument("--notes-url", default="")
-    parser.add_argument("--changelog-file", type=Path, default=None)
-    parser.add_argument(
-        "--changelog-from",
-        type=Path,
-        default=None,
-        help="CHANGELOG.md path; extract the ## [version] section when present",
-    )
     parser.add_argument("--valid-days", default=30, type=int)
     args = parser.parse_args()
 
@@ -89,13 +62,10 @@ def main() -> int:
         if not path.is_file() or path.stat().st_size < 1:
             parser.error(f"artifact does not exist or is empty: {path}")
 
-    changelog = ""
-    if args.changelog_file is not None:
-        changelog = args.changelog_file.read_text(encoding="utf-8").strip()
-        if len(changelog) > MAXIMUM_CHANGELOG_CHARS:
-            parser.error(f"changelog exceeds {MAXIMUM_CHANGELOG_CHARS} characters")
-    elif args.changelog_from is not None:
-        changelog = extract_changelog(args.changelog_from, args.version)
+    try:
+        changelogs = load_release_notes(args.version, args.build)
+    except ReleaseNotesError as error:
+        parser.error(str(error))
 
     now = dt.datetime.now(dt.timezone.utc)
     manifest: dict[str, object] = {
@@ -105,7 +75,9 @@ def main() -> int:
         "build": args.build,
         "publishedAt": utc_text(now),
         "expiresAt": utc_text(now + dt.timedelta(days=args.valid_days)),
-        "notesUrl": args.notes_url or f"https://github.com/zidage/AlcedoStudio/releases/tag/{args.tag}",
+        # Keep the English string for clients released before localized notes.
+        "changelog": changelogs["en"],
+        "changelogs": changelogs,
         "artifacts": {
             key: artifact(
                 path,
@@ -122,9 +94,6 @@ def main() -> int:
             for key, path in selected_paths.items()
         },
     }
-    if changelog:
-        manifest["changelog"] = changelog
-
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(
         (json.dumps(manifest, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")

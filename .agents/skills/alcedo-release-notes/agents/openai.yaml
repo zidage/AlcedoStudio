@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alcedo Release Notes"
+  short_description: "Generate and approve bilingual build release notes"
+  default_prompt: "Use $alcedo-release-notes to generate English and Simplified Chinese release notes for the next Alcedo build and present both drafts for my approval."

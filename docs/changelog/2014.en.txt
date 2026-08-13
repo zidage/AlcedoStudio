@@ -1,0 +1,21 @@
+Alcedo Studio 0.2.9 (Build 2014)
+
+Highlights
+----------
+- Export controls now live in the inspector, with reusable naming presets,
+  metadata and color-profile options, and pixel, print, and DPI sizing controls.
+  SDR and HDR exports now share the same selected size settings.
+- Album thumbnails now load through a dedicated image provider. Search, filter,
+  grid, and statistics results share the same filter rules and stay in sync.
+- Editor previews now use fixed quality levels and reuse open-image data, which
+  reduces redundant work during interactive adjustments and image switches.
+
+Updates
+-------
+- Added signed automatic updates for Windows and Apple silicon Macs. Stable and
+  beta builds use isolated feeds and verify release metadata, package size, and
+  the SHA-256 package digest before installation.
+- Update downloads can be canceled and resumed. Installation preserves the
+  existing application location instead of creating a second installation.
+- Settings now has a dedicated Updates page with installed and available build
+  numbers, download progress, errors, and release information in one place.

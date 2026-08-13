@@ -4,7 +4,7 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+80"/>
+        <location filename="../qml/AboutPage.qml" line="+79"/>
         <source>New to Alcedo Studio?</source>
         <translation>初次使用 Alcedo Studio？</translation>
     </message>
@@ -39,7 +39,7 @@
         <translation>版本</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+11"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -54,7 +54,7 @@
         <translation>基于 GPL-3.0-only 许可，并依据 GPLv3 第 7 条附加许可，允许组合与分发所需的 NVIDIA CUDA 组件。</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+15"/>
         <source>Links</source>
         <translation>链接</translation>
     </message>
@@ -4330,7 +4330,7 @@ Original source files on disk will be kept.</source>
         <translation>%1 / %2</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+68"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
@@ -4340,21 +4340,21 @@ Original source files on disk will be kept.</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+157"/>
-        <location line="+165"/>
+        <location line="-146"/>
+        <location line="+160"/>
+        <location line="+166"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-319"/>
-        <location line="+155"/>
+        <location line="-323"/>
+        <location line="+158"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-152"/>
-        <location line="+153"/>
+        <location line="-155"/>
+        <location line="+156"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
@@ -4393,7 +4393,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+187"/>
+        <location line="+188"/>
         <source>Update available</source>
         <translation>有可用更新</translation>
     </message>
@@ -4503,35 +4503,37 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>刷新</translation>
     </message>
     <message>
-        <location line="+197"/>
+        <location line="+212"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-840"/>
-        <location line="+146"/>
+        <location line="-856"/>
+        <location line="+147"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-154"/>
-        <location line="+151"/>
+        <location line="-158"/>
+        <location line="+154"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-148"/>
-        <location line="+149"/>
+        <location line="-151"/>
+        <location line="+152"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="-146"/>
-        <location line="+147"/>
+        <location line="-149"/>
+        <location line="+150"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
+        <location line="-147"/>
+        <location line="+148"/>
         <source>Updates</source>
         <translation>更新</translation>
     </message>
@@ -4706,172 +4708,193 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+12"/>
         <location line="+7"/>
         <source>Update available</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">有可用更新</translation>
     </message>
 </context>
 <context>
     <name>UpdateNotice</name>
     <message>
+        <location filename="../qml/UpdateNotice.qml" line="+55"/>
         <source>Updates are unavailable</source>
         <translation>此构建无法更新</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Checking for updates</source>
         <translation>正在检查更新</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Downloading the update</source>
         <translation>正在下载更新</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Ready to install</source>
         <translation>可以安装</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Installing the update</source>
         <translation>正在安装更新</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>The last update step failed</source>
         <translation>上一步更新失败</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>A newer version is available</source>
         <translation>有新版本可用</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Not checked yet</source>
         <translation>尚未检查</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Alcedo Studio is up to date</source>
         <translation>Alcedo Studio 已是最新版本</translation>
     </message>
     <message>
+        <location line="+7"/>
         <source>This build was compiled without a signed update feed, so it cannot check or install releases.</source>
         <translation>此构建未包含签名更新源，因此无法检查或安装新版本。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Contacting the signed release feed. This usually takes a few seconds.</source>
         <translation>正在连接签名发布源，通常只需几秒。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>The package is downloading now. You can cancel and try again later.</source>
         <translation>正在下载安装包。你可以取消，稍后再试。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>The package is verified. Install will close Alcedo Studio, replace this copy, and reopen.</source>
         <translation>安装包已通过校验。安装会关闭 Alcedo Studio，替换当前副本，然后重新打开。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Alcedo Studio is closing so the installer can replace this copy.</source>
         <translation>Alcedo Studio 即将关闭，以便安装程序替换当前副本。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Review the error below, then check again. A later check can resume a partial download.</source>
         <translation>请查看下方错误，然后重新检查。稍后检查可以继续未完成的下载。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>This development build can list a newer release, but it cannot replace itself. Use a packaged installer to install updates.</source>
         <translation>此开发构建可以列出新版本，但不能替换自身。请使用打包安装程序来安装更新。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Download the signed package, then install and restart when the file is ready.</source>
         <translation>请先下载签名安装包，文件就绪后再安装并重启。</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Check the signed release feed to see whether a newer build is available.</source>
         <translation>检查签名发布源，确认是否有更新的构建。</translation>
     </message>
-
     <message>
+        <location line="+8"/>
         <source>Updates are disabled in this build.</source>
         <translation>此构建已禁用更新。</translation>
     </message>
     <message>
+        <location line="+2"/>
+        <location line="+5"/>
         <source>Not checked yet.</source>
         <translation>尚未检查。</translation>
     </message>
     <message>
+        <location line="-3"/>
         <source>Checking for updates…</source>
         <translation>正在检查更新…</translation>
     </message>
     <message>
+        <location line="+10"/>
         <source>Checking…</source>
         <translation>正在检查…</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Cancel download</source>
         <translation>取消下载</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Install and restart</source>
         <translation>安装并重启</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Download update</source>
         <translation>下载更新</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Check again</source>
         <translation>重新检查</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Check for updates</source>
         <translation>检查更新</translation>
     </message>
     <message>
+        <location line="+5"/>
+        <location line="+4"/>
         <source>Not checked</source>
         <translation>尚未检查</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Same as installed</source>
         <translation>与已安装版本相同</translation>
     </message>
     <message>
-        <source>Beta</source>
-        <translation>Beta</translation>
+        <location line="+156"/>
+        <source>What&apos;s new in %1</source>
+        <translation>%1 更新内容</translation>
     </message>
     <message>
-        <source>Check</source>
-        <translation>检查</translation>
+        <location line="+30"/>
+        <source>Release notes for %1</source>
+        <translation>%1 的发行说明</translation>
     </message>
     <message>
-        <source>Download</source>
-        <translation>下载</translation>
-    </message>
-    <message>
-        <source>Install</source>
-        <translation>安装</translation>
-    </message>
-    <message>
+        <location line="-95"/>
         <source>Installed</source>
         <translation>已安装</translation>
     </message>
     <message>
+        <location line="+7"/>
         <source>Available</source>
         <translation>可用版本</translation>
     </message>
     <message>
+        <location line="+0"/>
         <source>Latest</source>
         <translation>最新版本</translation>
     </message>
     <message>
+        <location line="-6"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
-    </message>
-    <message>
-        <source>Open release notes</source>
-        <translation>打开发行说明</translation>
-    </message>
-    <message>
-        <source>What's new</source>
-        <translation>更新内容</translation>
     </message>
 </context>
 <context>
     <name>UpdatesSettingsPanel</name>
     <message>
+        <location filename="../qml/UpdatesSettingsPanel.qml" line="+29"/>
         <source>Software updates</source>
         <translation>软件更新</translation>
     </message>
@@ -5016,7 +5039,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+67"/>
+        <location filename="../../../app/update_service.cpp" line="+66"/>
         <source>%1 (build %2)</source>
         <translation>%1（构建 %2）</translation>
     </message>
@@ -5046,7 +5069,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>用户已取消更新下载。</translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+62"/>
         <source>The update operation failed.</source>
         <translation>更新操作失败。</translation>
     </message>

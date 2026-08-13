@@ -6,7 +6,6 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
-#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QNetworkReply>
@@ -181,16 +180,24 @@ QString UpdateService::changelog() const {
   return manifest_.has_value() ? manifest_->changelog : QString{};
 }
 
+QVariantMap UpdateService::changelogs() const {
+  QVariantMap result;
+  if (!manifest_.has_value()) {
+    return result;
+  }
+  for (auto iterator = manifest_->changelogs.cbegin();
+       iterator != manifest_->changelogs.cend(); ++iterator) {
+    result.insert(iterator.key(), iterator.value());
+  }
+  return result;
+}
+
 bool UpdateService::update_available() const {
   return state_ == State::Available || state_ == State::Downloading || state_ == State::Ready;
 }
 
 bool UpdateService::busy() const {
   return state_ == State::Checking || state_ == State::Downloading || state_ == State::Installing;
-}
-
-QUrl UpdateService::notes_url() const {
-  return manifest_.has_value() ? manifest_->notes_url : QUrl{};
 }
 
 void UpdateService::SetState(State state, QString status, QString error) {
@@ -498,12 +505,6 @@ void UpdateService::DeferUpdate() {
   }
   deferred_ = true;
   emit changed();
-}
-
-void UpdateService::OpenReleaseNotes() {
-  if (manifest_.has_value() && manifest_->notes_url.isValid()) {
-    QDesktopServices::openUrl(manifest_->notes_url);
-  }
 }
 
 QString UpdateService::PlatformKey() const {

@@ -15,6 +15,7 @@ ColumnLayout {
     property color mutedTextColor: appTheme.textMutedColor
     property color dividerColor: appTheme.cardBorderColor
     property string dataFontFamily: appTheme.dataFontFamily
+    readonly property string effectiveLanguageCode: languageManager.effectiveLanguageCode
 
     width: parent ? parent.width : implicitWidth
     spacing: appTheme.spaceXl
@@ -33,6 +34,7 @@ ColumnLayout {
         UpdateNotice {
             Layout.fillWidth: true
             updates: page.updateService
+            effectiveLanguageCode: page.effectiveLanguageCode
             showWhenUnchecked: true
         }
     }

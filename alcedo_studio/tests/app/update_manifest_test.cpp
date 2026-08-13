@@ -122,15 +122,54 @@ TEST(UpdateManifestTest, AcceptsSignedManifestWithoutChangelog) {
 }
 
 TEST(UpdateManifestTest, AcceptsOptionalChangelogField) {
-  const SignedManifest input = MakeSignedManifest(
-      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
-      QStringLiteral(R"(,"changelog":"Fixed export crash.\nImproved import.")"));
+  const SignedManifest input =
+      MakeSignedManifest(QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
+                         QStringLiteral(R"(,"changelog":"Fixed export crash.\nImproved import.")"));
   const auto result =
       VerifyUpdateManifest(input.json, input.signature, input.public_key,
                            QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
   ASSERT_TRUE(result) << result.error.toStdString();
-  EXPECT_EQ(result.manifest->changelog,
-            QStringLiteral("Fixed export crash.\nImproved import."));
+  EXPECT_EQ(result.manifest->changelog, QStringLiteral("Fixed export crash.\nImproved import."));
+  EXPECT_EQ(result.manifest->changelogs.value(QStringLiteral("en")),
+            result.manifest->changelog);
+}
+
+TEST(UpdateManifestTest, AcceptsEnglishAndSimplifiedChineseChangelogs) {
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
+      QStringLiteral(
+          R"(,"changelog":"Alcedo Studio 0.2.9 (Build 2009)\n\nUpdates\n-------\n- Improved export.","changelogs":{"en":"Alcedo Studio 0.2.9 (Build 2009)\n\nUpdates\n-------\n- Improved export.","zh-CN":"Alcedo Studio 0.2.9（构建 2009）\n\n更新内容\n--------\n- 改进了导出功能。"})"));
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  ASSERT_TRUE(result) << result.error.toStdString();
+  EXPECT_EQ(result.manifest->changelogs.value(QStringLiteral("en")), result.manifest->changelog);
+  EXPECT_EQ(result.manifest->changelogs.value(QStringLiteral("zh-CN")),
+            QStringLiteral("Alcedo Studio 0.2.9（构建 2009）\n\n更新内容\n--------\n"
+                           "- 改进了导出功能。"));
+}
+
+TEST(UpdateManifestTest, RejectsLocalizedChangelogsWithoutSimplifiedChinese) {
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
+      QStringLiteral(R"(,"changelog":"English notes.","changelogs":{"en":"English notes."})"));
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  EXPECT_FALSE(result);
+  EXPECT_TRUE(result.error.contains(QStringLiteral("zh-CN"), Qt::CaseInsensitive));
+}
+
+TEST(UpdateManifestTest, RejectsEnglishChangelogFallbackMismatch) {
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/releases/0.2.9/update.exe"), 42,
+      QStringLiteral(
+          R"(,"changelog":"Old English notes.","changelogs":{"en":"New English notes.","zh-CN":"中文发行说明。"})"));
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  EXPECT_FALSE(result);
+  EXPECT_TRUE(result.error.contains(QStringLiteral("English"), Qt::CaseInsensitive));
 }
 
 TEST(UpdateManifestTest, RejectsOversizedChangelog) {

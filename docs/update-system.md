@@ -112,6 +112,37 @@ use automatic build-number allocation.
 
 ## Sign and publish (one command)
 
+Before signing, invoke the repository skill `$alcedo-release-notes`. It runs the
+PR exporter, audits the evidence, drafts equivalent English and Simplified
+Chinese human-facing text, validates both files, and presents both complete
+drafts for user review. It writes the tracked pair only after explicit approval.
+
+The skill runs this evidence command internally:
+
+```powershell
+python scripts\update\export_release_prs.py `
+  --from-ref <previous-build-commit-or-tag> `
+  --to-ref <new-build-commit-or-tag> `
+  --build <new-build-number>
+```
+
+The script uses monotonically increasing GitHub PR numbers to bound its query,
+then includes a PR only when its merge commit, one of its branch commits, or an
+explicit PR reference is in the selected Git range. It writes structured review
+input to `build/tmp/update/release-notes/<build>-pr-review.json`. Give that JSON
+to an LLM for review; it must check duplicate, reverted, internal-only, and
+misleading entries rather than copying commit messages directly.
+
+Commit the approved results as `docs/changelog/<build>.en.txt` and
+`docs/changelog/<build>.zh-CN.txt`. Both files must be UTF-8 plain text with LF
+endings, a blank line after the heading, and lines no longer than 88 characters.
+The exact first lines are `Alcedo Studio <version> (Build <build>)` for English
+and `Alcedo Studio <version>（构建 <build>）` for Simplified Chinese. Tabs,
+trailing whitespace, Markdown headings/fences, files larger than 16 KiB, and
+missing final newlines are rejected. The two files describe the same supported
+user-visible changes. The root `CHANGELOG.md` only points to this tracked
+directory.
+
 ```powershell
 # Windows package machine
 python scripts\update\publish_update.py --platform windows `
@@ -126,14 +157,19 @@ This script:
 
 1. Reads version, build number, and update channel from the platform's CMake
    cache.
-2. Finds the package in the fixed output directory: Windows uses
+2. Finds the package in the fixed output directory: Windows uses the NSIS
    `build/release/package/*.exe`; macOS uses
    `build/macos-release/package/*.zip` plus its `.dmg`.
+   Windows packaging requires NSIS and does not generate portable ZIP archives.
 3. Copies the selected platform packages under
    `build/tmp/update/<channel>/<platform>/artifacts`.
 4. Writes a platform-specific `update-manifest.json` (schema 1).
-5. Adds optional `changelog` from `CHANGELOG.md` when a `## [version]` section
-   exists. The field is omitted when missing.
+5. Finds `docs/changelog/<build>.en.txt` and
+   `docs/changelog/<build>.zh-CN.txt` automatically, validates their plain-text
+   format and localized version/build headings, and writes them to the
+   `changelogs` manifest object. It also writes the English text to `changelog`
+   for clients released before localized notes. A missing or invalid file stops
+   publication.
 6. Signs with `alcedo_update_signer` and verifies the signature and package
    hashes.
 7. Uploads immutable build files first, the platform channel signature next,
@@ -269,7 +305,8 @@ next number automatically.
    all of these behaviors directly on the Updates page:
 
    - the installed and available versions include their build numbers;
-   - the changelog and release notes are readable without opening another dialog;
+   - the release notes appear in the page below the update actions, without a
+     dialog or external link;
    - Download update shows percentage, transferred bytes, speed, and remaining time;
    - Cancel download reports a user cancellation, and a later check and download
      can start normally and resume the partial package;
@@ -372,7 +409,15 @@ Required: `schema` (1), `sequence`, `version`, `build`, `publishedAt`,
 `sha256`, and `size`. A GitHub release manifest may contain both supported
 platform entries; a platform-machine upload contains only its own entry.
 
-Optional: `notesUrl`, `changelog` (plain text, max 16 KiB).
+Required release information: `changelogs`, containing validated `en` and
+`zh-CN` plain-text values (max 16 KiB each). `changelog` duplicates the English
+value for compatibility with clients released before localized notes.
+
+`notesUrl` remains accepted by older clients for schema-1 compatibility, but
+new manifests do not generate it and the Updates page does not open GitHub.
+The Updates page selects `changelogs.zh-CN` when the user's effective language
+is Simplified Chinese and `changelogs.en` otherwise. Changing the language
+updates the displayed text immediately without another network request.
 
 ## Platform limits
 

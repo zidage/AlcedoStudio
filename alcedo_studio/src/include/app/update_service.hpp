@@ -11,6 +11,7 @@
 #include <QString>
 #include <QStringList>
 #include <QUrl>
+#include <QVariantMap>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -34,6 +35,7 @@ class UpdateService final : public QObject {
   Q_PROPERTY(QString availableVersion READ available_version NOTIFY changed)
   Q_PROPERTY(quint64 availableBuild READ available_build NOTIFY changed)
   Q_PROPERTY(QString changelog READ changelog NOTIFY changed)
+  Q_PROPERTY(QVariantMap changelogs READ changelogs NOTIFY changed)
   Q_PROPERTY(QString statusText READ status_text NOTIFY changed)
   Q_PROPERTY(QString errorText READ error_text NOTIFY changed)
   Q_PROPERTY(double progress READ progress NOTIFY changed)
@@ -50,7 +52,6 @@ class UpdateService final : public QObject {
   Q_PROPERTY(bool updateDeferred READ update_deferred NOTIFY changed)
   Q_PROPERTY(bool downloadReady READ download_ready NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
-  Q_PROPERTY(QUrl notesUrl READ notes_url NOTIFY changed)
 
  public:
   enum class State {
@@ -78,6 +79,7 @@ class UpdateService final : public QObject {
   [[nodiscard]] QString available_version() const;
   [[nodiscard]] quint64 available_build() const;
   [[nodiscard]] QString changelog() const;
+  [[nodiscard]] QVariantMap changelogs() const;
   [[nodiscard]] QString status_text() const { return status_text_; }
   [[nodiscard]] QString error_text() const { return error_text_; }
   [[nodiscard]] double  progress() const { return progress_; }
@@ -94,7 +96,6 @@ class UpdateService final : public QObject {
   [[nodiscard]] bool    update_deferred() const { return deferred_; }
   [[nodiscard]] bool    download_ready() const { return state_ == State::Ready; }
   [[nodiscard]] bool    busy() const;
-  [[nodiscard]] QUrl    notes_url() const;
 
   Q_INVOKABLE void CheckForUpdates();
   Q_INVOKABLE void DownloadUpdate();
@@ -103,7 +104,6 @@ class UpdateService final : public QObject {
   Q_INVOKABLE bool CommitInstall();
   Q_INVOKABLE void CancelInstall();
   Q_INVOKABLE void DeferUpdate();
-  Q_INVOKABLE void OpenReleaseNotes();
 
  signals:
   void changed();

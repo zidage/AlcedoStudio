@@ -3,13 +3,14 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Reusable update workflow card. Settings > Updates hosts the full page;
-// this card owns status, version compare, actions, progress, and changelog.
+// this card owns status, version compare, actions, progress, and release notes.
 Rectangle {
     id: root
     objectName: "updatesNotice"
 
     required property var updates
     property bool showWhenUnchecked: true
+    property string effectiveLanguageCode: "en"
 
     readonly property bool enabledUpdates: updates && updates.enabled
     readonly property bool hasOffer: enabledUpdates
@@ -24,6 +25,18 @@ Rectangle {
                                      && !updates.hasError
                                      && !hasOffer
                                      && !updates.installing
+    readonly property string releaseNotesText: {
+        if (!updates)
+            return ""
+        const language = String(effectiveLanguageCode).toLowerCase().indexOf("zh") === 0
+                         ? "zh-CN" : "en"
+        const localized = updates.changelogs
+        if (localized && localized[language])
+            return String(localized[language])
+        if (localized && localized.en)
+            return String(localized.en)
+        return updates.changelog ? String(updates.changelog) : ""
+    }
 
     visible: showRow
     implicitWidth: 200
@@ -237,14 +250,6 @@ Rectangle {
                 onClicked: root.runPrimaryAction()
             }
 
-            DialogActionButton {
-                Layout.alignment: Qt.AlignVCenter
-                visible: root.updates && root.updates.notesUrl.toString().length > 0
-                text: qsTr("Open release notes")
-                kind: "normal"
-                onClicked: root.updates.OpenReleaseNotes()
-            }
-
             Item {
                 Layout.fillWidth: true
             }
@@ -277,12 +282,12 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
-            visible: root.updates && root.updates.changelog.length > 0
+            visible: root.hasOffer && root.releaseNotesText.length > 0
             spacing: appTheme.spaceSm
 
             Label {
                 Layout.fillWidth: true
-                text: qsTr("What's new")
+                text: qsTr("What's new in %1").arg(root.availableVersionText)
                 color: appTheme.textColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeBody
@@ -302,12 +307,17 @@ Rectangle {
                     objectName: "updatesChangelogLabel"
                     anchors.fill: parent
                     anchors.margins: appTheme.spaceMd
-                    text: root.updates ? root.updates.changelog : ""
+                    text: root.releaseNotesText
+                    textFormat: Text.PlainText
                     color: appTheme.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightRegular
                     wrapMode: Text.WordWrap
-                    lineHeight: 1.35
+                    lineHeightMode: Text.FixedHeight
+                    lineHeight: appTheme.lineHeightBody
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: qsTr("Release notes for %1").arg(root.availableVersionText)
                 }
             }
         }

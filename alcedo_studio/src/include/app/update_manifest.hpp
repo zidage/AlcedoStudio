@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QMap>
 #include <QString>
 #include <QUrl>
 #include <optional>
@@ -26,6 +27,7 @@ struct UpdateManifest {
   QDateTime      expires_at;
   QUrl           notes_url;
   QString        changelog;
+  QMap<QString, QString> changelogs;
   UpdateArtifact artifact;
 };
 
