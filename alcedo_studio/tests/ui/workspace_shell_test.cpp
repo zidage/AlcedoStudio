@@ -892,6 +892,8 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ASSERT_TRUE(
       session->submitPatch(QStringLiteral("exposure"), QStringLiteral(R"({"value":0.30})"), false));
   EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
+  EXPECT_TRUE(viewport->interactivePresentLoopActive())
+      << "unsettled adjustment must arm vsync-sampled consume";
   const auto interactive_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
   while (viewport->presentedFrameCount() <= composed_before_drag &&
          std::chrono::steady_clock::now() < interactive_deadline) {
@@ -906,6 +908,8 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ProcessEvents(60);
   const auto gen_b = viewport->sessionEpoch();
   EXPECT_GT(gen_b, gen_a1);
+  EXPECT_FALSE(viewport->interactivePresentLoopActive())
+      << "image switch must stop vsync-sampled consume";
   loaded->host.workspace_router()->OpenEditor(7, 70);
   ProcessEvents(60);
   const auto gen_a2 = viewport->sessionEpoch();

@@ -36,8 +36,9 @@ struct Sample {
 // during a long interactive session.
 constexpr std::size_t kMaxPendingSamples = 256;
 
-std::mutex                                g_mutex;
-std::unordered_map<std::uint64_t, Sample> g_samples;
+std::mutex                                          g_mutex;
+std::unordered_map<std::uint64_t, Sample>           g_samples;
+std::unordered_map<std::string, Clock::time_point>  g_last_displayed_by_role;
 
 auto MsBetween(const Clock::time_point start, const Clock::time_point end) -> double {
   return std::chrono::duration<double, std::milli>(end - start).count();
@@ -211,7 +212,8 @@ void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
   }
   const auto now = Clock::now();
 
-  Sample sample;
+  Sample                 sample;
+  std::optional<double>  display_dt_ms;
   {
     std::lock_guard lock(g_mutex);
     const auto      it = g_samples.find(request_id);
@@ -220,6 +222,14 @@ void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
     }
     sample = std::move(it->second);
     g_samples.erase(it);
+    // Cadence is per role so a same-tick QualityBase/DetailPatch import does
+    // not collapse InteractivePrimary display_dt to ~0.
+    const std::string role_key = sample.role.empty() ? std::string("?") : sample.role;
+    if (const auto last = g_last_displayed_by_role.find(role_key);
+        last != g_last_displayed_by_role.end()) {
+      display_dt_ms = MsBetween(last->second, now);
+    }
+    g_last_displayed_by_role[role_key] = now;
   }
 
   const double total_ms       = MsBetween(sample.submit_at, now);
@@ -239,7 +249,6 @@ void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
   // Render-thread work after the frame starts: target fulfill + createFrom.
   // consume_begin is retained for diagnostics if fulfill ever grows.
   const double import_ms = MsBetween(render_enter, now);
-  const double fps       = total_ms > 0.0 ? (1000.0 / total_ms) : 0.0;
 
   std::cout << std::fixed << std::setprecision(2) << "[RENDER_E2E] request=" << request_id
             << " reason=" << (sample.reason.empty() ? "?" : sample.reason)
@@ -247,8 +256,15 @@ void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
             << " role=" << (sample.role.empty() ? "?" : sample.role) << " total=" << total_ms
             << "ms queue=" << queue_ms << "ms pipeline=" << pipeline_ms
             << "ms present=" << present_ms << "ms (wake=" << wake_ms << "ms gui_wait=" << gui_wait_ms
-            << "ms sg_wait=" << sg_wait_ms << "ms import=" << import_ms << "ms) (~"
-            << std::setprecision(1) << fps << " fps)" << std::endl;
+            << "ms sg_wait=" << sg_wait_ms << "ms import=" << import_ms << "ms)";
+  if (display_dt_ms.has_value() && *display_dt_ms > 0.0) {
+    const double cadence_fps = 1000.0 / *display_dt_ms;
+    std::cout << " display_dt=" << *display_dt_ms << "ms (~" << std::setprecision(1) << cadence_fps
+              << " fps)";
+  } else {
+    std::cout << " display_dt=n/a";
+  }
+  std::cout << std::endl;
 
   (void)consume_begin;
 }

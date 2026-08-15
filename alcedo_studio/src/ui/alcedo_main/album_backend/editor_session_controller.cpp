@@ -1105,15 +1105,27 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
 }
 
 bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!can_edit()) {
+    // Pointer release must still stop the vsync consume if edit was lost
+    // mid-drag (image switch / session teardown).
+    if (settled && viewport) {
+      viewport->endInteractivePresentLoop();
+    }
     return false;
   }
   // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
   // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. The worker's
-  // NotifyFrameReady update remains the completion-side wakeup.
-  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  // can block waiting for a recyclable direct-present slot. Unsettled patches
+  // also arm a vsync-sampled consume so a Ready frame does not wait for the
+  // next pointer event or a missed requestUpdate. The worker's NotifyFrameReady
+  // update remains the completion-side wakeup when the loop is not armed.
   if (viewport) {
+    if (settled) {
+      viewport->endInteractivePresentLoop();
+    } else {
+      viewport->beginInteractivePresentLoop();
+    }
     viewport->prepareForAdjustmentFrame();
   }
   alcedo::EditorAdjustmentPatch patch;

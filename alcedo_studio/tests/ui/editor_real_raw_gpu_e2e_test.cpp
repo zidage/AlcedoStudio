@@ -384,6 +384,8 @@ TEST_F(EditorRealRawGpuE2eTest,
       ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
                                        QStringLiteral(R"({"value":0.30})"), false));
       EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
+      EXPECT_TRUE(viewport->interactivePresentLoopActive())
+          << "unsettled adjustment must arm vsync-sampled consume";
       ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() > composed_before_drag; },
                             std::chrono::minutes(2)))
           << "FAST adjustment frame was not composed before pointer release; status="
