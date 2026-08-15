@@ -59,6 +59,11 @@ class EditorHistoryState {
   auto EnsureWorkingState(sl_element_id_t element_id, std::string* error)
       -> std::shared_ptr<HistoryWorkingState>;
 
+  /// Return a prepared working state without loading. Null when prepare has
+  /// not finished; snapshot readers must not create state on the GUI thread.
+  [[nodiscard]] auto PeekWorkingState(sl_element_id_t element_id) const
+      -> std::shared_ptr<HistoryWorkingState>;
+
   /// Drop the working history state for one image.
   void ReleaseState(sl_element_id_t element_id);
 

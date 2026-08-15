@@ -178,6 +178,35 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
   EXPECT_EQ(sink.notify_count(), notifies_after_newer);
 }
 
+TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIsReleased) {
+  RegisterAllOperators();
+  auto               exec = std::make_shared<CPUPipelineExecutor>();
+  RecordingFrameSink sink;
+  ConfigureMinimalPipeline(exec);
+  exec->SetExecutionStages(&sink);
+
+  PipelineScheduler scheduler(1);
+  PipelineTask      task;
+  task.input_                             = MakeSolidImage(8, 8);
+  task.pipeline_executor_                 = exec;
+  task.request_id_                        = 17;
+  task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+  auto lock_released = std::make_shared<std::promise<bool>>();
+  auto completed     = lock_released->get_future();
+  task.on_complete_  = [exec, lock_released](bool) {
+    const bool acquired = exec->GetRenderLock().try_lock();
+    if (acquired) {
+      exec->GetRenderLock().unlock();
+    }
+    lock_released->set_value(acquired);
+  };
+
+  scheduler.ScheduleTask(std::move(task));
+
+  ASSERT_EQ(completed.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+  EXPECT_TRUE(completed.get());
+}
+
 TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) {
   using editor_rhi::DirectPresentQueue;
   using editor_rhi::EditorBackend;

@@ -224,10 +224,11 @@ uses the monochrome selected fill.
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
 `overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
-Save). Save calls `workspaceRouter.openLibrary()` — the same Finalize(true) seal
-as switching to Library — then waits on `sessionState` (`Saving` / `Switching`,
-same gate as the filmstrip) until `NoImage` before quitting. Discard uses
-`Finalize(false)`.
+Save). Save explicitly calls `Finalize(true)`, routes to Library, then waits on
+`sessionState` (`Saving` / `Switching`, same gate as the filmstrip) until
+`NoImage` before quitting. Discard uses `Finalize(false)`. Ordinary Library /
+Editor workspace navigation only changes visibility; it preserves the editor
+session, retained QML tree, viewport, and presentation sink.
 
 The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
 Icon and action geometry; the rail width is not tokenized because it is locked to

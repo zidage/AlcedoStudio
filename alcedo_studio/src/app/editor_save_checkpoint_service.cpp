@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -102,10 +103,10 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
 
   {
     std::scoped_lock lock(mutex_);
-    pending_saves_.push_back(PendingSave{request_id, request.operation_id,
-                                         request.image_load_request_id, request.element_id, task_id,
-                                         std::move(request.capture), request.last_journal_sequence,
-                                         std::move(save_lock), completion});
+    pending_saves_.push_back(PendingSave{
+        request_id, request.operation_id, request.image_load_request_id, request.element_id, task_id,
+        std::move(request.capture), request.last_journal_sequence, std::move(save_lock),
+        completion});
   }
 
   struct StartObservation {
@@ -222,10 +223,10 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     if (it == pending_saves_.end()) {
       return;
     }
-    task_id      = it->task_id;
-    operation_id = it->operation_id;
-    completion   = it->completion;
-    save_lock    = std::move(it->save_lock);
+    task_id                  = it->task_id;
+    operation_id             = it->operation_id;
+    completion               = it->completion;
+    save_lock                = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (deps_.tasks && task_id != 0) {
@@ -259,10 +260,10 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     if (it == pending_saves_.end()) {
       return;
     }
-    found        = true;
-    task_id      = it->task_id;
-    operation_id = it->operation_id;
-    element_id   = it->element_id;
+    found           = true;
+    task_id         = it->task_id;
+    operation_id    = it->operation_id;
+    element_id      = it->element_id;
     load_request_id = it->image_load_request_id;
 
     if (!outcome.accepted || !outcome.durable) {
@@ -305,7 +306,8 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
       EditorSaveCheckpointCoordinator::SaveCheckpointLock late_lock;
       if (TakePendingSave(request_id, &late_task_id, &late_completion, &late_lock)) {
         FinishSave(request_id, operation_id, load_request_id, late_task_id, false,
-                   "Materialization could not start", late_completion, std::move(late_lock));
+                   "Materialization could not start", late_completion, std::move(late_lock),
+                   std::nullopt);
       }
     }
     return;
@@ -324,7 +326,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
   }
   FinishSave(request_id, operation_id, load_request_id, task_id, ok, msg, completion,
-             std::move(early_lock));
+             std::move(early_lock), std::nullopt);
 }
 
 void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,
@@ -345,13 +347,13 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
     if (it == pending_saves_.end()) {
       return;
     }
-    found                 = true;
-    task_id               = it->task_id;
-    operation_id          = it->operation_id;
-    element_id            = it->element_id;
-    load_request_id = it->image_load_request_id;
-    last_journal_sequence = it->last_journal_sequence;
-    save_lock             = std::move(it->save_lock);
+    found                    = true;
+    task_id                  = it->task_id;
+    operation_id             = it->operation_id;
+    element_id               = it->element_id;
+    load_request_id          = it->image_load_request_id;
+    last_journal_sequence    = it->last_journal_sequence;
+    save_lock                = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (!found) {
@@ -374,7 +376,7 @@ void EditorSaveCheckpointService::FinishSave(
     std::uint64_t task_id, bool checkpoint_completed, std::string message,
     SaveCheckpointCompletion                              completion,
     EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
-    std::optional<std::uint64_t>                          last_journal_sequence) {
+    std::optional<std::uint64_t> last_journal_sequence) {
   if (deps_.tasks && task_id != 0) {
     deps_.tasks->EndTask(task_id, checkpoint_completed, message);
   }

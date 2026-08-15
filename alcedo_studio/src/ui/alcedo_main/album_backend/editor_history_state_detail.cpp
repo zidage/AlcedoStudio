@@ -237,6 +237,13 @@ attach_history:
   return inserted ? state : it->second;
 }
 
+auto EditorHistoryState::PeekWorkingState(sl_element_id_t element_id) const
+    -> std::shared_ptr<HistoryWorkingState> {
+  std::scoped_lock lock(mutex_);
+  const auto       existing = working_states_.find(element_id);
+  return existing == working_states_.end() ? nullptr : existing->second;
+}
+
 void EditorHistoryState::ReleaseState(sl_element_id_t element_id) {
   std::scoped_lock lock(mutex_);
   working_states_.erase(element_id);
@@ -255,7 +262,7 @@ auto EditorHistoryState::PipelineMapper() const
 
 auto EditorHistoryState::HasUnmaterializedChanges(sl_element_id_t element_id, std::string* error)
     -> bool {
-  auto state = EnsureWorkingState(element_id, error);
+  auto state = PeekWorkingState(element_id);
   if (!state) return false;
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
     if (error) *error = "Editor history graph is unavailable";

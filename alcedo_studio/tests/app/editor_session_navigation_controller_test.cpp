@@ -67,6 +67,26 @@ TEST_F(EditorSessionNavigationControllerTest,
             test::EditorSessionNavigationFixture::kElementA);
 }
 
+TEST_F(EditorSessionNavigationControllerTest,
+       SwitchDoesNotReleaseCurrentImageUntilSaveAndRenderAreBothFinished) {
+  fixture_.OpenA();
+  fixture_.render_submit().defer_idle_completion = true;
+
+  const auto result = fixture_.RequestSwitchToB();
+  ASSERT_TRUE(result.waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
+
+  fixture_.render_submit().CompleteSessionIdle();
+
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 1);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 1);
+}
+
 TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcquiresB) {
   fixture_.OpenA();
 

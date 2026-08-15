@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_session_ports.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "edit/history/commit_types.hpp"
 #include "type/type.hpp"
@@ -52,6 +53,9 @@ struct PendingEditorAction {
   /// Phase 7A: selected commit for BranchFromCommitAndCheckout.
   commit_hash_t           branch_commit{};
   CheckpointTicket        ticket{};
+  ImageLoadRequestId      sealed_image_load_request_id{};
+  bool                    render_idle = false;
+  std::optional<SaveCheckpointResult> checkpoint_result;
 };
 
 /// Mutable navigation state owned by the session command reducer. The
@@ -65,10 +69,6 @@ struct EditorSessionNavigationState {
   /// pending_action once the running save completes and the prior image is
   /// acquired. Only SwitchImage selections queue here.
   std::optional<PendingEditorAction> pending_next_target;
-  /// History needs live-pipeline ownership (render_lock_) after save, but the
-  /// GUI must not block on render. When the worker still owns the pipeline,
-  /// stash the Version op here and finish it on the next render-idle edge.
-  std::optional<PendingEditorAction> deferred_pipeline_ownership;
 };
 
 /// Outcome of a navigation request. The facade uses this to publish the
@@ -81,6 +81,8 @@ struct NavigationOutcome {
   /// no-op, or a discard-and-continue path). Save-bounded navigations never
   /// set this: their completion is posted through the command queue.
   bool             completed_synchronously = false;
+  /// No save is needed, but resource release waits for render idleness.
+  bool             waiting_for_render_idle = false;
   /// The request was rejected (e.g. concurrent navigation or shutdown).
   bool             rejected                = false;
   /// The request failed (e.g. save seal failure).
@@ -176,6 +178,9 @@ class EditorSessionNavigationController final {
   /// the matching EditorSessionResult for the UI.
   void               SetCompletionNotifier(NavigationCompletionNotifier notifier);
 
+  /// Post render-idle completion back onto the session owner thread.
+  void               SetOwnerPoster(std::function<void(std::function<void()>)> poster);
+
   /// Phase 7A: true when the session is in the RetainedImageFailure state and
   /// a pending recovery target exists (save failure with a pending navigation).
   [[nodiscard]] auto has_pending_recovery() const -> bool;
@@ -193,11 +198,6 @@ class EditorSessionNavigationController final {
   /// retained image. No data loss: the image stays published.
   void               CancelPendingNavigation();
 
-  /// Resume a Version op that was deferred because render still owned the live
-  /// pipeline. Called from the owner thread when the render queue goes idle.
-  /// GUI never waits for render; history simply runs when ownership is free.
-  void               TryResumeDeferredPipelineOwnership();
-
  private:
   /// Seal the current image: finalize edit, capture checkpoint, start save.
   /// Returns a valid ticket on success.
@@ -205,6 +205,11 @@ class EditorSessionNavigationController final {
   /// Continue to the target image after a successful save. Acquires guards and
   /// starts the first-frame render.
   void ContinueToTarget(sl_element_id_t element_id, image_id_t image_id, bool is_switch);
+  void StartRenderIdleBarrier(ImageLoadRequestId image_load_request);
+  void OnRenderSessionIdle(ImageLoadRequestId image_load_request);
+  void TryCompletePendingAction();
+  void CompletePendingAction(PendingEditorAction pending,
+                             const SaveCheckpointResult& result);
   /// Continue to a close after a successful save.
   void ContinueToClose(bool persist_changes);
   /// Continue Version checkout after a successful save on the current image.
@@ -244,6 +249,7 @@ class EditorSessionNavigationController final {
   std::thread::id                owner_thread_;
   std::uint64_t                  operation_id_ = 0;
   NavigationCompletionNotifier   completion_notifier_;
+  std::function<void(std::function<void()>)> owner_poster_;
 };
 
 }  // namespace alcedo

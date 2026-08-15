@@ -423,18 +423,25 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = task.request_id_;
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
-    bool completed = false;
-    const auto finish = [&task, &completed](bool success) {
-      if (completed) {
+    std::optional<bool> completion_result;
+    // Some render paths return from inside the render_lock scope. Record the
+    // result there, but invoke the external completion only when this outer
+    // guard is destroyed, after every inner lock and render parameter guard.
+    auto completion_guard = std::unique_ptr<void, std::function<void(void*)>>(
+        reinterpret_cast<void*>(1), [&task, &completion_result](void*) {
+          if (!completion_result.has_value() || !task.on_complete_) {
+            return;
+          }
+          try {
+            task.on_complete_(*completion_result);
+          } catch (...) {
+          }
+        });
+    const auto finish = [&completion_result](bool success) {
+      if (completion_result.has_value()) {
         return;
       }
-      completed = true;
-      if (task.on_complete_) {
-        try {
-          task.on_complete_(success);
-        } catch (...) {
-        }
-      }
+      completion_result = success;
     };
 
     const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {

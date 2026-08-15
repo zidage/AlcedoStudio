@@ -389,6 +389,36 @@ void EditorSessionRenderController::MarkImageAcquired() {
   image_acquired_ = true;
 }
 
+void EditorSessionRenderController::CancelSession(ImageLoadRequestId image_load_request) {
+  if (deps_.render && image_load_request.valid()) {
+    deps_.render->CancelSession(image_load_request.value);
+  }
+}
+
+void EditorSessionRenderController::CancelSession(
+    ImageLoadRequestId image_load_request,
+    std::function<void(ImageLoadRequestId)> on_idle) {
+  if (!image_load_request.valid()) {
+    if (on_idle) {
+      on_idle(image_load_request);
+    }
+    return;
+  }
+  if (!deps_.render) {
+    if (on_idle) {
+      on_idle(image_load_request);
+    }
+    return;
+  }
+  deps_.render->CancelSession(
+      image_load_request.value,
+      [on_idle = std::move(on_idle)](std::uint64_t request) {
+        if (on_idle) {
+          on_idle(ImageLoadRequestId{request});
+        }
+      });
+}
+
 void EditorSessionRenderController::CancelSessionAndWait(ImageLoadRequestId image_load_request) {
   if (deps_.render && image_load_request.valid()) {
     deps_.render->CancelSessionAndWait(image_load_request.value);

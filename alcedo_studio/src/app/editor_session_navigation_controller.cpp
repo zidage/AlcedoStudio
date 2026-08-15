@@ -4,7 +4,10 @@
 
 #include "app/editor_session_navigation_controller.hpp"
 
+#include <thread>
 #include <utility>
+
+#include "app/editor_session_ports.hpp"
 
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_session_lifecycle.hpp"
@@ -150,6 +153,20 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
   }
 
   const auto current_identity = lifecycle_.identity();
+  if (persist_changes && current_identity.element_id != 0 && current_identity.image_id != 0 &&
+      !lifecycle_.has_history_guard()) {
+    PendingEditorAction pending;
+    pending.kind              = PendingEditorActionKind::CloseEditor;
+    pending.persist           = true;
+    pending.checkpoint_result = SaveCheckpointResult{.checkpoint_completed = true};
+    state_->pending_action    = std::move(pending);
+    StartRenderIdleBarrier(lifecycle_.active_image_load_request());
+    outcome.waiting_for_render_idle = state_->pending_action.has_value();
+    outcome.completed_synchronously = !outcome.waiting_for_render_idle;
+    outcome.message = "Waiting for editor render shutdown";
+    return outcome;
+  }
+
   if (persist_changes && current_identity.element_id != 0 && current_identity.image_id != 0) {
     PendingEditorAction pending;
     pending.kind           = PendingEditorActionKind::CloseEditor;
@@ -180,17 +197,23 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
     return outcome;
   }
 
-  // Discard or no-image close: finalize discard and close immediately.
+  // Discard or no-image close: release only after the render worker confirms
+  // that it no longer owns the session or presentation sink.
   if (!persist_changes && journal_ != nullptr) {
     std::string error;
     journal_->DiscardUnflushed(current_identity.element_id, &error);
   }
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
-  lifecycle_.ReleaseGuards();
-  lifecycle_.CompleteClose();
-  render_.ResetForNewImage();
-  outcome.completed_synchronously = true;
-  outcome.message = persist_changes ? "Editor session closed" : "Editor changes discarded";
+  PendingEditorAction pending;
+  pending.kind              = PendingEditorActionKind::CloseEditor;
+  pending.persist           = persist_changes;
+  pending.checkpoint_result = SaveCheckpointResult{.checkpoint_completed = true};
+  state_->pending_action    = std::move(pending);
+  StartRenderIdleBarrier(lifecycle_.active_image_load_request());
+  outcome.waiting_for_render_idle = state_->pending_action.has_value();
+  outcome.completed_synchronously = !outcome.waiting_for_render_idle;
+  outcome.message = outcome.waiting_for_render_idle
+                        ? "Waiting for editor render shutdown"
+                        : (persist_changes ? "Editor session closed" : "Editor changes discarded");
   return outcome;
 }
 
@@ -207,11 +230,9 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
       (pending.ticket.request_id != result.request_id ||
        pending.ticket.image_load_request_id != result.image_load_request_id ||
        (pending.ticket.operation_id != 0 && result.operation_id != 0 &&
-        pending.ticket.operation_id != result.operation_id))) {
+       pending.ticket.operation_id != result.operation_id))) {
     return;
   }
-  state_->pending_action.reset();
-
   if (!result.checkpoint_completed) {
     // Phase 7A repair: preserve the pending target for recovery. The
     // lifecycle transitions to RetainedImageFailure so the image stays
@@ -219,14 +240,62 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     // Cancel. A selection queued behind the failed save is dropped: it never
     // changes the recovered target and is never promoted after recovery.
     state_->pending_next_target.reset();
+    state_->pending_action.reset();
     RetainPendingFailure(pending, result.error.empty() ? "Save checkpoint failed" : result.error);
     return;
   }
 
+  state_->pending_action->checkpoint_result = result;
+  TryCompletePendingAction();
+}
+
+void EditorSessionNavigationController::StartRenderIdleBarrier(
+    ImageLoadRequestId image_load_request) {
+  if (!state_->pending_action.has_value()) {
+    return;
+  }
+  state_->pending_action->sealed_image_load_request_id = image_load_request;
+  render_.CancelSession(image_load_request, [this](ImageLoadRequestId completed_request) {
+    auto completion = [this, completed_request] { OnRenderSessionIdle(completed_request); };
+    if (owner_poster_) {
+      owner_poster_(std::move(completion));
+    } else {
+      completion();
+    }
+  });
+}
+
+void EditorSessionNavigationController::OnRenderSessionIdle(
+    ImageLoadRequestId image_load_request) {
+  AssertOwnerThread();
+  if (!state_->pending_action.has_value() ||
+      state_->pending_action->sealed_image_load_request_id != image_load_request) {
+    return;
+  }
+  state_->pending_action->render_idle = true;
+  TryCompletePendingAction();
+}
+
+void EditorSessionNavigationController::TryCompletePendingAction() {
+  AssertOwnerThread();
+  if (!state_->pending_action.has_value() || !state_->pending_action->render_idle ||
+      !state_->pending_action->checkpoint_result.has_value()) {
+    return;
+  }
+  auto pending = std::move(*state_->pending_action);
+  auto result  = std::move(*pending.checkpoint_result);
+  state_->pending_action.reset();
+  CompletePendingAction(std::move(pending), result);
+}
+
+void EditorSessionNavigationController::CompletePendingAction(
+    PendingEditorAction pending, const SaveCheckpointResult& result) {
+  AssertOwnerThread();
+
   // Materializer truncates the durable journal by path. Drop the matching live
   // prefix while the history guard is still held so a same-session capture does
   // not re-include already-materialized sequences.
-  if (result.last_journal_sequence.has_value() && history_ != nullptr &&
+  if (pending.persist && result.last_journal_sequence.has_value() && history_ != nullptr &&
       lifecycle_.has_history_guard()) {
     std::string discard_error;
     (void)history_->DiscardMaterializedJournalThrough(
@@ -237,7 +306,7 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
   // in memory so the upcoming Continue* version/checkout persistence guard accepts it
   // instead of rejecting the durable state as stale. Fail closed: continuing with a
   // desynced in-memory tuple surfaces as "persisted history changed" mid-create.
-  if (history_ != nullptr && lifecycle_.has_history_guard()) {
+  if (pending.persist && history_ != nullptr && lifecycle_.has_history_guard()) {
     std::string sync_error;
     if (!history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(), &sync_error)) {
       RetainPendingFailure(pending, sync_error.empty()
@@ -253,10 +322,6 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string checkout_error;
     if (ContinueCheckoutVersion(pending.version_id, &checkout_error)) {
-      if (state_->deferred_pipeline_ownership.has_value()) {
-        // History is queued behind render ownership; GUI is not blocked.
-        return;
-      }
       NotifyCompletion(true, false, "Checked out Version", pending.ticket);
     } else {
       // Phase 7A repair: the save succeeded and the history port fails closed,
@@ -272,9 +337,6 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string create_error;
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
-      if (state_->deferred_pipeline_ownership.has_value()) {
-        return;
-      }
       NotifyCompletion(true, false, "Created root Version", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -287,9 +349,6 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     std::string branch_error;
     if (ContinueBranchFromCommit(pending.branch_commit, std::move(pending.display_name),
                                  &branch_error)) {
-      if (state_->deferred_pipeline_ownership.has_value()) {
-        return;
-      }
       NotifyCompletion(true, false, "Branched from commit", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -348,7 +407,8 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
                                                          bool start_background_save)
     -> CheckpointTicket {
   const auto identity = lifecycle_.identity();
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+  const auto sealed_load_request = lifecycle_.active_image_load_request();
+  StartRenderIdleBarrier(sealed_load_request);
 
   if (persist_changes) {
     if (journal_ != nullptr) {
@@ -400,6 +460,11 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
   return CheckpointTicket{};
 }
 
+void EditorSessionNavigationController::SetOwnerPoster(
+    std::function<void(std::function<void()>)> poster) {
+  owner_poster_ = std::move(poster);
+}
+
 void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element_id,
                                                          image_id_t image_id, bool is_switch) {
   std::string error;
@@ -411,11 +476,9 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
     lifecycle_.Fail(error);
     return;
   }
-
   lifecycle_.MarkImageReady();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
-
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
@@ -504,19 +567,6 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
-  // History needs live-pipeline ownership; the GUI must not wait for render.
-  // If the worker still owns render_lock_, stash the op and finish on the next
-  // render-idle edge (TryResumeDeferredPipelineOwnership).
-  if (render_.render_busy()) {
-    PendingEditorAction deferred;
-    deferred.kind       = PendingEditorActionKind::CheckoutVersion;
-    deferred.version_id = version_id;
-    deferred.ticket     = state_->pending_action.has_value() ? state_->pending_action->ticket
-                                                            : CheckpointTicket{};
-    state_->deferred_pipeline_ownership = deferred;
-    return true;
-  }
-
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
     // Phase 7A repair: do NOT call lifecycle_.Fail(). The history port fails
@@ -545,16 +595,6 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
-  if (render_.render_busy()) {
-    PendingEditorAction deferred;
-    deferred.kind         = PendingEditorActionKind::CreateRootVersionAndCheckout;
-    deferred.display_name = std::move(display_name);
-    deferred.ticket       = state_->pending_action.has_value() ? state_->pending_action->ticket
-                                                              : CheckpointTicket{};
-    state_->deferred_pipeline_ownership = deferred;
-    return true;
-  }
-
   version_ref_id_t new_version_id;
   std::string      local_error;
   if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
@@ -580,17 +620,6 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Branch creation lost the history guard after save";
     return false;
-  }
-
-  if (render_.render_busy()) {
-    PendingEditorAction deferred;
-    deferred.kind          = PendingEditorActionKind::BranchFromCommitAndCheckout;
-    deferred.branch_commit = commit_id;
-    deferred.display_name  = std::move(display_name);
-    deferred.ticket        = state_->pending_action.has_value() ? state_->pending_action->ticket
-                                                               : CheckpointTicket{};
-    state_->deferred_pipeline_ownership = deferred;
-    return true;
   }
 
   version_ref_id_t new_version_id;
@@ -657,7 +686,7 @@ auto EditorSessionNavigationController::RetrySaveAfterFailure() -> NavigationOut
     outcome.message  = "Retry Save requires a retained-image failure state";
     return outcome;
   }
-  const auto recovery = *state_->pending_recovery;
+  auto recovery = *state_->pending_recovery;
   state_->pending_recovery.reset();
   // Re-attempt the save checkpoint for the same pending target.
   state_->pending_action         = recovery;
@@ -702,7 +731,7 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     outcome.message  = "Discard requires a retained-image failure state";
     return outcome;
   }
-  const auto recovery = *state_->pending_recovery;
+  auto recovery = *state_->pending_recovery;
 
   // Explicitly discard unflushed journal/working changes before continuing.
   if (journal_ != nullptr) {
@@ -720,13 +749,15 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
 
   // Continue the pending navigation with persist=false (no save needed).
   if (recovery.kind == PendingEditorActionKind::CloseEditor) {
-    render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
-    lifecycle_.ReleaseGuards();
-    lifecycle_.CompleteClose();
-    render_.ResetForNewImage();
-    outcome.completed_synchronously = true;
-    outcome.message                 = "Editor changes discarded";
-    NotifyCompletion(true, false, "Discarded and closed", recovery.ticket);
+    recovery.persist           = false;
+    recovery.checkpoint_result = SaveCheckpointResult{.checkpoint_completed = true};
+    recovery.render_idle       = false;
+    state_->pending_action     = std::move(recovery);
+    StartRenderIdleBarrier(lifecycle_.active_image_load_request());
+    outcome.waiting_for_render_idle = state_->pending_action.has_value();
+    outcome.completed_synchronously = !outcome.waiting_for_render_idle;
+    outcome.message = outcome.waiting_for_render_idle ? "Waiting for editor render shutdown"
+                                                      : "Editor changes discarded";
     return outcome;
   }
   if (recovery.kind == PendingEditorActionKind::CheckoutVersion) {
@@ -779,12 +810,15 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     return outcome;
   }
   // SwitchImage: release the current image and acquire the target.
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
-  lifecycle_.ReleaseGuards();
-  ContinueToTarget(recovery.element_id, recovery.image_id, recovery.is_switch);
-  outcome.completed_synchronously = true;
-  outcome.message                 = "Discarded and switched image";
-  NotifyCompletion(true, false, "Discarded and switched image", recovery.ticket);
+  recovery.persist           = false;
+  recovery.checkpoint_result = SaveCheckpointResult{.checkpoint_completed = true};
+  recovery.render_idle       = false;
+  state_->pending_action     = std::move(recovery);
+  StartRenderIdleBarrier(lifecycle_.active_image_load_request());
+  outcome.waiting_for_render_idle = state_->pending_action.has_value();
+  outcome.completed_synchronously = !outcome.waiting_for_render_idle;
+  outcome.message = outcome.waiting_for_render_idle ? "Waiting for editor render shutdown"
+                                                    : "Discarded and switched image";
   return outcome;
 }
 
@@ -792,56 +826,10 @@ void EditorSessionNavigationController::CancelPendingNavigation() {
   AssertOwnerThread();
   state_->pending_recovery.reset();
   state_->pending_next_target.reset();
-  state_->deferred_pipeline_ownership.reset();
   if (lifecycle_.state() == EditorSessionState::RetainedImageFailure) {
     lifecycle_.ResumeInteractiveAfterFailure();
   }
   NotifyCompletion(true, false, "Pending navigation cancelled", {});
-}
-
-void EditorSessionNavigationController::TryResumeDeferredPipelineOwnership() {
-  AssertOwnerThread();
-  if (!state_->deferred_pipeline_ownership.has_value()) {
-    return;
-  }
-  // History waits for pipeline ownership; only run once render is idle so the
-  // GUI never blocks on render_lock_ while present still needs this thread.
-  if (render_.render_busy()) {
-    return;
-  }
-
-  const auto deferred = *state_->deferred_pipeline_ownership;
-  state_->deferred_pipeline_ownership.reset();
-
-  std::string error;
-  bool        ok = false;
-  std::string success_message;
-  switch (deferred.kind) {
-    case PendingEditorActionKind::CheckoutVersion:
-      ok              = ContinueCheckoutVersion(deferred.version_id, &error);
-      success_message = "Checked out Version";
-      break;
-    case PendingEditorActionKind::CreateRootVersionAndCheckout:
-      ok              = ContinueCreateRootVersion(deferred.display_name, &error);
-      success_message = "Created root Version";
-      break;
-    case PendingEditorActionKind::BranchFromCommitAndCheckout:
-      ok = ContinueBranchFromCommit(deferred.branch_commit, deferred.display_name, &error);
-      success_message = "Branched from commit";
-      break;
-    default:
-      return;
-  }
-
-  // Continue* may re-defer if a new frame started; leave completion for later.
-  if (state_->deferred_pipeline_ownership.has_value()) {
-    return;
-  }
-  if (ok) {
-    NotifyCompletion(true, false, std::move(success_message), deferred.ticket);
-  } else {
-    RetainPendingFailure(deferred, error.empty() ? "Deferred Version operation failed" : error);
-  }
 }
 
 auto EditorSessionNavigationController::RequestCreateRootVersion(std::string display_name)

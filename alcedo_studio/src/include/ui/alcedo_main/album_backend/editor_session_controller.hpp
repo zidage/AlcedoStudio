@@ -215,6 +215,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   bindPresentationViewport(QObject* viewportItem);
   Q_INVOKABLE void   unbindPresentationViewport();
   Q_INVOKABLE void   updatePresentationTargetSize(int width, int height);
+  /// Pause producer handshakes before the retained editor tree is hidden, or
+  /// refresh availability after it becomes visible again.
+  void               SetWorkspacePresentationActive(bool active);
   /// Bind the viewport interaction producer directly to the session route.
   /// This keeps DetailRefresh out of a QML Connections relay so a rebuilt
   /// workspace cannot lose the settled zoom notification.

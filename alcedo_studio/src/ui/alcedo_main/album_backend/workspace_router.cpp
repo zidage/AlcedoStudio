@@ -15,9 +15,10 @@ void WorkspaceRouter::OpenLibrary() {
   if (workspace_ == QStringLiteral("library") && element_id_ == 0 && image_id_ == 0) {
     return;
   }
-  if (editor_session_ && editor_session_->active()) {
-    // Seal the active image session before tearing down the editor visual tree.
-    editor_session_->Finalize(true);
+  if (editor_session_) {
+    // Parent visibility changes do not reliably notify the retained viewport.
+    // Pause producer handshakes before hiding its workspace.
+    editor_session_->SetWorkspacePresentationActive(false);
   }
   workspace_  = QStringLiteral("library");
   element_id_ = 0;
@@ -29,12 +30,15 @@ void WorkspaceRouter::OpenEditor(uint elementId, uint imageId) {
   workspace_  = QStringLiteral("editor");
   element_id_ = elementId;
   image_id_   = imageId;
+  // Publish the visual route first. The viewport must be visible before Open
+  // can produce a frame that requires a presentation acknowledgement.
+  emit RouteChanged();
   if (editor_session_) {
+    editor_session_->SetWorkspacePresentationActive(true);
     // EditorSessionController chooses Open, Switch, or Close. Do not pre-close
     // here: A→B must remain one service-owned switch operation.
     editor_session_->Open(elementId, imageId);
   }
-  emit RouteChanged();
 }
 
 }  // namespace alcedo::ui

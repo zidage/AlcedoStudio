@@ -262,16 +262,17 @@ ApplicationWindow {
     }
 
     function beginEditorCloseSave() {
-        // Same seal as switching to Library: WorkspaceRouter.openLibrary() →
-        // Finalize(true). Filmstrip image switches use the same Saving gate.
+        // Application exit explicitly seals the editor session. Ordinary
+        // workspace routing keeps it alive for immediate re-entry.
         root.waitingEditorCloseSave = true
         if (appDialogs.editorCloseConfirmDialog) {
             appDialogs.editorCloseConfirmDialog.busy = true
         }
+        if (appModules.editorSession) {
+            appModules.editorSession.Finalize(true)
+        }
         if (appModules.workspaceRouter) {
             appModules.workspaceRouter.openLibrary()
-        } else if (appModules.editorSession) {
-            appModules.editorSession.Finalize(true)
         }
         Qt.callLater(root.pollEditorCloseSave)
     }

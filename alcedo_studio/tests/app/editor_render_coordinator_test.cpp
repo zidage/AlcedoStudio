@@ -181,6 +181,32 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
   EXPECT_EQ(a.kind, EditorRenderResultKind::RequestAccepted);
 }
 
+TEST_F(EditorRenderCoordinatorTest, CancelSessionReportsIdleOnlyAfterInflightWorkerCompletes) {
+  const auto accepted = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  bool idle_reported = false;
+
+  coordinator_->CancelSession(1, [&idle_reported](std::uint64_t epoch) {
+    EXPECT_EQ(epoch, 1u);
+    idle_reported = true;
+  });
+
+  EXPECT_FALSE(idle_reported);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  coordinator_->NotifySchedulerCompleted(accepted.request_id, false, "cancelled");
+  EXPECT_TRUE(idle_reported);
+  EXPECT_FALSE(coordinator_->has_inflight());
+}
+
+TEST_F(EditorRenderCoordinatorTest, CancelSessionReportsIdleImmediatelyWhenSessionHasNoWork) {
+  bool idle_reported = false;
+  coordinator_->CancelSession(1, [&idle_reported](std::uint64_t epoch) {
+    EXPECT_EQ(epoch, 1u);
+    idle_reported = true;
+  });
+  EXPECT_TRUE(idle_reported);
+}
+
 TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedulerWork) {
   coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
 

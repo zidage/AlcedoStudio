@@ -395,8 +395,10 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
   EXPECT_EQ(controller.element_id(), 3u);
 
   router.OpenLibrary();
-  EXPECT_EQ(backend.close_count, 1);
-  EXPECT_TRUE(backend.last_close_persist);
+  EXPECT_EQ(backend.close_count, 0);
+  EXPECT_TRUE(controller.active());
+  EXPECT_EQ(controller.element_id(), 3u);
+  EXPECT_EQ(controller.image_id(), 4u);
   EXPECT_EQ(router.workspace(), QStringLiteral("library"));
 }
 

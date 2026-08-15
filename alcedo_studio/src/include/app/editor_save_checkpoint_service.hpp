@@ -174,7 +174,8 @@ class EditorSaveCheckpointService final {
                           std::optional<std::uint64_t> last_journal_sequence = std::nullopt);
   auto         TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
                                SaveCheckpointCompletion*                            completion,
-                               EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool;
+                               EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock)
+      -> bool;
 
   Dependencies deps_;
   std::shared_ptr<AsyncCallbackGate> callback_gate_;

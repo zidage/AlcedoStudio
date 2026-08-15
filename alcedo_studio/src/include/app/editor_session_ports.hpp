@@ -380,6 +380,19 @@ class IEditorCheckpointStore {
       -> EditorMaterializeOutcome {
     return EditorMaterializeOutcome{true, true, 0, {}};
   }
+
+  /// Optional asynchronous recovery entry point. Normal editor Open remains on
+  /// the synchronous path until pipeline installation and presentation no
+  /// longer form a cross-thread wait cycle.
+  virtual auto RecoverAndMaterializeAsync(sl_element_id_t element_id,
+                                          std::uint64_t   session_generation,
+                                          EditorMaterializeCallback callback) -> bool {
+    std::string error;
+    auto        outcome = RecoverAndMaterialize(element_id, session_generation, &error);
+    if (outcome.error.empty()) outcome.error = std::move(error);
+    if (callback) callback(std::move(outcome));
+    return true;
+  }
 };
 
 /// Schedules a refresh for the currently focused thumbnail after a durable
@@ -432,9 +445,21 @@ struct EditorRenderCommand {
 /// EditorRenderCoordinator; tests may inject a recording stub.
 class IEditorRenderSubmitPort {
  public:
+  using SessionIdleCallback = std::function<void(std::uint64_t)>;
+
   virtual ~IEditorRenderSubmitPort()                                          = default;
   virtual auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult = 0;
   virtual void CancelSession(std::uint64_t session_generation)                = 0;
+  /// Cancel without blocking the caller, then report when no scheduler work
+  /// still owns this render session. Fakes with synchronous work complete
+  /// immediately through the default adapter.
+  virtual void CancelSession(std::uint64_t session_generation,
+                             SessionIdleCallback on_idle) {
+    CancelSession(session_generation);
+    if (on_idle) {
+      on_idle(session_generation);
+    }
+  }
   /// Cancel a session and wait until production workers no longer use its
   /// presentation sink. Test/fake ports keep the historical synchronous
   /// behavior through this default implementation.

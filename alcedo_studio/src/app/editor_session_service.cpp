@@ -60,6 +60,9 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
       navigation_(lifecycle_, save_service_, render_, dependencies_.journal.get(),
                   dependencies_.checkpoint_store.get(), dependencies_.history.get(),
                   &navigation_state_) {
+  navigation_.SetOwnerPoster([this](std::function<void()> task) {
+    command_queue_.PostCompletion(std::move(task));
+  });
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
     EditorSessionCompletion posted;
     posted.kind                 = EditorSessionCompletionKind::NavigationFinished;
@@ -1540,11 +1543,6 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     BeginPublication();
     render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(),
                                lifecycle_.active_image_load_request(), lifecycle_.state());
-    // History may be queued for live-pipeline ownership; resume when idle.
-    // The GUI never blocks waiting for render — only history waits (by queue).
-    if (!render_.render_busy()) {
-      navigation_.TryResumeDeferredPipelineOwnership();
-    }
     EndPublication();
     reducing_command_     = previous_reducing;
     current_operation_id_ = previous_operation;

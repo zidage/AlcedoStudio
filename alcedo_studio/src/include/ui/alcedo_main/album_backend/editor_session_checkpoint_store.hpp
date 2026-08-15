@@ -58,6 +58,8 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
   /// Recover a durable journal prefix for one image.
   auto RecoverAndMaterialize(sl_element_id_t element_id, std::uint64_t session_generation,
                              std::string* error) -> alcedo::EditorMaterializeOutcome override;
+  auto RecoverAndMaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                                  alcedo::EditorMaterializeCallback callback) -> bool override;
 
  private:
   auto EnsureMaterializer() -> std::shared_ptr<alcedo::EditorMiniGitMaterializer>;
