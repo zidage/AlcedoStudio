@@ -7,6 +7,8 @@ import QtQml
 // State lives here; Main exposes it through aliases so existing bindings and
 // the Connections routers keep resolving. appModules is a global context
 // property; `welcomeDialog` is assigned by the host on completion.
+// Launch stays in the already-open window: the loading overlay is raised first,
+// then welcome is dismissed, so the empty library never flashes in between.
 Item {
     id: root
     property var host: null
@@ -17,6 +19,8 @@ Item {
     property bool welcomeDismissedForLaunch: false
     property var pendingProjectLaunchAction: null
     property bool restoreWelcomeOnProjectLaunchFailure: false
+    property bool welcomeOpenScheduled: false
+    property int welcomeReadyAttempts: 0
 
     readonly property bool projectLoadingOverlayVisible: root.projectLaunchPending || appModules.project.projectLoading
     readonly property bool projectLaunchBusy: root.projectLoadingOverlayVisible || root.pendingProjectLaunchAction !== null
@@ -51,10 +55,40 @@ Item {
 
     // Called from the host's Component.onCompleted once welcomeDialog is wired.
     function start() {
-        root.updateWelcomeDialogVisibility()
         if (!root.automationMode) {
             acceleratorPreparationStartTimer.start()
         }
+        // Open welcome only after the shell has a real size so MultiEffect
+        // snapshots the loaded main UI, same as SettingDialog / other modals.
+        root.scheduleWelcomeOpen()
+    }
+
+    function scheduleWelcomeOpen() {
+        if (root.welcomeOpenScheduled) {
+            return
+        }
+        root.welcomeOpenScheduled = true
+        Qt.callLater(root.openWelcomeAfterShellReady)
+    }
+
+    function openWelcomeAfterShellReady() {
+        root.welcomeOpenScheduled = false
+        const shell = root.host
+        const workspace = shell ? shell.workspaceLayer : null
+        const sizeReady = !!shell && Number(shell.width) > 0 && Number(shell.height) > 0
+        const libraryReady = !workspace || workspace.libraryItem
+        if (sizeReady && libraryReady) {
+            root.welcomeReadyAttempts = 0
+            root.updateWelcomeDialogVisibility()
+            return
+        }
+        if (root.welcomeReadyAttempts > 30) {
+            root.welcomeReadyAttempts = 0
+            root.updateWelcomeDialogVisibility()
+            return
+        }
+        root.welcomeReadyAttempts += 1
+        root.scheduleWelcomeOpen()
     }
 
     function showSnackbar(messageText) {
@@ -88,15 +122,15 @@ Item {
         }
         root.restoreWelcomeOnProjectLaunchFailure = !appModules.project.serviceReady
         root.pendingProjectLaunchAction = loadAction
+        // Show the loading overlay in the same window before closing welcome so
+        // the empty library never flashes between the two surfaces.
+        root.startPendingProjectLaunch()
         root.dismissWelcomeForProjectLaunch()
         root.updateWelcomeDialogVisibility()
-        if (root.welcomeDialog && !root.welcomeDialog.opened && !root.welcomeDialog.visible) {
-            root.startPendingProjectLaunch()
-        }
     }
 
     function startPendingProjectLaunch() {
-        if (!root.pendingProjectLaunchAction) {
+        if (!root.pendingProjectLaunchAction || projectLaunchTimer.running) {
             return
         }
         root.projectLaunchPending = true

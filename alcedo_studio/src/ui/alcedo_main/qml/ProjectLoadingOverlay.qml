@@ -3,12 +3,57 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Project loading overlay shown while a project is opening or launching.
+// `wanted` snaps the overlay on immediately (no fade-in — that flashed the
+// empty library after Welcome closed). After load it holds, then fades out
+// while the library grid plays its first reveal.
 Item {
     id: root
     property var theme: null
     property var host: null
     property Item blurSource: null
+    property bool wanted: false
     anchors.fill: parent
+    visible: overlayShown
+    opacity: 0
+
+    readonly property int fadeOutMs: appTheme.reduceMotion ? 0 : appTheme.motionFoldCloseMs
+    readonly property int revealHoldMs: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+    property bool overlayShown: false
+
+    onWantedChanged: {
+        if (wanted) {
+            hideSequence.stop()
+            opacity = 1
+            overlayShown = true
+        } else if (overlayShown) {
+            hideSequence.restart()
+        }
+    }
+
+    SequentialAnimation {
+        id: hideSequence
+        PauseAnimation { duration: root.revealHoldMs }
+        ScriptAction {
+            script: {
+                if (root.host && root.host.revealLibraryAfterProjectLoad)
+                    root.host.revealLibraryAfterProjectLoad()
+            }
+        }
+        NumberAnimation {
+            target: root
+            property: "opacity"
+            to: 0
+            duration: root.fadeOutMs
+            easing.type: Easing.OutCubic
+        }
+        ScriptAction {
+            script: {
+                if (!root.wanted && root.opacity <= 0) {
+                    root.overlayShown = false
+                }
+            }
+        }
+    }
 
     BlurredOverlay {
         anchors.fill: parent

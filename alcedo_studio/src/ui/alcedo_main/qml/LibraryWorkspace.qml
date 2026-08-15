@@ -68,6 +68,32 @@ Item {
     readonly property int defaultGridZoomLevel: 4
     property int gridZoomLevel: defaultGridZoomLevel
     property bool _viewStateReady: false
+    property real libraryGridRevealOpacity: 1
+    property real libraryGridRevealShift: 0
+
+    function prepareLibraryGridReveal() {
+        libraryGridRevealAnim.stop()
+        if (appTheme.reduceMotion) {
+            libraryGridRevealOpacity = 1
+            libraryGridRevealShift = 0
+            return
+        }
+        libraryGridRevealOpacity = 0
+        libraryGridRevealShift = appTheme.spaceMd
+    }
+
+    function playLibraryGridReveal() {
+        if (appTheme.reduceMotion) {
+            libraryGridRevealAnim.stop()
+            libraryGridRevealOpacity = 1
+            libraryGridRevealShift = 0
+            return
+        }
+        if (libraryGridRevealOpacity >= 1 && libraryGridRevealShift === 0) {
+            return
+        }
+        libraryGridRevealAnim.restart()
+    }
 
     function applyHostViewState() {
         if (!host) {
@@ -342,7 +368,34 @@ RowLayout {
                     anchors.fill: parent
                     active: appModules.library.shownCount > 0
                     sourceComponent: gridComp
-                    onLoaded: Qt.callLater(root.restoreScrollPosition)
+                    opacity: root.libraryGridRevealOpacity
+                    transform: Translate { y: root.libraryGridRevealShift }
+                    onLoaded: {
+                        if (host && host.projectLoadingOverlayVisible) {
+                            root.prepareLibraryGridReveal()
+                        } else {
+                            root.playLibraryGridReveal()
+                        }
+                        Qt.callLater(root.restoreScrollPosition)
+                    }
+                }
+
+                ParallelAnimation {
+                    id: libraryGridRevealAnim
+                    NumberAnimation {
+                        target: root
+                        property: "libraryGridRevealOpacity"
+                        to: 1
+                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+                        easing.type: Easing.OutCubic
+                    }
+                    NumberAnimation {
+                        target: root
+                        property: "libraryGridRevealShift"
+                        to: 0
+                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+                        easing.type: Easing.OutCubic
+                    }
                 }
 
                 Column {

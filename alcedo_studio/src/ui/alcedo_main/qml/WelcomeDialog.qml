@@ -115,16 +115,16 @@ Dialog {
                 MultiEffect {
                     anchors.fill: parent
                     source: dialog.blurSource
-                    blurEnabled: true
-                    blur: 0.72
-                    blurMax: 72
-                    saturation: -0.24
-                    brightness: -0.10
+                    blurEnabled: dialog.blurSource !== null
+                    blur: 0.6
+                    blurMax: 64
+                    saturation: -0.2
+                    brightness: -0.08
                 }
 
                 Rectangle {
                     anchors.fill: parent
-                    color: Qt.rgba(11 / 255, 12 / 255, 14 / 255, 0.66)
+                    color: dialog.overlayColor
                 }
             }
 
@@ -197,8 +197,6 @@ Dialog {
     Overlay.modal: Item {
         anchors.fill: parent
 
-        // Hidden rounded-rect used as the alpha mask for the entire backdrop
-        // (blur + dim). White pixels keep, transparent pixels cut away.
         Rectangle {
             id: backdropMask
             anchors.fill: parent
@@ -209,10 +207,7 @@ Dialog {
             layer.smooth: true
         }
 
-        // Wrap blur + dim in a layer-rendered Item, then mask the layer.
-        // This reliably clips both effects to the rounded shape.
         Item {
-            id: maskedBackdrop
             anchors.fill: parent
             layer.enabled: true
             layer.smooth: true
@@ -224,10 +219,10 @@ Dialog {
             MultiEffect {
                 anchors.fill: parent
                 source: dialog.blurSource
-                blurEnabled: true
-                blur: 0.72
-                blurMax: 72
-                saturation: -0.24
+                blurEnabled: dialog.blurSource !== null
+                blur: 0.6
+                blurMax: 64
+                saturation: -0.2
                 brightness: -0.08
             }
 

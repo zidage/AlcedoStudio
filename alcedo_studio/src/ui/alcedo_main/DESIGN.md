@@ -363,7 +363,7 @@ blocking. Session identity is never recreated by a fold.
 | --- | --- | --- |
 | `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
-| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity** |
+| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity**; project-load overlay hold before fade-out |
 | `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
 | Easing | `Easing.OutCubic` | Open/close and list selection fade |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
@@ -375,6 +375,8 @@ blocking. Session identity is never recreated by a fold.
 | LUT list selected well | Single sliding chrome: nearby `y` slide (`motionFoldOpenMs`); long jump snaps + opacity fade-in | Never per-delegate opacity; never flush to track; no catalog refresh on same-path snapshot echo |
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
+| Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
+| Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 
 **Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
 

@@ -397,6 +397,13 @@ ApplicationWindow {
         projectLaunchController.beginProjectLaunch(loadAction)
     }
 
+    function revealLibraryAfterProjectLoad() {
+        const library = workspaceHost.libraryItem
+        if (library && library.playLibraryGridReveal) {
+            library.playLibraryGridReveal()
+        }
+    }
+
     function startPendingProjectLaunch() {
         projectLaunchController.startPendingProjectLaunch()
     }
@@ -474,6 +481,7 @@ ApplicationWindow {
         return imageActionsController.editorImageStillExists(elementId)
     }
 
+    readonly property alias workspaceLayer: workspaceHost
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
@@ -591,7 +599,7 @@ ApplicationWindow {
 
     // ── Project loading overlay ────────────────────────────────────────
     ProjectLoadingOverlay {
-        visible: root.projectLoadingOverlayVisible
+        wanted: root.projectLoadingOverlayVisible
         z: 45
         theme: root
         host: root
