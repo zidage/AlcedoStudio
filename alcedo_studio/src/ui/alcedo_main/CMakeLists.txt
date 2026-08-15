@@ -236,6 +236,10 @@ set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
 if(WIN32)
+    list(APPEND ALCEDO_MAIN_SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/windows_frameless_window.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/windows_frameless_window.hpp"
+    )
     configure_file(
         "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_version.rc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc"
@@ -398,6 +402,9 @@ target_link_libraries(alcedo_main
         Qt6::Svg
         Qt6::QuickEffects
 )
+if(WIN32)
+    target_link_libraries(alcedo_main PRIVATE dwmapi user32)
+endif()
 target_compile_definitions(alcedo_main PRIVATE
     ALCEDO_APP_VERSION="${PROJECT_VERSION}"
 )

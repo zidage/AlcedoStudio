@@ -13,18 +13,30 @@ ApplicationWindow {
     // production context, where the property is explicitly set to false.
     readonly property bool automationModeEnabled: typeof automationMode === "boolean"
                                                   && automationMode
+    readonly property bool startMaximizedRequested: typeof startMaximized === "boolean"
+                                                    && startMaximized
+    readonly property bool nativeFrameManagedEnabled: typeof nativeFrameManaged === "boolean"
+                                                       && nativeFrameManaged
+    property bool nativeFrameReady: !root.nativeFrameManagedEnabled
     width: 1200
     height: 760
     minimumWidth: 960
     minimumHeight: 640
-    visible: true
-    visibility: Window.Windowed
+    visible: root.nativeFrameReady
+    // Production (startMaximized context property) opens as the real app.
+    // Tests and the automation host omit the property and stay windowed.
+    visibility: !root.nativeFrameReady
+                ? Window.Hidden
+                : root.startMaximizedRequested ? Window.Maximized : Window.Windowed
     title: qsTr("Alcedo Studio")
-    flags: Qt.Window | Qt.FramelessWindowHint
+    flags: root.nativeFrameManagedEnabled
+           ? Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+             | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+             | Qt.WindowCloseButtonHint
+           : Qt.Window | Qt.FramelessWindowHint
     font.family: appTheme.uiFontFamily
 
     readonly property bool windowMaximized: visibility === Window.Maximized || visibility === Window.FullScreen
-    readonly property bool windowRestoring: root.visibility !== Window.Minimized && root.visibility !== Window.Hidden
     readonly property real maximizedInset: 0
     // Snap radius — animating it together with the OS resize causes layout jitter.
     readonly property real windowCornerRadius: windowMaximized ? 0 : 12
@@ -558,7 +570,6 @@ ApplicationWindow {
     WindowAnimations {
         id: windowAnimations
         host: root
-        contentTarget: mainContent
     }
 
     ShellSignals {
@@ -568,7 +579,6 @@ ApplicationWindow {
         selectionState: selectionStateObj
         exportQueueState: exportQueueStateObj
         deleteConfirmDialog: appDialogs.deleteConfirmDialog
-        windowAnimations: windowAnimations
     }
 
     function toggleMaximizeAnimated() {

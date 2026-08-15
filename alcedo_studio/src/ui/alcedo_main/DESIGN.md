@@ -377,6 +377,7 @@ blocking. Session identity is never recreated by a fold.
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
+| Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`; other platforms use Qt frameless behavior. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
 
 **Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
 
