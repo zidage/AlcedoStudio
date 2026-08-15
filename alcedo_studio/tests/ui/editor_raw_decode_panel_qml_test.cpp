@@ -204,19 +204,25 @@ class AdjustmentStackHarness {
   QList<QQmlError>            errors_;
 };
 
-auto SelectComboEntry(AdjustmentStackHarness& harness, const QString& objectName, int downwardSteps)
-    -> bool {
-  auto* combo = harness.findObject<QQuickItem>(objectName);
-  if (combo == nullptr || !combo->isEnabled()) {
+auto SelectSegmentedEntry(AdjustmentStackHarness& harness, const QString& objectName,
+                          qsizetype index) -> bool {
+  auto* switcher = harness.findObject<QQuickItem>(objectName);
+  if (switcher == nullptr || !switcher->isEnabled()) {
     return false;
   }
-  combo->forceActiveFocus();
-  QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(combo));
-  ProcessEvents(30);
-  for (int i = 0; i < downwardSteps; ++i) {
-    QTest::keyClick(harness.window(), Qt::Key_Down);
+  auto* row = switcher->findChild<QQuickItem*>(QStringLiteral("segmentedCardSwitcherCardRow"));
+  if (row == nullptr) {
+    return false;
   }
-  QTest::keyClick(harness.window(), Qt::Key_Return);
+  const auto segments = row->childItems();
+  if (index < 0 || index >= segments.size()) {
+    return false;
+  }
+  auto* segment = segments.at(index);
+  if (segment == nullptr || !segment->isEnabled()) {
+    return false;
+  }
+  QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(segment));
   ProcessEvents(80);
   return true;
 }
@@ -254,7 +260,7 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
   ASSERT_TRUE(session.calls.empty());
 
-  ASSERT_TRUE(SelectComboEntry(harness, QStringLiteral("rawDemosaicMethodCombo"), 2));
+  ASSERT_TRUE(SelectSegmentedEntry(harness, QStringLiteral("rawDemosaicMethodControl"), 2));
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_EQ(session.calls.back().field_key, QStringLiteral("raw_decode"));
   EXPECT_TRUE(session.calls.back().settled);

@@ -28,7 +28,16 @@ Item {
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
     readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
+    readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
+
+    // Panel-level selection aliases so the method-track segments re-evaluate
+    // when currentIndex changes or snapshot load restores (selectedPath rule).
+    readonly property int selectedMethodIndex: rawMethodModel.currentIndex
+    readonly property string selectedMethodValue: {
+        var _dep = rawMethodModel.currentIndex
+        return rawMethodModel.currentValue ? String(rawMethodModel.currentValue) : ""
+    }
 
     function buildDefaultRawParams() {
         return {
@@ -137,11 +146,26 @@ Item {
                 anchors.margins: appTheme.spaceXs
                 spacing: appTheme.spaceSm
 
-                AdjustmentCombo {
-                    objectName: "rawDemosaicMethodControl"
-                    controlObjectName: "rawDemosaicMethodCombo"
+                Label {
                     Layout.fillWidth: true
-                    model: rawMethodModel
+                    text: qsTr("Method")
+                    color: root.colMuted
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                }
+
+                SegmentedCardSwitcher {
+                    objectName: "rawDemosaicMethodControl"
+                    Layout.fillWidth: true
+                    entries: rawMethodModel.entries
+                    currentIndex: root.selectedMethodIndex
+                    currentValue: root.selectedMethodValue
+                    enabled: root.controlsEnabled
+                    trackColor: root.colBase
+                    trackBorderColor: root.colCardBorder
+                    textColor: root.colText
+                    hoverColor: root.colHover
+                    onSelected: function(index, value) { rawMethodModel.selectIndex(index) }
                 }
 
                 AdjustmentToggle {
