@@ -32,8 +32,6 @@ Item {
     readonly property color colButtonSecondary: theme ? theme.colButtonSecondary : "#3A3F44"
     readonly property color colButtonSecondaryBorder: theme ? theme.colButtonSecondaryBorder : Qt.rgba(1, 1, 1, 0.12)
     readonly property color colButtonHighlight: theme ? theme.colButtonHighlight : "#E9C46A"
-    // CollectionsPanel reads theme.colDanger for the delete-folder button tint
-    // when a non-root folder is selected; mirror Main's colDanger so it resolves.
     readonly property color colDanger: theme ? theme.colDanger : appTheme.dangerColor
     readonly property string dataFontFamily: theme ? theme.dataFontFamily : appTheme.dataFontFamily
     readonly property string headlineFontFamily: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
@@ -53,15 +51,13 @@ Item {
     property real inspectorWidth: 300
     readonly property real inspectorMinWidth: 300
     readonly property real inspectorMaxWidth: 600
-    readonly property real leftPaneWidth: 276
     readonly property real centerPaneMinWidth: 560
-    // root.width is already the workspace content width (Main's 12px margins are
-    // outside WorkspaceHost). Do not subtract the window-level 24px margins again.
-    readonly property real contentRowSpacingTotal: 36
+    // Collections now live on the Main shell. This width is the right-hand
+    // stack only (Top toolbar + workspace). One 12px gap plus the 5px handle.
+    readonly property real contentRowSpacingTotal: 12
     readonly property real inspectorAdaptiveMaxWidth: Math.max(
         0,
         root.width
-        - leftPaneWidth
         - centerPaneMinWidth
         - contentRowSpacingTotal
         - 5)
@@ -226,23 +222,6 @@ Item {
 RowLayout {
     anchors.fill: parent
     spacing: 12
-
-    CollectionsPanel {
-        objectName: "collectionsPanel"
-        Layout.preferredWidth: root.leftPaneWidth
-        Layout.minimumWidth: root.leftPaneWidth
-        Layout.maximumWidth: root.leftPaneWidth
-        Layout.fillHeight: true
-        folderController: appModules.folders
-        theme: root
-        backendInteractive: host.backendInteractive
-        selectedCount: host.selectedCount
-        onImportRequested: host.importDialog.open()
-        onImportFromFolderRequested: host.importFolderDialog.open()
-        onSearchRequested: host.globalSearchDialog.openFromCollection()
-        onAdvancedAnalysisRequested: host.openAdvancedAnalysisDialog()
-        onBackgroundTasksRequested: host.openBackgroundTasksDialog()
-    }
 
     ColumnLayout {
         Layout.fillWidth: true

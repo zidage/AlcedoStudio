@@ -41,6 +41,9 @@
 #ifdef Q_OS_WIN
 #include "windows_frameless_window.hpp"
 #endif
+#ifdef Q_OS_MACOS
+#include "macos_frameless_window.hpp"
+#endif
 
 namespace {
 
@@ -273,6 +276,9 @@ int main(int argc, char* argv[]) {
 #ifdef Q_OS_WIN
   alcedo::ui::WindowsFramelessWindow native_window_frame;
 #endif
+#ifdef Q_OS_MACOS
+  alcedo::ui::MacosFramelessWindow native_window_frame;
+#endif
 
   // Install platform frame behavior before the hidden production window is
   // shown, then bind the editor renderer to that final native window.
@@ -281,6 +287,11 @@ int main(int argc, char* argv[]) {
 #ifdef Q_OS_WIN
       if (!native_window_frame.Install(window)) {
         qWarning("Could not install the native Windows frame integration");
+      }
+#endif
+#ifdef Q_OS_MACOS
+      if (!native_window_frame.Install(window)) {
+        qWarning("Could not install the native macOS traffic-light integration");
       }
 #endif
       alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);

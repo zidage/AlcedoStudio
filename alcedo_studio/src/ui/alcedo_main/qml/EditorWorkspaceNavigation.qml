@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-// Shared Library/Editor navigation for the application header. The router,
+// Shared Library/Editor navigation for the application toolbar. The router,
 // policy, and editor re-entry lookup are explicit inputs so this component
 // owns only workspace navigation and its permission gate.
 //

@@ -5,9 +5,11 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: panel
+    objectName: "collectionsPanel"
 
     property var folderController
     property var theme
+    property var host: null
     property bool backendInteractive: false
     property int selectedCount: 0
     property var folderRows: []
@@ -128,11 +130,14 @@ ColumnLayout {
     readonly property bool hasSelectedCollection: foldersModule
         && Number(foldersModule.currentFolderId) !== 0
 
-    Layout.preferredWidth: 276
-    Layout.minimumWidth: 276
-    Layout.maximumWidth: 276
+    width: appTheme.collectionsSidebarWidth
+    implicitWidth: appTheme.collectionsSidebarWidth
+    Layout.preferredWidth: appTheme.collectionsSidebarWidth
+    Layout.minimumWidth: appTheme.collectionsSidebarWidth
+    Layout.maximumWidth: appTheme.collectionsSidebarWidth
     Layout.fillHeight: true
     spacing: 12
+    clip: true
 
     Component.onCompleted: rebuildFolderRows()
     onSortDescendingChanged: rebuildFolderRows()
@@ -157,6 +162,7 @@ ColumnLayout {
     }
 
     Rectangle {
+        objectName: "collectionsSurface"
         Layout.fillWidth: true
         Layout.fillHeight: true
         radius: theme.panelRadius
@@ -169,6 +175,33 @@ ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
             spacing: 12
+
+            Row {
+                id: identityCard
+                objectName: "collectionsIdentityCard"
+                Layout.fillWidth: true
+                spacing: 0
+                Label {
+                    text: qsTr("Alcedo")
+                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                    font.pixelSize: 19
+                    font.weight: 700
+                    color: theme ? theme.colAccentPrimary : appTheme.accentColor
+                }
+                Label {
+                    text: " "
+                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                    font.pixelSize: 19
+                    font.weight: 700
+                }
+                Label {
+                    text: qsTr("Studio")
+                    font.family: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+                    font.pixelSize: 19
+                    font.weight: 700
+                    color: theme ? theme.colText : appTheme.textColor
+                }
+            }
 
             ColumnLayout {
                 Layout.fillWidth: true

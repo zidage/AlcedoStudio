@@ -36,6 +36,9 @@ Item {
     property color selectedOutlineColor: appTheme.textColor
     property bool showHoverFill: true
     property bool showFocusRing: true
+    // Immediate toolbar actions may opt out of retaining pointer focus while
+    // remaining keyboard reachable through activeFocusOnTab.
+    property bool focusOnPointerPress: true
     property string actionName: ""
     property url iconSrc: ""
     // Optional palette overrides when the parent shell uses a local theme mirror.
@@ -213,7 +216,11 @@ Item {
         hoverEnabled: true
         enabled: control.enabled
         cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onPressed: control.forceActiveFocus(Qt.MouseFocusReason)
+        onPressed: {
+            if (control.focusOnPointerPress) {
+                control.forceActiveFocus(Qt.MouseFocusReason)
+            }
+        }
         onClicked: control.clicked()
     }
 

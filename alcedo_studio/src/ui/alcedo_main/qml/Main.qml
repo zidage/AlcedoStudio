@@ -17,7 +17,19 @@ ApplicationWindow {
                                                     && startMaximized
     readonly property bool nativeFrameManagedEnabled: typeof nativeFrameManaged === "boolean"
                                                        && nativeFrameManaged
+    // macOS keeps the system traffic lights and hides the title-bar surface.
+    // Qt.platform.os is still "osx" on Qt 6.9; accept "macos" if that changes.
+    readonly property bool nativeTrafficLightsEnabled: Qt.platform.os === "osx"
+                                                       || Qt.platform.os === "macos"
     property bool nativeFrameReady: !root.nativeFrameManagedEnabled
+    property bool collectionsSidebarExpanded: true
+    property bool collectionsWorkspaceObservationReady: false
+    property real collectionsSidebarGap: collectionsSidebarExpanded
+                                                 ? appTheme.spaceMd : 0
+    readonly property string activeWorkspace: appModules.workspaceRouter
+                                              ? String(appModules.workspaceRouter.workspace
+                                                       || "library")
+                                              : "library"
     width: 1200
     height: 760
     minimumWidth: 960
@@ -33,13 +45,25 @@ ApplicationWindow {
            ? Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
              | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
              | Qt.WindowCloseButtonHint
-           : Qt.Window | Qt.FramelessWindowHint
+           : root.nativeTrafficLightsEnabled
+             ? Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint
+               | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+               | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+               | Qt.WindowCloseButtonHint
+             : Qt.Window | Qt.FramelessWindowHint
+    // Keep custom chrome edge-to-edge. The toolbar reserves its leading region
+    // so interactive content does not sit under the macOS traffic lights.
+    topPadding: 0
+    leftPadding: 0
+    rightPadding: 0
+    bottomPadding: 0
     font.family: appTheme.uiFontFamily
 
     readonly property bool windowMaximized: visibility === Window.Maximized || visibility === Window.FullScreen
     readonly property real maximizedInset: 0
     // Snap radius — animating it together with the OS resize causes layout jitter.
-    readonly property real windowCornerRadius: windowMaximized ? 0 : 12
+    // Native macOS windows already clip to the system corner; do not double-round.
+    readonly property real windowCornerRadius: (windowMaximized || root.nativeTrafficLightsEnabled) ? 0 : 12
 
     // Theme palette — borderless, luminance-separated zones
     readonly property color toneGold: appTheme.toneGold
@@ -104,6 +128,26 @@ ApplicationWindow {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
     }
 
+    function toggleCollectionsSidebar() {
+        root.collectionsSidebarExpanded = !root.collectionsSidebarExpanded
+    }
+
+    onActiveWorkspaceChanged: {
+        if (root.collectionsWorkspaceObservationReady) {
+            root.collectionsSidebarExpanded = false
+        }
+    }
+
+    Behavior on collectionsSidebarGap {
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0
+                      : (root.collectionsSidebarExpanded
+                         ? appTheme.motionFoldOpenMs
+                         : appTheme.motionFoldCloseMs)
+            easing.type: Easing.OutCubic
+        }
+    }
+
     function nauticalButtonFill(enabled, hovered, pressed) {
         if (!enabled) {
             return withAlpha(colButtonPrimary, 0.45)
@@ -135,8 +179,10 @@ ApplicationWindow {
     Material.accent: root.colAccentPrimary
     Material.background: root.colBgPanel
     Material.foreground: root.colText
-    // Transparent root surface so DWM does not draw a frame/border around our rounded content.
-    color: "transparent"
+    // Transparent on the DWM / frameless path so the platform does not stroke a
+    // second frame around the QML-rounded canvas. Native macOS windows clip
+    // themselves, so fill the canvas color out to those system corners.
+    color: root.nativeTrafficLightsEnabled ? root.colBgCanvas : "transparent"
 
     readonly property bool backendInteractive: appModules.project.serviceReady
                                                && !appModules.project.projectLoading
@@ -373,6 +419,7 @@ ApplicationWindow {
         imageActionsController.deleteConfirmDialog = appDialogs.deleteConfirmDialog
         projectLaunchController.welcomeDialog = appDialogs.welcomeDialog
         projectLaunchController.start()
+        root.collectionsWorkspaceObservationReady = true
     }
 
 
@@ -541,8 +588,8 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 12
+        anchors.margins: appTheme.spaceMd
+        spacing: appTheme.spaceSm
 
         TopToolbar {
             id: topToolbar
@@ -550,18 +597,68 @@ ApplicationWindow {
             host: root
         }
 
-        WorkspaceHost {
-            id: workspaceHost
-            objectName: "workspaceHost"
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            theme: root
-            host: root
-            workspaceRouter: appModules.workspaceRouter
-        }
 
-        BackgroundTaskBar {
-            Layout.fillWidth: true
+            CollectionsPanel {
+                id: collectionsSidebar
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: root.collectionsSidebarExpanded ? appTheme.collectionsSidebarWidth : 0
+                opacity: root.collectionsSidebarExpanded ? 1.0 : 0.0
+                enabled: root.collectionsSidebarExpanded
+                folderController: appModules.folders
+                theme: root
+                host: root
+                backendInteractive: root.backendInteractive
+                selectedCount: root.selectedCount
+                onImportRequested: root.importDialog.open()
+                onImportFromFolderRequested: root.importFolderDialog.open()
+                onSearchRequested: root.globalSearchDialog.openFromCollection()
+                onAdvancedAnalysisRequested: root.openAdvancedAnalysisDialog()
+                onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+
+                Behavior on width {
+                    NumberAnimation {
+                        duration: appTheme.reduceMotion ? 0
+                                  : (root.collectionsSidebarExpanded
+                                     ? appTheme.motionFoldOpenMs
+                                     : appTheme.motionFoldCloseMs)
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            ColumnLayout {
+                anchors.left: collectionsSidebar.right
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: root.collectionsSidebarGap
+                spacing: appTheme.spaceMd
+
+                WorkspaceHost {
+                    id: workspaceHost
+                    objectName: "workspaceHost"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    theme: root
+                    host: root
+                    workspaceRouter: appModules.workspaceRouter
+                }
+
+                BackgroundTaskBar {
+                    Layout.fillWidth: true
+                }
+            }
         }
     }
 
@@ -591,7 +688,7 @@ ApplicationWindow {
 
     WindowResizeHandles {
         host: root
-        active: root.visibility === Window.Windowed
+        active: root.visibility === Window.Windowed && !root.nativeTrafficLightsEnabled
     }
     Shortcut {
         sequence: StandardKey.SelectAll

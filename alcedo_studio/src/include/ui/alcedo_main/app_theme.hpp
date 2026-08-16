@@ -80,6 +80,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorMergeDialogWidth READ editorMergeDialogWidth CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
+  // Persistent left collections column in the application shell (see DESIGN.md).
+  Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
   Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
   Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
@@ -250,6 +252,7 @@ class AppTheme final : public QObject {
   auto        editorMergeDialogWidth() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
+  auto        collectionsSidebarWidth() const -> int;
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;
   auto        lineHeightTitle() const -> int;

@@ -471,13 +471,14 @@ TEST_F(WorkspaceShellTests, InspectorAdaptiveWidthUsesWorkspaceWidthNearMinimum)
   auto* library = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryWorkspace"));
   ASSERT_NE(library, nullptr);
 
-  // Workspace content width is window width minus Main's 12px*2 margins.
-  // At the original formula, adaptive max used window width - 24 - panes.
-  // After extraction, workspace width already excludes those 24px, so the formula
-  // must not subtract them again.
-  const qreal left_pane  = 276.0;
+  // Library width is the right-hand stack: window minus the 12px left inset,
+  // the collections sidebar, the 12px gap after it, and the 12px right margin.
+  const qreal sidebar    = 276.0;
+  const qreal shell_gap  = 12.0;
+  const qreal left_margin = 12.0;
+  const qreal right_margin = 12.0;
   const qreal center_min = 560.0;
-  const qreal spacing    = 36.0;
+  const qreal spacing    = 12.0;
   const qreal handle     = 5.0;
 
   struct Case {
@@ -488,21 +489,114 @@ TEST_F(WorkspaceShellTests, InspectorAdaptiveWidthUsesWorkspaceWidthNearMinimum)
     loaded->window->resize(c.window_width, 700);
     ProcessEvents(40);
     const qreal workspace_width = library->width();
-    EXPECT_NEAR(workspace_width, static_cast<qreal>(c.window_width) - 24.0, 1.0)
+    EXPECT_NEAR(workspace_width,
+                static_cast<qreal>(c.window_width) - left_margin - sidebar - shell_gap
+                    - right_margin,
+                1.0)
         << "window " << c.window_width;
 
     const qreal expected =
-        std::max(0.0, workspace_width - left_pane - center_min - spacing - handle);
+        std::max(0.0, workspace_width - center_min - spacing - handle);
     const qreal actual = library->property("inspectorAdaptiveMaxWidth").toReal();
     EXPECT_NEAR(actual, expected, 1.0) << "window " << c.window_width;
 
-    // Wrong formula that still subtracts window margins would be 24px smaller.
+    // Wrong formula that still subtracts the lifted sidebar would be 276px smaller.
     const qreal wrong =
-        std::max(0.0, workspace_width - left_pane - center_min - 24.0 - spacing - handle);
+        std::max(0.0, workspace_width - sidebar - center_min - spacing - handle);
     if (expected > 0.0) {
       EXPECT_GT(actual + 0.5, wrong) << "window " << c.window_width;
     }
   }
+}
+
+TEST_F(WorkspaceShellTests, TopToolbarOwnsWorkspaceSwitchAndCollectionsSidebarOwnsWordmark) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(30);
+
+  auto* collections = loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsPanel"));
+  ASSERT_NE(collections, nullptr);
+  auto* identity = loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsIdentityCard"));
+  ASSERT_NE(identity, nullptr);
+  auto* surface = loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsSurface"));
+  ASSERT_NE(surface, nullptr);
+  auto* navigation =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceNavigation"));
+  ASSERT_NE(navigation, nullptr);
+  auto* top_toolbar = loaded->window->findChild<QQuickItem*>(QStringLiteral("topToolbar"));
+  ASSERT_NE(top_toolbar, nullptr);
+
+  auto* library = loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace"));
+  ASSERT_NE(library, nullptr);
+  EXPECT_EQ(library->findChild<QObject*>(QStringLiteral("collectionsPanel")), nullptr);
+  EXPECT_EQ(collections->findChild<QObject*>(QStringLiteral("editorWorkspaceNavigation")), nullptr);
+  EXPECT_NE(top_toolbar->findChild<QObject*>(QStringLiteral("editorWorkspaceNavigation")), nullptr);
+
+  const QPointF collections_scene = collections->mapToScene(QPointF(0, 0));
+  const QPointF identity_scene    = identity->mapToScene(QPointF(0, 0));
+  const QPointF toolbar_scene     = top_toolbar->mapToScene(QPointF(0, 0));
+  EXPECT_NEAR(toolbar_scene.x(), 12.0, 0.5);
+  EXPECT_NEAR(toolbar_scene.y(), 12.0, 0.5);
+  EXPECT_NEAR(top_toolbar->width(), loaded->window->width() - 24.0, 0.5);
+  EXPECT_NEAR(top_toolbar->height(), 48.0, 0.5);
+  EXPECT_NEAR(collections_scene.x(), 12.0, 0.5);
+  EXPECT_NEAR(collections_scene.y(), 68.0, 0.5);
+  EXPECT_GT(surface->property("radius").toReal(), 0.0);
+  EXPECT_GT(identity_scene.y(), collections_scene.y());
+}
+
+TEST_F(WorkspaceShellTests, CollectionsSidebarToolbarToggleRestoresCollapsedPanel) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(30);
+
+  auto* collections = loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsPanel"));
+  auto* sidebar_toggle =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsSidebarToggle"));
+  ASSERT_NE(collections, nullptr);
+  ASSERT_NE(sidebar_toggle, nullptr);
+
+  EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
+  EXPECT_NEAR(collections->width(), 276.0, 1.0);
+  EXPECT_TRUE(sidebar_toggle->isVisible());
+  EXPECT_FALSE(sidebar_toggle->property("showFocusRing").toBool());
+  EXPECT_FALSE(sidebar_toggle->property("focusOnPointerPress").toBool());
+  EXPECT_EQ(sidebar_toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar.svg"));
+
+  // Exercise the collapsed state directly. Loading the editor in the macOS
+  // headless test host reaches the native ColorManager with no NSWindow; route
+  // integration is covered by WorkspaceRouter tests in a native window host.
+  loaded->window->setProperty("collectionsSidebarExpanded", false);
+  ProcessEvents(250);
+
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+  EXPECT_NEAR(collections->width(), 0.0, 1.0);
+  EXPECT_TRUE(sidebar_toggle->isVisible());
+  EXPECT_EQ(sidebar_toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar-inactive.svg"));
+
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(sidebar_toggle));
+  ProcessEvents(250);
+
+  EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
+  EXPECT_FALSE(sidebar_toggle->hasActiveFocus());
+  EXPECT_NEAR(collections->width(), 276.0, 1.0);
+  EXPECT_EQ(sidebar_toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar.svg"));
+
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(sidebar_toggle));
+  ProcessEvents(250);
+
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+  EXPECT_NEAR(collections->width(), 0.0, 1.0);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
 }
 
 TEST_F(WorkspaceShellTests, InspectorToggleButtonLivesOnTopToolbarWithOriginalSize) {
@@ -532,6 +626,29 @@ TEST_F(WorkspaceShellTests, InspectorToggleButtonLivesOnTopToolbarWithOriginalSi
   ProcessEvents(30);
   EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
   EXPECT_FALSE(library->property("inspectorVisible").toBool());
+}
+
+TEST_F(WorkspaceShellTests, MacosKeepsNativeTrafficLightsAndHidesDrawnCaptionButtons) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(30);
+
+  auto* caption = loaded->window->findChild<QQuickItem*>(QStringLiteral("windowCaptionButtons"));
+  ASSERT_NE(caption, nullptr);
+
+#ifdef Q_OS_MACOS
+  EXPECT_TRUE(loaded->window->property("nativeTrafficLightsEnabled").toBool());
+  EXPECT_TRUE(loaded->window->flags().testFlag(Qt::ExpandedClientAreaHint));
+  EXPECT_TRUE(loaded->window->flags().testFlag(Qt::NoTitleBarBackgroundHint));
+  EXPECT_FALSE(loaded->window->flags().testFlag(Qt::FramelessWindowHint));
+  EXPECT_FALSE(caption->isVisible());
+#else
+  EXPECT_FALSE(loaded->window->property("nativeTrafficLightsEnabled").toBool());
+  EXPECT_FALSE(loaded->window->flags().testFlag(Qt::ExpandedClientAreaHint));
+  EXPECT_TRUE(caption->isVisible());
+#endif
 }
 
 TEST_F(WorkspaceShellTests, LibraryGridPinsSurviveEditorSwitchDuringZoom) {
@@ -1802,6 +1919,7 @@ TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   EXPECT_EQ(theme.editorSidePanelWidthMax(), 460);
   EXPECT_EQ(theme.editorScopeHeight(), 192);
   EXPECT_EQ(theme.editorScopeHeightMin(), 160);
+  EXPECT_EQ(theme.collectionsSidebarWidth(), 276);
   EXPECT_GE(theme.editorSidePanelWidthMax(), theme.editorSidePanelWidth());
   EXPECT_GE(theme.editorSidePanelWidth(), theme.editorSidePanelWidthMin());
   EXPECT_GE(theme.editorScopeHeight(), theme.editorScopeHeightMin());

@@ -197,6 +197,40 @@ inside the card — not a nested second card of the same fill.
 
 ---
 
+## Application shell
+
+Desktop chrome is a full-width toolbar above a two-column body:
+
+`Vertical(Top toolbar, Horizontal(Collections sidebar, Vertical(Workspace, Background tasks)))`
+
+The Library workspace inside that right stack is `Horizontal(Browser, Inspector)`.
+The wordmark lives on the collections card. The collections toggle and
+Library/Editor capsule remain on the full-width toolbar with File, Settings,
+update, inspector toggle, and drawn caption buttons.
+
+The top toolbar is one compact action band: `iconButtonHitSizeCompact +
+spaceSm` (48 px), followed by `spaceSm` before the body so it preserves editor
+height. The collections card remains a floating `panelRadius` surface with
+`spaceMd` leading and bottom insets on every platform. On macOS, native traffic
+lights sit over the toolbar; their vertical center is derived from `spaceMd +
+(iconButtonHitSizeCompact + spaceSm) / 2`, exactly matching the toolbar action
+axis. The buttons stay inside the system title-bar container. That container
+is grown downward so the visible frames remain inside AppKit's title-bar hit
+region; empty title-bar area passes events through to the QML toolbar. Resize
+and maximize re-apply the same geometry. The close button keeps its 17 px
+horizontal correction. The card must not be made flush or square to host the
+wordmark.
+
+The collections sidebar folds to zero width after a Library / Editor route
+change. Width, following workspace gap, and opacity use `motionFoldOpenMs`,
+`motionFoldCloseMs`, and `motionFadeMs`; `reduceMotion` resolves them to zero.
+Its toggle stays at the leading side of the full-width toolbar, after the
+macOS traffic-light reserve when applicable, and switches between the active
+and inactive sidebar glyphs without moving. The Library/Editor capsule stays
+beside it so workspace routing remains available while the sidebar is folded.
+
+---
+
 ## Editor panel geometry
 
 Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
@@ -212,6 +246,7 @@ the two side columns read as one family.
 | `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog — top action bar + three-column Current / Incoming / Merged cards |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
+| `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
 **Merge dialog layout:** `EditorMergeDialog` is centered on `Overlay.overlay`
 with the shared MultiEffect blur + `overlayColor` dim used by other modal
@@ -304,6 +339,11 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 - Default chrome borders: 1 px `cardBorderColor` / `dividerColor`.
 - Focus rings on structural icon actions: 1 px accent at ~60% alpha via
   `IconActionButton.showFocusRing` (default true).
+- **Collections sidebar toggle exception:** this is an immediate toolbar action,
+  not a selected mode. Pointer activation does not retain focus and it draws no
+  accent focus border. Hover, press, and keyboard focus use the existing quiet
+  `buttonHoveredFillColor` gray well; keyboard access remains available through
+  `activeFocusOnTab`.
 - **Library/Editor capsule exception:** segments draw **no** hover fill, press
   fill, or focus ring. The sliding `workspaceSwitchThumb` is the **only**
   selected-workspace indication. Hover still drives tooltips.
@@ -377,7 +417,7 @@ blocking. Session identity is never recreated by a fold.
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
-| Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`; other platforms use Qt frameless behavior. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
+| Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
 
 **Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
 
@@ -455,7 +495,7 @@ row delegate and arrow affordance automatically.
 | Location | Exception | Why |
 | --- | --- | --- |
 | History / Versions rail | compact 40 px hit, 32 px well, 18 px SVG | Quiet tools inside a 48 px persistent rail |
-| Window caption buttons | custom canvas 16 px glyphs | OS-chrome parity, not content SVG set |
+| Window caption buttons | custom canvas 16 px glyphs on Windows/Linux; hidden on macOS | OS-chrome parity, not content SVG set. macOS uses the system traffic lights in the expanded client area |
 
 ---
 

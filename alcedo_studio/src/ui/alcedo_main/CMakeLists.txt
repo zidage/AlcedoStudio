@@ -247,6 +247,16 @@ if(WIN32)
     )
     list(APPEND ALCEDO_MAIN_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc")
 endif()
+if(APPLE)
+    list(APPEND ALCEDO_MAIN_SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.mm"
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.hpp"
+    )
+    set_source_files_properties(
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.mm"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+endif()
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
     add_executable(alcedo_main MACOSX_BUNDLE ${ALCEDO_MAIN_SOURCES})
 else()
@@ -404,6 +414,9 @@ target_link_libraries(alcedo_main
 )
 if(WIN32)
     target_link_libraries(alcedo_main PRIVATE dwmapi user32)
+endif()
+if(APPLE)
+    target_link_libraries(alcedo_main PRIVATE "-framework AppKit")
 endif()
 target_compile_definitions(alcedo_main PRIVATE
     ALCEDO_APP_VERSION="${PROJECT_VERSION}"
