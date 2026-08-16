@@ -32,7 +32,7 @@ if(PUERHLAB_USE_BUNDLED_LIBRAW)
         SYSTEM
         PUBLIC
             "${PUERHLAB_LIBRAW_SOURCE_DIR}")
-    target_link_libraries(puerhlab_libraw PUBLIC Threads::Threads)
+    target_link_libraries(puerhlab_libraw PUBLIC Threads::Threads OpenMP::OpenMP_CXX)
     target_compile_options(puerhlab_libraw PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/w>
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)
