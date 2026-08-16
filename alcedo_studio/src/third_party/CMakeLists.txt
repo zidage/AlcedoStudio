@@ -33,6 +33,10 @@ if(PUERHLAB_USE_BUNDLED_LIBRAW)
         PUBLIC
             "${PUERHLAB_LIBRAW_SOURCE_DIR}")
     target_link_libraries(puerhlab_libraw PUBLIC Threads::Threads OpenMP::OpenMP_CXX)
+    if(APPLE)
+        # libraw_types.h otherwise #undef LIBRAW_USE_OPENMP on Apple + _REENTRANT.
+        target_compile_definitions(puerhlab_libraw PUBLIC LIBRAW_FORCE_OPENMP)
+    endif()
     target_compile_options(puerhlab_libraw PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/w>
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)

@@ -15,14 +15,13 @@ struct WBParams {
 };
 
 struct ToLinearRefParams {
-  uint  width;
-  uint  height;
-  uint  stride;
-  uint  tile_width;
-  uint  tile_height;
-  uint  black_tile_width;
-  uint  black_tile_height;
-  uint  raw_fc[36];
+  uint width;
+  uint height;
+  uint tile_width;
+  uint tile_height;
+  uint black_tile_width;
+  uint black_tile_height;
+  uint raw_fc[36];
 };
 
 static inline uint RawColorAt(constant ToLinearRefParams& params, uint y, uint x) {
@@ -41,28 +40,33 @@ static inline float PatternBlackAt(constant ToLinearRefParams& params, device co
   return pattern_black[tile_y * params.black_tile_width + tile_x];
 }
 
-kernel void to_linear_ref_r32f(device float*                image [[buffer(0)]],
-                               constant ToLinearRefParams&  params [[buffer(1)]],
-                               constant WBParams&           wb_params [[buffer(2)]],
-                               device const float*          pattern_black [[buffer(3)]],
-                               uint2                        gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
-  }
-
-  const uint color_idx = RawColorAt(params, gid.y, gid.x);
-  const uint index     = gid.y * params.stride + gid.x;
-
-  const float sample = image[index];
+static inline float LinearizeSample(float sample, uint color_idx, constant ToLinearRefParams& params,
+                                    constant WBParams& wb_params, device const float* pattern_black,
+                                    uint y, uint x) {
   const float black =
-      wb_params.black_level[color_idx] + PatternBlackAt(params, pattern_black, gid.y, gid.x);
-  const float denom = wb_params.white_level[color_idx] - black;
+      wb_params.black_level[color_idx] + PatternBlackAt(params, pattern_black, y, x);
+  const float denom     = wb_params.white_level[color_idx] - black;
   float       pixel_val = denom > 0.0f ? clamp((sample - black) / denom, 0.0f, 1.0f) : 0.0f;
 
   if (wb_params.apply_white_balance != 0u && wb_params.wb_multipliers[1] > 0.0f &&
       (color_idx == 0u || color_idx == 2u)) {
     pixel_val *= wb_params.wb_multipliers[color_idx] / wb_params.wb_multipliers[1];
   }
+  return pixel_val;
+}
 
-  image[index] = pixel_val;
+kernel void to_linear_ref_r16u(texture2d<ushort, access::read> src [[texture(0)]],
+                               texture2d<float, access::write> dst [[texture(1)]],
+                               constant ToLinearRefParams&     params [[buffer(0)]],
+                               constant WBParams&              wb_params [[buffer(1)]],
+                               device const float*             pattern_black [[buffer(2)]],
+                               uint2                           gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+
+  const uint  color_idx = RawColorAt(params, gid.y, gid.x);
+  const float sample    = float(src.read(gid).r);
+  dst.write(LinearizeSample(sample, color_idx, params, wb_params, pattern_black, gid.y, gid.x),
+            gid);
 }

@@ -9,15 +9,7 @@ using namespace metal;
 struct SinglePlaneParams {
   uint width;
   uint height;
-  uint stride;
   uint rgb_fc[4];
-};
-
-struct MergeParams {
-  uint width;
-  uint height;
-  uint plane_stride;
-  uint rgba_stride;
 };
 
 constant float kEps   = 1e-5f;
@@ -27,39 +19,40 @@ static inline uint FC(constant SinglePlaneParams& params, uint y, uint x) {
   return params.rgb_fc[((y & 1u) << 1u) | (x & 1u)];
 }
 
-static inline float LoadPlane(device const float* plane, constant SinglePlaneParams& params, int y,
-                              int x) {
-  return plane[static_cast<uint>(y) * params.stride + static_cast<uint>(x)];
+static inline float LoadTex(texture2d<float, access::read> plane, int y, int x) {
+  return plane.read(uint2(static_cast<uint>(x), static_cast<uint>(y))).r;
 }
 
-static inline float LowPassAt(device const float* raw, constant SinglePlaneParams& params, int y,
-                              int x) {
-  const float c  = LoadPlane(raw, params, y, x);
-  const float n  = LoadPlane(raw, params, y - 1, x);
-  const float s  = LoadPlane(raw, params, y + 1, x);
-  const float w  = LoadPlane(raw, params, y, x - 1);
-  const float e  = LoadPlane(raw, params, y, x + 1);
-  const float nw = LoadPlane(raw, params, y - 1, x - 1);
-  const float ne = LoadPlane(raw, params, y - 1, x + 1);
-  const float sw = LoadPlane(raw, params, y + 1, x - 1);
-  const float se = LoadPlane(raw, params, y + 1, x + 1);
+static inline float LoadTexRW(texture2d<float, access::read_write> plane, int y, int x) {
+  return plane.read(uint2(static_cast<uint>(x), static_cast<uint>(y))).r;
+}
+
+static inline float LowPassAt(texture2d<float, access::read> raw, int y, int x) {
+  const float c  = LoadTex(raw, y, x);
+  const float n  = LoadTex(raw, y - 1, x);
+  const float s  = LoadTex(raw, y + 1, x);
+  const float w  = LoadTex(raw, y, x - 1);
+  const float e  = LoadTex(raw, y, x + 1);
+  const float nw = LoadTex(raw, y - 1, x - 1);
+  const float ne = LoadTex(raw, y - 1, x + 1);
+  const float sw = LoadTex(raw, y + 1, x - 1);
+  const float se = LoadTex(raw, y + 1, x + 1);
 
   return 0.25f * c + 0.125f * (n + s + w + e) + 0.0625f * (nw + ne + sw + se);
 }
 
-static inline float ReconstructRbAtGreen(device const float* channel,
-                                         constant SinglePlaneParams& params, int y, int x,
+static inline float ReconstructRbAtGreen(texture2d<float, access::read_write> channel, int y, int x,
                                          float g_c, float g_m2, float g_p2, float g_l2, float g_r2,
                                          float g_m1, float g_p1, float g_l1, float g_r1,
                                          float vh_disc) {
-  const float ch_m1 = LoadPlane(channel, params, y - 1, x);
-  const float ch_p1 = LoadPlane(channel, params, y + 1, x);
-  const float ch_m3 = LoadPlane(channel, params, y - 3, x);
-  const float ch_p3 = LoadPlane(channel, params, y + 3, x);
-  const float ch_l1 = LoadPlane(channel, params, y, x - 1);
-  const float ch_r1 = LoadPlane(channel, params, y, x + 1);
-  const float ch_l3 = LoadPlane(channel, params, y, x - 3);
-  const float ch_r3 = LoadPlane(channel, params, y, x + 3);
+  const float ch_m1 = LoadTexRW(channel, y - 1, x);
+  const float ch_p1 = LoadTexRW(channel, y + 1, x);
+  const float ch_m3 = LoadTexRW(channel, y - 3, x);
+  const float ch_p3 = LoadTexRW(channel, y + 3, x);
+  const float ch_l1 = LoadTexRW(channel, y, x - 1);
+  const float ch_r1 = LoadTexRW(channel, y, x + 1);
+  const float ch_l3 = LoadTexRW(channel, y, x - 3);
+  const float ch_r3 = LoadTexRW(channel, y, x + 3);
 
   const float N_grad = kEps + fabs(g_c - g_m2) + fabs(ch_m1 - ch_p1) + fabs(ch_m1 - ch_m3);
   const float S_grad = kEps + fabs(g_c - g_p2) + fabs(ch_p1 - ch_m1) + fabs(ch_p1 - ch_p3);
@@ -76,48 +69,47 @@ static inline float ReconstructRbAtGreen(device const float* channel,
   return max(0.f, g_c + (1.f - vh_disc) * V_est + vh_disc * H_est);
 }
 
-kernel void rcd_init_and_vh(device const float* raw [[buffer(0)]],
-                            device float*       r [[buffer(1)]],
-                            device float*       g [[buffer(2)]],
-                            device float*       b [[buffer(3)]],
-                            device float*       vh_dir [[buffer(4)]],
-                            constant SinglePlaneParams& params [[buffer(5)]],
-                            uint2 gid [[thread_position_in_grid]]) {
+kernel void rcd_init_and_vh(texture2d<float, access::read>  raw [[texture(0)]],
+                            texture2d<float, access::write> r [[texture(1)]],
+                            texture2d<float, access::write> g [[texture(2)]],
+                            texture2d<float, access::write> b [[texture(3)]],
+                            texture2d<float, access::write> vh_dir [[texture(4)]],
+                            constant SinglePlaneParams&     params [[buffer(0)]],
+                            uint2                           gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height) {
     return;
   }
 
-  const uint index = gid.y * params.stride + gid.x;
-  const float val  = raw[index];
-  const uint color = FC(params, gid.y, gid.x);
+  const float val  = raw.read(gid).r;
+  const uint  color = FC(params, gid.y, gid.x);
 
-  r[index]         = (color == 0u) ? val : 0.0f;
-  g[index]         = (color == 1u) ? val : 0.0f;
-  b[index]         = (color == 2u) ? val : 0.0f;
+  r.write((color == 0u) ? val : 0.0f, gid);
+  g.write((color == 1u) ? val : 0.0f, gid);
+  b.write((color == 2u) ? val : 0.0f, gid);
 
-  float vh         = 0.0f;
+  float vh = 0.0f;
   if (gid.x >= 4u && gid.y >= 4u && gid.x + 4u < params.width && gid.y + 4u < params.height) {
-    const int x = static_cast<int>(gid.x);
-    const int y = static_cast<int>(gid.y);
+    const int   x   = static_cast<int>(gid.x);
+    const int   y   = static_cast<int>(gid.y);
     const float c   = val;
 
-    const float vm1 = LoadPlane(raw, params, y - 1, x);
-    const float vp1 = LoadPlane(raw, params, y + 1, x);
-    const float vm2 = LoadPlane(raw, params, y - 2, x);
-    const float vp2 = LoadPlane(raw, params, y + 2, x);
-    const float vm3 = LoadPlane(raw, params, y - 3, x);
-    const float vp3 = LoadPlane(raw, params, y + 3, x);
-    const float vm4 = LoadPlane(raw, params, y - 4, x);
-    const float vp4 = LoadPlane(raw, params, y + 4, x);
+    const float vm1 = LoadTex(raw, y - 1, x);
+    const float vp1 = LoadTex(raw, y + 1, x);
+    const float vm2 = LoadTex(raw, y - 2, x);
+    const float vp2 = LoadTex(raw, y + 2, x);
+    const float vm3 = LoadTex(raw, y - 3, x);
+    const float vp3 = LoadTex(raw, y + 3, x);
+    const float vm4 = LoadTex(raw, y - 4, x);
+    const float vp4 = LoadTex(raw, y + 4, x);
 
-    const float hm1 = LoadPlane(raw, params, y, x - 1);
-    const float hp1 = LoadPlane(raw, params, y, x + 1);
-    const float hm2 = LoadPlane(raw, params, y, x - 2);
-    const float hp2 = LoadPlane(raw, params, y, x + 2);
-    const float hm3 = LoadPlane(raw, params, y, x - 3);
-    const float hp3 = LoadPlane(raw, params, y, x + 3);
-    const float hm4 = LoadPlane(raw, params, y, x - 4);
-    const float hp4 = LoadPlane(raw, params, y, x + 4);
+    const float hm1 = LoadTex(raw, y, x - 1);
+    const float hp1 = LoadTex(raw, y, x + 1);
+    const float hm2 = LoadTex(raw, y, x - 2);
+    const float hp2 = LoadTex(raw, y, x + 2);
+    const float hm3 = LoadTex(raw, y, x - 3);
+    const float hp3 = LoadTex(raw, y, x + 3);
+    const float hm4 = LoadTex(raw, y, x - 4);
+    const float hp4 = LoadTex(raw, y, x + 4);
 
     const float V_stat = max(
         -18.f * c * vm1 - 18.f * c * vp1 - 36.f * c * vm2 - 36.f * c * vp2 + 18.f * c * vm3 +
@@ -148,14 +140,14 @@ kernel void rcd_init_and_vh(device const float* raw [[buffer(0)]],
     vh = V_stat / (V_stat + H_stat);
   }
 
-  vh_dir[index] = vh;
+  vh_dir.write(vh, gid);
 }
 
-kernel void rcd_green_at_rb(device const float* raw [[buffer(0)]],
-                            device const float* vh_dir [[buffer(1)]],
-                            device float*       g [[buffer(2)]],
-                            constant SinglePlaneParams& params [[buffer(3)]],
-                            uint2 gid [[thread_position_in_grid]]) {
+kernel void rcd_green_at_rb(texture2d<float, access::read>       raw [[texture(0)]],
+                            texture2d<float, access::read>       vh_dir [[texture(1)]],
+                            texture2d<float, access::read_write> g [[texture(2)]],
+                            constant SinglePlaneParams&          params [[buffer(0)]],
+                            uint2                                gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height || gid.x < 4u || gid.y < 4u ||
       gid.x + 4u >= params.width || gid.y + 4u >= params.height) {
     return;
@@ -168,38 +160,36 @@ kernel void rcd_green_at_rb(device const float* raw [[buffer(0)]],
   const int x = static_cast<int>(gid.x);
   const int y = static_cast<int>(gid.y);
 
-  const float VH_central = LoadPlane(vh_dir, params, y, x);
-  const float VH_neigh   = 0.25f * (LoadPlane(vh_dir, params, y - 1, x - 1) +
-                                  LoadPlane(vh_dir, params, y - 1, x + 1) +
-                                  LoadPlane(vh_dir, params, y + 1, x - 1) +
-                                  LoadPlane(vh_dir, params, y + 1, x + 1));
+  const float VH_central = LoadTex(vh_dir, y, x);
+  const float VH_neigh   = 0.25f * (LoadTex(vh_dir, y - 1, x - 1) + LoadTex(vh_dir, y - 1, x + 1) +
+                                  LoadTex(vh_dir, y + 1, x - 1) + LoadTex(vh_dir, y + 1, x + 1));
   const float VH_disc =
       (fabs(0.5f - VH_central) < fabs(0.5f - VH_neigh)) ? VH_neigh : VH_central;
 
-  const float c   = LoadPlane(raw, params, y, x);
-  const float vm1 = LoadPlane(raw, params, y - 1, x);
-  const float vp1 = LoadPlane(raw, params, y + 1, x);
-  const float vm2 = LoadPlane(raw, params, y - 2, x);
-  const float vp2 = LoadPlane(raw, params, y + 2, x);
-  const float vm3 = LoadPlane(raw, params, y - 3, x);
-  const float vp3 = LoadPlane(raw, params, y + 3, x);
-  const float vm4 = LoadPlane(raw, params, y - 4, x);
-  const float vp4 = LoadPlane(raw, params, y + 4, x);
+  const float c   = LoadTex(raw, y, x);
+  const float vm1 = LoadTex(raw, y - 1, x);
+  const float vp1 = LoadTex(raw, y + 1, x);
+  const float vm2 = LoadTex(raw, y - 2, x);
+  const float vp2 = LoadTex(raw, y + 2, x);
+  const float vm3 = LoadTex(raw, y - 3, x);
+  const float vp3 = LoadTex(raw, y + 3, x);
+  const float vm4 = LoadTex(raw, y - 4, x);
+  const float vp4 = LoadTex(raw, y + 4, x);
 
-  const float hm1 = LoadPlane(raw, params, y, x - 1);
-  const float hp1 = LoadPlane(raw, params, y, x + 1);
-  const float hm2 = LoadPlane(raw, params, y, x - 2);
-  const float hp2 = LoadPlane(raw, params, y, x + 2);
-  const float hm3 = LoadPlane(raw, params, y, x - 3);
-  const float hp3 = LoadPlane(raw, params, y, x + 3);
-  const float hm4 = LoadPlane(raw, params, y, x - 4);
-  const float hp4 = LoadPlane(raw, params, y, x + 4);
+  const float hm1 = LoadTex(raw, y, x - 1);
+  const float hp1 = LoadTex(raw, y, x + 1);
+  const float hm2 = LoadTex(raw, y, x - 2);
+  const float hp2 = LoadTex(raw, y, x + 2);
+  const float hm3 = LoadTex(raw, y, x - 3);
+  const float hp3 = LoadTex(raw, y, x + 3);
+  const float hm4 = LoadTex(raw, y, x - 4);
+  const float hp4 = LoadTex(raw, y, x + 4);
 
-  const float lpf_c  = LowPassAt(raw, params, y, x);
-  const float lpf_n2 = LowPassAt(raw, params, y - 2, x);
-  const float lpf_s2 = LowPassAt(raw, params, y + 2, x);
-  const float lpf_w2 = LowPassAt(raw, params, y, x - 2);
-  const float lpf_e2 = LowPassAt(raw, params, y, x + 2);
+  const float lpf_c  = LowPassAt(raw, y, x);
+  const float lpf_n2 = LowPassAt(raw, y - 2, x);
+  const float lpf_s2 = LowPassAt(raw, y + 2, x);
+  const float lpf_w2 = LowPassAt(raw, y, x - 2);
+  const float lpf_e2 = LowPassAt(raw, y, x + 2);
 
   const float N_grad = kEps + fabs(vm1 - vp1) + fabs(c - vm2) + fabs(vm1 - vm3) + fabs(vm2 - vm4);
   const float S_grad = kEps + fabs(vp1 - vm1) + fabs(c - vp2) + fabs(vp1 - vp3) + fabs(vp2 - vp4);
@@ -211,16 +201,16 @@ kernel void rcd_green_at_rb(device const float* raw [[buffer(0)]],
   const float W_est = hm1 * (1.f + (lpf_c - lpf_w2) / (kEps + lpf_c + lpf_w2));
   const float E_est = hp1 * (1.f + (lpf_c - lpf_e2) / (kEps + lpf_c + lpf_e2));
 
-  const float V_est  = (S_grad * N_est + N_grad * S_est) / (N_grad + S_grad);
-  const float H_est  = (W_grad * E_est + E_grad * W_est) / (E_grad + W_grad);
+  const float V_est = (S_grad * N_est + N_grad * S_est) / (N_grad + S_grad);
+  const float H_est = (W_grad * E_est + E_grad * W_est) / (E_grad + W_grad);
 
-  g[gid.y * params.stride + gid.x] = max(VH_disc * H_est + (1.f - VH_disc) * V_est, 0.f);
+  g.write(max(VH_disc * H_est + (1.f - VH_disc) * V_est, 0.f), gid);
 }
 
-kernel void rcd_pq_dir(device const float* raw [[buffer(0)]],
-                       device float*       pq_dir [[buffer(1)]],
-                       constant SinglePlaneParams& params [[buffer(2)]],
-                       uint2 gid [[thread_position_in_grid]]) {
+kernel void rcd_pq_dir(texture2d<float, access::read>  raw [[texture(0)]],
+                       texture2d<float, access::write> pq_dir [[texture(1)]],
+                       constant SinglePlaneParams&     params [[buffer(0)]],
+                       uint2                           gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height) {
     return;
   }
@@ -228,27 +218,27 @@ kernel void rcd_pq_dir(device const float* raw [[buffer(0)]],
   float pq = 0.0f;
   if (gid.x >= 4u && gid.y >= 4u && gid.x + 4u < params.width && gid.y + 4u < params.height &&
       FC(params, gid.y, gid.x) != 1u) {
-    const int x = static_cast<int>(gid.x);
-    const int y = static_cast<int>(gid.y);
-    const float c   = LoadPlane(raw, params, y, x);
+    const int   x = static_cast<int>(gid.x);
+    const int   y = static_cast<int>(gid.y);
+    const float c = LoadTex(raw, y, x);
 
-    const float nw1 = LoadPlane(raw, params, y - 1, x - 1);
-    const float se1 = LoadPlane(raw, params, y + 1, x + 1);
-    const float nw2 = LoadPlane(raw, params, y - 2, x - 2);
-    const float se2 = LoadPlane(raw, params, y + 2, x + 2);
-    const float nw3 = LoadPlane(raw, params, y - 3, x - 3);
-    const float se3 = LoadPlane(raw, params, y + 3, x + 3);
-    const float nw4 = LoadPlane(raw, params, y - 4, x - 4);
-    const float se4 = LoadPlane(raw, params, y + 4, x + 4);
+    const float nw1 = LoadTex(raw, y - 1, x - 1);
+    const float se1 = LoadTex(raw, y + 1, x + 1);
+    const float nw2 = LoadTex(raw, y - 2, x - 2);
+    const float se2 = LoadTex(raw, y + 2, x + 2);
+    const float nw3 = LoadTex(raw, y - 3, x - 3);
+    const float se3 = LoadTex(raw, y + 3, x + 3);
+    const float nw4 = LoadTex(raw, y - 4, x - 4);
+    const float se4 = LoadTex(raw, y + 4, x + 4);
 
-    const float sw1 = LoadPlane(raw, params, y + 1, x - 1);
-    const float ne1 = LoadPlane(raw, params, y - 1, x + 1);
-    const float sw2 = LoadPlane(raw, params, y + 2, x - 2);
-    const float ne2 = LoadPlane(raw, params, y - 2, x + 2);
-    const float sw3 = LoadPlane(raw, params, y + 3, x - 3);
-    const float ne3 = LoadPlane(raw, params, y - 3, x + 3);
-    const float sw4 = LoadPlane(raw, params, y + 4, x - 4);
-    const float ne4 = LoadPlane(raw, params, y - 4, x + 4);
+    const float sw1 = LoadTex(raw, y + 1, x - 1);
+    const float ne1 = LoadTex(raw, y - 1, x + 1);
+    const float sw2 = LoadTex(raw, y + 2, x - 2);
+    const float ne2 = LoadTex(raw, y - 2, x + 2);
+    const float sw3 = LoadTex(raw, y + 3, x - 3);
+    const float ne3 = LoadTex(raw, y - 3, x + 3);
+    const float sw4 = LoadTex(raw, y + 4, x - 4);
+    const float ne4 = LoadTex(raw, y - 4, x + 4);
 
     const float P_stat = max(
         -18.f * c * nw1 - 18.f * c * se1 - 36.f * c * nw2 - 36.f * c * se2 + 18.f * c * nw3 +
@@ -279,15 +269,15 @@ kernel void rcd_pq_dir(device const float* raw [[buffer(0)]],
     pq = P_stat / (P_stat + Q_stat);
   }
 
-  pq_dir[gid.y * params.stride + gid.x] = pq;
+  pq_dir.write(pq, gid);
 }
 
-kernel void rcd_rb_at_rb(device const float* pq_dir [[buffer(0)]],
-                         device const float* g [[buffer(1)]],
-                         device float*       r [[buffer(2)]],
-                         device float*       b [[buffer(3)]],
-                         constant SinglePlaneParams& params [[buffer(4)]],
-                         uint2 gid [[thread_position_in_grid]]) {
+kernel void rcd_rb_at_rb(texture2d<float, access::read>       pq_dir [[texture(0)]],
+                         texture2d<float, access::read>       g [[texture(1)]],
+                         texture2d<float, access::read_write> r [[texture(2)]],
+                         texture2d<float, access::read_write> b [[texture(3)]],
+                         constant SinglePlaneParams&          params [[buffer(0)]],
+                         uint2                                gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height || gid.x < 4u || gid.y < 4u ||
       gid.x + 4u >= params.width || gid.y + 4u >= params.height) {
     return;
@@ -298,49 +288,41 @@ kernel void rcd_rb_at_rb(device const float* pq_dir [[buffer(0)]],
     return;
   }
 
-  const int x = static_cast<int>(gid.x);
-  const int y = static_cast<int>(gid.y);
+  const int  x = static_cast<int>(gid.x);
+  const int  y = static_cast<int>(gid.y);
   const uint c = 2u - color;
 
-  const float PQ_c    = LoadPlane(pq_dir, params, y, x);
-  const float PQ_n    = 0.25f * (LoadPlane(pq_dir, params, y - 1, x - 1) +
-                              LoadPlane(pq_dir, params, y - 1, x + 1) +
-                              LoadPlane(pq_dir, params, y + 1, x - 1) +
-                              LoadPlane(pq_dir, params, y + 1, x + 1));
+  const float PQ_c = LoadTex(pq_dir, y, x);
+  const float PQ_n = 0.25f * (LoadTex(pq_dir, y - 1, x - 1) + LoadTex(pq_dir, y - 1, x + 1) +
+                              LoadTex(pq_dir, y + 1, x - 1) + LoadTex(pq_dir, y + 1, x + 1));
   const float PQ_disc = (fabs(0.5f - PQ_c) < fabs(0.5f - PQ_n)) ? PQ_n : PQ_c;
 
-  const float g_c     = LoadPlane(g, params, y, x);
+  const float g_c = LoadTex(g, y, x);
 
-  const device float* channel = (c == 0u) ? r : b;
+  const float ch_nw1 = (c == 0u) ? LoadTexRW(r, y - 1, x - 1) : LoadTexRW(b, y - 1, x - 1);
+  const float ch_ne1 = (c == 0u) ? LoadTexRW(r, y - 1, x + 1) : LoadTexRW(b, y - 1, x + 1);
+  const float ch_sw1 = (c == 0u) ? LoadTexRW(r, y + 1, x - 1) : LoadTexRW(b, y + 1, x - 1);
+  const float ch_se1 = (c == 0u) ? LoadTexRW(r, y + 1, x + 1) : LoadTexRW(b, y + 1, x + 1);
 
-  const float ch_nw1 = LoadPlane(channel, params, y - 1, x - 1);
-  const float ch_ne1 = LoadPlane(channel, params, y - 1, x + 1);
-  const float ch_sw1 = LoadPlane(channel, params, y + 1, x - 1);
-  const float ch_se1 = LoadPlane(channel, params, y + 1, x + 1);
+  const float ch_nw3 = (c == 0u) ? LoadTexRW(r, y - 3, x - 3) : LoadTexRW(b, y - 3, x - 3);
+  const float ch_ne3 = (c == 0u) ? LoadTexRW(r, y - 3, x + 3) : LoadTexRW(b, y - 3, x + 3);
+  const float ch_sw3 = (c == 0u) ? LoadTexRW(r, y + 3, x - 3) : LoadTexRW(b, y + 3, x - 3);
+  const float ch_se3 = (c == 0u) ? LoadTexRW(r, y + 3, x + 3) : LoadTexRW(b, y + 3, x + 3);
 
-  const float ch_nw3 = LoadPlane(channel, params, y - 3, x - 3);
-  const float ch_ne3 = LoadPlane(channel, params, y - 3, x + 3);
-  const float ch_sw3 = LoadPlane(channel, params, y + 3, x - 3);
-  const float ch_se3 = LoadPlane(channel, params, y + 3, x + 3);
+  const float g_nw2 = LoadTex(g, y - 2, x - 2);
+  const float g_ne2 = LoadTex(g, y - 2, x + 2);
+  const float g_sw2 = LoadTex(g, y + 2, x - 2);
+  const float g_se2 = LoadTex(g, y + 2, x + 2);
 
-  const float g_nw2  = LoadPlane(g, params, y - 2, x - 2);
-  const float g_ne2  = LoadPlane(g, params, y - 2, x + 2);
-  const float g_sw2  = LoadPlane(g, params, y + 2, x - 2);
-  const float g_se2  = LoadPlane(g, params, y + 2, x + 2);
+  const float NW_grad = kEps + fabs(ch_nw1 - ch_se1) + fabs(ch_nw1 - ch_nw3) + fabs(g_c - g_nw2);
+  const float NE_grad = kEps + fabs(ch_ne1 - ch_sw1) + fabs(ch_ne1 - ch_ne3) + fabs(g_c - g_ne2);
+  const float SW_grad = kEps + fabs(ch_sw1 - ch_ne1) + fabs(ch_sw1 - ch_sw3) + fabs(g_c - g_sw2);
+  const float SE_grad = kEps + fabs(ch_se1 - ch_nw1) + fabs(ch_se1 - ch_se3) + fabs(g_c - g_se2);
 
-  const float NW_grad =
-      kEps + fabs(ch_nw1 - ch_se1) + fabs(ch_nw1 - ch_nw3) + fabs(g_c - g_nw2);
-  const float NE_grad =
-      kEps + fabs(ch_ne1 - ch_sw1) + fabs(ch_ne1 - ch_ne3) + fabs(g_c - g_ne2);
-  const float SW_grad =
-      kEps + fabs(ch_sw1 - ch_ne1) + fabs(ch_sw1 - ch_sw3) + fabs(g_c - g_sw2);
-  const float SE_grad =
-      kEps + fabs(ch_se1 - ch_nw1) + fabs(ch_se1 - ch_se3) + fabs(g_c - g_se2);
-
-  const float g_nw1 = LoadPlane(g, params, y - 1, x - 1);
-  const float g_ne1 = LoadPlane(g, params, y - 1, x + 1);
-  const float g_sw1 = LoadPlane(g, params, y + 1, x - 1);
-  const float g_se1 = LoadPlane(g, params, y + 1, x + 1);
+  const float g_nw1 = LoadTex(g, y - 1, x - 1);
+  const float g_ne1 = LoadTex(g, y - 1, x + 1);
+  const float g_sw1 = LoadTex(g, y + 1, x - 1);
+  const float g_se1 = LoadTex(g, y + 1, x + 1);
 
   const float NW_est = ch_nw1 - g_nw1;
   const float NE_est = ch_ne1 - g_ne1;
@@ -352,18 +334,18 @@ kernel void rcd_rb_at_rb(device const float* pq_dir [[buffer(0)]],
   const float out_val = max(0.f, g_c + (1.f - PQ_disc) * P_est + PQ_disc * Q_est);
 
   if (c == 0u) {
-    r[gid.y * params.stride + gid.x] = out_val;
+    r.write(out_val, gid);
   } else {
-    b[gid.y * params.stride + gid.x] = out_val;
+    b.write(out_val, gid);
   }
 }
 
-kernel void rcd_rb_at_g(device const float* vh_dir [[buffer(0)]],
-                        device const float* g [[buffer(1)]],
-                        device float*       r [[buffer(2)]],
-                        device float*       b [[buffer(3)]],
-                        constant SinglePlaneParams& params [[buffer(4)]],
-                        uint2 gid [[thread_position_in_grid]]) {
+kernel void rcd_rb_at_g(texture2d<float, access::read>       vh_dir [[texture(0)]],
+                        texture2d<float, access::read>       g [[texture(1)]],
+                        texture2d<float, access::read_write> r [[texture(2)]],
+                        texture2d<float, access::read_write> b [[texture(3)]],
+                        constant SinglePlaneParams&          params [[buffer(0)]],
+                        uint2                                gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height || gid.x < 4u || gid.y < 4u ||
       gid.x + 4u >= params.width || gid.y + 4u >= params.height ||
       FC(params, gid.y, gid.x) != 1u) {
@@ -373,44 +355,42 @@ kernel void rcd_rb_at_g(device const float* vh_dir [[buffer(0)]],
   const int x = static_cast<int>(gid.x);
   const int y = static_cast<int>(gid.y);
 
-  const float VH_central = LoadPlane(vh_dir, params, y, x);
-  const float VH_neigh   = 0.25f * (LoadPlane(vh_dir, params, y - 1, x - 1) +
-                                  LoadPlane(vh_dir, params, y - 1, x + 1) +
-                                  LoadPlane(vh_dir, params, y + 1, x - 1) +
-                                  LoadPlane(vh_dir, params, y + 1, x + 1));
+  const float VH_central = LoadTex(vh_dir, y, x);
+  const float VH_neigh   = 0.25f * (LoadTex(vh_dir, y - 1, x - 1) + LoadTex(vh_dir, y - 1, x + 1) +
+                                  LoadTex(vh_dir, y + 1, x - 1) + LoadTex(vh_dir, y + 1, x + 1));
   const float VH_disc =
       (fabs(0.5f - VH_central) < fabs(0.5f - VH_neigh)) ? VH_neigh : VH_central;
 
-  const float g_c  = LoadPlane(g, params, y, x);
-  const float g_m2 = LoadPlane(g, params, y - 2, x);
-  const float g_p2 = LoadPlane(g, params, y + 2, x);
-  const float g_l2 = LoadPlane(g, params, y, x - 2);
-  const float g_r2 = LoadPlane(g, params, y, x + 2);
-  const float g_m1 = LoadPlane(g, params, y - 1, x);
-  const float g_p1 = LoadPlane(g, params, y + 1, x);
-  const float g_l1 = LoadPlane(g, params, y, x - 1);
-  const float g_r1 = LoadPlane(g, params, y, x + 1);
-  const uint index = gid.y * params.stride + gid.x;
+  const float g_c  = LoadTex(g, y, x);
+  const float g_m2 = LoadTex(g, y - 2, x);
+  const float g_p2 = LoadTex(g, y + 2, x);
+  const float g_l2 = LoadTex(g, y, x - 2);
+  const float g_r2 = LoadTex(g, y, x + 2);
+  const float g_m1 = LoadTex(g, y - 1, x);
+  const float g_p1 = LoadTex(g, y + 1, x);
+  const float g_l1 = LoadTex(g, y, x - 1);
+  const float g_r1 = LoadTex(g, y, x + 1);
 
-  r[index] = ReconstructRbAtGreen(r, params, y, x, g_c, g_m2, g_p2, g_l2, g_r2, g_m1, g_p1, g_l1,
-                                  g_r1, VH_disc);
-  b[index] = ReconstructRbAtGreen(b, params, y, x, g_c, g_m2, g_p2, g_l2, g_r2, g_m1, g_p1, g_l1,
-                                  g_r1, VH_disc);
+  r.write(ReconstructRbAtGreen(r, y, x, g_c, g_m2, g_p2, g_l2, g_r2, g_m1, g_p1, g_l1, g_r1,
+                               VH_disc),
+          gid);
+  b.write(ReconstructRbAtGreen(b, y, x, g_c, g_m2, g_p2, g_l2, g_r2, g_m1, g_p1, g_l1, g_r1,
+                               VH_disc),
+          gid);
 }
 
-kernel void rcd_merge_rgba(device const float* r [[buffer(0)]],
-                           device const float* g [[buffer(1)]],
-                           device const float* b [[buffer(2)]],
-                           device float4*      out_rgba [[buffer(3)]],
-                           constant MergeParams& params [[buffer(4)]],
-                           uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
+kernel void rcd_merge_rgba(texture2d<float, access::read>   r [[texture(0)]],
+                           texture2d<float, access::read>   g [[texture(1)]],
+                           texture2d<float, access::read>   b [[texture(2)]],
+                           texture2d<float, access::write>  out_rgba [[texture(3)]],
+                           constant SinglePlaneParams&      params [[buffer(0)]],
+                           uint2                            gid [[thread_position_in_grid]]) {
+  const uint out_width  = params.width - 8u;
+  const uint out_height = params.height - 8u;
+  if (gid.x >= out_width || gid.y >= out_height) {
     return;
   }
 
-  const uint in_x        = gid.x + 4u;
-  const uint in_y        = gid.y + 4u;
-  const uint plane_index = in_y * params.plane_stride + in_x;
-  const uint rgba_index  = gid.y * params.rgba_stride + gid.x;
-  out_rgba[rgba_index]   = float4(r[plane_index], g[plane_index], b[plane_index], 1.0f);
+  const uint2 in_coord(gid.x + 4u, gid.y + 4u);
+  out_rgba.write(float4(r.read(in_coord).r, g.read(in_coord).r, b.read(in_coord).r, 1.0f), gid);
 }

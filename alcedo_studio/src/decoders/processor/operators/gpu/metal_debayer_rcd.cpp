@@ -7,7 +7,6 @@
 #include "decoders/processor/operators/gpu/metal_debayer_rcd.hpp"
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 
@@ -22,15 +21,7 @@ namespace {
 struct SinglePlaneParams {
   uint32_t width;
   uint32_t height;
-  uint32_t stride;
   uint32_t rgb_fc[4];
-};
-
-struct MergeParams {
-  uint32_t width;
-  uint32_t height;
-  uint32_t plane_stride;
-  uint32_t rgba_stride;
 };
 
 enum class Kernel : uint32_t {
@@ -42,12 +33,7 @@ enum class Kernel : uint32_t {
   MergeRGBA,
 };
 
-constexpr uint32_t kRowAlignmentBytes = 256;
 constexpr uint32_t kRcdOutputCropRadius = 4;
-
-auto AlignRowBytes(size_t row_bytes) -> size_t {
-  return ((row_bytes + kRowAlignmentBytes - 1) / kRowAlignmentBytes) * kRowAlignmentBytes;
-}
 
 auto KernelNameFor(Kernel kernel) -> const char* {
   switch (kernel) {
@@ -77,29 +63,31 @@ auto GetPipelineState(Kernel kernel) -> NS::SharedPtr<MTL::ComputePipelineState>
 #endif
 }
 
-auto MakeSharedBuffer(size_t length) -> NS::SharedPtr<MTL::Buffer> {
-  auto* device = MetalContext::Instance().Device();
-  if (device == nullptr) {
-    throw std::runtime_error("Metal Debayer RCD: Metal device is unavailable.");
-  }
-
-  auto buffer = NS::TransferPtr(
-      device->newBuffer(static_cast<NS::UInteger>(length), MTL::ResourceStorageModeShared));
-  if (!buffer) {
-    throw std::runtime_error("Metal Debayer RCD: failed to allocate staging buffer.");
-  }
-
-  return buffer;
-}
-
 void DispatchThreads(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineState* pipeline,
                      uint32_t width, uint32_t height) {
-  const auto thread_width  = std::max<NS::UInteger>(1, pipeline->threadExecutionWidth());
+  const auto thread_width = std::max<NS::UInteger>(1, pipeline->threadExecutionWidth());
   const auto thread_height =
       std::max<NS::UInteger>(1, pipeline->maxTotalThreadsPerThreadgroup() / thread_width);
   const MTL::Size threads_per_threadgroup{thread_width, thread_height, 1};
   const MTL::Size threads_per_grid{width, height, 1};
   encoder->dispatchThreads(threads_per_grid, threads_per_threadgroup);
+}
+
+void EnsurePlane(MetalImage& image, uint32_t width, uint32_t height) {
+  image.Create(width, height, PixelFormat::R32FLOAT, true, true, false);
+}
+
+struct RcdScratch {
+  MetalImage r;
+  MetalImage g;
+  MetalImage b;
+  MetalImage vh;
+  MetalImage pq;
+};
+
+auto Scratch() -> RcdScratch& {
+  static RcdScratch scratch;
+  return scratch;
 }
 
 }  // namespace
@@ -123,21 +111,12 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
   const uint32_t out_width  = in_width - 2 * kRcdOutputCropRadius;
   const uint32_t out_height = in_height - 2 * kRcdOutputCropRadius;
 
-  const auto plane_row_bytes = AlignRowBytes(static_cast<size_t>(in_width) * sizeof(float));
-  const auto plane_size      = plane_row_bytes * in_height;
-  const auto plane_stride    = static_cast<uint32_t>(plane_row_bytes / sizeof(float));
-
-  const auto rgba_row_bytes = AlignRowBytes(static_cast<size_t>(out_width) * sizeof(float) * 4U);
-  const auto rgba_size      = rgba_row_bytes * out_height;
-  const auto rgba_stride    = static_cast<uint32_t>(rgba_row_bytes / (sizeof(float) * 4U));
-
-  auto raw_buffer  = MakeSharedBuffer(plane_size);
-  auto r_buffer    = MakeSharedBuffer(plane_size);
-  auto g_buffer    = MakeSharedBuffer(plane_size);
-  auto b_buffer    = MakeSharedBuffer(plane_size);
-  auto vh_buffer   = MakeSharedBuffer(plane_size);
-  auto pq_buffer   = MakeSharedBuffer(plane_size);
-  auto rgba_buffer = MakeSharedBuffer(rgba_size);
+  auto& scratch = Scratch();
+  EnsurePlane(scratch.r, in_width, in_height);
+  EnsurePlane(scratch.g, in_width, in_height);
+  EnsurePlane(scratch.b, in_width, in_height);
+  EnsurePlane(scratch.vh, in_width, in_height);
+  EnsurePlane(scratch.pq, in_width, in_height);
 
   MetalImage output =
       MetalImage::Create2D(out_width, out_height, PixelFormat::RGBA32FLOAT, true, true, false);
@@ -152,40 +131,25 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     throw std::runtime_error("Metal Debayer RCD: failed to create command buffer.");
   }
 
-  {
-    auto blit = NS::RetainPtr(command_buffer->blitCommandEncoder());
-    blit->copyFromTexture(image.Texture(), 0, 0, MTL::Origin{0, 0, 0},
-                          MTL::Size{in_width, in_height, 1}, raw_buffer.get(), 0,
-                          plane_row_bytes, plane_size);
-    blit->endEncoding();
-  }
-
   const SinglePlaneParams plane_params{
       .width  = in_width,
       .height = in_height,
-      .stride = plane_stride,
       .rgb_fc = {static_cast<uint32_t>(pattern.rgb_fc[0]),
                  static_cast<uint32_t>(pattern.rgb_fc[1]),
                  static_cast<uint32_t>(pattern.rgb_fc[2]),
                  static_cast<uint32_t>(pattern.rgb_fc[3])},
-  };
-  const MergeParams merge_params{
-      .width       = out_width,
-      .height      = out_height,
-      .plane_stride = plane_stride,
-      .rgba_stride = rgba_stride,
   };
 
   {
     auto pipeline = GetPipelineState(Kernel::InitAndVH);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(raw_buffer.get(), 0, 0);
-    compute->setBuffer(r_buffer.get(), 0, 1);
-    compute->setBuffer(g_buffer.get(), 0, 2);
-    compute->setBuffer(b_buffer.get(), 0, 3);
-    compute->setBuffer(vh_buffer.get(), 0, 4);
-    compute->setBytes(&plane_params, sizeof(plane_params), 5);
+    compute->setTexture(image.Texture(), 0);
+    compute->setTexture(scratch.r.Texture(), 1);
+    compute->setTexture(scratch.g.Texture(), 2);
+    compute->setTexture(scratch.b.Texture(), 3);
+    compute->setTexture(scratch.vh.Texture(), 4);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), in_width, in_height);
     compute->endEncoding();
   }
@@ -194,10 +158,10 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     auto pipeline = GetPipelineState(Kernel::GreenAtRB);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(raw_buffer.get(), 0, 0);
-    compute->setBuffer(vh_buffer.get(), 0, 1);
-    compute->setBuffer(g_buffer.get(), 0, 2);
-    compute->setBytes(&plane_params, sizeof(plane_params), 3);
+    compute->setTexture(image.Texture(), 0);
+    compute->setTexture(scratch.vh.Texture(), 1);
+    compute->setTexture(scratch.g.Texture(), 2);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), in_width, in_height);
     compute->endEncoding();
   }
@@ -206,9 +170,9 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     auto pipeline = GetPipelineState(Kernel::PQDir);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(raw_buffer.get(), 0, 0);
-    compute->setBuffer(pq_buffer.get(), 0, 1);
-    compute->setBytes(&plane_params, sizeof(plane_params), 2);
+    compute->setTexture(image.Texture(), 0);
+    compute->setTexture(scratch.pq.Texture(), 1);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), in_width, in_height);
     compute->endEncoding();
   }
@@ -217,11 +181,11 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     auto pipeline = GetPipelineState(Kernel::RBAtRB);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(pq_buffer.get(), 0, 0);
-    compute->setBuffer(g_buffer.get(), 0, 1);
-    compute->setBuffer(r_buffer.get(), 0, 2);
-    compute->setBuffer(b_buffer.get(), 0, 3);
-    compute->setBytes(&plane_params, sizeof(plane_params), 4);
+    compute->setTexture(scratch.pq.Texture(), 0);
+    compute->setTexture(scratch.g.Texture(), 1);
+    compute->setTexture(scratch.r.Texture(), 2);
+    compute->setTexture(scratch.b.Texture(), 3);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), in_width, in_height);
     compute->endEncoding();
   }
@@ -230,11 +194,11 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     auto pipeline = GetPipelineState(Kernel::RBAtG);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(vh_buffer.get(), 0, 0);
-    compute->setBuffer(g_buffer.get(), 0, 1);
-    compute->setBuffer(r_buffer.get(), 0, 2);
-    compute->setBuffer(b_buffer.get(), 0, 3);
-    compute->setBytes(&plane_params, sizeof(plane_params), 4);
+    compute->setTexture(scratch.vh.Texture(), 0);
+    compute->setTexture(scratch.g.Texture(), 1);
+    compute->setTexture(scratch.r.Texture(), 2);
+    compute->setTexture(scratch.b.Texture(), 3);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), in_width, in_height);
     compute->endEncoding();
   }
@@ -243,21 +207,13 @@ void Bayer2x2ToRGB_RCD(MetalImage& image, const BayerPattern2x2& pattern) {
     auto pipeline = GetPipelineState(Kernel::MergeRGBA);
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(r_buffer.get(), 0, 0);
-    compute->setBuffer(g_buffer.get(), 0, 1);
-    compute->setBuffer(b_buffer.get(), 0, 2);
-    compute->setBuffer(rgba_buffer.get(), 0, 3);
-    compute->setBytes(&merge_params, sizeof(merge_params), 4);
+    compute->setTexture(scratch.r.Texture(), 0);
+    compute->setTexture(scratch.g.Texture(), 1);
+    compute->setTexture(scratch.b.Texture(), 2);
+    compute->setTexture(output.Texture(), 3);
+    compute->setBytes(&plane_params, sizeof(plane_params), 0);
     DispatchThreads(compute.get(), pipeline.get(), out_width, out_height);
     compute->endEncoding();
-  }
-
-  {
-    auto blit = NS::RetainPtr(command_buffer->blitCommandEncoder());
-    blit->copyFromBuffer(rgba_buffer.get(), 0, rgba_row_bytes, rgba_size,
-                         MTL::Size{out_width, out_height, 1}, output.Texture(), 0, 0,
-                         MTL::Origin{0, 0, 0});
-    blit->endEncoding();
   }
 
   command_buffer->commit();

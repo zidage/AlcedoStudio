@@ -11,23 +11,19 @@ struct InverseCamMulParams {
   float scale_g;
   float scale_b;
   float scale_a;
-  uint  width;
-  uint  height;
-  uint  stride;
 };
 
-kernel void apply_inverse_cam_mul_rgba32f(device float4* image [[buffer(0)]],
-                                          constant InverseCamMulParams& params [[buffer(1)]],
+kernel void apply_inverse_cam_mul_rgba32f(texture2d<float, access::read_write> image [[texture(0)]],
+                                          constant InverseCamMulParams& params [[buffer(0)]],
                                           uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
+  if (gid.x >= image.get_width() || gid.y >= image.get_height()) {
     return;
   }
 
-  const uint index = gid.y * params.stride + gid.x;
-  float4 rgba      = image[index];
+  float4 rgba = image.read(gid);
   rgba.r *= params.scale_r;
   rgba.g *= params.scale_g;
   rgba.b *= params.scale_b;
   rgba.a *= params.scale_a;
-  image[index] = rgba;
+  image.write(rgba, gid);
 }

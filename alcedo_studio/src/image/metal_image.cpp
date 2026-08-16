@@ -203,7 +203,6 @@ void MetalImage::Upload(const cv::Mat& host_image) {
   Create(static_cast<uint32_t>(host_image.cols), static_cast<uint32_t>(host_image.rows), format);
 
   auto staging_buffer = MakeSharedBuffer(buffer_size);
-  std::memset(staging_buffer->contents(), 0, buffer_size);
   CopyRowsToBuffer(host_image, staging_buffer->contents(), row_bytes);
 
   auto* queue = MetalContext::Instance().Queue();
