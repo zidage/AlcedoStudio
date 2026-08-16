@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
+#include <string>
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
@@ -205,6 +206,45 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
 
   ASSERT_EQ(completed.wait_for(std::chrono::seconds(30)), std::future_status::ready);
   EXPECT_TRUE(completed.get());
+}
+
+TEST(PipelineSchedulerRequestIdTest,
+     ConsecutiveInteractiveAdjustmentsReuseGeometryStageOutput) {
+  RegisterAllOperators();
+
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
+  exec->GetStage(PipelineStageName::Image_Loading)
+      .EnableOperator(OperatorType::RAW_DECODE, false, exec->GetGlobalParams());
+  exec->SetExecutionStages();
+
+  auto input = MakeSolidImage(64, 48);
+  PipelineScheduler scheduler(1);
+  auto run_interactive = [&](std::uint64_t request_id) {
+    PipelineTask task;
+    task.input_                             = input;
+    task.pipeline_executor_                 = exec;
+    task.request_id_                        = request_id;
+    task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+    task.options_.is_blocking_              = true;
+    task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
+    auto future = task.result_->get_future();
+    scheduler.ScheduleTask(std::move(task));
+    EXPECT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+    return future.get();
+  };
+
+  ASSERT_NE(run_interactive(101), nullptr);
+  auto& geometry = exec->GetStage(PipelineStageName::Geometry_Adjustment);
+  ASSERT_TRUE(geometry.CacheValid());
+
+  auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
+  basic.SetOperator(OperatorType::EXPOSURE, {{"exposure", 0.5f}}, exec->GetGlobalParams());
+
+  ASSERT_NE(run_interactive(102), nullptr);
+  EXPECT_TRUE(geometry.CacheValid());
+  EXPECT_NE(geometry.GetLastProfileSummary().find("cache=hit"), std::string::npos)
+      << geometry.GetLastProfileSummary();
 }
 
 TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) {

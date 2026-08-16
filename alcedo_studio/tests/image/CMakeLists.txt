@@ -19,4 +19,11 @@ if(ALCEDO_METAL_ENABLED)
   target_link_libraries(ImageBufferMetalTest PRIVATE GTest::gtest_main ImageBuffer MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(ImageBufferMetalTest TEST_PREFIX "ImageBufferMetalTest.")
   alcedo_register_test_target(ImageBufferMetalTest image)
+
+  add_executable(MetalGeometryUtilsTest ${ALCEDO_TEST_ROOT}/metal/metal_geometry_utils_test.cpp)
+  target_include_directories(MetalGeometryUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(MetalGeometryUtilsTest PRIVATE GTest::gtest_main MetalGeometryUtils
+                                                       MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  gtest_discover_tests(MetalGeometryUtilsTest TEST_PREFIX "MetalGeometryUtilsTest.")
+  alcedo_register_test_target(MetalGeometryUtilsTest image gpu)
 endif()
