@@ -26,7 +26,9 @@ from release_notes import (  # noqa: E402
     load_release_notes,
     load_release_notes_file,
     release_notes_path,
+    stamp_build_heading,
     validate_release_notes,
+    version_notes_path,
 )
 
 
@@ -39,6 +41,10 @@ class ReleaseNotesTest(unittest.TestCase):
         self.assertEqual(
             release_notes_path(2014, "zh-CN", directory),
             directory / "2014.zh-CN.txt",
+        )
+        self.assertEqual(
+            version_notes_path("0.2.9", "en", directory),
+            directory / "0.2.9.en.txt",
         )
 
     def test_valid_notes_load_without_final_manifest_newline(self) -> None:
@@ -80,6 +86,49 @@ class ReleaseNotesTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ReleaseNotesError, "2014.zh-CN.txt"):
                 load_release_notes("0.2.9", 2014, directory)
+
+    def test_version_notes_are_stamped_with_the_platform_build(self) -> None:
+        english = "Alcedo Studio 0.2.9\n\nUpdates\n-------\n- Item.\n"
+        chinese = "Alcedo Studio 0.2.9\n\n更新内容\n--------\n- 项目。\n"
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT) as root:
+            directory = Path(root)
+            (directory / "0.2.9.en.txt").write_text(english, encoding="utf-8", newline="\n")
+            (directory / "0.2.9.zh-CN.txt").write_text(
+                chinese, encoding="utf-8", newline="\n"
+            )
+            loaded = load_release_notes("0.2.9", 2005, directory)
+        self.assertEqual(
+            loaded["en"],
+            stamp_build_heading(english, "0.2.9", 2005, "en"),
+        )
+        self.assertTrue(loaded["en"].startswith("Alcedo Studio 0.2.9 (Build 2005)"))
+        self.assertTrue(loaded["zh-CN"].startswith("Alcedo Studio 0.2.9（构建 2005）"))
+
+    def test_build_specific_pair_wins_over_version_pair(self) -> None:
+        version_en = "Alcedo Studio 0.2.9\n\nUpdates\n-------\n- Version item.\n"
+        version_zh = "Alcedo Studio 0.2.9\n\n更新内容\n--------\n- 版本项目。\n"
+        build_en = "Alcedo Studio 0.2.9 (Build 2006)\n\nUpdates\n-------\n- Hotfix item.\n"
+        build_zh = "Alcedo Studio 0.2.9（构建 2006）\n\n更新内容\n--------\n- 热修复项目。\n"
+        with tempfile.TemporaryDirectory(dir=TEST_TEMP_ROOT) as root:
+            directory = Path(root)
+            (directory / "0.2.9.en.txt").write_text(version_en, encoding="utf-8", newline="\n")
+            (directory / "0.2.9.zh-CN.txt").write_text(
+                version_zh, encoding="utf-8", newline="\n"
+            )
+            (directory / "2006.en.txt").write_text(build_en, encoding="utf-8", newline="\n")
+            (directory / "2006.zh-CN.txt").write_text(
+                build_zh, encoding="utf-8", newline="\n"
+            )
+            loaded = load_release_notes("0.2.9", 2006, directory)
+        self.assertIn("Hotfix item.", loaded["en"])
+
+    def test_version_heading_is_accepted_without_a_build(self) -> None:
+        validate_release_notes(
+            "Alcedo Studio 0.2.9\n\nUpdates\n-------\n- Item.\n",
+            "0.2.9",
+            None,
+            "en",
+        )
 
     def test_wrong_build_heading_is_rejected(self) -> None:
         text = "Alcedo Studio 0.2.9 (Build 2013)\n\nUpdates\n-------\n- Item.\n"
@@ -151,6 +200,8 @@ class ManifestGenerationTest(unittest.TestCase):
                 "2014",
                 "--tag",
                 "v0.2.9",
+                "--commit",
+                "0123456789abcdef0123456789abcdef01234567",
                 "--windows",
                 str(package),
                 "--output",
@@ -164,6 +215,14 @@ class ManifestGenerationTest(unittest.TestCase):
             manifest = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(manifest["changelogs"], changelogs)
             self.assertEqual(manifest["changelog"], changelogs["en"])
+            self.assertEqual(
+                manifest["commit"], "0123456789abcdef0123456789abcdef01234567"
+            )
+            self.assertTrue(
+                manifest["artifacts"]["windows-x86_64"]["url"].startswith(
+                    "https://static.aoraw.org/updates/v1/stable/builds/2014/windows-x86_64/"
+                )
+            )
             self.assertNotIn("notesUrl", manifest)
 
 

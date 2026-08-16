@@ -44,11 +44,11 @@ Source plan: [Alcedo Studio Website Redesign Plan](alcedo_website_redesign_plan.
 ### 1.1 下载 URL 策略（实现约定，不进页面正文）
 
 - 首页按钮文案只写动作：`Download for Windows` / `Windows 下载` 等。
-- **当前阶段（GitHub Pages）**：Windows / macOS 按钮直接指向当前安装包的 GitHub Release 下载 URL；另提供 `All releases` / `全部版本` 文字链接。
-- 当前具体 URL（发版时同步更新，页面不显示版本号）：
-  - Windows: `https://github.com/zidage/AlcedoStudio/releases/download/v0.2.7/AlcedoStudio-0.2.7-Windows-AMD64.exe`
-  - macOS: `https://github.com/zidage/AlcedoStudio/releases/download/v0.2.7/AlcedoStudio-0.2.7-Darwin-arm64.dmg`
-- **后续（Cloudflare R2）**：改为固定 `releases/latest/` 对象；GitHub Releases 保留为后备。
+- 下载按钮读取公开的 stable 更新清单，不指向 GitHub Release 资产，也不使用 `releases/latest/`。
+- 清单地址（页面不显示版本号）：
+  - Windows: `https://static.aoraw.org/updates/v1/stable/windows-x86_64/manifest.json` → `artifacts.windows-x86_64.url`
+  - macOS: `https://static.aoraw.org/updates/v1/stable/macos-arm64/manifest.json` → `artifacts.macos-arm64.manualUrl`（DMG；不要用自动更新用的 zip）
+- GitHub Releases 只作公开档案和导流；`All releases` / `全部版本` 可保留为文字链接。
 - 中文页额外提供 `百度网盘`；英文页不显示。
 - 不写“高速”“推荐线路”“国内加速”等修饰。
 
@@ -156,7 +156,7 @@ Source plan: [Alcedo Studio Website Redesign Plan](alcedo_website_redesign_plan.
   "applicationCategory": "MultimediaApplication",
   "operatingSystem": "Windows 10, Windows 11, macOS (Apple Silicon)",
   "license": "https://www.gnu.org/licenses/gpl-3.0.html",
-  "downloadUrl": "https://github.com/zidage/AlcedoStudio/releases/latest",
+  "downloadUrl": "https://static.aoraw.org/updates/v1/stable/windows-x86_64/manifest.json",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -267,7 +267,7 @@ Installation and user guide for import, editing, and export.
   "applicationCategory": "MultimediaApplication",
   "operatingSystem": "Windows 10, Windows 11, macOS (Apple Silicon)",
   "license": "https://www.gnu.org/licenses/gpl-3.0.html",
-  "downloadUrl": "https://github.com/zidage/AlcedoStudio/releases/latest",
+  "downloadUrl": "https://static.aoraw.org/updates/v1/stable/windows-x86_64/manifest.json",
   "offers": {
     "@type": "Offer",
     "price": "0",

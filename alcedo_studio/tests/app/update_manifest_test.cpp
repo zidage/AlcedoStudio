@@ -51,6 +51,18 @@ const QDateTime kValidationTime =
     QDateTime::fromString(QStringLiteral("2026-08-11T00:00:00Z"), Qt::ISODate);
 const QUrl kFeedUrl(QStringLiteral("https://static.aoraw.org/updates/v1/stable/manifest.json"));
 
+TEST(UpdateManifestTest, AcceptsOptionalCommitField) {
+  const SignedManifest input = MakeSignedManifest(
+      QStringLiteral("https://static.aoraw.org/updates/v1/stable/builds/2009/windows-x86_64/update.exe"),
+      42,
+      QStringLiteral(R"(,"commit":"0123456789abcdef0123456789abcdef01234567")"));
+  const auto result =
+      VerifyUpdateManifest(input.json, input.signature, input.public_key,
+                           QStringLiteral("windows-x86_64"), kFeedUrl, 40, kValidationTime);
+  ASSERT_TRUE(result) << result.error.toStdString();
+  EXPECT_EQ(result.manifest->commit, QStringLiteral("0123456789abcdef0123456789abcdef01234567"));
+}
+
 TEST(UpdateManifestTest, AcceptsSignedArtifactForCurrentPlatform) {
   const SignedManifest input = MakeSignedManifest();
   const auto           result =

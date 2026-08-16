@@ -3,7 +3,7 @@
   "tasks": [
     {
       "label": "Alcedo: Package Windows Release",
-      "detail": "Stable package; build number increments after each successful run.",
+      "detail": "Bakes the stable update feed into the installer. Does not upload. Build number increments after each successful run.",
       "type": "process",
       "command": "powershell",
       "args": [
@@ -30,7 +30,7 @@
     },
     {
       "label": "Alcedo: Package Windows Beta",
-      "detail": "Beta update package; build number increments after each successful run.",
+      "detail": "Bakes the beta updater-test feed into the installer. Does not upload. Build number increments after each successful run.",
       "type": "process",
       "command": "powershell",
       "args": [
@@ -59,7 +59,7 @@
     },
     {
       "label": "Alcedo: Package macOS Release",
-      "detail": "Stable package; build number increments after each successful run.",
+      "detail": "Bakes the stable update feed into the installer. Does not upload. Build number increments after each successful run.",
       "type": "process",
       "command": "bash",
       "args": [
@@ -80,7 +80,7 @@
     },
     {
       "label": "Alcedo: Package macOS Beta",
-      "detail": "Beta update package; build number increments after each successful run.",
+      "detail": "Bakes the beta updater-test feed into the installer. Does not upload. Build number increments after each successful run.",
       "type": "process",
       "command": "bash",
       "args": [

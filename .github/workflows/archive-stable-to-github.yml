@@ -1,0 +1,62 @@
+name: Archive stable update to GitHub
+
+# Records an already-live stable update as a public GitHub archive.
+# This workflow does not publish an update, does not read a beta feed, and
+# does not write to R2. Running it while no stable pair is live will fail.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Live stable marketing version to archive (for example 0.2.9). Leave empty to use the version both platforms already share.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-stable-github
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Archive live stable feeds
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPDATE_PUBLIC_KEY: ${{ vars.ALCEDO_UPDATE_PUBLIC_KEY_BASE64 }}
+      ARCHIVE_VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Check out history for the packaged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Confirm this is only an archive job
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ -n "${R2_ACCESS_KEY_ID:-}" || -n "${R2_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "This workflow must not receive R2 credentials." >&2
+            exit 1
+          fi
+          if [[ -z "$UPDATE_PUBLIC_KEY" ]]; then
+            echo "Missing GitHub Actions variable: ALCEDO_UPDATE_PUBLIC_KEY_BASE64" >&2
+            exit 1
+          fi
+
+      - name: Archive the live stable pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=()
+          if [[ -n "${ARCHIVE_VERSION}" ]]; then
+            extra+=(--version "$ARCHIVE_VERSION")
+          fi
+          python3 scripts/update/archive_stable_github.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --public-key-base64 "$UPDATE_PUBLIC_KEY" \
+            "${extra[@]}"
