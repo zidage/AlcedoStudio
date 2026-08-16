@@ -15,7 +15,8 @@ DESIGN/token drift.
      `iconSourceSize*`
    - Card fills/borders → `cardSurfaceColor` / `cardBorderColor` (or
      `colCardSurface` / `colCardBorder` from the Main theme mirror)
-   - Fold timing → `motionFoldOpenMs` / `motionFoldCloseMs` / `reduceMotion`
+   - Fold timing / easing → `motionFoldOpenMs` / `motionFoldCloseMs` /
+     `motionEasing` / `reduceMotion`
    - Body spacing → `spaceXs`…`spaceXl`
 4. **Documented exceptions only.** If a literal remains (e.g. History rail 46 px
    hit, window caption canvas), it is listed under “Compact exceptions” in

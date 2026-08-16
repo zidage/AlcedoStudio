@@ -23,13 +23,18 @@ ApplicationWindow {
                                                        || Qt.platform.os === "macos"
     property bool nativeFrameReady: !root.nativeFrameManagedEnabled
     property bool collectionsSidebarExpanded: true
+    property bool collectionsSidebarUserAdjusted: false
     property bool collectionsWorkspaceObservationReady: false
     property real collectionsSidebarGap: collectionsSidebarExpanded
                                                  ? appTheme.spaceMd : 0
+    property bool editorAdjustmentStackExpanded: true
     readonly property string activeWorkspace: appModules.workspaceRouter
                                               ? String(appModules.workspaceRouter.workspace
                                                        || "library")
                                               : "library"
+    readonly property bool activeRightSidebarExpanded: activeWorkspace === "editor"
+                                                       ? editorAdjustmentStackExpanded
+                                                       : libraryInspectorVisible
     width: 1200
     height: 760
     minimumWidth: 960
@@ -129,13 +134,30 @@ ApplicationWindow {
     }
 
     function toggleCollectionsSidebar() {
+        root.collectionsSidebarUserAdjusted = true
         root.collectionsSidebarExpanded = !root.collectionsSidebarExpanded
     }
 
-    onActiveWorkspaceChanged: {
-        if (root.collectionsWorkspaceObservationReady) {
-            root.collectionsSidebarExpanded = false
+    function applyDefaultCollectionsSidebarForWorkspace() {
+        if (root.collectionsSidebarUserAdjusted) {
+            return
         }
+        root.collectionsSidebarExpanded = root.activeWorkspace === "library"
+    }
+
+    function toggleActiveRightSidebar() {
+        if (root.activeWorkspace === "editor") {
+            root.editorAdjustmentStackExpanded = !root.editorAdjustmentStackExpanded
+            return
+        }
+        root.libraryInspectorVisible = !root.libraryInspectorVisible
+    }
+
+    onActiveWorkspaceChanged: {
+        if (!root.collectionsWorkspaceObservationReady) {
+            return
+        }
+        root.applyDefaultCollectionsSidebarForWorkspace()
     }
 
     Behavior on collectionsSidebarGap {
@@ -144,7 +166,7 @@ ApplicationWindow {
                       : (root.collectionsSidebarExpanded
                          ? appTheme.motionFoldOpenMs
                          : appTheme.motionFoldCloseMs)
-            easing.type: Easing.OutCubic
+            easing.type: appTheme.motionEasing
         }
     }
 
@@ -540,6 +562,10 @@ ApplicationWindow {
         return imageActionsController.editorImageStillExists(elementId)
     }
 
+    function firstLibraryImage() {
+        return imageActionsController.firstLibraryImage()
+    }
+
     readonly property alias workspaceLayer: workspaceHost
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
@@ -626,13 +652,13 @@ ApplicationWindow {
                                   : (root.collectionsSidebarExpanded
                                      ? appTheme.motionFoldOpenMs
                                      : appTheme.motionFoldCloseMs)
-                        easing.type: Easing.OutCubic
+                        easing.type: appTheme.motionEasing
                     }
                 }
                 Behavior on opacity {
                     NumberAnimation {
                         duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
-                        easing.type: Easing.OutCubic
+                        easing.type: appTheme.motionEasing
                     }
                 }
             }

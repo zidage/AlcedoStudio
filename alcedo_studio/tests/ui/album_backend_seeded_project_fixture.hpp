@@ -17,6 +17,7 @@
 #include <QString>
 #include <QVariantList>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -85,14 +86,17 @@ inline auto FindFolderId(const QVariantList& folders, const QString& name) -> ui
 /// Returns the packed path and the image element/file + image ids on success.
 inline auto CreateSeededPackedProject(
     const std::filesystem::path&              tempDir,
-    const std::vector<std::filesystem::path>& sourceImagePaths = {})
+    const std::vector<std::filesystem::path>& sourceImagePaths = {},
+    std::size_t                               synthetic_image_count = 1)
     -> std::optional<SeededProject> {
   const auto db_path     = tempDir / "album_delete_seed.db";
   const auto meta_path   = tempDir / "album_delete_seed.json";
   const auto packed_path = tempDir / "album_delete_seed.alcd";
 
   auto project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kCreateNew);
-  const std::size_t image_count = sourceImagePaths.empty() ? 1 : sourceImagePaths.size();
+  const std::size_t image_count =
+      sourceImagePaths.empty() ? std::max<std::size_t>(1, synthetic_image_count)
+                               : sourceImagePaths.size();
   std::vector<SeededProject::ImageKey> image_keys;
   image_keys.reserve(image_count);
 
@@ -108,8 +112,8 @@ inline auto CreateSeededPackedProject(
 
     auto image = image_handle.Get();
     if (sourceImagePaths.empty()) {
-      image->image_path_ = tempDir / "album-delete.dng";
-      image->image_name_ = L"album-delete.dng";
+      image->image_path_ = tempDir / ("album-delete-" + std::to_string(index) + ".dng");
+      image->image_name_ = L"album-delete-" + std::to_wstring(index) + L".dng";
     } else {
       image->image_path_ = sourceImagePaths[index];
       image->image_name_ = L"workspace-image-" + std::to_wstring(index) + L".dng";

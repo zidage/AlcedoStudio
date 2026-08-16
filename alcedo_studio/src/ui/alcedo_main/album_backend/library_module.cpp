@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <limits>
 
+#include "app/project_service.hpp"
 #include "image/image.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "sleeve/storage.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -165,6 +167,50 @@ bool LibraryModule::LoadThumbnailsThroughIndex(int index) {
     loaded_any = true;
   }
   return loaded_any;
+}
+
+int LibraryModule::IndexOfElementInCurrentView(uint elementId) {
+  if (elementId == 0) {
+    return -1;
+  }
+
+  const int loaded = thumbnail_model_.rowByElementId(elementId);
+  if (loaded >= 0) {
+    return loaded;
+  }
+
+  if (!project_ || !folders_ || !search_ || !stats_) {
+    return -1;
+  }
+
+  auto proj = project_->handler().project();
+  if (!proj) {
+    return -1;
+  }
+
+  auto storage = proj->GetStorage();
+  if (!storage) {
+    return -1;
+  }
+
+  const auto folder_id_opt = folders_->CurrentFolderElementId();
+  if (!folder_id_opt.has_value()) {
+    return -1;
+  }
+
+  const auto merged_filter =
+      MergeFilterNodes(stats_->BuildStatsFilterNode(), search_->ActiveSearchFilterNode());
+  const auto effective_filter = CompileFilterPredicate(merged_filter);
+  const auto ids =
+      storage->GetElementStore().ListFilteredFileIds(folder_id_opt.value(), effective_filter);
+  for (size_t i = 0; i < ids.size(); ++i) {
+    if (ids[i] == static_cast<sl_element_id_t>(elementId)) {
+      const auto index = static_cast<int>(i);
+      LoadThumbnailsThroughIndex(index);
+      return thumbnail_model_.rowByElementId(elementId);
+    }
+  }
+  return -1;
 }
 
 // ── Q_INVOKABLE: Project I/O ────────────────────────────────────────────────

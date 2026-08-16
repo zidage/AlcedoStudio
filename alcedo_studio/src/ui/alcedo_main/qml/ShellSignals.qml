@@ -95,10 +95,41 @@ Item {
             if (root.host) {
                 root.host.pendingDeleteTargets = []
                 root.host.pendingRatingTarget = ({})
-                root.host.setFocusedImage(null)
             }
             if (root.deleteConfirmDialog) {
                 root.deleteConfirmDialog.close()
+            }
+            const inEditor = appModules.workspaceRouter
+                             && String(appModules.workspaceRouter.workspace || "") === "editor"
+            if (inEditor && root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
+                return
+            }
+            if (root.host) {
+                root.host.setFocusedImage(null)
+            }
+        }
+    }
+
+    Connections {
+        target: appModules.stats
+        ignoreUnknownSignals: true
+        function onStatsFilterChanged() {
+            if (root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
+            }
+        }
+    }
+
+    Connections {
+        target: appModules.search
+        ignoreUnknownSignals: true
+        function onSearchStateChanged() {
+            if (root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
             }
         }
     }

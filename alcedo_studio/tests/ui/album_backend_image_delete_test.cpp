@@ -208,6 +208,44 @@ TEST_F(DeleteTests, AddToAlbumThenDeleteFromAlbum_KeepsRootFile) {
   (void)image_id;
 }
 
+TEST_F(DeleteTests, IndexOfElementInCurrentViewFollowsCollectionMembership) {
+  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(seeded.has_value());
+  ASSERT_EQ(seeded->images_.size(), 2u);
+
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(LoadPackedProject(backend, seeded->packed_path_));
+  ProcessEvents(500);
+  ASSERT_EQ(backend.library()->ShownCount(), 2);
+
+  const auto first_id  = static_cast<uint>(seeded->images_[0].file_id_);
+  const auto second_id = static_cast<uint>(seeded->images_[1].file_id_);
+  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(first_id), 0);
+  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(second_id), 0);
+
+  backend.folders()->CreateFolder("AlbumOnlySecond");
+  ProcessEvents(500);
+  const uint album_ui_id = FindFolderId(backend.folders()->Folders(), "AlbumOnlySecond");
+  ASSERT_NE(album_ui_id, 0u);
+
+  QVariantList targets;
+  targets.push_back(QVariantMap{{"elementId", second_id},
+                                {"imageId", static_cast<uint>(seeded->images_[1].image_id_)}});
+  const QVariantMap add_result = backend.images()->AddImagesToFolder(targets, album_ui_id);
+  ASSERT_TRUE(add_result.value("success").toBool());
+
+  backend.folders()->SelectFolder(album_ui_id);
+  ProcessEvents(500);
+  ASSERT_EQ(backend.library()->ShownCount(), 1);
+  EXPECT_EQ(backend.library()->IndexOfElementInCurrentView(second_id), 0);
+  EXPECT_EQ(backend.library()->IndexOfElementInCurrentView(first_id), -1);
+
+  backend.folders()->SelectFolder(0);
+  ProcessEvents(500);
+  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(first_id), 0);
+  EXPECT_GE(backend.library()->IndexOfElementInCurrentView(second_id), 0);
+}
+
 TEST_F(DeleteTests, AddToAlbumTwiceIsIdempotent) {
   const auto seeded = CreateSeededPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());

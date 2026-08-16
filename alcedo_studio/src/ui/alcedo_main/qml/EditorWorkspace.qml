@@ -682,6 +682,7 @@ Item {
                 editorSession: root.editorSession
                 interaction: editorInteraction
                 controlsEnabled: root.editorControlsEnabled
+                expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }
         }
 

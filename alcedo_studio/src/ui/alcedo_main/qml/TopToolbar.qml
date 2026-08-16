@@ -77,6 +77,7 @@ Rectangle {
             interactionPolicy: appModules.interactionPolicy
             editorSession: appModules.editorSession
             editorImageExists: root.host ? root.host.editorImageStillExists : null
+            firstEditorImage: root.host ? root.host.firstLibraryImage : null
             navigationEnabled: appModules.project.serviceReady
         }
 
@@ -167,8 +168,8 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
-        // Inspector toggle lives on the application top toolbar (52×42,
-        // icon 24×24) — same placement and size as before workspace extraction.
+        // Inspector toggle: compact IconActionButton, same hit as the
+        // collections sidebar control. Visible only in the Library workspace.
         InspectorToggleButton {
             theme: root.theme
             host: root.host

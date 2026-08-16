@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QEasingCurve>
 #include <QFontDatabase>
 #include <QListWidget>
 #include <QPushButton>
@@ -1092,6 +1093,9 @@ auto AppTheme::spaceXl() const -> int { return 20; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
+auto AppTheme::motionEasing() const -> int {
+  return static_cast<int>(QEasingCurve::OutCubic);
+}
 auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {

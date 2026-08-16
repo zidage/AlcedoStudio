@@ -8,6 +8,7 @@
 /// interaction entrypoints, and Phase 4C visual/motion contracts.
 
 #include <QColor>
+#include <QEasingCurve>
 #include <QPoint>
 #include <QQuickItem>
 #include <QSettings>
@@ -599,6 +600,82 @@ TEST_F(WorkspaceShellTests, CollectionsSidebarToolbarToggleRestoresCollapsedPane
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
 }
 
+TEST_F(WorkspaceShellTests, CollectionsSidebarFollowsWorkspaceUntilUserAdjusts) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  auto* router = loaded->host.workspace_router();
+  ASSERT_NE(router, nullptr);
+  EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
+
+  router->OpenEditor(0, 0);
+  ProcessEvents(80);
+  EXPECT_EQ(router->workspace(), QStringLiteral("editor"));
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+
+  router->OpenLibrary();
+  ProcessEvents(80);
+  EXPECT_EQ(router->workspace(), QStringLiteral("library"));
+  EXPECT_TRUE(loaded->window->property("collectionsSidebarExpanded").toBool());
+
+  auto* sidebar_toggle =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("collectionsSidebarToggle"));
+  ASSERT_NE(sidebar_toggle, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(sidebar_toggle));
+  ProcessEvents(80);
+  EXPECT_TRUE(loaded->window->property("collectionsSidebarUserAdjusted").toBool());
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+
+  router->OpenEditor(0, 0);
+  ProcessEvents(80);
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+  router->OpenLibrary();
+  ProcessEvents(80);
+  EXPECT_FALSE(loaded->window->property("collectionsSidebarExpanded").toBool());
+}
+
+TEST_F(WorkspaceShellTests, RightSidebarToggleHidesEditorAdjustmentStack) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  auto* router = loaded->host.workspace_router();
+  ASSERT_NE(router, nullptr);
+  router->OpenEditor(0, 0);
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->window->property("activeWorkspace").toString(), QStringLiteral("editor"));
+  EXPECT_TRUE(loaded->window->property("editorAdjustmentStackExpanded").toBool());
+  EXPECT_TRUE(loaded->window->property("activeRightSidebarExpanded").toBool());
+
+  auto* toggle = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryInspectorToggle"));
+  auto* stack  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  ASSERT_NE(toggle, nullptr);
+  ASSERT_NE(stack, nullptr);
+  EXPECT_TRUE(toggle->isVisible());
+  EXPECT_EQ(toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar-right.svg"));
+  EXPECT_NEAR(stack->width(), 320.0, 2.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(loaded->window, "toggleActiveRightSidebar"));
+  ProcessEvents(250);
+  EXPECT_FALSE(loaded->window->property("editorAdjustmentStackExpanded").toBool());
+  EXPECT_FALSE(loaded->window->property("activeRightSidebarExpanded").toBool());
+  EXPECT_NEAR(stack->width(), 0.0, 1.0);
+  EXPECT_EQ(toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar-right-inactive.svg"));
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(loaded->window, "toggleActiveRightSidebar"));
+  ProcessEvents(250);
+  EXPECT_TRUE(loaded->window->property("editorAdjustmentStackExpanded").toBool());
+  EXPECT_NEAR(stack->width(), 320.0, 2.0);
+}
+
 TEST_F(WorkspaceShellTests, InspectorToggleButtonLivesOnTopToolbarWithOriginalSize) {
   ASSERT_TRUE(QCoreApplication::instance());
   auto loaded = LoadMainWindow();
@@ -609,8 +686,10 @@ TEST_F(WorkspaceShellTests, InspectorToggleButtonLivesOnTopToolbarWithOriginalSi
   auto* toggle = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryInspectorToggle"));
   ASSERT_NE(toggle, nullptr);
   EXPECT_TRUE(toggle->isVisible());
-  EXPECT_NEAR(toggle->width(), 52.0, 1.0);
-  EXPECT_NEAR(toggle->height(), 42.0, 1.0);
+  EXPECT_NEAR(toggle->width(), 40.0, 1.0);
+  EXPECT_NEAR(toggle->height(), 40.0, 1.0);
+  EXPECT_EQ(toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar-right.svg"));
 
   // Button must not live under the library browser tree as a smaller control.
   auto* library = loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace"));
@@ -626,6 +705,8 @@ TEST_F(WorkspaceShellTests, InspectorToggleButtonLivesOnTopToolbarWithOriginalSi
   ProcessEvents(30);
   EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
   EXPECT_FALSE(library->property("inspectorVisible").toBool());
+  EXPECT_EQ(toggle->property("iconSrc").toUrl().toString(),
+            QStringLiteral("qrc:/panel_icons/layout-sidebar-right-inactive.svg"));
 }
 
 TEST_F(WorkspaceShellTests, MacosKeepsNativeTrafficLightsAndHidesDrawnCaptionButtons) {
@@ -1635,6 +1716,105 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
       << loaded->qml_warnings.front().toString().toStdString();
 }
 
+TEST_F(WorkspaceShellTests, EditorCollectionChangeOpensFirstImageWhenCurrentMissing) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(seeded.has_value());
+  ASSERT_EQ(seeded->images_.size(), 2u);
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(80);
+  ASSERT_EQ(loaded->host.library()->ShownCount(), 2);
+
+  loaded->host.folders()->CreateFolder(QStringLiteral("AlbumOnlySecond"));
+  ProcessEvents(500);
+  const uint album_id =
+      FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumOnlySecond"));
+  ASSERT_NE(album_id, 0u);
+
+  const auto first  = seeded->images_[0];
+  const auto second = seeded->images_[1];
+  QVariantList targets;
+  targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(second.file_id_)},
+                                {QStringLiteral("imageId"), static_cast<uint>(second.image_id_)}});
+  const QVariantMap add_result = loaded->host.images()->AddImagesToFolder(targets, album_id);
+  ASSERT_TRUE(add_result.value(QStringLiteral("success")).toBool());
+
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(first.file_id_),
+                                              static_cast<uint>(first.image_id_));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(first.file_id_));
+
+  loaded->host.folders()->SelectFolder(album_id);
+  ProcessEvents(400);
+  EXPECT_EQ(loaded->host.library()->ShownCount(), 1);
+  EXPECT_EQ(loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(first.file_id_)),
+            -1);
+  EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
+  EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
+
+  auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
+  ASSERT_NE(filmstrip, nullptr);
+  EXPECT_EQ(filmstrip->property("totalCount").toInt(), 1);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 0);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, EditorCollectionChangeRevealsCurrentImageWhenStillPresent) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto seeded = CreateSeededPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(seeded.has_value());
+  ASSERT_EQ(seeded->images_.size(), 2u);
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(80);
+  ASSERT_EQ(loaded->host.library()->ShownCount(), 2);
+
+  loaded->host.folders()->CreateFolder(QStringLiteral("AlbumBoth"));
+  ProcessEvents(500);
+  const uint album_id = FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumBoth"));
+  ASSERT_NE(album_id, 0u);
+
+  const auto first  = seeded->images_[0];
+  const auto second = seeded->images_[1];
+  QVariantList targets;
+  targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(first.file_id_)},
+                                {QStringLiteral("imageId"), static_cast<uint>(first.image_id_)}});
+  targets.push_back(QVariantMap{{QStringLiteral("elementId"), static_cast<uint>(second.file_id_)},
+                                {QStringLiteral("imageId"), static_cast<uint>(second.image_id_)}});
+  const QVariantMap add_result = loaded->host.images()->AddImagesToFolder(targets, album_id);
+  ASSERT_TRUE(add_result.value(QStringLiteral("success")).toBool());
+
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(second.file_id_),
+                                              static_cast<uint>(second.image_id_));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
+
+  loaded->host.folders()->SelectFolder(album_id);
+  ProcessEvents(400);
+  EXPECT_EQ(loaded->host.library()->ShownCount(), 2);
+  const int row =
+      loaded->host.library()->IndexOfElementInCurrentView(static_cast<uint>(second.file_id_));
+  EXPECT_GE(row, 0);
+  EXPECT_EQ(loaded->host.editor_session()->last_element_id(), static_cast<uint>(second.file_id_));
+  EXPECT_EQ(loaded->host.workspace_router()->element_id(), static_cast<uint>(second.file_id_));
+
+  auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
+  ASSERT_NE(filmstrip, nullptr);
+  EXPECT_EQ(filmstrip->property("totalCount").toInt(), 2);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), row);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
 // ── Phase 4B: restored editor desktop ordering ─────────────────────────────
 
 namespace {
@@ -1911,6 +2091,7 @@ TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   EXPECT_EQ(theme.motionFoldOpenMs(), 200);
   EXPECT_EQ(theme.motionFoldCloseMs(), 160);
   EXPECT_LT(theme.motionFoldCloseMs(), theme.motionFoldOpenMs());
+  EXPECT_EQ(theme.motionEasing(), static_cast<int>(QEasingCurve::OutCubic));
   EXPECT_EQ(theme.lineHeightBody(), 16);
   EXPECT_EQ(theme.lineHeightHeadline(), 28);
   // Editor side-panel + scope sizing tokens (Phase 4C comfort sizing).
@@ -2071,15 +2252,16 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_NEAR(rail->width(), rail_width, 1.0);
   EXPECT_FALSE(rail->property("layoutExpanded").toBool());
 
-  // Intermediate 0.5 — R6: outer layout is binary full width; progress drives
-  // transform (panelSlideX) only, not interpolated Layout width.
+  // Intermediate 0.5 — filmstrip mode: outer layout width interpolates so the
+  // viewport moves with the panel.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
   EXPECT_TRUE(rail->property("layoutExpanded").toBool());
   const qreal full_w = rail_width + panel_gap + panel_width;
-  EXPECT_NEAR(rail->width(), full_w, 1.5);
-  EXPECT_NEAR(rail->property("panelSlideX").toReal(), -0.5 * panel_width, 1.5);
+  const qreal mid_w  = rail_width + 0.5 * (panel_gap + panel_width);
+  EXPECT_NEAR(rail->width(), mid_w, 1.5);
+  EXPECT_NEAR(rail->property("totalWidth").toReal(), mid_w, 1.5);
 
   // Open session page and complete the fold.
   session->set_history_panel_page(QStringLiteral("history"));
@@ -2089,17 +2271,16 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
-  EXPECT_NEAR(rail->property("panelSlideX").toReal(), 0.0, 1.0);
 
   // Rapid reverse at mid progress: session collapses immediately; driver pins mid.
-  // Layout stays terminal-expanded until progress returns to 0.
+  // Layout width follows the driven progress (viewport grows with the fold).
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   session->set_history_panel_page(QString());
   ProcessEvents(10);
   EXPECT_TRUE(session->history_panel_page().isEmpty());
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
-  EXPECT_NEAR(rail->width(), full_w, 1.5);
+  EXPECT_NEAR(rail->width(), mid_w, 1.5);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
@@ -2172,6 +2353,50 @@ TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeomet
   ProcessEvents(20);
   EXPECT_TRUE(session->filmstrip_collapsed());
   EXPECT_NEAR(filmstrip->height(), handle_h, 1.0);
+}
+
+TEST_F(WorkspaceShellTests, AdjustmentStackFoldDriverPinsIntermediateAndTerminalGeometry) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* stack = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  ASSERT_NE(stack, nullptr);
+
+  const qreal preferred = stack->property("preferredPanelWidth").toReal();
+  ASSERT_GT(preferred, 0.0);
+
+  loaded->window->setProperty("editorAdjustmentStackExpanded", true);
+  ProcessEvents(10);
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(stack, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(stack->width(), preferred, 1.5);
+  EXPECT_NEAR(stack->property("stackExpandProgress").toReal(), 1.0, 0.001);
+
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(stack, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
+  ProcessEvents(10);
+  EXPECT_NEAR(stack->width(), preferred * 0.5, 1.5);
+  EXPECT_NEAR(stack->property("stackExpandProgress").toReal(), 0.5, 0.001);
+
+  loaded->window->setProperty("editorAdjustmentStackExpanded", false);
+  ProcessEvents(10);
+  EXPECT_FALSE(loaded->window->property("editorAdjustmentStackExpanded").toBool());
+  EXPECT_NEAR(stack->property("stackExpandProgress").toReal(), 0.5, 0.001);
+
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(stack, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(stack->width(), 0.0, 1.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(stack, "endFoldDrive"));
+  ProcessEvents(10);
+  EXPECT_NEAR(stack->width(), 0.0, 1.0);
+  EXPECT_NEAR(stack->property("stackExpandProgress").toReal(), 0.0, 0.001);
 }
 
 TEST_F(WorkspaceShellTests, AdjustmentSectionFoldDriverPreservesPanelSelection) {

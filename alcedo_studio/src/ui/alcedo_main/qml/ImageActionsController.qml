@@ -27,6 +27,7 @@ Item {
     // "editor-filmstrip"). The editor filmstrip has no multi-selection surface,
     // so its menu always targets exactly the clicked image.
     property string menuOrigin: "library"
+    property bool _pendingEditorLibraryListSync: false
 
     // Push the focused image element id and the pending delete targets into the
     // interaction-policy controller so its cached Q_PROPERTYs (which the inspector
@@ -271,10 +272,134 @@ Item {
     // restored image must be in view); a global existence query belongs with the
     // Phase 5B first-frame loader.
     function editorImageStillExists(elementId) {
-        if (!appModules || !appModules.library || !appModules.library.thumbnailModel) {
-            return false
+        return root.rowInCurrentLibraryList(elementId) >= 0
+    }
+
+    function rowInCurrentLibraryList(elementId) {
+        const target = Number(elementId || 0)
+        if (target <= 0 || !appModules || !appModules.library
+                || !appModules.library.thumbnailModel) {
+            return -1
         }
-        return appModules.library.thumbnailModel.rowByElementId(Number(elementId)) >= 0
+        const model = appModules.library.thumbnailModel
+        if (model.rowByElementId) {
+            const loaded = Number(model.rowByElementId(target))
+            if (loaded >= 0) {
+                return loaded
+            }
+        }
+        if (appModules.library.IndexOfElementInCurrentView) {
+            return Number(appModules.library.IndexOfElementInCurrentView(target))
+        }
+        return -1
+    }
+
+    function firstLibraryImage() {
+        if (!appModules || !appModules.library || !appModules.library.thumbnailModel) {
+            return null
+        }
+        const model = appModules.library.thumbnailModel
+        if (Number(model.count) <= 0) {
+            return null
+        }
+        return root.selectionItemFromThumbnailRow(model.getItemAt(0))
+    }
+
+    function revealLibraryListImage(elementId, index) {
+        if (!host || Number(elementId || 0) <= 0) {
+            return
+        }
+        if (host.requestFilmstripScrollToElement) {
+            host.requestFilmstripScrollToElement(elementId, index)
+        }
+        if (host.requestLibraryScrollToElement) {
+            host.requestLibraryScrollToElement(elementId, index)
+        }
+    }
+
+    function requestEditorLibraryListSync() {
+        if (!appModules || !appModules.workspaceRouter
+                || String(appModules.workspaceRouter.workspace || "") !== "editor") {
+            return
+        }
+        root._pendingEditorLibraryListSync = true
+        Qt.callLater(root.flushEditorLibraryListSync)
+    }
+
+    function flushEditorLibraryListSync() {
+        if (!root._pendingEditorLibraryListSync) {
+            return
+        }
+        if (!appModules || !appModules.workspaceRouter
+                || String(appModules.workspaceRouter.workspace || "") !== "editor") {
+            root._pendingEditorLibraryListSync = false
+            return
+        }
+        const model = appModules.library ? appModules.library.thumbnailModel : null
+        if (model && model.loading) {
+            return
+        }
+        const session = appModules.editorSession
+        const state = session ? String(session.sessionState || "") : ""
+        if (state === "Saving" || state === "Switching") {
+            return
+        }
+        root._pendingEditorLibraryListSync = false
+        root.applyEditorLibraryListSync()
+    }
+
+    // After collection or filter changes, the editor must follow the same
+    // filtered library list the grid uses. Keep the open image when it is
+    // still in that list and reveal it; otherwise open the first remaining
+    // image (or the empty editor when the list is empty).
+    function applyEditorLibraryListSync() {
+        if (!appModules || !appModules.workspaceRouter
+                || String(appModules.workspaceRouter.workspace || "") !== "editor") {
+            return
+        }
+        const model = appModules.library ? appModules.library.thumbnailModel : null
+        if (!model) {
+            return
+        }
+        const session = appModules.editorSession
+        const currentElementId = session ? Number(session.elementId || 0) : 0
+        const row = currentElementId > 0 ? root.rowInCurrentLibraryList(currentElementId) : -1
+        if (row >= 0) {
+            const item = model.getItemAt ? model.getItemAt(row) : null
+            root.revealLibraryListImage(currentElementId, row)
+            if (item) {
+                root.setFocusedImage(root.selectionItemFromThumbnailRow(item))
+            }
+            return
+        }
+
+        const first = root.firstLibraryImage()
+        if (first && Number(first.elementId) > 0 && Number(first.imageId) > 0) {
+            appModules.workspaceRouter.openEditor(Number(first.elementId),
+                                                  Number(first.imageId))
+            root.revealLibraryListImage(Number(first.elementId), 0)
+            root.setFocusedImage(first)
+            return
+        }
+
+        if (session && session.clearLastEditedImage) {
+            session.clearLastEditedImage()
+        }
+        appModules.workspaceRouter.openEditor(0, 0)
+        root.setFocusedImage(null)
+    }
+
+    Connections {
+        target: appModules.editorSession
+        ignoreUnknownSignals: true
+        function onStateChanged() { root.flushEditorLibraryListSync() }
+        function onSessionStateChanged() { root.flushEditorLibraryListSync() }
+    }
+
+    Connections {
+        target: appModules.library.thumbnailModel
+        ignoreUnknownSignals: true
+        function onLoadingChanged() { root.flushEditorLibraryListSync() }
     }
 
     // Phase 4A-Fix: deleting the image currently loaded in the editor must end

@@ -96,6 +96,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int motionFoldOpenMs READ motionFoldOpenMs CONSTANT)
   Q_PROPERTY(int motionFoldCloseMs READ motionFoldCloseMs CONSTANT)
   Q_PROPERTY(int motionFadeMs READ motionFadeMs CONSTANT)
+  // QEasingCurve::Type / QML Easing.Type. Fold and fade hosts bind
+  // `easing.type: appTheme.motionEasing` so VI easing is not a QML literal.
+  Q_PROPERTY(int motionEasing READ motionEasing CONSTANT)
   Q_PROPERTY(int backgroundTaskAutoCollapseMs READ backgroundTaskAutoCollapseMs CONSTANT)
   Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
   Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
@@ -266,6 +269,7 @@ class AppTheme final : public QObject {
   auto        motionFoldOpenMs() const -> int;
   auto        motionFoldCloseMs() const -> int;
   auto        motionFadeMs() const -> int;
+  auto        motionEasing() const -> int;
   auto        backgroundTaskAutoCollapseMs() const -> int;
   auto        reduceMotion() const -> bool;
   void        setReduceMotion(bool enabled);

@@ -3,8 +3,9 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_history_versions_rail_lifecycle_qml_test.cpp
-/// @brief Phase 7A R6: closed rail has no list delegates; only the active body
-///        loads; scroll restores across panel switches; fold layout is binary.
+/// @brief Closed rail has no list delegates; only the active body loads; scroll
+///        restores across panel switches; fold layout interpolates like the
+///        filmstrip so the viewport moves with the panel.
 
 #include "editor_history_versions_rail_qml_harness.hpp"
 
@@ -107,7 +108,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
 }
 
 TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
-       FoldProgressKeepsBinaryOuterLayoutAndTransformOnlySlide) {
+       FoldProgressInterpolatesOuterLayoutWidthLikeFilmstrip) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   auto* rail = Find(QStringLiteral("editorHistoryVersionsRail"));
   ASSERT_NE(rail, nullptr);
@@ -116,11 +117,12 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   const int panel_width = rail->property("expandedPanelWidth").toInt();
   const int panel_gap = rail->property("panelGap").toInt();
   const qreal full_w = rail_width + panel_gap + panel_width;
+  const qreal mid_w  = rail_width + 0.5 * (panel_gap + panel_width);
   ASSERT_GT(rail_width, 0);
   ASSERT_GT(panel_width, 0);
 
   // Harness Loader stretches the rail Item to the window; assert the layout
-  // contract (totalWidth / layoutExpanded / panelSlideX), not scene width.
+  // contract (totalWidth / layoutExpanded), not scene width.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents();
   EXPECT_NEAR(rail->property("totalWidth").toReal(), rail_width, 1.0);
@@ -128,20 +130,17 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
 
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents();
-  // Binary full outer layout width at mid progress (not half-width thrash).
-  EXPECT_NEAR(rail->property("totalWidth").toReal(), full_w, 1.5);
+  EXPECT_NEAR(rail->property("totalWidth").toReal(), mid_w, 1.5);
   EXPECT_TRUE(rail->property("layoutExpanded").toBool());
-  EXPECT_NEAR(rail->property("panelSlideX").toReal(), -0.5 * panel_width, 1.5);
 
-  // Panel shell must not fade the complex subtree (opacity stays fully opaque).
-  auto* panel = Find(QStringLiteral("editorHistoryVersionsPanel"));
-  ASSERT_NE(panel, nullptr);
-  EXPECT_NEAR(panel->opacity(), 1.0, 0.001);
+  auto* host = Find(QStringLiteral("editorHistoryVersionsPanelHost"));
+  ASSERT_NE(host, nullptr);
+  EXPECT_NEAR(host->opacity(), 0.5, 0.001);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents();
   EXPECT_NEAR(rail->property("totalWidth").toReal(), full_w, 1.5);
-  EXPECT_NEAR(rail->property("panelSlideX").toReal(), 0.0, 1.0);
+  EXPECT_NEAR(host->opacity(), 1.0, 0.001);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "endFoldDrive"));
   ProcessEvents();

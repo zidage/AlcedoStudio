@@ -70,6 +70,12 @@ ApplicationWindow {
         property int lastImageId: 7
     }
 
+    property QtObject firstImageProvider: QtObject {
+        objectName: "firstImageProvider"
+        property int elementId: 0
+        property int imageId: 0
+    }
+
     Loader {
         id: navigationLoader
         objectName: "navigationLoader"
@@ -87,6 +93,15 @@ ApplicationWindow {
             item.editorSession = editorSession
             item.navigationEnabled = true
             item.editorImageExists = function(elementId) { return elementId !== 99 }
+            item.firstEditorImage = function() {
+                if (firstImageProvider.elementId <= 0 || firstImageProvider.imageId <= 0) {
+                    return null
+                }
+                return {
+                    elementId: firstImageProvider.elementId,
+                    imageId: firstImageProvider.imageId
+                }
+            }
         }
     }
 }
@@ -257,6 +272,32 @@ TEST(EditorWorkspaceNavigationQmlTest, MissingLastImageFallsBackToEmptyEditor) {
   ProcessEvents(20);
   EXPECT_EQ(router->property("lastElementId").toInt(), 0);
   EXPECT_EQ(router->property("lastImageId").toInt(), 0);
+}
+
+TEST(EditorWorkspaceNavigationQmlTest, MissingLastImageOpensFirstLibraryImage) {
+  EditorWorkspaceNavigationQmlHarness harness;
+  ASSERT_NE(harness.window, nullptr)
+      << "root=" << (harness.root_object ? harness.root_object->metaObject()->className() : "none")
+      << " warnings=" << harness.warnings.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
+
+  auto* editor = harness.button(QStringLiteral("editorNavButton"));
+  auto* session = harness.window->findChild<QObject*>(QStringLiteral("editorSession"));
+  auto* first   = harness.window->findChild<QObject*>(QStringLiteral("firstImageProvider"));
+  auto* router  = harness.router();
+  ASSERT_NE(editor, nullptr);
+  ASSERT_NE(session, nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(router, nullptr);
+
+  session->setProperty("lastElementId", 99);
+  session->setProperty("lastImageId", 7);
+  first->setProperty("elementId", 11);
+  first->setProperty("imageId", 22);
+  ClickButton(editor);
+  ProcessEvents(20);
+  EXPECT_EQ(router->property("lastElementId").toInt(), 11);
+  EXPECT_EQ(router->property("lastImageId").toInt(), 22);
 }
 
 }  // namespace
