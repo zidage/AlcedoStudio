@@ -71,3 +71,27 @@ def require_commit_on_origin_main(repo: Path, commit: str) -> None:
         f"stable updates must be built from a commit already on origin/main ({commit} is not). "
         "Merge first, then package and upload from that merge commit."
     )
+
+
+def commit_is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    validate_commit(ancestor)
+    validate_commit(descendant)
+    result = run_git(
+        repo,
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def newer_commit(repo: Path, left: str, right: str) -> str | None:
+    if left == right:
+        return left
+    if commit_is_ancestor(repo, left, right):
+        return right
+    if commit_is_ancestor(repo, right, left):
+        return left
+    return None

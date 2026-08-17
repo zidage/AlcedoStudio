@@ -506,7 +506,7 @@ updates/v1/stable/<platform>/manifest.json
 
 1. 只允许 `workflow_dispatch`。
 2. 读取两个公开 live stable manifest 并校验签名。
-3. 两边必须是同一 `version` 和同一 `commit`；build 可以不同。
+3. 两边必须是同一 `version`；各自的 `commit` 必须已经在 `origin/main` 上，不必相同。build 可以不同。
 4. 在该 commit 上创建 `v<version>`，Release 标题写
    `(windows <build>/macOS <build>)`，正文附上 `updates/` 下载地址。
 5. 把 exe / zip / dmg 挂成 GitHub 资产，仅作公开档案。

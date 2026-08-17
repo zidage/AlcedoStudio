@@ -11,13 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.request
 
-from release_git import require_commit_on_origin_main, validate_commit
+from release_git import newer_commit, require_commit_on_origin_main, validate_commit
 from release_notes import notes_body
 
 
@@ -26,19 +27,66 @@ PUBLIC_BASE = "https://static.aoraw.org"
 STABLE_FEED = f"{PUBLIC_BASE}/updates/v1/stable"
 PLATFORMS = ("windows-x86_64", "macos-arm64")
 WEBSITE = "https://aoraw.org"
+# Cloudflare WAF returns 403 for the default Python-urllib User-Agent.
+USER_AGENT = "AlcedoStudio-archive/1.0 (+https://github.com/zidage/AlcedoStudio)"
+FETCH_TIMEOUT_SECONDS = 300
 
 
 class ArchiveError(RuntimeError):
     """Raised when the live stable pair cannot be archived."""
 
 
-def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+def download_headers() -> dict[str, str]:
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, application/octet-stream, */*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+
+
+def fetch_bytes_with_curl(url: str, curl: str) -> bytes:
+    result = subprocess.run(
+        [
+            curl,
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            str(FETCH_TIMEOUT_SECONDS),
+            "--user-agent",
+            USER_AGENT,
+            "--header",
+            "Cache-Control: no-cache",
+            "--header",
+            "Accept: application/json, application/octet-stream, */*;q=0.8",
+            url,
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip() or f"curl exit {result.returncode}"
+        raise ArchiveError(f"failed to download {url}: {detail}")
+    return result.stdout
+
+
+def fetch_bytes_with_urllib(url: str) -> bytes:
+    request = urllib.request.Request(url, headers=download_headers())
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             return response.read()
+    except urllib.error.HTTPError as error:
+        raise ArchiveError(f"failed to download {url}: HTTP {error.code} {error.reason}") from error
     except urllib.error.URLError as error:
         raise ArchiveError(f"failed to download {url}: {error}") from error
+
+
+def fetch_bytes(url: str) -> bytes:
+    curl = shutil.which("curl")
+    if curl:
+        return fetch_bytes_with_curl(url, curl)
+    return fetch_bytes_with_urllib(url)
 
 
 def load_json(url: str) -> dict[str, object]:
@@ -110,6 +158,7 @@ def inspect_manifest(manifest: dict[str, object], platform: str) -> dict[str, ob
         "version": version,
         "build": build,
         "commit": commit,
+        "published_at": str(manifest.get("publishedAt", "")),
         "package_url": package_url,
         "manual_url": manual_url,
         "changelogs": changelogs_of(manifest, platform),
@@ -130,41 +179,50 @@ def pair_stable_manifests(
         raise ArchiveError(
             f"live stable version is {left['version']}, not the requested {expected_version}"
         )
-    if left["commit"] != right["commit"]:
-        raise ArchiveError(
-            f"stable platforms do not share a commit: Windows {left['commit']} "
-            f"vs macOS {right['commit']}"
-        )
     return {
         "version": left["version"],
-        "commit": left["commit"],
         "windows_build": left["build"],
         "macos_build": right["build"],
+        "windows_commit": left["commit"],
+        "macos_commit": right["commit"],
         "windows": left,
         "macos": right,
     }
 
 
-def notes_source_urls(commit: str, version: str, windows_build: int, macos_build: int) -> list[str]:
-    base = f"https://github.com/zidage/AlcedoStudio/blob/{commit}/docs/changelog"
+def notes_source_urls(
+    version: str,
+    windows_commit: str,
+    macos_commit: str,
+    windows_build: int,
+    macos_build: int,
+) -> list[str]:
+    commits = [windows_commit]
+    if macos_commit != windows_commit:
+        commits.append(macos_commit)
     version_en = REPO_ROOT / "docs" / "changelog" / f"{version}.en.txt"
-    if version_en.is_file():
-        return [
-            f"{base}/{version}.en.txt",
-            f"{base}/{version}.zh-CN.txt",
-        ]
-    links = [
-        f"{base}/{windows_build}.en.txt",
-        f"{base}/{windows_build}.zh-CN.txt",
-    ]
-    if macos_build != windows_build:
-        links.extend(
-            [
-                f"{base}/{macos_build}.en.txt",
-                f"{base}/{macos_build}.zh-CN.txt",
-            ]
-        )
-    return links
+    links: list[str] = []
+    for commit in commits:
+        base = f"https://github.com/zidage/AlcedoStudio/blob/{commit}/docs/changelog"
+        if version_en.is_file():
+            links.extend([f"{base}/{version}.en.txt", f"{base}/{version}.zh-CN.txt"])
+            continue
+        build = windows_build if commit == windows_commit else macos_build
+        links.extend([f"{base}/{build}.en.txt", f"{base}/{build}.zh-CN.txt"])
+    return list(dict.fromkeys(links))
+
+
+def choose_tag_commit(pair: dict[str, object], repo: Path) -> str:
+    windows_commit = str(pair["windows_commit"])
+    macos_commit = str(pair["macos_commit"])
+    selected = newer_commit(repo, windows_commit, macos_commit)
+    if selected:
+        return selected
+    windows_published = str(pair["windows"]["published_at"])
+    macos_published = str(pair["macos"]["published_at"])
+    if macos_published > windows_published:
+        return macos_commit
+    return windows_commit
 
 
 def compose_github_release(
@@ -173,7 +231,8 @@ def compose_github_release(
     version = str(pair["version"])
     windows_build = int(pair["windows_build"])
     macos_build = int(pair["macos_build"])
-    commit = str(pair["commit"])
+    windows_commit = str(pair["windows_commit"])
+    macos_commit = str(pair["macos_commit"])
     heading = f"Alcedo Studio {version} (windows {windows_build}/macOS {macos_build})"
     windows_notes = pair["windows"]["changelogs"]
     macos_notes = pair["macos"]["changelogs"]
@@ -202,7 +261,9 @@ def compose_github_release(
         str(pair["windows"]["package_url"]),
         str(pair["macos"]["manual_url"] or pair["macos"]["package_url"]),
     ]
-    note_links = notes_source_urls(commit, version, windows_build, macos_build)
+    note_links = notes_source_urls(
+        version, windows_commit, macos_commit, windows_build, macos_build
+    )
     body = "\n".join(
         [
             heading,
@@ -278,21 +339,27 @@ def archive_pair(
     public_key: str,
 ) -> int:
     version = str(pair["version"])
-    commit = str(pair["commit"])
+    windows_commit = str(pair["windows_commit"])
+    macos_commit = str(pair["macos_commit"])
+    try:
+        require_commit_on_origin_main(REPO_ROOT, windows_commit)
+        require_commit_on_origin_main(REPO_ROOT, macos_commit)
+    except SystemExit as error:
+        raise ArchiveError(str(error)) from error
+    tag_commit = choose_tag_commit(pair, REPO_ROOT)
     tag = f"v{version}"
     title, body = compose_github_release(pair)
-    require_commit_on_origin_main(REPO_ROOT, commit)
 
     work_root = REPO_ROOT / "build" / "tmp" / "update" / "archive-stable"
     work_root.mkdir(parents=True, exist_ok=True)
     notes_path = work_root / f"{version}-github-notes.txt"
     notes_path.write_text(body, encoding="utf-8", newline="\n")
     print(title)
+    print(f"Windows commit: {windows_commit}")
+    print(f"macOS commit: {macos_commit}")
     print(notes_path)
 
     tagged = existing_tag_commit(tag)
-    if tagged and tagged != commit:
-        raise ArchiveError(f"tag {tag} already points at {tagged}, not {commit}")
 
     with tempfile.TemporaryDirectory(prefix="alcedo-stable-archive-", dir=work_root) as directory:
         root = Path(directory)
@@ -340,7 +407,7 @@ def archive_pair(
                     "tag",
                     "-a",
                     tag,
-                    commit,
+                    tag_commit,
                     "-m",
                     title,
                 ],
@@ -349,7 +416,9 @@ def archive_pair(
             run(["git", "push", "origin", tag], dry_run=dry_run)
 
         if dry_run:
-            print(f"Dry run complete. Would archive {tag} from {commit} without publishing.")
+            print(
+                f"Dry run complete. Would archive {tag} from {tag_commit} without publishing."
+            )
             return 0
 
         if release_exists(repo, tag):
