@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,19 +27,66 @@ PUBLIC_BASE = "https://static.aoraw.org"
 STABLE_FEED = f"{PUBLIC_BASE}/updates/v1/stable"
 PLATFORMS = ("windows-x86_64", "macos-arm64")
 WEBSITE = "https://aoraw.org"
+# Cloudflare WAF returns 403 for the default Python-urllib User-Agent.
+USER_AGENT = "AlcedoStudio-archive/1.0 (+https://github.com/zidage/AlcedoStudio)"
+FETCH_TIMEOUT_SECONDS = 300
 
 
 class ArchiveError(RuntimeError):
     """Raised when the live stable pair cannot be archived."""
 
 
-def fetch_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+def download_headers() -> dict[str, str]:
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, application/octet-stream, */*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+
+
+def fetch_bytes_with_curl(url: str, curl: str) -> bytes:
+    result = subprocess.run(
+        [
+            curl,
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            str(FETCH_TIMEOUT_SECONDS),
+            "--user-agent",
+            USER_AGENT,
+            "--header",
+            "Cache-Control: no-cache",
+            "--header",
+            "Accept: application/json, application/octet-stream, */*;q=0.8",
+            url,
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip() or f"curl exit {result.returncode}"
+        raise ArchiveError(f"failed to download {url}: {detail}")
+    return result.stdout
+
+
+def fetch_bytes_with_urllib(url: str) -> bytes:
+    request = urllib.request.Request(url, headers=download_headers())
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             return response.read()
+    except urllib.error.HTTPError as error:
+        raise ArchiveError(f"failed to download {url}: HTTP {error.code} {error.reason}") from error
     except urllib.error.URLError as error:
         raise ArchiveError(f"failed to download {url}: {error}") from error
+
+
+def fetch_bytes(url: str) -> bytes:
+    curl = shutil.which("curl")
+    if curl:
+        return fetch_bytes_with_curl(url, curl)
+    return fetch_bytes_with_urllib(url)
 
 
 def load_json(url: str) -> dict[str, object]:

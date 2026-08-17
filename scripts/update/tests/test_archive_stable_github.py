@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+import unittest.mock
 
 
 UPDATE_SCRIPTS = Path(__file__).resolve().parents[1]
@@ -130,6 +131,37 @@ class ArchiveStableGithubTest(unittest.TestCase):
                 manifest(platform="macos-arm64", build=2001),
                 "0.2.8",
             )
+
+    def test_download_headers_override_python_urllib_user_agent(self) -> None:
+        headers = archive.download_headers()
+        self.assertEqual(headers["User-Agent"], archive.USER_AGENT)
+        self.assertNotIn("Python-urllib", headers["User-Agent"])
+        self.assertIn("Cache-Control", headers)
+
+    def test_urllib_fetch_sends_the_archive_user_agent(self) -> None:
+        captured: dict[str, str] = {}
+
+        class FakeResponse:
+            def read(self) -> bytes:
+                return b"{}"
+
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *arguments: object) -> None:
+                return None
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            captured["user_agent"] = request.get_header("User-agent")  # type: ignore[attr-defined]
+            captured["timeout"] = str(timeout)
+            return FakeResponse()
+
+        with unittest.mock.patch("archive_stable_github.urllib.request.urlopen", fake_urlopen):
+            payload = archive.fetch_bytes_with_urllib(
+                "https://static.aoraw.org/updates/v1/stable/windows-x86_64/manifest.json"
+            )
+        self.assertEqual(payload, b"{}")
+        self.assertEqual(captured["user_agent"], archive.USER_AGENT)
 
     def test_live_urls_are_stable_only(self) -> None:
         manifest_url, signature_url = archive.live_urls("windows-x86_64")
