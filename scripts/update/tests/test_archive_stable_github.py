@@ -58,6 +58,7 @@ def manifest(
         "version": version,
         "build": build,
         "commit": commit,
+        "publishedAt": "2026-08-16T01:01:01Z",
         "changelog": english,
         "changelogs": {"en": english, "zh-CN": chinese},
         "artifacts": artifacts,
@@ -72,7 +73,8 @@ class ArchiveStableGithubTest(unittest.TestCase):
             "",
         )
         self.assertEqual(pair["version"], "0.2.9")
-        self.assertEqual(pair["commit"], COMMIT)
+        self.assertEqual(pair["windows_commit"], COMMIT)
+        self.assertEqual(pair["macos_commit"], COMMIT)
         self.assertEqual(pair["windows_build"], 2005)
         self.assertEqual(pair["macos_build"], 2001)
 
@@ -101,13 +103,30 @@ class ArchiveStableGithubTest(unittest.TestCase):
         self.assertNotIn("/releases/", body)
         self.assertNotIn("/beta/", body)
 
-    def test_rejects_mismatched_commits(self) -> None:
-        with self.assertRaisesRegex(archive.ArchiveError, "do not share a commit"):
-            archive.pair_stable_manifests(
-                manifest(platform="windows-x86_64", build=2005, commit=COMMIT),
-                manifest(platform="macos-arm64", build=2001, commit=OTHER),
-                "",
-            )
+    def test_pairs_different_commits_for_the_same_version(self) -> None:
+        pair = archive.pair_stable_manifests(
+            manifest(platform="windows-x86_64", build=2005, commit=COMMIT),
+            manifest(platform="macos-arm64", build=2001, commit=OTHER),
+            "",
+        )
+        self.assertEqual(pair["windows_commit"], COMMIT)
+        self.assertEqual(pair["macos_commit"], OTHER)
+        self.assertEqual(pair["version"], "0.2.9")
+
+    def test_tag_commit_prefers_later_published_when_history_is_unrelated(self) -> None:
+        pair = archive.pair_stable_manifests(
+            manifest(platform="windows-x86_64", build=2005, commit=COMMIT),
+            manifest(platform="macos-arm64", build=2001, commit=OTHER),
+            "",
+        )
+        pair["windows"]["published_at"] = "2026-08-16T01:00:00Z"
+        pair["macos"]["published_at"] = "2026-08-17T01:00:00Z"
+
+        def fake_newer(_repo: object, _left: str, _right: str) -> str | None:
+            return None
+
+        with unittest.mock.patch("archive_stable_github.newer_commit", fake_newer):
+            self.assertEqual(archive.choose_tag_commit(pair, Path(".")), OTHER)
 
     def test_rejects_missing_commit(self) -> None:
         payload = manifest(platform="windows-x86_64", build=2005)

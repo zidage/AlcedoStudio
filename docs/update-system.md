@@ -226,18 +226,16 @@ for slow upstream connections.
 The `Archive stable update to GitHub` workflow is manual. It is not a publisher.
 
 It reads the two public live stable manifests, verifies both signatures, and
-fails unless they share the same `version` and the same `commit` on
-`origin/main`. Build numbers may differ. It then creates `v<version>` on that
-commit, writes a GitHub release titled
-`Alcedo Studio <version> (windows <win-build>/macOS <mac-build>)`, copies the
-reviewed notes, appends the official `updates/` download URLs, and attaches the
-packages as archive assets.
+fails unless they share the same `version` and each `commit` already exists on
+`origin/main`. Build numbers and commits may differ. If `v<version>` does not
+exist, it is created on the newer of the two packaged commits. An existing tag
+is left in place. The GitHub release title is
+`Alcedo Studio <version> (windows <win-build>/macOS <mac-build>)`. The job
+copies the reviewed notes, appends the official `updates/` download URLs, and
+attaches the packages as archive assets.
 
 It does not have R2 credentials. It never reads a beta feed. If you have not
 uploaded a stable pair, this workflow must fail.
-
-A Windows-only or macOS-only hotfix stays on R2 until the other platform is
-built from the same commit. Do not run the archive job against a mixed pair.
 
 ## Official stable sequence
 
@@ -247,8 +245,9 @@ built from the same commit. Do not run the archive job against a mixed pair.
 3. On each package machine, check out that merge commit on `main`. Run the
    **Release** package task (stable).
 4. Upload that platform with `publish_update.py`. That platform is now live.
-5. After both live stable manifests show the same version and commit, run
-   **Archive stable update to GitHub** by hand.
+5. After both live stable manifests show the same version, run
+   **Archive stable update to GitHub** by hand. Each packaged commit must exist
+   on `origin/main`; the two platforms do not need the same SHA.
 
 Until step 4 happens for a platform, nothing user-facing changes. Running the
 archive workflow does not perform step 4.
