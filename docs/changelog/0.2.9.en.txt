@@ -1,0 +1,62 @@
+Alcedo Studio 0.2.9
+
+New
+---
+- Signed automatic updates on Windows and macOS. Updates are offered by build
+  number, each update manifest is signature-verified, and packages are checked
+  for platform, origin, size, and content hash before installation.
+- A dedicated Updates page in Settings shows the installed and available
+  versions, release notes in the selected language, download progress with
+  cancel and retry, and install and restart actions without a popup dialog.
+- Windows and macOS now use native window drawing, with system window frames
+  and native minimize, maximize, and restore behavior on each platform.
+- Export moved into the inspector and is now built from a complete recipe:
+  codec, resolution, EXIF metadata, ICC profile, alpha channel, file naming,
+  and name-collision handling.
+- Export preserves EXIF metadata such as rating, capture date, camera, lens,
+  exposure, focal length, and orientation, and writing EXIF and embedding the
+  output ICC profile are explicit options.
+- Exported images now carry the Alcedo Studio version in their EXIF metadata,
+  and metadata handling is verified for every supported export format. WebP is
+  no longer offered as an export format.
+- File names can be composed from patterns with inline presets: source name,
+  capture date, camera, lens, ISO, aperture, shutter speed, focal length,
+  rating, literal text, and padded sequence numbers.
+- Export sizing covers original pixels, longest edge, pixel bounds, and
+  physical print size with DPI. Ultra HDR follows the same size setting with an
+  automatic 8192 px limit, and SDR and HDR quality settings are remembered
+  between sessions.
+
+Performance
+-----------
+- Nikon High-Efficiency (HE/HE*) RAW files decode about four times faster with
+  identical output, on both Windows and macOS.
+- macOS now decodes RAW with all cores and runs RAW processing on the GPU. A
+  warm editor render with highlight recovery drops from about one second to
+  roughly 190 ms, and highlight recovery itself from about 581 ms to 53 ms.
+- Interactive edits on macOS no longer resize the preview for every change: a
+  full-frame resize drops from about 60 ms to about 14 ms, and later edits skip
+  the resize stage entirely.
+
+Editor and library
+------------------
+- Switching between Library and Editor no longer blocks the interface. The
+  editor stays alive while you visit Library and redisplays at once on return.
+- Live adjustment previews are presented on display ticks, so dragging a slider
+  keeps showing the newest frame instead of waiting for the next input event.
+- The editor filmstrip lists the same collection and filter results as Library
+  and keeps the open image selected when it stays in the list.
+- A compact full-width toolbar and collections card replace the old window
+  chrome. Sidebars are open in Library and closed in Editor by default, the
+  choice is remembered, and the right button toggles the inspector or the
+  adjustment stack.
+- History, Versions, the adjustment stack, and the filmstrip fold with one
+  shared animation while the viewer grows and shrinks with the panel.
+- New application icon on both platforms, shown by the Windows taskbar and
+  installer and by the macOS Dock, Finder, and disk image.
+
+Fixed
+-----
+- Pasting adjustments that include a LUT keeps that LUT selected in the LUT
+  panel instead of showing no selection.
+- Opening a project from the welcome screen no longer shows an empty frame.
