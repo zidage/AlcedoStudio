@@ -15,6 +15,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <QWindow>
 #include <QSettings>
 #include <QString>
 #include <QtGlobal>
@@ -36,6 +37,13 @@
 #include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/clock/time_provider.hpp"
+
+#ifdef Q_OS_WIN
+#include "windows_frameless_window.hpp"
+#endif
+#ifdef Q_OS_MACOS
+#include "macos_frameless_window.hpp"
+#endif
 
 namespace {
 
@@ -193,12 +201,13 @@ int main(int argc, char* argv[]) {
                                              ? startup.diagnostics.notes
                                              : startup.diagnostics.adapter_description));
 
-  // Platform window / taskbar / Dock fallback icon.
+  // Platform window / taskbar fallback icon.
   // Windows: multi-res ICO (Explorer taskbar + Alt-Tab). EXE also embeds the
-  // same ICO via alcedo_main.rc.
-  // macOS: PNG master; the .app Dock icon comes from Contents/Resources
-  // alcedo_icon.icns (MACOSX_BUNDLE_ICON_FILE). setWindowIcon still covers
-  // non-bundle runs and window chrome.
+  // same ICO via alcedo_main.rc. Other non-Apple platforms use the PNG master.
+  // On macOS, do not replace the bundle icon at runtime: Dock and Finder load
+  // the ICNS resource through CFBundleIconFile, preserving the system-rendered
+  // icon appearance while the application is running.
+#if !defined(Q_OS_MACOS)
   {
 #if defined(Q_OS_WIN)
     QIcon app_icon(QStringLiteral(":/ICON/alcedo_icon.ico"));
@@ -210,6 +219,7 @@ int main(int argc, char* argv[]) {
 #endif
     app.setWindowIcon(app_icon);
   }
+#endif
   {
     QFont default_font = app.font();
     default_font.setStyleStrategy(QFont::PreferAntialias);
@@ -249,16 +259,44 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
   engine.rootContext()->setContextProperty("languageManager", &language_manager);
   engine.rootContext()->setContextProperty("automationMode", false);
+#ifdef Q_OS_WIN
+  engine.rootContext()->setContextProperty("nativeFrameManaged", true);
+#else
+  engine.rootContext()->setContextProperty("nativeFrameManaged", false);
+#endif
+  // Production starts as the real maximized app. Tests and the automation host
+  // leave this unset so they keep the declared 1200x760 windowed geometry.
+  engine.rootContext()->setContextProperty("startMaximized", true);
 
   QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                    []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
 
   engine.loadFromModule("Alcedo.Main", "Main");
 
-  // Bind CUDA adapter LUID to the first created QQuickWindow when present.
+#ifdef Q_OS_WIN
+  alcedo::ui::WindowsFramelessWindow native_window_frame;
+#endif
+#ifdef Q_OS_MACOS
+  alcedo::ui::MacosFramelessWindow native_window_frame;
+#endif
+
+  // Install platform frame behavior before the hidden production window is
+  // shown, then bind the editor renderer to that final native window.
   if (!engine.rootObjects().isEmpty()) {
     if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
+#ifdef Q_OS_WIN
+      if (!native_window_frame.Install(window)) {
+        qWarning("Could not install the native Windows frame integration");
+      }
+#endif
+#ifdef Q_OS_MACOS
+      if (!native_window_frame.Install(window)) {
+        qWarning("Could not install the native macOS traffic-light integration");
+      }
+#endif
       alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+      window->setProperty("nativeFrameReady", true);
+      window->showMaximized();
     }
   }
 

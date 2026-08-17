@@ -6,6 +6,7 @@
 
 #include "utils/diagnostics/render_e2e_timing.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace alcedo {
@@ -356,7 +357,13 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
 }
 
 void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id) {
+  CancelSession(image_load_request_id, {});
+}
+
+void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id,
+                                            SessionIdleCallback on_idle) {
   std::uint64_t scheduler_job_to_cancel = 0;
+  std::vector<SessionIdleCallback> ready_callbacks;
   {
     std::scoped_lock lock(mutex_);
     for (auto& slot : slots_) {
@@ -390,11 +397,22 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id)
     // Pending-only cancellation may leave the coordinator idle. A cancelled
     // running request remains in-flight until the blocking pipeline call exits.
     ScheduleNext();
+    if (on_idle) {
+      if (HasSessionWork(image_load_request_id)) {
+        idle_callbacks_.push_back(
+            PendingIdleCallback{image_load_request_id, std::move(on_idle)});
+      } else {
+        ready_callbacks.push_back(std::move(on_idle));
+      }
+    }
   }
   if (scheduler_ && scheduler_job_to_cancel != 0) {
     scheduler_->Cancel(scheduler_job_to_cancel);
   }
   DeliverPendingResults();
+  for (auto& callback : ready_callbacks) {
+    callback(image_load_request_id);
+  }
 }
 
 void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t image_load_request_id) {
@@ -569,9 +587,13 @@ void EditorRenderCoordinator::Pump() {
 void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id, bool success,
                                                        std::string message,
                                                        bool schedule_next_from_pool) {
+  std::uint64_t completed_image_load_request_id = 0;
+  std::vector<SessionIdleCallback> ready_callbacks;
   {
     std::scoped_lock lock(mutex_);
     if (inflight_ && inflight_->request.request_id == request_id) {
+      completed_image_load_request_id =
+          inflight_->request.intent.image_load_request_id.value;
       const bool already_terminal = terminal_request_ids_.count(request_id) != 0;
       const bool cancelled = inflight_->request.intent.cancellation &&
                              inflight_->request.intent.cancellation->IsCancelled();
@@ -592,9 +614,41 @@ void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id,
       if (schedule_next_from_pool) {
         ScheduleNext();
       }
+      ready_callbacks = TakeIdleCallbacks(completed_image_load_request_id);
     }
   }
   DeliverPendingResults();
+  for (auto& callback : ready_callbacks) {
+    callback(completed_image_load_request_id);
+  }
+}
+
+auto EditorRenderCoordinator::HasSessionWork(std::uint64_t image_load_request_id) const -> bool {
+  if (inflight_ &&
+      inflight_->request.intent.image_load_request_id.value == image_load_request_id) {
+    return true;
+  }
+  return std::any_of(slots_.begin(), slots_.end(), [image_load_request_id](const auto& slot) {
+    return slot && slot->request.intent.image_load_request_id.value == image_load_request_id;
+  });
+}
+
+auto EditorRenderCoordinator::TakeIdleCallbacks(std::uint64_t image_load_request_id)
+    -> std::vector<SessionIdleCallback> {
+  std::vector<SessionIdleCallback> ready;
+  if (HasSessionWork(image_load_request_id)) {
+    return ready;
+  }
+  auto it = idle_callbacks_.begin();
+  while (it != idle_callbacks_.end()) {
+    if (it->image_load_request_id != image_load_request_id) {
+      ++it;
+      continue;
+    }
+    ready.push_back(std::move(it->callback));
+    it = idle_callbacks_.erase(it);
+  }
+  return ready;
 }
 
 }  // namespace alcedo

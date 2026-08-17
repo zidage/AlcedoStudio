@@ -66,6 +66,7 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
 }
 
 EditorViewportItem::~EditorViewportItem() {
+  stopInteractivePresentLoop();
   detachWindow();
   present_queue_->Shutdown();
   setStatusText(QStringLiteral("viewport shutting down"));
@@ -166,6 +167,7 @@ void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
     return;
   }
   present_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  stopInteractivePresentLoop();
   emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
@@ -179,6 +181,7 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
+  stopInteractivePresentLoop();
   emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
@@ -232,6 +235,7 @@ void EditorViewportItem::cancelPendingFrames() {
 }
 
 void EditorViewportItem::suspendPresentation() {
+  stopInteractivePresentLoop();
   presentation_requested_.store(false, std::memory_order_release);
   present_queue_->SetConsumerAvailable(false);
   notifyDiagnosticsChanged();
@@ -248,6 +252,34 @@ void EditorViewportItem::prepareForAdjustmentFrame() {
   adjustment_frame_requested_.store(true, std::memory_order_release);
   adjustment_frame_request_count_.fetch_add(1, std::memory_order_acq_rel);
   requestPresentUpdateOnGuiThread();
+}
+
+void EditorViewportItem::beginInteractivePresentLoop() {
+  const bool was_active = interactive_present_loop_.exchange(true, std::memory_order_acq_rel);
+  if (was_active) {
+    return;
+  }
+  requestPresentUpdateOnGuiThread();
+}
+
+void EditorViewportItem::endInteractivePresentLoop() {
+  stopInteractivePresentLoop();
+  requestPresentUpdateOnGuiThread();
+}
+
+void EditorViewportItem::continueInteractivePresentLoop() {
+  if (!interactive_present_loop_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (!presentation_requested_.load(std::memory_order_acquire)) {
+    return;
+  }
+  requestPresentUpdateOnGuiThread();
+  interactive_present_loop_tick_count_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void EditorViewportItem::stopInteractivePresentLoop() {
+  interactive_present_loop_.store(false, std::memory_order_release);
 }
 
 void EditorViewportItem::refreshPresentationAvailability() {
@@ -327,6 +359,15 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
         applyDisplayConfig();
       },
       Qt::QueuedConnection);
+  // afterRendering runs on the render thread (threaded loop). Queue the
+  // continue onto the GUI thread so QQuickItem::update() stays thread-safe.
+  // Present can wait for vsync while that queued request is processed.
+  after_rendering_connection_ = connect(
+      attached_window_, &QQuickWindow::afterRendering, this,
+      [this] { continueInteractivePresentLoop(); }, Qt::QueuedConnection);
+  if (interactive_present_loop_.load(std::memory_order_acquire)) {
+    requestPresentUpdate();
+  }
   applyDisplayConfig();
 }
 
@@ -338,10 +379,12 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(window_screen_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
+  QObject::disconnect(after_rendering_connection_);
   window_visibility_connection_       = {};
   window_screen_connection_           = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
+  after_rendering_connection_         = {};
   attached_window_                    = nullptr;
 }
 

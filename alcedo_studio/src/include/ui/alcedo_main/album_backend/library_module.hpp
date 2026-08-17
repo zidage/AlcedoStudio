@@ -79,6 +79,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   Q_INVOKABLE void SetThumbnailCacheHint(uint visibleCells, uint maxEdge = 1024);
   Q_INVOKABLE bool LoadMoreThumbnails();
   Q_INVOKABLE bool LoadThumbnailsThroughIndex(int index);
+  /// Row in the current collection + filter listing, not just the loaded page.
+  /// Returns -1 when the element is outside that listing.
+  Q_INVOKABLE int IndexOfElementInCurrentView(uint elementId);
   Q_INVOKABLE void SetThumbnailDiskCacheEnabled(bool enabled);
   Q_INVOKABLE void SetThumbnailDiskCacheRoot(const QString& rootPath);
   Q_INVOKABLE void SetThumbnailDiskCacheMaxEntries(int maxEntries);

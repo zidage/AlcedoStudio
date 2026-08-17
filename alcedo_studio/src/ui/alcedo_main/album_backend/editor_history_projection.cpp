@@ -17,8 +17,11 @@ EditorHistoryProjection::EditorHistoryProjection(EditorHistoryState& state) : st
 auto EditorHistoryProjection::ReadHistorySnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorHistorySnapshot* snapshot,
     std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    if (snapshot) *snapshot = {};
+    return true;
+  }
 
   struct ProjectionCommitSource {
     alcedo::EditCommit commit;
@@ -92,8 +95,11 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
 auto EditorHistoryProjection::ReadAdjustmentSnapshot(
     const alcedo::EditorHistoryGuardHandle& guard,
     alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    if (snapshot) *snapshot = {};
+    return true;
+  }
   if (snapshot == nullptr) {
     if (error) *error = "Adjustment snapshot output is null";
     return false;

@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QEasingCurve>
 #include <QFontDatabase>
 #include <QListWidget>
 #include <QPushButton>
@@ -1078,6 +1079,7 @@ auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
 auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
+auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }
@@ -1091,6 +1093,9 @@ auto AppTheme::spaceXl() const -> int { return 20; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
+auto AppTheme::motionEasing() const -> int {
+  return static_cast<int>(QEasingCurve::OutCubic);
+}
 auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {

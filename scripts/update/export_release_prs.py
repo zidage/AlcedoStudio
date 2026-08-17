@@ -139,7 +139,12 @@ def main() -> int:
     )
     parser.add_argument("--from-ref", required=True, help="Git ref for the previous build")
     parser.add_argument("--to-ref", required=True, help="Git ref for the new build")
-    parser.add_argument("--build", required=True, type=int, help="New build number")
+    parser.add_argument(
+        "--build",
+        type=int,
+        default=1,
+        help="Optional review-file label. Version notes do not require a packaged build.",
+    )
     parser.add_argument("--repo", default="", help="GitHub OWNER/NAME; auto-detected by gh")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
@@ -225,8 +230,9 @@ def main() -> int:
             "Resolve duplicate, reverted, internal-only, and misleading commit messages.",
             "Describe user-visible outcomes in plain language; do not copy PR bodies blindly.",
             "Draft equivalent user-visible release notes in English and Simplified Chinese.",
-            f"After approval, write docs/changelog/{args.build}.en.txt and "
-            f"docs/changelog/{args.build}.zh-CN.txt together.",
+            "After approval, write docs/changelog/<version>.en.txt and "
+            "docs/changelog/<version>.zh-CN.txt for a version pair, or the "
+            f"{args.build}.* hotfix pair.",
             "Keep every line at 88 characters or fewer and use UTF-8 LF text.",
         ],
     }

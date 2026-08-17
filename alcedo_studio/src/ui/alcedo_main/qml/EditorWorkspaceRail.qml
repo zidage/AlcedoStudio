@@ -7,9 +7,9 @@ import Alcedo.Main 1.0
 // and Version panels. Only the active panel body is loaded; scroll offsets live
 // on the rail so Loader teardown/recreation restores the prior viewport.
 //
-// Fold motion: outer layout width snaps once (open or closed). Inner reveal is
-// transform-only (x) driven by panelOpenProgress — never per-frame Layout width
-// and never opacity on the history/Versions subtree.
+// Fold motion matches the filmstrip: panelOpenProgress interpolates the rail's
+// layout width so the center viewport grows and shrinks with the panel. The
+// icon column stays put; the panel host clips a full-width body.
 Item {
     id: root
     objectName: "editorHistoryVersionsRail"
@@ -53,18 +53,21 @@ Item {
     readonly property int expandedPanelWidth: appTheme.editorSidePanelWidth
     readonly property int panelGap: appTheme.spaceSm
 
-    // Visual fold progress (0 closed → 1 open). Drives transform only.
+    // Visual fold progress (0 closed → 1 open). Drives layout width + body
+    // opacity, the same contract as EditorFilmstrip.dockExpandProgress.
     property real panelOpenProgress: 0
     property bool foldManualDrive: false
     property bool _motionArmed: false
     property int _foldDuration: appTheme.motionFoldOpenMs
 
-    // Layout width is binary: full while open or while a close animation still
-    // holds intermediate progress; never interpolated every animation frame.
-    readonly property bool layoutExpanded: root.panelExpanded || root.panelOpenProgress > 0.001
-    readonly property real totalWidth: railWidth
-                                       + (layoutExpanded ? (panelGap + expandedPanelWidth) : 0)
-    readonly property real panelSlideX: (1.0 - panelOpenProgress) * (-expandedPanelWidth)
+    readonly property bool layoutExpanded: root.panelOpenProgress > 0.001
+    readonly property real panelRevealWidth: (panelGap + expandedPanelWidth) * panelOpenProgress
+    readonly property real totalWidth: railWidth + panelRevealWidth
+    readonly property string bodyPage: {
+        if (activePage === "history" || activePage === "versions")
+            return activePage
+        return _lastBodyPage
+    }
 
     readonly property string statusMessage: {
         var body = panelBodyLoader.item
@@ -130,18 +133,20 @@ Item {
         if (!body || body.restoreListContentY === undefined)
             return
         var y = 0
-        if (activePage === "history")
+        if (bodyPage === "history")
             y = historyListContentY
-        else if (activePage === "versions")
+        else if (bodyPage === "versions")
             y = versionsListContentY
         body.restoreListContentY(y)
     }
 
     onActivePageChanged: {
-        // Capture scroll of the body that is about to be destroyed, then track
-        // which page the next Loader instance represents.
+        // Capture scroll of the body that is about to be destroyed or hidden.
+        // Keep the last non-empty page so a closing fold can clip that body
+        // until panelOpenProgress reaches 0.
         captureBodyScroll()
-        _lastBodyPage = activePage
+        if (activePage === "history" || activePage === "versions")
+            _lastBodyPage = activePage
     }
 
     onPanelExpandedChanged: {
@@ -160,7 +165,7 @@ Item {
         enabled: root._motionArmed && !root.foldManualDrive
         NumberAnimation {
             duration: appTheme.reduceMotion ? 0 : root._foldDuration
-            easing.type: Easing.OutCubic
+            easing.type: appTheme.motionEasing
         }
     }
 
@@ -240,16 +245,18 @@ Item {
         }
     }
 
-    // Panel shell: full terminal width when layoutExpanded; content slides on x.
+    // Panel shell: host width tracks progress; the full-width body is clipped
+    // so the viewport reflows with the fold (filmstrip mode).
     Item {
         id: historyPanelHost
         objectName: "editorHistoryVersionsPanelHost"
         anchors.left: rail.right
-        anchors.leftMargin: root.layoutExpanded ? root.panelGap : 0
+        anchors.leftMargin: root.panelGap * root.panelOpenProgress
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: root.layoutExpanded ? root.expandedPanelWidth : 0
+        width: root.expandedPanelWidth * root.panelOpenProgress
         visible: root.layoutExpanded
+        opacity: root.panelOpenProgress
         clip: true
 
         Rectangle {
@@ -257,23 +264,23 @@ Item {
             objectName: "editorHistoryVersionsPanel"
             width: root.expandedPanelWidth
             height: parent.height
-            x: root.panelSlideX
+            x: 0
             radius: root.panelRadius
             color: root.colCardSurface
             border.width: 1
             border.color: root.colCardBorder
-            // No opacity animation — transform-only reveal (R6).
 
             Loader {
                 id: panelBodyLoader
                 objectName: "editorHistoryVersionsBodyLoader"
                 anchors.fill: parent
-                // Load only while the session page names a body; closed rail owns
-                // no transaction or Version delegates.
-                active: root.activePage === "history" || root.activePage === "versions"
+                // Keep the last body mounted while a close fold is in flight.
+                // A fully closed rail (progress ≈ 0) owns no list delegates.
+                active: root.layoutExpanded
+                        && (root.bodyPage === "history" || root.bodyPage === "versions")
                 asynchronous: false
-                sourceComponent: root.activePage === "history" ? historyBodyComponent
-                                 : (root.activePage === "versions" ? versionsBodyComponent
+                sourceComponent: root.bodyPage === "history" ? historyBodyComponent
+                                 : (root.bodyPage === "versions" ? versionsBodyComponent
                                                                    : null)
 
                 onLoaded: {

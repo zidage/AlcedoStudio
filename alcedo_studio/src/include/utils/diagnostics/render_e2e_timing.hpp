@@ -17,13 +17,19 @@ namespace alcedo::diag {
 ///
 /// Always enabled; output is a single line per presented request:
 ///   [RENDER_E2E] request=N ... total=..ms queue=..ms pipeline=..ms
-///     present=..ms (wake=..ms gui_wait=..ms sg_wait=..ms import=..ms) (~.. fps)
+///     present=..ms (wake=..ms gui_wait=..ms sg_wait=..ms import=..ms)
+///     display_dt=..ms (~.. fps)
 ///
 /// present breakdown:
 /// - wake:     NotifyReady → requestPresentUpdate posted (worker side)
 /// - gui_wait: update posted → GUI thread actually runs update()/requestUpdate
 /// - sg_wait:  GUI update() → render-thread render() entry (scene-graph / vsync)
 /// - import:   render() entry → QRhi createFrom / layer bind complete
+///
+/// total is request age (submit → import), not frame time. display_dt is the
+/// interval since the previous presented request of the same role; the trailing
+/// fps is 1000/display_dt (on-screen cadence). The first sample of a role has
+/// no prior display and prints display_dt=n/a.
 ///
 /// Large gui_wait ⇒ main/GUI thread backlog. Large sg_wait ⇒ missed frame /
 /// vsync phase. Large import ⇒ work inside the render pass before the texture

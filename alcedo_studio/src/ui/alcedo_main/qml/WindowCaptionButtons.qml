@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Layouts
 
-// Frameless window caption buttons (minimize / maximize-restore / close).
+// Drawn caption buttons (minimize / maximize-restore / close) for platforms
+// that do not keep native window controls. macOS uses the system traffic
+// lights instead (see Main.qml nativeTrafficLightsEnabled).
 // CaptionButton stays a nested inline component — file-level inline
 // components are rejected by qmlcachegen (see InspectorPanel.qml).
 Row {

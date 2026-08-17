@@ -27,6 +27,15 @@ target_link_libraries(RawProcessorCropTest PRIVATE GTest::gtest_main RawProcesso
 gtest_discover_tests(RawProcessorCropTest TEST_PREFIX "RawProcessorCropTest.")
 alcedo_register_test_target(RawProcessorCropTest raw)
 
+if(ALCEDO_METAL_ENABLED)
+  add_executable(MetalRawOpsTest ${ALCEDO_TEST_ROOT}/raw/metal_raw_ops_test.cpp)
+  target_include_directories(MetalRawOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(MetalRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp
+                                                MetalImage MetalContext ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  gtest_discover_tests(MetalRawOpsTest TEST_PREFIX "MetalRawOpsTest.")
+  alcedo_register_test_target(MetalRawOpsTest raw gpu)
+endif()
+
 # --- CUDA-guarded raw targets ---
 
 if(ALCEDO_CUDA_ENABLED AND ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST)

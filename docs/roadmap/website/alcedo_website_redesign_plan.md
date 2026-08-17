@@ -275,8 +275,8 @@ docs/alcedo-website/
 | macOS | Apple Silicon | Download for macOS |
 | Source | Source code | View source |
 
-建议下载链接直接指向当前安装包，并提供 `All releases` 作为稳定后备链接。如果发布资产文件名不稳定，
-则先指向 GitHub `releases/latest`，不要伪装成平台直链。
+下载按钮读取 live stable 更新清单里的安装包 URL，不要指向 GitHub `releases/latest`。
+`All releases` 只作为 GitHub 档案入口。
 
 中文页另提供一个文字为 `百度网盘` 的次级链接，不添加线路或速度说明。
 
@@ -486,45 +486,30 @@ R2 自定义域名才能使用 Cloudflare Cache、WAF 和访问控制。
 
 ```text
 images/features/<content-hash>/...
-releases/v<version>/AlcedoStudio-<version>-windows-x64.exe
-releases/v<version>/AlcedoStudio-<version>-macos-arm64.dmg
-releases/v<version>/SHA256SUMS.txt
+updates/v1/stable/builds/<build>/<platform>/AlcedoStudio-<version>-...
+updates/v1/stable/<platform>/manifest.json
 ```
 
 - 文件名必须包含版本和平台，发布后不覆盖同一个 key。
 - 版本化图片和安装包使用长期不可变缓存；更新内容时产生新 URL。
 - 安装包设置正确的 `Content-Type`、`Content-Disposition: attachment`、`Cache-Control` 和文件名。
 - 每个安装包提供 SHA-256；如项目已有代码签名或 detached signature，也在同一版本目录发布。
-- 主页下载链接指向固定的 `releases/latest/` 对象，同时提供 `All releases on GitHub` 后备入口；
-  每个版本仍保留不可变的归档 URL。
+- 主页下载按钮读取 live stable manifest，使用其中的包 URL。Windows 用
+  `artifacts.windows-x86_64.url`；macOS 用手装 DMG
+  `artifacts.macos-arm64.manualUrl`。另提供 `All releases on GitHub` 档案入口。
 - 不在浏览器中调用 R2 API，也不在网站源码中存放 R2 凭据；bucket 只暴露明确的公共下载对象。
 
-#### GitHub Release 自动同步
+#### GitHub 档案（不是发布入口）
 
-安装包不手工上传 R2。新增一个独立 GitHub Actions workflow，在稳定版 Release 发布时自动同步：
+安装包由各平台打包机上传到 R2 的 `updates/` 前缀。GitHub Action 只在 stable
+已经上线之后，手动把那一对包镜像成 GitHub Release。它不写 R2，也不读 beta。
 
-1. 监听 `release` 的 `published` 事件，并保留 `workflow_dispatch` 手动重跑入口。
-2. 读取 `github.event.release.tag_name`，使用 GitHub CLI 下载该 Release 的附件。
-3. 只接受明确的安装包和校验文件扩展名；不上传源码归档或未知附件。
-4. 在上传前确认 Windows x64 和 macOS Apple Silicon 安装包都存在，否则整次同步失败。
-5. 生成 `SHA256SUMS.txt`，先上传到不可变的 `releases/<tag>/` 目录。
-6. 版本目录全部成功后，再把两个安装包和校验文件复制到固定的 `releases/latest/` key。
-7. `releases/<tag>/` 使用长期 immutable 缓存；`releases/latest/` 使用短缓存或重新验证，
-   防止下载按钮继续拿到旧版本。
-8. 预发布版本可以存入版本目录，但默认不更新 `latest`。
-
-同步使用 R2 的 S3-compatible API 和 AWS CLI/rclone。Wrangler 只允许一次上传一个对象，且单文件
-上传限制较低，不适合作为安装包批量同步工具。
-
-所需 GitHub Secrets 只授予目标 bucket 的对象读写权限：
-
-- `R2_ACCOUNT_ID`
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_BUCKET`
-
-网站部署和 Release 同步保持两个独立 workflow。普通网站文案或样式更新不会重复下载、上传安装包；
-发布稳定版时也不需要手工部署网站，固定的 `latest` URL 会继续供下载按钮使用。
+1. 只允许 `workflow_dispatch`。
+2. 读取两个公开 live stable manifest 并校验签名。
+3. 两边必须是同一 `version` 和同一 `commit`；build 可以不同。
+4. 在该 commit 上创建 `v<version>`，Release 标题写
+   `(windows <build>/macOS <build>)`，正文附上 `updates/` 下载地址。
+5. 把 exe / zip / dmg 挂成 GitHub 资产，仅作公开档案。
 
 截至 2026-07，R2 Standard 免费额度包含每月 10 GB-month 存储、100 万次 Class A、
 1000 万次 Class B 操作，并且直接从 R2 到公网的 egress 不收费。该项目当前体量预计可落在免费额度内，

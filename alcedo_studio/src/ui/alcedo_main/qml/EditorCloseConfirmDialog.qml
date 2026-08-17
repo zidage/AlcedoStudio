@@ -4,8 +4,8 @@ import QtQuick.Layouts
 import QtQuick.Effects
 
 // Application-close confirmation while the editor has an open image.
-// Save → WorkspaceRouter.openLibrary() (same Finalize(true) seal as leaving
-// the editor); host waits on sessionState Leaving Saving like the filmstrip.
+// Save explicitly finalizes the editor; ordinary Library routing preserves the
+// session. The host waits on sessionState Leaving Saving like the filmstrip.
 // Discard → Finalize(false). Cancel leaves the editor session alone.
 Popup {
     id: root

@@ -517,6 +517,19 @@ TEST(EditorLutPanelQmlTest, LoadFromSnapshotRestoresSelectedPathWithoutSubmit) {
   call_load(QStringLiteral("d:\\fake\\lut_07.cube"));
   EXPECT_EQ(h.panel->property("selectedPathNormalized").toString(),
             QStringLiteral("d:/fake/lut_07.cube"));
+
+  // Empty / missing lut field must select None (do not keep a stale path).
+  {
+    QJSValue snap      = engine->newObject();
+    QJSValue panel_js  = engine->newQObject(h.panel);
+    QJSValue fn        = panel_js.property(QStringLiteral("loadFromSnapshot"));
+    ASSERT_TRUE(fn.isCallable());
+    const QJSValue result = fn.callWithInstance(panel_js, QJSValueList{snap});
+    EXPECT_FALSE(result.isError()) << result.toString().toStdString();
+    ProcessEvents(40);
+    EXPECT_EQ(h.model.selectedPath(), QString());
+    EXPECT_EQ(h.panel->property("selectedPath").toString(), QString());
+  }
 }
 
 TEST(EditorLutPanelQmlTest, EntryRowHeightIsUniformForNoneAndFile) {

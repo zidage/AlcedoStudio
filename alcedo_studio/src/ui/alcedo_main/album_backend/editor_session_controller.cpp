@@ -753,9 +753,10 @@ void EditorSessionController::Shutdown() {
 }
 
 void EditorSessionController::Finalize(bool persistChanges) {
-  // Same seal path as WorkspaceRouter::OpenLibrary / empty-editor Open(0,0).
-  // Do not suspend the presentation viewport before Close returns: SealAndStartSave
-  // calls CancelSessionAndWait and must let in-flight presents finish.
+  // Explicit close path for application/project lifecycle and empty-editor
+  // transitions. Ordinary workspace routing deliberately does not call this.
+  // The navigation layer releases guards only after save and render-idle both
+  // complete, so keep presentation available for the in-flight handoff.
   if (!session_backend_) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
@@ -777,7 +778,7 @@ void EditorSessionController::Finalize(bool persistChanges) {
   }
 
   // Synchronous close can drop presentation now. Async SaveStarted keeps the
-  // viewport until the library route tears it down or NoImage arrives.
+  // viewport until the backend publishes NoImage.
   if (result.kind != alcedo::EditorSessionResultKind::Rejected &&
       result.kind != alcedo::EditorSessionResultKind::SaveStarted) {
     if (scope_controller_) {
@@ -915,6 +916,18 @@ void EditorSessionController::unbindPresentationViewport() {
     session_backend_->SetPresentationSinkId(0);
   }
   emit PresentationBindingChanged();
+}
+
+void EditorSessionController::SetWorkspacePresentationActive(bool active) {
+  auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (!item) {
+    return;
+  }
+  if (!active) {
+    item->suspendPresentation();
+    return;
+  }
+  item->refreshPresentationAvailability();
 }
 
 auto EditorSessionController::presentation_viewport() const -> QObject* {
@@ -1092,15 +1105,27 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
 }
 
 bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!can_edit()) {
+    // Pointer release must still stop the vsync consume if edit was lost
+    // mid-drag (image switch / session teardown).
+    if (settled && viewport) {
+      viewport->endInteractivePresentLoop();
+    }
     return false;
   }
   // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
   // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. The worker's
-  // NotifyFrameReady update remains the completion-side wakeup.
-  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  // can block waiting for a recyclable direct-present slot. Unsettled patches
+  // also arm a vsync-sampled consume so a Ready frame does not wait for the
+  // next pointer event or a missed requestUpdate. The worker's NotifyFrameReady
+  // update remains the completion-side wakeup when the loop is not armed.
   if (viewport) {
+    if (settled) {
+      viewport->endInteractivePresentLoop();
+    } else {
+      viewport->beginInteractivePresentLoop();
+    }
     viewport->prepareForAdjustmentFrame();
   }
   alcedo::EditorAdjustmentPatch patch;

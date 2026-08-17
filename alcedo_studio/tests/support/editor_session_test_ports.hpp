@@ -389,9 +389,29 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
  public:
   int cancel_count = 0;
   int submit_count = 0;
+  bool defer_idle_completion = false;
+  SessionIdleCallback pending_idle_completion;
+  std::uint64_t pending_idle_epoch = 0;
 
   void CancelSessionAndWait(std::uint64_t) override { ++cancel_count; }
   void CancelSession(std::uint64_t) override { ++cancel_count; }
+  void CancelSession(std::uint64_t epoch, SessionIdleCallback on_idle) override {
+    ++cancel_count;
+    if (!defer_idle_completion) {
+      if (on_idle) {
+        on_idle(epoch);
+      }
+      return;
+    }
+    pending_idle_epoch      = epoch;
+    pending_idle_completion = std::move(on_idle);
+  }
+  void CompleteSessionIdle() {
+    auto callback = std::move(pending_idle_completion);
+    if (callback) {
+      callback(pending_idle_epoch);
+    }
+  }
   auto Submit(const EditorRenderIntent&) -> EditorRenderResult override {
     ++submit_count;
     EditorRenderResult result;

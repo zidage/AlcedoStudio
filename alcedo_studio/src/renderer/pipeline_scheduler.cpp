@@ -172,6 +172,14 @@ auto RenderFrameRoleId(FrameRole role) -> int {
   return OperatorParams::kRenderFrameRoleInteractivePrimary;
 }
 
+auto UsesTaskScopedRenderParams(RenderType render_type) -> bool {
+  // Editor preview tasks deliberately leave the executor in a known preview
+  // state so the next interactive request can reuse the decoded/geometry
+  // caches. Thumbnail and export are isolated jobs and must restore the live
+  // executor configuration after they finish.
+  return render_type == RenderType::THUMBNAIL || render_type == RenderType::FULL_RES_EXPORT;
+}
+
 void ApplyRenderFrameRole(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
                           const FramePreviewMetadata&                 metadata) {
   if (!pipeline_executor) {
@@ -423,18 +431,25 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = task.request_id_;
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
-    bool completed = false;
-    const auto finish = [&task, &completed](bool success) {
-      if (completed) {
+    std::optional<bool> completion_result;
+    // Some render paths return from inside the render_lock scope. Record the
+    // result there, but invoke the external completion only when this outer
+    // guard is destroyed, after every inner lock and render parameter guard.
+    auto completion_guard = std::unique_ptr<void, std::function<void(void*)>>(
+        reinterpret_cast<void*>(1), [&task, &completion_result](void*) {
+          if (!completion_result.has_value() || !task.on_complete_) {
+            return;
+          }
+          try {
+            task.on_complete_(*completion_result);
+          } catch (...) {
+          }
+        });
+    const auto finish = [&completion_result](bool success) {
+      if (completion_result.has_value()) {
         return;
       }
-      completed = true;
-      if (task.on_complete_) {
-        try {
-          task.on_complete_(success);
-        } catch (...) {
-        }
-      }
+      completion_result = success;
     };
 
     const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
@@ -589,7 +604,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           }
 
           std::optional<CPUPipelineExecutor::OneShotRenderParamsSnapshot> prior_one_shot;
-          if (task.pipeline_executor_) {
+          if (task.pipeline_executor_ && UsesTaskScopedRenderParams(render_desc.render_type_)) {
             prior_one_shot = task.pipeline_executor_->CaptureOneShotRenderParams();
           }
 
@@ -610,8 +625,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             return;
           }
 
-          // RAII: restore one-shot render params (decode/resize/ROI/force-cpu/cache)
-          // and the editor frame sink on every exit path (success, cancel, exception).
+          // RAII: isolated thumbnail/export work restores one-shot render
+          // params (decode/resize/ROI/force-cpu/cache). Editor previews retain
+          // their explicit post-render baseline so geometry caches survive
+          // consecutive interactive requests.
           auto render_params_guard = std::unique_ptr<void, std::function<void(void*)>>(
               reinterpret_cast<void*>(1),
               [&task, &prior_one_shot, &restore_frame_sink](void*) {

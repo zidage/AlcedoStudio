@@ -236,12 +236,26 @@ set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
 if(WIN32)
+    list(APPEND ALCEDO_MAIN_SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/windows_frameless_window.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/windows_frameless_window.hpp"
+    )
     configure_file(
         "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_version.rc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc"
         @ONLY
     )
     list(APPEND ALCEDO_MAIN_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/alcedo_version.rc")
+endif()
+if(APPLE)
+    list(APPEND ALCEDO_MAIN_SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.mm"
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.hpp"
+    )
+    set_source_files_properties(
+        "${ALCEDO_UI_SHELL_ROOT}/macos_frameless_window.mm"
+        PROPERTIES LANGUAGE OBJCXX
+    )
 endif()
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
     add_executable(alcedo_main MACOSX_BUNDLE ${ALCEDO_MAIN_SOURCES})
@@ -307,7 +321,11 @@ if(APPLE)
     set(ALCEDO_MAIN_ICON_PNG "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.png")
     set(ALCEDO_MAIN_ICON_ICNS_SRC "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.icns")
     set(ALCEDO_MAIN_ICONSET_DIR "${ALCEDO_BINARY_ROOT}/alcedo_icon.iconset")
-    set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_icon.icns")
+    # Keep the bundled resource name distinct from every previously shipped
+    # mark. Launch Services caches application icons by bundle metadata and
+    # resource identity; reusing alcedo_icon.icns kept the old bird, and
+    # reusing alcedo_studio_or.icns kept the OR mark after the AO refresh.
+    set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_studio_ao.icns")
 
     if(EXISTS "${ALCEDO_MAIN_ICON_ICNS_SRC}")
         add_custom_command(
@@ -360,7 +378,7 @@ if(APPLE)
     target_sources(alcedo_main PRIVATE "${ALCEDO_MAIN_ICON_ICNS}")
     # CFBundleIconFile — Finder, Dock, and Launchpad use this for the .app.
     set_target_properties(alcedo_main PROPERTIES
-        MACOSX_BUNDLE_ICON_FILE "alcedo_icon.icns"
+        MACOSX_BUNDLE_ICON_FILE "alcedo_studio_ao.icns"
     )
 endif()
 
@@ -394,6 +412,12 @@ target_link_libraries(alcedo_main
         Qt6::Svg
         Qt6::QuickEffects
 )
+if(WIN32)
+    target_link_libraries(alcedo_main PRIVATE dwmapi user32)
+endif()
+if(APPLE)
+    target_link_libraries(alcedo_main PRIVATE "-framework AppKit")
+endif()
 target_compile_definitions(alcedo_main PRIVATE
     ALCEDO_APP_VERSION="${PROJECT_VERSION}"
 )
@@ -868,4 +892,37 @@ if(ALCEDO_ARIA2C_BINARY AND TARGET alcedo_main)
             VERBATIM
         )
     endif()
+endif()
+
+# The linker signs the executable before the bundle resources above are copied.
+# Re-sign the complete build-tree bundle last so Launch Services and Dock see a
+# valid application identity during direct development launches as well as from
+# installed/package builds.
+if(APPLE AND ALCEDO_MACOS_BUNDLE AND
+   NOT "${ALCEDO_MACOS_CODESIGN_IDENTITY}" STREQUAL "")
+    find_program(ALCEDO_CODESIGN_EXECUTABLE codesign REQUIRED)
+    if(ALCEDO_MACOS_CODESIGN_TIMESTAMP)
+        set(_alcedo_build_codesign_timestamp --timestamp)
+    else()
+        set(_alcedo_build_codesign_timestamp --timestamp=none)
+    endif()
+    add_custom_command(TARGET alcedo_main POST_BUILD
+        # Incremental builds do not clear files that were copied by an older
+        # target definition. Remove retired icon resources before sealing
+        # the bundle so only CFBundleIconFile's current resource can be used.
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/Resources/alcedo_icon.icns"
+            "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/Resources/alcedo_studio_or.icns"
+        COMMAND ${CMAKE_COMMAND} -E touch "$<TARGET_BUNDLE_DIR:alcedo_main>"
+        COMMAND "${ALCEDO_CODESIGN_EXECUTABLE}"
+            --force
+            --deep
+            ${ALCEDO_MACOS_CODESIGN_OPTIONS}
+            --sign "${ALCEDO_MACOS_CODESIGN_IDENTITY}"
+            ${_alcedo_build_codesign_timestamp}
+            "$<TARGET_BUNDLE_DIR:alcedo_main>"
+        COMMENT "Signing complete macOS build-tree app bundle"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+    )
 endif()

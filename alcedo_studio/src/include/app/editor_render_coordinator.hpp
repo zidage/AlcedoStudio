@@ -91,6 +91,8 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   /// Cancel every pending/in-flight request for an image-load request (image switch).
   void CancelSession(std::uint64_t image_load_request_id) override;
+  void CancelSession(std::uint64_t image_load_request_id,
+                     SessionIdleCallback on_idle) override;
   void CancelSessionAndWait(std::uint64_t image_load_request_id) override;
   /// Queue behind the in-flight frame: drop not-yet-started pending for this
   /// session, then wait for the running job (and its present handoff) to finish.
@@ -171,6 +173,9 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   [[nodiscard]] auto SelectNextSlotIndex() const -> std::optional<std::size_t>;
   /// Drop cancelled / epoch-obsolete entries from all slots (O(slot count)).
   void ScrubPendingSlots();
+  [[nodiscard]] auto HasSessionWork(std::uint64_t image_load_request_id) const -> bool;
+  auto TakeIdleCallbacks(std::uint64_t image_load_request_id)
+      -> std::vector<SessionIdleCallback>;
 
   std::shared_ptr<IEditorPipelineSchedulerPort> scheduler_;
   ResultObserver                                observer_;
@@ -183,6 +188,11 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::vector<EditorRenderResult>                            results_;
   std::vector<EditorRenderResult>                            pending_delivery_;
   std::unordered_set<std::uint64_t>                          terminal_request_ids_;
+  struct PendingIdleCallback {
+    std::uint64_t       image_load_request_id = 0;
+    SessionIdleCallback callback;
+  };
+  std::vector<PendingIdleCallback> idle_callbacks_;
   // Diagnostics for the QML spinner/progress/error surface.
   std::size_t                                   replaced_count_  = 0;
   std::size_t                                   cancelled_count_ = 0;

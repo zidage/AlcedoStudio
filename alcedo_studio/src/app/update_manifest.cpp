@@ -98,6 +98,19 @@ UpdateManifestResult VerifyUpdateManifest(const QByteArray& manifest_bytes,
   if (manifest.version.isEmpty() || manifest.version.size() > 64) {
     return Failure(QStringLiteral("The update version is not valid."));
   }
+  manifest.commit = root.value(QStringLiteral("commit")).toString().trimmed().toLower();
+  if (!manifest.commit.isEmpty()) {
+    if (manifest.commit.size() != 40) {
+      return Failure(QStringLiteral("The update commit is not valid."));
+    }
+    for (const QChar character : manifest.commit) {
+      const ushort value = character.unicode();
+      const bool hex_digit = (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+      if (!hex_digit) {
+        return Failure(QStringLiteral("The update commit is not valid."));
+      }
+    }
+  }
 
   manifest.published_at = ParseUtcTimestamp(root, QStringLiteral("publishedAt"));
   manifest.expires_at   = ParseUtcTimestamp(root, QStringLiteral("expiresAt"));

@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 
+from release_git import read_head_commit, require_clean_worktree, validate_commit
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORMS = {
@@ -113,7 +115,12 @@ def main() -> int:
     parser.add_argument("--version", default="", help="Optional metadata override for recovery use.")
     parser.add_argument("--build", type=int, default=None, help="Optional build-number override.")
     parser.add_argument("--sequence", type=int, default=None, help="Optional sequence override.")
-    parser.add_argument("--tag", default="", help="Optional immutable release tag override.")
+    parser.add_argument("--commit", default="", help="Optional packaged git SHA override.")
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="Ignored. Package URLs no longer use a git tag.",
+    )
     parser.add_argument("--channel", choices=("stable", "beta"), default=None)
     parser.add_argument(
         "--public-key-file",
@@ -131,7 +138,11 @@ def main() -> int:
     version = args.version or project_version(cache)
     build = args.build if args.build is not None else build_number(cache, version)
     sequence = args.sequence or int(dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d%H%M%S"))
-    tag = args.tag or f"v{version}"
+    if args.commit:
+        commit = validate_commit(args.commit)
+    else:
+        require_clean_worktree(REPO_ROOT)
+        commit = read_head_commit(REPO_ROOT)
     packaged_channel = cache.get("ALCEDO_UPDATE_CHANNEL", "stable").strip() or "stable"
     channel = args.channel or packaged_channel
     if channel != packaged_channel:
@@ -192,8 +203,8 @@ def main() -> int:
         str(build),
         "--sequence",
         str(sequence),
-        "--tag",
-        tag,
+        "--commit",
+        commit,
         "--channel",
         channel,
         "--output",
@@ -203,6 +214,8 @@ def main() -> int:
     ]
     artifact_argument = "--windows" if args.platform == "windows" else "--macos-arm64"
     create_cmd.extend([artifact_argument, str(package_copy)])
+    if dmg_path is not None:
+        create_cmd.extend(["--macos-dmg", str(artifacts_dir / dmg_path.name)])
 
     run(create_cmd)
     run(
@@ -231,8 +244,6 @@ def main() -> int:
             public_key,
             "--artifacts",
             str(artifacts_dir),
-            "--tag",
-            tag,
             "--channel",
             channel,
             "--platform",
@@ -243,6 +254,7 @@ def main() -> int:
     print(f"Platform: {config['artifact_key']}")
     print(f"Channel: {channel}")
     print(f"Version/build: {version} ({build})")
+    print(f"Commit: {commit}")
     print(f"Sequence: {sequence}")
     print(f"Manifest: {manifest}")
     print(f"Signature: {signature}")

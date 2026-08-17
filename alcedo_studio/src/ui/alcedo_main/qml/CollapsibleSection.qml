@@ -7,7 +7,7 @@ import QtQuick.Layouts
 //   - Logical expanded flips immediately (session/state).
 //   - foldProgress (0 collapsed → 1 expanded) drives height and opacity.
 //   - Persistent header/trigger stays put; body clips intermediate content.
-//   - Opening uses motionFoldOpenMs + OutCubic; closing uses motionFoldCloseMs.
+//   - Opening uses motionFoldOpenMs + motionEasing; closing uses motionFoldCloseMs.
 //   - reduceMotion snaps; driveFoldProgress() lets tests set intermediate points
 //     without wall-clock sleeps.
 Item {
@@ -82,7 +82,7 @@ Item {
         enabled: root._motionArmed && !root.foldManualDrive
         NumberAnimation {
             duration: appTheme.reduceMotion ? 0 : root._foldDuration
-            easing.type: Easing.OutCubic
+            easing.type: appTheme.motionEasing
         }
     }
 

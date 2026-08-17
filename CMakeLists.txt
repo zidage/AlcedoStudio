@@ -146,9 +146,21 @@ else()
         CACHE STRING
         "Display/executable name for the packaged macOS .app bundle.")
 endif()
-set(ALCEDO_MACOS_BUNDLE_IDENTIFIER "studio.alcedo.AlcedoStudio"
-    CACHE STRING
-    "Bundle identifier for the packaged macOS .app bundle.")
+if(NOT DEFINED ALCEDO_MACOS_BUNDLE_IDENTIFIER OR
+   "${ALCEDO_MACOS_BUNDLE_IDENTIFIER}" STREQUAL "" OR
+   "${ALCEDO_MACOS_BUNDLE_IDENTIFIER}" STREQUAL "studio.alcedo.AlcedoStudio")
+    # Migrate away from the identifier used by legacy PuerhLab bundles. Those
+    # bundles carried the bird icon, and macOS can reuse their cached Dock tile
+    # during launch/termination when the identifier remains the same.
+    set(ALCEDO_MACOS_BUNDLE_IDENTIFIER "studio.alcedo.Studio"
+        CACHE STRING
+        "Bundle identifier for the packaged macOS .app bundle."
+        FORCE)
+else()
+    set(ALCEDO_MACOS_BUNDLE_IDENTIFIER "${ALCEDO_MACOS_BUNDLE_IDENTIFIER}"
+        CACHE STRING
+        "Bundle identifier for the packaged macOS .app bundle.")
+endif()
 
 function(alcedo_append_existing_prefix prefix)
     if(EXISTS "${prefix}")

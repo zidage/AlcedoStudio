@@ -35,6 +35,10 @@
     <file>panel_icons/inspector-collapse.svg</file>
     <file>panel_icons/inspector-expand.svg</file>
     <file>panel_icons/layout-grid.svg</file>
+    <file>panel_icons/layout-sidebar.svg</file>
+    <file>panel_icons/layout-sidebar-inactive.svg</file>
+    <file>panel_icons/layout-sidebar-right.svg</file>
+    <file>panel_icons/layout-sidebar-right-inactive.svg</file>
     <file>panel_icons/list.svg</file>
     <file>panel_icons/image.svg</file>
     <file>panel_icons/hdr.svg</file>

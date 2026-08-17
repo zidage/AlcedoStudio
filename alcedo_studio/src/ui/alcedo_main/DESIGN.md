@@ -197,6 +197,40 @@ inside the card — not a nested second card of the same fill.
 
 ---
 
+## Application shell
+
+Desktop chrome is a full-width toolbar above a two-column body:
+
+`Vertical(Top toolbar, Horizontal(Collections sidebar, Vertical(Workspace, Background tasks)))`
+
+The Library workspace inside that right stack is `Horizontal(Browser, Inspector)`.
+The wordmark lives on the collections card. The collections toggle and
+Library/Editor capsule remain on the full-width toolbar with File, Settings,
+update, inspector toggle, and drawn caption buttons.
+
+The top toolbar is one compact action band: `iconButtonHitSizeCompact +
+spaceSm` (48 px), followed by `spaceSm` before the body so it preserves editor
+height. The collections card remains a floating `panelRadius` surface with
+`spaceMd` leading and bottom insets on every platform. On macOS, native traffic
+lights sit over the toolbar; their vertical center is derived from `spaceMd +
+(iconButtonHitSizeCompact + spaceSm) / 2`, exactly matching the toolbar action
+axis. The buttons stay inside the system title-bar container. That container
+is grown downward so the visible frames remain inside AppKit's title-bar hit
+region; empty title-bar area passes events through to the QML toolbar. Resize
+and maximize re-apply the same geometry. The close button keeps its 17 px
+horizontal correction. The card must not be made flush or square to host the
+wordmark.
+
+The collections sidebar folds to zero width after a Library / Editor route
+change. Width, following workspace gap, and opacity use `motionFoldOpenMs`,
+`motionFoldCloseMs`, and `motionFadeMs`; `reduceMotion` resolves them to zero.
+Its toggle stays at the leading side of the full-width toolbar, after the
+macOS traffic-light reserve when applicable, and switches between the active
+and inactive sidebar glyphs without moving. The Library/Editor capsule stays
+beside it so workspace routing remains available while the sidebar is folded.
+
+---
+
 ## Editor panel geometry
 
 Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
@@ -212,6 +246,7 @@ the two side columns read as one family.
 | `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog — top action bar + three-column Current / Incoming / Merged cards |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
+| `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
 **Merge dialog layout:** `EditorMergeDialog` is centered on `Overlay.overlay`
 with the shared MultiEffect blur + `overlayColor` dim used by other modal
@@ -224,10 +259,11 @@ uses the monochrome selected fill.
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
 `overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
-Save). Save calls `workspaceRouter.openLibrary()` — the same Finalize(true) seal
-as switching to Library — then waits on `sessionState` (`Saving` / `Switching`,
-same gate as the filmstrip) until `NoImage` before quitting. Discard uses
-`Finalize(false)`.
+Save). Save explicitly calls `Finalize(true)`, routes to Library, then waits on
+`sessionState` (`Saving` / `Switching`, same gate as the filmstrip) until
+`NoImage` before quitting. Discard uses `Finalize(false)`. Ordinary Library /
+Editor workspace navigation only changes visibility; it preserves the editor
+session, retained QML tree, viewport, and presentation sink.
 
 The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
 Icon and action geometry; the rail width is not tokenized because it is locked to
@@ -303,6 +339,11 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 - Default chrome borders: 1 px `cardBorderColor` / `dividerColor`.
 - Focus rings on structural icon actions: 1 px accent at ~60% alpha via
   `IconActionButton.showFocusRing` (default true).
+- **Collections sidebar toggle exception:** this is an immediate toolbar action,
+  not a selected mode. Pointer activation does not retain focus and it draws no
+  accent focus border. Hover, press, and keyboard focus use the existing quiet
+  `buttonHoveredFillColor` gray well; keyboard access remains available through
+  `activeFocusOnTab`.
 - **Library/Editor capsule exception:** segments draw **no** hover fill, press
   fill, or focus ring. The sliding `workspaceSwitchThumb` is the **only**
   selected-workspace indication. Hover still drives tooltips.
@@ -362,9 +403,9 @@ blocking. Session identity is never recreated by a fold.
 | --- | --- | --- |
 | `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
-| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity** |
+| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity**; project-load overlay hold before fade-out |
+| `motionEasing` | `QEasingCurve::OutCubic` (QML `Easing.OutCubic`) | Fold and fade easing. Bind `easing.type: appTheme.motionEasing` |
 | `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
-| Easing | `Easing.OutCubic` | Open/close and list selection fade |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
 
 **Monochrome selection motion:**
@@ -374,33 +415,42 @@ blocking. Session identity is never recreated by a fold.
 | LUT list selected well | Single sliding chrome: nearby `y` slide (`motionFoldOpenMs`); long jump snaps + opacity fade-in | Never per-delegate opacity; never flush to track; no catalog refresh on same-path snapshot echo |
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
+| Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
+| Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
+| Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
 
-**Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
+**Fold rules (History/Versions, adjustment stack, filmstrip, collapsible section):**
 
 1. Logical expanded/collapsed (or session page) flips immediately.
 2. Persistent rail / handle / section header stays stationary.
-3. Intermediate content is clipped (`clip: true`).
-4. Opening uses `motionFoldOpenMs`; closing uses `motionFoldCloseMs`.
-5. `reduceMotion` snaps progress to the terminal value.
-6. Tests may call `driveFoldProgress(t)` / `endFoldDrive()` to pin intermediate
+3. Intermediate content is clipped (`clip: true`). The folding body keeps its
+   expanded size and is revealed by the host size; it does not slide via `x`/`y`.
+4. Host layout size interpolates with progress so the center viewport grows and
+   shrinks with the panel (same mode as the filmstrip dock).
+5. Body opacity tracks the same progress. Duration is `motionFoldOpenMs` on open
+   and `motionFoldCloseMs` on close. Easing is `motionEasing`.
+6. `reduceMotion` snaps progress to the terminal value.
+7. Tests may call `driveFoldProgress(t)` / `endFoldDrive()` to pin intermediate
    progress without wall-clock sleeps. Hosts expose:
-   - History/Versions: `panelOpenProgress`, `panelSlideX`, `layoutExpanded`,
+   - History/Versions: `panelOpenProgress`, `totalWidth`, `layoutExpanded`,
      `driveFoldProgress`, `endFoldDrive`
+   - Adjustment stack: `stackExpandProgress`, `driveFoldProgress`, `endFoldDrive`
    - Filmstrip: `dockExpandProgress`, `driveFoldProgress`, `endFoldDrive`
    - `CollapsibleSection`: `foldProgress`, `driveFoldProgress`, `endFoldDrive`
 
-**History/Versions rail (Phase 7A R6 — transform-only reveal):**
+**History/Versions rail:**
 
-1. Outer layout width is **binary** (rail-only vs rail + full panel). It snaps once
-   when the panel becomes layout-expanded or fully closed — it does **not** track
-   `panelOpenProgress` every animation frame (avoids workspace re-layout thrash).
-2. `panelOpenProgress` drives **transform-only** inner motion (`x` slide via
-   `panelSlideX`). No opacity animation on the history/Versions panel subtree.
-3. Only the active page body is loaded (`Loader`). Closed rail owns no transaction
-   or Version list delegates. Scroll offsets live on the rail and restore on
-   reactivation.
-4. Filmstrip and `CollapsibleSection` may still animate height + opacity together;
-   that exception is limited to those hosts and is not used on the history rail.
+1. `totalWidth` interpolates: `railWidth + (panelGap + expandedPanelWidth) *
+   panelOpenProgress`. The editor row reflows every frame so the viewport moves
+   with the panel.
+2. The icon rail stays put. The panel host width and following gap track
+   progress; the full-width panel body is clipped (no `x` slide).
+3. Only the active page body is loaded (`Loader`) while progress is above zero.
+   A closing fold keeps the last body until progress reaches 0. A fully closed
+   rail owns no transaction or Version list delegates. Scroll offsets live on
+   the rail and restore on reactivation.
+4. Adjustment stack uses the same progress + clip + layout-width fold toward
+   the window edge.
 
 ---
 
@@ -451,7 +501,7 @@ row delegate and arrow affordance automatically.
 | Location | Exception | Why |
 | --- | --- | --- |
 | History / Versions rail | compact 40 px hit, 32 px well, 18 px SVG | Quiet tools inside a 48 px persistent rail |
-| Window caption buttons | custom canvas 16 px glyphs | OS-chrome parity, not content SVG set |
+| Window caption buttons | custom canvas 16 px glyphs on Windows/Linux; hidden on macOS | OS-chrome parity, not content SVG set. macOS uses the system traffic lights in the expanded client area |
 
 ---
 

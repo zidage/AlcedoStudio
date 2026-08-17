@@ -15,6 +15,10 @@
 #include <sstream>
 #include <vector>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_processor.hpp"
@@ -50,6 +54,16 @@ void AppendProfileMs(DeferredCpuLog& log, const char* label, const ProfileClock:
   std::ostringstream oss;
   oss << label << '=' << std::chrono::duration<double, std::milli>(elapsed).count() << " ms";
   log.Add(oss.str());
+}
+
+void AppendUnpackOpenMpLog(DeferredCpuLog& log) {
+#if defined(_OPENMP)
+  std::ostringstream oss;
+  oss << "RAW CPU unpack_omp_max_threads=" << omp_get_max_threads();
+  log.Add(oss.str());
+#else
+  (void)log;
+#endif
 }
 
 void AppendLibRawUnpackRouteLog(DeferredCpuLog& log, LibRaw& raw_processor) {
@@ -138,6 +152,7 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       throw_if_cancelled();
       libraw_guard::Unpack(*raw_processor);
       AppendProfileMs(deferred_log, "RAW CPU unpack", ProfileClock::now() - unpack_start);
+      AppendUnpackOpenMpLog(deferred_log);
       AppendLibRawUnpackRouteLog(deferred_log, *raw_processor);
       throw_if_cancelled();
 
@@ -175,6 +190,7 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       throw_if_cancelled();
       libraw_guard::Unpack(*raw_processor);
       AppendProfileMs(deferred_log, "RAW CPU unpack", ProfileClock::now() - unpack_start);
+      AppendUnpackOpenMpLog(deferred_log);
       AppendLibRawUnpackRouteLog(deferred_log, *raw_processor);
       throw_if_cancelled();
 

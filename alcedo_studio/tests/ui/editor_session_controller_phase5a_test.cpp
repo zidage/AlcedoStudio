@@ -395,8 +395,10 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
   EXPECT_EQ(controller.element_id(), 3u);
 
   router.OpenLibrary();
-  EXPECT_EQ(backend.close_count, 1);
-  EXPECT_TRUE(backend.last_close_persist);
+  EXPECT_EQ(backend.close_count, 0);
+  EXPECT_TRUE(controller.active());
+  EXPECT_EQ(controller.element_id(), 3u);
+  EXPECT_EQ(controller.image_id(), 4u);
   EXPECT_EQ(router.workspace(), QStringLiteral("library"));
 }
 
@@ -1003,6 +1005,99 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapsh
                                      QStringLiteral("{\"exposure\":0.8}"), true));
   EXPECT_GE(snapshot_signals, 1) << "settled submitPatch must publish AdjustmentSnapshotChanged";
   EXPECT_EQ(backend.commit_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSettledStopsIt) {
+  FakeSessionBackend backend;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
+  EditorSessionController        controller(&backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+  viewport.resumePresentation();
+
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.1}"), false));
+  EXPECT_TRUE(viewport.interactivePresentLoopActive());
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.2}"), false));
+  EXPECT_TRUE(viewport.interactivePresentLoopActive());
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.3}"), true));
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     PresentLoopTickRequestsUpdateOnlyWhileArmedAndPresentationIsAvailable) {
+  editor_rhi::EditorViewportItem viewport;
+  const auto ticks_idle = viewport.interactivePresentLoopTickCount();
+  viewport.continueInteractivePresentLoop();
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
+
+  viewport.beginInteractivePresentLoop();
+  EXPECT_TRUE(viewport.interactivePresentLoopActive());
+  viewport.continueInteractivePresentLoop();
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle)
+      << "continue must not tick while presentation is unavailable";
+
+  viewport.resumePresentation();
+  viewport.continueInteractivePresentLoop();
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 1);
+  viewport.continueInteractivePresentLoop();
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+
+  viewport.endInteractivePresentLoop();
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
+  viewport.continueInteractivePresentLoop();
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SessionEpochChangeStopsPresentLoop) {
+  editor_rhi::EditorViewportItem viewport;
+  viewport.resumePresentation();
+  viewport.setImageIdentity(2);
+  viewport.setSessionEpoch(1);
+  viewport.beginInteractivePresentLoop();
+  ASSERT_TRUE(viewport.interactivePresentLoopActive());
+  viewport.setSessionEpoch(2);
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
+}
+
+TEST(EditorSessionControllerPhase5ATest, SuspendPresentationStopsPresentLoop) {
+  editor_rhi::EditorViewportItem viewport;
+  viewport.resumePresentation();
+  viewport.beginInteractivePresentLoop();
+  ASSERT_TRUE(viewport.interactivePresentLoopActive());
+  viewport.suspendPresentation();
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
+}
+
+TEST(EditorSessionControllerPhase5ATest, SettledSubmitStopsPresentLoopWhenEditIsLost) {
+  FakeSessionBackend backend;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
+  EditorSessionController        controller(&backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+  viewport.resumePresentation();
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.1}"), false));
+  ASSERT_TRUE(viewport.interactivePresentLoopActive());
+
+  backend.state_    = EditorSessionState::NoImage;
+  backend.identity_ = {};
+  backend.NotifyWithoutStateChange();
+  EXPECT_FALSE(controller.can_edit());
+  EXPECT_FALSE(controller.submitPatch(QStringLiteral("exposure"),
+                                      QStringLiteral("{\"exposure\":0.2}"), true));
+  EXPECT_FALSE(viewport.interactivePresentLoopActive());
 }
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNotify) {

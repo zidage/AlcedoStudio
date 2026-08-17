@@ -9,29 +9,20 @@ using namespace metal;
 struct HighlightParams {
   float clips[4];
   float clipdark[4];
-  float chrominance[4];
   uint  width;
   uint  height;
-  uint  stride;
 };
 
-constant uint kDilateRadius  = 3u;
-constant uint kPlaneBaseR    = 0u;
-constant uint kPlaneBaseG    = 1u;
-constant uint kPlaneBaseB    = 2u;
-constant uint kPlaneDilatedR = 3u;
-constant uint kPlaneDilatedG = 4u;
-constant uint kPlaneDilatedB = 5u;
-// Reconstruction ramps in over the top (1 - kSoftClipLo) fraction below the clip level instead
-// of switching on exactly at the clip point. Shot/read noise makes pixels straddle a hard
-// threshold, which decorrelates neighbours and shows up as speckle at highlight edges.
-constant float kSoftClipLo = 0.95f;
+constant uint  kDilateRadius     = 3u;
+constant uint  kBlockX           = 16u;
+constant uint  kBlockY           = 16u;
+constant uint  kTileW            = kBlockX + 2u * kDilateRadius;
+constant uint  kTileH            = kBlockY + 2u * kDilateRadius;
+constant float kSoftClipLo       = 0.95f;
+constant float kMinChromaSamples = 30.0f;
 
 static inline float Cube(float value) { return value * value * value; }
 
-// A CMOS readout is a finite, non-negative electron count. Anything else (negative black-level
-// residue, NaN/Inf from an upstream artefact) is mapped to 0 so a single corrupt sample can
-// neither become a dark outlier nor poison the neighbourhood statistics.
 static inline float SanitizeChannel(float value) {
   return isfinite(value) ? max(value, 0.0f) : 0.0f;
 }
@@ -53,12 +44,6 @@ static inline float ReconstructChannel(float pixel, float ref, float chrominance
   return pixel + weight * (max(pixel, ref + chrominance) - pixel);
 }
 
-// Accumulate one neighbourhood sample. A sample at/above the clip level is censored by the
-// sensor (the photosite has reached full well, so its readout only means ">= clip"), or is a
-// hot-pixel/demosaic outlier; either way it carries no usable level information and must not
-// move the mean at face value. Censored samples still feed the fallback used when a channel
-// has no uncensored sample left (e.g. inside a fully blown region). Non-finite samples are
-// dropped entirely.
 static inline void RefavgAccumulate(thread float* valid_sum, thread float* valid_cnt,
                                     thread float* all_sum, thread float* all_cnt, float3 raw,
                                     constant HighlightParams& params) {
@@ -91,171 +76,209 @@ static inline void RefavgAccumulate(thread float* valid_sum, thread float* valid
   }
 }
 
-static inline float3 CalcRefavg(device const float4* input, int row, int col,
-                                constant HighlightParams& params) {
-  float valid_sum[3] = {0.0f, 0.0f, 0.0f};
-  float valid_cnt[3] = {0.0f, 0.0f, 0.0f};
-  float all_sum[3]   = {0.0f, 0.0f, 0.0f};
-  float all_cnt[3]   = {0.0f, 0.0f, 0.0f};
-
-  const int dymin = max(0, row - 1);
-  const int dxmin = max(0, col - 1);
-  const int dymax = min(static_cast<int>(params.height) - 1, row + 1);
-  const int dxmax = min(static_cast<int>(params.width) - 1, col + 1);
-
-  for (int dy = dymin; dy <= dymax; ++dy) {
-    for (int dx = dxmin; dx <= dxmax; ++dx) {
-      RefavgAccumulate(valid_sum, valid_cnt, all_sum, all_cnt,
-                       input[static_cast<uint>(dy) * params.stride + static_cast<uint>(dx)].rgb,
-                       params);
-    }
-  }
-
+static inline float3 RefavgFinalize(thread const float* valid_sum, thread const float* valid_cnt,
+                                    thread const float* all_sum, thread const float* all_cnt) {
   float mean[3];
-  for (uint c = 0; c < 3u; ++c) {
+  for (uint c = 0u; c < 3u; ++c) {
     const float m = (valid_cnt[c] > 0.0f) ? valid_sum[c] / valid_cnt[c]
                     : (all_cnt[c] > 0.0f)   ? all_sum[c] / all_cnt[c]
                                             : 0.0f;
     mean[c] = pow(m, 1.0f / 3.0f);
   }
-
   return float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
                 Cube(0.5f * (mean[0] + mean[1])));
 }
 
-static inline uchar DilateMaskAt(device const uchar* plane, uint width, uint height, int row,
-                                 int col, int radius) {
-  const int y0 = max(0, row - radius);
-  const int x0 = max(0, col - radius);
-  const int y1 = min(static_cast<int>(height) - 1, row + radius);
-  const int x1 = min(static_cast<int>(width) - 1, col + radius);
+static inline float3 CalcRefavgFromTile(threadgroup float3 tile_img[kTileH][kTileW], int row,
+                                        int col, int local_y, int local_x, int height, int width,
+                                        constant HighlightParams& params) {
+  float valid_sum[3] = {0.0f, 0.0f, 0.0f};
+  float valid_cnt[3] = {0.0f, 0.0f, 0.0f};
+  float all_sum[3]   = {0.0f, 0.0f, 0.0f};
+  float all_cnt[3]   = {0.0f, 0.0f, 0.0f};
 
-  for (int y = y0; y <= y1; ++y) {
-    const int row_offset = y * static_cast<int>(width);
-    for (int x = x0; x <= x1; ++x) {
-      if (plane[row_offset + x] != 0) {
-        return 1;
+  const int dy0 = max(-1, -row);
+  const int dx0 = max(-1, -col);
+  const int dy1 = min(1, height - 1 - row);
+  const int dx1 = min(1, width - 1 - col);
+  for (int dy = dy0; dy <= dy1; ++dy) {
+    for (int dx = dx0; dx <= dx1; ++dx) {
+      RefavgAccumulate(valid_sum, valid_cnt, all_sum, all_cnt,
+                       tile_img[local_y + dy][local_x + dx], params);
+    }
+  }
+  return RefavgFinalize(valid_sum, valid_cnt, all_sum, all_cnt);
+}
+
+static inline float3 CalcRefavgTex(texture2d<float, access::read> src, int row, int col,
+                                   constant HighlightParams& params) {
+  float valid_sum[3] = {0.0f, 0.0f, 0.0f};
+  float valid_cnt[3] = {0.0f, 0.0f, 0.0f};
+  float all_sum[3]   = {0.0f, 0.0f, 0.0f};
+  float all_cnt[3]   = {0.0f, 0.0f, 0.0f};
+
+  const int height = static_cast<int>(params.height);
+  const int width  = static_cast<int>(params.width);
+  const int dymin  = max(0, row - 1);
+  const int dxmin  = max(0, col - 1);
+  const int dymax  = min(height - 1, row + 1);
+  const int dxmax  = min(width - 1, col + 1);
+  for (int dy = dymin; dy <= dymax; ++dy) {
+    for (int dx = dxmin; dx <= dxmax; ++dx) {
+      RefavgAccumulate(valid_sum, valid_cnt, all_sum, all_cnt,
+                       MaxRgb(src.read(uint2(static_cast<uint>(dx), static_cast<uint>(dy)))),
+                       params);
+    }
+  }
+  return RefavgFinalize(valid_sum, valid_cnt, all_sum, all_cnt);
+}
+
+// One pass: load a halo tile, dilate, and atomically fold chrominance. Matches the CUDA
+// AccumulateHighlightStats kernel so we never materialize mask/contrib planes.
+kernel void hlr_accumulate_stats(texture2d<float, access::read> src [[texture(0)]],
+                                 device atomic<float>*          stats [[buffer(0)]],
+                                 constant HighlightParams&      params [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]],
+                                 uint2 lid [[thread_position_in_threadgroup]],
+                                 uint2 groupid [[threadgroup_position_in_grid]]) {
+  threadgroup float3 tile_img[kTileH][kTileW];
+  threadgroup uchar  tile_r[kTileH][kTileW];
+  threadgroup uchar  tile_g[kTileH][kTileW];
+  threadgroup uchar  tile_b[kTileH][kTileW];
+  threadgroup float  tg_sum[3][256];
+  threadgroup float  tg_cnt[3][256];
+
+  const uint lane = lid.y * kBlockX + lid.x;
+
+  const int tile_origin_x = static_cast<int>(groupid.x * kBlockX) - static_cast<int>(kDilateRadius);
+  const int tile_origin_y = static_cast<int>(groupid.y * kBlockY) - static_cast<int>(kDilateRadius);
+  const int width         = static_cast<int>(params.width);
+  const int height        = static_cast<int>(params.height);
+
+  for (uint sy = lid.y; sy < kTileH; sy += kBlockY) {
+    const int gy = clamp(tile_origin_y + static_cast<int>(sy), 0, max(height - 1, 0));
+    for (uint sx = lid.x; sx < kTileW; sx += kBlockX) {
+      const int    gx    = clamp(tile_origin_x + static_cast<int>(sx), 0, max(width - 1, 0));
+      const float3 pixel = MaxRgb(src.read(uint2(static_cast<uint>(gx), static_cast<uint>(gy))));
+      tile_img[sy][sx]   = pixel;
+      tile_r[sy][sx]     = pixel.x >= params.clips[0] ? 1 : 0;
+      tile_g[sy][sx]     = pixel.y >= params.clips[1] ? 1 : 0;
+      tile_b[sy][sx]     = pixel.z >= params.clips[2] ? 1 : 0;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  float local_sum[3] = {0.0f, 0.0f, 0.0f};
+  float local_cnt[3] = {0.0f, 0.0f, 0.0f};
+
+  const bool in_bounds = gid.x < params.width && gid.y < params.height;
+  if (in_bounds) {
+    const int row     = static_cast<int>(gid.y);
+    const int col     = static_cast<int>(gid.x);
+    const int local_x = static_cast<int>(lid.x) + static_cast<int>(kDilateRadius);
+    const int local_y = static_cast<int>(lid.y) + static_cast<int>(kDilateRadius);
+
+    const int dy0 = max(-static_cast<int>(kDilateRadius), -row);
+    const int dx0 = max(-static_cast<int>(kDilateRadius), -col);
+    const int dy1 = min(static_cast<int>(kDilateRadius), height - 1 - row);
+    const int dx1 = min(static_cast<int>(kDilateRadius), width - 1 - col);
+
+    uchar dil_r = 0;
+    uchar dil_g = 0;
+    uchar dil_b = 0;
+    for (int dy = dy0; dy <= dy1; ++dy) {
+      for (int dx = dx0; dx <= dx1; ++dx) {
+        dil_r |= tile_r[local_y + dy][local_x + dx];
+        dil_g |= tile_g[local_y + dy][local_x + dx];
+        dil_b |= tile_b[local_y + dy][local_x + dx];
+      }
+    }
+
+    const float3 pixel = tile_img[local_y][local_x];
+    const bool   use_r =
+        dil_r != 0 && pixel.x > params.clipdark[0] && pixel.x < params.clips[0];
+    const bool use_g =
+        dil_g != 0 && pixel.y > params.clipdark[1] && pixel.y < params.clips[1];
+    const bool use_b =
+        dil_b != 0 && pixel.z > params.clipdark[2] && pixel.z < params.clips[2];
+
+    if (use_r || use_g || use_b) {
+      const float3 ref =
+          CalcRefavgFromTile(tile_img, row, col, local_y, local_x, height, width, params);
+      if (use_r) {
+        local_sum[0] = pixel.x - ref.x;
+        local_cnt[0] = 1.0f;
+      }
+      if (use_g) {
+        local_sum[1] = pixel.y - ref.y;
+        local_cnt[1] = 1.0f;
+      }
+      if (use_b) {
+        local_sum[2] = pixel.z - ref.z;
+        local_cnt[2] = 1.0f;
       }
     }
   }
 
-  return 0;
-}
+  tg_sum[0][lane] = local_sum[0];
+  tg_sum[1][lane] = local_sum[1];
+  tg_sum[2][lane] = local_sum[2];
+  tg_cnt[0][lane] = local_cnt[0];
+  tg_cnt[1][lane] = local_cnt[1];
+  tg_cnt[2][lane] = local_cnt[2];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
 
-kernel void hlr_build_mask(device const float4* input [[buffer(0)]],
-                           device uchar*        mask_buf [[buffer(1)]],
-                           device atomic_uint*  anyclipped [[buffer(2)]],
-                           constant HighlightParams& params [[buffer(3)]],
-                           uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
-  }
-  const uint   size  = params.width * params.height;
-  const uint   index = gid.y * params.stride + gid.x;
-  const uint   idx   = gid.y * params.width + gid.x;
-  const float3 pixel = MaxRgb(input[index]);
-
-  mask_buf[kPlaneBaseR * size + idx] = pixel.x >= params.clips[0] ? 1 : 0;
-  mask_buf[kPlaneBaseG * size + idx] = pixel.y >= params.clips[1] ? 1 : 0;
-  mask_buf[kPlaneBaseB * size + idx] = pixel.z >= params.clips[2] ? 1 : 0;
-
-  if (pixel.x >= params.clips[0] || pixel.y >= params.clips[1] || pixel.z >= params.clips[2]) {
-    atomic_store_explicit(anyclipped, 1u, memory_order_relaxed);
-  }
-}
-
-kernel void hlr_dilate_mask(device const uchar* mask_buf [[buffer(0)]],
-                            device uchar*       dilated_mask_buf [[buffer(1)]],
-                            constant HighlightParams& params [[buffer(2)]],
-                            uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
-  }
-  const uint size = params.width * params.height;
-  const uint idx  = gid.y * params.width + gid.x;
-
-  dilated_mask_buf[kPlaneDilatedR * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseR * size, params.width, params.height,
-                   static_cast<int>(gid.y), static_cast<int>(gid.x), static_cast<int>(kDilateRadius));
-  dilated_mask_buf[kPlaneDilatedG * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseG * size, params.width, params.height,
-                   static_cast<int>(gid.y), static_cast<int>(gid.x), static_cast<int>(kDilateRadius));
-  dilated_mask_buf[kPlaneDilatedB * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseB * size, params.width, params.height,
-                   static_cast<int>(gid.y), static_cast<int>(gid.x), static_cast<int>(kDilateRadius));
-}
-
-kernel void hlr_chrominance_contrib(device const float4* input [[buffer(0)]],
-                                    device const uchar*  mask_buf [[buffer(1)]],
-                                    device float4*       contrib [[buffer(2)]],
-                                    device float4*       counts [[buffer(3)]],
-                                    constant HighlightParams& params [[buffer(4)]],
-                                    uint2 gid [[thread_position_in_grid]]) {
-  if (gid.x >= params.width || gid.y >= params.height) {
-    return;
-  }
-
-  const uint   size  = params.width * params.height;
-  const uint   index = gid.y * params.stride + gid.x;
-  const uint   idx   = gid.y * params.width + gid.x;
-  const float3 pixel = MaxRgb(input[index]);
-
-  const bool use_r = mask_buf[kPlaneDilatedR * size + idx] && pixel.x > params.clipdark[0] &&
-                     pixel.x < params.clips[0];
-  const bool use_g = mask_buf[kPlaneDilatedG * size + idx] && pixel.y > params.clipdark[1] &&
-                     pixel.y < params.clips[1];
-  const bool use_b = mask_buf[kPlaneDilatedB * size + idx] && pixel.z > params.clipdark[2] &&
-                     pixel.z < params.clips[2];
-
-  float4 contrib_value = float4(0.0f);
-  float4 count_value   = float4(0.0f);
-
-  // refavg costs nine reads; only pay for it inside the chrominance ring.
-  if (use_r || use_g || use_b) {
-    const float3 ref =
-        CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
-    if (use_r) {
-      contrib_value.x = pixel.x - ref.x;
-      count_value.x   = 1.0f;
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      tg_sum[0][lane] += tg_sum[0][lane + stride];
+      tg_sum[1][lane] += tg_sum[1][lane + stride];
+      tg_sum[2][lane] += tg_sum[2][lane + stride];
+      tg_cnt[0][lane] += tg_cnt[0][lane + stride];
+      tg_cnt[1][lane] += tg_cnt[1][lane + stride];
+      tg_cnt[2][lane] += tg_cnt[2][lane + stride];
     }
-    if (use_g) {
-      contrib_value.y = pixel.y - ref.y;
-      count_value.y   = 1.0f;
-    }
-    if (use_b) {
-      contrib_value.z = pixel.z - ref.z;
-      count_value.z   = 1.0f;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  if (lane == 0u) {
+    for (uint c = 0u; c < 3u; ++c) {
+      if (tg_cnt[c][0] > 0.0f || tg_sum[c][0] != 0.0f) {
+        atomic_fetch_add_explicit(stats + c, tg_sum[c][0], memory_order_relaxed);
+        atomic_fetch_add_explicit(stats + 3u + c, tg_cnt[c][0], memory_order_relaxed);
+      }
     }
   }
-
-  contrib[index] = contrib_value;
-  counts[index]  = count_value;
 }
 
-kernel void hlr_reconstruct(device const float4* input [[buffer(0)]],
-                            device float4*       output [[buffer(1)]],
-                            constant HighlightParams& params [[buffer(2)]],
-                            uint2 gid [[thread_position_in_grid]]) {
+kernel void hlr_reconstruct_tex(texture2d<float, access::read>  src [[texture(0)]],
+                                texture2d<float, access::write> dst [[texture(1)]],
+                                device const float*             stats [[buffer(0)]],
+                                constant HighlightParams&       params [[buffer(1)]],
+                                uint2                           gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height) {
     return;
   }
 
-  const uint  index = gid.y * params.stride + gid.x;
-  const float4 input_pixel = input[index];
+  const float4 input_pixel = src.read(gid);
   const float3 pixel       = MaxRgb(input_pixel);
   const float3 weight      = float3(SoftClipWeight(pixel.x, params.clips[0]),
                                     SoftClipWeight(pixel.y, params.clips[1]),
                                     SoftClipWeight(pixel.z, params.clips[2]));
 
-  float3 result = pixel;
-  // refavg costs nine reads; unclipped pixels keep their value and never touch it.
-  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
-    const float3 ref =
-        CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
-    result.x = ReconstructChannel(pixel.x, ref.x, params.chrominance[0], weight.x);
-    result.y = ReconstructChannel(pixel.y, ref.y, params.chrominance[1], weight.y);
-    result.z = ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z);
+  float3 chrominance = float3(0.0f);
+  for (uint c = 0u; c < 3u; ++c) {
+    const float cnt = stats[3u + c];
+    chrominance[c]  = (cnt > kMinChromaSamples) ? (stats[c] / cnt) : 0.0f;
   }
 
-  output[index] = float4(result, input_pixel.w);
+  float3 result = pixel;
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float3 ref =
+        CalcRefavgTex(src, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
+    result.x = ReconstructChannel(pixel.x, ref.x, chrominance.x, weight.x);
+    result.y = ReconstructChannel(pixel.y, ref.y, chrominance.y, weight.y);
+    result.z = ReconstructChannel(pixel.z, ref.z, chrominance.z, weight.z);
+  }
+
+  dst.write(float4(result, input_pixel.w), gid);
 }

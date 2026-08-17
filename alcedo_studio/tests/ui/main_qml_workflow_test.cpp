@@ -113,16 +113,21 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   auto* workspace_host = root->findChild<QObject*>(QStringLiteral("workspaceHost"));
   ASSERT_NE(workspace_host, nullptr);
   EXPECT_EQ(workspace_host->property("activeWorkspace").toString(), QStringLiteral("editor"));
+  EXPECT_TRUE(workspace_host->property("editorVisible").toBool());
+  EXPECT_FALSE(workspace_host->property("libraryVisible").toBool());
   EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
-  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+  EXPECT_NE(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
   EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorBackgroundTasksRailButton")), nullptr);
 
   host.workspace_router()->OpenLibrary();
   ProcessEvents(50);
   EXPECT_EQ(host.workspace_router()->workspace(), QStringLiteral("library"));
-  EXPECT_FALSE(host.editor_session()->active());
+  EXPECT_TRUE(host.editor_session()->active());
+  EXPECT_FALSE(host.editor_session()->has_image());
+  EXPECT_TRUE(workspace_host->property("libraryVisible").toBool());
+  EXPECT_FALSE(workspace_host->property("editorVisible").toBool());
   EXPECT_NE(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
-  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
+  EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(0))));
   ProcessEvents(100);

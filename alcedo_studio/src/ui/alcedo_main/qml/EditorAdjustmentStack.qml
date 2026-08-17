@@ -51,13 +51,52 @@ Item {
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
     readonly property int minimumPanelWidth: appTheme.editorSidePanelWidthMin
     readonly property int maximumPanelWidth: appTheme.editorSidePanelWidthMax
+    property bool expanded: true
 
-    implicitWidth: preferredPanelWidth
+    // Filmstrip-style fold: logical expanded flips immediately; layout width
+    // and opacity track stackExpandProgress so the viewport reflows with the
+    // panel. Layout min/max stay loose during the fold so they cannot snap
+    // the width to 0 or to the expanded floor mid-animation.
+    property real stackExpandProgress: 1
+    property bool foldManualDrive: false
+    property bool _motionArmed: false
+    property int _foldDuration: appTheme.motionFoldOpenMs
+    readonly property real stackWidth: preferredPanelWidth * stackExpandProgress
+    readonly property bool foldAtRestExpanded: expanded && stackExpandProgress >= 0.999
+
+    implicitWidth: stackWidth
     implicitHeight: 400
-    Layout.preferredWidth: preferredPanelWidth
-    Layout.minimumWidth: minimumPanelWidth
-    Layout.maximumWidth: maximumPanelWidth
+    Layout.preferredWidth: stackWidth
+    Layout.minimumWidth: foldAtRestExpanded ? minimumPanelWidth : 0
+    Layout.maximumWidth: foldAtRestExpanded ? maximumPanelWidth : preferredPanelWidth
     Layout.fillHeight: true
+    opacity: stackExpandProgress
+    enabled: expanded
+    clip: true
+
+    function driveFoldProgress(value) {
+        foldManualDrive = true
+        stackExpandProgress = Math.max(0, Math.min(1, value))
+    }
+
+    function endFoldDrive() {
+        foldManualDrive = false
+        stackExpandProgress = expanded ? 1 : 0
+    }
+
+    onExpandedChanged: {
+        _foldDuration = expanded ? appTheme.motionFoldOpenMs : appTheme.motionFoldCloseMs
+        if (!foldManualDrive)
+            stackExpandProgress = expanded ? 1 : 0
+    }
+
+    Behavior on stackExpandProgress {
+        enabled: root._motionArmed && !root.foldManualDrive
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : root._foldDuration
+            easing.type: appTheme.motionEasing
+        }
+    }
 
     // Counts successful fan-outs for tests/diagnostics. Content equality is
     // gated by the controller: AdjustmentSnapshotChanged only fires when the
@@ -151,7 +190,9 @@ Item {
     Rectangle {
         id: panelShell
         objectName: "editorRightPanelSlot"
-        anchors.fill: parent
+        width: root.preferredPanelWidth
+        height: parent.height
+        anchors.right: parent.right
         radius: root.panelRadius
         // Always the shared card surface — matches left rail, viewport, filmstrip.
         // Disabled is expressed through control enablement and muted copy, not a
@@ -296,6 +337,8 @@ Item {
     // createWithInitialProperties / first frame: session may already be set
     // without a change signal.
     Component.onCompleted: {
+        stackExpandProgress = expanded ? 1 : 0
+        _motionArmed = true
         root.lastAppliedRevision = -1
         root.scheduleLoadFromSession()
     }

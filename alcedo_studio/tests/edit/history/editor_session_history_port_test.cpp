@@ -19,6 +19,7 @@
 #include <thread>
 
 #include "json.hpp"
+#include "app/adjustment_transfer_service.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
@@ -86,6 +87,82 @@ auto MakeExposureTransferPackage(double exposure) -> alcedo::AdjustmentTransferP
       alcedo::PipelineStageName::Basic_Adjustment, alcedo::OperatorType::EXPOSURE, true, false,
       nlohmann::json{{"exposure", exposure}}});
   return package;
+}
+
+auto MakeLutTransferPackage(std::string lut_path) -> alcedo::AdjustmentTransferPackage {
+  alcedo::AdjustmentTransferPackage package;
+  package.operators_.push_back(alcedo::AdjustmentTransferEntry{
+      alcedo::PipelineStageName::Color_Adjustment, alcedo::OperatorType::LMT, true, false,
+      nlohmann::json{{"ocio_lmt", std::move(lut_path)}}});
+  return package;
+}
+
+auto LiveLutPath(const std::shared_ptr<alcedo::PipelineGuard>& guard) -> std::string {
+  if (!guard || !guard->pipeline_) {
+    return {};
+  }
+  const auto entry =
+      guard->pipeline_->GetStage(alcedo::PipelineStageName::Color_Adjustment)
+          .GetOperator(alcedo::OperatorType::LMT);
+  if (!entry.has_value() || entry.value() == nullptr || !entry.value()->op_) {
+    return {};
+  }
+  const auto params = entry.value()->op_->GetParams();
+  if (!params.contains("ocio_lmt") || !params["ocio_lmt"].is_string()) {
+    return {};
+  }
+  return params["ocio_lmt"].get<std::string>();
+}
+
+auto LutPathFromSnapshot(const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> std::string {
+  const auto serialized = PatchValue(snapshot, "lut");
+  if (serialized.empty()) {
+    return {};
+  }
+  try {
+    const auto params = nlohmann::json::parse(serialized);
+    if (params.contains("ocio_lmt") && params["ocio_lmt"].is_string()) {
+      return params["ocio_lmt"].get<std::string>();
+    }
+  } catch (const nlohmann::json::exception&) {
+  }
+  return {};
+}
+
+/// Mirrors AdjustmentTransferController::PasteViaMiniGit: root-relative Version,
+/// rebuild live pipeline, persist graph, optionally request checkpoint writeback.
+auto LibraryPasteThenRelease(alcedo::PipelineMgmtService& pipeline_service,
+                             sl_element_id_t element_id,
+                             const alcedo::AdjustmentTransferPackage& package,
+                             bool writeback_after_persist, std::string* error) -> bool {
+  auto guard = pipeline_service.LoadEditorPipeline(element_id);
+  if (!guard || !guard->commit_graph_ || !guard->pipeline_) {
+    if (error) *error = "Library paste requires a loaded editor pipeline";
+    return false;
+  }
+  const auto expected = guard->commit_graph_->GetImageEditState();
+  const auto pasted   = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
+      *guard->commit_graph_, pipeline_service, element_id, package, "Pasted Adjustments");
+  if (!pasted.pasted) {
+    if (error) *error = pasted.error.empty() ? "Library paste failed" : pasted.error;
+    pipeline_service.SavePipeline(guard);
+    return false;
+  }
+  if (!pipeline_service.RebuildActiveEditorPipeline(guard, error)) {
+    pipeline_service.SavePipeline(guard);
+    return false;
+  }
+  guard->serialized_state_needs_writeback_ = true;
+  if (!pipeline_service.PersistEditorHistoryState(guard, expected, error)) {
+    pipeline_service.SavePipeline(guard);
+    return false;
+  }
+  if (writeback_after_persist) {
+    guard->serialized_state_needs_writeback_ = true;
+  }
+  guard->dirty_ = false;
+  pipeline_service.SavePipeline(guard);
+  return true;
 }
 
 class EditorSessionHistoryPortTest : public ::testing::Test {
@@ -1669,6 +1746,144 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_FALSE(preview.has_conflicts)
       << "portable-only fields match; image-local meta on target must not conflict";
   EXPECT_TRUE(preview.conflicts.empty());
+}
+
+TEST(EditorSessionHistoryPortPersistTest,
+     LibraryPasteOfLutRestoresLutFieldInAdjustmentSnapshotOnEditorReopen) {
+  alcedo::TimeProvider::Refresh();
+  RegisterAllOperators();
+
+  const auto stamp =
+      std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  const auto db_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_snapshot_" + stamp + ".db");
+  const auto meta_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_snapshot_" + stamp + ".json");
+  const auto journal_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_snapshot_" + stamp + ".wal");
+  std::error_code ec;
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+
+  constexpr sl_element_id_t element_id = 831;
+  const std::string         lut_path   = "D:/luts/teal_orange.cube";
+
+  alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
+  {
+    alcedo::PipelineMgmtService pipeline_service(project.GetStorage());
+    std::string                 error;
+    ASSERT_TRUE(LibraryPasteThenRelease(pipeline_service, element_id, MakeLutTransferPackage(lut_path),
+                                        true, &error))
+        << error;
+  }
+
+  {
+    // New service instance forces LoadEditorPipeline to read persisted state
+    // instead of the first service's cache.
+    auto pipeline_service = std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
+    auto guard            = pipeline_service->LoadEditorPipeline(element_id);
+    ASSERT_NE(guard, nullptr);
+    ASSERT_NE(guard->pipeline_, nullptr);
+    EXPECT_EQ(LiveLutPath(guard), lut_path);
+
+    auto pipeline = std::make_shared<EditorSessionPipelinePort>();
+    pipeline->SetServices(EditorSessionPipelineMappers{
+        [pipeline_service]() { return pipeline_service; },
+        [guard](sl_element_id_t) { return guard; }});
+
+    EditorSessionHistoryPort history;
+    history.SetServices(EditorSessionHistoryPort::Services{
+        [journal_path](sl_element_id_t) { return journal_path; }});
+    history.SetPipelinePort(pipeline);
+
+    std::string error;
+    const auto  handle = history.Acquire(element_id, &error);
+    ASSERT_TRUE(handle.valid) << error;
+
+    alcedo::EditorRenderAdjustmentSnapshot snapshot;
+    ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &snapshot, &error)) << error;
+    EXPECT_EQ(LutPathFromSnapshot(snapshot), lut_path)
+        << "editor reopen after library Paste must publish the pasted LUT path so LUTPanel "
+           "can highlight the catalog row instead of None";
+
+    history.Release(handle);
+    pipeline_service->SavePipeline(guard);
+  }
+
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+}
+
+TEST(EditorSessionHistoryPortPersistTest,
+     LibraryPasteWithoutSerializedCheckpointStillRestoresLutSnapshotFromLivePipeline) {
+  alcedo::TimeProvider::Refresh();
+  RegisterAllOperators();
+
+  const auto stamp =
+      std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  const auto db_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_live_" + stamp + ".db");
+  const auto meta_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_live_" + stamp + ".json");
+  const auto journal_path =
+      std::filesystem::temp_directory_path() / ("library_paste_lut_live_" + stamp + ".wal");
+  std::error_code ec;
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+
+  constexpr sl_element_id_t element_id = 832;
+  const std::string         lut_path   = "D:/luts/film_print.cube";
+
+  alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
+  {
+    alcedo::PipelineMgmtService pipeline_service(project.GetStorage());
+    std::string                 error;
+    // Old library-paste path: Persist clears the checkpoint and leaves writeback
+    // false, so SavePipeline does not store pipeline_params.
+    ASSERT_TRUE(LibraryPasteThenRelease(pipeline_service, element_id, MakeLutTransferPackage(lut_path),
+                                        false, &error))
+        << error;
+  }
+
+  {
+    auto pipeline_service = std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
+    auto guard            = pipeline_service->LoadEditorPipeline(element_id);
+    ASSERT_NE(guard, nullptr);
+    ASSERT_NE(guard->pipeline_, nullptr);
+    EXPECT_EQ(LiveLutPath(guard), lut_path);
+    EXPECT_TRUE(guard->serialized_state_needs_writeback_)
+        << "missing checkpoint must rebuild from history and mark writeback";
+
+    auto pipeline = std::make_shared<EditorSessionPipelinePort>();
+    pipeline->SetServices(EditorSessionPipelineMappers{
+        [pipeline_service]() { return pipeline_service; },
+        [guard](sl_element_id_t) { return guard; }});
+
+    EditorSessionHistoryPort history;
+    history.SetServices(EditorSessionHistoryPort::Services{
+        [journal_path](sl_element_id_t) { return journal_path; }});
+    history.SetPipelinePort(pipeline);
+
+    std::string error;
+    const auto  handle = history.Acquire(element_id, &error);
+    ASSERT_TRUE(handle.valid) << error;
+
+    alcedo::EditorRenderAdjustmentSnapshot snapshot;
+    ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &snapshot, &error)) << error;
+    EXPECT_EQ(LutPathFromSnapshot(snapshot), lut_path)
+        << "when the serialized checkpoint is missing, the editor snapshot must still "
+           "come from the rebuilt live pipeline so LUTPanel does not highlight None";
+
+    history.Release(handle);
+    pipeline_service->SavePipeline(guard);
+  }
+
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
 }
 
 }  // namespace

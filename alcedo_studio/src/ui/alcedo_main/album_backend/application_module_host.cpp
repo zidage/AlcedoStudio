@@ -294,11 +294,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     if (editor_session) {
       editor_session->clearLastEditedImage();
     }
-    if (workspace_router) {
-      // OpenLibrary finalizes an active EditorSessionController session.
-      workspace_router->OpenLibrary();
-    } else if (editor_session && editor_session->active()) {
+    if (editor_session && editor_session->active()) {
       editor_session->Finalize(true);
+    }
+    if (workspace_router) {
+      workspace_router->OpenLibrary();
     }
   };
   lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
@@ -416,10 +416,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (library_) {
       library_->thumbs().ReleaseVisibleThumbnailPins();
     }
+    if (editor_session_ && editor_session_->active()) {
+      editor_session_->Finalize(true);
+    }
     if (workspace_router_) {
       workspace_router_->OpenLibrary();
-    } else if (editor_session_ && editor_session_->active()) {
-      editor_session_->Finalize(true);
     }
     if (editor_session_) {
       editor_session_->Shutdown();

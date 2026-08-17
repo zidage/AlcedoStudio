@@ -128,6 +128,13 @@ class FilmstripModel final : public QAbstractListModel {
     return -1;
   }
 
+  void resetRows(std::vector<FilmstripRow> rows) {
+    beginResetModel();
+    rows_ = std::move(rows);
+    endResetModel();
+    emit countChanged();
+  }
+
  signals:
   void countChanged();
   void loadingChanged();
@@ -144,6 +151,8 @@ class FilmstripLibrary final : public QObject {
   explicit FilmstripLibrary(QObject* parent = nullptr) : QObject(parent) {}
 
   [[nodiscard]] FilmstripModel* thumbnailModel() { return &model_; }
+
+  void resetRows(std::vector<FilmstripRow> rows) { model_.resetRows(std::move(rows)); }
 
   Q_INVOKABLE void SetThumbnailVisible(int element_id, int image_id, bool visible, int max_edge) {
     Q_UNUSED(image_id);
@@ -502,6 +511,32 @@ TEST(EditorFilmstripQmlTest, SharedModelRoutesKeyboardSelectionAndUpdatesCurrent
   EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("film_1.arw"));
 }
 
+TEST(EditorFilmstripQmlTest, ModelResetRebindsToNewFilteredRows) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+
+  harness.library_.resetRows(
+      {{5001, 6001, QStringLiteral("album_only.arw"), 0},
+       {5002, 6002, QStringLiteral("album_two.arw"), 0}});
+  ProcessEvents();
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 2, 2000);
+  EXPECT_EQ(filmstrip->property("totalCount").toInt(), 2);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), -1);
+
+  harness.session_.setElementId(5002);
+  harness.session_.setImageId(6002);
+  ProcessEvents();
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
+  EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("album_two.arw"));
+}
+
 TEST(EditorFilmstripQmlTest, FileNameSitsBelowThumbnailWithMonochromeSelectedTile) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
@@ -547,8 +582,8 @@ TEST(EditorFilmstripQmlTest, FileNameSitsBelowThumbnailWithMonochromeSelectedTil
             AppTheme::Instance().editorListSelectedFillColor());
   EXPECT_GT(label->y(), frame->y());
   EXPECT_GT(label->height(), 0.0);
-  EXPECT_EQ(surfaces.front()->property("color").value<QColor>(),
-            AppTheme::Instance().editorListSelectedFillColor());
+  QTRY_COMPARE_WITH_TIMEOUT(surfaces.front()->property("color").value<QColor>(),
+                            AppTheme::Instance().editorListSelectedFillColor(), 2000);
 }
 
 TEST(EditorFilmstripQmlTest, CollapseKeepsThumbnailPinsAndRestoresHorizontalScroll) {

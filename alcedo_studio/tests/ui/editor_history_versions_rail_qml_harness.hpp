@@ -642,7 +642,7 @@ class RailQmlFixture : public ::testing::Test {
   void OpenHistoryPage() { Click(window_, Find(QStringLiteral("editorHistoryRailButton"))); }
 
   RecordingEditorSessionBackend backend_;
-  EditorSessionController       controller_{nullptr, &backend_};
+  EditorSessionController       controller_{&backend_};
   RecordingInteractionPolicy    policy_;
   RecordingAdjustmentTransfer   transfer_;
   QQmlApplicationEngine         engine_;

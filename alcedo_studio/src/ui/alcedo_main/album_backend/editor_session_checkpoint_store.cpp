@@ -120,4 +120,19 @@ auto EditorSessionCheckpointStore::RecoverAndMaterialize(sl_element_id_t element
   return {result.accepted, result.materialized, result.materialized ? 1u : 0u, result.error};
 }
 
+auto EditorSessionCheckpointStore::RecoverAndMaterializeAsync(
+    sl_element_id_t element_id, std::uint64_t session_generation,
+    alcedo::EditorMaterializeCallback callback) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (shutting_down_) return false;
+  workers_.emplace_back([this, element_id, session_generation,
+                         callback = std::move(callback)]() mutable {
+    std::string error;
+    auto        outcome = RecoverAndMaterialize(element_id, session_generation, &error);
+    if (outcome.error.empty()) outcome.error = std::move(error);
+    if (callback) callback(std::move(outcome));
+  });
+  return true;
+}
+
 }  // namespace alcedo::ui

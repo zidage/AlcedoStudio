@@ -173,7 +173,7 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(AcceleratorBackend PUBLIC HAVE_OPENCL)
     target_link_libraries(AcceleratorBackend PRIVATE OpenClProgramLibrary)
 endif()
-target_link_libraries(Operators PRIVATE AcceleratorBackend)
+target_link_libraries(Operators PRIVATE AcceleratorBackend OpenMP::OpenMP_CXX)
 
 # --- Edit Pipeline ---
 set(PIPELINE_SRCS

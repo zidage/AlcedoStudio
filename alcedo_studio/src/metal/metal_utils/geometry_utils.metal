@@ -13,8 +13,6 @@ struct ResizeParams {
   uint  crop_height;
   uint  dst_width;
   uint  dst_height;
-  uint  src_stride;
-  uint  dst_stride;
   float scale_x;
   float scale_y;
 };
@@ -72,56 +70,6 @@ struct PixelOps<float4> {
 };
 
 template <typename PixelT>
-static inline auto ZeroPixel() -> PixelT {
-  return PixelT(0.0f);
-}
-
-template <typename PixelT>
-static inline auto ReadWithinCrop(device const PixelT* src, constant ResizeParams& params, int x,
-                                  int y) -> PixelT {
-  const int crop_x0 = static_cast<int>(params.origin_x);
-  const int crop_y0 = static_cast<int>(params.origin_y);
-  const int crop_x1 = static_cast<int>(params.origin_x + params.crop_width);
-  const int crop_y1 = static_cast<int>(params.origin_y + params.crop_height);
-  if (x < crop_x0 || y < crop_y0 || x >= crop_x1 || y >= crop_y1) {
-    return ZeroPixel<PixelT>();
-  }
-  return src[static_cast<uint>(y) * params.src_stride + static_cast<uint>(x)];
-}
-
-template <typename PixelT>
-static inline auto BilinearSampleWithinCrop(device const PixelT* src, constant ResizeParams& params,
-                                            float sx, float sy) -> PixelT {
-  using Ops = PixelOps<PixelT>;
-  using Acc = typename Ops::Acc;
-
-  const int x0 = static_cast<int>(floor(sx));
-  const int y0 = static_cast<int>(floor(sy));
-  const int x1 = x0 + 1;
-  const int y1 = y0 + 1;
-
-  const float fx = sx - static_cast<float>(x0);
-  const float fy = sy - static_cast<float>(y0);
-
-  const float w00 = (1.0f - fx) * (1.0f - fy);
-  const float w10 = fx * (1.0f - fy);
-  const float w01 = (1.0f - fx) * fy;
-  const float w11 = fx * fy;
-
-  const PixelT p00 = ReadWithinCrop(src, params, x0, y0);
-  const PixelT p10 = ReadWithinCrop(src, params, x1, y0);
-  const PixelT p01 = ReadWithinCrop(src, params, x0, y1);
-  const PixelT p11 = ReadWithinCrop(src, params, x1, y1);
-
-  Acc acc = Ops::Zero();
-  acc     = Ops::AddMul(acc, p00, w00);
-  acc     = Ops::AddMul(acc, p10, w10);
-  acc     = Ops::AddMul(acc, p01, w01);
-  acc     = Ops::AddMul(acc, p11, w11);
-  return Ops::Div(acc, 1.0f);
-}
-
-template <typename PixelT>
 static inline auto BorderValue(constant AffineParams& params) -> PixelT;
 
 template <>
@@ -174,88 +122,6 @@ static inline auto BilinearSampleAffine(device const PixelT* src, constant Affin
   acc     = Ops::AddMul(acc, p01, w01);
   acc     = Ops::AddMul(acc, p11, w11);
   return Ops::Div(acc, 1.0f);
-}
-
-template <typename PixelT>
-static inline void CropResizeLinear(device const PixelT* src, device PixelT* dst,
-                                    constant ResizeParams& params, uint2 gid) {
-  if (gid.x >= params.dst_width || gid.y >= params.dst_height) {
-    return;
-  }
-
-  const float sx = static_cast<float>(params.origin_x) +
-                   (static_cast<float>(gid.x) + 0.5f) * params.scale_x - 0.5f;
-  const float sy = static_cast<float>(params.origin_y) +
-                   (static_cast<float>(gid.y) + 0.5f) * params.scale_y - 0.5f;
-  dst[gid.y * params.dst_stride + gid.x] = BilinearSampleWithinCrop(src, params, sx, sy);
-}
-
-template <typename PixelT>
-static inline void CropResizeArea(device const PixelT* src, device PixelT* dst,
-                                  constant ResizeParams& params, uint2 gid) {
-  using Ops = PixelOps<PixelT>;
-  using Acc = typename Ops::Acc;
-
-  if (gid.x >= params.dst_width || gid.y >= params.dst_height) {
-    return;
-  }
-
-  constexpr float kEps = 1e-8f;
-
-  const float sx0 =
-      static_cast<float>(params.origin_x) + static_cast<float>(gid.x) * params.scale_x;
-  const float sx1 =
-      static_cast<float>(params.origin_x) + static_cast<float>(gid.x + 1u) * params.scale_x;
-  const float sy0 =
-      static_cast<float>(params.origin_y) + static_cast<float>(gid.y) * params.scale_y;
-  const float sy1 =
-      static_cast<float>(params.origin_y) + static_cast<float>(gid.y + 1u) * params.scale_y;
-
-  const int crop_x0 = static_cast<int>(params.origin_x);
-  const int crop_y0 = static_cast<int>(params.origin_y);
-  const int crop_x1 = static_cast<int>(params.origin_x + params.crop_width);
-  const int crop_y1 = static_cast<int>(params.origin_y + params.crop_height);
-
-  const int ix0 = max(crop_x0, static_cast<int>(floor(sx0)));
-  const int ix1 = min(crop_x1, static_cast<int>(ceil(sx1)));
-  const int iy0 = max(crop_y0, static_cast<int>(floor(sy0)));
-  const int iy1 = min(crop_y1, static_cast<int>(ceil(sy1)));
-
-  Acc   acc   = Ops::Zero();
-  float total = 0.0f;
-
-  for (int yy = iy0; yy < iy1; ++yy) {
-    const float yy0 = max(sy0, static_cast<float>(yy));
-    const float yy1 = min(sy1, static_cast<float>(yy + 1));
-    const float wy  = max(0.0f, yy1 - yy0);
-    if (wy <= 0.0f) {
-      continue;
-    }
-
-    for (int xx = ix0; xx < ix1; ++xx) {
-      const float xx0 = max(sx0, static_cast<float>(xx));
-      const float xx1 = min(sx1, static_cast<float>(xx + 1));
-      const float wx  = max(0.0f, xx1 - xx0);
-      const float w   = wx * wy;
-      if (w <= 0.0f) {
-        continue;
-      }
-
-      acc =
-          Ops::AddMul(acc, src[static_cast<uint>(yy) * params.src_stride + static_cast<uint>(xx)], w);
-      total += w;
-    }
-  }
-
-  const uint dst_index = gid.y * params.dst_stride + gid.x;
-  if (total <= kEps) {
-    const int sx = clamp(static_cast<int>(sx0), crop_x0, crop_x1 - 1);
-    const int sy = clamp(static_cast<int>(sy0), crop_y0, crop_y1 - 1);
-    dst[dst_index] = src[static_cast<uint>(sy) * params.src_stride + static_cast<uint>(sx)];
-    return;
-  }
-
-  dst[dst_index] = Ops::Div(acc, total);
 }
 
 template <typename PixelT>
@@ -334,32 +200,124 @@ static inline auto WarpRectilinearSourceCoord(uint x, uint y, uint plane,
   return float2(cx + m * (dxr + dxt), cy + m * (dyr + dyt));
 }
 
-kernel void crop_resize_linear_r32f(device const float* src [[buffer(0)]],
-                                    device float*       dst [[buffer(1)]],
-                                    constant ResizeParams& params [[buffer(2)]],
+static inline auto ReadTextureWithinCrop(texture2d<float, access::read> src,
+                                         constant ResizeParams& params, int x, int y) -> float4 {
+  const int crop_x0 = static_cast<int>(params.origin_x);
+  const int crop_y0 = static_cast<int>(params.origin_y);
+  const int crop_x1 = static_cast<int>(params.origin_x + params.crop_width);
+  const int crop_y1 = static_cast<int>(params.origin_y + params.crop_height);
+  if (x < crop_x0 || y < crop_y0 || x >= crop_x1 || y >= crop_y1) {
+    return float4(0.0f);
+  }
+  return src.read(uint2(static_cast<uint>(x), static_cast<uint>(y)));
+}
+
+static inline auto BilinearSampleTexture(texture2d<float, access::read> src,
+                                         constant ResizeParams& params, float sx,
+                                         float sy) -> float4 {
+  const int   x0  = static_cast<int>(floor(sx));
+  const int   y0  = static_cast<int>(floor(sy));
+  const int   x1  = x0 + 1;
+  const int   y1  = y0 + 1;
+  const float fx  = sx - static_cast<float>(x0);
+  const float fy  = sy - static_cast<float>(y0);
+  const float w00 = (1.0f - fx) * (1.0f - fy);
+  const float w10 = fx * (1.0f - fy);
+  const float w01 = (1.0f - fx) * fy;
+  const float w11 = fx * fy;
+  return ReadTextureWithinCrop(src, params, x0, y0) * w00 +
+         ReadTextureWithinCrop(src, params, x1, y0) * w10 +
+         ReadTextureWithinCrop(src, params, x0, y1) * w01 +
+         ReadTextureWithinCrop(src, params, x1, y1) * w11;
+}
+
+static inline void CropResizeLinearTexture(texture2d<float, access::read> src,
+                                           texture2d<float, access::write> dst,
+                                           constant ResizeParams& params, uint2 gid) {
+  if (gid.x >= params.dst_width || gid.y >= params.dst_height) {
+    return;
+  }
+  const float sx = static_cast<float>(params.origin_x) +
+                   (static_cast<float>(gid.x) + 0.5f) * params.scale_x - 0.5f;
+  const float sy = static_cast<float>(params.origin_y) +
+                   (static_cast<float>(gid.y) + 0.5f) * params.scale_y - 0.5f;
+  dst.write(BilinearSampleTexture(src, params, sx, sy), gid);
+}
+
+static inline void CropResizeAreaTexture(texture2d<float, access::read> src,
+                                         texture2d<float, access::write> dst,
+                                         constant ResizeParams& params, uint2 gid) {
+  if (gid.x >= params.dst_width || gid.y >= params.dst_height) {
+    return;
+  }
+
+  const float sx0 =
+      static_cast<float>(params.origin_x) + static_cast<float>(gid.x) * params.scale_x;
+  const float sx1 =
+      static_cast<float>(params.origin_x) + static_cast<float>(gid.x + 1u) * params.scale_x;
+  const float sy0 =
+      static_cast<float>(params.origin_y) + static_cast<float>(gid.y) * params.scale_y;
+  const float sy1 =
+      static_cast<float>(params.origin_y) + static_cast<float>(gid.y + 1u) * params.scale_y;
+
+  const int crop_x0 = static_cast<int>(params.origin_x);
+  const int crop_y0 = static_cast<int>(params.origin_y);
+  const int crop_x1 = static_cast<int>(params.origin_x + params.crop_width);
+  const int crop_y1 = static_cast<int>(params.origin_y + params.crop_height);
+  const int ix0     = max(crop_x0, static_cast<int>(floor(sx0)));
+  const int ix1     = min(crop_x1, static_cast<int>(ceil(sx1)));
+  const int iy0     = max(crop_y0, static_cast<int>(floor(sy0)));
+  const int iy1     = min(crop_y1, static_cast<int>(ceil(sy1)));
+
+  float4 acc   = float4(0.0f);
+  float  total = 0.0f;
+  for (int yy = iy0; yy < iy1; ++yy) {
+    const float wy = max(0.0f, min(sy1, static_cast<float>(yy + 1)) -
+                                   max(sy0, static_cast<float>(yy)));
+    for (int xx = ix0; xx < ix1; ++xx) {
+      const float wx = max(0.0f, min(sx1, static_cast<float>(xx + 1)) -
+                                     max(sx0, static_cast<float>(xx)));
+      const float weight = wx * wy;
+      acc += src.read(uint2(static_cast<uint>(xx), static_cast<uint>(yy))) * weight;
+      total += weight;
+    }
+  }
+
+  if (total <= 1e-8f) {
+    const int sx = clamp(static_cast<int>(sx0), crop_x0, crop_x1 - 1);
+    const int sy = clamp(static_cast<int>(sy0), crop_y0, crop_y1 - 1);
+    dst.write(src.read(uint2(static_cast<uint>(sx), static_cast<uint>(sy))), gid);
+    return;
+  }
+  dst.write(acc / total, gid);
+}
+
+kernel void crop_resize_linear_r32f(texture2d<float, access::read> src [[texture(0)]],
+                                    texture2d<float, access::write> dst [[texture(1)]],
+                                    constant ResizeParams& params [[buffer(0)]],
                                     uint2 gid [[thread_position_in_grid]]) {
-  CropResizeLinear<float>(src, dst, params, gid);
+  CropResizeLinearTexture(src, dst, params, gid);
 }
 
-kernel void crop_resize_linear_rgba32f(device const float4* src [[buffer(0)]],
-                                       device float4*       dst [[buffer(1)]],
-                                       constant ResizeParams& params [[buffer(2)]],
+kernel void crop_resize_linear_rgba32f(texture2d<float, access::read> src [[texture(0)]],
+                                       texture2d<float, access::write> dst [[texture(1)]],
+                                       constant ResizeParams& params [[buffer(0)]],
                                        uint2 gid [[thread_position_in_grid]]) {
-  CropResizeLinear<float4>(src, dst, params, gid);
+  CropResizeLinearTexture(src, dst, params, gid);
 }
 
-kernel void crop_resize_area_r32f(device const float* src [[buffer(0)]],
-                                  device float*       dst [[buffer(1)]],
-                                  constant ResizeParams& params [[buffer(2)]],
+kernel void crop_resize_area_r32f(texture2d<float, access::read> src [[texture(0)]],
+                                  texture2d<float, access::write> dst [[texture(1)]],
+                                  constant ResizeParams& params [[buffer(0)]],
                                   uint2 gid [[thread_position_in_grid]]) {
-  CropResizeArea<float>(src, dst, params, gid);
+  CropResizeAreaTexture(src, dst, params, gid);
 }
 
-kernel void crop_resize_area_rgba32f(device const float4* src [[buffer(0)]],
-                                     device float4*       dst [[buffer(1)]],
-                                     constant ResizeParams& params [[buffer(2)]],
+kernel void crop_resize_area_rgba32f(texture2d<float, access::read> src [[texture(0)]],
+                                     texture2d<float, access::write> dst [[texture(1)]],
+                                     constant ResizeParams& params [[buffer(0)]],
                                      uint2 gid [[thread_position_in_grid]]) {
-  CropResizeArea<float4>(src, dst, params, gid);
+  CropResizeAreaTexture(src, dst, params, gid);
 }
 
 kernel void warp_affine_linear_r32f(device const float* src [[buffer(0)]],

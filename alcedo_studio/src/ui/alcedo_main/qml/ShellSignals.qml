@@ -6,7 +6,7 @@ import QtQml
 // thumbnail refresh, and import/export session transitions. The import/export
 // session bookkeeping (importSessionObserved / exportSessionObserved /
 // lastObservedExportCompleted) lives here. `host` is Main; the controllers,
-// state objects, dialogs, and window animations are passed in as properties.
+// state objects, and dialogs are passed in as properties.
 Item {
     id: root
     property var host: null
@@ -14,7 +14,6 @@ Item {
     property var selectionState: null
     property var exportQueueState: null
     property var deleteConfirmDialog: null
-    property var windowAnimations: null
 
     property bool importSessionObserved: false
     property bool exportSessionObserved: false
@@ -67,12 +66,6 @@ Item {
             if (root.host) {
                 root.host.showSnackbar(appModules.project.serviceMessage)
             }
-
-            // Auto-maximize when a project is successfully opened.
-            if (appModules.project.serviceReady && root.host && !root.host.windowMaximized
-                    && root.windowAnimations && !root.windowAnimations.maximizeRunning) {
-                root.windowAnimations.maximize()
-            }
         }
         function onServiceStateChanged() {
             if (root.host) {
@@ -102,10 +95,41 @@ Item {
             if (root.host) {
                 root.host.pendingDeleteTargets = []
                 root.host.pendingRatingTarget = ({})
-                root.host.setFocusedImage(null)
             }
             if (root.deleteConfirmDialog) {
                 root.deleteConfirmDialog.close()
+            }
+            const inEditor = appModules.workspaceRouter
+                             && String(appModules.workspaceRouter.workspace || "") === "editor"
+            if (inEditor && root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
+                return
+            }
+            if (root.host) {
+                root.host.setFocusedImage(null)
+            }
+        }
+    }
+
+    Connections {
+        target: appModules.stats
+        ignoreUnknownSignals: true
+        function onStatsFilterChanged() {
+            if (root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
+            }
+        }
+    }
+
+    Connections {
+        target: appModules.search
+        ignoreUnknownSignals: true
+        function onSearchStateChanged() {
+            if (root.imageActionsController
+                    && root.imageActionsController.requestEditorLibraryListSync) {
+                root.imageActionsController.requestEditorLibraryListSync()
             }
         }
     }

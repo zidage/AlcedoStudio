@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 
+from release_git import validate_commit
 from release_notes import ReleaseNotesError, validate_release_notes
 
 
@@ -44,17 +45,28 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def package_prefix(channel: str, build: int, platform: str, public_base: str) -> str:
+    return f"{public_base.rstrip('/')}/updates/v1/{channel}/builds/{build}/{platform}/"
+
+
+def verify_local_file(path: Path, sha256: str, size: int, label: str) -> None:
+    if not path.is_file() or path.stat().st_size != size or digest(path) != sha256:
+        raise RuntimeError(f"{label} does not match its signed metadata")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--signature", required=True, type=Path)
     parser.add_argument("--public-key-base64", required=True)
     parser.add_argument("--artifacts", required=True, type=Path)
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--tag", default="", help="Ignored. Package URLs no longer use a git tag.")
     parser.add_argument("--channel", choices=("stable", "beta"), default="stable")
+    parser.add_argument("--public-base", default="https://static.aoraw.org")
     parser.add_argument(
         "--beta-base-url",
-        default="https://static.aoraw.org/updates/v1/beta/builds",
+        default="",
+        help="Ignored. Package URLs always live under /updates/v1/<channel>/builds/.",
     )
     parser.add_argument(
         "--platform",
@@ -90,6 +102,10 @@ def main() -> int:
         raise RuntimeError("the manifest schema or sequence is not valid")
     if not isinstance(manifest.get("version"), str) or not isinstance(manifest.get("build"), int):
         raise RuntimeError("the manifest version or build is not valid")
+    try:
+        validate_commit(str(manifest.get("commit", "")))
+    except SystemExit as error:
+        raise RuntimeError(str(error)) from error
     changelogs = manifest.get("changelogs")
     if not isinstance(changelogs, dict) or set(changelogs) != {"en", "zh-CN"}:
         raise RuntimeError("the manifest does not contain both en and zh-CN release notes")
@@ -114,16 +130,19 @@ def main() -> int:
         raise RuntimeError("the manifest does not contain the required platform artifacts")
     for platform in sorted(expected_keys):
         item = manifest["artifacts"][platform]
-        prefix = (
-            f"{args.beta_base_url.rstrip('/')}/{manifest['build']}/{platform}/"
-            if args.channel == "beta"
-            else f"https://static.aoraw.org/releases/{args.tag}/"
-        )
+        prefix = package_prefix(args.channel, manifest["build"], platform, args.public_base)
         if not item["url"].startswith(prefix):
             raise RuntimeError(f"{platform} does not use the immutable {args.channel} URL")
         path = args.artifacts / item["url"].removeprefix(prefix)
-        if not path.is_file() or path.stat().st_size != item["size"] or digest(path) != item["sha256"]:
-            raise RuntimeError(f"{platform} does not match its signed metadata")
+        verify_local_file(path, item["sha256"], item["size"], platform)
+        manual_url = item.get("manualUrl")
+        if manual_url:
+            if not isinstance(manual_url, str) or not manual_url.startswith(prefix):
+                raise RuntimeError(f"{platform} manual download does not use the immutable URL")
+            if not isinstance(item.get("manualSha256"), str) or not isinstance(item.get("manualSize"), int):
+                raise RuntimeError(f"{platform} manual download is missing signed metadata")
+            manual_path = args.artifacts / manual_url.removeprefix(prefix)
+            verify_local_file(manual_path, item["manualSha256"], item["manualSize"], f"{platform} manual")
     print("Signed update manifest and package metadata are valid.")
     return 0
 

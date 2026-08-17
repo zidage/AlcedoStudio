@@ -41,8 +41,11 @@ Item {
     readonly property var workspaceRouter: (typeof appModules !== "undefined" && appModules)
                                            ? appModules.workspaceRouter : null
     readonly property int selectedElementId: editorSession ? Number(editorSession.elementId) : 0
-    readonly property int selectedIndex: thumbnailModel && selectedElementId > 0
-                                        ? thumbnailModel.rowByElementId(selectedElementId) : -1
+    readonly property int selectedIndex: {
+        const _rev = root._listRevision
+        return thumbnailModel && selectedElementId > 0
+                ? thumbnailModel.rowByElementId(selectedElementId) : -1
+    }
     readonly property int currentIndex: selectedIndex >= 0 ? selectedIndex + 1 : 0
     readonly property int totalCount: thumbnailModel ? Number(thumbnailModel.count) : 0
     property string currentFileName: ""
@@ -58,6 +61,8 @@ Item {
     property bool _restoringScroll: false
     property int _pendingRevealIndex: -1
     property bool _heightResizing: false
+    property bool _rebindingModel: false
+    property int _listRevision: 0
     readonly property bool selectionEnabled: editorSession
                                              ? Boolean(editorSession.actions.canSelectImage)
                                              : (interactionPolicy
@@ -167,6 +172,54 @@ Item {
 
     function scheduleScrollRestore() {
         scrollRestoreTimer.restart()
+    }
+
+    function bumpListRevision() {
+        _listRevision += 1
+    }
+
+    function rebindThumbnailModel() {
+        if (_rebindingModel || !filmstripListView) {
+            return
+        }
+        _rebindingModel = true
+        filmstripListView.model = null
+        filmstripListView.model = root.thumbnailModel
+        _rebindingModel = false
+        root.bumpListRevision()
+    }
+
+    function clearPersistedFilmstripScroll() {
+        if (host && host.contentX !== undefined) {
+            host.contentX = 0
+        }
+        if (editorSession && editorSession.filmstripScrollPosition !== undefined) {
+            editorSession.filmstripScrollPosition = 0
+        }
+    }
+
+    function maybeLoadMoreThumbnails() {
+        if (!libraryModule || !thumbnailModel || !filmstripListView
+                || _rebindingModel || _restoringScroll) {
+            return
+        }
+        if (!thumbnailModel.hasMore || thumbnailModel.loading) {
+            return
+        }
+        const threshold = Math.max(filmstripListView.width * 0.5, 240)
+        const maxX = Math.max(0, filmstripListView.contentWidth - filmstripListView.width)
+        if (filmstripListView.contentX >= maxX - threshold) {
+            libraryModule.LoadMoreThumbnails()
+        }
+    }
+
+    function revealCurrentImageInStrip() {
+        if (root.applyFilmstripScrollTarget()) {
+            return
+        }
+        if (selectedIndex >= 0) {
+            root.revealIndexAtBeginning(selectedIndex)
+        }
     }
 
     function revealIndexAtBeginning(index) {
@@ -436,8 +489,10 @@ Item {
         } else if (focusIndex < 0 || focusIndex >= totalCount) {
             focusIndex = Math.max(0, Math.min(totalCount - 1, selectedIndex))
         }
-        applyFilmstripScrollTarget()
-        scheduleScrollRestore()
+        if (!_rebindingModel) {
+            applyFilmstripScrollTarget()
+            scheduleScrollRestore()
+        }
     }
     Component.onCompleted: {
         // Snap to the persisted collapse state on load (no open animation).
@@ -452,7 +507,7 @@ Item {
         enabled: root._motionArmed && !root.foldManualDrive
         NumberAnimation {
             duration: appTheme.reduceMotion ? 0 : root._foldDuration
-            easing.type: Easing.OutCubic
+            easing.type: appTheme.motionEasing
         }
     }
 
@@ -479,15 +534,46 @@ Item {
     }
 
     Connections {
+        target: root.workspaceRouter
+        ignoreUnknownSignals: true
+        function onRouteChanged() {
+            if (root.workspaceRouter
+                    && String(root.workspaceRouter.workspace || "") === "editor") {
+                root.rebindThumbnailModel()
+                root.revealCurrentImageInStrip()
+            }
+        }
+    }
+
+    Connections {
         target: root.thumbnailModel
         ignoreUnknownSignals: true
         function onCountChanged() {
+            root.bumpListRevision()
             root.refreshCurrentFileName()
+            if (root._rebindingModel) {
+                return
+            }
             root.applyFilmstripScrollTarget()
             root.scheduleScrollRestore()
+            root.maybeLoadMoreThumbnails()
         }
         function onDataChanged() { root.refreshCurrentFileName() }
-        function onModelReset() { root.refreshCurrentFileName() }
+        function onModelReset() {
+            root.bumpListRevision()
+            root.refreshCurrentFileName()
+            root.clearPersistedFilmstripScroll()
+            Qt.callLater(function() {
+                root.rebindThumbnailModel()
+                root.revealCurrentImageInStrip()
+            })
+        }
+        function onHasMoreChanged() { root.maybeLoadMoreThumbnails() }
+        function onLoadingChanged() {
+            if (!root.thumbnailModel || !root.thumbnailModel.loading) {
+                root.maybeLoadMoreThumbnails()
+            }
+        }
     }
 
     signal expandRequested()
@@ -791,10 +877,19 @@ Item {
                 activeFocusOnTab: true
                 keyNavigationEnabled: false
 
-                onContentXChanged: root.storeFilmstripScroll()
-                onContentWidthChanged: root.scheduleScrollRestore()
+                onContentXChanged: {
+                    root.storeFilmstripScroll()
+                    root.maybeLoadMoreThumbnails()
+                }
+                onContentWidthChanged: {
+                    root.scheduleScrollRestore()
+                    root.maybeLoadMoreThumbnails()
+                }
                 onWidthChanged: root.scheduleScrollRestore()
-                onCountChanged: root.scheduleScrollRestore()
+                onCountChanged: {
+                    root.scheduleScrollRestore()
+                    root.maybeLoadMoreThumbnails()
+                }
 
                 WheelHandler {
                     id: filmstripWheelHandler

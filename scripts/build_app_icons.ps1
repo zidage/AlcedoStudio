@@ -1,12 +1,14 @@
-# Generates Windows/macOS app icons from the brand stack using `cargo tauri icon`.
+# Generates Windows/macOS app icons from the brand master using `cargo tauri icon`.
 #
-# Source (preferred): alcedo_studio/src/config/ICON/icon_stack/combined_logo.png
+# Source: alcedo_studio/src/config/ICON/alcedo_icon.png
 # Outputs:
-#   - alcedo_studio/src/config/ICON/alcedo_icon.png  (QRC + setWindowIcon; 1024 master)
 #   - alcedo_studio/src/config/ICON/alcedo_icon.ico  (EXE resource via alcedo_main.rc)
-#   - alcedo_studio/src/config/ICON/alcedo_icon.icns (macOS .app Dock/Finder; staged by CMake)
+#   - alcedo_studio/src/config/ICON/alcedo_icon.icns (macOS Dock/Finder/DMG native ICNS)
 #   - packaging/windows/alcedo.ico                   (NSIS/WiX installer)
 #   - packaging/macos/alcedo.icns                    (DMG/package icon copy)
+#
+# The 1024 PNG master is left in place. macOS Dock/Finder keep the native ICNS;
+# this script never substitutes a PNG for the ICNS bundle/package icon.
 #
 # Prerequisites: cargo + tauri-cli (`cargo install tauri-cli --version "^2"`)
 # Usage (repo root):
@@ -39,15 +41,7 @@ $PackagingIcns = Resolve-RepoPath $PackagingIcns
 $WorkDir = Resolve-RepoPath $WorkDir
 
 if ([string]::IsNullOrWhiteSpace($InputPng)) {
-    $combined = Join-Path $IconDir 'icon_stack/combined_logo.png'
-    $fallback = Join-Path $IconDir 'alcedo_icon.png'
-    if (Test-Path -LiteralPath $combined) {
-        $InputPng = $combined
-    } elseif (Test-Path -LiteralPath $fallback) {
-        $InputPng = $fallback
-    } else {
-        throw "No source PNG found. Expected $combined or $fallback"
-    }
+    $InputPng = Join-Path $IconDir 'alcedo_icon.png'
 } else {
     $InputPng = Resolve-RepoPath $InputPng
 }
@@ -103,12 +97,12 @@ foreach ($required in @($generatedIco, $generatedIcns, $generatedPng)) {
     }
 }
 
-# Prefer the design-stack 1024 master for runtime / macOS when available.
-$masterPng = Join-Path $IconDir 'icon_stack/combined_logo.png'
-if (Test-Path -LiteralPath $masterPng) {
-    Copy-Item -LiteralPath $masterPng -Destination (Join-Path $IconDir 'alcedo_icon.png') -Force
-} else {
-    Copy-Item -LiteralPath $generatedPng -Destination (Join-Path $IconDir 'alcedo_icon.png') -Force
+# Keep the designer-provided 1024 PNG master. tauri's icon.png is a
+# downscaled preview and must not replace alcedo_icon.png, and the
+# committed ICNS remains the macOS Dock/Finder/DMG icon.
+$outPng = Join-Path $IconDir 'alcedo_icon.png'
+if (-not (Test-Path -LiteralPath $outPng)) {
+    Copy-Item -LiteralPath $generatedPng -Destination $outPng -Force
 }
 
 Copy-Item -LiteralPath $generatedIco -Destination (Join-Path $IconDir 'alcedo_icon.ico') -Force
@@ -119,7 +113,15 @@ Copy-Item -LiteralPath $generatedIcns -Destination $PackagingIcns -Force
 # Optional desktop-size previews next to sources (not packaged).
 $previewDir = Join-Path $IconDir 'generated'
 New-Item -ItemType Directory -Force -Path $previewDir | Out-Null
-foreach ($name in @('32x32.png', '64x64.png', '128x128.png', 'icon.png')) {
+foreach ($name in @(
+    '32x32.png',
+    '64x64.png',
+    '128x128.png',
+    'icon.png',
+    'Square44x44Logo.png',
+    'Square150x150Logo.png',
+    'StoreLogo.png'
+)) {
     $p = Join-Path $WorkDir $name
     if (Test-Path -LiteralPath $p) {
         Copy-Item -LiteralPath $p -Destination (Join-Path $previewDir $name) -Force
@@ -156,6 +158,6 @@ Write-Output ""
 Write-Output "Wiring (already in tree):"
 Write-Output "  Windows EXE  : alcedo_main.rc -> alcedo_icon.ico"
 Write-Output "  Taskbar/UI   : main.cpp setWindowIcon (ICO on Win, PNG elsewhere) via resource.qrc"
-Write-Output "  macOS Dock   : MACOSX_BUNDLE_ICON_FILE=alcedo_icon.icns in Contents/Resources"
+Write-Output "  macOS Dock   : MACOSX_BUNDLE_ICON_FILE=alcedo_studio_ao.icns in Contents/Resources"
 Write-Output "  macOS DMG    : CPACK_PACKAGE_ICON -> alcedo_icon.icns"
 Write-Output "Done"

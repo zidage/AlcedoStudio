@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Validate and publish a signed Alcedo Studio update to Cloudflare R2."""
+"""Sign and upload one platform's update to the public updates/ feed on R2.
+
+A stable upload is live for installed apps and the website. A GitHub release is
+created later by archive_stable_github.py and is not part of this script.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+
+from release_git import commit_is_on_origin_main, require_commit_on_origin_main, validate_commit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,18 +57,16 @@ def packaged_channel(platform: str) -> str:
     return "stable"
 
 
-def immutable_prefixes(tag: str, build: int, sequence: int, platform_key: str,
+def immutable_prefixes(build: int, sequence: int, platform_key: str,
                        channel: str) -> tuple[str, str]:
-    if channel == "beta":
-        build_prefix = f"updates/v1/beta/builds/{build}/{platform_key}"
-        return build_prefix, f"{build_prefix}/manifests/{sequence}"
-    return f"releases/{tag}", f"updates/v1/releases/{tag}/{sequence}/{platform_key}"
+    build_prefix = f"updates/v1/{channel}/builds/{build}/{platform_key}"
+    return build_prefix, f"{build_prefix}/manifests/{sequence}"
 
 
-def planned_keys(tag: str, build: int, sequence: int, platform_key: str, package_name: str,
-                 dmg_name: str, channel: str, promote_latest: bool) -> list[tuple[str, str]]:
+def planned_keys(build: int, sequence: int, platform_key: str, package_name: str,
+                 dmg_name: str, channel: str) -> list[tuple[str, str]]:
     package_prefix, manifest_prefix = immutable_prefixes(
-        tag, build, sequence, platform_key, channel
+        build, sequence, platform_key, channel
     )
     keys = [
         (f"{package_prefix}/{package_name}", "immutable package"),
@@ -74,15 +78,6 @@ def planned_keys(tag: str, build: int, sequence: int, platform_key: str, package
     ]
     if dmg_name:
         keys.insert(1, (f"{package_prefix}/{dmg_name}", "immutable package"))
-    # releases/latest/ is the stable website download alias; never repoint it at
-    # a beta build, even if the caller left --promote-latest on.
-    if channel == "stable" and promote_latest:
-        latest_name = ("AlcedoStudio-Windows-x64.exe" if platform_key == "windows-x86_64"
-                       else "AlcedoStudio-macos-arm64.zip")
-        keys.append((f"releases/latest/{latest_name}", "latest alias"))
-        if dmg_name:
-            keys.append(("releases/latest/AlcedoStudio-macos-arm64.dmg", "latest alias"))
-        keys.append((f"releases/latest/SHA256SUMS-{platform_key}.txt", "latest checksums"))
     return keys
 
 
@@ -224,18 +219,12 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
-        "--promote-latest",
-        action="store_true",
-        default=True,
-        help="Also publish stable/latest aliases (default: on).",
-    )
-    parser.add_argument(
         "--channel",
         default=None,
         choices=("stable", "beta"),
-        help="Update channel to publish: 'stable' (official) or 'beta' (test). "
-             "The channel manifest alias updates/v1/<channel>/<platform>/manifest.json is always "
-             "published. releases/latest/ aliases are only written for the stable channel.",
+        help="Update channel to publish: 'stable' (official) or 'beta' (updater tests). "
+             "Both channels write only under updates/v1/<channel>/. A stable upload is live "
+             "for installed apps and the website. Do not run it unless you intend to ship.",
     )
     args = parser.parse_args()
     channel = args.channel or packaged_channel(args.platform)
@@ -263,7 +252,7 @@ def main() -> int:
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     version = str(manifest["version"])
-    tag = f"v{version}"
+    commit = validate_commit(str(manifest.get("commit", "")))
 
     public_key = args.public_key_file.read_text(encoding="utf-8").strip()
     verify = [
@@ -277,8 +266,6 @@ def main() -> int:
         public_key,
         "--artifacts",
         str(artifacts_dir),
-        "--tag",
-        tag,
         "--channel",
         channel,
         "--platform",
@@ -295,8 +282,9 @@ def main() -> int:
     macos_dmg_name = f"AlcedoStudio-{version}-Darwin-arm64.dmg" if args.platform == "macos" else ""
     has_dmg = bool(macos_dmg_name) and (artifacts_dir / macos_dmg_name).is_file()
 
-    keys = planned_keys(tag, build, sequence, platform_key, package_name,
-                        macos_dmg_name if has_dmg else "", channel, args.promote_latest)
+    keys = planned_keys(build, sequence, platform_key, package_name,
+                        macos_dmg_name if has_dmg else "", channel)
+    print(f"Packaged commit: {commit}")
     print("Validated update objects:")
     for key, role in keys:
         if "dmg" in key and not has_dmg and args.dry_run:
@@ -305,8 +293,19 @@ def main() -> int:
         print(f"  {PUBLIC_BASE}/{key}  [{role}]")
 
     if args.dry_run:
-        print("Dry run complete. R2 credentials were not read.")
+        if channel == "stable" and not commit_is_on_origin_main(REPO_ROOT, commit):
+            print(
+                "WARNING: this stable dry-run is not from origin/main. "
+                "A real stable upload would be refused."
+            )
+        print("Dry run complete. R2 credentials were not read. Nothing was published.")
         return 0
+
+    if channel == "stable":
+        require_commit_on_origin_main(REPO_ROOT, commit)
+        print(
+            f"Publishing a LIVE stable update for {version} (build {build}) from {commit}."
+        )
 
     load_env_file(args.env_file)
     account_id = require_env("R2_ACCOUNT_ID")
@@ -331,7 +330,7 @@ def main() -> int:
     immutable = "public, max-age=31536000, immutable"
     mutable = "public, max-age=300, must-revalidate"
     package_prefix, manifest_prefix = immutable_prefixes(
-        tag, build, sequence, platform_key, channel
+        build, sequence, platform_key, channel
     )
 
     package_content_type = (
@@ -402,38 +401,6 @@ def main() -> int:
             ),
         ]
     )
-
-    # releases/latest/ is the stable website download alias. Only the stable
-    # channel may repoint it, and only when the caller did not disable it.
-    if channel == "stable" and args.promote_latest:
-        if has_dmg:
-            uploads.append(
-                (
-                    artifacts_dir / macos_dmg_name,
-                    "releases/latest/AlcedoStudio-macos-arm64.dmg",
-                    "application/x-apple-diskimage",
-                    'attachment; filename="AlcedoStudio-macos-arm64.dmg"',
-                    mutable,
-                )
-            )
-        latest_name = ("AlcedoStudio-Windows-x64.exe" if args.platform == "windows"
-                       else "AlcedoStudio-macos-arm64.zip")
-        uploads.extend([
-            (
-                artifacts_dir / package_name,
-                f"releases/latest/{latest_name}",
-                package_content_type,
-                f'attachment; filename="{latest_name}"',
-                mutable,
-            ),
-            (
-                checksums,
-                f"releases/latest/SHA256SUMS-{platform_key}.txt",
-                "text/plain; charset=utf-8",
-                f'attachment; filename="SHA256SUMS-{platform_key}.txt"',
-                mutable,
-            ),
-        ])
 
     immutable_uploads = [item for item in uploads if item[4] == immutable]
     mutable_uploads = [item for item in uploads if item[4] != immutable]

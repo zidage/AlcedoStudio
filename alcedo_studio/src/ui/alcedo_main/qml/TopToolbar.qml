@@ -3,15 +3,21 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// Application top toolbar: brand, workspace switch, File menu, Settings,
-// Inspector toggle, and frameless window caption buttons.
+// Full-width application toolbar: native traffic-light reserve, collections
+// toggle, workspace switch, File, Settings, update, inspector, and caption
+// actions. The wordmark remains on the collections card below this bar.
 Rectangle {
     id: root
     objectName: "topToolbar"
     property var theme: null
     property var host: null
+    readonly property bool nativeTrafficLightsEnabled: host
+                                                       && host.nativeTrafficLightsEnabled === true
+    readonly property bool collectionsSidebarExpanded: !host
+                                                       || host.collectionsSidebarExpanded === true
     Layout.fillWidth: true
-    Layout.preferredHeight: 56
+    // One compact 40 px action band plus 4 px breathing room above and below.
+    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact + appTheme.spaceSm
     radius: theme ? theme.panelRadius : 12
     color: theme ? theme.colGlassPanel : "#1C1C1D"
     border.width: 1
@@ -34,34 +40,45 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: 20
+        anchors.leftMargin: appTheme.spaceXl
         anchors.rightMargin: 0
         spacing: 10
-        Row {
-            spacing: 0
-            Label { text: qsTr("Alcedo"); font.family: root.theme ? root.theme.headlineFontFamily : appTheme.headlineFontFamily; font.pixelSize: 19; font.weight: 700; color: root.theme ? root.theme.colAccentPrimary : appTheme.accentColor }
-            Label { text: " "; font.family: root.theme ? root.theme.headlineFontFamily : appTheme.headlineFontFamily; font.pixelSize: 19; font.weight: 700 }
-            Label { text: qsTr("Studio"); font.family: root.theme ? root.theme.headlineFontFamily : appTheme.headlineFontFamily; font.pixelSize: 19; font.weight: 700; color: root.theme ? root.theme.colText : appTheme.textColor }
+
+        Item {
+            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact + appTheme.spaceXl
+            Layout.preferredHeight: 1
+            visible: root.nativeTrafficLightsEnabled
         }
-        Item { Layout.preferredWidth: 12 }
+
+        IconActionButton {
+            id: sidebarToggle
+            objectName: "collectionsSidebarToggle"
+            compact: true
+            focusOnPointerPress: false
+            showFocusRing: false
+            fillIdle: activeFocus
+                      ? appTheme.buttonHoveredFillColor
+                      : appTheme.buttonIdleFillColor
+            actionName: root.collectionsSidebarExpanded
+                        ? qsTr("Hide collections sidebar")
+                        : qsTr("Show collections sidebar")
+            iconSrc: root.collectionsSidebarExpanded
+                     ? "qrc:/panel_icons/layout-sidebar.svg"
+                     : "qrc:/panel_icons/layout-sidebar-inactive.svg"
+            onClicked: if (root.host) root.host.toggleCollectionsSidebar()
+        }
 
         EditorWorkspaceNavigation {
             id: workspaceSwitch
-            objectName: "workspaceSwitch"
             Layout.preferredWidth: 112
-            Layout.preferredHeight: 40
+            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
             theme: root.host
             workspaceRouter: appModules.workspaceRouter
             interactionPolicy: appModules.interactionPolicy
             editorSession: appModules.editorSession
             editorImageExists: root.host ? root.host.editorImageStillExists : null
+            firstEditorImage: root.host ? root.host.firstLibraryImage : null
             navigationEnabled: appModules.project.serviceReady
-        }
-
-        Rectangle {
-            Layout.preferredWidth: 1
-            Layout.preferredHeight: 22
-            color: root.theme ? root.theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
         }
 
         // ── File menu ──
@@ -151,17 +168,23 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
-        // Inspector toggle lives on the application top toolbar (52×42,
-        // icon 24×24) — same placement and size as before workspace extraction.
+        // Inspector toggle: compact IconActionButton, same hit as the
+        // collections sidebar control. Visible only in the Library workspace.
         InspectorToggleButton {
             theme: root.theme
             host: root.host
         }
 
-        // ── Frameless window caption buttons ──
-        Item { Layout.preferredWidth: 8 }
+        // Drawn caption buttons stay off macOS so they do not sit next to the
+        // system traffic lights.
+        Item {
+            Layout.preferredWidth: 8
+            visible: captionButtons.visible
+        }
 
         WindowCaptionButtons {
+            id: captionButtons
+            visible: !root.nativeTrafficLightsEnabled
             theme: root.theme
             host: root.host
         }

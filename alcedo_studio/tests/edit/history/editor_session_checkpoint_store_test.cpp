@@ -7,9 +7,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
@@ -175,6 +178,31 @@ TEST_F(EditorSessionCheckpointStoreTest, RecoveryUsesConfiguredImageJournalPathA
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
+}
+
+TEST_F(EditorSessionCheckpointStoreTest, RecoverAndMaterializeAsyncRunsOffCallerThread) {
+  const auto caller = std::this_thread::get_id();
+  std::mutex mutex;
+  std::condition_variable ready;
+  bool                    done = false;
+  std::thread::id         callback_thread;
+  alcedo::EditorMaterializeOutcome outcome;
+
+  ASSERT_TRUE(store_->RecoverAndMaterializeAsync(
+      element_id_, 1, [&](alcedo::EditorMaterializeOutcome result) {
+        std::scoped_lock lock(mutex);
+        callback_thread = std::this_thread::get_id();
+        outcome         = std::move(result);
+        done            = true;
+        ready.notify_one();
+      }));
+
+  {
+    std::unique_lock lock(mutex);
+    ASSERT_TRUE(ready.wait_for(lock, std::chrono::seconds(5), [&] { return done; }));
+  }
+  EXPECT_NE(callback_thread, caller);
+  EXPECT_TRUE(outcome.accepted) << outcome.error;
 }
 
 /// Phase 4A: null capture and missing storage fail; never report a silent success.

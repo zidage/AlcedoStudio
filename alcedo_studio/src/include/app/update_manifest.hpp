@@ -22,6 +22,7 @@ struct UpdateArtifact {
 struct UpdateManifest {
   quint64        sequence = 0;
   QString        version;
+  QString        commit;
   quint64        build = 0;
   QDateTime      published_at;
   QDateTime      expires_at;

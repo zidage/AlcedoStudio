@@ -110,7 +110,14 @@ class EditorSessionRenderController final {
   /// the first frame is ready.
   void               MarkImageAcquired();
 
-  /// Cancel the active render session for one image-load request.
+  /// Cancel pending/in-flight work for one image-load request without joining.
+  void               CancelSession(ImageLoadRequestId image_load_request);
+  /// Cancel without blocking and report actual scheduler idleness. The callback
+  /// can originate on a render worker; callers must marshal state changes to
+  /// their owner thread.
+  void               CancelSession(ImageLoadRequestId image_load_request,
+                                   std::function<void(ImageLoadRequestId)> on_idle);
+  /// Cancel the active render session and wait until workers leave it.
   void               CancelSessionAndWait(ImageLoadRequestId image_load_request);
   /// Wait for the active session's renders to finish (no cancel). History head
   /// moves queue behind the current frame instead of racing it.

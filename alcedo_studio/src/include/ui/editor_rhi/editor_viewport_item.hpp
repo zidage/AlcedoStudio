@@ -106,8 +106,10 @@ class EditorViewportItem : public QQuickRhiItem {
   Q_INVOKABLE void   requestRendererInvalidation();
   Q_INVOKABLE void   cancelPendingFrames();
   // Stop producer handshakes before a session close tears down this QML tree.
-  // This is reversible: normal visibility refresh resumes a reused viewport.
+  // This is reversible: resumePresentation or a visibility refresh re-enables
+  // a reused viewport.
   void               suspendPresentation();
+  void               resumePresentation();
   // Re-evaluate window exposure / minimize state (also used by tests after
   // programmatic hide/show where Qt may not emit the expected signals promptly).
   Q_INVOKABLE void   refreshPresentationAvailability();
@@ -118,6 +120,23 @@ class EditorViewportItem : public QQuickRhiItem {
   // frame can recycle stale presentation slots even if a worker-thread ready
   // notification is still queued behind continuous input events.
   void               prepareForAdjustmentFrame();
+  // Arm a vsync-sampled consume: every window present re-dirties this item so
+  // ConsumeNewestReady runs on the next scene-graph tick. Used while a slider
+  // or trackball drag submits unsettled patches.
+  void               beginInteractivePresentLoop();
+  // Stop the vsync consume and request one more pass for the last Ready frame.
+  void               endInteractivePresentLoop();
+  // Re-request a scene-graph frame while the interactive present loop is armed.
+  // QQuickWindow::afterRendering queues this onto the GUI thread. Tests may
+  // call it directly.
+  void               continueInteractivePresentLoop();
+
+  [[nodiscard]] auto interactivePresentLoopActive() const -> bool {
+    return interactive_present_loop_.load(std::memory_order_acquire);
+  }
+  [[nodiscard]] auto interactivePresentLoopTickCount() const -> std::uint64_t {
+    return interactive_present_loop_tick_count_.load(std::memory_order_acquire);
+  }
 
   [[nodiscard]] auto adjustmentFrameRequestCount() const -> std::uint64_t {
     return adjustment_frame_request_count_.load(std::memory_order_acquire);
@@ -151,7 +170,7 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto takeAdjustmentFrameRequest() -> bool {
     return adjustment_frame_requested_.exchange(false, std::memory_order_acq_rel);
   }
-  void                                resumePresentation();
+  void                                stopInteractivePresentLoop();
   void                                setBackendName(const QString& name);
   void                                setStatusText(const QString& text);
   void                                notifyDiagnosticsChanged();
@@ -174,11 +193,14 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<bool>          presentation_requested_{false};
   std::atomic<bool>          adjustment_frame_requested_{false};
   std::atomic<std::uint64_t> adjustment_frame_request_count_{0};
+  std::atomic<bool>          interactive_present_loop_{false};
+  std::atomic<std::uint64_t> interactive_present_loop_tick_count_{0};
   QQuickWindow*              attached_window_ = nullptr;
   QMetaObject::Connection    window_visibility_connection_;
   QMetaObject::Connection    window_screen_connection_;
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
+  QMetaObject::Connection    after_rendering_connection_;
   std::atomic<bool>          window_color_space_applied_{false};
   bool                       last_diagnostics_available_      = false;
   qulonglong                 last_diag_target_gen_            = 0;

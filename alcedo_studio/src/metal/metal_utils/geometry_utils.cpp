@@ -26,8 +26,6 @@ struct ResizeParams {
   uint32_t crop_height;
   uint32_t dst_width;
   uint32_t dst_height;
-  uint32_t src_stride;
-  uint32_t dst_stride;
   float    scale_x;
   float    scale_y;
 };
@@ -235,14 +233,6 @@ auto MakeBorderArray(const cv::Scalar& border_value) -> std::array<float, 4> {
 
 void DispatchCropResize(const MetalImage& src, MetalImage& dst, const cv::Rect& crop_rect,
                         ResizeDownsampleAlgorithm downsample_algorithm) {
-  const auto src_row_bytes = RowBytesFor(src.Width(), src.Format());
-  const auto dst_row_bytes = RowBytesFor(dst.Width(), dst.Format());
-  const auto src_size      = src_row_bytes * src.Height();
-  const auto dst_size      = dst_row_bytes * dst.Height();
-
-  auto src_buffer = MakeSharedBuffer(src_size);
-  auto dst_buffer = MakeSharedBuffer(dst_size);
-
   auto command_buffer = MakeCommandBuffer();
 
   const ResizeParams params{
@@ -252,10 +242,6 @@ void DispatchCropResize(const MetalImage& src, MetalImage& dst, const cv::Rect& 
       .crop_height = static_cast<uint32_t>(crop_rect.height),
       .dst_width   = dst.Width(),
       .dst_height  = dst.Height(),
-      .src_stride  = static_cast<uint32_t>(
-          src_row_bytes / CV_ELEM_SIZE(MetalImage::CVTypeFromPixelFormat(src.Format()))),
-      .dst_stride  = static_cast<uint32_t>(
-          dst_row_bytes / CV_ELEM_SIZE(MetalImage::CVTypeFromPixelFormat(dst.Format()))),
       .scale_x     = static_cast<float>(crop_rect.width) / static_cast<float>(dst.Width()),
       .scale_y     = static_cast<float>(crop_rect.height) / static_cast<float>(dst.Height()),
   };
@@ -265,21 +251,17 @@ void DispatchCropResize(const MetalImage& src, MetalImage& dst, const cv::Rect& 
                         ? GeometryKernel::Linear
                         : GeometryKernel::Area;
 
-  EncodeTextureToBuffer(command_buffer.get(), src, src_buffer.get(), src_row_bytes, src_size);
-
   {
     auto pipeline = GetGeometryPipelineState(mode, src.Format());
     auto compute  = NS::RetainPtr(command_buffer->computeCommandEncoder());
 
     compute->setComputePipelineState(pipeline.get());
-    compute->setBuffer(src_buffer.get(), 0, 0);
-    compute->setBuffer(dst_buffer.get(), 0, 1);
-    compute->setBytes(&params, sizeof(params), 2);
+    compute->setTexture(src.Texture(), 0);
+    compute->setTexture(dst.Texture(), 1);
+    compute->setBytes(&params, sizeof(params), 0);
     DispatchThreads(compute.get(), pipeline.get(), dst.Width(), dst.Height());
     compute->endEncoding();
   }
-
-  EncodeBufferToTexture(command_buffer.get(), dst, dst_buffer.get(), dst_row_bytes, dst_size);
 
   command_buffer->commit();
   command_buffer->waitUntilCompleted();

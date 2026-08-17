@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-// Shared Library/Editor navigation for the application header. The router,
+// Shared Library/Editor navigation for the application toolbar. The router,
 // policy, and editor re-entry lookup are explicit inputs so this component
 // owns only workspace navigation and its permission gate.
 //
@@ -17,6 +17,7 @@ Item {
     property var interactionPolicy: null
     property var editorSession: null
     property var editorImageExists: null
+    property var firstEditorImage: null
     property bool navigationEnabled: true
 
     readonly property string currentWorkspace: workspaceRouter
@@ -78,9 +79,14 @@ Item {
         if (lastElementId > 0 && lastImageId > 0
                 && editorImageIsAvailable(lastElementId)) {
             workspaceRouter.openEditor(lastElementId, lastImageId)
-        } else {
-            workspaceRouter.openEditor(0, 0)
+            return
         }
+        const first = (typeof firstEditorImage === "function") ? firstEditorImage() : null
+        if (first && Number(first.elementId) > 0 && Number(first.imageId) > 0) {
+            workspaceRouter.openEditor(Number(first.elementId), Number(first.imageId))
+            return
+        }
+        workspaceRouter.openEditor(0, 0)
     }
 
     Item {
