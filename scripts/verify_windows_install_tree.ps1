@@ -45,6 +45,7 @@ Assert-Directory $binDir
 
 $requiredFiles = @(
     'alcedo_main.exe',
+    'alcedo_studio_ao.ico',
     'alcedo_mind.exe',
     'DirectML.dll',
     'aria2c.exe',
@@ -123,6 +124,15 @@ if (-not $SkipOpenCLAssetCheck) {
     foreach ($file in $openClFiles) {
         Assert-File (Join-Path $binDir $file)
     }
+}
+
+$exeIconScript = Join-Path $PSScriptRoot 'verify_windows_exe_icon.ps1'
+$committedIco = (Resolve-Path -LiteralPath (
+    Join-Path $PSScriptRoot '..\alcedo_studio\src\config\ICON\alcedo_icon.ico'
+)).Path
+& $exeIconScript -Exe (Join-Path $binDir 'alcedo_main.exe') -Ico $committedIco
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows EXE PE icon does not match the committed ICO."
 }
 
 Write-Host "[alcedo] Windows install tree verification passed: $binDir" -ForegroundColor Green

@@ -202,8 +202,10 @@ int main(int argc, char* argv[]) {
                                              : startup.diagnostics.adapter_description));
 
   // Platform window / taskbar fallback icon.
-  // Windows: multi-res ICO (Explorer taskbar + Alt-Tab). EXE also embeds the
-  // same ICO via alcedo_main.rc. Other non-Apple platforms use the PNG master.
+  // Windows: multi-res ICO (running-app taskbar + Alt-Tab) from Qt RCC.
+  // Explorer / Start Menu / desktop shortcuts use the PE RT_ICON compiled
+  // from alcedo_main.rc; keep that resource on the same ICO. Other
+  // non-Apple platforms use the PNG master.
   // On macOS, do not replace the bundle icon at runtime: Dock and Finder load
   // the ICNS resource through CFBundleIconFile, preserving the system-rendered
   // icon appearance while the application is running.
