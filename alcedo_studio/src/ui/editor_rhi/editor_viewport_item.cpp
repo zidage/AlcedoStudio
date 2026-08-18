@@ -180,6 +180,7 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   present_queue_->InvalidateSessionEpoch(next, imageIdentity);
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   stopInteractivePresentLoop();
   emit SessionEpochChanged();
@@ -230,6 +231,7 @@ void EditorViewportItem::cancelPendingFrames() {
   present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
+    frame_sink_->ClearPendingHostFrames();
   }
   requestPresentUpdate();
 }

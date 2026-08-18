@@ -68,6 +68,42 @@
       }
     },
     {
+      "name": "linux_cpu_debug",
+      "displayName": "Linux CPU Debug",
+      "description": "Linux x86_64 CPU-only bring-up build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-cpu-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "ALCEDO_ENABLE_CUDA": "OFF",
+        "ALCEDO_ENABLE_METAL": "OFF",
+        "ALCEDO_ENABLE_OPENCL": "OFF",
+        "ALCEDO_ENABLE_WEBGPU": "OFF",
+        "ALCEDO_BUILD_TESTS": "OFF",
+        "ALCEDO_BUILD_ARIA2C_FETCH": "OFF"
+      }
+    },
+    {
+      "name": "linux_opencl_debug",
+      "displayName": "Linux OpenCL Debug",
+      "description": "Linux x86_64 OpenCL compute with Qt Quick OpenGL presentation",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-opencl-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "ALCEDO_ENABLE_CUDA": "OFF",
+        "ALCEDO_ENABLE_METAL": "OFF",
+        "ALCEDO_ENABLE_OPENCL": "ON",
+        "ALCEDO_ENABLE_WEBGPU": "OFF",
+        "ALCEDO_BUILD_TESTS": "OFF",
+        "ALCEDO_BUILD_ARIA2C_FETCH": "OFF"
+      }
+    },
+    {
       "name": "macos_debug",
       "displayName": "macOS Debug",
       "description": "macOS: Metal-enabled app build without the legacy OpenGL editor",
@@ -178,6 +214,32 @@
       "name": "release",
       "configurePreset": "release",
       "jobs": 8
+    },
+    {
+      "name": "linux_cpu_debug",
+      "configurePreset": "linux_cpu_debug",
+      "jobs": 4
+    },
+    {
+      "name": "linux_cpu_debug_app",
+      "configurePreset": "linux_cpu_debug",
+      "jobs": 4,
+      "targets": [
+        "alcedo_main"
+      ]
+    },
+    {
+      "name": "linux_opencl_debug",
+      "configurePreset": "linux_opencl_debug",
+      "jobs": 4
+    },
+    {
+      "name": "linux_opencl_debug_app",
+      "configurePreset": "linux_opencl_debug",
+      "jobs": 4,
+      "targets": [
+        "alcedo_main"
+      ]
     },
     {
       "name": "macos_debug",

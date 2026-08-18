@@ -19,6 +19,13 @@
 
 namespace alcedo {
 
+enum class OpenClGlContextApi {
+  Auto,
+  Wgl,
+  Glx,
+  Egl,
+};
+
 struct OpenClDeviceCapabilities {
   std::string           name;
   std::string           vendor;
@@ -54,8 +61,10 @@ struct OpenClInitializationOptions {
   void*                      d3d11_device = nullptr;
 
   // Optional native OpenGL context/display handles. On Windows these are HGLRC
-  // and HDC. When set, OpenCL initialization selects a device that can share
-  // with the GL context and creates a cl_khr_gl_sharing context.
+  // and HDC; on Linux they are GLXContext + Display* or EGLContext + EGLDisplay.
+  // When set, OpenCL initialization selects a device that can share with the GL
+  // context and creates a cl_khr_gl_sharing context.
+  OpenClGlContextApi         gl_context_api = OpenClGlContextApi::Auto;
   void*                      gl_context = nullptr;
   void*                      gl_device_context = nullptr;
 };

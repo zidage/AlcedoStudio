@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <stdexcept>

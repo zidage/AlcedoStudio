@@ -53,6 +53,11 @@ auto ParseEditorBackendToken(std::string_view token) -> std::optional<EditorBack
   if (lower == "metal") {
     return EditorBackend::Metal;
   }
+#if defined(__linux__)
+  if (lower == "cpu") {
+    return EditorBackend::Cpu;
+  }
+#endif
   return std::nullopt;
 }
 
@@ -69,8 +74,13 @@ auto ParseEditorBackendArgs(int argc, char** argv) -> EditorBackendParseResult {
   }
   result.backend = ParseEditorBackendToken(*value);
   if (!result.backend.has_value()) {
+#if defined(__linux__)
+    result.error = "invalid --editor-backend value \"" + std::string(*value) +
+                   "\"; expected cuda, opencl, metal, or cpu";
+#else
     result.error = "invalid --editor-backend value \"" + std::string(*value) +
                    "\"; expected cuda, opencl, or metal";
+#endif
   }
   return result;
 }
@@ -83,6 +93,8 @@ auto ToString(EditorBackend backend) -> const char* {
       return "opencl";
     case EditorBackend::Metal:
       return "metal";
+    case EditorBackend::Cpu:
+      return "cpu";
   }
   return "unknown";
 }
@@ -95,6 +107,8 @@ auto QtGraphicsApiName(EditorBackend backend) -> const char* {
       return "OpenGL";
     case EditorBackend::Metal:
       return "Metal";
+    case EditorBackend::Cpu:
+      return "OpenGL host upload";
   }
   return "unknown";
 }
@@ -102,6 +116,8 @@ auto QtGraphicsApiName(EditorBackend backend) -> const char* {
 auto IsBackendSupportedOnThisPlatform(EditorBackend backend) -> bool {
 #if defined(_WIN32)
   return backend == EditorBackend::Cuda || backend == EditorBackend::OpenCl;
+#elif defined(__linux__)
+  return backend == EditorBackend::OpenCl || backend == EditorBackend::Cpu;
 #elif defined(__APPLE__)
   return backend == EditorBackend::Metal;
 #else
@@ -133,16 +149,16 @@ auto IsBackendAvailableInThisBuild(EditorBackend backend) -> bool {
 #else
       return false;
 #endif
+    case EditorBackend::Cpu:
+      return true;
   }
   return false;
 }
 
 auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
   // Routing follows the user's explicit selection (CLI > QSettings). This
-  // default only applies before any selection exists. On Windows, OpenCL is
-  // the baseline accelerator: it is the only viable backend on machines
-  // without an NVIDIA GPU, and it works on NVIDIA machines too, so prefer it
-  // over CUDA whenever the build carries it.
+  // default only applies before any selection exists. Preserve the existing
+  // Windows/macOS defaults; Linux adds OpenCL with a CPU host-upload fallback.
 #if defined(_WIN32)
 #if defined(HAVE_OPENCL)
   return EditorBackend::OpenCl;
@@ -156,6 +172,12 @@ auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
   return EditorBackend::Metal;
 #else
   return std::nullopt;
+#endif
+#elif defined(__linux__)
+#if defined(HAVE_OPENCL)
+  return EditorBackend::OpenCl;
+#else
+  return EditorBackend::Cpu;
 #endif
 #else
   return std::nullopt;

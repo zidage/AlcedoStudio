@@ -510,6 +510,8 @@ auto MakeLeaseTargetAdapter(EditorBackend backend) -> std::unique_ptr<ILeaseTarg
       return std::make_unique<OpenClOpenGlLeaseAdapter>();
     case EditorBackend::Metal:
       return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
+    case EditorBackend::Cpu:
+      return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
   }
   return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
 }

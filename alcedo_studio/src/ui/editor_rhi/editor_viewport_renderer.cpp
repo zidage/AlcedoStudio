@@ -35,7 +35,8 @@ auto                  BackendForRhi(QRhi* rhi) -> EditorBackend {
   }
   switch (rhi->backend()) {
     case QRhi::OpenGLES2:
-      return EditorBackend::OpenCl;
+      return ActiveEditorBackend() == EditorBackend::Cpu ? EditorBackend::Cpu
+                                                         : EditorBackend::OpenCl;
     case QRhi::Metal:
       return EditorBackend::Metal;
     case QRhi::D3D11:
@@ -268,6 +269,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     releaseQueuedNatives();
     if (item_->frameSink()) {
       item_->frameSink()->ClearPendingImportedFrames();
+      item_->frameSink()->ClearPendingHostFrames();
     }
     session_epoch_  = next_session_epoch;
     image_identity_ = next_image_identity;
@@ -581,6 +583,92 @@ void EditorViewportRenderer::consumeDirectFrames() {
       item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
                                .arg(frame->slot.preview_metadata.preview_generation));
+    }
+  }
+}
+
+void EditorViewportRenderer::consumeHostFrames(QRhiResourceUpdateBatch* updates) {
+  if (!rhi_ || !updates || !item_ || !item_->frameSink()) {
+    return;
+  }
+
+  auto pending = item_->frameSink()->DrainPendingHostFrames(session_epoch_, image_identity_);
+  for (auto& frame : pending) {
+    if (!frame || frame.width <= 0 || frame.height <= 0 || frame.row_bytes == 0) {
+      continue;
+    }
+    const auto role       = frame.preview_metadata.frame_role;
+    const auto request_id = frame.preview_metadata.presentation_request_id;
+    const auto minimum_stride = static_cast<std::size_t>(frame.width) * sizeof(float) * 4U;
+    if (frame.row_bytes < minimum_stride ||
+        frame.row_bytes > static_cast<std::size_t>(std::numeric_limits<quint32>::max())) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] host frame has unsupported stride request=%llu stride=%zu",
+                static_cast<unsigned long long>(request_id), frame.row_bytes);
+      diag::NoteRenderE2eTerminal(request_id, "host-frame-invalid-stride");
+      continue;
+    }
+    const auto height = static_cast<std::size_t>(frame.height);
+    if (height > std::numeric_limits<std::size_t>::max() / frame.row_bytes) {
+      diag::NoteRenderE2eTerminal(request_id, "host-frame-size-overflow");
+      continue;
+    }
+    const auto byte_count = frame.row_bytes * height;
+    if (!frame.pixels || byte_count > static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
+      diag::NoteRenderE2eTerminal(request_id, "host-frame-invalid-pixels");
+      continue;
+    }
+
+    diag::NoteRenderE2eConsumeBegin(request_id);
+    auto& layer = layers_[layerIndex(layerForRole(role))];
+    releaseLayer(layer);
+
+    auto* texture = rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);
+    if (!texture || !texture->create()) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] host QRhi texture creation failed request=%llu size=%dx%d",
+                static_cast<unsigned long long>(request_id), frame.width, frame.height);
+      diag::NoteRenderE2eTerminal(request_id, "host-qrhi-create-failed");
+      destroyResource(texture);
+      continue;
+    }
+
+    // QByteArray owns a copy of the worker-produced pixels until the resource
+    // update batch is consumed by QRhi. This avoids a render-thread race with
+    // a short-lived cv::Mat or shared vector held by the pipeline worker.
+    const QByteArray bytes(reinterpret_cast<const char*>(frame.pixels.get()),
+                           static_cast<qsizetype>(byte_count));
+    QRhiTextureSubresourceUploadDescription description(bytes);
+    description.setDataStride(static_cast<quint32>(frame.row_bytes));
+    description.setSourceSize(QSize(frame.width, frame.height));
+    updates->uploadTexture(
+        texture,
+        QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
+
+    layer.texture                    = texture;
+    layer.width                      = frame.width;
+    layer.height                     = frame.height;
+    layer.imported                   = false;
+    layer.valid                      = true;
+    layer.slot_index                 = -1;
+    layer.imported_owner.reset();
+    layer.imported_native_handle     = 0;
+    layer.presentation_mode          = frame.presentation_mode;
+    layer.preview_metadata           = frame.preview_metadata;
+    layer.ready_frame                = {};
+    layer.ready_frame.slot.width     = frame.width;
+    layer.ready_frame.slot.height    = frame.height;
+    layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
+    layer.ready_frame.slot.preview_metadata  = frame.preview_metadata;
+    layer.ready_frame.slot.session_epoch     = frame.preview_metadata.session_epoch;
+    layer.ready_frame.slot.image_identity    = frame.preview_metadata.image_identity;
+    layer.ready_frame.slot.sequence          = request_id;
+    content_dirty_                   = true;
+    diag::NoteRenderE2eDisplayed(request_id);
+    if (item_) {
+      item_->setStatusText(QStringLiteral("uploaded host frame role=%1 gen=%2")
+                               .arg(static_cast<int>(role))
+                               .arg(frame.preview_metadata.preview_generation));
     }
   }
 }
@@ -926,6 +1014,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   consumeImportedGpuFrames();
   ensureStaticResources(render_target, command_buffer);
   auto*        updates       = rhi_->nextResourceUpdateBatch();
+  consumeHostFrames(updates);
 
   const auto*  primary_layer = selectedPrimaryLayer();
   const auto*  detail_layer  = selectedDetailLayer();

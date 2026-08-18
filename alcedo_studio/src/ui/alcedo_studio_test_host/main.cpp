@@ -70,9 +70,17 @@ auto ParseOptions(int argc, char** argv) -> std::optional<HostOptions> {
   parser.addOption(QCommandLineOption(
       {QStringLiteral("reuse-project")},
       QStringLiteral("Open an existing project without starting a new import.")));
+#if defined(Q_OS_LINUX)
   parser.addOption(QCommandLineOption(
       {QStringLiteral("editor-backend")},
-      QStringLiteral("Editor backend token: cuda, opencl, or metal."), QStringLiteral("backend")));
+      QStringLiteral("Editor backend token: cuda, opencl, metal, or cpu."),
+      QStringLiteral("backend")));
+#else
+  parser.addOption(QCommandLineOption(
+      {QStringLiteral("editor-backend")},
+      QStringLiteral("Editor backend token: cuda, opencl, or metal."),
+      QStringLiteral("backend")));
+#endif
 
   const QStringList arguments = BuildArgumentList(argc, argv);
   if (!parser.parse(arguments)) {
@@ -113,6 +121,8 @@ auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
       return alcedo::AcceleratorBackendPreference::OpenCL;
     case alcedo::editor_rhi::EditorBackend::Metal:
       return alcedo::AcceleratorBackendPreference::Metal;
+    case alcedo::editor_rhi::EditorBackend::Cpu:
+      return alcedo::AcceleratorBackendPreference::CPU;
   }
   return alcedo::AcceleratorBackendPreference::CPU;
 }
@@ -183,6 +193,8 @@ auto ConfigureGraphicsApi(alcedo::editor_rhi::EditorBackend backend) -> bool {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
   } else if (backend == alcedo::editor_rhi::EditorBackend::Metal) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
+  } else if (backend == alcedo::editor_rhi::EditorBackend::Cpu) {
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
   } else {
     return false;
   }
@@ -206,9 +218,9 @@ int main(int argc, char* argv[]) {
     qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
     return 1;
   }
-  const auto editor_backend = backend_parse.backend.has_value()
-                                  ? *backend_parse.backend
-                                  : alcedo::editor_rhi::DefaultEditorBackendForPlatform();
+  auto editor_backend = backend_parse.backend.has_value()
+                            ? *backend_parse.backend
+                            : alcedo::editor_rhi::DefaultEditorBackendForPlatform();
   if (!editor_backend.has_value()) {
     qCritical("No editor backend is available for this build.");
     return 1;
@@ -224,7 +236,22 @@ int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
   QQuickStyle::setStyle("Basic");
 
+#if defined(Q_OS_LINUX)
+  auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
+  if (!startup.ok && *editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl &&
+      !backend_parse.present) {
+    qWarning("OpenCL startup failed on Linux (%s); falling back to CPU host upload",
+             startup.error.c_str());
+    *editor_backend = alcedo::editor_rhi::EditorBackend::Cpu;
+    if (!ConfigureGraphicsApi(*editor_backend)) {
+      qCritical("Could not configure the Linux CPU graphics API.");
+      return 1;
+    }
+    startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
+  }
+#else
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
+#endif
   if (!startup.ok) {
     qCritical("Editor backend startup failed (%s): %s",
               alcedo::editor_rhi::ToString(*editor_backend), startup.error.c_str());

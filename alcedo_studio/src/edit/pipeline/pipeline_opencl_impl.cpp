@@ -183,14 +183,20 @@ void CheckOpenClFrameCopy(cl_int error, const char* operation) {
 
 auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_sink,
                                 const FrameCompletionSubmission& submission) -> bool {
+  if (!OpenClContext::Instance().GLSharingEnabled()) {
+    // Without a cl_khr_gl_sharing context there is no valid native target to
+    // reserve. Skip the queue handshake and let Execute() take the blocking
+    // OpenCL readback -> SubmitHostFrame path below.
+    return false;
+  }
   frame_sink.EnsureSize(image.Width(), image.Height());
   const FrameWriteMapping mapping = frame_sink.MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
   if (!mapping) {
     // DirectFrameSink already logs the concrete handshake / domain reason.
-    // host_upload after this is a no-op on the production QML path.
+    // Execute() performs a device-to-host readback after this return.
     std::cerr << "[OpenCL Pipeline] direct present mapping failed " << image.Width() << "x"
               << image.Height()
-              << " (present will report host_upload; production sink has no host path)\n";
+              << " (falling back to OpenCL readback + host_upload)\n";
     return false;
   }
 

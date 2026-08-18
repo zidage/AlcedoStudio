@@ -71,8 +71,8 @@ auto FindArgValue(int argc, char** argv, std::string_view option_name)
   return std::nullopt;
 }
 
-// Same semantics as --editor-backend: accept only cuda|opencl|metal tokens that
-// this build can host. "auto"/"cpu" are pipeline preferences, not RHI backends.
+// Same semantics as --editor-backend: accept only backend tokens that this
+// build can host. CPU is a real host-upload presentation backend on Linux.
 auto ParseStoredEditorBackendToken(const QString& raw)
     -> std::optional<alcedo::editor_rhi::EditorBackend> {
   const QString stored_value = raw.trimmed().toLower();
@@ -115,6 +115,8 @@ auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
       return alcedo::AcceleratorBackendPreference::OpenCL;
     case alcedo::editor_rhi::EditorBackend::Metal:
       return alcedo::AcceleratorBackendPreference::Metal;
+    case alcedo::editor_rhi::EditorBackend::Cpu:
+      return alcedo::AcceleratorBackendPreference::CPU;
   }
   return alcedo::AcceleratorBackendPreference::CPU;
 }
@@ -172,6 +174,8 @@ int main(int argc, char* argv[]) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
   } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Metal) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
+  } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Cpu) {
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
   }
 
   alcedo::TimeProvider::Refresh();
@@ -185,7 +189,24 @@ int main(int argc, char* argv[]) {
 
   // After QApplication, before any QQuickWindow / QML load: select graphics API
   // and initialize CUDA adapter or OpenCL/GL sharing.
+#if defined(Q_OS_LINUX)
+  auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
+  if (!startup.ok && editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl &&
+      !backend_parse.present) {
+    // Linux defaults to OpenCL when it is compiled in, but a loader can be
+    // present without an Intel/Mesa device or without a usable GL-sharing
+    // session. Keep the normal application usable in that case; an explicit
+    // --editor-backend=opencl remains a hard diagnostic request.
+    qWarning("OpenCL startup failed on Linux (%s); falling back to CPU host upload",
+             startup.error.c_str());
+    editor_backend = alcedo::editor_rhi::EditorBackend::Cpu;
+    backend_source = "runtime-cpu-fallback";
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
+  }
+#else
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(editor_backend);
+#endif
   if (!startup.ok) {
     qCritical("Editor backend startup failed (%s): %s",
               alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());

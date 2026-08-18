@@ -332,14 +332,32 @@ endif()
 
 # OpenCL
 set(ALCEDO_OPENCL_ENABLED OFF)
-if(ALCEDO_ENABLE_OPENCL AND WIN32)
+if(ALCEDO_ENABLE_OPENCL)
     find_package(OpenCL QUIET)
 endif()
-if(ALCEDO_ENABLE_OPENCL AND WIN32 AND OpenCL_FOUND)
+if(ALCEDO_ENABLE_OPENCL AND OpenCL_FOUND)
     add_compile_definitions(HAVE_OPENCL)
+    # HAVE_OPENCL is a project-wide feature definition because several public
+    # image/editor headers expose OpenCL-backed types.  Those headers can be
+    # parsed by targets that do not link OpenCL::OpenCL directly, so make the
+    # package's header directory available at the directory scope as well as
+    # through the imported link target.
+    set(_alcedo_opencl_include_dirs "${OpenCL_INCLUDE_DIRS}")
+    if(TARGET OpenCL::OpenCL)
+        get_target_property(_alcedo_opencl_target_include_dirs
+            OpenCL::OpenCL INTERFACE_INCLUDE_DIRECTORIES)
+        if(_alcedo_opencl_target_include_dirs)
+            list(APPEND _alcedo_opencl_include_dirs
+                ${_alcedo_opencl_target_include_dirs})
+        endif()
+    endif()
+    list(REMOVE_DUPLICATES _alcedo_opencl_include_dirs)
+    if(_alcedo_opencl_include_dirs)
+        include_directories(SYSTEM ${_alcedo_opencl_include_dirs})
+    endif()
+    unset(_alcedo_opencl_include_dirs)
+    unset(_alcedo_opencl_target_include_dirs)
     set(ALCEDO_OPENCL_ENABLED ON)
-elseif(ALCEDO_ENABLE_OPENCL AND NOT WIN32)
-    message(STATUS "OpenCL support is only available on Windows in Alcedo; building without OpenCL support.")
 elseif(ALCEDO_ENABLE_OPENCL)
     message(STATUS "OpenCL SDK/ICD loader not found; building without OpenCL support.")
 endif()
@@ -401,17 +419,50 @@ set_target_properties(MurmurHash3 PROPERTIES
 )
 
 # xxHash
-find_package(xxHash CONFIG REQUIRED)
-# Create a unified alias target 'xxHash' so the rest of the project can link to it.
-if (NOT TARGET xxHash)
+# Prefer a package-provided CMake target, then fall back to the standard Linux
+# pkg-config/module search paths. The latter is needed on distributions that
+# ship libxxhash with a .pc file but no xxHashConfig.cmake package config.
+find_package(xxHash CONFIG QUIET)
+if(NOT TARGET xxHash::xxhash AND NOT TARGET xxhash)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALCEDO_XXHASH QUIET IMPORTED_TARGET libxxhash)
+    endif()
+
+    if(TARGET PkgConfig::ALCEDO_XXHASH)
+        add_library(xxHash INTERFACE)
+        target_link_libraries(xxHash INTERFACE PkgConfig::ALCEDO_XXHASH)
+    else()
+        find_path(ALCEDO_XXHASH_INCLUDE_DIR NAMES xxhash.h)
+        find_library(ALCEDO_XXHASH_LIBRARY NAMES xxhash)
+        if(NOT ALCEDO_XXHASH_INCLUDE_DIR OR NOT ALCEDO_XXHASH_LIBRARY)
+            message(FATAL_ERROR
+                "xxHash was not found as a CMake package, pkg-config module, or standard library/header pair. "
+                "Install the xxHash development package or set CMAKE_PREFIX_PATH.")
+        endif()
+        add_library(xxHash INTERFACE)
+        target_include_directories(xxHash INTERFACE "${ALCEDO_XXHASH_INCLUDE_DIR}")
+        target_link_libraries(xxHash INTERFACE "${ALCEDO_XXHASH_LIBRARY}")
+    endif()
+endif()
+
+# Create a unified target 'xxHash' so the rest of the project can link to any
+# supported package target spelling.
+if(NOT TARGET xxHash)
     add_library(xxHash INTERFACE)
-    if (TARGET xxHash::xxhash)
+    if(TARGET xxHash::xxhash)
         target_link_libraries(xxHash INTERFACE xxHash::xxhash)
-    elseif (TARGET xxhash)
+    elseif(TARGET xxhash)
         target_link_libraries(xxHash INTERFACE xxhash)
     else()
         message(FATAL_ERROR "xxHash package found but no known CMake target (xxHash::xxhash or xxhash) was defined.")
     endif()
+endif()
+# A few existing test manifests use the namespaced spelling directly. Keep it
+# available even when the Linux fallback above had to create the unified target
+# from pkg-config or find_library.
+if(NOT TARGET xxHash::xxhash)
+    add_library(xxHash::xxhash ALIAS xxHash)
 endif()
 
 # JSON  
@@ -428,13 +479,21 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
 
+set(ALCEDO_OPENGL_GLX_ENABLED OFF)
 if(WIN32 AND ALCEDO_OPENCL_ENABLED)
     find_package(OpenGL REQUIRED)
+elseif(UNIX AND NOT APPLE AND ALCEDO_OPENCL_ENABLED)
+    # Linux Qt installations may use either X11/GLX or Wayland/EGL. GLX is
+    # optional here; the EGL bootstrap remains available when only EGL exists.
+    find_package(OpenGL QUIET COMPONENTS GLX)
+    if(OpenGL_GLX_FOUND)
+        set(ALCEDO_OPENGL_GLX_ENABLED ON)
+    endif()
 endif()
 
-if((WIN32 AND (ALCEDO_CUDA_ENABLED OR ALCEDO_OPENCL_ENABLED)) OR (APPLE AND ALCEDO_METAL_ENABLED))
-    find_package(Qt6 REQUIRED COMPONENTS ShaderTools GuiPrivate)
-endif()
+# The editor RHI targets are built on every desktop platform and use both
+# qt_add_shaders() and Qt private GUI headers, including the Linux CPU path.
+find_package(Qt6 REQUIRED COMPONENTS ShaderTools GuiPrivate)
 
 # Profiler/hwy/lcms2
 # if (WIN32)
@@ -443,8 +502,8 @@ endif()
 # endif()
 find_package(hwy CONFIG REQUIRED)
 
-if (WIN32)
-find_package(lcms2 CONFIG REQUIRED)
+if(WIN32)
+    find_package(lcms2 CONFIG REQUIRED)
 elseif(APPLE)
     find_library(LCMS2_LIB NAMES lcms2 PATHS ${ALCEDO_LIBRARY_HINTS})
     find_path(LCMS2_INC NAMES lcms2.h PATHS ${ALCEDO_INCLUDE_HINTS})
@@ -454,9 +513,36 @@ elseif(APPLE)
     else()
         message(FATAL_ERROR "lcms2 not found. Install via Homebrew (little-cms2) or set CMAKE_PREFIX_PATH to its prefix.")
     endif()
-endif()
-if(UNIX AND NOT APPLE)
-    find_package(lcms2 REQUIRED)
+elseif(UNIX)
+    find_package(lcms2 CONFIG QUIET)
+    if(NOT TARGET lcms2::lcms2 AND TARGET lcms2)
+        add_library(lcms2::lcms2 ALIAS lcms2)
+    endif()
+    if(NOT TARGET lcms2::lcms2)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(ALCEDO_LCMS2 QUIET IMPORTED_TARGET lcms2)
+        endif()
+    endif()
+    if(TARGET PkgConfig::ALCEDO_LCMS2)
+        add_library(alcedo_lcms2 INTERFACE)
+        target_link_libraries(alcedo_lcms2 INTERFACE PkgConfig::ALCEDO_LCMS2)
+        add_library(lcms2::lcms2 ALIAS alcedo_lcms2)
+    elseif(NOT TARGET lcms2::lcms2)
+        find_library(ALCEDO_LCMS2_LIBRARY NAMES lcms2)
+        find_path(ALCEDO_LCMS2_INCLUDE_DIR NAMES lcms2.h)
+        if(ALCEDO_LCMS2_LIBRARY AND ALCEDO_LCMS2_INCLUDE_DIR)
+            add_library(lcms2::lcms2 SHARED IMPORTED)
+            set_target_properties(lcms2::lcms2 PROPERTIES
+                IMPORTED_LOCATION "${ALCEDO_LCMS2_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${ALCEDO_LCMS2_INCLUDE_DIR}")
+        else()
+            message(FATAL_ERROR
+                "LittleCMS (lcms2) was not found as a CMake package, pkg-config module, "
+                "or standard library/header pair. Install the lcms2 development package "
+                "or set CMAKE_PREFIX_PATH.")
+        endif()
+    endif()
 endif()
 
 # OpenColorIO
