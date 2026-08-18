@@ -1,1 +1,5 @@
-IDI_ALCEDO_MAIN_ICON ICON "alcedo_icon.ico"
+// Application icon resource for Explorer, Start Menu, and desktop shortcuts.
+// Keep the numeric ID and symbol distinct from previously shipped marks so
+// Windows does not keep serving a cached OR/bird icon for alcedo_main.exe.
+#define IDI_ALCEDO_STUDIO_AO 1
+IDI_ALCEDO_STUDIO_AO ICON "alcedo_icon.ico"

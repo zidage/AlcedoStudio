@@ -383,11 +383,48 @@ if(APPLE)
 endif()
 
 if(WIN32)
+    # Brand icon pipeline (Windows + macOS):
+    #   scripts/build_app_icons.ps1  ->  cargo tauri icon
+    # writes config/ICON/alcedo_icon.{png,ico,icns}. Explorer / Start Menu /
+    # desktop shortcuts read the PE RT_ICON resource compiled from
+    # alcedo_main.rc, not the Qt RCC copy used by setWindowIcon.
+    set(ALCEDO_MAIN_ICON_ICO "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.ico")
     set(ALCEDO_MAIN_ICON_RC "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_main.rc")
-    if(EXISTS "${ALCEDO_MAIN_ICON_RC}")
-        target_sources(alcedo_main PRIVATE "${ALCEDO_MAIN_ICON_RC}")
+    if(EXISTS "${ALCEDO_MAIN_ICON_RC}" AND EXISTS "${ALCEDO_MAIN_ICON_ICO}")
+        # rc.exe only lists the .rc as a compile input. Without OBJECT_DEPENDS,
+        # incrementally packaged builds keep the previous .res and ship the
+        # retired OR mark after the ICO is refreshed.
+        set_source_files_properties("${ALCEDO_MAIN_ICON_RC}" PROPERTIES
+            OBJECT_DEPENDS "${ALCEDO_MAIN_ICON_ICO}"
+        )
+        set_property(DIRECTORY APPEND PROPERTY
+            CMAKE_CONFIGURE_DEPENDS "${ALCEDO_MAIN_ICON_ICO}"
+        )
+        target_sources(alcedo_main PRIVATE
+            "${ALCEDO_MAIN_ICON_RC}"
+            "${ALCEDO_MAIN_ICON_ICO}"
+        )
+        set_source_files_properties("${ALCEDO_MAIN_ICON_ICO}" PROPERTIES
+            HEADER_FILE_ONLY TRUE
+        )
+        # Sidecar used by NSIS Start Menu / desktop shortcuts so Explorer can
+        # pick up a newly named mark after an in-place upgrade.
+        install(FILES "${ALCEDO_MAIN_ICON_ICO}"
+            DESTINATION "${CMAKE_INSTALL_BINDIR}"
+            RENAME "alcedo_studio_ao.ico"
+        )
+        add_custom_command(TARGET alcedo_main POST_BUILD
+            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_SOURCE_DIR}/scripts/verify_windows_exe_icon.ps1"
+                -Exe "$<TARGET_FILE:alcedo_main>"
+                -Ico "${ALCEDO_MAIN_ICON_ICO}"
+            COMMENT "Verifying alcedo_main.exe PE icon matches alcedo_icon.ico"
+            VERBATIM
+        )
     else()
-        message(WARNING "Windows app icon resource not found: ${ALCEDO_MAIN_ICON_RC}")
+        message(WARNING
+            "Windows app icon resource not found: ${ALCEDO_MAIN_ICON_RC} / "
+            "${ALCEDO_MAIN_ICON_ICO}")
     endif()
 endif()
 
