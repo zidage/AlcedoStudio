@@ -93,14 +93,14 @@ ScrollView {
             Layout.bottomMargin: 20
             spacing: 24
 
-            StatsCard {
+            DateFilterSection {
                 Layout.fillWidth: true
                 title: qsTr("By Capture Date")
                 accentColor: appTheme.toneSteel
                 model: appModules.stats.dateStats
                 selectedLabel: appModules.stats.statsFilterDate
-                displayMode: "grouped"
-                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("date", label) }
+                folderKey: appModules.folders.currentFolderId
+                onDayClicked: function(label) { appModules.stats.ToggleStatsFilter("date", label) }
             }
 
             StatsCard {

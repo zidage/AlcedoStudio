@@ -8,6 +8,7 @@ Owner: `alcedo_studio/src/ui/alcedo_main`
 Implementation source of truth: `AppTheme` (`app_theme.hpp` / `app_theme.cpp`)  
 Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
+`SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`
 
 This document freezes the visual system for the unified QML workspace (Phase 4C).
@@ -183,6 +184,34 @@ inside the card — not a nested second card of the same fill.
 | `spaceMd` | 12 | Default panel padding, desktop row gap |
 | `spaceLg` | 16 | Panel title margins |
 | `spaceXl` | 20 | Rare large separation |
+
+### Library date activity graph
+
+Capture-date heatmap in the album inspector (GitHub contribution-graph layout,
+week columns that wrap to the inspector width). Geometry is independent of the
+spacing ladder because the cells must stay dense enough for 365/366 days.
+
+| Token | px | Use |
+| --- | --- | --- |
+| `dateGraphCellMinSize` | 10 | Floor for a day square; cells grow to fill the wrap row |
+| `dateGraphCellGap` | 3 | Gap between day squares (GitHub pitch) |
+| `dateGraphCellRadius` | 2 | Day-square corner |
+
+Intensity uses `toneSteel` (same accent as the calendar date filter), not GitHub
+green and not ad-hoc QML alpha:
+
+| Token | Use |
+| --- | --- |
+| `dateGraphLevel0Color` | Empty / padding day (`bgBase` toward `textMuted`) |
+| `dateGraphLevel1Color` | Lowest non-zero bucket |
+| `dateGraphLevel2Color` | Mid-low bucket |
+| `dateGraphLevel3Color` | Mid-high bucket |
+| `dateGraphLevel4Color` | Peak bucket (`toneSteel`) |
+
+Selected day keeps its level fill and adds a 1 px `accentColor` outline so
+selection is not color-only. Month names sit above the week columns; there is
+no weekday gutter. Calendar / activity uses `SlidingIconNav`; the year
+picker reuses `AdjustmentCombo`. The day hover tip follows the pointer.
 
 ---
 

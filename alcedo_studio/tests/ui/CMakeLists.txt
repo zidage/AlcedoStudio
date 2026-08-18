@@ -1141,6 +1141,40 @@ target_link_libraries(EditorCdlTrackballGeometryTest
 alcedo_ui_gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
 alcedo_register_test_target(EditorCdlTrackballGeometryTest ui)
 
+# Library date activity graph: rolling year from latest photo, leap-year cells,
+# histogram cache across a date filter, and calendar/activity style switch.
+add_executable(DateCommitGraphQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/date_commit_graph_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(DateCommitGraphQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(DateCommitGraphQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(DateCommitGraphQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(DateCommitGraphQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(DateCommitGraphQmlTest
+    TEST_PREFIX "DateCommitGraphQmlTest."
+    PROPERTIES LABELS "workspace_qml;date_filter"
+)
+alcedo_register_test_target(DateCommitGraphQmlTest ui)
+
 # LUT panel QML: selection scroll contract, favorites, filter, appTheme VI tokens.
 add_executable(EditorLutPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_lut_panel_qml_test.cpp

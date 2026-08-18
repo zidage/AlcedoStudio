@@ -522,6 +522,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollectionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/GlobalSearchDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StatsCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DateCommitGraph.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/DateFilterSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StarRatingFilter.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuItem.qml"
