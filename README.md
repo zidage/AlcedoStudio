@@ -12,11 +12,11 @@
 
 **Alcedo Studio** is a free, open-source photography workstation for the day after a shoot.
 
-Import a card of RAWs and the library is ready to browse. Grade files up to 150 megapixels in 32-bit float on the GPU.
+Import a card of RAW files and start browsing. Grade up to 150-megapixel frames in 32-bit float on the GPU.
 
-The project is one [DuckDB](https://duckdb.org/) file with extra metadata. Album structure and the full edit history live inside it. One file to move and keep. No mess.
+One file follows your photos. It's a [DuckDB](https://duckdb.org/) database with extra metadata, and it holds your album structure and the full edit history. Move it, back it up, put it where you want. No mess, and searches across a large library stay fast.
 
-What's more, the grade follows a film-industry picture pipeline. Camera RAW becomes a scene-referred image. You work in a log space the way a DI suite grades ACEScc. Looks arrive as film-emulation LUTs. A display rendering transform then forms the picture for the monitor.
+What's more, it uses a film-industry workflow. In a DI suite, the colorist works on a scene-referred image in a log-like working space, and a fixed transform forms the final picture for the screen. That split is why modern color pipelines stay stable when shots, cameras, and deliverables change. Alcedo follows the same structure: your RAW becomes a scene-linear image, you grade in an ACEScc-style log space, film-emulation LUTs carry the look, and a display rendering transform makes the final picture. On macOS you can even watch HDR while you edit.
 
 Windows 10/11 x64 and Apple Silicon. Current release: [v0.2.9](https://github.com/zidage/AlcedoStudio/releases/tag/v0.2.9).
 
@@ -28,40 +28,34 @@ https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
 ## Features
 
-**Cameras, then RAW quality.** Tested across Canon, Nikon, Sony, Fujifilm, Panasonic, OM System, Leica, Hasselblad, Phase One (including IQ4 150MP), Pentax, Sigma, and phone / drone DNG. Lists: [supported formats](docs/supported_raw_formats.md) and [supported cameras](docs/supported_cameras.md). Nikon HE and HE★ NEFs from the Z 8, Z 9, Z 6 III, and Z 50 II decode through the project's [LibRaw fork](https://github.com/zidage/LibRaw) with special performance optimization.
+**Work with most cameras.** Tested across Canon, Nikon, Sony, Fujifilm, Panasonic, OM System, Leica, Hasselblad, Phase One (including IQ4 150MP), Pentax, Sigma, and phone / drone DNG. Lists: [supported formats](docs/supported_raw_formats.md) and [supported cameras](docs/supported_cameras.md). Nikon HE and HE★ NEFs from the Z 8, Z 9, Z 6 III, and Z 50 II decode through the project's [LibRaw fork](https://github.com/zidage/LibRaw). You can also pick the demosaic: Default, RCD, or Neural Engine (a distilled [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/) on the GPU, Bayer and X-Trans). Highlight reconstruction comes from an improved inpaint-opposed method, adapted from darktable and RawTherapee.
 
-Pick the demosaic: Default, RCD, or Neural Engine (a distilled [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/) on the GPU, Bayer and X-Trans). Highlight reconstruction uses an improved inpaint-opposed method originally from darktable and RawTherapee.
+**High-performance processing core.** Drag a slider and the preview holds 2.5K at 60 frames per second. When you stop, the preview sharpens to 4K, so your high-megapixel camera still shows what it captured. An RGB histogram and waveform follow the image. CUDA on NVIDIA, OpenCL on other Windows GPUs, Metal on macOS. A tuned cache keeps interactions fast and memory use low. It also provides a wide range of adjustment tools, from local tone mapping (highlights and shadows) to CDL color wheels, all carefully tuned for photography.
 
-**Smooth at 2.5K@60.** Drag a slider and the preview holds 2.5K at 60 FPS. When you stop, it can reach 4K, so your high-megapixel camera still looks like itself. An RGB histogram and a waveform update with the picture and guide the next move. CUDA on NVIDIA, OpenCL on other Windows GPUs, Metal on macOS. A cache keeps that performance with low memory. You set the thumbnail disk cache: location, size, quality, on or off, no mysterious disk space occupancy.
+**A display rendering transform forms the picture.** Scene-linear RAW holds colors and dynamic range a monitor can't show on its own. A DRT (Display Rendering Transform) is the look decision that maps that range onto the screen. That transform sits at the heart of modern film pipelines, and there's a good public write-up in [Chris Brejon's article on picture formation](https://chrisbrejon.com/articles/what-makes-a-good-picture-formation/). Alcedo provides ACES 2.0 and OpenDRT. Grade toward sRGB, wide-gamut, or HDR. You pick the target color space, the EOTF, and the HDR peak luminance. On macOS, the preview supports HDR while you edit.
 
-**A display rendering transform forms the picture.** Scene-linear RAW holds color and dynamic range a monitor can't show as-is. A DRT (picture formation) is the look decision that maps that range onto the display. See [Chris Brejon on picture formation](https://chrisbrejon.com/articles/what-makes-a-good-picture-formation/) for more information about DRT. You can use ACES 2.0 or OpenDRT, grading toward sRGB, wide-gamut, or HDR: choose the encoding color space, the EOTF, and HDR peak luminance. On macOS you even get an HDR preview while you edit.
+**Film-emulation LUTs.** [CUBE LUTs generated from real film-stock spectral response](https://github.com/JanLohse/spectral_film_lut), plus grain and halation with a physical model behind them.
 
-**Film-emulation LUTs.** [CUBE LUTs generated from real film-stock spectral response](https://github.com/JanLohse/spectral_film_lut), plus grain and halation designed with physical properties.
+**Looks you keep, copy, and walk back.** A photo can hold several named looks, so you can compare and come back. You can copy a look onto another photo, or merge parts of one look into another. Every adjustment leaves a record, and you can return to every step. That whole history stays with the project file, so the undo trail is still there next month. The edit history is backed by a Git-like version control system. For more information, see [Edit History](https://zidage.github.io/AlcedoStudio_docs/en/docs/developer/edit-history-architecture).
 
-**Looks you can keep, copy, and walk back.** Named versions hold different looks on a photo so you can compare. Copy a look onto another photo, or merge fields from one look into another. Every adjustment is a step you can undo. That history stays in the project file, so the undo trail is still there next month.
+**Export with highly customizable configurations.** Configure format, size, naming, metadata, and ICC profile. JPEG, PNG, TIFF, or EXR up to 32-bit. Original pixels, a longest edge, pixel bounds, or a print size at a set DPI. File names can draw from the source name, capture date, camera, lens, exposure, rating, and a running sequence.
 
-**Export with highly customizable configurations.** Format, size, naming, metadata, ICC, and alpha, from the inspector. JPEG, PNG, TIFF, or EXR (up to 32-bit). Original pixels, longest edge, pixel bounds, or print size with DPI. File names can use source name, capture date, camera, lens, exposure, rating, and sequence.
+**Describe, review, and rate.** Connect an LLM provider you already use, and it writes a description, a 1–5 star rating, and a short rating reason. You control how strict the review is. You can also run this analysis in the background while you browse or edit images.
 
-**Review and rate.** Connect an LLM you already use (OpenAI-compatible, Anthropic, or Volcengine Ark). It writes a description, a 1–5 star rating, and a short reason into EXIF. You set how strict the review is.
+**Tag it. Find it.** The library supports semantic tagging. Multilingual CLIP models run locally and tag every photo, so a scene, a subject, or a phrase becomes a query — no manual keywording. Global search mixes field filters (camera, date, lens) with natural-language search by meaning, and the album inspector maps the same library by capture date, camera, lens, labels, and rating. You can also manage models and configure auto tagging after import.
 
-**Tag it. Find it.** Local multilingual CLIP models label the library. Type a scene, a camera, a date, or a phrase. The inspector maps the same library by capture date, camera, lens, labels, and rating. You can manage the CLIP models yourself by downloading a new model, activating an existing model for your library, and deleting a downloaded model to free up space.
-
-**The library stays fast on a big shoot.** DuckDB is built so a whole card of photos can answer at once. Filter by Saturday, a 35mm, and five stars, and the grid updates. The inspector can tell you how many frames you shot on each body that week.
-
-FTS is there so the words in a description or tag work as a query: "red umbrella" hits the caption, not only the filename. HNSW is there so photos that look alike sit near each other: a phrase finds frames by meaning, even when nobody typed that filename.
-
-Put the file where you want. Move it. Back it up.
+**The library stays fast.** The library uses an inode-like file system stored in a DuckDB database. Full-text search lets the words in an LLM description work as a query: "red umbrella" matches the description, not only the filename. HNSW vector search keeps similar photos close, so a phrase can find images by their content.
 
 ## System requirements
 
 - **Windows**: 10/11 x64. NVIDIA GPU (compute capability 6.0+) for CUDA; other GPUs use OpenCL.
 - **macOS**: Apple Silicon (M1 or newer), macOS 13.3 or later, Metal.
-- 8GB RAM minimum (16GB+ for large libraries).
+- 8GB RAM minimum (16GB and up if your library is large).
 - Release builds install signed updates from Settings → Updates.
 
 ## Documentation
 
-User guides and build notes: [documentation site](https://zidage.github.io/AlcedoStudio_docs/docs/intro). Source build: [docs/build_from_source.md](docs/build_from_source.md). Development plans made by AI agents: [docs/roadmap/roadmap.md](docs/roadmap/roadmap.md). Change logs: [docs/changelog/](docs/changelog/).
+User guides and build notes: [documentation site](https://zidage.github.io/AlcedoStudio_docs/docs/intro). Source build: [docs/build_from_source.md](docs/build_from_source.md). Change logs: [docs/changelog/](docs/changelog/).
 
 ## Acknowledgements
 
@@ -76,4 +70,4 @@ User guides and build notes: [documentation site](https://zidage.github.io/Alced
 
 ## License
 
-Alcedo Studio is licensed under GPL-3.0-only. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Alcedo Studio is licensed under the GNU General Public License v3.0 (GPL-3.0-only). See [LICENSE](LICENSE) and [NOTICE](NOTICE).
