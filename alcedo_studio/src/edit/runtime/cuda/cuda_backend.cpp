@@ -29,11 +29,11 @@ CudaCommandContext::CudaCommandContext(CudaCommandContext&& other) noexcept
 auto CudaCommandContext::operator=(CudaCommandContext&& other) noexcept -> CudaCommandContext& {
   if (this != &other) {
     Destroy();
-    stream_            = other.stream_;
-    event_             = other.event_;
-    submission_id_     = other.submission_id_;
-    other.stream_      = nullptr;
-    other.event_       = nullptr;
+    stream_              = other.stream_;
+    event_               = other.event_;
+    submission_id_       = other.submission_id_;
+    other.stream_        = nullptr;
+    other.event_         = nullptr;
     other.submission_id_ = 0;
   }
   return *this;
@@ -170,8 +170,7 @@ auto CudaBackend::CreateBuffer(std::size_t bytes) -> Buffer {
 
 auto CudaBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, TextureFormat format)
     -> Texture2D {
-  const auto bytes =
-      static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(format);
+  const auto bytes = static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(format);
   if (bytes == 0) {
     return {};
   }
@@ -183,7 +182,7 @@ auto CudaBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Tex
 
 void CudaBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                                     std::span<const std::byte> bytes,
-                                    CommandContext& command_context) {
+                                    CommandContext&            command_context) {
   if (fail_next_upload_) {
     fail_next_upload_ = false;
     throw std::runtime_error("CudaBackend::UploadBufferRange: injected failure");
@@ -200,13 +199,12 @@ void CudaBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                   "CudaBackend::UploadBufferRange");
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
-  last_h2d_ranges_.push_back(
-      ByteRange{offset, static_cast<std::uint32_t>(bytes.size())});
+  last_h2d_ranges_.push_back(ByteRange{offset, static_cast<std::uint32_t>(bytes.size())});
 }
 
 void CudaBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset,
                                       std::span<std::byte> out,
-                                      CommandContext& command_context) const {
+                                      CommandContext&      command_context) const {
   if (out.empty()) {
     return;
   }
@@ -241,6 +239,27 @@ void CudaBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte>
                   "CudaBackend::UploadTexture2D");
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
+}
+
+void CudaBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
+                                      std::span<const std::byte> bytes,
+                                      CommandContext&            command_context) {
+  if (texture.Format() != TextureFormat::R8 || rectangle.x < 0 || rectangle.y < 0 ||
+      rectangle.width <= 0 || rectangle.height <= 0 ||
+      rectangle.X1() > static_cast<std::int32_t>(texture.Width()) ||
+      rectangle.Y1() > static_cast<std::int32_t>(texture.Height()) ||
+      bytes.size() != static_cast<std::size_t>(rectangle.width) * rectangle.height) {
+    throw std::runtime_error("CudaBackend::UploadR8TextureRect: invalid rectangle");
+  }
+  auto* destination = static_cast<std::byte*>(texture.DevicePointer()) +
+                      static_cast<std::size_t>(rectangle.y) * texture.Width() + rectangle.x;
+  cuda::CheckCuda(::cudaMemcpy2DAsync(destination, texture.Width(), bytes.data(), rectangle.width,
+                                      rectangle.width, rectangle.height, cudaMemcpyHostToDevice,
+                                      command_context.Stream()),
+                  "CudaBackend::UploadR8TextureRect");
+  ++h2d_copy_count_;
+  h2d_bytes_ += bytes.size();
+  last_texture_rectangles_.push_back(rectangle);
 }
 
 void CudaBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
@@ -280,8 +299,6 @@ void CudaBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::byt
                   "CudaBackend::DownloadTexture2D sync");
 }
 
-void CudaBackend::GenerateMaskMipLevels(Texture2D&) {}
-
 void CudaBackend::Submit(CommandContext& command_context) {
   cuda::CheckCuda(::cudaEventRecord(command_context.Event(), command_context.Stream()),
                   "CudaBackend::Submit");
@@ -303,6 +320,7 @@ void CudaBackend::ResetCounters() {
   h2d_copy_count_ = 0;
   h2d_bytes_      = 0;
   last_h2d_ranges_.clear();
+  last_texture_rectangles_.clear();
 }
 
 void CudaBackend::FailNextUpload() { fail_next_upload_ = true; }

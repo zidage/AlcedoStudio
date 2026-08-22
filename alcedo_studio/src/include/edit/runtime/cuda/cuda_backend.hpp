@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-#include <cuda_runtime.h>
-
+#include "edit/geometry/types.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -26,10 +27,10 @@ class CudaCommandContext {
   CudaCommandContext();
   ~CudaCommandContext();
 
-  CudaCommandContext(const CudaCommandContext&)            = delete;
+  CudaCommandContext(const CudaCommandContext&)                    = delete;
   auto operator=(const CudaCommandContext&) -> CudaCommandContext& = delete;
   CudaCommandContext(CudaCommandContext&& other) noexcept;
-  auto operator=(CudaCommandContext&& other) noexcept -> CudaCommandContext&;
+  auto               operator=(CudaCommandContext&& other) noexcept -> CudaCommandContext&;
 
   [[nodiscard]] auto Stream() const -> cudaStream_t { return stream_; }
   [[nodiscard]] auto Event() const -> cudaEvent_t { return event_; }
@@ -37,7 +38,7 @@ class CudaCommandContext {
   void               SetSubmissionId(std::uint64_t id) { submission_id_ = id; }
 
  private:
-  void Destroy() noexcept;
+  void          Destroy() noexcept;
 
   cudaStream_t  stream_        = nullptr;
   cudaEvent_t   event_         = nullptr;
@@ -58,17 +59,17 @@ class CudaBackend {
     Buffer(CudaBackend* owner, void* ptr, std::size_t bytes, std::uint64_t id);
     ~Buffer();
 
-    Buffer(const Buffer&)            = delete;
+    Buffer(const Buffer&)                    = delete;
     auto operator=(const Buffer&) -> Buffer& = delete;
     Buffer(Buffer&& other) noexcept;
-    auto operator=(Buffer&& other) noexcept -> Buffer&;
+    auto               operator=(Buffer&& other) noexcept -> Buffer&;
 
     [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
     [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
     [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
     [[nodiscard]] auto Empty() const -> bool { return ptr_ == nullptr; }
 
-    void Reset() noexcept;
+    void               Reset() noexcept;
 
    private:
     CudaBackend*  owner_       = nullptr;
@@ -84,10 +85,10 @@ class CudaBackend {
               std::uint32_t height, TextureFormat format, std::uint64_t id);
     ~Texture2D();
 
-    Texture2D(const Texture2D&)            = delete;
+    Texture2D(const Texture2D&)                    = delete;
     auto operator=(const Texture2D&) -> Texture2D& = delete;
     Texture2D(Texture2D&& other) noexcept;
-    auto operator=(Texture2D&& other) noexcept -> Texture2D&;
+    auto               operator=(Texture2D&& other) noexcept -> Texture2D&;
 
     [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
     [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
@@ -96,7 +97,7 @@ class CudaBackend {
     [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
     [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
 
-    void Reset() noexcept;
+    void               Reset() noexcept;
 
    private:
     CudaBackend*  owner_       = nullptr;
@@ -108,14 +109,14 @@ class CudaBackend {
     std::uint64_t resource_id_ = 0;
   };
 
-  using Slab            = Buffer;
-  using CommandContext  = CudaCommandContext;
+  using Slab                                                       = Buffer;
+  using CommandContext                                             = CudaCommandContext;
 
-  CudaBackend()  = default;
-  ~CudaBackend() = default;
+  CudaBackend()                                                    = default;
+  ~CudaBackend()                                                   = default;
 
-  CudaBackend(const CudaBackend&)            = delete;
-  auto operator=(const CudaBackend&) -> CudaBackend& = delete;
+  CudaBackend(const CudaBackend&)                                  = delete;
+  auto               operator=(const CudaBackend&) -> CudaBackend& = delete;
 
   [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
   [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
@@ -133,6 +134,9 @@ class CudaBackend {
    */
   void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                        CommandContext& command_context);
+  /** @brief Upload a tightly packed R8 rectangle into an R8 texture. */
+  void UploadR8TextureRect(Texture2D& texture, RectI rectangle, std::span<const std::byte> bytes,
+                           CommandContext& command_context);
   void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
                          CommandContext& command_context) const;
 
@@ -142,25 +146,20 @@ class CudaBackend {
   void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                           CommandContext& command_context);
 
-  /// G6 will generate mips. G2 keeps the entry and does nothing.
-  void GenerateMaskMipLevels(Texture2D& texture);
-
   void Submit(CommandContext& command_context);
   void Wait(CommandContext& command_context);
 
-  [[nodiscard]] auto HasInFlightSubmission() const -> bool {
-    return in_flight_submission_ != 0;
-  }
+  [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
     return submitted_on != 0 && submitted_on > completed_submission_;
   }
   [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
 
-  void NoteFree() noexcept { ++free_count_; }
+  void               NoteFree() noexcept { ++free_count_; }
 
-  void ResetCounters();
-  void FailNextUpload();
-  void NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
+  void               ResetCounters();
+  void               FailNextUpload();
+  void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
 
   [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
   [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
@@ -169,23 +168,27 @@ class CudaBackend {
   [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
     return last_h2d_ranges_;
   }
+  [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
+    return last_texture_rectangles_;
+  }
 
  private:
   friend class Buffer;
   friend class Texture2D;
 
-  void NoteMalloc() noexcept { ++malloc_count_; }
+  void                   NoteMalloc() noexcept { ++malloc_count_; }
 
-  std::uint64_t         malloc_count_          = 0;
-  std::uint64_t         free_count_            = 0;
-  std::uint64_t         h2d_copy_count_        = 0;
-  std::uint64_t         h2d_bytes_             = 0;
-  std::uint64_t         next_resource_id_      = 1;
-  std::uint64_t         next_submission_       = 0;
-  std::uint64_t         in_flight_submission_  = 0;
-  std::uint64_t         completed_submission_  = 0;
-  bool                  fail_next_upload_      = false;
+  std::uint64_t          malloc_count_         = 0;
+  std::uint64_t          free_count_           = 0;
+  std::uint64_t          h2d_copy_count_       = 0;
+  std::uint64_t          h2d_bytes_            = 0;
+  std::uint64_t          next_resource_id_     = 1;
+  std::uint64_t          next_submission_      = 0;
+  std::uint64_t          in_flight_submission_ = 0;
+  std::uint64_t          completed_submission_ = 0;
+  bool                   fail_next_upload_     = false;
   std::vector<ByteRange> last_h2d_ranges_;
+  std::vector<RectI>     last_texture_rectangles_;
 };
 
 }  // namespace alcedo

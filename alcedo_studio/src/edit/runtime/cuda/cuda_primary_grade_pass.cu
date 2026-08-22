@@ -284,7 +284,7 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
                                    const unsigned char*         parameter_base,
                                    const CudaAdjustmentCommand* commands,
                                    std::uint32_t command_count, CameraToAp1Params camera,
-                                   float local_reference) {
+                                   float local_reference, const std::uint8_t* mask) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   const float4 source = input[index];
@@ -298,10 +298,11 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
         parameter_base + commands[i].parameter_offset);
     c = ApplyAdjustment(c, *params, index, local_reference);
   }
-  c.x           = converted.x + (c.x - converted.x) * camera.mix;
-  c.y           = converted.y + (c.y - converted.y) * camera.mix;
-  c.z           = converted.z + (c.z - converted.z) * camera.mix;
-  output[index] = make_float4(c.x, c.y, c.z, source.w);
+  const float mix = camera.mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
+  c.x             = converted.x + (c.x - converted.x) * mix;
+  c.y             = converted.y + (c.y - converted.y) * mix;
+  c.z             = converted.z + (c.z - converted.z) * mix;
+  output[index]   = make_float4(c.x, c.y, c.z, source.w);
 }
 
 }  // namespace
@@ -398,13 +399,22 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     throw std::runtime_error("ExecuteCudaPrimaryGrade: workspace image has no CUDA allocation");
   }
   const auto camera = MakeCameraToAp1(color_context, grade->Enabled() ? grade->Mix() : 0.0f);
+  const std::uint8_t* mask_pointer = nullptr;
+  if (plan.primary_grade_mask) {
+    auto* mask = workspace.Images().Find(plan.mask_output);
+    if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
+        mask->Texture().Width() != input_width || mask->Texture().Height() != input_height) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
+    }
+    mask_pointer = static_cast<const std::uint8_t*>(mask->Texture().DevicePointer());
+  }
   const std::uint32_t     pixels = input_width * input_height;
   constexpr std::uint32_t block  = 256;
   PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
       static_cast<const float4*>(input_pointer), static_cast<float4*>(output_pointer), pixels,
       static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer()),
       static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer()),
-      static_cast<std::uint32_t>(commands.size()), camera, 0.18f);
+      static_cast<std::uint32_t>(commands.size()), camera, 0.18f, mask_pointer);
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
   }

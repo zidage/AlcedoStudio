@@ -60,10 +60,11 @@ void RequireDefaultEndpoints(const PipelineDocument& document) {
   for (const auto& node : document.Graph().Nodes()) {
     const auto& type = node->Type();
     if (type == type_ids::DevelopNode() || type == type_ids::ColorGradeNode() ||
-        type == type_ids::DrtNode()) {
+        type == type_ids::DrtNode() || type == type_ids::AnalyticMaskNode() ||
+        type == type_ids::RasterMaskNode()) {
       continue;
     }
-    throw std::runtime_error("GraphCompiler: G4 compiles only the default three-node document");
+    throw std::runtime_error("GraphCompiler: unsupported GPU DAG node");
   }
 }
 
@@ -81,6 +82,7 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
   plan.source               = source;
   plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
   plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
+  const auto* grade         = document.PrimaryGrade();
 
   if (source.kind == DevelopInputKind::DirectRgb) {
     plan.passes.push_back(GpuPassDesc{GpuPassKind::UploadRgb});
@@ -95,9 +97,21 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
   plan.passes.push_back(GpuPassDesc{GpuPassKind::Lens});
   plan.passes.push_back(GpuPassDesc{GpuPassKind::GeometryResample});
   plan.passes.push_back(GpuPassDesc{GpuPassKind::CameraToAp1});
+  for (const auto& edge : document.Graph().Edges()) {
+    if (edge.to_node == grade->Id() && edge.to_port == PortId{"mask"}) {
+      const auto* mask = document.Graph().FindNode(edge.from_node);
+      if (mask == nullptr) throw std::runtime_error("GraphCompiler: mask edge has no source");
+      const auto kind = mask->Type() == type_ids::RasterMaskNode() ? CompiledMaskKind::Raster
+                                                                   : CompiledMaskKind::Analytic;
+      plan.primary_grade_mask = CompiledMask{mask->Id(), kind};
+      plan.mask_output        = GraphValueId{mask->Id(), PortId{"mask"}};
+      plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskEvaluate});
+      plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskFeather});
+      break;
+    }
+  }
   plan.passes.push_back(GpuPassDesc{GpuPassKind::PrimaryColorGrade});
 
-  const auto* grade = document.PrimaryGrade();
   for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
     plan.primary_grade_adjustments.push_back(
         {grade->AdjustmentIdAt(index), grade->AdjustmentAt(index).Type()});

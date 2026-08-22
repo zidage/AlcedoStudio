@@ -7,20 +7,35 @@
 #include <string>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
 
-TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder) {
+TEST(GpuDagModelGraph, RasterMaskRoundTripPreservesMaskAssetKey) {
   auto document = CreateDefaultPipelineDocument();
+  auto mask     = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.persisted"});
+  mask->SetAssetKey(MaskAssetKey{"asset_01"});
+  document.Graph().AddNode(std::move(mask));
+  document.Graph().Connect(NodeId{"mask.persisted"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
+  const auto  restored = PipelineDocument::FromJson(document.ToJson());
+  const auto* restored_mask =
+      dynamic_cast<const RasterMaskNodeModel*>(restored.Graph().FindNode("mask.persisted"));
+  ASSERT_NE(restored_mask, nullptr);
+  EXPECT_EQ(restored_mask->AssetKey(), MaskAssetKey{"asset_01"});
+}
+
+TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder) {
+  auto  document = CreateDefaultPipelineDocument();
   auto* exposure = dynamic_cast<ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(1.25f);
   document.PrimaryGrade()->MoveAdjustment(AdjustmentInstanceId{"grade.primary.film_grain"}, 8);
 
-  const auto json     = document.ToJson();
+  const auto json = document.ToJson();
   EXPECT_EQ(json["format_version"], 2);
   EXPECT_FALSE(json.dump().find("stage") != std::string::npos && json.contains("stage"));
   EXPECT_FALSE(json.contains("priority"));
@@ -40,8 +55,7 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
   const auto* grade = restored.PrimaryGrade();
   ASSERT_EQ(grade->AdjustmentCount(), 17u);
   EXPECT_EQ(std::string{grade->AdjustmentIdAt(8).Value()}, "grade.primary.film_grain");
-  const auto* restored_exposure =
-      dynamic_cast<const ExposureModel*>(&grade->AdjustmentAt(1));
+  const auto* restored_exposure = dynamic_cast<const ExposureModel*>(&grade->AdjustmentAt(1));
   ASSERT_NE(restored_exposure, nullptr);
   EXPECT_FLOAT_EQ(restored_exposure->Value(), 1.25f);
   EXPECT_TRUE(restored.Graph().Validate().empty());

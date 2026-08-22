@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G5 complete (CUDA Primary Color Grade and Camera-to-AP1 runtime).
+Status: G6 complete (persistent R8 MaskStore, CUDA masks, exact feather, and Normal Mix).
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2533,6 +2533,110 @@ CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
 - 改变 feather radius 不重新计算 signed distance；
 - dynamic resolution 不重新创建持久 mask texture。
 
+##### Phase G6 completion record (2026-08-22)
+
+**Status:** complete — 持久 R8 MaskStore、可配置 root、主存 LRU、workspace CUDA mask
+texture/mip LRU、dirty rectangle upload、analytic/raster mask、精确 signed Euclidean distance
+feather 和 Color Grade Normal Mix 已接入同一 GPU DAG。
+
+**Primary success call chain:**
+
+```text
+PipelineDocument mask edge + serialized MaskAssetKey + RenderRequest
+  -> GraphCompiler::Compile
+  -> ExecutionPlan(MaskEvaluate, MaskFeather, PrimaryColorGrade)
+  -> ExecuteCudaMask
+  -> MaskStore::Load -> host R8 byte-budget LRU
+  -> BasicRenderWorkspace::MaskTextures -> keyed R8 mip chain + submission lease
+  -> full or unioned dirty-rectangle upload
+  -> analytic evaluation or raster TextureSamplingPlan
+  -> parallel-band exact signed Euclidean distance -> cached distance buffer -> feather sample
+  -> RenderSpace R8 mask
+  -> ExecuteCudaPrimaryGrade -> per-pixel Normal Mix
+  -> scene-linear output
+```
+
+**Primary failure call chain:**
+
+```text
+empty key / axis outside [1, 4096] / wrong R8 byte count
+  -> ValidateMaskAsset rejects before temporary-file creation
+  -> existing persistent mask remains unchanged
+
+incomplete or invalid R8 file / missing MaskStore / invalid dirty rectangle / CUDA failure
+  -> MaskStore or ExecuteCudaMask throws
+  -> active-submission leases prevent texture eviction
+  -> caller receives GPU runtime failure; no CPU image-processing fallback
+```
+
+**Files added:**
+
+- `alcedo_studio/src/include/edit/mask/mask_asset.hpp`
+- `alcedo_studio/src/include/edit/mask/mask_store.hpp`
+- `alcedo_studio/src/edit/mask/mask_store.cpp`
+- `alcedo_studio/src/include/edit/runtime/mask_texture_cache.hpp`
+- `alcedo_studio/src/include/edit/runtime/cuda/cuda_mask_pass.hpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_mask_pass.cu`
+- `alcedo_studio/tests/edit/mask/mask_store_test.cpp`
+- `alcedo_studio/tests/edit/runtime/cuda_mask_test.cpp`
+
+**Files removed:** none.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MaskStoreRejectsRasterMaskLargerThan4096OnEitherAxis` | `GpuDagMaskStoreTest` | PASS |
+| `MaskStoreRoundTripPreservesR8PixelsDescriptorAndKey` | `GpuDagMaskStoreTest` | PASS |
+| `MaskStoreUsesConfiguredRoot` | `GpuDagMaskStoreTest` | PASS |
+| `MaskStoreReplacesFileOnlyAfterCompleteWrite` | `GpuDagMaskStoreTest` | PASS |
+| `MaskHostCacheEvictsByBytesWithoutDeletingMaskFile` | `GpuDagMaskStoreTest` | PASS |
+| `CudaMaskTextureCacheReusesTextureForSameMaskAssetKey` | `GpuDagCudaMaskTest` | PASS |
+| `CudaMaskTextureCacheDoesNotEvictTextureUsedByActiveSubmission` | `GpuDagCudaMaskTest` | PASS |
+| `CudaRasterMaskUploadsOnlyUnionedDirtyRectangle` | `GpuDagCudaMaskTest` | PASS |
+| `CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScales` | `GpuDagCudaMaskTest` | PASS |
+| `CudaGraduatedNdMaskFollowsReferenceSpaceNormal` | `GpuDagCudaMaskTest` | PASS |
+| `CudaFeatherPreservesZeroAndOnePlateaus` | `GpuDagCudaMaskTest` | PASS |
+| `CudaSignedDistanceFeatherMatchesExactEuclideanReferenceWithinTolerance` | `GpuDagCudaMaskTest` | PASS |
+| `CudaFeatherPreservesAntialiasedSourceBoundary` | `GpuDagCudaMaskTest` | PASS |
+| `CudaFeatherRadiusIsStableAcrossDynamicRenderScales` | `GpuDagCudaMaskTest` | PASS |
+| `ChangingFeatherRadiusReusesSignedDistanceTexture` | `GpuDagCudaMaskTest` | PASS |
+| `CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne` | `GpuDagCudaMaskTest` | PASS |
+| serialized `MaskAssetKey` read/write | `GpuDagModelGraphTest` | PASS |
+| G1–G5 graph, geometry, input, Develop, grade, and workspace regression | nine GPU DAG targets | PASS |
+| exact-distance and Normal Mix CUDA memory access | `compute-sanitizer --tool memcheck` | PASS, 0 errors |
+| not-yet-migrated backend compatibility | `Operators` | BUILD PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagMaskStoreTest GpuDagCudaMaskTest GpuDagCudaPrimaryGradeTest GpuDagCudaWorkspaceTest Operators --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|GpuDagCudaPrimaryGradeTest|GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagCudaDevelopTest|GpuDagGeometryTest|GpuDagCudaGeometryTest"
+compute-sanitizer --tool memcheck --print-limit 10 build\debug\alcedo_studio\tests\edit\GpuDagCudaMaskTest_runtime\GpuDagCudaMaskTest.exe --gtest_filter=CudaMaskFixture.CudaSignedDistanceFeatherMatchesExactEuclideanReferenceWithinTolerance:CudaMaskFixture.CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
+```
+
+Suite totals: G6 required tests `16/16` PASS; combined affected GPU DAG tests `83/83` PASS;
+memcheck `2/2` PASS with `0` errors.
+
+**Checklist / exit condition:** all G6 checks complete. MaskStore contains no GPU type. Persistent
+raster data is R8 and rejects either axis above 4096. Host and GPU caches enforce byte budgets;
+the GPU cache exists only in BasicRenderWorkspace and retains active-submission resources. Raster
+textures build keyed mip chains, dirty edits upload one union rectangle, and viewport/dynamic scale
+changes reuse the persistent texture. Feather uses an exact signed Euclidean distance transform;
+radius-only changes reuse its workspace buffer. Color Grade applies one per-pixel Normal Mix.
+
+**Performance and allocation evidence:** dynamic-scale renders retained the same persistent mask
+texture resource id. Feather-radius changes retained the same signed-distance resource id. The mip
+chain and exact-distance work buffers are allocated on first use and retained in the workspace;
+active submissions block LRU eviction.
+
+**LOC note (grill-code-review):** `cuda_mask_pass.cu` 423 lines; `cuda_mask_test.cpp` 324 lines;
+`mask_texture_cache.hpp` 223 lines; `mask_store.cpp` 179 lines. No changed file exceeds 1000 lines.
+
+**Residual gaps:** CUDA DRT and product pipeline routing are G7 scope. OpenCL and Metal mask
+runtimes remain on their existing paths until G8 and G9.
+
 ## 40. Phase G7 — CUDA DRT 和产品管线路径
 
 Branch: `feature/gpu-dag-cuda-drt-product`
@@ -2839,7 +2943,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 默认 PipelineDocument 有且只有 Develop、Primary Color Grade 和 DRT 三个节点。
 - [ ] Geometry 是全局 Model 和内部 Pass，不是第四个用户节点。
 - [ ] MaskNode 是独立节点。
-- [ ] ColorGradeNode 有可选 mask 输入和单一 Normal Mix。
+- [x] ColorGradeNode 有可选 mask 输入和单一 Normal Mix。
 - [ ] PipelineStage 全部删除。
 - [ ] OperatorParams 总结构全部删除。
 - [ ] operators 只保存参数 Model、DTO 和序列化逻辑。
@@ -2860,7 +2964,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 每个 RenderDevice 只有一份 ParameterArena。
 - [ ] 稳定渲染不创建或销毁 GPU buffer 和 texture。
 - [ ] LLF 不管理自己的内存池。
-- [ ] Mask GPU LRU 只存在于 workspace。
+- [x] Mask GPU LRU 只存在于 workspace。
 
 ### 46.4 RAW 和颜色
 
@@ -2874,13 +2978,13 @@ ctest --test-dir build/macos-debug --output-on-failure
 
 - [ ] crop、rotation、view ROI 和 dynamic resolution 只执行一次图像重采样。
 - [ ] LLF 和 mask 使用相同的 RenderGeometry 数据。
-- [ ] Rasterized Mask 使用 R8。
-- [ ] Rasterized Mask 任意一条边不大于 4096。
-- [ ] Rasterized Mask 作为 GPU texture 采样。
-- [ ] Rasterized Mask feather 使用 GPU exact signed Euclidean distance field。
-- [ ] 改变 feather radius 复用 signed distance texture。
-- [ ] view 或 render scale 变化不重新创建不变的 mask texture。
-- [ ] MaskStore root 可以由用户配置。
+- [x] Rasterized Mask 使用 R8。
+- [x] Rasterized Mask 任意一条边不大于 4096。
+- [x] Rasterized Mask 作为 GPU texture 采样。
+- [x] Rasterized Mask feather 使用 GPU exact signed Euclidean distance field。
+- [x] 改变 feather radius 复用 signed distance texture。
+- [x] view 或 render scale 变化不重新创建不变的 mask texture。
+- [x] MaskStore root 可以由用户配置。
 
 ### 46.6 后端
 

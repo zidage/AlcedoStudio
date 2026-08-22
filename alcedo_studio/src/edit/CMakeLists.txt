@@ -27,6 +27,13 @@ def_library(EditGeometry
         ${ALCEDO_SRC_ROOT}/edit/geometry/texture_sampling_plan.cpp
 )
 
+# GPU-free persistent R8 mask repository and host byte-budget cache.
+def_library(EditMaskStore
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/mask/mask_store.cpp
+    PUBLIC_DEPS EditGeometry
+)
+
 # GPU DAG document/graph/models. No ImageBuffer, Operators, or GPU backends.
 set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/adjustment_catalog.cpp
@@ -48,7 +55,7 @@ set(EDIT_GRAPH_SRCS
 
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
-    PUBLIC_DEPS JSON EditGeometry
+    PUBLIC_DEPS JSON EditGeometry EditMaskStore
 )
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
@@ -71,6 +78,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart

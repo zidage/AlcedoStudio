@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
@@ -24,6 +25,13 @@ struct CompiledAdjustment {
   OperatorTypeId       type;
 };
 
+enum class CompiledMaskKind : std::uint8_t { Analytic, Raster };
+
+struct CompiledMask {
+  NodeId           node_id;
+  CompiledMaskKind kind = CompiledMaskKind::Analytic;
+};
+
 /**
  * @brief Compiled backend work for one graph. Does not own GPU memory.
  *
@@ -38,6 +46,8 @@ struct ExecutionPlan {
   bool                            encode_geometry_resample = false;
   std::size_t                     peak_transient_bytes     = 0;
   std::vector<CompiledAdjustment> primary_grade_adjustments;
+  std::optional<CompiledMask>     primary_grade_mask;
+  GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
 
   [[nodiscard]] auto              Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

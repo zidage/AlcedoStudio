@@ -14,21 +14,23 @@ RasterMaskNodeModel::RasterMaskNodeModel(NodeId id) : id_(std::move(id)) {
 
 auto RasterMaskNodeModel::InputPorts() const -> std::span<const PortDescriptor> { return {}; }
 
-auto RasterMaskNodeModel::OutputPorts() const -> std::span<const PortDescriptor> { return outputs_; }
+auto RasterMaskNodeModel::OutputPorts() const -> std::span<const PortDescriptor> {
+  return outputs_;
+}
 
 auto RasterMaskNodeModel::ToJson() const -> nlohmann::json {
   return {{"id", std::string{id_.Value()}},
           {"type", std::string{Type().Text()}},
           {"params",
-           {{"asset_key", asset_key_},
-            {"reference_bounds",
-             nlohmann::json::array({reference_bounds_.x, reference_bounds_.y, reference_bounds_.w,
-                                    reference_bounds_.h})},
+           {{"asset_key", std::string{asset_key_.Value()}},
+            {"reference_bounds", nlohmann::json::array({reference_bounds_.x, reference_bounds_.y,
+                                                        reference_bounds_.w, reference_bounds_.h})},
             {"feather_radius", feather_radius_},
             {"invert", invert_}}}};
 }
 
-auto RasterMaskNodeModel::FromJson(const nlohmann::json& json) -> std::unique_ptr<RasterMaskNodeModel> {
+auto RasterMaskNodeModel::FromJson(const nlohmann::json& json)
+    -> std::unique_ptr<RasterMaskNodeModel> {
   auto node = std::make_unique<RasterMaskNodeModel>(NodeId{json.at("id").get<std::string>()});
   if (!json.contains("params") || !json["params"].is_object()) {
     return node;

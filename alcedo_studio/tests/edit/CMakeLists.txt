@@ -254,6 +254,15 @@ gtest_discover_tests(GpuDagGeometryTest TEST_PREFIX "GpuDagGeometryTest."
   PROPERTIES LABELS "ci_core_flow;edit;geometry")
 alcedo_register_test_target(GpuDagGeometryTest edit)
 
+# GPU DAG Phase G6: persistent R8 repository and GPU-free host cache.
+add_executable(GpuDagMaskStoreTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/mask_store_test.cpp)
+target_include_directories(GpuDagMaskStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GpuDagMaskStoreTest PRIVATE GTest::gtest_main EditMaskStore)
+gtest_discover_tests(GpuDagMaskStoreTest TEST_PREFIX "GpuDagMaskStoreTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(GpuDagMaskStoreTest edit)
+
 # GPU DAG Phase G3: CUDA GeometryResamplePass.
 if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaGeometryTest
@@ -296,6 +305,14 @@ if(ALCEDO_CUDA_ENABLED)
   gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
+
+  add_executable(GpuDagCudaMaskTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
+  target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaMaskTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
+  gtest_discover_tests(GpuDagCudaMaskTest TEST_PREFIX "GpuDagCudaMaskTest."
+    PROPERTIES LABELS "gpu;edit;runtime;mask")
+  alcedo_register_test_target(GpuDagCudaMaskTest gpu)
 
   add_executable(GpuDagCudaWorkspaceTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp

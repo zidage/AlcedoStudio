@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "edit/runtime/graph_image_cache.hpp"
+#include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/texture_pool.hpp"
@@ -25,9 +26,9 @@ namespace alcedo {
 template <class Backend>
 class BasicRenderWorkspace {
  public:
-  using Buffer          = typename Backend::Buffer;
-  using Texture2D       = typename Backend::Texture2D;
-  using CommandContext  = typename Backend::CommandContext;
+  using Buffer         = typename Backend::Buffer;
+  using Texture2D      = typename Backend::Texture2D;
+  using CommandContext = typename Backend::CommandContext;
 
   BasicRenderWorkspace()
       : parameters_(backend_),
@@ -35,8 +36,8 @@ class BasicRenderWorkspace {
         textures_(backend_),
         mask_textures_(backend_) {}
 
-  BasicRenderWorkspace(const BasicRenderWorkspace&)            = delete;
-  auto operator=(const BasicRenderWorkspace&) -> BasicRenderWorkspace& = delete;
+  BasicRenderWorkspace(const BasicRenderWorkspace&)                                  = delete;
+  auto               operator=(const BasicRenderWorkspace&) -> BasicRenderWorkspace& = delete;
 
   [[nodiscard]] auto Device() -> Backend& { return backend_; }
   [[nodiscard]] auto Device() const -> const Backend& { return backend_; }
@@ -44,7 +45,7 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Parameters() -> ParameterArena<Backend>& { return parameters_; }
   [[nodiscard]] auto TransientBuffers() -> TransientBufferArena<Backend>& { return transients_; }
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
-  [[nodiscard]] auto MaskTextures() -> TexturePool<Backend>& { return mask_textures_; }
+  [[nodiscard]] auto MaskTextures() -> MaskTextureCache<Backend>& { return mask_textures_; }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
@@ -53,7 +54,7 @@ class BasicRenderWorkspace {
    * @brief Wait the previous submission, rewind transients, start a new submission id.
    * @throws std::runtime_error if called re-entrantly.
    */
-  void BeginRender(CommandContext& command_context) {
+  void               BeginRender(CommandContext& command_context) {
     if (rendering_) {
       throw std::runtime_error("BasicRenderWorkspace::BeginRender: already rendering");
     }
@@ -81,14 +82,14 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
 
  private:
-  Backend                        backend_{};
-  ParameterArena<Backend>        parameters_;
-  TransientBufferArena<Backend>  transients_;
-  TexturePool<Backend>           textures_;
-  TexturePool<Backend>           mask_textures_;
-  NodeResultCache<Backend>       values_{};
-  GraphImageCache<Backend>       images_{};
-  bool                           rendering_ = false;
+  Backend                       backend_{};
+  ParameterArena<Backend>       parameters_;
+  TransientBufferArena<Backend> transients_;
+  TexturePool<Backend>          textures_;
+  MaskTextureCache<Backend>     mask_textures_;
+  NodeResultCache<Backend>      values_{};
+  GraphImageCache<Backend>      images_{};
+  bool                          rendering_ = false;
 };
 
 }  // namespace alcedo
