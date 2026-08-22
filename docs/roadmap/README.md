@@ -21,6 +21,10 @@ use their own top-level category.
 
 - [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
 
+## Alcedo Studio — Image editing pipeline
+
+- [GPU DAG Pipeline Rebuild Phase Plan](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md)
+
 ## Alcedo Studio — UI
 
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)

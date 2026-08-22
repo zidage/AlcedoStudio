@@ -36,6 +36,9 @@
 ## Still Planned
 
 - [ ] Add JSON serialization for pipeline configurations.
+- [ ] Replace the editor image-processing path with the
+      [GPU DAG pipeline](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md), delivered as
+      a Stacked PR series across CUDA, OpenCL, and Metal.
 - [ ] Extend HDR workflow and output.
 - [ ] Continue semantic search and AI-assisted tagging work; see the
       [semantic generation plan](alcedo_studio/ai/semantic_generation_search_plan.md) and
