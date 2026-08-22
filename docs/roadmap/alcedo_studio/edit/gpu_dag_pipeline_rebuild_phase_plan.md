@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G6 complete (persistent R8 MaskStore, CUDA masks, exact feather, and Normal Mix).
+Status: G7 complete (CUDA ACES 2.0/OpenDRT DRT and Windows/CUDA product DAG routing).
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2684,6 +2684,151 @@ CudaDefaultPipelineSecondRenderCreatesNoGpuAllocation
 - 默认图保存为三个节点；
 - CUDA 从输入到 DRT 完整运行；
 - UI 文件没有修改。
+
+##### Phase G7 completion record (2026-08-22)
+
+**Status:** complete — CUDA ACES 2.0/OpenDRT、显示色域/EOTF、DRT dirty Patch、完整
+`CudaRenderDevice::Execute`、PipelineMgmtService v2 文档持有/保存，以及现有 scheduler 到
+CUDA DAG 和 frame sink 的产品路径均已接入。OpenCL/Metal 继续使用原有 stage 适配器。
+
+**Primary product call chain:**
+
+```text
+PipelineScheduler -> CPUPipelineExecutor::Apply
+  -> changed legacy editor controls -> LegacyPipelineImporter (default three-node transition only)
+  -> CudaProductRenderer::Render
+  -> RawInputLoader::LoadEncoded (CPU unpack boundary)
+  -> GraphCompiler::Compile(RenderRequest with viewport ROI / target extent / max edge)
+  -> CudaRenderDevice::Execute
+  -> ExecuteCudaDevelop
+  -> optional ExecuteCudaMask
+  -> ExecuteCudaPrimaryGrade
+  -> ExecuteCudaDrt
+  -> persistent RGBA32F display texture
+  -> CUDA device copy to IFrameSink mapping
+  -> external semaphore signal -> NotifyFrameReady
+```
+
+Pure v2 documents do not mirror the legacy stage adapter. The transition import runs only for a
+legacy/default document whose graph still has exactly the three visible nodes, so a document with
+additional v2 nodes such as masks is not flattened by the old editor-control path.
+
+**DRT parameter and execution call chain:**
+
+```text
+DrtParamsModel dirty fields
+  -> TakePendingParameterPatch
+  -> ODT_Op runtime resolution (ACES 2.0 tables or OpenDRT settings)
+  -> GPUParamsConverter
+  -> stable ParameterArena slot keyed by (drt, drt.output)
+  -> dirty-range upload
+  -> DrtKernel(scene-linear AP1 -> DRT -> display gamut -> EOTF)
+  -> GraphImageCache[(drt, display)]
+```
+
+The pending DRT patch commits only after the GPU upload succeeds. A DRT-only change reuses the
+Develop and Primary Color Grade image resources. The second identical render performs no CUDA
+allocation or free.
+
+**Persistence and legacy-load call chain:**
+
+```text
+PipelineMgmtService::LoadPipeline
+  -> ElementStore::GetPipelineJsonByElementId
+  -> format v2 -> PipelineDocument::FromJson
+     old stage JSON -> LegacyPipelineImporter::Import
+  -> PipelineGuard::document_
+  -> CPUPipelineExecutor::SetPipelineDocument
+
+PipelineMgmtService::SavePipeline / SyncPipelineDocument
+  -> PipelineDocument::ToJson(format_version = 2, three visible nodes)
+  -> optional nested legacy_stage_adapter for unchanged OpenCL/Metal/editor controls
+  -> ElementStore::UpdatePipelineJsonByElementId
+  -> PipelineMapper raw JSON update
+```
+
+The top-level stored representation is always format version 2. New saves do not write the old
+stage object as the pipeline root.
+
+**Primary failure call chain:**
+
+```text
+CUDA allocation / upload / kernel failure
+  -> CudaRenderDevice::Execute catches
+  -> BasicRenderWorkspace::CancelRender
+  -> synchronous runtime error reporter
+  -> exception propagated through CudaProductRenderer and PipelineScheduler
+  -> no legacy CPU image-processing Apply path
+
+frame-sink map / copy / semaphore / host-download failure
+  -> CudaProductRenderer reports synchronously
+  -> exception propagated through PipelineScheduler
+  -> no legacy CPU image-processing Apply path
+```
+
+**Files added:**
+
+- `alcedo_studio/src/include/edit/runtime/cuda/cuda_drt_pass.hpp`
+- `alcedo_studio/src/include/edit/runtime/cuda/cuda_product_renderer.hpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_drt_runtime_state.cuh`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_drt_pass.cu`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_plan_executor.cpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_product_renderer.cu`
+- `alcedo_studio/tests/edit/runtime/cuda_drt_product_test.cpp`
+
+**Files removed:** none.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DefaultCudaPipelineBuildsThreeVisibleNodes` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaDrtOpenDrtProducesFiniteDisplayReferredOutput` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaDrtAces20ProducesFiniteDisplayReferredOutput` | `GpuDagCudaDrtProductTest` | PASS |
+| `ChangingDrtPeakLuminanceKeepsDevelopAndGradeCacheValid` | `GpuDagCudaDrtProductTest` | PASS |
+| `PipelineMgmtServiceBuildsDefaultGpuDagForNewImage` | `PipelineMapperTest` | PASS |
+| `LegacyPipelineImportRendersSameCudaReferenceWithinTolerance` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaBackendFailureDoesNotEnterCpuImageProcessing` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaDefaultPipelineSecondRenderCreatesNoGpuAllocation` | `GpuDagCudaDrtProductTest` | PASS |
+| Pipeline/storage/history compatibility regression | `PipelineMapperTest` | PASS, `26/26` |
+| G1–G7 graph, geometry, input, workspace, Develop, mask, grade, and DRT regression | ten GPU DAG targets | PASS, `90/90` |
+| Windows/CUDA product executable | `alcedo_main` | BUILD PASS |
+| UI source unchanged | `git diff --name-only -- alcedo_studio/src/ui` | PASS, empty |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main PipelineMapperTest GpuDagCudaDrtProductTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagModelGraphTest GpuDagGeometryTest GpuDagMaskStoreTest GpuDagRawInputTest GpuDagCudaGeometryTest GpuDagCudaDevelopTest GpuDagCudaPrimaryGradeTest GpuDagCudaMaskTest GpuDagCudaWorkspaceTest GpuDagCudaDrtProductTest --parallel 4
+GpuDagCudaDrtProductTest.exe --gtest_color=no --gtest_brief=1
+PipelineMapperTest.exe --gtest_color=no --gtest_brief=1
+```
+
+Suite totals: G7 required tests `8/8` PASS; affected GPU DAG tests `90/90` PASS;
+PipelineMgmtService/storage/history tests `26/26` PASS. The two disabled pre-existing
+`PipelineMapperTest` cases were not executed.
+
+**Checklist / exit condition:** all G7 checks complete. Windows/CUDA defaults to the v2 three-node
+DAG, scheduler requests preserve viewport ROI and output-resolution intent, display output is
+written directly to the existing frame sink, and host output is downloaded only for callers that
+explicitly require it. CUDA errors cancel the incomplete workspace submission and propagate
+without CPU image processing. The stored root is format version 2 with three visible nodes. No UI
+source file changed.
+
+**Performance and allocation evidence:** a DRT peak-luminance-only edit retained both upstream
+texture resource ids. A second identical default render recorded `0` CUDA allocations and `0`
+CUDA frees. The DRT output texture and resolved method resources remain owned by the per-pipeline
+`CudaRenderDevice` workspace/runtime state.
+
+**LOC note (grill-code-review):** new implementation files remain focused:
+`cuda_product_renderer.cu` 149 lines, `cuda_drt_pass.cu` 139 lines,
+`cuda_plan_executor.cpp` 42 lines, and `cuda_drt_product_test.cpp` 191 lines. Existing large
+`pipeline_service.cpp` and `pipeline_cpu.cpp` received localized routing/persistence changes; no
+new file exceeds 500 lines.
+
+**Residual gaps:** OpenCL and Metal still execute through their existing stage adapters and consume
+the nested compatibility data; their full DAG runtime migrations remain G8 and G9 scope.
 
 ## 41. Phase G8 — OpenCL 移植
 

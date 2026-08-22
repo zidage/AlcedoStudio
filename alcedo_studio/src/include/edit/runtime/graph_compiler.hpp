@@ -12,10 +12,11 @@
 namespace alcedo {
 
 /**
- * @brief Builds a Develop-only ExecutionPlan. Does not allocate GPU memory.
+ * @brief Builds the complete Develop -> PrimaryColorGrade -> DRT plan. Does not allocate GPU
+ * memory.
  *
- * Validates the three-node document. ColorGrade and DRT are accepted as graph
- * nodes but are not emitted as GPU passes in G4. Camera-to-AP1 is not a pass.
+ * Validates the three-node document. Camera-to-AP1 remains part of Develop rather than a
+ * separately allocated pass.
  *
  * Recompile when topology is dirty, input kind changes, or decoded extent
  * changes. Highlight / demosaic / lens flags are encoder branches, not new

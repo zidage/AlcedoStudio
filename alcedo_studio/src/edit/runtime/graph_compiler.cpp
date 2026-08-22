@@ -111,6 +111,9 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
     }
   }
   plan.passes.push_back(GpuPassDesc{GpuPassKind::PrimaryColorGrade});
+  plan.primary_grade_output = GraphValueId{grade->Id(), PortId{"image"}};
+  plan.display_output       = GraphValueId{document.Drt()->Id(), PortId{"display"}};
+  plan.passes.push_back(GpuPassDesc{GpuPassKind::Drt});
 
   for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
     plan.primary_grade_adjustments.push_back(

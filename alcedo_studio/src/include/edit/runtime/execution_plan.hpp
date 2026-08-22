@@ -48,6 +48,8 @@ struct ExecutionPlan {
   std::vector<CompiledAdjustment> primary_grade_adjustments;
   std::optional<CompiledMask>     primary_grade_mask;
   GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
+  GraphValueId                    primary_grade_output{NodeId{"grade.primary"}, PortId{"image"}};
+  GraphValueId                    display_output{NodeId{"drt"}, PortId{"display"}};
 
   [[nodiscard]] auto              Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

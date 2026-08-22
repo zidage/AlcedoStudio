@@ -306,6 +306,15 @@ if(ALCEDO_CUDA_ENABLED)
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
 
+  add_executable(GpuDagCudaDrtProductTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp)
+  target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
+    GTest::gtest_main EditRuntimeCuda EditInput)
+  gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
+    PROPERTIES LABELS "gpu;edit;runtime;product")
+  alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
+
   add_executable(GpuDagCudaMaskTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
   target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})

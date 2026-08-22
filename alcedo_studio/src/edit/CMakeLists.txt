@@ -78,11 +78,20 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_plan_executor.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_product_renderer.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp
+        PRIVATE_DEPS EditInput RawProcessorOp Operators
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
+endif()
+
+if(ALCEDO_CUDA_ENABLED)
+    # The existing scheduler owns CPUPipelineExecutor. Its CUDA branch is now a thin adapter into
+    # EditRuntimeCuda; OpenCL and Metal continue using the established stage adapters.
+    target_link_libraries(EditPipeline PRIVATE EditRuntimeCuda EditInput EditGraph)
 endif()

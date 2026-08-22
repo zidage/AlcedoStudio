@@ -29,6 +29,7 @@ enum class GpuPassKind : std::uint8_t {
   MaskEvaluate      = 10,
   MaskFeather       = 11,
   PrimaryColorGrade = 12,
+  Drt               = 13,
 };
 
 [[nodiscard]] inline auto GpuPassKindName(GpuPassKind kind) -> const char* {
@@ -59,6 +60,8 @@ enum class GpuPassKind : std::uint8_t {
       return "MaskFeather";
     case GpuPassKind::PrimaryColorGrade:
       return "PrimaryColorGrade";
+    case GpuPassKind::Drt:
+      return "Drt";
   }
   return "Unknown";
 }

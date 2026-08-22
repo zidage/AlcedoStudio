@@ -273,7 +273,7 @@ def_library(ProjectService
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"
-    PUBLIC_DEPS ProjectService EditPipeline
+    PUBLIC_DEPS ProjectService EditPipeline EditGraph
 )
 
 def_library(AdjustmentTransferService

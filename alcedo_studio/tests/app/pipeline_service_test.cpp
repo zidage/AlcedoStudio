@@ -6,10 +6,11 @@
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
+
+#include <atomic>
 #include <filesystem>
 #include <format>
 #include <memory>
-#include <atomic>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -58,6 +59,25 @@ class PipelineMapperTests : public ::testing::Test {
 TEST_F(PipelineMapperTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
   EXPECT_NO_THROW(PipelineMgmtService pipeline_service(project.GetStorage()));
+}
+
+TEST_F(PipelineMapperTests, PipelineMgmtServiceBuildsDefaultGpuDagForNewImage) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipeline_service(project.GetStorage());
+  auto                guard = pipeline_service.LoadPipeline(9001);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->document_, nullptr);
+  EXPECT_EQ(guard->document_->Graph().Nodes().size(), 3U);
+  EXPECT_EQ(guard->document_->Graph().Edges().size(), 2U);
+  EXPECT_EQ(guard->document_->ToJson().at("format_version"), 2);
+
+  guard->dirty_ = true;
+  pipeline_service.SavePipeline(guard);
+  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9001);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->at("format_version"), 2);
+  EXPECT_EQ(stored->at("nodes").size(), 3U);
+  EXPECT_FALSE(stored->contains("stages"));
 }
 
 TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
@@ -126,8 +146,7 @@ TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
   ASSERT_TRUE(exported["Output Transform"]["Output Transform"].contains("odt"));
   ASSERT_TRUE(exported["Output Transform"]["Output Transform"]["odt"].contains("params"));
   ASSERT_TRUE(exported["Output Transform"]["Output Transform"]["odt"]["params"].contains("odt"));
-  const auto& odt =
-      exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
+  const auto& odt = exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
   EXPECT_EQ(odt["method"], "open_drt");
   EXPECT_EQ(odt["encoding_eotf"], "gamma_2_2");
   EXPECT_EQ(odt["limiting_space"], "rec709");
@@ -145,17 +164,16 @@ TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
 TEST_F(PipelineMapperTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
   CPUPipelineExecutor exec;
 
-  const auto exported = exec.ExportPipelineParams();
+  const auto          exported = exec.ExportPipelineParams();
   EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"],
             1.5);
   EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["contrast"]["params"]["contrast"],
             0.0);
   EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["saturation"]["params"]["saturation"],
             30.0);
-  EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["ocio_lmt"]["params"]["ocio_lmt"],
-            "");
-  EXPECT_FALSE(exported["Geometry Adjustment"]["Geometry Adjustment"]["crop_rotate"]["enable"]
-                   .get<bool>());
+  EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["ocio_lmt"]["params"]["ocio_lmt"], "");
+  EXPECT_FALSE(
+      exported["Geometry Adjustment"]["Geometry Adjustment"]["crop_rotate"]["enable"].get<bool>());
   EXPECT_EQ(exported["Geometry Adjustment"]["Geometry Adjustment"]["crop_rotate"]["params"]
                     ["crop_rotate"]["enabled"],
             false);
@@ -172,10 +190,10 @@ TEST_F(PipelineMapperTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
 
 TEST_F(PipelineMapperTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndColorTemp) {
   CPUPipelineExecutor exec;
-  auto&               loading = exec.GetStage(PipelineStageName::Image_Loading);
-  auto&               to_ws   = exec.GetStage(PipelineStageName::To_WorkingSpace);
+  auto&               loading                 = exec.GetStage(PipelineStageName::Image_Loading);
+  auto&               to_ws                   = exec.GetStage(PipelineStageName::To_WorkingSpace);
 
-  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
+  nlohmann::json      raw_params              = pipeline_defaults::MakeDefaultRawDecodeParams();
   raw_params["raw"]["highlights_reconstruct"] = false;
   loading.SetOperator(OperatorType::RAW_DECODE, raw_params);
 
@@ -194,8 +212,8 @@ TEST_F(PipelineMapperTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndCo
   EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]
                     ["highlights_reconstruct"],
             false);
-  EXPECT_EQ(exported["To Working Space"]["To Working Space"]["color_temp"]["params"]
-                    ["color_temp"]["mode"],
+  EXPECT_EQ(exported["To Working Space"]["To Working Space"]["color_temp"]["params"]["color_temp"]
+                    ["mode"],
             "custom");
   EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"],
             1.5);
@@ -217,8 +235,8 @@ TEST_F(PipelineMapperTests, LoadPipelineRepairsLensCalibEnableMismatchFromParams
     ASSERT_TRUE(lens_entry.contains("params"));
     ASSERT_TRUE(lens_entry["params"].contains("lens_calib"));
 
-    lens_entry["enable"]                                  = true;
-    lens_entry["params"]["lens_calib"]["enabled"]         = false;
+    lens_entry["enable"]                          = true;
+    lens_entry["params"]["lens_calib"]["enabled"] = false;
     pipeline_guard->pipeline_->ImportPipelineParams(serialized);
 
     auto op = pipeline_guard->pipeline_->GetStage(PipelineStageName::Image_Loading)
@@ -239,9 +257,8 @@ TEST_F(PipelineMapperTests, LoadPipelineRepairsLensCalibEnableMismatchFromParams
 
     auto                reloaded = pipeline_service.LoadPipeline(44);
     ASSERT_NE(reloaded, nullptr);
-    auto                op =
-        reloaded->pipeline_->GetStage(PipelineStageName::Image_Loading)
-            .GetOperator(OperatorType::LENS_CALIBRATION);
+    auto op = reloaded->pipeline_->GetStage(PipelineStageName::Image_Loading)
+                  .GetOperator(OperatorType::LENS_CALIBRATION);
     ASSERT_TRUE(op.has_value());
     ASSERT_NE(op.value(), nullptr);
     EXPECT_FALSE(op.value()->enable_);
@@ -256,15 +273,15 @@ TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSp
   auto                pipeline_guard = pipeline_service.LoadPipeline(43);
   ASSERT_NE(pipeline_guard, nullptr);
 
-  nlohmann::json odt_params = pipeline_defaults::MakeDefaultODTParams();
-  odt_params["odt"]["method"] = "aces_2_0";
-  odt_params["odt"]["encoding_space"] = "rec2020";
-  odt_params["odt"]["encoding_eotf"] = "st2084";
-  odt_params["odt"]["peak_luminance"] = 600.0f;
-  odt_params["odt"]["limiting_space"] = "p3_d65";
-  odt_params["odt"]["open_drt"]["look_preset"] = "umbra";
-  odt_params["odt"]["open_drt"]["tonescale_preset"] = "aces_2_0";
-  odt_params["odt"]["open_drt"]["creative_white"] = "d60";
+  nlohmann::json odt_params                             = pipeline_defaults::MakeDefaultODTParams();
+  odt_params["odt"]["method"]                           = "aces_2_0";
+  odt_params["odt"]["encoding_space"]                   = "rec2020";
+  odt_params["odt"]["encoding_eotf"]                    = "st2084";
+  odt_params["odt"]["peak_luminance"]                   = 600.0f;
+  odt_params["odt"]["limiting_space"]                   = "p3_d65";
+  odt_params["odt"]["open_drt"]["look_preset"]          = "umbra";
+  odt_params["odt"]["open_drt"]["tonescale_preset"]     = "aces_2_0";
+  odt_params["odt"]["open_drt"]["creative_white"]       = "d60";
   odt_params["odt"]["open_drt"]["creative_white_limit"] = 23.5f;
   odt_params["odt"]["open_drt"]["display_grey_luminance"] = 12.5f;
 
@@ -279,8 +296,7 @@ TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSp
   ASSERT_NE(reloaded, nullptr);
 
   const nlohmann::json exported = reloaded->pipeline_->ExportPipelineParams();
-  const auto& odt =
-      exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
+  const auto& odt = exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
   EXPECT_EQ(odt["method"], "aces_2_0");
   EXPECT_EQ(odt["encoding_space"], "rec2020");
   EXPECT_EQ(odt["encoding_eotf"], "st2084");
@@ -431,15 +447,15 @@ TEST_F(PipelineMapperTests, CacheTest2) {
 
 TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
   {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
+    ProjectService                                   project(db_path_, meta_path_);
+    PipelineMgmtService                              pipeline_service(project.GetStorage());
 
-    constexpr int                 kOpsCount        = 500;
-    constexpr int                 kIdRange         = 96;
-    std::mt19937                  rng{12345};
-    std::uniform_int_distribution<int> id_dist(1, kIdRange);
-    std::uniform_int_distribution<int> op_dist(0, 5);
-    std::uniform_real_distribution<float> value_dist(-2.0f, 2.0f);
+    constexpr int                                    kOpsCount = 500;
+    constexpr int                                    kIdRange  = 96;
+    std::mt19937                                     rng{12345};
+    std::uniform_int_distribution<int>               id_dist(1, kIdRange);
+    std::uniform_int_distribution<int>               op_dist(0, 5);
+    std::uniform_real_distribution<float>            value_dist(-2.0f, 2.0f);
     std::unordered_map<sl_element_id_t, std::string> expected_dump;
     const auto empty_dump = CPUPipelineExecutor().ExportPipelineParams().dump();
 
@@ -463,7 +479,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         // Load + modify + save (dirty path)
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto& stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
         nlohmann::json params;
         params["exposure"] = static_cast<float>(id) + value_dist(rng);
         stage.SetOperator(OperatorType::EXPOSURE, params);
@@ -474,11 +490,11 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         // Load + modify without save (pinned & dirty in cache)
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto& stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
         nlohmann::json params;
         params["contrast"] = static_cast<float>(id) + value_dist(rng);
         stage.SetOperator(OperatorType::CONTRAST, params);
-        guard->dirty_ = true;
+        guard->dirty_     = true;
         expected_dump[id] = guard->pipeline_->ExportPipelineParams().dump();
       } else if (op == 3) {
         // Sync all dirty pipelines
@@ -488,7 +504,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         auto guard = pipeline_service.LoadPipeline(static_cast<sl_element_id_t>(kIdRange + id));
         ASSERT_NE(guard, nullptr);
         EXPECT_EQ(guard->id_, static_cast<sl_element_id_t>(kIdRange + id));
-        auto dump = guard->pipeline_->ExportPipelineParams().dump();
+        auto       dump   = guard->pipeline_->ExportPipelineParams().dump();
         const auto far_id = static_cast<sl_element_id_t>(kIdRange + id);
         if (expected_dump.contains(far_id)) {
           EXPECT_EQ(dump, expected_dump.at(far_id));
@@ -527,24 +543,24 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
 }
 
 TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorage());
+  ProjectService           project(db_path_, meta_path_);
+  PipelineMgmtService      pipeline_service(project.GetStorage());
 
-  constexpr int kThreads   = 8;
-  constexpr int kOpsPerThr = 200;
-  constexpr int kIdRange   = 64;
+  constexpr int            kThreads   = 8;
+  constexpr int            kOpsPerThr = 200;
+  constexpr int            kIdRange   = 64;
 
-  std::atomic<int> ops_count{0};
+  std::atomic<int>         ops_count{0};
   std::vector<std::thread> workers;
   workers.reserve(kThreads);
 
   for (int t = 0; t < kThreads; ++t) {
     workers.emplace_back([t, &pipeline_service, &ops_count]() {
       for (int i = 0; i < kOpsPerThr; ++i) {
-        const auto id = static_cast<sl_element_id_t>((t * kOpsPerThr + i) % kIdRange + 1);
+        const auto id    = static_cast<sl_element_id_t>((t * kOpsPerThr + i) % kIdRange + 1);
         auto       guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto& stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
         nlohmann::json params;
         params["exposure"] = static_cast<float>(id) + static_cast<float>(t) * 0.01f;
         stage.SetOperator(OperatorType::EXPOSURE, params);
@@ -585,7 +601,7 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveG
     ProjectService      project(db_path_, meta_path_);
     PipelineMgmtService ps(project.GetStorage());
 
-    auto g1 = ps.LoadPipeline(1);
+    auto                g1 = ps.LoadPipeline(1);
     ASSERT_NE(g1, nullptr);
     ASSERT_NE(g1->pipeline_, nullptr);
 
@@ -595,24 +611,24 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveG
     exp1["exposure"] = 1.5f;
     stage.SetOperator(OperatorType::EXPOSURE, exp1);
     g1->dirty_ = true;
-    params_v1   = g1->pipeline_->ExportPipelineParams();
+    params_v1  = g1->pipeline_->ExportPipelineParams();
 
     // Capture a snapshot of the current (dirty, pinned) live state.
     std::string err;
     auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
     ASSERT_NE(snap, nullptr);
     ASSERT_NE(snap->executor_, nullptr);
-    EXPECT_NE(snap->executor_, g1->pipeline_);                       // independent instance
-    EXPECT_EQ(snap->pipeline_params_, params_v1);                    // captured current params
-    EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);    // snapshot holds them
+    EXPECT_NE(snap->executor_, g1->pipeline_);                      // independent instance
+    EXPECT_EQ(snap->pipeline_params_, params_v1);                   // captured current params
+    EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);  // snapshot holds them
 
     // Acceptance: the live guard is untouched by the capture.
-    EXPECT_EQ(g1->dirty_, true);                                      // dirty NOT cleared
-    EXPECT_EQ(g1->pin_count_, size_t{1});                             // pin NOT changed
-    EXPECT_EQ(g1->pipeline_->ExportPipelineParams(), params_v1);      // live exec unchanged
+    EXPECT_EQ(g1->dirty_, true);                                  // dirty NOT cleared
+    EXPECT_EQ(g1->pin_count_, size_t{1});                         // pin NOT changed
+    EXPECT_EQ(g1->pipeline_->ExportPipelineParams(), params_v1);  // live exec unchanged
 
     ps.ReleasePipelineSnapshot(snap);
-    EXPECT_EQ(g1->dirty_, true);                                      // release didn't touch live
+    EXPECT_EQ(g1->dirty_, true);  // release didn't touch live
     EXPECT_EQ(g1->pin_count_, size_t{1});
 
     // Later user edit after the snapshot. Must persist, not be overwritten.
@@ -620,8 +636,8 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveG
     exp2["exposure"] = 2.5f;
     stage.SetOperator(OperatorType::EXPOSURE, exp2);
     g1->dirty_ = true;
-    params_v2   = g1->pipeline_->ExportPipelineParams();
-    EXPECT_NE(params_v2, params_v1);                                  // the later edit took effect
+    params_v2  = g1->pipeline_->ExportPipelineParams();
+    EXPECT_NE(params_v2, params_v1);  // the later edit took effect
 
     ps.SavePipeline(g1);  // return to cache (last pin)
     ps.Sync();            // write the later edit to storage
@@ -646,8 +662,8 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
   PipelineMgmtService ps(project.GetStorage());
 
   // 999 was never loaded → cache-miss fallback inside LoadPipelineSnapshot.
-  std::string err;
-  auto        snap = ps.LoadPipelineSnapshot(999, 0, &err);
+  std::string         err;
+  auto                snap = ps.LoadPipelineSnapshot(999, 0, &err);
   ASSERT_NE(snap, nullptr);
   ASSERT_NE(snap->executor_, nullptr);
 
@@ -666,7 +682,7 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
-  auto initial = first.LoadEditorPipeline(701);
+  auto                initial = first.LoadEditorPipeline(701);
   ASSERT_NE(initial, nullptr);
   ASSERT_NE(initial->pipeline_, nullptr);
   EXPECT_NE(initial->root_id_, Hash128{});
@@ -693,7 +709,7 @@ TEST_F(PipelineMapperTests, LoadWithMatchingCheckpointSkipsFullReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
-  auto initial = first.LoadEditorPipeline(731);
+  auto                initial = first.LoadEditorPipeline(731);
   ASSERT_NE(initial, nullptr);
   first.SavePipeline(initial);
 
@@ -707,12 +723,11 @@ TEST_F(PipelineMapperTests, LoadWithMatchingCheckpointSkipsFullReplay) {
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineMapperTests,
-       PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
+TEST_F(PipelineMapperTests, PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipeline_service(project.GetStorage());
 
-  auto guard = pipeline_service.LoadEditorPipeline(715);
+  auto                guard = pipeline_service.LoadEditorPipeline(715);
   ASSERT_NE(guard, nullptr);
   ASSERT_NE(guard->commit_graph_, nullptr);
   const auto expected_materialized_state = guard->commit_graph_->GetImageEditState();
@@ -722,17 +737,16 @@ TEST_F(PipelineMapperTests,
   guard->serialized_state_needs_writeback_ = true;
 
   std::string error;
-  ASSERT_TRUE(pipeline_service.PersistEditorHistoryState(guard, expected_materialized_state,
-                                                         &error))
+  ASSERT_TRUE(
+      pipeline_service.PersistEditorHistoryState(guard, expected_materialized_state, &error))
       << error;
   EXPECT_FALSE(guard->serialized_state_needs_writeback_);
 
   {
-    auto               db_guard =
-        project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    const auto         persisted = graph_service.LoadGraph(715);
+    const auto       persisted = graph_service.LoadGraph(715);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_EQ(persisted->GetActiveVersionId(), new_version);
     EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, std::nullopt);
@@ -753,11 +767,11 @@ TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOn
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto deleted = pipelines.LoadEditorPipeline(711);
-  auto retained = pipelines.LoadEditorPipeline(712);
+  auto                deleted  = pipelines.LoadEditorPipeline(711);
+  auto                retained = pipelines.LoadEditorPipeline(712);
   ASSERT_NE(deleted, nullptr);
   ASSERT_NE(retained, nullptr);
-  const auto deleted_root = deleted->root_id_;
+  const auto deleted_root  = deleted->root_id_;
   const auto retained_root = retained->root_id_;
   pipelines.SavePipeline(deleted);
   pipelines.SavePipeline(retained);
@@ -765,8 +779,8 @@ TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOn
   const std::vector<sl_element_id_t> deleted_ids = {711};
   pipelines.DeletePipelines(deleted_ids);
 
-  auto               db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-  auto               db_lock  = db_guard.Lock();
+  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_FALSE(graph_service.GetImageEditState(711).has_value());
   EXPECT_FALSE(graph_service.GetRootSerializedPipelineState(711, deleted_root).has_value());
@@ -778,7 +792,7 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
-  auto initial = first.LoadEditorPipeline(702);
+  auto                initial = first.LoadEditorPipeline(702);
   ASSERT_NE(initial, nullptr);
   const auto root_id = initial->root_id_;
   first.SavePipeline(initial);
@@ -786,21 +800,21 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   commit_hash_t            expected_head{};
   transaction_chain_hash_t expected_chain{};
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto graph = graph_service.LoadGraph(702);
+    auto             graph = graph_service.LoadGraph(702);
     ASSERT_TRUE(graph.has_value());
 
     OrdinaryEditPayload payload;
-    payload.operator_type   = OperatorType::EXPOSURE;
-    payload.stage_name      = PipelineStageName::Basic_Adjustment;
-    payload.field_name      = "exposure";
-    payload.before_value    = 1.5f;
-    payload.after_value     = 2.0f;
-    payload.before_enabled  = true;
-    payload.after_enabled   = true;
-    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    payload.operator_type  = OperatorType::EXPOSURE;
+    payload.stage_name     = PipelineStageName::Basic_Adjustment;
+    payload.field_name     = "exposure";
+    payload.before_value   = 1.5f;
+    payload.after_value    = 2.0f;
+    payload.before_enabled = true;
+    payload.after_enabled  = true;
+    auto commit   = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
     expected_head = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
@@ -808,8 +822,8 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
 
     // This is an untagged serialized state. Its graph state remains valid, but the editor must
     // reject it and replay the new first-parent commit from the immutable root.
-    graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
-        nlohmann::json{{"legacy", true}}));
+    graph_service.Materialize(
+        graph->CaptureMaterializationWithSerializedPipelineState(nlohmann::json{{"legacy", true}}));
   }
 
   PipelineMgmtService reopened(project.GetStorage());
@@ -820,7 +834,7 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
   EXPECT_TRUE(rebuilt->serialized_state_needs_writeback_);
   EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                          ["exposure"]["params"]["exposure"],
+                                                      ["exposure"]["params"]["exposure"],
             2.0f);
   reopened.SavePipeline(rebuilt);
 
@@ -831,7 +845,7 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   EXPECT_EQ(matched->working_head_commit_hash(), expected_head);
   EXPECT_EQ(matched->transaction_chain_hash(), expected_chain);
   EXPECT_EQ(matched->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                               ["exposure"]["params"]["exposure"],
+                                                      ["exposure"]["params"]["exposure"],
             2.0f);
   after_writeback.SavePipeline(matched);
 }
@@ -841,35 +855,34 @@ TEST_F(PipelineMapperTests,
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
-  auto initial = first.LoadEditorPipeline(732);
+  auto                initial = first.LoadEditorPipeline(732);
   ASSERT_NE(initial, nullptr);
   first.SavePipeline(initial);
 
   commit_hash_t expected_head{};
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto graph = graph_service.LoadGraph(732);
+    auto             graph = graph_service.LoadGraph(732);
     ASSERT_TRUE(graph.has_value());
 
     OrdinaryEditPayload payload;
-    payload.operator_type   = OperatorType::EXPOSURE;
-    payload.stage_name      = PipelineStageName::Basic_Adjustment;
-    payload.field_name      = "exposure";
-    payload.before_value    = 0.0f;
-    payload.after_value     = 3.25f;
-    payload.before_enabled  = true;
-    payload.after_enabled   = true;
-    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    payload.operator_type  = OperatorType::EXPOSURE;
+    payload.stage_name     = PipelineStageName::Basic_Adjustment;
+    payload.field_name     = "exposure";
+    payload.before_value   = 0.0f;
+    payload.after_value    = 3.25f;
+    payload.before_enabled = true;
+    payload.after_enabled  = true;
+    auto commit   = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
     expected_head = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
 
     // Deliberately wrong params under a non-matching checkpoint identity.
     graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
-        nlohmann::json{{"legacy", true},
-                       {"stale_exposure", 0.0f}}));
+        nlohmann::json{{"legacy", true}, {"stale_exposure", 0.0f}}));
   }
 
   PipelineMgmtService reopened(project.GetStorage());
@@ -879,33 +892,32 @@ TEST_F(PipelineMapperTests,
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
   EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
   EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                          ["exposure"]["params"]["exposure"],
+                                                      ["exposure"]["params"]["exposure"],
             3.25f)
       << "rebuild must follow history, not stale checkpoint JSON values";
   reopened.SavePipeline(rebuilt);
 }
 
-TEST_F(PipelineMapperTests,
-       SerializedStateWritebackRejectsAConcurrentMaterializedHistoryChange) {
+TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializedHistoryChange) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto local = pipelines.LoadEditorPipeline(703);
+  auto                local = pipelines.LoadEditorPipeline(703);
   ASSERT_NE(local, nullptr);
   ASSERT_NE(local->commit_graph_, nullptr);
-  const auto root_id = local->root_id_;
+  const auto          root_id = local->root_id_;
 
   OrdinaryEditPayload local_payload;
-  local_payload.operator_type   = OperatorType::EXPOSURE;
-  local_payload.stage_name      = PipelineStageName::Basic_Adjustment;
-  local_payload.field_name      = "$operator_params";
-  local_payload.before_value    = nlohmann::json{{"exposure", 0.0f}};
-  local_payload.after_value     = nlohmann::json{{"exposure", 1.0f}};
-  local_payload.before_enabled  = true;
-  local_payload.after_enabled   = true;
-  const auto local_version = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
-  auto local_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(local_payload));
-  const auto local_head = local_commit.GetCommitHash();
+  local_payload.operator_type  = OperatorType::EXPOSURE;
+  local_payload.stage_name     = PipelineStageName::Basic_Adjustment;
+  local_payload.field_name     = "$operator_params";
+  local_payload.before_value   = nlohmann::json{{"exposure", 0.0f}};
+  local_payload.after_value    = nlohmann::json{{"exposure", 1.0f}};
+  local_payload.before_enabled = true;
+  local_payload.after_enabled  = true;
+  const auto local_version     = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
+  auto       local_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(local_payload));
+  const auto local_head   = local_commit.GetCommitHash();
   ASSERT_TRUE(local->commit_graph_->InsertCommit(std::move(local_commit)));
   local->commit_graph_->MoveWorkingHead(local_version, local_head);
   local->commit_graph_->SetActiveVersionId(local_version);
@@ -913,22 +925,22 @@ TEST_F(PipelineMapperTests,
 
   commit_hash_t remote_head{};
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto remote_graph = graph_service.LoadGraph(703);
+    auto             remote_graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(remote_graph.has_value());
 
     OrdinaryEditPayload remote_payload;
-    remote_payload.operator_type   = OperatorType::EXPOSURE;
-    remote_payload.stage_name      = PipelineStageName::Basic_Adjustment;
-    remote_payload.field_name      = "$operator_params";
-    remote_payload.before_value    = nlohmann::json{{"exposure", 0.0f}};
-    remote_payload.after_value     = nlohmann::json{{"exposure", 2.0f}};
-    remote_payload.before_enabled  = true;
-    remote_payload.after_enabled   = true;
+    remote_payload.operator_type  = OperatorType::EXPOSURE;
+    remote_payload.stage_name     = PipelineStageName::Basic_Adjustment;
+    remote_payload.field_name     = "$operator_params";
+    remote_payload.before_value   = nlohmann::json{{"exposure", 0.0f}};
+    remote_payload.after_value    = nlohmann::json{{"exposure", 2.0f}};
+    remote_payload.before_enabled = true;
+    remote_payload.after_enabled  = true;
     auto remote_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(remote_payload));
-    remote_head = remote_commit.GetCommitHash();
+    remote_head        = remote_commit.GetCommitHash();
     ASSERT_TRUE(remote_graph->InsertCommit(std::move(remote_commit)));
     remote_graph->MoveWorkingHead(remote_graph->GetActiveVersionId(), remote_head);
     graph_service.Materialize(remote_graph->CaptureMaterialization());
@@ -938,10 +950,10 @@ TEST_F(PipelineMapperTests,
   EXPECT_TRUE(local->serialized_state_needs_writeback_);
 
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    const auto persisted = graph_service.LoadGraph(703);
+    const auto       persisted = graph_service.LoadGraph(703);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, remote_head);
     EXPECT_NE(persisted->GetActiveVersionRef().head_commit_hash, local_head);
@@ -956,10 +968,10 @@ TEST_F(PipelineMapperTests,
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipeline_service(project.GetStorage());
 
-  auto guard = pipeline_service.LoadEditorPipeline(720);
+  auto                guard = pipeline_service.LoadEditorPipeline(720);
   ASSERT_NE(guard, nullptr);
   ASSERT_NE(guard->commit_graph_, nullptr);
-  const auto root_id = guard->root_id_;
+  const auto          root_id = guard->root_id_;
 
   // Commit an adjustment: the working head advances, but ImageEditState.materialized_*
   // stays at root (MoveWorkingHead never advances materialized state by design).
@@ -971,8 +983,8 @@ TEST_F(PipelineMapperTests,
   payload.after_value    = 1.0f;
   payload.before_enabled = true;
   payload.after_enabled  = true;
-  auto edit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(payload));
-  const auto new_head = edit.GetCommitHash();
+  auto       edit        = EditCommit::MakeEdit(root_id, std::nullopt, std::move(payload));
+  const auto new_head    = edit.GetCommitHash();
   ASSERT_TRUE(guard->commit_graph_->InsertCommit(std::move(edit)));
   guard->commit_graph_->MoveWorkingHead(guard->commit_graph_->GetActiveVersionId(), new_head);
 
@@ -980,8 +992,8 @@ TEST_F(PipelineMapperTests,
   // production checkpoint path, does NOT call ApplyMaterializedState, so the in-memory
   // materialized_* stays at root while DuckDB advances to the working head.
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     graph_service.Materialize(
         guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
@@ -991,22 +1003,20 @@ TEST_F(PipelineMapperTests,
   // DuckDB now holds the working head; the in-memory graph still reports root.
   commit_hash_t durable_head{};
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             persisted = graph_service.LoadGraph(720);
     ASSERT_TRUE(persisted.has_value());
     durable_head = persisted->GetImageEditState().materialized_head_commit_hash.value();
     ASSERT_EQ(durable_head, new_head);
   }
-  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash,
-            std::nullopt)
+  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash, std::nullopt)
       << "in-memory materialized head must stay stale until the post-checkpoint sync";
 
   // Fix B: mirror the durable materialization into the in-memory state.
   guard->commit_graph_->MaterializeActiveHeadInMemory();
-  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash,
-            new_head);
+  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash, new_head);
   EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_transaction_chain_hash,
             guard->transaction_chain_hash());
 
@@ -1022,24 +1032,24 @@ TEST_F(PipelineMapperTests,
 }
 
 TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorage());
+  ProjectService         project(db_path_, meta_path_);
+  PipelineMgmtService    first(project.GetStorage());
 
   RawRuntimeColorContext raw_context;
   raw_context.valid_                        = true;
   raw_context.output_in_camera_space_       = true;
   raw_context.camera_make_                  = "Alcedo Camera Co";
   raw_context.camera_model_                 = "Root State Test";
-  raw_context.lens_metadata_valid_           = true;
-  raw_context.lens_make_                     = "Alcedo Optics";
-  raw_context.lens_model_                    = "Fixed 35";
-  raw_context.focal_length_mm_               = 35.0f;
-  raw_context.color_matrices_valid_          = true;
-  raw_context.color_matrix_1_[0]             = 0.625;
-  raw_context.dng_warp_rectilinear_present_  = true;
-  raw_context.dng_warp_rectilinear_applied_  = true;
+  raw_context.lens_metadata_valid_          = true;
+  raw_context.lens_make_                    = "Alcedo Optics";
+  raw_context.lens_model_                   = "Fixed 35";
+  raw_context.focal_length_mm_              = 35.0f;
+  raw_context.color_matrices_valid_         = true;
+  raw_context.color_matrix_1_[0]            = 0.625;
+  raw_context.dng_warp_rectilinear_present_ = true;
+  raw_context.dng_warp_rectilinear_applied_ = true;
 
-  auto initial = first.LoadPipeline(704);
+  auto initial                              = first.LoadPipeline(704);
   ASSERT_NE(initial, nullptr);
   initial->pipeline_->InjectRawMetadata(raw_context);
   first.InitializeImageRoot(initial, &raw_context);
@@ -1047,10 +1057,10 @@ TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   first.SavePipeline(initial);
 
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    const auto encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
+    const auto       encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
     ASSERT_TRUE(encoded.has_value());
     ASSERT_TRUE(encoded->contains("raw_color_context"));
     EXPECT_EQ((*encoded)["raw_color_context"]["CameraModel"], "Root State Test");
@@ -1074,13 +1084,13 @@ TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto first = pipelines.LoadEditorPipeline(705);
-  auto second = pipelines.LoadEditorPipeline(706);
+  auto                first  = pipelines.LoadEditorPipeline(705);
+  auto                second = pipelines.LoadEditorPipeline(706);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
 
-  auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-  auto db_lock  = db_guard.Lock();
+  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first->root_id_),
                std::runtime_error);
@@ -1093,8 +1103,8 @@ TEST_F(PipelineMapperTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto requested = pipelines.LoadPipeline(707);
-  auto unrelated = pipelines.LoadPipeline(708);
+  auto                requested = pipelines.LoadPipeline(707);
+  auto                unrelated = pipelines.LoadPipeline(708);
   ASSERT_NE(requested, nullptr);
   ASSERT_NE(unrelated, nullptr);
   requested->dirty_ = true;
@@ -1118,33 +1128,32 @@ TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
 
   commit_hash_t missing_hash{};
   {
-    auto db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto graph = graph_service.LoadGraph(703);
+    auto             graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(graph.has_value());
 
     OrdinaryEditPayload payload;
-    payload.operator_type   = OperatorType::EXPOSURE;
-    payload.stage_name      = PipelineStageName::Basic_Adjustment;
-    payload.field_name      = "exposure";
-    payload.before_value    = 1.5f;
-    payload.after_value     = 2.0f;
-    payload.before_enabled  = true;
-    payload.after_enabled   = true;
-    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    payload.operator_type  = OperatorType::EXPOSURE;
+    payload.stage_name     = PipelineStageName::Basic_Adjustment;
+    payload.field_name     = "exposure";
+    payload.before_value   = 1.5f;
+    payload.after_value    = 2.0f;
+    payload.before_enabled = true;
+    payload.after_enabled  = true;
+    auto commit  = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
     missing_hash = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), missing_hash);
     graph_service.Materialize(graph->CaptureMaterialization());
 
     duckdb_result result;
-    ASSERT_EQ(duckdb_query(
-                  db_guard.conn_,
-                  std::format("DELETE FROM EditCommit WHERE commit_hash='{}';",
-                              missing_hash.ToString())
-                      .c_str(),
-                  &result),
+    ASSERT_EQ(duckdb_query(db_guard.conn_,
+                           std::format("DELETE FROM EditCommit WHERE commit_hash='{}';",
+                                       missing_hash.ToString())
+                               .c_str(),
+                           &result),
               DuckDBSuccess);
     duckdb_destroy_result(&result);
   }

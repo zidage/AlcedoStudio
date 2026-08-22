@@ -17,8 +17,8 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
-#include "storage/store/ai/ai_store.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/store/ai/ai_store.hpp"
 #include "type/hash_type.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
@@ -31,8 +31,8 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
   ScopedFileQuery scope;
   std::string     extra_where;
   if (extra_filter.has_value() && !extra_filter->empty()) {
-    extra_where = " AND (" + extra_filter->sql_ + ")";
-    scope.binds_.sql_ = extra_filter->sql_;
+    extra_where         = " AND (" + extra_filter->sql_ + ")";
+    scope.binds_.sql_   = extra_filter->sql_;
     scope.binds_.binds_ = extra_filter->binds_;
   }
 
@@ -278,7 +278,7 @@ void ElementStore::RemoveElement(const std::shared_ptr<SleeveElement> element) {
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
     DeleteSemanticAndAiRowsForFiles(guard_.conn_,
-                               std::span<const sl_element_id_t>(&file->element_id_, 1));
+                                    std::span<const sl_element_id_t>(&file->element_id_, 1));
     history_mapper_.RemoveById(file->element_id_);
     pipeline_mapper_.RemoveById(file->element_id_);
     file_mapper_.RemoveById(file->element_id_);
@@ -386,11 +386,10 @@ auto ElementStore::GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo
     -> std::vector<std::shared_ptr<SleeveElement>> {
   auto       db_lock    = guard_.Lock();
   const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
-  const auto where =
-      where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
+  const auto where      = where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
   // Always resolve ids through the prepared-bind list path so SqlFragment
   // binds stay valid. Then load full elements by primary key.
-  const auto ids = ListFilteredFileIds(folder_id, where);
+  const auto ids        = ListFilteredFileIds(folder_id, where);
   std::vector<std::shared_ptr<SleeveElement>> out;
   out.reserve(ids.size());
   for (const auto id : ids) {
@@ -406,8 +405,7 @@ auto ElementStore::GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCom
     -> std::vector<sl_element_id_t> {
   auto       db_lock    = guard_.Lock();
   const auto where_frag = FilterSQLCompiler::Compile(filter->GetRoot());
-  const auto where =
-      where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
+  const auto where      = where_frag.empty() ? std::optional<duckorm::SqlFragment>{} : where_frag;
   return ListFilteredFileIds(folder_id, where);
 }
 
@@ -418,11 +416,11 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                            f
   auto            db_lock = guard_.Lock();
   FolderStatsView out;
 
-  const auto  base_query = BuildScopedFileQuery(folder_id, extra_filter);
-  const auto& base_join  = base_query.from_where_;
-  const auto& binds      = base_query.binds_;
+  const auto      base_query = BuildScopedFileQuery(folder_id, extra_filter);
+  const auto&     base_join  = base_query.from_where_;
+  const auto&     binds      = base_query.binds_;
 
-  out.total_photo_count_ = static_cast<int>(
+  out.total_photo_count_     = static_cast<int>(
       RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", base_join), binds));
 
   out.date_stats_ = RunGroupByQuery(
@@ -520,8 +518,8 @@ auto ElementStore::ListFilesInFolderPage(
   return out;
 }
 
-auto ElementStore::CountFilesInFolder(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter) const
+auto ElementStore::CountFilesInFolder(sl_element_id_t                            folder_id,
+                                      const std::optional<duckorm::SqlFragment>& extra_filter) const
     -> size_t {
   auto              db_lock = guard_.Lock();
   const auto        scope   = BuildScopedFileQuery(folder_id, extra_filter);
@@ -538,8 +536,8 @@ auto ElementStore::ListFilteredFileIds(
   const auto                   scope = BuildScopedFileQuery(folder_id, extra_filter);
   const auto                   sql = std::format("SELECT e.id {} ORDER BY e.id", scope.from_where_);
 
-  duckdb_result     result;
-  duckdb_connection conn = guard_.conn_;
+  duckdb_result                result;
+  duckdb_connection            conn = guard_.conn_;
   if (duckorm::execute_query(conn, sql, scope.binds_, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return out;
@@ -561,10 +559,23 @@ auto ElementStore::GetPipelineByElementId(const sl_element_id_t element_id)
   return pipeline_mapper_.GetPipelineParamByFileId(element_id);
 }
 
-auto ElementStore::UpdatePipelineByElementId(
-    const sl_element_id_t element_id, const std::shared_ptr<CPUPipelineExecutor> pipeline) -> void {
+auto ElementStore::UpdatePipelineByElementId(const sl_element_id_t                      element_id,
+                                             const std::shared_ptr<CPUPipelineExecutor> pipeline)
+    -> void {
   auto db_lock = guard_.Lock();
   pipeline_mapper_.UpdatePipelineParamByFileId(element_id, pipeline);
+}
+
+auto ElementStore::GetPipelineJsonByElementId(sl_element_id_t element_id)
+    -> std::optional<nlohmann::json> {
+  auto db_lock = guard_.Lock();
+  return pipeline_mapper_.GetPipelineJsonByFileId(element_id);
+}
+
+void ElementStore::UpdatePipelineJsonByElementId(sl_element_id_t       element_id,
+                                                 const nlohmann::json& document) {
+  auto db_lock = guard_.Lock();
+  pipeline_mapper_.UpdatePipelineJsonByFileId(element_id, document);
 }
 
 auto ElementStore::RemovePipelineByElementId(const sl_element_id_t element_id) -> void {
@@ -585,8 +596,7 @@ auto ElementStore::GetEditHistoryByFileId(const sl_element_id_t file_id)
 }
 
 auto ElementStore::UpdateEditHistoryByFileId(const sl_element_id_t              file_id,
-                                                  const std::shared_ptr<EditHistory> history)
-    -> void {
+                                             const std::shared_ptr<EditHistory> history) -> void {
   auto db_lock = guard_.Lock();
   history_mapper_.Update(history, file_id);
 }
@@ -596,8 +606,7 @@ auto ElementStore::RemoveEditHistoryByFileId(const sl_element_id_t file_id) -> v
   history_mapper_.RemoveById(file_id);
 }
 
-auto ElementStore::RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids)
-    -> void {
+auto ElementStore::RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids) -> void {
   auto db_lock = guard_.Lock();
   history_mapper_.RemoveByIds(file_ids);
 }
@@ -606,9 +615,9 @@ namespace {
 auto ToRecoveryMapperParams(const EditorRecoveryMetadata& metadata)
     -> EditorRecoveryMetadataMapperParams {
   EditorRecoveryMetadataMapperParams params;
-  params.file_id                         = metadata.element_id;
-  params.version_id                      = std::make_unique<std::string>(metadata.version_id.ToString());
-  params.journal_generation              = metadata.journal_generation;
+  params.file_id            = metadata.element_id;
+  params.version_id         = std::make_unique<std::string>(metadata.version_id.ToString());
+  params.journal_generation = metadata.journal_generation;
   params.materialized_operation_sequence = metadata.materialized_operation_sequence;
   params.transaction_chain_hash =
       std::make_unique<std::string>(metadata.transaction_chain_hash.ToString());
@@ -637,9 +646,9 @@ auto FromRecoveryMapperParams(EditorRecoveryMetadataMapperParams&& params)
 }  // namespace
 
 auto ElementStore::MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
-    const std::shared_ptr<CPUPipelineExecutor>& pipeline,
-                                               const EditorRecoveryMetadata& recovery_metadata,
-                                               std::string*                  error) -> bool {
+                                          const std::shared_ptr<CPUPipelineExecutor>& pipeline,
+                                          const EditorRecoveryMetadata& recovery_metadata,
+                                          std::string*                  error) -> bool {
   if (!history || !pipeline) {
     if (error) {
       *error = "MaterializeEditorState requires history and pipeline";
@@ -696,9 +705,9 @@ auto ElementStore::MaterializeEditorState(const std::shared_ptr<EditHistory>&   
 
 auto ElementStore::GetEditorRecoveryMetadata(sl_element_id_t file_id)
     -> std::optional<EditorRecoveryMetadata> {
-  auto db_lock = guard_.Lock();
+  auto                         db_lock = guard_.Lock();
   EditorRecoveryMetadataMapper mapper(guard_.conn_);
-  auto rows = mapper.Get(std::format("file_id={}", file_id).c_str());
+  auto                         rows = mapper.Get(std::format("file_id={}", file_id).c_str());
   if (rows.empty()) {
     return std::nullopt;
   }

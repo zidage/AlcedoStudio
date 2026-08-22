@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
@@ -24,6 +25,30 @@
 
 namespace alcedo {
 namespace {
+struct LoadedPipelineDocument {
+  std::shared_ptr<PipelineDocument> document;
+  bool                              mirror_legacy_stage_adapter = false;
+};
+
+auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
+                          const std::shared_ptr<CPUPipelineExecutor>& legacy)
+    -> LoadedPipelineDocument {
+  const auto stored = store.GetPipelineJsonByElementId(id);
+  if (stored && stored->is_object() && stored->value("format_version", 0) == 2) {
+    return {std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored)),
+            stored->contains("legacy_stage_adapter")};
+  }
+  if (legacy) {
+    auto imported = LegacyPipelineImporter::Import(legacy->ExportPipelineParams());
+    if (!imported.Ok()) {
+      throw std::runtime_error("PipelineMgmtService: legacy pipeline import failed: " +
+                               imported.error);
+    }
+    return {std::make_shared<PipelineDocument>(std::move(*imported.document)), true};
+  }
+  return {std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()), true};
+}
+
 void ResetToDefaults(OperatorParams& params) {
   // OperatorParams has const members, so it is not assignable.
   // Reinitialize in-place to restore default values.
@@ -73,11 +98,8 @@ void EnsureDefaultColorTemp(CPUPipelineExecutor& exec) {
 
   nlohmann::json color_temp_params;
   color_temp_params["color_temp"] = {
-      {"mode", mode},
-      {"custom_cct", cct},
-      {"custom_tint", tint},
-      {"as_shot_cct", cct},
-      {"as_shot_tint", tint},
+      {"mode", mode},       {"custom_cct", cct},    {"custom_tint", tint},
+      {"as_shot_cct", cct}, {"as_shot_tint", tint},
   };
   to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
 }
@@ -375,8 +397,7 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
   if (pipeline_guard->pipeline_) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
     if (pipeline_guard->dirty_) {
-      storage_->GetElementStore().UpdatePipelineByElementId(
-          candidate, pipeline_guard->pipeline_);
+      storage_->GetElementStore().UpdatePipelineByElementId(candidate, pipeline_guard->pipeline_);
       pipeline_guard->dirty_ = false;
     }
     // Clear intermediate buffers before removing from cache to ensure timely memory release.
@@ -386,7 +407,7 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
 
 auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
   std::shared_ptr<PipelineGuard> cached;
-  bool                          reinitialize = false;
+  bool                           reinitialize = false;
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     const auto                   it = loaded_pipelines_.find(id);
@@ -421,7 +442,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   }
 
   std::shared_ptr<CPUPipelineExecutor> pipeline;
-  auto                                pipeline_guard = std::make_shared<PipelineGuard>();
+  auto                                 pipeline_guard = std::make_shared<PipelineGuard>();
   try {
     pipeline = storage_->GetLivePipeline(id);
     if (!pipeline) {
@@ -452,11 +473,16 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   }
   storage_->RememberLivePipeline(id, pipeline);
 
-  pipeline_guard->pipeline_   = std::move(pipeline);
-  pipeline_guard->id_         = id;
-  pipeline_guard->pinned_     = true;
-  pipeline_guard->pin_count_  = 1;
-  pipeline_guard->dirty_      = false;
+  pipeline_guard->pipeline_ = std::move(pipeline);
+  auto loaded_document =
+      LoadPipelineDocument(storage_->GetElementStore(), id, pipeline_guard->pipeline_);
+  pipeline_guard->document_ = std::move(loaded_document.document);
+  pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_,
+                                                 loaded_document.mirror_legacy_stage_adapter);
+  pipeline_guard->id_        = id;
+  pipeline_guard->pinned_    = true;
+  pipeline_guard->pin_count_ = 1;
+  pipeline_guard->dirty_     = false;
 
   std::shared_ptr<PipelineGuard> raced_cached;
   std::optional<sl_element_id_t> evicted;
@@ -469,7 +495,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       raced_cached->pinned_ = true;
       pipeline_cache_.AccessElement(id);
     } else {
-      evicted = pipeline_cache_.RecordAccess_WithEvict(id, id);
+      evicted               = pipeline_cache_.RecordAccess_WithEvict(id, id);
       loaded_pipelines_[id] = pipeline_guard;
       if (!evicted.has_value() && loaded_pipelines_.size() + 1 > default_cache_capacity_) {
         pipeline_cache_.Resize(loaded_pipelines_.size() - 1);
@@ -485,22 +511,34 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   return pipeline_guard;
 }
 
+void PipelineMgmtService::SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline) {
+  if (!pipeline || !pipeline->document_) {
+    throw std::invalid_argument("PipelineMgmtService: cannot save a null PipelineDocument");
+  }
+  const auto json = pipeline->document_->ToJson();
+  if (json.value("format_version", 0) != 2) {
+    throw std::runtime_error("PipelineMgmtService: product save requires format version 2");
+  }
+  storage_->GetElementStore().UpdatePipelineJsonByElementId(pipeline->id_, json);
+  pipeline->dirty_ = false;
+}
+
 void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                               const RawRuntimeColorContext* raw_color_context) {
   if (!pipeline || !pipeline->pipeline_) {
     throw std::runtime_error("PipelineMgmtService: cannot initialize a null pipeline root");
   }
 
-  nlohmann::json               root_params;
+  nlohmann::json root_params;
   {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     root_params = pipeline->pipeline_->ExportPipelineParams();
   }
 
-  auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto               db_lock  = db_guard.Lock();
+  auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+  auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
-  auto               state = graph_service.GetImageEditState(pipeline->id_);
+  auto             state = graph_service.GetImageEditState(pipeline->id_);
   if (!state.has_value()) {
     auto graph = graph_service.CreateRootPipelinePersisted(
         pipeline->id_, root_params,
@@ -528,11 +566,11 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
   try {
     InitializeImageRoot(pipeline);
 
-    std::optional<CommitGraph>             graph;
+    std::optional<CommitGraph>              graph;
     std::optional<DecodedRootPipelineState> root_state;
     {
-      auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-      auto               db_lock  = db_guard.Lock();
+      auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+      auto             db_lock  = db_guard.Lock();
       CommitGraphStore graph_service(db_guard.conn_);
       graph = graph_service.LoadGraph(id);
       if (!graph.has_value()) {
@@ -551,8 +589,8 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
                                  std::to_string(id));
       }
 
-      const auto& state         = graph->GetImageEditState();
-      const auto  expected_head = graph->GetActiveVersionRef().head_commit_hash;
+      const auto& state          = graph->GetImageEditState();
+      const auto  expected_head  = graph->GetActiveVersionRef().head_commit_hash;
       const auto  expected_chain = graph->ChainHashForHead(expected_head);
       if (state.root_id != graph->GetRootId() ||
           state.materialized_head_commit_hash != expected_head ||
@@ -565,10 +603,10 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
     // History tip is sole authority. Checkpoint (params + head/chain label) is a fast path:
     // if the label matches the active Version tip, import params and skip first-parent replay.
     SetPipelineHistoryState(*pipeline, *graph);
-    const auto& state         = graph->GetImageEditState();
-    const auto  expected_head = graph->GetActiveVersionRef().head_commit_hash;
-    const auto  expected_chain = graph->ChainHashForHead(expected_head);
-    bool accepted_serialized_state = false;
+    const auto& state                     = graph->GetImageEditState();
+    const auto  expected_head             = graph->GetActiveVersionRef().head_commit_hash;
+    const auto  expected_chain            = graph->ChainHashForHead(expected_head);
+    bool        accepted_serialized_state = false;
     if (state.serialized_pipeline_state.has_value()) {
       const auto stored = DecodeSerializedPipelineState(*state.serialized_pipeline_state);
       if (stored.has_value() && stored->root_id == graph->GetRootId() &&
@@ -631,10 +669,10 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
         pipeline_params = pipeline->pipeline_->ExportPipelineParams();
       }
 
-      auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-      auto               db_lock  = db_guard.Lock();
+      auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+      auto             db_lock  = db_guard.Lock();
       CommitGraphStore graph_service(db_guard.conn_);
-      auto stored_graph = graph_service.LoadGraph(pipeline->id_);
+      auto             stored_graph = graph_service.LoadGraph(pipeline->id_);
       if (!stored_graph.has_value()) {
         throw std::runtime_error(
             "PipelineMgmtService: cannot write serialized state without an edit graph");
@@ -681,13 +719,34 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
     if (pipeline->pin_count_ > 0) {
       pipeline->pin_count_--;
     }
-    last_pin       = pipeline->pin_count_ == 0;
+    last_pin          = pipeline->pin_count_ == 0;
     pipeline->pinned_ = !last_pin;
   }
 
   // Shared by multiple callers (e.g. thumbnail + export): only the last owner may release/reset.
   if (!last_pin) {
     return;
+  }
+
+  // The editable pipeline table has one canonical representation from G7 onward. History keeps
+  // its serialized compatibility checkpoint separately, but a product save never writes the old
+  // stage array back over the format-version-2 graph.
+  if (pipeline->dirty_) {
+    nlohmann::json legacy_stage_adapter;
+    {
+      std::unique_lock<std::mutex> render_guard(pipeline->pipeline_->GetRenderLock());
+      legacy_stage_adapter = pipeline->pipeline_->ExportPipelineParams();
+    }
+    auto imported = LegacyPipelineImporter::Import(legacy_stage_adapter);
+    if (!imported.document.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: cannot convert edited stages to format 2: " +
+                               imported.error);
+    }
+    *pipeline->document_                  = std::move(*imported.document);
+    auto document_json                    = pipeline->document_->ToJson();
+    document_json["legacy_stage_adapter"] = std::move(legacy_stage_adapter);
+    storage_->GetElementStore().UpdatePipelineJsonByElementId(pipeline->id_, document_json);
+    pipeline->dirty_ = false;
   }
 
   // Always clear intermediate buffers and GPU resources when returning a pipeline to cache.
@@ -704,14 +763,14 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
   }
 
   // Save the pipeline back to the cache
-  sl_element_id_t                id      = pipeline->id_;
+  sl_element_id_t                id = pipeline->id_;
   // Store it back to the pipeline cache
   std::optional<sl_element_id_t> evicted;
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
-    evicted = pipeline_cache_.RecordAccess_WithEvict(id, id);
-    pipeline->pinned_      = false;
-    loaded_pipelines_[id]  = pipeline;
+    evicted               = pipeline_cache_.RecordAccess_WithEvict(id, id);
+    pipeline->pinned_     = false;
+    loaded_pipelines_[id] = pipeline;
     if (!evicted.has_value() && loaded_pipelines_.size() + 1 > default_cache_capacity_) {
       pipeline_cache_.Resize(static_cast<uint32_t>(loaded_pipelines_.size() - 1));
     }
@@ -723,8 +782,7 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
 
 auto PipelineMgmtService::PersistEditorHistoryState(
     const std::shared_ptr<PipelineGuard>& pipeline,
-    const ImageEditState&                 expected_materialized_state,
-    std::string*                          error) -> bool {
+    const ImageEditState& expected_materialized_state, std::string* error) -> bool {
   if (!pipeline || !pipeline->commit_graph_) {
     if (error != nullptr) {
       *error = "PipelineMgmtService: history persistence requires a loaded editor graph";
@@ -733,10 +791,10 @@ auto PipelineMgmtService::PersistEditorHistoryState(
   }
 
   try {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto               stored_graph = graph_service.LoadGraph(pipeline->id_);
+    auto             stored_graph = graph_service.LoadGraph(pipeline->id_);
     if (!stored_graph.has_value()) {
       throw std::runtime_error("PipelineMgmtService: persisted editor graph is missing");
     }
@@ -778,12 +836,13 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     -> bool {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
     if (error != nullptr) {
-      *error = "PipelineMgmtService: checkout requires a loaded editor pipeline with a commit graph";
+      *error =
+          "PipelineMgmtService: checkout requires a loaded editor pipeline with a commit graph";
     }
     return false;
   }
 
-  auto& graph = *pipeline->commit_graph_;
+  auto&      graph            = *pipeline->commit_graph_;
   const auto prior_version_id = graph.GetActiveVersionId();
   if (prior_version_id == version_id) {
     // Already on the requested Version: logical head is the graph active head.
@@ -801,10 +860,10 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
 
   DecodedRootPipelineState root_state;
   {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    const auto root_encoded =
+    const auto       root_encoded =
         graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
     if (!root_encoded.has_value()) {
       if (error != nullptr) {
@@ -843,8 +902,8 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     try {
       graph.SetActiveVersionId(prior_version_id);
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
-                                    accelerator_preference_);
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
+                                    root_state.raw_color_context, accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
     } catch (...) {
       // Best-effort restore; still report the original checkout failure.
@@ -857,8 +916,8 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     try {
       graph.SetActiveVersionId(prior_version_id);
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
-                                    accelerator_preference_);
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
+                                    root_state.raw_color_context, accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
     } catch (...) {
     }
@@ -880,13 +939,13 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
     return false;
   }
 
-  auto& graph = *pipeline->commit_graph_;
+  auto&                    graph = *pipeline->commit_graph_;
   DecodedRootPipelineState root_state;
   {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    const auto root_encoded =
+    const auto       root_encoded =
         graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
     if (!root_encoded.has_value()) {
       if (error != nullptr) {
@@ -919,8 +978,8 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
   } catch (const std::exception& ex) {
     try {
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
-                                    accelerator_preference_);
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
+                                    root_state.raw_color_context, accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
     } catch (...) {
     }
@@ -931,8 +990,8 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
   } catch (...) {
     try {
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
-                                    accelerator_preference_);
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
+                                    root_state.raw_color_context, accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
     } catch (...) {
     }
@@ -944,8 +1003,8 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
 }
 
 auto PipelineMgmtService::CollectUnreachableEditCommits() -> std::size_t {
-  auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto               db_lock  = db_guard.Lock();
+  auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+  auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   return graph_service.DeleteUnreachableCommitsForProject();
 }
@@ -980,8 +1039,8 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
     }
   }
   try {
-    auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     for (const auto id : ids) {
       if (id != 0) {
@@ -1037,7 +1096,7 @@ void PipelineMgmtService::Sync() {
   for (const auto& pipeline_guard : dirty_pipelines) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
     storage_->GetElementStore().UpdatePipelineByElementId(pipeline_guard->id_,
-                                                                       pipeline_guard->pipeline_);
+                                                          pipeline_guard->pipeline_);
     {
       std::unique_lock<std::mutex> cache_lock(lock_);
       pipeline_guard->dirty_ = false;

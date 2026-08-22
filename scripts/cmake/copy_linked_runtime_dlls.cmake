@@ -22,11 +22,26 @@ endif()
 
 if(DEFINED ALCEDO_RUNTIME_EXECUTABLE AND EXISTS "${ALCEDO_RUNTIME_EXECUTABLE}")
   string(REPLACE "," ";" _alcedo_runtime_search_dirs "${ALCEDO_RUNTIME_SEARCH_DIRS}")
+  # The executable directory already contains files copied by applocal. Passing it back to
+  # GET_RUNTIME_DEPENDENCIES together with the package bin directory makes identical DLL names
+  # appear as conflicting candidates on CMake 4.x.
+  cmake_path(NORMAL_PATH ALCEDO_RUNTIME_DEST OUTPUT_VARIABLE _alcedo_runtime_dest_normalized)
+  set(_alcedo_filtered_runtime_search_dirs "")
+  foreach(_alcedo_runtime_search_dir IN LISTS _alcedo_runtime_search_dirs)
+    cmake_path(NORMAL_PATH _alcedo_runtime_search_dir OUTPUT_VARIABLE _alcedo_runtime_search_dir_normalized)
+    if(NOT _alcedo_runtime_search_dir_normalized STREQUAL _alcedo_runtime_dest_normalized)
+      list(APPEND _alcedo_filtered_runtime_search_dirs "${_alcedo_runtime_search_dir}")
+    endif()
+  endforeach()
+  set(_alcedo_runtime_search_dirs "${_alcedo_filtered_runtime_search_dirs}")
   file(GET_RUNTIME_DEPENDENCIES
     EXECUTABLES "${ALCEDO_RUNTIME_EXECUTABLE}"
     DIRECTORIES ${_alcedo_runtime_search_dirs}
     RESOLVED_DEPENDENCIES_VAR _alcedo_resolved_runtime_dlls
     UNRESOLVED_DEPENDENCIES_VAR _alcedo_unresolved_runtime_dlls
+    # Applocal can place a dependency beside the executable before this validation pass. CMake
+    # 4.x otherwise treats that valid local copy plus the package-bin source as a fatal conflict.
+    CONFLICTING_DEPENDENCIES_PREFIX _alcedo_runtime_conflicts
     PRE_EXCLUDE_REGEXES
       "api-ms-win-.*"
       "ext-ms-.*"

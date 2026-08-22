@@ -81,6 +81,9 @@ class BasicRenderWorkspace {
 
   [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
 
+  /** @brief Leave a failed encode without submitting its incomplete command stream. */
+  void               CancelRender() { rendering_ = false; }
+
  private:
   Backend                       backend_{};
   ParameterArena<Backend>       parameters_;

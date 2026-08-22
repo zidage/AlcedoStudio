@@ -14,6 +14,7 @@
 
 #include "app/image_pool_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline.hpp"
@@ -43,6 +44,8 @@ namespace alcedo {
 ///   to the history tip; match skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
+  /// Authoritative format-version-2 graph used by the CUDA product renderer.
+  std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
   /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
@@ -61,7 +64,7 @@ struct PipelineGuard {
   std::shared_ptr<CommitGraph>         commit_graph_;
 
   /// Active Version tip on commit_graph_ (history-owned). Empty graph → nullopt.
-  [[nodiscard]] auto working_head_commit_hash() const -> head_commit_hash_t {
+  [[nodiscard]] auto                   working_head_commit_hash() const -> head_commit_hash_t {
     if (!commit_graph_) {
       return std::nullopt;
     }
@@ -91,7 +94,7 @@ struct PipelineSnapshot {
 
 class PipelineMgmtService final {
  private:
-  std::shared_ptr<Storage>                                     storage_;
+  std::shared_ptr<Storage>                                            storage_;
 
   LRUCache<sl_element_id_t, sl_element_id_t>                          pipeline_cache_;
 
@@ -103,16 +106,14 @@ class PipelineMgmtService final {
 
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
 
-  std::uint64_t editor_pipeline_history_rebuild_count_ = 0;
+  std::uint64_t                editor_pipeline_history_rebuild_count_ = 0;
 
   void                         HandleEviction(sl_element_id_t evicted_id);
 
  public:
   PipelineMgmtService() = delete;
   explicit PipelineMgmtService(std::shared_ptr<Storage> storage_service)
-      : storage_(storage_service),
-        pipeline_cache_(default_cache_capacity_),
-        loaded_pipelines_() {}
+      : storage_(storage_service), pipeline_cache_(default_cache_capacity_), loaded_pipelines_() {}
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
 
@@ -120,11 +121,14 @@ class PipelineMgmtService final {
   /// caller keeps its editor guard pinned. `expected_materialized_state` is
   /// the state observed before the in-memory history mutation and prevents a
   /// concurrent writer from being overwritten.
-  auto PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
-                                 const ImageEditState&                 expected_materialized_state,
-                                 std::string* error = nullptr) -> bool;
+  auto               PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
+                                               const ImageEditState&                 expected_materialized_state,
+                                               std::string*                          error = nullptr) -> bool;
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /** @brief Save the guard's authoritative GPU DAG document as format version 2. */
+  void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
 
   /// Load editor params for `id` using history tip as authority.
   /// If checkpoint (params + head/chain label) matches active Version tip, import params
@@ -159,19 +163,19 @@ class PipelineMgmtService final {
   /// pipeline. Does not invent a second head on the guard.
   ///
   /// @return true when the Version tip and pipeline params both match the checked-out head.
-  auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                       const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+  auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
+                                     const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
 
   /// Rebuild the executor params from the immutable root and the first-parent chain of the
   /// currently active Version tip. Used when the checkpoint label does not match history.
-  auto RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                   std::string* error = nullptr) -> bool;
+  auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
+                                                 std::string*                          error = nullptr) -> bool;
 
   /// Clean project-exit garbage collection: mark from every Version head through both parents and
   /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
   /// shutdown must not call this.
   /// @return number of deleted commit rows.
-  auto CollectUnreachableEditCommits() -> std::size_t;
+  auto               CollectUnreachableEditCommits() -> std::size_t;
 
   void               DeletePipeline(sl_element_id_t id);
   void               DeletePipelines(std::span<const sl_element_id_t> ids);
@@ -204,14 +208,14 @@ class PipelineMgmtService final {
 /// Checkpoint label: which history tip the serialized params claim to match.
 /// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
 struct PipelineCheckpointIdentity {
-  head_commit_hash_t       head  = std::nullopt;
+  head_commit_hash_t       head = std::nullopt;
   transaction_chain_hash_t chain{};
 };
 
 /// True when the checkpoint label on `state` matches the history tip after WAL attach.
 /// Match ⇒ safe to import params without first-parent SetOperator replay.
-[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState& state,
-                                                head_commit_hash_t logical_head,
+[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState&           state,
+                                                head_commit_hash_t              logical_head,
                                                 const transaction_chain_hash_t& logical_chain)
     -> bool;
 
