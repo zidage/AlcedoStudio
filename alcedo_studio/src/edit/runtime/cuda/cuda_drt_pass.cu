@@ -26,14 +26,7 @@ constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All
 
 auto EnsureDisplayImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                         std::uint32_t height) -> ResourceLease<CudaBackend>& {
-  auto* existing = workspace.Images().Find(id);
-  if (existing != nullptr && !existing->Empty() && existing->Texture().Width() == width &&
-      existing->Texture().Height() == height) {
-    return *existing;
-  }
-  auto lease = workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
-  workspace.Images().Store(id, std::move(lease));
-  return *workspace.Images().Find(id);
+  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
 }
 
 void ResolveRuntime(CudaDrtRuntimeState& state, const DrtParamsModel& model) {

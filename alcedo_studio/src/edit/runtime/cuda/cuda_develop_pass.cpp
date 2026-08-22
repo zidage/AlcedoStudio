@@ -51,22 +51,9 @@ auto AllocateTransient(CudaRenderWorkspace& workspace, std::size_t bytes) -> voi
   return workspace.TransientBuffers().Allocate(bytes);
 }
 
-auto EnsureImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
+auto AcquireRgba(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<CudaBackend>& {
-  auto* existing = workspace.Images().Find(id);
-  if (existing != nullptr && !existing->Empty()) {
-    const auto& tex = existing->Texture();
-    if (tex.Width() == width && tex.Height() == height && tex.Format() == TextureFormat::Rgba32f) {
-      return *existing;
-    }
-  }
-  auto lease = workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
-  workspace.Images().Store(id, std::move(lease));
-  auto* stored = workspace.Images().Find(id);
-  if (stored == nullptr) {
-    throw std::runtime_error("ExecuteCudaDevelop: failed to store develop image");
-  }
-  return *stored;
+  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
 }
 
 auto CropIfNeeded(cv::cuda::GpuMat plane, const RectI& crop) -> cv::cuda::GpuMat {
@@ -105,10 +92,10 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   auto         stream = WrapStream(ctx.Stream());
   const auto   flags  = develop->Params().Params();
   const bool   hlr    = flags.highlights_reconstruct;
-  const GraphValueId develop_id = plan.develop_output;
+  const GraphValueId sensor_id = plan.sensor_linear_output;
   const auto   out_w  = plan.source.develop_output_extent.width;
   const auto   out_h  = plan.source.develop_output_extent.height;
-  auto&        decoded_lease = EnsureImage(workspace, develop_id, out_w, out_h);
+  auto&        decoded_lease = AcquireRgba(workspace, sensor_id, out_w, out_h);
   auto&        out_tex       = decoded_lease.Texture();
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
@@ -211,21 +198,33 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     }
   }
 
-  if (plan.encode_geometry_resample) {
-    // Viewport ROI and max-edge (dynamic resolution) live on RenderRequest, not on the
-    // document. They only change render_extent. Re-query the decoded texture after
-    // Acquire: TexturePool::entries_ may reallocate and invalidate Texture2D&.
-    const auto rw   = plan.geometry.render_extent.width;
-    const auto rh   = plan.geometry.render_extent.height;
-    auto       dest = workspace.Textures().Acquire({rw, rh, TextureFormat::Rgba32f});
-    GeometryResamplePass pass;
-    pass.Encode(plan.geometry, decoded_lease.Texture(), dest.Texture(), ctx);
-    workspace.Images().Store(develop_id, std::move(dest));
-  }
-
   if (pending.has_value()) {
     pending->Commit();
   }
+}
+
+void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& plan) {
+  auto& workspace = device.Workspace();
+  if (!workspace.IsRendering()) {
+    throw std::runtime_error("ExecuteCudaGeometryResample: BeginRender has not been called");
+  }
+  auto* sensor = workspace.Images().Find(plan.sensor_linear_output);
+  if (sensor == nullptr || sensor->Empty()) {
+    throw std::runtime_error("ExecuteCudaGeometryResample: missing develop.sensor_linear");
+  }
+  const auto width  = plan.geometry.render_extent.width;
+  const auto height = plan.geometry.render_extent.height;
+  auto& dest = AcquireRgba(workspace, plan.geometry_output, width, height);
+  sensor     = workspace.Images().Find(plan.sensor_linear_output);
+  if (sensor == nullptr) {
+    throw std::runtime_error("ExecuteCudaGeometryResample: sensor texture lost during acquire");
+  }
+  if (!plan.encode_geometry_resample) {
+    workspace.Device().CopyTexture2D(sensor->Texture(), dest.Texture(), device.CommandContext());
+    return;
+  }
+  GeometryResamplePass pass;
+  pass.Encode(plan.geometry, sensor->Texture(), dest.Texture(), device.CommandContext());
 }
 
 }  // namespace alcedo

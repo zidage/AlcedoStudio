@@ -10,6 +10,7 @@
 
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/gpu_node_pass_stats.hpp"
 
 namespace alcedo {
 
@@ -43,6 +44,20 @@ class CudaRenderDevice {
   void               WaitIdle() { workspace_.Device().Wait(command_context_); }
   void               CancelRender() noexcept;
 
+  /**
+   * @brief Publish unpublished GPU image results for the submission ended by EndRender.
+   *
+   * Call after a successful present or host download. Kernel or frame-sink failure must
+   * leave results unpublished via CancelRender / DiscardUnpublished.
+   */
+  void PublishResults() {
+    workspace_.Images().PublishSuccessfulSubmission(command_context_.SubmissionId());
+  }
+
+  [[nodiscard]] auto PassStats() -> GpuNodePassStats& { return pass_stats_; }
+  [[nodiscard]] auto PassStats() const -> const GpuNodePassStats& { return pass_stats_; }
+  void               ResetPassStats() { pass_stats_.Reset(); }
+
   /** @brief Install the app-layer error receiver. Called synchronously on the render thread. */
   void               SetErrorReporter(std::function<void(std::string_view)> reporter) {
     error_reporter_ = std::move(reporter);
@@ -56,18 +71,22 @@ class CudaRenderDevice {
   /**
    * @brief Execute the complete compiled CUDA DAG and return its display texture identity.
    *
-   * Reports and rethrows failures after cancelling the incomplete submission. There is no CPU
-   * image-processing fallback.
+   * Skips GPU node passes whose content keys are already published. When
+   * @p publish_on_success is true, unpublished writes are published after a successful
+   * submit. Product present paths pass false and call @ref PublishResults after the sink
+   * succeeds. Reports and rethrows failures after cancelling the incomplete submission.
+   * There is no CPU image-processing fallback.
    */
   [[nodiscard]] auto Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
-                             PipelineDocument& document, MaskStore* mask_store = nullptr)
-      -> GraphValueId;
+                             PipelineDocument& document, MaskStore* mask_store = nullptr,
+                             bool publish_on_success = true) -> GraphValueId;
 
  private:
   CudaRenderWorkspace                   workspace_;
   CudaCommandContext                    command_context_;
   std::unique_ptr<CudaDrtRuntimeState>  drt_runtime_;
   std::function<void(std::string_view)> error_reporter_;
+  GpuNodePassStats                      pass_stats_{};
 };
 
 }  // namespace alcedo

@@ -51,14 +51,23 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
 
   /**
-   * @brief Wait the previous submission, rewind transients, start a new submission id.
+   * @brief Allocate an unpublished write texture for @p id. See GraphImageCache.
+   */
+  auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
+      -> ResourceLease<Backend>& {
+    return images_.AcquireTextureForWrite(textures_, backend_, id, request);
+  }
+
+  /**
+   * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.
    * @throws std::runtime_error if called re-entrantly.
    */
-  void               BeginRender(CommandContext& command_context) {
+  void BeginRender(CommandContext& command_context) {
     if (rendering_) {
       throw std::runtime_error("BasicRenderWorkspace::BeginRender: already rendering");
     }
     backend_.Wait(command_context);
+    images_.DiscardUnpublished();
     transients_.Reset();
     textures_.BeginFrame();
     mask_textures_.BeginFrame();
@@ -81,8 +90,13 @@ class BasicRenderWorkspace {
 
   [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
 
-  /** @brief Leave a failed encode without submitting its incomplete command stream. */
-  void               CancelRender() { rendering_ = false; }
+  /**
+   * @brief Leave a failed encode without submitting. Unpublished writes are discarded.
+   */
+  void CancelRender() {
+    images_.DiscardUnpublished();
+    rendering_ = false;
+  }
 
  private:
   Backend                       backend_{};

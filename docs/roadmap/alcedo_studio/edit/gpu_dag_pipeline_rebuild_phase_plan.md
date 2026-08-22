@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1 complete；G7R.2–G7R.5 remaining；G7R 仍阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.2 complete；G7R.3–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2946,7 +2946,7 @@ Branch: `feature/gpu-dag-cuda-default-recovery`
 
 Base: `feature/gpu-dag-cuda-drt-product`
 
-Status: G7R.1 complete；G7R.2–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
+Status: G7R.1–G7R.2 complete；G7R.3–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
 
 Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
 任务中已经明确的 Develop endpoint、GPU workspace KV cache 和动态分辨率要求，不重新定义
@@ -3041,7 +3041,7 @@ LibRaw/input-preparation implementation version
 - [x] 同一 source key 的 preview/quality/detail 渲染共享 PreparedRawInput；
 - [x] 未淘汰的 source 再次打开时复用主存结果，不重新执行 LibRaw open/unpack；
 - [x] DecodeRes 或输入准备规则改变时生成新 key，不覆盖仍被 submission 使用的旧条目；
-- [ ] source host bytes 只在 `develop.sensor_linear` miss 时上传；
+- [x] source host bytes 只在 `develop.sensor_linear` miss 时上传；
 - [x] 静态 ExecutionPlan key 只包含 graph topology、节点/调整类型与顺序、source layout 和后端能力；
 - [x] 参数值、viewport、CCT、Grade 和 DRT 编辑不触发静态 plan 重编译；
 - [x] ResolvedRenderGeometry 和 pass dirty schedule 属于每帧只读数据，不通过重编译静态图表达；
@@ -3151,19 +3151,19 @@ drt.display             = display-referred output
 
 工作：
 
-- 从 `GraphImageCache` 中拆出 allocation slots 与 valid results，或让 API 强制调用者明确选择
+- [x] 从 `GraphImageCache` 中拆出 allocation slots 与 valid results，或让 API 强制调用者明确选择
   `AcquireTextureForWrite`、`FindValidResult`、`PublishResult`；
-- 缓存查找比较 value ID、内容 key、extent、format 和完成 submission；
-- pass 写入临时 unpublished 状态，只在 submission 成功后原子发布内容 key；
-- 取消、kernel 失败、frame-sink 失败不能把部分写入标成有效；
-- 同 key 已命中时跳过 pass，保留原 `last_writer` 和内容身份；
-- 同一物理纹理被新 key 覆写前，先移除旧结果身份；
-- geometry cache key 使用完整 ResolvedRenderGeometry，包括 crop、rotation、ROI、目标尺寸、
+- [x] 缓存查找比较 value ID、内容 key、extent、format 和完成 submission；
+- [x] pass 写入临时 unpublished 状态，只在 submission 成功后原子发布内容 key；
+- [x] 取消、kernel 失败、frame-sink 失败不能把部分写入标成有效；
+- [x] 同 key 已命中时跳过 pass，保留原 `last_writer` 和内容身份；
+- [x] 同一物理纹理被新 key 覆写前，先移除旧结果身份；
+- [x] geometry cache key 使用完整 ResolvedRenderGeometry，包括 crop、rotation、ROI、目标尺寸、
   DecodeRes 映射和采样规则；
-- CCT/tint、Grade、mask 或 DRT 改变不得使 `geometry.scene_source` 失效；
-- viewport/geometry 改变复用 `develop.sensor_linear`，只重跑 Geometry 和下游；
-- workspace LRU 按 GPU 字节预算淘汰已完成且没有 lease 的结果；
-- 结果缓存支持 source/document revision 隔离，防止切图后错误命中。
+- [x] CCT/tint、Grade、mask 或 DRT 改变不得使 `geometry.scene_source` 失效；
+- [x] viewport/geometry 改变复用 `develop.sensor_linear`，只重跑 Geometry 和下游；
+- [x] workspace LRU 按 GPU 字节预算淘汰已完成且没有 lease 的结果；
+- [x] 结果缓存支持 source/document revision 隔离，防止切图后错误命中。
 
 主要文件：
 
@@ -3172,6 +3172,109 @@ drt.display             = display-referred output
 - `alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp`
 - `alcedo_studio/src/edit/runtime/cuda/cuda_develop_pass.cpp`
 - `alcedo_studio/src/edit/runtime/cuda/cuda_plan_executor.cpp`
+
+##### Phase G7R.2 completion record (2026-08-22)
+
+**Status:** complete — content-keyed GPU result cache with independent
+`develop.sensor_linear`, `geometry.scene_source`, and `develop.image` values.
+Unchanged, Exposure, CCT, DRT, viewport, geometry, Develop, and image-switch
+frames skip or execute the required pass set. Source H2D runs only on a
+`develop.sensor_linear` miss.
+
+`GraphImageCache` is now a content-keyed result cache. Allocation reuse is
+`AcquireTextureForWrite` / TexturePool. A content hit is `BindValidResult` /
+`FindValidResult` with matching value ID, content key, extent, format, and a
+completed `last_writer`. Passes write unpublished slots; `PublishResults` runs
+only after a successful submit and, on the product path, after present/download.
+
+**Primary success call chain:**
+
+```text
+CPUPipelineExecutor::Apply
+  -> CudaProductRenderer::Render
+  -> PreparedSourceCache::AcquireEncoded
+  -> StaticExecutionPlanCache::GetOrCompile
+  -> GraphCompiler::BindFrameGeometry
+  -> BuildFrameResultContentKeys
+  -> CudaRenderDevice::Execute(publish_on_success=false)
+       BeginRender waits previous submission and drops leftover unpublished writes
+       BindValidResult(develop.sensor_linear)
+         hit  -> skip SensorDevelop, no source H2D
+         miss -> ExecuteCudaDevelop + RecordUnpublished
+       BindValidResult(geometry.scene_source)
+         hit  -> skip Geometry
+         miss -> ExecuteCudaGeometryResample + RecordUnpublished
+       BindValidResult(develop.image)
+         hit  -> skip CameraColor
+         miss -> ExecuteCudaCameraColor + RecordUnpublished
+       BindValidResult(grade.primary.image) / (drt, display)
+         hit  -> skip
+         miss -> ExecuteCudaPrimaryGrade / ExecuteCudaDrt + RecordUnpublished
+  -> present or host download
+  -> CudaRenderDevice::PublishResults
+```
+
+**Primary failure call chain:**
+
+```text
+kernel / source H2D / frame-sink mapping failure
+  -> CudaRenderDevice::CancelRender
+  -> GraphImageCache::DiscardUnpublished
+  -> previously published content keys remain FindValidResult hits
+  -> new unpublished keys are not published
+  -> exception returns through CPUPipelineExecutor (no CPU image processing)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SecondUnchangedProductRenderRunsNoLibRawNoSourceUploadAndNoGpuNodePass` | `GpuDagCudaDrtProductTest` | PASS |
+| `ExposureEditRunsOnlyPrimaryGradeAndDrtPasses` | `GpuDagCudaDrtProductTest` | PASS |
+| `DevelopCctEditReusesSensorAndGeometryAndRunsCameraColorGradeDrt` | `GpuDagCudaDrtProductTest` | PASS |
+| `DrtEditRunsOnlyDrtPass` | `GpuDagCudaDrtProductTest` | PASS |
+| `ViewportChangeReusesSensorDevelopAndRunsGeometryAndDownstream` | `GpuDagCudaDrtProductTest` | PASS |
+| `GeometryEditReusesSensorDevelopAndInvalidatesPostGeometryResult` | `GpuDagCudaDrtProductTest` | PASS |
+| `RawDevelopEditInvalidatesSensorDevelopAndAllDownstreamResults` | `GpuDagCudaDrtProductTest` | PASS |
+| `ImageSwitchBackReusesMatchingPreparedSourceAndGpuResults` | `GpuDagCudaDrtProductTest` | PASS |
+| `ResultCacheDoesNotTreatReusedTextureAllocationAsContentHit` | `GpuDagCudaWorkspaceTest` | PASS |
+| `FailedSubmissionDoesNotPublishResultContentKey` | `GpuDagCudaWorkspaceTest` and `GpuDagCudaDrtProductTest` | PASS |
+| `CancelledSubmissionKeepsPreviouslyCompletedCacheEntriesUsable` | `GpuDagCudaWorkspaceTest` and `GpuDagCudaDrtProductTest` | PASS |
+| `SensorLinearKeyIgnoresCctTintGradeAndDrt` | `GpuDagRawInputTest` | PASS |
+| `GeometryKeyIncludesViewportAndCropAndIgnoresGrade` | `GpuDagRawInputTest` | PASS |
+| `HighlightRecoverChangesSensorLinearAndAllDownstreamKeys` | `GpuDagRawInputTest` | PASS |
+| `ProductRendererCompilesStaticPlanOnlyForTopologyOrSourceLayoutChange` | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagRawInputTest GpuDagCudaDrtProductTest GpuDagCudaDevelopTest GpuDagCudaPrimaryGradeTest GpuDagCudaWorkspaceTest GpuDagCudaMaskTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest|GpuDagCudaDrtProductTest|GpuDagCudaDevelopTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaWorkspaceTest|GpuDagCudaMaskTest"
+```
+
+Suite totals: `92/92` PASS (`GpuDagRawInputTest` 29, CUDA Develop 6, CUDA Primary Grade 9,
+CUDA DRT product 21, CUDA Mask 11, CUDA workspace 16). One mask mix test was updated
+to run Geometry and CameraColor before Primary Grade after the value-ID split.
+
+**Checklist / exit condition:** all 11 G7R.2 work items checked. G7R.1 remaining
+source-H2D-on-sensor-miss item is also checked.
+
+**LOC note (grill-code-review):** new files stay small: `content_key.hpp` 107,
+`graph_image_cache.hpp` 329, `gpu_node_pass_stats.hpp` 37,
+`result_content_key.hpp` 51, `result_content_key.cpp` 228,
+`cuda_camera_color_pass.cu` 90, `cuda_plan_executor.cpp` 130,
+`result_content_key_test.cpp` 129, `graph_image_cache_test.cpp` 122,
+`cuda_result_cache_test.cpp` 320. `cuda_develop_pass.cpp` 230,
+`cuda_product_renderer.cu` 184, `cuda_primary_grade_pass.cu` 400.
+No changed file exceeds 500 lines.
+
+**Residual gaps:** CameraColor still uses the current `rgb_cam` × sRGB→AP1 matrix
+and may still fall back to identity; G7R.3 replaces that with CameraMatrices/DNG
+dual-illuminant interpolation and rejects missing/singular matrices. Creative
+CAT02 remains channel scaling until G7R.4. Full 41.9 A/B timing, GPU
+allocation/free, and duration snapshots remain G7R.5. `develop.image` is a
+separate AP1-bound GraphValue after CameraColor, but AP1 correctness is not
+claimed until G7R.3 reference tests.
 
 ### 41.5 G7R.3 — 恢复 CameraMatrices 双光源插值和 Develop AP1 输出
 
@@ -3652,9 +3755,9 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 每个 RenderDevice 只有一个 workspace。
 - [ ] 每个 RenderDevice 只有一份 ParameterArena。
 - [ ] 稳定渲染不创建或销毁 GPU buffer 和 texture。
-- [ ] Prepared RAW、静态 ExecutionPlan 和节点结果都有可查询的内容感知 cache hit/miss。
-- [ ] `develop.sensor_linear` 和 `geometry.scene_source` 是独立、可淘汰、submission-safe 的结果缓存。
-- [ ] 无变化渲染不执行 LibRaw、source H2D、plan compile 或 GPU 图像节点 pass。
+- [x] Prepared RAW、静态 ExecutionPlan 和节点结果都有可查询的内容感知 cache hit/miss。
+- [x] `develop.sensor_linear` 和 `geometry.scene_source` 是独立、可淘汰、submission-safe 的结果缓存。
+- [x] 无变化渲染不执行 LibRaw、source H2D、plan compile 或 GPU 图像节点 pass。
 - [ ] LLF 不管理自己的内存池。
 - [x] Mask GPU LRU 只存在于 workspace。
 

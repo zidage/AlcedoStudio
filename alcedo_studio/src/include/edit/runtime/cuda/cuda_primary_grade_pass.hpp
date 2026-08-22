@@ -19,7 +19,7 @@ struct CudaPrimaryGradeResult {
 };
 
 /**
- * @brief Convert camera RGB to AP1 and execute the serialized primary-grade Model order.
+ * @brief Execute the serialized primary-grade Model order on AP1 scene-linear input.
  *
  * Must run between CudaRenderDevice::BeginRender and EndRender. Parameters, output images,
  * execution order, and local-tone reference data are owned by the device workspace. A failed

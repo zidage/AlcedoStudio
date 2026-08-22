@@ -108,6 +108,8 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
 struct ExecutionPlan {
   StaticPlanKey                   static_key{};
   std::vector<GpuPassDesc>        passes;
+  GraphValueId                    sensor_linear_output{NodeId{"develop"}, PortId{"sensor_linear"}};
+  GraphValueId                    geometry_output{NodeId{"geometry"}, PortId{"scene_source"}};
   GraphValueId                    develop_output{NodeId{"develop"}, PortId{"image"}};
   DevelopCompileSource            source{};
   ResolvedRenderGeometry          geometry{};

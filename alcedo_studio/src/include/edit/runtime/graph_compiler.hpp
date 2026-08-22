@@ -17,8 +17,8 @@ namespace alcedo {
  * @brief Builds the complete Develop -> PrimaryColorGrade -> DRT plan. Does not allocate GPU
  * memory.
  *
- * Validates the three-node document. Camera-to-AP1 remains part of Develop rather than a
- * separately allocated pass.
+ * Validates the three-node document. SensorDevelop, GeometryResample, and CameraToAp1 are
+ * separate compiled passes with distinct GraphValueIds.
  *
  * The static plan key covers graph topology, adjustment types and order, source layout,
  * and backend capability version. Viewport, crop, CCT, Grade values, and DRT values are

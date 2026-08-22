@@ -50,6 +50,8 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
   auto Render() -> CudaPrimaryGradeResult {
     device_.BeginRender();
     ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_.color_context, document_);
     device_.EndRender();
     device_.WaitIdle();

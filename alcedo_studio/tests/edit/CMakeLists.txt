@@ -279,6 +279,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
@@ -310,7 +311,8 @@ if(ALCEDO_CUDA_ENABLED)
 
   add_executable(GpuDagCudaDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeCuda EditInput Image)
@@ -330,6 +332,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/texture_lease_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/header_hygiene_test.cpp)
   target_include_directories(GpuDagCudaWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeCuda)

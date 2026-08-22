@@ -241,6 +241,22 @@ void CudaBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte>
   h2d_bytes_ += bytes.size();
 }
 
+void CudaBackend::CopyTexture2D(const Texture2D& src, Texture2D& dst,
+                                CommandContext& command_context) {
+  if (src.DevicePointer() == nullptr || dst.DevicePointer() == nullptr) {
+    throw std::runtime_error("CudaBackend::CopyTexture2D: empty texture");
+  }
+  if (src.Width() != dst.Width() || src.Height() != dst.Height() || src.Format() != dst.Format()) {
+    throw std::runtime_error("CudaBackend::CopyTexture2D: size or format mismatch");
+  }
+  if (src.Bytes() == 0) {
+    return;
+  }
+  cuda::CheckCuda(::cudaMemcpyAsync(dst.DevicePointer(), src.DevicePointer(), src.Bytes(),
+                                    cudaMemcpyDeviceToDevice, command_context.Stream()),
+                  "CudaBackend::CopyTexture2D");
+}
+
 void CudaBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
                                       std::span<const std::byte> bytes,
                                       CommandContext&            command_context) {

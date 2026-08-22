@@ -99,6 +99,8 @@ class CudaMaskFixture : public ::testing::Test {
   auto RenderGrade() -> CudaPrimaryGradeResult {
     device_.BeginRender();
     (void)ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
     (void)ExecuteCudaMask(device_, plan_, document_, store_.get());
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_.color_context, document_);
     device_.EndRender();
@@ -305,6 +307,8 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   store_->Save(asset);
   device_.BeginRender();
   (void)ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+  ExecuteCudaGeometryResample(device_, plan_);
+  ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
   const RectI dirty{0, 0, static_cast<std::int32_t>(width_ / 2),
                     static_cast<std::int32_t>(height_)};
   (void)ExecuteCudaMask(device_, plan_, document_, store_.get(), std::span{&dirty, 1});

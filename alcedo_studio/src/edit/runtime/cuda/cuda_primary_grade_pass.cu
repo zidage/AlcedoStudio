@@ -24,6 +24,7 @@
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
 namespace {
@@ -101,39 +102,9 @@ auto MakeRuntimeParams(const IOperatorModel& model, CudaAdjustmentBehavior behav
   throw std::runtime_error("CUDA primary grade: Model DTO is not supported");
 }
 
-auto MakeCameraToAp1(const RawRuntimeColorContext& context, float mix) -> CameraToAp1Params {
-  CameraToAp1Params result;
-  result.mix = mix;
-  if (!context.valid_) {
-    return result;
-  }
-  constexpr float srgb_to_ap1[9] = {0.613097f, 0.339523f, 0.047380f, 0.070194f, 0.916354f,
-                                    0.013452f, 0.020616f, 0.109570f, 0.869815f};
-  float           absolute_sum   = 0.0f;
-  for (float value : context.rgb_cam_) absolute_sum += std::abs(value);
-  if (absolute_sum <= 1.0e-6f) {
-    return result;
-  }
-  for (int row = 0; row < 3; ++row) {
-    for (int column = 0; column < 3; ++column) {
-      result.matrix[row * 3 + column] = srgb_to_ap1[row * 3] * context.rgb_cam_[column] +
-                                        srgb_to_ap1[row * 3 + 1] * context.rgb_cam_[3 + column] +
-                                        srgb_to_ap1[row * 3 + 2] * context.rgb_cam_[6 + column];
-    }
-  }
-  return result;
-}
-
 auto EnsureImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<CudaBackend>& {
-  auto* existing = workspace.Images().Find(id);
-  if (existing != nullptr && !existing->Empty() && existing->Texture().Width() == width &&
-      existing->Texture().Height() == height) {
-    return *existing;
-  }
-  auto lease = workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
-  workspace.Images().Store(id, std::move(lease));
-  return *workspace.Images().Find(id);
+  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
 }
 
 auto EnsureBuffer(CudaRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
@@ -310,6 +281,7 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                              const RawRuntimeColorContext& color_context,
                              PipelineDocument&             document) -> CudaPrimaryGradeResult {
+  (void)color_context;
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: BeginRender has not been called");
@@ -401,7 +373,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       ::cudaPointerGetAttributes(&output_attributes, output_pointer) != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: workspace image has no CUDA allocation");
   }
-  const auto camera = MakeCameraToAp1(color_context, grade->Enabled() ? grade->Mix() : 0.0f);
+  CameraToAp1Params camera;
+  camera.mix = grade->Enabled() ? grade->Mix() : 0.0f;
   const std::uint8_t* mask_pointer = nullptr;
   if (plan.primary_grade_mask) {
     auto* mask = workspace.Images().Find(plan.mask_output);

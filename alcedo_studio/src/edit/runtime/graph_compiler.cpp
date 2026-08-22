@@ -156,10 +156,12 @@ auto GraphCompiler::CompileStatic(const PipelineDocument& document,
   }
 
   ExecutionPlan plan;
-  plan.static_key           = MakeStaticPlanKey(document, source, backend_capability_version);
-  plan.source               = source;
-  plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
-  plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
+  plan.static_key            = MakeStaticPlanKey(document, source, backend_capability_version);
+  plan.source                = source;
+  plan.sensor_linear_output  = GraphValueId{NodeId{"develop"}, PortId{"sensor_linear"}};
+  plan.geometry_output       = GraphValueId{NodeId{"geometry"}, PortId{"scene_source"}};
+  plan.develop_output        = GraphValueId{NodeId{"develop"}, PortId{"image"}};
+  plan.peak_transient_bytes  = EstimatePeakTransientBytes(source);
   const auto* grade         = document.PrimaryGrade();
 
   if (source.kind == DevelopInputKind::DirectRgb) {

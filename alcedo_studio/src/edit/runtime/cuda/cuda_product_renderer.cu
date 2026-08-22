@@ -37,7 +37,7 @@ void PresentCudaTexture(CudaRenderDevice& device, const GraphValueId& output_id,
   sink.EnsureSize(static_cast<int>(width), static_cast<int>(height));
   const FrameWriteMapping mapping = sink.MapResourceForWrite(FrameMemoryDomain::CudaDevice);
   if (!mapping) {
-    return;
+    throw std::runtime_error("CudaProductRenderer: frame sink rejected the write mapping");
   }
 
   try {
@@ -140,16 +140,21 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
   if (document_->TopologyDirty()) {
     document_->ClearTopologyDirty();
   }
-  const auto output_id = device_->Execute(plan, prepared_lease.Get(), *document_);
+  const auto output_id =
+      device_->Execute(plan, prepared_lease.Get(), *document_, nullptr, false);
 
   try {
     if (sink != nullptr) {
       PresentCudaTexture(*device_, output_id, *sink, submission);
     }
     if (require_host_output) {
-      return DownloadCudaTexture(*device_, output_id);
+      auto host = DownloadCudaTexture(*device_, output_id);
+      device_->PublishResults();
+      return host;
     }
+    device_->PublishResults();
   } catch (const std::exception& ex) {
+    device_->Workspace().Images().DiscardUnpublished();
     device_->ReportError(ex.what());
     throw;
   }
@@ -166,12 +171,14 @@ auto CudaProductRenderer::Stats() const -> CudaProductSessionStats {
   stats.plan_cache_hits          = plan.hits;
   stats.plan_cache_misses        = plan.misses;
   stats.plan_compile_count       = plan.compiles;
+  stats.pass                     = device_->PassStats();
   return stats;
 }
 
 void CudaProductRenderer::ResetStats() {
   source_cache_.ResetStats();
   plan_cache_.ResetStats();
+  device_->ResetPassStats();
 }
 
 }  // namespace alcedo

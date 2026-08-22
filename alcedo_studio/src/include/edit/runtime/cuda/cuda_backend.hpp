@@ -134,6 +134,10 @@ class CudaBackend {
    */
   void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                        CommandContext& command_context);
+  /**
+   * @brief Device-to-device copy of matching RGBA32F textures for identity geometry/camera.
+   */
+  void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
   /** @brief Upload a tightly packed R8 rectangle into an R8 texture. */
   void UploadR8TextureRect(Texture2D& texture, RectI rectangle, std::span<const std::byte> bytes,
                            CommandContext& command_context);
@@ -150,6 +154,7 @@ class CudaBackend {
   void Wait(CommandContext& command_context);
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
+  [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
   [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
     return submitted_on != 0 && submitted_on > completed_submission_;
   }

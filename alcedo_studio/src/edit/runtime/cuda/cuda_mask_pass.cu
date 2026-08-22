@@ -49,14 +49,7 @@ auto CopyRectangle(const MaskAsset& asset, RectI rectangle) -> std::vector<std::
 
 auto EnsureOutput(CudaRenderWorkspace& workspace, const GraphValueId& id, Extent2D extent)
     -> ResourceLease<CudaBackend>& {
-  auto* existing = workspace.Images().Find(id);
-  if (existing != nullptr && existing->Texture().Width() == extent.width &&
-      existing->Texture().Height() == extent.height &&
-      existing->Texture().Format() == TextureFormat::R8)
-    return *existing;
-  workspace.Images().Store(
-      id, workspace.Textures().Acquire({extent.width, extent.height, TextureFormat::R8}));
-  return *workspace.Images().Find(id);
+  return workspace.AcquireImageForWrite(id, {extent.width, extent.height, TextureFormat::R8});
 }
 
 __device__ auto Transform(const float* matrix, float x, float y) -> float2 {

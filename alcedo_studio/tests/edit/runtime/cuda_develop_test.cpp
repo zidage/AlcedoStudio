@@ -43,7 +43,7 @@ struct Rgba {
 };
 
 auto DownloadDevelop(CudaRenderDevice& device, const ExecutionPlan& plan) -> std::vector<Rgba> {
-  auto* lease = device.Workspace().Images().Find(plan.develop_output);
+  auto* lease = device.Workspace().Images().Find(plan.sensor_linear_output);
   EXPECT_NE(lease, nullptr);
   if (lease == nullptr) {
     return {};
@@ -130,7 +130,7 @@ TEST_F(CudaDevelopFixture, CudaDevelopUsesWorkspaceForAllTemporaryBuffers) {
   EXPECT_GT(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   device.EndRender();
   device.WaitIdle();
-  EXPECT_NE(device.Workspace().Images().Find(plan.develop_output), nullptr);
+  EXPECT_NE(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {

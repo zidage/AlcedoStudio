@@ -14,9 +14,10 @@
 namespace alcedo {
 
 /**
- * @brief KV cache of node outputs keyed by producer node and output port.
+ * @brief KV cache of non-image node buffers keyed by producer node and output port.
  *
- * Values are owning backend buffers. Not thread-safe.
+ * GPU image results live in GraphImageCache with content keys. This cache holds
+ * runtime buffers such as adjustment command lists. Not thread-safe.
  */
 template <class Backend>
 class NodeResultCache {

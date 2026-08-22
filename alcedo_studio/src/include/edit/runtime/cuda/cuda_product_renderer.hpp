@@ -9,6 +9,7 @@
 
 #include "edit/geometry/render_request.hpp"
 #include "edit/input/prepared_source_cache.hpp"
+#include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
@@ -24,10 +25,7 @@ class PipelineDocument;
 inline constexpr std::uint32_t kCudaDagBackendCapabilityVersion = 1;
 
 /**
- * @brief Queryable prepare/compile counters for one product pipeline session.
- *
- * Hit/miss/compile counts are the cache identity for G7R.1. GPU pass skip and
- * result-content hits belong to later G7R work.
+ * @brief Queryable prepare/compile and result-cache counters for one product session.
  */
 struct CudaProductSessionStats {
   std::uint64_t prepared_source_hits       = 0;
@@ -36,6 +34,7 @@ struct CudaProductSessionStats {
   std::uint64_t plan_cache_hits            = 0;
   std::uint64_t plan_cache_misses          = 0;
   std::uint64_t plan_compile_count         = 0;
+  GpuNodePassStats pass{};
 };
 
 /**

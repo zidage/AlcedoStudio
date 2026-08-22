@@ -12,15 +12,32 @@
 namespace alcedo {
 
 /**
- * @brief Encode CUDA Develop for the current in-flight submission.
+ * @brief Encode SensorDevelop into `develop.sensor_linear` for the current submission.
  *
  * Must be called between BeginRender and EndRender. Failures throw; there is
- * no CPU Apply fallback. Develop output is camera scene-linear RGBA32F.
+ * no CPU Apply fallback. Output is camera scene-linear RGBA32F before geometry.
+ * Source host bytes are uploaded only from this pass.
  *
  * CUDA order: Linearize → (optional CFA Clamp01) → Demosaic → HighlightRecover
- * on RGB when enabled. Camera-to-AP1 is not applied.
+ * on RGB when enabled. Geometry and CameraColor are separate passes.
  */
 void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
                         const PreparedRawInput& input, PipelineDocument& document);
+
+/**
+ * @brief Write `geometry.scene_source` from `develop.sensor_linear`.
+ *
+ * Identity geometry copies the sensor texture. Non-identity runs GeometryResamplePass.
+ */
+void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& plan);
+
+/**
+ * @brief Write `develop.image` from `geometry.scene_source` using the current camera matrix.
+ *
+ * G7R.3 replaces the matrix construction. This pass is independently skippable.
+ */
+void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
+                            const RawRuntimeColorContext& color_context,
+                            const PipelineDocument&       document);
 
 }  // namespace alcedo

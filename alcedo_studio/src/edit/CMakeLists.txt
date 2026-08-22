@@ -71,8 +71,9 @@ def_library(EditRuntime
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
-    PUBLIC_DEPS EditGraph EditGeometry
+    PUBLIC_DEPS EditGraph EditGeometry EditInput
 )
 
 if(ALCEDO_CUDA_ENABLED)
@@ -80,6 +81,7 @@ if(ALCEDO_CUDA_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
