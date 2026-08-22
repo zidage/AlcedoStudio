@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: 设计阶段。实现尚未开始。
+Status: G1 complete (Model, DTO, PipelineGraph). G2 not started.
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -1886,6 +1886,94 @@ LegacyStageJsonMapsRawGradeGeometryAndDrtToNewDocument
 - 图修改只使用 `topology_dirty`；
 - JSON 中没有 stage 或 priority；
 - 旧产品执行路径仍然构建。
+
+##### Phase G1 completion record (2026-08-22)
+
+**Status:** complete — GPU-free Model/DTO/PipelineGraph, default three-node document, format v2 JSON, and one-way legacy importer. Product execution still uses PipelineStage.
+
+**Primary success call chain:**
+
+```text
+CreateDefaultPipelineDocument
+  -> DevelopNodeModel + ColorGradeNodeModel::MakeDefault + DrtNodeModel
+  -> PipelineGraph::AddNode / Connect
+  -> Validate + TopologicalOrder
+  -> PipelineDocument::ToJson  (format_version 2)
+```
+
+**Parameter dirty call chain:**
+
+```text
+ExposureModel::SetValue
+  -> dirty field bit
+  -> TakeDirtyPatch
+  -> OperatorParamPatchDto (latest value; bits cleared)
+```
+
+**Primary failure call chain:**
+
+```text
+Connect(display or mask output, scene image input) or cyclic edge
+  -> PipelineGraph::Validate
+  -> PortTypeMismatch or Cycle
+  -> TopologicalOrder throws; document graph left as constructed
+
+Unknown legacy OperatorType
+  -> LegacyPipelineImporter::Import
+  -> error string, no PipelineDocument
+```
+
+**Cancelled parameter transfer:**
+
+```text
+TakePendingParameterPatch
+  -> destructor without Commit
+  -> RestoreDirty
+  -> field remains dirty for retry
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DefaultPipelineHasDevelopGradeAndDrtNodes` | `GpuDagModelGraphTest` | PASS |
+| `DefaultPipelineConnectsDevelopThroughPrimaryGradeToDrt` | `GpuDagModelGraphTest` | PASS |
+| `DefaultPrimaryGradeContainsOrderedSceneAdjustments` | `GpuDagModelGraphTest` | PASS |
+| `DefaultPrimaryGradeUsesFullMixAndNoMask` | `GpuDagModelGraphTest` | PASS |
+| `PipelineGraphRejectsCycle` | `GpuDagModelGraphTest` | PASS |
+| `PipelineGraphRejectsDisplayImageConnectedToSceneInput` | `GpuDagModelGraphTest` | PASS |
+| `PipelineGraphRejectsMaskConnectedToImageInput` | `GpuDagModelGraphTest` | PASS |
+| `RepeatedExposureWritesCollapseIntoOneDirtyPatch` | `GpuDagModelGraphTest` | PASS |
+| `DirtyPatchTakenBeforeNewEditLeavesNewEditDirty` | `GpuDagModelGraphTest` | PASS |
+| `CancelledParameterTransferRestoresDirtyFields` | `GpuDagModelGraphTest` | PASS |
+| `PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder` | `GpuDagModelGraphTest` | PASS |
+| `LegacyStageJsonMapsRawGradeGeometryAndDrtToNewDocument` | `GpuDagModelGraphTest` | PASS |
+| Header hygiene (no GPU / ImageBuffer includes) | `GpuDagModelGraphTest` | PASS |
+| Unknown legacy operator fails import | `GpuDagModelGraphTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagModelGraphTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R GpuDagModelGraphTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target Operators EditPipeline --parallel 4
+```
+
+Suite totals: `17/17` GpuDagModelGraphTest PASS. Operators and EditPipeline still build.
+
+**Checklist / exit condition:** all G1 exit conditions met. Product `PipelineMgmtService` is unchanged.
+
+**LOC note (grill-code-review):** largest new file is `legacy_pipeline_importer.cpp` (~305 lines). No changed file exceeds 1000 LOC. `EditGraph` links JSON only.
+
+**Remaining gaps:** GraphCompiler, ExecutionPlan, CUDA workspace (G2); product path still reads old stage JSON (G7).
+
+**Files added:** `alcedo_studio/src/include/edit/graph/*`, `alcedo_studio/src/include/edit/operators/models/*`, matching `.cpp` under `edit/graph` and `edit/operators/models`, `tests/edit/graph/*`, CMake `EditGraph` + `GpuDagModelGraphTest`.
+
+**Files removed:** none.
+
+**Performance and allocation evidence:** not applicable; G1 has no GPU path.
+
+**Open work:** G2 CUDA workspace.
 
 ## 35. Phase G2 — CUDA workspace 和参数传输
 
