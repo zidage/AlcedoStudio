@@ -33,12 +33,80 @@ struct CompiledMask {
 };
 
 /**
+ * @brief Identity of a static compiled plan. Parameter values and viewport are omitted.
+ *
+ * Source layout is the decoded host/develop extents, not ResolvedRenderGeometry.
+ */
+struct StaticPlanKey {
+  std::uint64_t        topology_hash               = 0;
+  DevelopCompileSource source_layout{};
+  std::uint32_t        backend_capability_version  = 0;
+};
+
+inline auto operator==(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
+  return a.topology_hash == b.topology_hash && a.source_layout == b.source_layout &&
+         a.backend_capability_version == b.backend_capability_version;
+}
+
+inline auto operator!=(const StaticPlanKey& a, const StaticPlanKey& b) -> bool { return !(a == b); }
+
+inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
+  if (a.topology_hash != b.topology_hash) {
+    return a.topology_hash < b.topology_hash;
+  }
+  if (a.backend_capability_version != b.backend_capability_version) {
+    return a.backend_capability_version < b.backend_capability_version;
+  }
+  if (a.source_layout.kind != b.source_layout.kind) {
+    return a.source_layout.kind < b.source_layout.kind;
+  }
+  if (a.source_layout.host_extent.width != b.source_layout.host_extent.width) {
+    return a.source_layout.host_extent.width < b.source_layout.host_extent.width;
+  }
+  if (a.source_layout.host_extent.height != b.source_layout.host_extent.height) {
+    return a.source_layout.host_extent.height < b.source_layout.host_extent.height;
+  }
+  if (a.source_layout.develop_output_extent.width != b.source_layout.develop_output_extent.width) {
+    return a.source_layout.develop_output_extent.width < b.source_layout.develop_output_extent.width;
+  }
+  if (a.source_layout.develop_output_extent.height !=
+      b.source_layout.develop_output_extent.height) {
+    return a.source_layout.develop_output_extent.height <
+           b.source_layout.develop_output_extent.height;
+  }
+  if (a.source_layout.full_reference_extent.width != b.source_layout.full_reference_extent.width) {
+    return a.source_layout.full_reference_extent.width < b.source_layout.full_reference_extent.width;
+  }
+  if (a.source_layout.full_reference_extent.height !=
+      b.source_layout.full_reference_extent.height) {
+    return a.source_layout.full_reference_extent.height <
+           b.source_layout.full_reference_extent.height;
+  }
+  if (a.source_layout.downsample_passes != b.source_layout.downsample_passes) {
+    return a.source_layout.downsample_passes < b.source_layout.downsample_passes;
+  }
+  if (a.source_layout.sensor_active_area.x != b.source_layout.sensor_active_area.x) {
+    return a.source_layout.sensor_active_area.x < b.source_layout.sensor_active_area.x;
+  }
+  if (a.source_layout.sensor_active_area.y != b.source_layout.sensor_active_area.y) {
+    return a.source_layout.sensor_active_area.y < b.source_layout.sensor_active_area.y;
+  }
+  if (a.source_layout.sensor_active_area.width != b.source_layout.sensor_active_area.width) {
+    return a.source_layout.sensor_active_area.width < b.source_layout.sensor_active_area.width;
+  }
+  return a.source_layout.sensor_active_area.height < b.source_layout.sensor_active_area.height;
+}
+
+/**
  * @brief Compiled backend work for one graph. Does not own GPU memory.
  *
  * Always includes GeometryResample so a viewport change does not recompile.
- * The encoder skips the kernel when @ref encode_geometry_resample is false.
+ * @ref geometry and @ref encode_geometry_resample are per-frame and are filled by
+ * GraphCompiler::BindFrameGeometry. The encoder skips the kernel when
+ * @ref encode_geometry_resample is false.
  */
 struct ExecutionPlan {
+  StaticPlanKey                   static_key{};
   std::vector<GpuPassDesc>        passes;
   GraphValueId                    develop_output{NodeId{"develop"}, PortId{"image"}};
   DevelopCompileSource            source{};

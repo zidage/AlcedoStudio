@@ -60,7 +60,9 @@ def_library(EditGraph
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
 def_library(EditInput
-    SOURCES ${ALCEDO_SRC_ROOT}/edit/input/raw_input_loader.cpp
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/input/raw_input_loader.cpp
+        ${ALCEDO_SRC_ROOT}/edit/input/prepared_source_cache.cpp
     PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core
 )
 
@@ -69,6 +71,7 @@ def_library(EditRuntime
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
     PUBLIC_DEPS EditGraph EditGeometry
 )
 

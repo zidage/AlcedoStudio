@@ -13,7 +13,6 @@
 #include "cuda/cuda_check.hpp"
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -98,7 +97,14 @@ auto DownloadCudaTexture(CudaRenderDevice& device, const GraphValueId& output_id
 }  // namespace
 
 CudaProductRenderer::CudaProductRenderer(std::shared_ptr<PipelineDocument> document)
-    : document_(std::move(document)), device_(std::make_unique<CudaRenderDevice>()) {
+    : CudaProductRenderer(std::move(document), PreparedSourceCache::UnpackFn{}) {}
+
+CudaProductRenderer::CudaProductRenderer(std::shared_ptr<PipelineDocument> document,
+                                         PreparedSourceCache::UnpackFn     unpack)
+    : document_(std::move(document)),
+      device_(std::make_unique<CudaRenderDevice>()),
+      source_cache_(std::move(unpack)),
+      plan_cache_(kCudaDagBackendCapabilityVersion) {
   device_->SetErrorReporter([](std::string_view message) {
     std::fprintf(stderr, "[ERROR] CUDA DAG product render failed: %.*s\n",
                  static_cast<int>(message.size()), message.data());
@@ -128,9 +134,13 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
   auto&      encoded       = input->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  auto       prepared  = RawInputLoader::LoadEncoded(encoded_bytes, decode_res);
-  const auto plan      = GraphCompiler::Compile(*document_, prepared.CompileSource(), request);
-  const auto output_id = device_->Execute(plan, prepared, *document_);
+  const auto prepared_lease = source_cache_.AcquireEncoded(encoded_bytes, decode_res);
+  auto       plan           = plan_cache_.GetOrCompile(*document_, prepared_lease.Get().CompileSource());
+  GraphCompiler::BindFrameGeometry(plan, *document_, request);
+  if (document_->TopologyDirty()) {
+    document_->ClearTopologyDirty();
+  }
+  const auto output_id = device_->Execute(plan, prepared_lease.Get(), *document_);
 
   try {
     if (sink != nullptr) {
@@ -144,6 +154,24 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
     throw;
   }
   return std::make_shared<ImageBuffer>();
+}
+
+auto CudaProductRenderer::Stats() const -> CudaProductSessionStats {
+  const auto source = source_cache_.GetStats();
+  const auto plan   = plan_cache_.GetStats();
+  CudaProductSessionStats stats;
+  stats.prepared_source_hits     = source.hits;
+  stats.prepared_source_misses   = source.misses;
+  stats.libraw_open_unpack_count = source.libraw_open_unpack_count;
+  stats.plan_cache_hits          = plan.hits;
+  stats.plan_cache_misses        = plan.misses;
+  stats.plan_compile_count       = plan.compiles;
+  return stats;
+}
+
+void CudaProductRenderer::ResetStats() {
+  source_cache_.ResetStats();
+  plan_cache_.ResetStats();
 }
 
 }  // namespace alcedo

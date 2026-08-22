@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R（CUDA 默认管线行为、颜色与性能恢复）为必做阶段并阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1 complete；G7R.2–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2946,7 +2946,7 @@ Branch: `feature/gpu-dag-cuda-default-recovery`
 
 Base: `feature/gpu-dag-cuda-drt-product`
 
-Status: required；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
+Status: G7R.1 complete；G7R.2–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
 
 Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
 任务中已经明确的 Develop endpoint、GPU workspace KV cache 和动态分辨率要求，不重新定义
@@ -3038,15 +3038,104 @@ LibRaw/input-preparation implementation version
 
 工作：
 
-- 同一 source key 的 preview/quality/detail 渲染共享 PreparedRawInput；
-- 未淘汰的 source 再次打开时复用主存结果，不重新执行 LibRaw open/unpack；
-- DecodeRes 或输入准备规则改变时生成新 key，不覆盖仍被 submission 使用的旧条目；
-- source host bytes 只在 `develop.sensor_linear` miss 时上传；
-- 静态 ExecutionPlan key 只包含 graph topology、节点/调整类型与顺序、source layout 和后端能力；
-- 参数值、viewport、CCT、Grade 和 DRT 编辑不触发静态 plan 重编译；
-- ResolvedRenderGeometry 和 pass dirty schedule 属于每帧只读数据，不通过重编译静态图表达；
-- 接入并测试 `GraphCompiler::NeedsRecompile`，或删除该未使用 API 并用单一 plan key 机制替代；
-- plan cache miss、hit 和 compile count 必须可查询。
+- [x] 同一 source key 的 preview/quality/detail 渲染共享 PreparedRawInput；
+- [x] 未淘汰的 source 再次打开时复用主存结果，不重新执行 LibRaw open/unpack；
+- [x] DecodeRes 或输入准备规则改变时生成新 key，不覆盖仍被 submission 使用的旧条目；
+- [ ] source host bytes 只在 `develop.sensor_linear` miss 时上传；
+- [x] 静态 ExecutionPlan key 只包含 graph topology、节点/调整类型与顺序、source layout 和后端能力；
+- [x] 参数值、viewport、CCT、Grade 和 DRT 编辑不触发静态 plan 重编译；
+- [x] ResolvedRenderGeometry 和 pass dirty schedule 属于每帧只读数据，不通过重编译静态图表达；
+- [x] 接入并测试 `GraphCompiler::NeedsRecompile`，或删除该未使用 API 并用单一 plan key 机制替代；
+- [x] plan cache miss、hit 和 compile count 必须可查询。
+
+##### Phase G7R.1 completion record (2026-08-22)
+
+**Status:** complete — reusable CUDA product session caches PreparedRawInput and the static
+ExecutionPlan by content key. Parameter, viewport, CCT, Grade, and DRT edits no longer
+recompile. Source H2D skip on `develop.sensor_linear` miss is owned by G7R.2.
+
+`CudaProductRenderer` is the session named in 41.2 (`CudaProductPipelineSession`). It is
+created once per `CPUPipelineExecutor` and owns PreparedSourceCache, StaticExecutionPlanCache,
+and one `CudaRenderDevice`.
+
+**Primary success call chain:**
+
+```text
+CPUPipelineExecutor::Apply
+  -> CudaProductRenderer::Render
+  -> PreparedSourceCache::AcquireEncoded(encoded hash + DecodeRes + prep version)
+       hit  -> lease existing PreparedRawInput
+       miss -> unpack (LibRaw in production) + insert under a new key
+  -> StaticExecutionPlanCache::GetOrCompile(StaticPlanKey)
+       hit  -> copy cached pass list
+       miss -> GraphCompiler::CompileStatic
+  -> GraphCompiler::BindFrameGeometry (per-frame ResolvedRenderGeometry)
+  -> CudaRenderDevice::Execute
+  -> existing IFrameSink present or host download
+```
+
+**Primary failure call chain:**
+
+```text
+unpack / CompileStatic / Execute throw
+  -> PreparedSourceCache lease released; prior host and plan entries stay
+  -> CudaRenderDevice::CancelRender + ReportError
+  -> exception returns through CPUPipelineExecutor (no CPU image processing)
+```
+
+DecodeRes change inserts a second prepared-source key and does not replace a leased FULL
+entry. Adjustment-order or mask-topology change compiles a new static plan and leaves the
+previous plan in the cache.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PreparedSourceKeyIncludesEncodedHashKindDecodeResAndPreparationVersion` | `GpuDagRawInputTest` | PASS |
+| `PreparedSourceCacheReusesHostResultForSameEncodedKeyWithoutCallingUnpack` | `GpuDagRawInputTest` | PASS |
+| `PreparedSourceCacheSharesHostResultAcrossPreviewAndExportQuality` | `GpuDagRawInputTest` | PASS |
+| `PreparedSourceCacheUsesNewKeyForDecodeResChangeWithoutReplacingLeasedEntry` | `GpuDagRawInputTest` | PASS |
+| `PreparedSourceCacheReusesMatchingSourceAfterSwitchingEncodedBuffers` | `GpuDagRawInputTest` | PASS |
+| `PreparedSourceCacheDoesNotEvictLeasedEntryWhenHostBudgetIsExceeded` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerNeedsRecompileIsFalseForUnchangedTopologyAndSourceLayout` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerNeedsRecompileIsTrueWhenAdjustmentOrderChanges` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerNeedsRecompileIsTrueWhenSourceExtentChanges` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerCompileDoesNotBakeViewportIntoStaticPlanKey` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerBindsFrameGeometryWithoutChangingStaticPlanKey` | `GpuDagRawInputTest` | PASS |
+| `StaticExecutionPlanCacheCompilesOnceForRepeatedParameterAndViewportEdits` | `GpuDagRawInputTest` | PASS |
+| `StaticExecutionPlanCacheRecompilesWhenMaskTopologyChanges` | `GpuDagRawInputTest` | PASS |
+| `StaticExecutionPlanCacheRecompilesWhenSourceLayoutChanges` | `GpuDagRawInputTest` | PASS |
+| `StaticExecutionPlanCacheExposesHitMissAndCompileCounts` | `GpuDagRawInputTest` | PASS |
+| `ProductRendererCompilesStaticPlanOnlyForTopologyOrSourceLayoutChange` | `GpuDagCudaDrtProductTest` | PASS |
+| `ProductRendererReusesPreparedSourceAfterSwitchingEncodedBuffers` | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagRawInputTest GpuDagCudaDrtProductTest GpuDagCudaDevelopTest GpuDagCudaPrimaryGradeTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest|GpuDagCudaDrtProductTest|GpuDagCudaDevelopTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaWorkspaceTest.GpuDagCudaWorkspace.GpuAndRuntimeHeadersDoNotIncludeCudaOrImageBuffer"
+```
+
+Suite totals: `49/49` PASS (`GpuDagRawInputTest` 24, CUDA Develop 6, CUDA Primary Grade 9,
+CUDA DRT product 9, runtime header hygiene 1).
+
+**Checklist / exit condition:** eight of nine G7R.1 work items checked. The remaining item is
+source H2D only on `develop.sensor_linear` miss.
+
+**LOC note (grill-code-review):** new files stay small: `prepared_source_cache.hpp` 99,
+`prepared_source_cache.cpp` 117, `static_execution_plan_cache.hpp` 49,
+`static_execution_plan_cache.cpp` 21, `cuda_product_plan_cache_test.cpp` 120,
+`prepared_source_cache_test.cpp` 113, `static_execution_plan_cache_test.cpp` 141.
+`cuda_product_renderer.cu` 157, `graph_compiler.cpp` 202, `raw_input_loader.cpp` 424.
+No changed file exceeds 500 lines.
+
+**Residual gaps:** source host-byte upload still runs on every `ExecuteCudaDevelop` of a Bayer
+input. Skipping H2D requires the G7R.2 `develop.sensor_linear` result cache. GPU node pass
+skip, geometry-after cache, CameraMatrices AP1, CAT02, and 41.9 A/B remain G7R.2–G7R.5.
+Crop/viewport still force GeometryResample; the product Bayer path currently throws
+`GeometryResamplePass::Encode: textures must be RGBA32F` for those frames, so the product
+test binds viewport/crop geometry without executing that resample. G7R.2 should keep that
+failure visible until the result cache owns geometry.
 
 ### 41.4 G7R.2 — 内容感知结果缓存和 geometry 后缓存
 

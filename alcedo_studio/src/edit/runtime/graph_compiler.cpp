@@ -4,12 +4,20 @@
 
 #include "edit/runtime/graph_compiler.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/i_node_model.hpp"
+#include "edit/graph/pipeline_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/operator_type_id.hpp"
 
 namespace alcedo {
 namespace {
@@ -43,6 +51,64 @@ auto ImageParamsFromDocument(const PipelineDocument& document) -> ImageGeometryP
   return params;
 }
 
+auto MixU64(std::uint64_t hash, std::uint64_t value) -> std::uint64_t {
+  hash ^= value;
+  hash *= 1099511628211ull;
+  return hash;
+}
+
+auto MixText(std::uint64_t hash, std::string_view text) -> std::uint64_t {
+  hash = MixU64(hash, Fnv1a64(text));
+  return MixU64(hash, 0xFFull);
+}
+
+auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
+  std::uint64_t hash = MixU64(14695981039346656037ull, 1);
+
+  std::vector<const INodeModel*> nodes;
+  nodes.reserve(document.Graph().Nodes().size());
+  for (const auto& node : document.Graph().Nodes()) {
+    nodes.push_back(node.get());
+  }
+  std::sort(nodes.begin(), nodes.end(), [](const INodeModel* a, const INodeModel* b) {
+    return a->Id() < b->Id();
+  });
+  for (const auto* node : nodes) {
+    hash = MixText(hash, node->Id().Value());
+    hash = MixText(hash, node->Type().Text());
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+    if (grade == nullptr) {
+      continue;
+    }
+    hash = MixU64(hash, grade->AdjustmentCount());
+    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+      hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
+      hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
+    }
+  }
+
+  std::vector<GraphEdge> edges = document.Graph().Edges();
+  std::sort(edges.begin(), edges.end(), [](const GraphEdge& a, const GraphEdge& b) {
+    if (a.from_node != b.from_node) {
+      return a.from_node < b.from_node;
+    }
+    if (a.from_port != b.from_port) {
+      return a.from_port < b.from_port;
+    }
+    if (a.to_node != b.to_node) {
+      return a.to_node < b.to_node;
+    }
+    return a.to_port < b.to_port;
+  });
+  for (const auto& edge : edges) {
+    hash = MixText(hash, edge.from_node.Value());
+    hash = MixText(hash, edge.from_port.Value());
+    hash = MixText(hash, edge.to_node.Value());
+    hash = MixText(hash, edge.to_port.Value());
+  }
+  return hash;
+}
+
 void RequireDefaultEndpoints(const PipelineDocument& document) {
   const auto errors = document.Graph().Validate();
   if (!errors.empty()) {
@@ -70,8 +136,19 @@ void RequireDefaultEndpoints(const PipelineDocument& document) {
 
 }  // namespace
 
-auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompileSource& source,
-                            const RenderRequest& request) -> ExecutionPlan {
+auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument& document,
+                                      const DevelopCompileSource& source,
+                                      std::uint32_t backend_capability_version) -> StaticPlanKey {
+  StaticPlanKey key;
+  key.topology_hash              = HashGraphTopology(document);
+  key.source_layout              = source;
+  key.backend_capability_version = backend_capability_version;
+  return key;
+}
+
+auto GraphCompiler::CompileStatic(const PipelineDocument& document,
+                                  const DevelopCompileSource& source,
+                                  std::uint32_t backend_capability_version) -> ExecutionPlan {
   RequireDefaultEndpoints(document);
   if (source.host_extent.Empty() || source.develop_output_extent.Empty() ||
       source.full_reference_extent.Empty()) {
@@ -79,6 +156,7 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
   }
 
   ExecutionPlan plan;
+  plan.static_key           = MakeStaticPlanKey(document, source, backend_capability_version);
   plan.source               = source;
   plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
   plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
@@ -119,25 +197,30 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
     plan.primary_grade_adjustments.push_back(
         {grade->AdjustmentIdAt(index), grade->AdjustmentAt(index).Type()});
   }
+  return plan;
+}
 
+void GraphCompiler::BindFrameGeometry(ExecutionPlan& plan, const PipelineDocument& document,
+                                      const RenderRequest& request) {
   const auto geom_source =
-      MakeSourceGeometry(source.develop_output_extent, source.full_reference_extent,
-                         source.sensor_active_area, source.downsample_passes);
+      MakeSourceGeometry(plan.source.develop_output_extent, plan.source.full_reference_extent,
+                         plan.source.sensor_active_area, plan.source.downsample_passes);
   plan.geometry = ResolveRenderGeometry(geom_source, ImageParamsFromDocument(document),
                                         request.view, request.resolution, request.footprint);
   plan.encode_geometry_resample = !IsIdentityResample(plan.geometry);
+}
+
+auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompileSource& source,
+                            const RenderRequest& request) -> ExecutionPlan {
+  auto plan = CompileStatic(document, source);
+  BindFrameGeometry(plan, document, request);
   return plan;
 }
 
 auto GraphCompiler::NeedsRecompile(const ExecutionPlan& previous, const PipelineDocument& document,
                                    const DevelopCompileSource& source) -> bool {
-  if (document.TopologyDirty()) {
-    return true;
-  }
-  return previous.source.kind != source.kind || previous.source.host_extent != source.host_extent ||
-         previous.source.develop_output_extent != source.develop_output_extent ||
-         previous.source.full_reference_extent != source.full_reference_extent ||
-         previous.source.downsample_passes != source.downsample_passes;
+  return previous.static_key !=
+         MakeStaticPlanKey(document, source, previous.static_key.backend_capability_version);
 }
 
 }  // namespace alcedo

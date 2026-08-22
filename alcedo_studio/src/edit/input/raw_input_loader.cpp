@@ -8,6 +8,7 @@
 #include "decoders/processor/raw_normalization.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -20,13 +21,37 @@ namespace {
 
 constexpr int kRcdOutputCropRadius = 4;
 
-auto HashBytes(std::span<const std::byte> bytes) -> std::uint64_t {
-  std::uint64_t hash = 14695981039346656037ull;
-  for (const auto byte : bytes) {
-    hash ^= static_cast<std::uint8_t>(byte);
-    hash *= 1099511628211ull;
+auto MixU64(std::uint64_t hash, std::uint64_t value) -> std::uint64_t {
+  hash ^= value;
+  hash *= 1099511628211ull;
+  return hash;
+}
+
+auto HashCfaPattern(const RawCfaPattern& pattern) -> std::uint64_t {
+  std::uint64_t hash = MixU64(14695981039346656037ull, static_cast<std::uint64_t>(pattern.kind));
+  if (pattern.kind == RawCfaKind::XTrans6x6) {
+    for (int i = 0; i < 36; ++i) {
+      hash = MixU64(hash, static_cast<std::uint64_t>(pattern.xtrans_pattern.raw_fc[i] + 1));
+    }
+  } else {
+    for (int i = 0; i < 4; ++i) {
+      hash = MixU64(hash, static_cast<std::uint64_t>(pattern.bayer_pattern.raw_fc[i] + 1));
+    }
   }
   return hash;
+}
+
+auto FillSourceKey(PreparedRawInput& input, std::uint64_t encoded_hash,
+                   std::uint64_t encoded_byte_count) -> void {
+  input.content_key.content_hash       = encoded_hash;
+  input.source_key.encoded_content_hash = encoded_hash;
+  input.source_key.encoded_byte_count  = encoded_byte_count;
+  input.source_key.input_kind          = input.input_kind;
+  input.source_key.cfa_hash            = HashCfaPattern(input.cfa_pattern);
+  input.source_key.downsample_passes   = input.downsample_passes;
+  input.source_key.sensor_active_area  = input.sensor_active_area;
+  input.source_key.orientation_flip    = input.sensor.orientation_flip;
+  input.source_key.preparation_version = kRawInputPreparationVersion;
 }
 
 auto ScaleCoordFloor(int value, int divisor) -> int { return value / divisor; }
@@ -275,12 +300,13 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   ctx.camera_model_ = raw.imgdata.idata.model;
 }
 
-auto FinishPrepared(PreparedRawInput input, DecodeRes decode_res) -> PreparedRawInput {
+auto FinishPrepared(PreparedRawInput input, DecodeRes decode_res, std::uint64_t encoded_hash,
+                    std::uint64_t encoded_byte_count) -> PreparedRawInput {
   const auto passes = DecodeResToDownsamplePasses(decode_res);
   DownsampleInPlace(input, passes);
   FillOutputGeometry(input, DecodeRes::FULL);
-  input.content_key.content_hash = HashBytes(input.pixels.Span());
-  input.working_space            = SceneWorkingSpace::CameraRgb;
+  FillSourceKey(input, encoded_hash, encoded_byte_count);
+  input.working_space = SceneWorkingSpace::CameraRgb;
   return input;
 }
 
@@ -351,7 +377,9 @@ auto RawInputLoader::FromUnpackedCfa(HostImagePlane plane, RawCfaPattern pattern
   for (int i = 0; i < 3; ++i) {
     input.color_context.cam_mul_[i] = linearization.cam_mul[i];
   }
-  return FinishPrepared(std::move(input), decode_res);
+  const auto encoded_hash  = HashContentBytes(input.pixels.Span());
+  const auto encoded_bytes = input.pixels.ByteCount();
+  return FinishPrepared(std::move(input), decode_res, encoded_hash, encoded_bytes);
 }
 
 auto RawInputLoader::FromDirectRgb(HostImagePlane plane, RawSensorGeometry sensor)
@@ -373,7 +401,9 @@ auto RawInputLoader::FromDirectRgb(HostImagePlane plane, RawSensorGeometry senso
   input.linearization.apply_as_shot_wb = 0;
   input.color_context.valid_                  = true;
   input.color_context.output_in_camera_space_ = true;
-  return FinishPrepared(std::move(input), DecodeRes::FULL);
+  const auto encoded_hash  = HashContentBytes(input.pixels.Span());
+  const auto encoded_bytes = input.pixels.ByteCount();
+  return FinishPrepared(std::move(input), DecodeRes::FULL, encoded_hash, encoded_bytes);
 }
 
 auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
@@ -421,7 +451,7 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   input.input_kind  = RawInputKind::BayerRaw;
   input.cfa_pattern = pattern;
   raw.recycle();
-  return FinishPrepared(std::move(input), decode_res);
+  return FinishPrepared(std::move(input), decode_res, HashContentBytes(encoded), encoded.size());
 }
 
 auto RawInputLoader::TryLoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)

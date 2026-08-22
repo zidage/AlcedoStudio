@@ -28,6 +28,18 @@ struct DevelopCompileSource {
   std::uint8_t     downsample_passes      = 0;
 };
 
+inline auto operator==(const DevelopCompileSource& a, const DevelopCompileSource& b) -> bool {
+  return a.kind == b.kind && a.host_extent == b.host_extent &&
+         a.develop_output_extent == b.develop_output_extent &&
+         a.full_reference_extent == b.full_reference_extent &&
+         a.sensor_active_area == b.sensor_active_area &&
+         a.downsample_passes == b.downsample_passes;
+}
+
+inline auto operator!=(const DevelopCompileSource& a, const DevelopCompileSource& b) -> bool {
+  return !(a == b);
+}
+
 /**
  * @brief Identity of a prepared source. No write counters.
  */

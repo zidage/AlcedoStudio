@@ -277,7 +277,9 @@ endif()
 # GPU DAG Phase G4: CPU RawInputLoader / GraphCompiler (no CUDA required).
 add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
 target_compile_definitions(GpuDagRawInputTest PRIVATE
@@ -307,10 +309,11 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
 
   add_executable(GpuDagCudaDrtProductTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeCuda EditInput)
+    GTest::gtest_main EditRuntimeCuda EditInput Image)
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)

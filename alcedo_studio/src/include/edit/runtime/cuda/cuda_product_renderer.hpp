@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 #include "edit/geometry/render_request.hpp"
+#include "edit/input/prepared_source_cache.hpp"
+#include "edit/runtime/static_execution_plan_cache.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -16,16 +19,37 @@ class CudaRenderDevice;
 class ImageBuffer;
 class PipelineDocument;
 
+/// CUDA DAG backend capability mixed into the static plan key. Bump when pass
+/// lists or backend traits that affect compilation change.
+inline constexpr std::uint32_t kCudaDagBackendCapabilityVersion = 1;
+
 /**
- * @brief Product adapter from the existing scheduler inputs to the CUDA DAG renderer.
+ * @brief Queryable prepare/compile counters for one product pipeline session.
  *
- * Owns one device workspace per loaded pipeline so node results and allocations survive
- * consecutive scheduler frames. Failures are reported and propagated; this adapter never calls
- * the old CPU image-processing stages.
+ * Hit/miss/compile counts are the cache identity for G7R.1. GPU pass skip and
+ * result-content hits belong to later G7R work.
+ */
+struct CudaProductSessionStats {
+  std::uint64_t prepared_source_hits       = 0;
+  std::uint64_t prepared_source_misses     = 0;
+  std::uint64_t libraw_open_unpack_count   = 0;
+  std::uint64_t plan_cache_hits            = 0;
+  std::uint64_t plan_cache_misses          = 0;
+  std::uint64_t plan_compile_count         = 0;
+};
+
+/**
+ * @brief Reusable CUDA product session for one opened PipelineDocument.
+ *
+ * Owns PreparedSourceCache, the static ExecutionPlan cache, and one
+ * CudaRenderDevice/workspace. Not created per Apply. Preview and export frames
+ * that share encoded bytes and DecodeRes reuse the same PreparedRawInput.
  */
 class CudaProductRenderer {
  public:
   explicit CudaProductRenderer(std::shared_ptr<PipelineDocument> document);
+  CudaProductRenderer(std::shared_ptr<PipelineDocument> document,
+                      PreparedSourceCache::UnpackFn     unpack);
   ~CudaProductRenderer();
 
   CudaProductRenderer(const CudaProductRenderer&)                                  = delete;
@@ -38,9 +62,22 @@ class CudaProductRenderer {
                             const FrameCompletionSubmission& submission, bool require_host_output)
       -> std::shared_ptr<ImageBuffer>;
 
+  /**
+   * @brief Snapshot of source and static-plan cache counters since construction or ResetStats.
+   */
+  [[nodiscard]] auto Stats() const -> CudaProductSessionStats;
+  void               ResetStats();
+
+  [[nodiscard]] auto SourceCache() -> PreparedSourceCache& { return source_cache_; }
+  [[nodiscard]] auto SourceCache() const -> const PreparedSourceCache& { return source_cache_; }
+  [[nodiscard]] auto PlanCache() -> StaticExecutionPlanCache& { return plan_cache_; }
+  [[nodiscard]] auto PlanCache() const -> const StaticExecutionPlanCache& { return plan_cache_; }
+
  private:
   std::shared_ptr<PipelineDocument> document_;
   std::unique_ptr<CudaRenderDevice> device_;
+  PreparedSourceCache               source_cache_;
+  StaticExecutionPlanCache          plan_cache_{kCudaDagBackendCapabilityVersion};
 };
 
 }  // namespace alcedo
