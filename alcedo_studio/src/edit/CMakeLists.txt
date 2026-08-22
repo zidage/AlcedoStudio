@@ -20,6 +20,13 @@ def_library(EditHistory
     PUBLIC_DEPS Image TimeProvider JSON EditPipeline
 )
 
+# GPU-free render geometry: coordinate spaces, resolver, sampling plans. No CUDA.
+def_library(EditGeometry
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/geometry/render_geometry_resolver.cpp
+        ${ALCEDO_SRC_ROOT}/edit/geometry/texture_sampling_plan.cpp
+)
+
 # GPU DAG document/graph/models. No ImageBuffer, Operators, or GPU backends.
 set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/adjustment_catalog.cpp
@@ -41,18 +48,20 @@ set(EDIT_GRAPH_SRCS
 
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
-    PUBLIC_DEPS JSON
+    PUBLIC_DEPS JSON EditGeometry
 )
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
 def_library(EditRuntime
     SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
-    PUBLIC_DEPS EditGraph
+    PUBLIC_DEPS EditGraph EditGeometry
 )
 
 if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda
-        SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)

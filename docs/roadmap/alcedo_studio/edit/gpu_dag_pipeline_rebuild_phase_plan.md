@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G2 complete (CUDA workspace, ParameterArena, lifted TransientBufferArena). G3 not started.
+Status: G3 complete (RenderGeometryResolver, TextureSamplingPlan, CUDA GeometryResamplePass). G4 not started.
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2154,6 +2154,79 @@ OddImageDimensionsUseOneRoundingResultAcrossImageMaskAndLlf
 - GeometryResamplePass 不成为用户节点；
 - 默认图仍然只有三个节点；
 - 图像、LLF 和 mask 使用相同的 render-to-reference 数据。
+
+##### Phase G3 completion record (2026-08-22)
+
+**Status:** complete — GPU-free RenderGeometryResolver (pixel-center matrices, one rounding owner), TextureSamplingPlan for mask/LLF, CUDA GeometryResamplePass as one kernel. Not a user node. No GraphCompiler.
+
+**Primary success call chain:**
+
+```text
+SourceGeometry + ImageGeometryParams + ViewRequest + ResolutionRequest + SamplingFootprint
+  -> ResolveRenderGeometry
+  -> ResolvedRenderGeometry (matrices, extents, required RectI, GpuRenderGeometry)
+  -> MakeRasterMaskSamplingPlan / MakeLlfSamplingPlan
+     or GeometryResamplePass::Encode
+  -> one CUDA kernel, RGBA32F at render_extent
+```
+
+**Primary failure call chain:**
+
+```text
+zero or non-finite extent, or render_scale <= 0
+  -> ResolveRenderGeometry throws
+  -> no matrices, no kernel
+```
+
+```text
+required AABB after footprint expansion
+  -> clamp to decoded / reference RectI
+  -> still inside source bounds
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RenderGeometryRoundTripsReferenceAndRenderPixelCenters` | `GpuDagGeometryTest` | PASS |
+| `FullCropZeroRotationMapsReferenceCornersToRenderCorners` | `GpuDagGeometryTest` | PASS |
+| `RotatedCropBoundsContainAllFourTransformedCorners` | `GpuDagGeometryTest` | PASS |
+| `ViewportCropAndDynamicScaleProduceRequestedRenderExtent` | `GpuDagGeometryTest` | PASS |
+| `DecodeScaleDoesNotChangeNormalizedReferenceCoordinates` | `GpuDagGeometryTest` | PASS |
+| `RequiredInputRegionExpandsForBicubicFootprintAndClampsToDecodedBounds` | `GpuDagGeometryTest` | PASS |
+| `RasterMaskSamplingMapsSameReferencePointAtQuarterAndFullPreview` | `GpuDagGeometryTest` | PASS |
+| `OddImageDimensionsUseOneRoundingResultAcrossImageMaskAndLlf` | `GpuDagGeometryTest` | PASS |
+| `CropRotateViewportAndScaleExecuteAsOneCudaResample` | `GpuDagCudaGeometryTest` | PASS |
+| `ResolveRenderGeometryRejectsZeroExtent` | `GpuDagGeometryTest` | PASS |
+| Default document still three nodes; JSON has no viewport/scale | `GpuDagGeometryTest` | PASS |
+| Operator DTO headers contain no `roi_` | `GpuDagGeometryTest` | PASS |
+| Geometry headers have no GPU / ImageBuffer includes | `GpuDagGeometryTest` | PASS |
+| G1 `GpuDagModelGraphTest` regression | `GpuDagModelGraphTest` | PASS |
+| G2 `GpuDagCudaWorkspaceTest` regression | `GpuDagCudaWorkspaceTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagGeometryTest GpuDagCudaGeometryTest GpuDagModelGraphTest GpuDagCudaWorkspaceTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagGeometryTest|GpuDagCudaGeometryTest|GpuDagModelGraphTest|GpuDagCudaWorkspaceTest"
+```
+
+Suite totals: `12/12` GpuDagGeometryTest PASS. `1/1` GpuDagCudaGeometryTest PASS. `17/17` GpuDagModelGraphTest PASS. `12/12` GpuDagCudaWorkspaceTest PASS. Combined `42/42` PASS.
+
+**Checklist / exit condition:** all G3 exit conditions met. GeometryResamplePass is a CUDA encode unit, not an `INodeModel`. Product `PipelineMgmtService` and old `CropRotateOp` are unchanged.
+
+**LOC note (grill-code-review):** largest new file is `render_geometry_resolver.cpp` (242 lines). `geometry_resample.cu` is 137 lines. No changed file exceeds 1000 LOC.
+
+**Remaining gaps:** GraphCompiler / ExecutionPlan insert the pass (G4+). Develop/grade/DRT kernels (G4–G7). MaskStore GPU textures and feather (G6). OpenCL and Metal GeometryResamplePass (G8/G9).
+
+**Files added:** `alcedo_studio/src/include/edit/geometry/*`, `alcedo_studio/src/edit/geometry/*`, `include/edit/runtime/cuda/geometry_resample_pass.hpp`, `src/edit/runtime/cuda/geometry_resample.cu`, `tests/edit/geometry/*`. CMake `EditGeometry` + `GpuDagGeometryTest` + `GpuDagCudaGeometryTest`.
+
+**Files removed:** none. `NormalizedRect` moved from `image_geometry_model.hpp` into `edit/geometry/types.hpp`.
+
+**Performance and allocation evidence:** `CropRotateViewportAndScaleExecuteAsOneCudaResample` asserts `LaunchCount() == 1` for the combined crop/rotate/view/scale kernel, GPU vs CPU pixel-center bilinear max error `< 1e-4`, and second encode malloc/free counts stay 0 after peak reserve.
+
+**Open work:** G4 CUDA Develop Endpoint.
 
 ## 37. Phase G4 — CUDA Develop Endpoint
 

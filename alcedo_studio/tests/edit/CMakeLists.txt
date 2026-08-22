@@ -241,7 +241,29 @@ gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
 
-# GPU DAG Phase G2: CUDA workspace, ParameterArena, transient bump, texture lease.
+# GPU DAG Phase G3: RenderGeometryResolver (CPU).
+add_executable(GpuDagGeometryTest
+  ${ALCEDO_TEST_ROOT}/edit/geometry/render_geometry_resolver_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/geometry/sampling_and_document_test.cpp)
+target_include_directories(GpuDagGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GpuDagGeometryTest PRIVATE GTest::gtest_main EditGeometry EditGraph)
+target_compile_definitions(GpuDagGeometryTest PRIVATE
+  ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
+  ALCEDO_GEOMETRY_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/geometry")
+gtest_discover_tests(GpuDagGeometryTest TEST_PREFIX "GpuDagGeometryTest."
+  PROPERTIES LABELS "ci_core_flow;edit;geometry")
+alcedo_register_test_target(GpuDagGeometryTest edit)
+
+# GPU DAG Phase G3: CUDA GeometryResamplePass.
+if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaGeometryTest
+    ${ALCEDO_TEST_ROOT}/edit/geometry/cuda_geometry_resample_test.cpp)
+  target_include_directories(GpuDagCudaGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaGeometryTest PRIVATE GTest::gtest_main EditRuntimeCuda)
+  gtest_discover_tests(GpuDagCudaGeometryTest TEST_PREFIX "GpuDagCudaGeometryTest."
+    PROPERTIES LABELS "gpu;edit;geometry")
+  alcedo_register_test_target(GpuDagCudaGeometryTest gpu)
+endif()
 if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaWorkspaceTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp

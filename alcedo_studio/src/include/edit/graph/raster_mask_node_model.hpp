@@ -11,8 +11,8 @@
 
 #include <string_view>
 
+#include "edit/geometry/types.hpp"
 #include "edit/graph/i_node_model.hpp"
-#include "edit/graph/image_geometry_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {

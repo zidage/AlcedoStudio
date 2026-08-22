@@ -221,6 +221,46 @@ void CudaBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset
                   "CudaBackend::DownloadBufferRange sync");
 }
 
+void CudaBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
+                                  CommandContext& command_context) {
+  if (fail_next_upload_) {
+    fail_next_upload_ = false;
+    throw std::runtime_error("CudaBackend::UploadTexture2D: injected failure");
+  }
+  if (texture.DevicePointer() == nullptr) {
+    throw std::runtime_error("CudaBackend::UploadTexture2D: empty texture");
+  }
+  if (bytes.size() != texture.Bytes()) {
+    throw std::runtime_error("CudaBackend::UploadTexture2D: size does not match texture");
+  }
+  if (bytes.empty()) {
+    return;
+  }
+  cuda::CheckCuda(::cudaMemcpyAsync(texture.DevicePointer(), bytes.data(), bytes.size(),
+                                    cudaMemcpyHostToDevice, command_context.Stream()),
+                  "CudaBackend::UploadTexture2D");
+  ++h2d_copy_count_;
+  h2d_bytes_ += bytes.size();
+}
+
+void CudaBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
+                                    CommandContext& command_context) const {
+  if (texture.DevicePointer() == nullptr) {
+    throw std::runtime_error("CudaBackend::DownloadTexture2D: empty texture");
+  }
+  if (out.size() != texture.Bytes()) {
+    throw std::runtime_error("CudaBackend::DownloadTexture2D: size does not match texture");
+  }
+  if (out.empty()) {
+    return;
+  }
+  cuda::CheckCuda(::cudaMemcpyAsync(out.data(), texture.DevicePointer(), out.size(),
+                                    cudaMemcpyDeviceToHost, command_context.Stream()),
+                  "CudaBackend::DownloadTexture2D");
+  cuda::CheckCuda(::cudaStreamSynchronize(command_context.Stream()),
+                  "CudaBackend::DownloadTexture2D sync");
+}
+
 void CudaBackend::GenerateMaskMipLevels(Texture2D&) {}
 
 void CudaBackend::Submit(CommandContext& command_context) {

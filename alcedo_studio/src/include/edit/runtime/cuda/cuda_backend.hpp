@@ -127,6 +127,15 @@ class CudaBackend {
   void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
                            CommandContext& command_context) const;
 
+  /**
+   * @brief Copy tightly packed host rows into a linear Texture2D. @p bytes size must equal
+   *        texture.Bytes().
+   */
+  void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
+                       CommandContext& command_context);
+  void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
+                         CommandContext& command_context) const;
+
   /// G6 will generate mips. G2 keeps the entry and does nothing.
   void GenerateMaskMipLevels(Texture2D& texture);
 

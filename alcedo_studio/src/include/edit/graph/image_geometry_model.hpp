@@ -4,20 +4,10 @@
 
 #pragma once
 
+#include "edit/geometry/types.hpp"
 #include "json.hpp"
 
 namespace alcedo {
-
-struct NormalizedRect {
-  float x = 0.0f;
-  float y = 0.0f;
-  float w = 1.0f;
-  float h = 1.0f;
-
-  [[nodiscard]] auto IsFullFrame() const -> bool {
-    return x == 0.0f && y == 0.0f && w == 1.0f && h == 1.0f;
-  }
-};
 
 /**
  * @brief Document-level crop and rotation. Not a user-visible graph node.
