@@ -51,9 +51,17 @@ def_library(EditGraph
     PUBLIC_DEPS JSON EditGeometry
 )
 
+# CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
+def_library(EditInput
+    SOURCES ${ALCEDO_SRC_ROOT}/edit/input/raw_input_loader.cpp
+    PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core
+)
+
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
 def_library(EditRuntime
-    SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     PUBLIC_DEPS EditGraph EditGeometry
 )
 
@@ -61,8 +69,10 @@ if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
+        PRIVATE_DEPS EditInput RawProcessorOp
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()

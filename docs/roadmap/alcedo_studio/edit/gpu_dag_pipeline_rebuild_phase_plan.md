@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G3 complete (RenderGeometryResolver, TextureSamplingPlan, CUDA GeometryResamplePass). G4 not started.
+Status: G4 complete (CUDA Develop Endpoint, camera scene-linear RGB). G5 not started.
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2273,6 +2273,73 @@ DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint
 - GPU 不执行 RAW DecodeRes 降采样；
 - Develop 不调用 CPU 图像算子；
 - Develop 输出格式和色彩空间明确。
+
+##### Phase G4 completion record (2026-08-22)
+
+**Status:** complete — CUDA Develop Endpoint on `feature/gpu-dag-cuda-develop`. Output is **camera scene-linear RGBA32F**, not AP1. Camera-to-AP1 is deferred to G5 as a dedicated unmaskable CameraColor node so CCT changes do not dirty Develop / re-run demosaic.
+
+**Highlight recovery order:** CUDA full-frame (`ProcessCudaFullFrame`) is Linearize → (optional CFA Clamp01 when HLR is off) → Demosaic → HighlightRecover on RGB. The CPU path (`ApplyLinearization` → `ApplyHighlightReconstruct` → `ApplyDebayer`) is not the G4 reference. `GraphCompiler` emits `Demosaic` before `HighlightRecover`. Encoder matches CUDA: Bayer + HLR uses planar RCD then `ApplyHighlightCorrectionAndPackRGBAOriented`; Bayer without HLR clamps CFA then packs with inverse cam_mul; non-neural X-Trans always clamps CFA then `XTransToRGB_Ref`.
+
+**Primary success call chain:**
+
+```text
+RawInputLoader::FromUnpackedCfa | LoadEncoded | FromDirectRgb
+  -> PreparedRawInput (CPU unpack + DecodeRes downsample, LibRaw recycled)
+  -> GraphCompiler::Compile (Develop passes + GeometryResample; no LibRaw / DecodeRes / CameraToAp1)
+  -> CudaRenderDevice.BeginRender
+  -> ExecuteCudaDevelop (workspace transients + Images() RGBA32F)
+  -> Linearize -> Demosaic -> HighlightRecover (RGB) | InverseCamMulPack
+  -> GraphImageCache[develop/image] camera scene-linear RGBA32F
+  -> EndRender / WaitIdle
+```
+
+**Primary failure call chain:**
+
+```text
+CudaBackend::FailNextUpload
+  -> ExecuteCudaDevelop throws
+  -> PendingParameterPatch destructor RestoreDirty
+  -> Develop params remain dirty; no CPU Apply fallback
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RawInputLoaderUnpacksBeforePipelineBuild` | `GpuDagRawInputTest` | PASS |
+| `RawInputLoaderDownsampleUpdatesCfaPatternAndPhase` | `GpuDagRawInputTest` | PASS |
+| `PreparedRawInputKeepsFullReferenceExtentAcrossDecodeRes` | `GpuDagRawInputTest` | PASS |
+| `DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint` | `GpuDagRawInputTest` + `GpuDagCudaDevelopTest` | PASS |
+| `GraphCompilerEmitsNoLibRawOrDecodeResPass` (also no CameraToAp1) | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerPlacesHighlightRecoverAfterDemosaic` | `GpuDagRawInputTest` | PASS |
+| `CudaDevelopProducesFiniteAp1SceneLinearRgbFromBayerInput` mapped to `CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopProducesFiniteAp1SceneLinearRgbFromXTransInput` mapped to `CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTransInput` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopUsesWorkspaceForAllTemporaryBuffers` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopSecondRenderCreatesNoGpuAllocation` | `GpuDagCudaDevelopTest` | PASS |
+| Upload failure restores dirty; no CPU Apply | `GpuDagCudaDevelopTest` | PASS |
+| G1 `GpuDagModelGraphTest` regression | `GpuDagModelGraphTest` | PASS |
+| G2 `GpuDagCudaWorkspaceTest` regression | `GpuDagCudaWorkspaceTest` | PASS |
+| G3 `GpuDagGeometryTest` / `GpuDagCudaGeometryTest` regression | those binaries | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagRawInputTest GpuDagCudaDevelopTest GpuDagModelGraphTest GpuDagCudaWorkspaceTest GpuDagGeometryTest GpuDagCudaGeometryTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest|GpuDagCudaDevelopTest|GpuDagModelGraphTest|GpuDagCudaWorkspaceTest|GpuDagGeometryTest|GpuDagCudaGeometryTest"
+```
+
+Suite totals: `9/9` GpuDagRawInputTest PASS. `6/6` GpuDagCudaDevelopTest PASS. `17/17` GpuDagModelGraphTest PASS. `12/12` GpuDagCudaWorkspaceTest PASS. `12/12` GpuDagGeometryTest PASS. `1/1` GpuDagCudaGeometryTest PASS. Combined `57/57` PASS.
+
+**Checklist / exit condition:** ExecutionPlan has no LibRaw or DecodeRes pass. GPU does not downsample RAW. Develop does not call CPU image operators. Output format is RGBA32F camera scene-linear (`SceneWorkingSpace::CameraRgb`). Product `PipelineMgmtService` and old `RawDecodeOp` / `RawProcessor` are unchanged.
+
+**LOC note (grill-code-review):** `raw_input_loader.cpp` 396 lines. `cuda_develop_pass.cpp` 197 lines. `graph_compiler.cpp` 102 lines. No changed file exceeds 1000 LOC.
+
+**Remaining gaps:** Camera-to-AP1 and CAT02 stay in G5 (four-node graph: Develop → CameraColor → ColorGrade → DRT). NeuralEngine demosaic is not executed in G4 (Legacy RCD / `XTransToRGB_Ref` only). Lensfun is a no-op unless DNG warp is present; G4 tests do not cover DNG warp. Full-frame only (no 9000px tiled path). DemosaicNet arena is not unified with workspace.
+
+**Files added:** `include/edit/input/*`, `edit/input/raw_input_loader.cpp`, `include/edit/runtime/{pass_kind,execution_plan,graph_compiler,render_context,develop_compile_source,graph_image_cache}.hpp`, `edit/runtime/graph_compiler.cpp`, `include/edit/runtime/cuda/cuda_develop_pass.hpp`, `edit/runtime/cuda/cuda_develop_pass.cpp`, `include/decoders/processor/raw_linearization_params.hpp`, G4 tests under `tests/edit/input` and `tests/edit/runtime`.
+
+**Open work:** G5 CUDA Primary Color Grade plus CameraColor node.
 
 ## 38. Phase G5 — CUDA Primary Color Grade
 

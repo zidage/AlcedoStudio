@@ -264,6 +264,30 @@ if(ALCEDO_CUDA_ENABLED)
     PROPERTIES LABELS "gpu;edit;geometry")
   alcedo_register_test_target(GpuDagCudaGeometryTest gpu)
 endif()
+
+# GPU DAG Phase G4: CPU RawInputLoader / GraphCompiler (no CUDA required).
+add_executable(GpuDagRawInputTest
+  ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp)
+target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
+target_compile_definitions(GpuDagRawInputTest PRIVATE
+  ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
+  ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input")
+gtest_discover_tests(GpuDagRawInputTest TEST_PREFIX "GpuDagRawInputTest."
+  PROPERTIES LABELS "ci_core_flow;edit;input")
+alcedo_register_test_target(GpuDagRawInputTest edit)
+
+# GPU DAG Phase G4: CUDA Develop Endpoint.
+if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp)
+  target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
+  gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
+endif()
 if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaWorkspaceTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp

@@ -136,6 +136,12 @@ class CudaBackend {
   void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
                          CommandContext& command_context) const;
 
+  /**
+   * @brief Host-to-device copy into an arbitrary device pointer (transient CFA, etc.).
+   */
+  void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
+                          CommandContext& command_context);
+
   /// G6 will generate mips. G2 keeps the entry and does nothing.
   void GenerateMaskMipLevels(Texture2D& texture);
 

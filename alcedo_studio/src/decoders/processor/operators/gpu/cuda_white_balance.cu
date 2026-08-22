@@ -5,6 +5,8 @@
 #include <opencv2/core/cuda_types.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 
+#include <stdexcept>
+
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
@@ -81,6 +83,48 @@ __global__ void ToLinearRefKernel(cv::cuda::PtrStep<float> image, int width, int
   image(row, col) = pixel_val;
 }
 
+__global__ void ToLinearRefFromU16Kernel(cv::cuda::PtrStep<ushort> src, cv::cuda::PtrStep<float> dst,
+                                         int width, int height, WBParams wb_params,
+                                         RawCfaPattern pattern) {
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y * blockDim.y + threadIdx.y;
+  if (col >= width || row >= height) {
+    return;
+  }
+
+  const int   color_idx = RawColorAt(pattern, row, col);
+  const float sample    = static_cast<float>(src(row, col));
+
+  float pattern_black = 0.0f;
+  if (wb_params.black_tile_width > 0 && wb_params.black_tile_height > 0) {
+    const int tile_y = row % wb_params.black_tile_height;
+    const int tile_x = col % wb_params.black_tile_width;
+    pattern_black    = wb_params.pattern_black[tile_y * wb_params.black_tile_width + tile_x];
+  }
+  const float black = wb_params.black_level[color_idx] + pattern_black;
+  float       pixel_val =
+      raw_norm::NormalizeSample(sample, black, wb_params.white_level[color_idx]);
+  pixel_val *= raw_norm::RelativeWhiteBalanceMultiplier(
+      wb_params.wb_multipliers, color_idx, wb_params.apply_white_balance != 0);
+  dst(row, col) = pixel_val;
+}
+
+auto MakeWbParams(const RawLinearizationParams& params) -> WBParams {
+  WBParams wb_params = {};
+  for (int c = 0; c < 4; ++c) {
+    wb_params.black_level[c]    = params.black_level[c];
+    wb_params.white_level[c]    = params.white_level[c];
+    wb_params.wb_multipliers[c] = params.cam_mul[c];
+  }
+  wb_params.apply_white_balance = params.apply_as_shot_wb;
+  wb_params.black_tile_width    = params.black_tile_width;
+  wb_params.black_tile_height   = params.black_tile_height;
+  for (int i = 0; i < 36; ++i) {
+    wb_params.pattern_black[i] = params.pattern_black[i];
+  }
+  return wb_params;
+}
+
 static auto GetWBCoeff(const libraw_rawdata_t& raw_data) -> const float* {
   return raw_data.color.cam_mul;
 }
@@ -124,6 +168,27 @@ void ToLinearRef(cv::cuda::GpuMat& image, LibRaw& raw_processor, const RawCfaPat
   ToLinearRefKernel<<<num_blocks, threads_per_block, 0, cuda_stream>>>(
       image, image.cols, image.rows, wb_params, pattern);
 
+  CUDA_CHECK(cudaGetLastError());
+  MaybeWait(stream);
+}
+
+void ToLinearRef(const cv::cuda::GpuMat& src_u16, cv::cuda::GpuMat& dst_f32,
+                 const RawLinearizationParams& params, const RawCfaPattern& pattern,
+                 cv::cuda::Stream* stream) {
+  if (src_u16.type() != CV_16UC1) {
+    throw std::runtime_error("CUDA::ToLinearRef: src must be CV_16UC1");
+  }
+  if (dst_f32.type() != CV_32FC1 || dst_f32.size() != src_u16.size() || dst_f32.empty()) {
+    throw std::runtime_error("CUDA::ToLinearRef: dst must be a preallocated CV_32FC1 of src size");
+  }
+
+  const WBParams wb_params         = MakeWbParams(params);
+  const dim3     threads_per_block(32, 32);
+  const dim3     num_blocks((src_u16.cols + threads_per_block.x - 1) / threads_per_block.x,
+                            (src_u16.rows + threads_per_block.y - 1) / threads_per_block.y);
+  const cudaStream_t cuda_stream = GetCudaStream(stream);
+  ToLinearRefFromU16Kernel<<<num_blocks, threads_per_block, 0, cuda_stream>>>(
+      src_u16, dst_f32, src_u16.cols, src_u16.rows, wb_params, pattern);
   CUDA_CHECK(cudaGetLastError());
   MaybeWait(stream);
 }

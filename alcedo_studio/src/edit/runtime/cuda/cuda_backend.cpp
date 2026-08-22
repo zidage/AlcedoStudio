@@ -243,6 +243,25 @@ void CudaBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte>
   h2d_bytes_ += bytes.size();
 }
 
+void CudaBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
+                                     CommandContext& command_context) {
+  if (fail_next_upload_) {
+    fail_next_upload_ = false;
+    throw std::runtime_error("CudaBackend::UploadDeviceMemory: injected failure");
+  }
+  if (bytes.empty()) {
+    return;
+  }
+  if (dst == nullptr) {
+    throw std::runtime_error("CudaBackend::UploadDeviceMemory: null destination");
+  }
+  cuda::CheckCuda(::cudaMemcpyAsync(dst, bytes.data(), bytes.size(), cudaMemcpyHostToDevice,
+                                    command_context.Stream()),
+                  "CudaBackend::UploadDeviceMemory");
+  ++h2d_copy_count_;
+  h2d_bytes_ += bytes.size();
+}
+
 void CudaBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
                                     CommandContext& command_context) const {
   if (texture.DevicePointer() == nullptr) {

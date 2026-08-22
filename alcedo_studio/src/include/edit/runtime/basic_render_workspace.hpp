@@ -6,6 +6,7 @@
 
 #include <stdexcept>
 
+#include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/texture_pool.hpp"
@@ -45,6 +46,8 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto MaskTextures() -> TexturePool<Backend>& { return mask_textures_; }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
+  [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
 
   /**
    * @brief Wait the previous submission, rewind transients, start a new submission id.
@@ -84,6 +87,7 @@ class BasicRenderWorkspace {
   TexturePool<Backend>           textures_;
   TexturePool<Backend>           mask_textures_;
   NodeResultCache<Backend>       values_{};
+  GraphImageCache<Backend>       images_{};
   bool                           rendering_ = false;
 };
 
