@@ -10,7 +10,8 @@
 
 namespace alcedo {
 
-auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type) -> CudaAdjustmentBehavior {
+auto TryResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
+    -> std::optional<CudaAdjustmentBehavior> {
   using enum CudaAdjustmentBehavior;
   if (type == type_ids::Cat02WhiteBalance()) return Cat02WhiteBalance;
   if (type == type_ids::Exposure()) return Exposure;
@@ -29,6 +30,13 @@ auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type) -> CudaAdjustment
   if (type == type_ids::Sharpen()) return Sharpen;
   if (type == type_ids::Halation()) return Halation;
   if (type == type_ids::FilmGrain()) return FilmGrain;
+  return std::nullopt;
+}
+
+auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type) -> CudaAdjustmentBehavior {
+  if (auto behavior = TryResolveCudaAdjustmentBehavior(type)) {
+    return *behavior;
+  }
   throw std::runtime_error("CUDA primary grade: unregistered adjustment type");
 }
 

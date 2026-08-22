@@ -6,6 +6,7 @@
 
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
@@ -43,6 +44,8 @@ auto MakeLegacyStageJson() -> nlohmann::json {
       {"type", 2}, {"enable", true}, {"params", {{"exposure", 1.5}}}};
   json["Color Adjustment"]["Color Adjustment"]["saturation"] = {
       {"type", 10}, {"enable", true}, {"params", {{"saturation", 30.0}}}};
+  json["Color Adjustment"]["Color Adjustment"]["tint"] = {
+      {"type", 11}, {"enable", true}, {"params", {{"tint", 12.0}}}};
   json["Output Transform"]["Output Transform"]["odt"] = {
       {"type", 17},
       {"enable", true},
@@ -88,6 +91,12 @@ TEST(GpuDagModelGraph, LegacyStageJsonMapsRawGradeGeometryAndDrtToNewDocument) {
 
   EXPECT_EQ(document.Drt()->Params().Params().method, DrtMethod::Aces20);
   EXPECT_FLOAT_EQ(document.Drt()->Params().Params().peak_luminance, 200.0f);
+
+  EXPECT_EQ(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
+  const auto* cat02 = dynamic_cast<const Cat02WhiteBalanceModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()));
+  ASSERT_NE(cat02, nullptr);
+  EXPECT_FLOAT_EQ(cat02->TintOffset(), 12.0f);
 }
 
 TEST(GpuDagModelGraph, LegacyImportFailsOnUnknownOperatorType) {

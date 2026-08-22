@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/json_read.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 
@@ -312,11 +313,19 @@ auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyI
     }
   }
   if (const auto* tint = FindOp(operators, kLegacyTint)) {
-    auto model = std::make_unique<TintModel>();
-    const auto nested = NestedOrSelf(tint->params, "tint");
-    ApplyScalar(model.get(), nested, "tint");
-    document.InsertAdjustment(NodeId{"grade.primary"}, grade->AdjustmentCount(),
-                              AdjustmentInstanceId{"grade.primary.tint"}, std::move(model));
+    // Legacy Tint is not a CUDA grade kernel. Fold it into CAT02 tint_offset so reopen of
+    // stored pipelines does not insert an unregistered adjustment type.
+    if (auto* cat02 = dynamic_cast<Cat02WhiteBalanceModel*>(
+            grade->FindAdjustmentByType(type_ids::Cat02WhiteBalance()))) {
+      const auto nested = NestedOrSelf(tint->params, "tint");
+      float      value  = 0.0f;
+      if (nested.is_number()) {
+        value = nested.get<float>();
+      } else {
+        value = json_util::ReadFloat(nested, "tint", 0.0f);
+      }
+      cat02->SetTintOffset(value);
+    }
   }
   if (const auto* odt = FindOp(operators, kLegacyOdt)) {
     drt->Params().LoadJson(NestedOrSelf(odt->params, "odt"));

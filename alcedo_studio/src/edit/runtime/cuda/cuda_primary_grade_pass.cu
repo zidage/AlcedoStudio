@@ -337,10 +337,13 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       throw std::runtime_error(
           "ExecuteCudaPrimaryGrade: compiled adjustment no longer matches graph");
     }
-    const auto behavior   = ResolveCudaAdjustmentBehavior(compiled.type);
-    needs_local_reference = needs_local_reference || IsCudaLocalToneBehavior(behavior);
+    const auto behavior = TryResolveCudaAdjustmentBehavior(compiled.type);
+    if (!behavior.has_value()) {
+      continue;
+    }
+    needs_local_reference = needs_local_reference || IsCudaLocalToneBehavior(*behavior);
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    const auto             runtime_params = MakeRuntimeParams(*model, behavior);
+    const auto             runtime_params = MakeRuntimeParams(*model, *behavior);
     auto payload = std::make_shared<TypedOperatorParamPayload<CudaAdjustmentParams>>(
         compiled.type, 1, runtime_params);
     if (!arena.Contains(key)) {

@@ -117,11 +117,19 @@ void GeometryResamplePass::Encode(const ResolvedRenderGeometry& geometry,
   }
   if (src.Width() != geometry.decoded_extent.width ||
       src.Height() != geometry.decoded_extent.height) {
-    throw std::runtime_error("GeometryResamplePass::Encode: src size must match decoded_extent");
+    throw std::runtime_error(
+        "GeometryResamplePass::Encode: src size " + std::to_string(src.Width()) + "x" +
+        std::to_string(src.Height()) + " must match decoded_extent " +
+        std::to_string(geometry.decoded_extent.width) + "x" +
+        std::to_string(geometry.decoded_extent.height));
   }
   if (dst.Width() != geometry.render_extent.width ||
       dst.Height() != geometry.render_extent.height) {
-    throw std::runtime_error("GeometryResamplePass::Encode: dst size must match render_extent");
+    throw std::runtime_error(
+        "GeometryResamplePass::Encode: dst size " + std::to_string(dst.Width()) + "x" +
+        std::to_string(dst.Height()) + " must match render_extent " +
+        std::to_string(geometry.render_extent.width) + "x" +
+        std::to_string(geometry.render_extent.height));
   }
   if (src.DevicePointer() == nullptr || dst.DevicePointer() == nullptr) {
     throw std::runtime_error("GeometryResamplePass::Encode: empty texture");

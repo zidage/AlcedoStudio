@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "edit/operators/models/operator_type_id.hpp"
 
@@ -29,6 +30,13 @@ enum class CudaAdjustmentBehavior : std::uint32_t {
   Halation,
   FilmGrain,
 };
+
+/**
+ * @brief Resolve a built-in Model type to its CUDA runtime behavior.
+ * @return nullopt when the type has no CUDA grade implementation (legacy Tint, etc.).
+ */
+[[nodiscard]] auto TryResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
+    -> std::optional<CudaAdjustmentBehavior>;
 
 /**
  * @brief Resolve a built-in Model type to its CUDA runtime behavior.

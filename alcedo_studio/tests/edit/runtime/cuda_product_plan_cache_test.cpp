@@ -12,6 +12,7 @@
 
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/analytic_mask_node_model.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -141,6 +142,49 @@ TEST(GpuDagCudaDrtProduct, ProductRendererReusesPreparedSourceAfterSwitchingEnco
   EXPECT_EQ(renderer.Stats().prepared_source_misses, 2U);
   EXPECT_EQ(renderer.Stats().prepared_source_hits, 1U);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
+}
+
+TEST(GpuDagCudaDrtProduct, ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+
+  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          image = MakeEncodedImage(31);
+  RenderRequest       request;
+  request.view.viewport_extent = {48, 32};
+  request.resolution.max_edge  = 48;
+
+  const auto output = RenderHost(renderer, image, DecodeRes::FULL, request);
+  ASSERT_NE(output, nullptr);
+  const auto& cpu = output->GetCPUData();
+  EXPECT_EQ(cpu.cols, 48);
+  EXPECT_EQ(cpu.rows, 32);
+
+  request.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
+  request.view.viewport_extent            = {40, 24};
+  const auto cropped = RenderHost(renderer, image, DecodeRes::FULL, request);
+  ASSERT_NE(cropped, nullptr);
+  EXPECT_EQ(cropped->GetCPUData().cols, 40);
+  EXPECT_EQ(cropped->GetCPUData().rows, 24);
+}
+
+TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnregisteredType) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+
+  nlohmann::json legacy;
+  legacy["Color Adjustment"]["Color Adjustment"]["tint"] = {
+      {"type", 11}, {"enable", true}, {"params", {{"tint", 18.0f}}}};
+  auto imported = LegacyPipelineImporter::Import(legacy);
+  ASSERT_TRUE(imported.Ok()) << imported.error;
+  ASSERT_EQ(imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
+
+  auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
+  document->InsertAdjustment(NodeId{"grade.primary"}, document->PrimaryGrade()->AdjustmentCount(),
+                             AdjustmentInstanceId{"grade.primary.tint"},
+                             std::make_unique<TintModel>());
+  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          image = MakeEncodedImage(41);
+  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, RenderRequest{}), nullptr);
 }
 
 }  // namespace

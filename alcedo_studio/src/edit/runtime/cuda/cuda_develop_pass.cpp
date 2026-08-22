@@ -108,8 +108,8 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   const GraphValueId develop_id = plan.develop_output;
   const auto   out_w  = plan.source.develop_output_extent.width;
   const auto   out_h  = plan.source.develop_output_extent.height;
-  auto&        out_lease = EnsureImage(workspace, develop_id, out_w, out_h);
-  auto&        out_tex   = out_lease.Texture();
+  auto&        decoded_lease = EnsureImage(workspace, develop_id, out_w, out_h);
+  auto&        out_tex       = decoded_lease.Texture();
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
@@ -212,11 +212,14 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   }
 
   if (plan.encode_geometry_resample) {
-    const auto rw = plan.geometry.render_extent.width;
-    const auto rh = plan.geometry.render_extent.height;
+    // Viewport ROI and max-edge (dynamic resolution) live on RenderRequest, not on the
+    // document. They only change render_extent. Re-query the decoded texture after
+    // Acquire: TexturePool::entries_ may reallocate and invalidate Texture2D&.
+    const auto rw   = plan.geometry.render_extent.width;
+    const auto rh   = plan.geometry.render_extent.height;
     auto       dest = workspace.Textures().Acquire({rw, rh, TextureFormat::Rgba32f});
     GeometryResamplePass pass;
-    pass.Encode(plan.geometry, out_tex, dest.Texture(), ctx);
+    pass.Encode(plan.geometry, decoded_lease.Texture(), dest.Texture(), ctx);
     workspace.Images().Store(develop_id, std::move(dest));
   }
 
