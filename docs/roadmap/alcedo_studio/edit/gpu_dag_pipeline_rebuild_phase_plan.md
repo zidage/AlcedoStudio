@@ -1890,7 +1890,7 @@ Stack:
 | G5 | `feature/gpu-dag-cuda-grade` | G4 | CUDA 调色、CAT02、LLF workspace 化 |
 | G6 | `feature/gpu-dag-cuda-mask-mix` | G5 | MaskStore、R8 mask、feather、Mix |
 | G7 | `feature/gpu-dag-cuda-drt-product` | G6 | CUDA DRT 和 app 管线路径切换 |
-| G7R | `feature/gpu-dag-cuda-default-recovery` | G7 | scheduler、CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
+| G7R | `feature/gpu-dag-cuda-default-recovery` | G7 | CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
 | G8 | `feature/gpu-dag-opencl` | G7R | OpenCL 完整移植 |
 | G9 | `feature/gpu-dag-metal` | G8 | Metal 完整移植 |
 | G10 | `feature/gpu-dag-final-removal` | G9 | 删除旧 stage、CPU 图像路径和过渡代码；全平台验证 |
@@ -2933,7 +2933,7 @@ CUDA frees. The DRT output texture and resolved method resources remain owned by
 `pipeline_service.cpp` and `pipeline_cpu.cpp` received localized routing/persistence changes; no
 new file exceeds 500 lines.
 
-**Residual gaps:** G7R 审计确认当前 CUDA 产品路径仍缺少完整 scheduler 意图传递、
+**Residual gaps:** G7R 审计确认当前 CUDA 产品路径仍缺少
 PreparedRawInput/ExecutionPlan/节点结果的内容感知缓存、geometry 后缓存，以及正确的
 CameraMatrices 双光源 Camera→AP1。G7 的资源 ID 与零 allocation 证据不能证明结果 cache hit
 或没有重复计算。G7 接入的 legacy 参数镜像、importer 和 nested adapter 也不是目标架构，
@@ -2949,14 +2949,12 @@ Base: `feature/gpu-dag-cuda-drt-product`
 Status: required；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
 
 Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
-任务中已经明确的 Develop endpoint、GPU workspace KV cache、动态分辨率和 scheduler 集成
-要求，不重新定义产品范围。
+任务中已经明确的 Develop endpoint、GPU workspace KV cache 和动态分辨率要求，不重新定义
+产品范围。
 
 目标：
 
 - 保留 G4/G5 把传感器开发与 CameraColorPass 分开的正确设计，使 Develop 的昂贵结果可缓存；
-- 让 scheduler 独占交互帧、质量帧、细节补帧、取消、过期帧抑制、busy 和 frame sink；
-- 让 Preview 与 Export 使用完全独立的 PipelineSession/workspace，不保留状态恢复路径；
 - 从 CUDA 产品路径删除 legacy 参数、importer、snapshot 和 stage adapter；
 - 使用 CameraMatrices/DNG 双光源矩阵插值恢复正确的 RAW CCT/tint 和 Camera→AP1；
 - 增加 geometry 后 camera scene-linear 结果缓存，并让所有结果缓存使用内容 key；
@@ -2978,7 +2976,6 @@ Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本
 | P0 | Structural evidence | `CudaProductRenderer::Render` 每次都 `LoadEncoded` 和 `Compile`，executor 每次无条件运行 Develop、Grade、DRT | `cuda_product_renderer.cu`、`cuda_plan_executor.cpp` | 无变化帧不重复输入准备、编译和 GPU 节点执行 |
 | P0 | Structural evidence | `GraphImageCache`/`NodeResultCache` 只按 `GraphValueId` 保存资源，没有内容 key 和有效性；当前所谓 cache valid 只比较纹理 `ResourceId` | cache headers 与 G7 测试断言 | 分配复用与结果命中成为两个独立概念，缓存命中由内容 key 证明 |
 | P0 | Structural evidence | 当前没有 geometry 后结果缓存，CCT、Grade 或 DRT 编辑无法明确复用重采样结果 | Develop pass 与 workspace image map | `geometry.scene_source` 是内容感知的一级结果缓存 |
-| P0 | Structural evidence | scheduler 在 `Apply` 前后判断 stale，但 CUDA renderer 在 `Apply` 内部直接写 frame sink；渲染后的 stale 判断可能晚于旧帧呈现 | `pipeline_scheduler.cpp`、`pipeline_cpu.cpp`、`cuda_product_renderer.cu` | scheduler 独占 present 权限；DAG 返回未呈现结果，不接收完整 scheduler 状态机 |
 | P1 | Structural evidence | 当前 creative white balance 只做每通道指数缩放，不是计划要求的 AP1/CAT02 色适配 | CUDA adjustment runtime | 局部色温使用实际 CAT02；不与 RAW CameraColorPass 混用 |
 | P1 | Coverage gap | `ChangingDrtPeakLuminanceKeepsDevelopAndGradeCacheValid` 只比较资源 ID；第二帧测试只检查 malloc/free | `cuda_drt_product_test.cpp` | 测试断言 LibRaw、H2D、compile、每类 pass execute/skip 和内容 key |
 | P1 | Coverage gap | Primary Grade 色彩测试使用 direct RGB，并明确让 camera conversion 保持 identity | `cuda_primary_grade_test.cpp` | 加入真实 RAW、CameraMatrices、双光源插值和 AP1 reference 测试 |
@@ -2993,21 +2990,18 @@ ctest --test-dir build/debug --output-on-failure \
 结果为 `26/26` PASS，耗时 `5.53 s`。该结果只证明现有窄测试仍通过，不否定上表问题。
 直接执行真实 RAW 编辑器用例时结果是 `0` PASS、`1` SKIPPED；它受
 `ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E` 控制。因此目前没有一个默认执行的测试同时覆盖真实
-RAW、CameraMatrices 色彩、scheduler 状态和重复渲染性能。
+RAW、CameraMatrices 色彩和重复渲染性能。
 
 ### 41.2 恢复后的产品调用链
 
 默认三节点图不增加用户节点。产品执行链固定为：
 
 ```text
-PipelineScheduler
-  -> ScheduledTask
-       request id / frame role / stale state / busy state / display sink
-       这些字段只由 scheduler 持有
-  -> resolve immutable RenderRequest
+CPUPipelineExecutor::Apply
+  -> translate existing executor inputs into immutable RenderRequest
        source content key / document snapshot
        viewport / target extent / max edge / DecodeRes / quality
-  -> CudaProductPipelineSession::Render(RenderRequest, optional cancel query)
+  -> CudaProductPipelineSession::Render
   -> PreparedSourceCache lookup
        miss -> RawInputLoader open + unpack + downsample + complete color metadata
   -> Static ExecutionPlan lookup
@@ -3022,61 +3016,15 @@ PipelineScheduler
        DrtPass
   -> completion fence
   -> publish successful cache entries
-  -> return RenderedFrame(texture/value id/fence or host image)
-  -> PipelineScheduler checks cancel/stale/revision
-  -> latest eligible preview frame only -> IFrameSink
-  -> scheduler records completion exactly once
-
-ExportService
-  -> independent ExportPipelineSession + ExportRenderWorkspace
-  -> host/file output
-  -> never reads, changes, restores, or presents through the editor preview session
+  -> existing bound FrameSubmission / IFrameSink path
+  -> return through the existing CPUPipelineExecutor result path
 ```
 
 `CudaProductPipelineSession` 表示一个打开图像和 PipelineDocument 的可复用运行实例。它拥有
 PreparedSourceCache、静态 ExecutionPlan、CudaRenderDevice/workspace 和结果 cache metadata。
-它不能在每个 `Apply` 调用中临时创建，也不能借助旧 merged stage 保存结果。它不拥有
-`IFrameSink`，也不判断 InteractivePrimary、QualityBase 或 DetailPatch 的呈现顺序。
+它不能在每个 `Apply` 调用中临时创建，也不能借助旧 merged stage 保存结果。
 
-### 41.3 G7R.1 — 收回 present 权限并精简 DAG request
-
-工作：
-
-- `RenderRequest` 只携带会改变像素、输出尺寸或 cache key 的不可变输入；不得复制 scheduler
-  状态机；
-- `InteractivePrimary`、`QualityBase` 和 `DetailPatch` 只由 scheduler 解释，并在调用 DAG 前解析
-  为具体 viewport、ROI、输出尺寸、采样策略和质量参数；DAG 不读取这些 frame-role 标签；
-- source content key 和不可变 document snapshot/revision 可以进入 `RenderRequest`，因为它们参与
-  cache 身份；UI busy、stale、最新 request id 和合成顺序不能进入 GraphCompiler 或 pass 参数；
-- 允许传入一个简单的 `cancel_requested()` 查询，使 renderer 可以少做已经没人需要的工作；
-  取消查询是性能优化，不能决定哪个结果最终呈现；
-- `CudaProductPipelineSession::Render` 返回 `RenderedFrame` 或等价结果，其中包含 GPU value/
-  texture、完成 fence、extent/format 和可选 host image；renderer 不调用 `IFrameSink`；
-- scheduler 在收到 `RenderedFrame` 后、调用 frame sink 前执行最终 cancel/stale/revision 检查；
-- 一个 scheduler task 只能完成一次：成功、取消或失败三者互斥；busy、quality 和 detail 状态只在
-  scheduler 中清理；
-- QualityBase 和 DetailPatch 的 revision 匹配、合成和呈现顺序只由 scheduler 处理；编辑变化后
-  旧 detail patch 不得合成到新 primary；
-- 保留现有 single in-flight preview 限制；已经提交的旧 GPU 工作可以安全完成和回收，但返回
-  scheduler 后可以被丢弃；
-- Preview 和 full-resolution Export 使用不同 PipelineSession、RenderDevice、workspace、cache
-  和输出目标。Export 不连接 editor frame sink，不保存或恢复 preview 参数；
-- scheduler 的旧 scratch/reset 动作在 DAG 路径只 rewind 每帧 transient，不能清空已发布的
-  Prepared RAW、sensor develop、geometry、AP1、Grade 或 DRT 结果缓存；
-- DAG 路径不再依赖旧 executor 的全局 cancel 标记、merged-stage reset 或 stage cache 状态；
-- 从 CUDA 产品路径删除 legacy stage adapter、legacy parameter snapshot、
-  `ExportPipelineParams` 镜像和 `LegacyPipelineImporter`；UI/app service 直接修改新 Model。
-
-主要文件：
-
-- `alcedo_studio/src/renderer/pipeline_scheduler.cpp`
-- `alcedo_studio/src/include/renderer/pipeline_task.hpp`
-- `alcedo_studio/src/edit/pipeline/pipeline_cpu.cpp`
-- `alcedo_studio/src/include/edit/geometry/render_request.hpp`
-- `alcedo_studio/src/edit/runtime/cuda/cuda_product_renderer.cu`
-- `alcedo_studio/src/include/edit/runtime/cuda/cuda_product_renderer.hpp`
-
-### 41.4 G7R.2 — 缓存 Prepared RAW 和静态 ExecutionPlan
+### 41.3 G7R.1 — 缓存 Prepared RAW 和静态 ExecutionPlan
 
 Prepared source key 至少包含：
 
@@ -3100,7 +3048,7 @@ LibRaw/input-preparation implementation version
 - 接入并测试 `GraphCompiler::NeedsRecompile`，或删除该未使用 API 并用单一 plan key 机制替代；
 - plan cache miss、hit 和 compile count 必须可查询。
 
-### 41.5 G7R.3 — 内容感知结果缓存和 geometry 后缓存
+### 41.4 G7R.2 — 内容感知结果缓存和 geometry 后缓存
 
 实现第 27 节定义的五层缓存，并保持以下值语义：
 
@@ -3136,7 +3084,7 @@ drt.display             = display-referred output
 - `alcedo_studio/src/edit/runtime/cuda/cuda_develop_pass.cpp`
 - `alcedo_studio/src/edit/runtime/cuda/cuda_plan_executor.cpp`
 
-### 41.6 G7R.4 — 恢复 CameraMatrices 双光源插值和 Develop AP1 输出
+### 41.5 G7R.3 — 恢复 CameraMatrices 双光源插值和 Develop AP1 输出
 
 颜色实现必须从旧 `ColorTempOp::ResolveRuntime` 提取一个不依赖 `OperatorParams` 的纯解析器，
 例如：
@@ -3187,7 +3135,7 @@ DNG 解析能力，或提取共享 `RawColorMetadataResolver`。不得继续维�
 `FillColorContext` 副本。若 `LoadEncoded` 只有字节而没有路径，DNG tag 读取必须支持内存输入，
 或由调用方把已经解析的不可变 metadata snapshot 一起传入；不能因此退回 LibRaw 对角缩放。
 
-### 41.7 G7R.5 — 正确实现独立的 creative CAT02
+### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 
 Primary Grade 的第一个 adjustment 是 scene-linear AP1 creative white balance，与 RAW
 CameraColorPass 是两个不同功能：
@@ -3199,7 +3147,7 @@ CameraColorPass 是两个不同功能：
 - zero offset 必须是严格 identity；
 - 参数 dirty 只让当前 Grade 和 DRT 失效，不让 CameraColor、Geometry 或 SensorDevelop 失效。
 
-### 41.8 G7R.6 — 可观测性与性能恢复
+### 41.7 G7R.5 — 可观测性与性能恢复
 
 为测试和 profiling 增加每个 pipeline session 的只读统计快照：
 
@@ -3215,14 +3163,13 @@ GPU allocation/free count and bytes
 CPU prepare/compile/submit/present duration
 GPU pass and total submission duration
 renderer completed/aborted/failed count
-scheduler presented/discarded-stale/cancelled task count
 ```
 
 统计默认关闭或使用低成本原子计数；测试构建可开启细粒度计时。性能验收不能依赖日志文本。
 
-### 41.9 必须新增或加强的测试
+### 41.8 必须新增或加强的测试
 
-#### 41.9.1 RAW metadata 与颜色单元测试
+#### 41.8.1 RAW metadata 与颜色单元测试
 
 ```text
 RawInputLoaderPopulatesCompleteColorContextFromRealRaw
@@ -3241,7 +3188,7 @@ CudaCat02MapsSourceWhiteToRequestedWhiteInAp1
 输出。双光源测试使用非对角矩阵，使 `cam_mul` 对角实现、`rgb_cam` 固定矩阵实现和错误的
 线性 Kelvin 插值都必然失败。
 
-#### 41.9.2 真实 RAW reference 测试
+#### 41.8.2 真实 RAW reference 测试
 
 使用 `alcedo_studio/tests/resources/sample_images/ci_rawfiles` 中至少一个 DNG 和一个非 DNG RAW。
 reference 来自重构前提交 `bf6686fb` 的旧 CameraMatrices/ColorTemp 路径，在固定输入、
@@ -3258,7 +3205,7 @@ CudaRealRawColorTransformProducesFiniteAp1WithoutChannelCollapse
 误差范围必须在 fixture 中按阶段说明。至少断言每通道有限值、非零动态范围、参考白点、色卡或
 固定 patch 的 RGB/xy 误差；不能只断言“图像存在”。
 
-#### 41.9.3 缓存和最小执行集测试
+#### 41.8.3 缓存和最小执行集测试
 
 ```text
 SecondUnchangedProductRenderRunsNoLibRawNoSourceUploadAndNoGpuNodePass
@@ -3272,40 +3219,23 @@ ProductRendererCompilesStaticPlanOnlyForTopologyOrSourceLayoutChange
 ResultCacheDoesNotTreatReusedTextureAllocationAsContentHit
 FailedSubmissionDoesNotPublishResultContentKey
 CancelledSubmissionKeepsPreviouslyCompletedCacheEntriesUsable
+ImageSwitchBackReusesMatchingPreparedSourceAndGpuResults
 ```
 
 每个测试断言内容 key、execute/skip counter、LibRaw count、H2D bytes 和输出像素；禁止只比较
 `ResourceId` 或 malloc/free。
 
-#### 41.9.4 Scheduler 状态回归测试
-
-```text
-RenderRequestContainsNoSchedulerRoleOrPresentationTarget
-ProductRendererReturnsFrameWithoutCallingDisplaySink
-PipelineSchedulerIsTheOnlyPreviewPresentationOwner
-InteractiveReplacementDoesNotPresentStaleFrame
-InteractiveQualityDetailSequencePresentsInOrderAndClearsBusy
-EditRevisionChangeRejectsOlderQualityAndDetailFrames
-CancelledScheduledRenderCompletesExactlyOnceAndKeepsSessionReusable
-ScheduledRenderFailureClearsBusyAndReportsTheOriginalError
-ImageSwitchBackReusesMatchingPreparedSourceWithoutPresentingOldFrame
-FullResolutionExportUsesIndependentPipelineSession
-FullResolutionExportDoesNotMutatePreviewWorkspace
-FullResolutionExportNeverWritesEditorFrameSink
-```
-
-#### 41.9.5 编辑器真实 RAW E2E
+#### 41.8.4 编辑器真实 RAW E2E
 
 ```text
 RealRawEditorColorTempEditChangesPixelsWithoutRerunningDemosaic
 RealRawEditorExposureEditKeepsPreparedSensorAndGeometryResults
-RealRawEditorRapidEditsPresentOnlyLatestRevisionAndReturnToIdle
 ```
 
 这些测试必须进入默认 CUDA CI，不得依赖 `ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E` 才执行。现有
 deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整个真实 RAW 行为测试来规避。
 
-### 41.10 重构前性能 A/B 验收
+### 41.9 重构前性能 A/B 验收
 
 基线固定为重构前提交 `bf6686fb`。在同一台机器、同一 CUDA driver/GPU、同一 MSVC/CMake
 配置、同一输入 RAW、同一 DecodeRes、同一 viewport/输出尺寸和同一编辑序列下比较。Debug
@@ -3317,13 +3247,13 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 
 | 场景 | G7R 的强制执行集 | 强制为零的工作 |
 | --- | --- | --- |
-| 无变化重复渲染 | DAG 只查找并返回已完成结果；scheduler 可在 DAG 外呈现 | LibRaw、source H2D、plan compile、所有图像节点 pass、GPU alloc/free |
+| 无变化重复渲染 | 查找并复用已完成结果，沿现有输出路径提交 | LibRaw、source H2D、plan compile、所有图像节点 pass、GPU alloc/free |
 | Exposure 连续调整 | PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、Geometry、CameraColor、GPU alloc/free |
 | RAW CCT/tint 连续调整 | CameraColor、PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、Geometry、GPU alloc/free |
 | DRT 连续调整 | DRT | LibRaw、source H2D、SensorDevelop、Geometry、CameraColor、PrimaryGrade、GPU alloc/free |
 | viewport/geometry 改变 | Geometry、CameraColor、PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、GPU alloc/free |
 | RAW Develop 参数改变 | SensorDevelop 及下游 | 重复 LibRaw open/unpack、无关 source preparation、GPU alloc/free |
-| 切换图像后切回 | DAG 命中仍在预算内的 source/GPU 结果；scheduler 决定是否呈现 | 对命中项的 LibRaw、source H2D 和图像节点 pass |
+| 切换图像后切回 | 命中仍在预算内的 source/GPU 结果，沿现有输出路径提交 | 对命中项的 LibRaw、source H2D 和图像节点 pass |
 
 量化完成条件：
 
@@ -3331,11 +3261,10 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 - warm interactive median 不高于 `bf6686fb` 基线的 `1.05x`，p95 不高于 `1.10x`；
 - QualityBase、DetailPatch 和切图返回场景的 median/p95 不比基线差 10%；
 - 无变化、Exposure、CCT 和 DRT 连续编辑从第二帧开始 GPU allocation/free 均为 0；
-- DAG 计算时间与 scheduler/frame-sink 呈现时间分别报告，不能用显示同步掩盖节点重算；
 - 若新路径优于基线，记录绝对时间与提升比例；若未达到阈值，G7R 不得标记 complete；
 - 性能报告写入本 Phase completion record，包含 GPU、driver、CPU、构建类型、fixture 和命令。
 
-### 41.11 完成条件
+### 41.10 完成条件
 
 - 用户可见图仍然只有 Develop、Primary Color Grade 和 DRT；
 - G4/G5 的缓存拆分保留，并存在独立 `develop.sensor_linear`、`geometry.scene_source`、
@@ -3343,15 +3272,12 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 - `develop.image` 被 reference 测试证明是 AP1 scene-linear；
 - Camera→AP1 使用 CameraMatrices/DNG 双光源插值，`cam_mul/pre_mul` 不作为颜色矩阵；
 - as-shot/custom CCT/tint 和 creative CAT02 分别通过数学单元测试和真实 RAW reference 测试；
-- DAG request 只包含像素计算和 cache 身份输入；renderer 返回未呈现的 `RenderedFrame`；
-- scheduler 独占 frame sink，并让取消、过期帧抑制、quality/detail 和 busy 清理通过默认测试；
-- Preview 与 Export 使用独立 PipelineSession/workspace；Export 不保存、修改或恢复 preview 状态；
 - CUDA 产品路径不再包含 legacy 参数镜像、stage adapter 或 `LegacyPipelineImporter`；
 - 缓存命中由内容 key 和 pass counter 证明，不由资源 ID 推断；
-- 第 41.9 节测试全部默认执行并通过；
-- 第 41.10 节 A/B 达标，并把完整测量写回 completion record；
-- G7 completion record 中“upstream cache valid”和“scheduler 已完整接入”的结论，在 G7R
-  完成前只视为历史记录，不作为 G8 的验收依据；
+- 第 41.8 节测试全部默认执行并通过；
+- 第 41.9 节 A/B 达标，并把完整测量写回 completion record；
+- G7 completion record 中“upstream cache valid”的结论，在 G7R 完成前只视为历史记录，
+  不作为 G8 的验收依据；
 - G8 必须以 G7R 分支为 base，不得从当前 G7 直接开始 OpenCL 移植。
 
 ## 42. Phase G8 — OpenCL 移植
@@ -3580,7 +3506,7 @@ Metal output
 - 首帧创建成本单独报告；
 - 第二帧开始不得分配 GPU buffer 或 texture；
 - 无变化重复渲染不得重新 open/unpack RAW、上传 source、编译静态 plan 或执行图像节点 pass；
-- Exposure、RAW CCT/tint、DRT、viewport/geometry 编辑分别断言第 41.10 节的最小执行集；
+- Exposure、RAW CCT/tint、DRT、viewport/geometry 编辑分别断言第 41.9 节的最小执行集；
 - cache hit 必须由内容 key 和 pass skip counter 证明，不能由相同 `ResourceId` 推断；
 - 无参数变化时参数上传字节数必须为 0；
 - 单字段变化时只上传对应字段范围；
@@ -3588,7 +3514,7 @@ Metal output
 - dynamic resolution 变化不得重新生成不变的 feather resource；
 - LLF reference 可以跨 viewport 变化复用；
 - GPU 内存预算和 LRU 清理字节数可查询；
-- CUDA 产品路径必须与重构前提交 `bf6686fb` 做同机 Release A/B，并满足第 41.10 节阈值。
+- CUDA 产品路径必须与重构前提交 `bf6686fb` 做同机 Release A/B，并满足第 41.9 节阈值。
 
 ## 46. 构建与运行
 
@@ -3684,18 +3610,11 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 不存在 `LegacyPipelineImporter`、legacy parameter snapshot 或 nested stage adapter。
 - [ ] 新保存只写 format version 2，不写旧 stage JSON。
 
-### 47.8 Scheduler 和性能
+### 47.8 性能
 
-- [ ] DAG request 只包含像素计算和 cache 身份输入，不包含 scheduler 状态机。
-- [ ] DAG renderer 返回未呈现的结果；scheduler 是 editor frame sink 的唯一调用者。
-- [ ] InteractivePrimary、QualityBase 和 DetailPatch 只在 scheduler 中解析和排序。
-- [ ] 取消、失败和成功都恰好完成一次，并清理 busy/quality/detail 状态。
-- [ ] 过期帧不会覆盖最新 frame sink 输出。
-- [ ] Preview 与 Export 使用独立 PipelineSession、workspace、cache 和输出目标。
-- [ ] Export 不保存、修改或恢复 Preview 状态，也不连接 editor frame sink。
 - [ ] 切图返回只命中相同 source/document revision 的缓存。
-- [ ] 真实 RAW 编辑器颜色与状态测试默认进入 CUDA CI，不依赖环境变量才执行。
-- [ ] G7R 与重构前提交 `bf6686fb` 的同机 A/B 满足第 41.10 节阈值。
+- [ ] 真实 RAW 编辑器颜色和缓存测试默认进入 CUDA CI，不依赖环境变量才执行。
+- [ ] G7R 与重构前提交 `bf6686fb` 的同机 A/B 满足第 41.9 节阈值。
 - [ ] G7R 完成后才允许以其为 base 开始 G8。
 
 ## 48. 风险与处理
