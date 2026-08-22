@@ -28,36 +28,36 @@ class OperatorModelBase : public IOperatorModel {
   [[nodiscard]] auto Type() const -> OperatorTypeId override { return Derived::TypeId(); }
 
   [[nodiscard]] auto IsDirty() const -> bool override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return dirty_.Any();
   }
 
   [[nodiscard]] auto MakeFullDto() const -> OperatorParamDto override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return MakeDtoLocked();
   }
 
   auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!dirty_.Any()) {
       return std::nullopt;
     }
     OperatorParamPatchDto patch;
     patch.type         = Derived::TypeId();
     patch.dirty_fields = dirty_;
-    patch.payload      = std::make_shared<TypedOperatorParamPayload<Payload>>(
-        Derived::TypeId(), kDataVersion, payload_);
-    dirty_ = DirtyFieldMask{};
+    patch.payload      = std::make_shared<TypedOperatorParamPayload<Payload>>(Derived::TypeId(),
+                                                                              kDataVersion, payload_);
+    dirty_             = DirtyFieldMask{};
     return patch;
   }
 
   void RestoreDirty(DirtyFieldMask fields) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     dirty_ |= fields;
   }
 
   void MarkAllDirty() override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     dirty_ = DirtyFieldMask{DirtyEnum::All};
   }
 
@@ -66,33 +66,33 @@ class OperatorModelBase : public IOperatorModel {
 
   template <class Fn>
   void Mutate(DirtyEnum bit, Fn&& fn) {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     fn(payload_);
     dirty_ |= DirtyFieldMask{bit};
   }
 
   template <class Fn>
   auto Read(Fn&& fn) const {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return fn(payload_);
   }
 
   [[nodiscard]] auto PayloadCopy() const -> Payload {
-    std::lock_guard lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     return payload_;
   }
 
-  Payload                  payload_{};
-  DirtyFieldMask           dirty_{DirtyEnum::All};
-  mutable std::mutex       mutex_;
+  Payload            payload_{};
+  DirtyFieldMask     dirty_{DirtyEnum::All};
+  mutable std::mutex mutex_;
 
  private:
   [[nodiscard]] auto MakeDtoLocked() const -> OperatorParamDto {
     OperatorParamDto dto;
-    dto.type          = Derived::TypeId();
-    dto.data_version  = kDataVersion;
-    dto.payload       = std::make_shared<TypedOperatorParamPayload<Payload>>(
-        Derived::TypeId(), kDataVersion, payload_);
+    dto.type         = Derived::TypeId();
+    dto.data_version = kDataVersion;
+    dto.payload      = std::make_shared<TypedOperatorParamPayload<Payload>>(Derived::TypeId(),
+                                                                            kDataVersion, payload_);
     return dto;
   }
 };

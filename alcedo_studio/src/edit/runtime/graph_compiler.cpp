@@ -16,13 +16,13 @@ namespace {
 
 constexpr std::size_t kAlign = 256;
 
-auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
+auto                  AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
 auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size_t {
-  const std::size_t w = source.host_extent.width;
-  const std::size_t h = source.host_extent.height;
+  const std::size_t w      = source.host_extent.width;
+  const std::size_t h      = source.host_extent.height;
   const std::size_t pixels = w * h;
   if (source.kind == DevelopInputKind::DirectRgb) {
     return AlignUp(4096, kAlign);
@@ -37,9 +37,9 @@ auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size
 
 auto ImageParamsFromDocument(const PipelineDocument& document) -> ImageGeometryParams {
   ImageGeometryParams params;
-  params.crop_rect         = document.Geometry().CropRect();
-  params.rotation_degrees  = document.Geometry().RotationDegrees();
-  params.expand_to_fit     = document.Geometry().ExpandToFit();
+  params.crop_rect        = document.Geometry().CropRect();
+  params.rotation_degrees = document.Geometry().RotationDegrees();
+  params.expand_to_fit    = document.Geometry().ExpandToFit();
   return params;
 }
 
@@ -78,8 +78,8 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
   }
 
   ExecutionPlan plan;
-  plan.source          = source;
-  plan.develop_output  = GraphValueId{NodeId{"develop"}, PortId{"image"}};
+  plan.source               = source;
+  plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
   plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
 
   if (source.kind == DevelopInputKind::DirectRgb) {
@@ -94,11 +94,20 @@ auto GraphCompiler::Compile(const PipelineDocument& document, const DevelopCompi
   }
   plan.passes.push_back(GpuPassDesc{GpuPassKind::Lens});
   plan.passes.push_back(GpuPassDesc{GpuPassKind::GeometryResample});
+  plan.passes.push_back(GpuPassDesc{GpuPassKind::CameraToAp1});
+  plan.passes.push_back(GpuPassDesc{GpuPassKind::PrimaryColorGrade});
 
-  const auto geom_source = MakeSourceGeometry(source.develop_output_extent, source.full_reference_extent,
-                                              source.sensor_active_area, source.downsample_passes);
-  plan.geometry = ResolveRenderGeometry(geom_source, ImageParamsFromDocument(document), request.view,
-                                        request.resolution, request.footprint);
+  const auto* grade = document.PrimaryGrade();
+  for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+    plan.primary_grade_adjustments.push_back(
+        {grade->AdjustmentIdAt(index), grade->AdjustmentAt(index).Type()});
+  }
+
+  const auto geom_source =
+      MakeSourceGeometry(source.develop_output_extent, source.full_reference_extent,
+                         source.sensor_active_area, source.downsample_passes);
+  plan.geometry = ResolveRenderGeometry(geom_source, ImageParamsFromDocument(document),
+                                        request.view, request.resolution, request.footprint);
   plan.encode_geometry_resample = !IsIdentityResample(plan.geometry);
   return plan;
 }
@@ -108,8 +117,7 @@ auto GraphCompiler::NeedsRecompile(const ExecutionPlan& previous, const Pipeline
   if (document.TopologyDirty()) {
     return true;
   }
-  return previous.source.kind != source.kind ||
-         previous.source.host_extent != source.host_extent ||
+  return previous.source.kind != source.kind || previous.source.host_extent != source.host_extent ||
          previous.source.develop_output_extent != source.develop_output_extent ||
          previous.source.full_reference_extent != source.full_reference_extent ||
          previous.source.downsample_passes != source.downsample_passes;

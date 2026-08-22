@@ -289,6 +289,14 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
 endif()
 if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaPrimaryGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp)
+  target_include_directories(GpuDagCudaPrimaryGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaPrimaryGradeTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
+  gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
+
   add_executable(GpuDagCudaWorkspaceTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp

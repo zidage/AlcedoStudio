@@ -34,7 +34,7 @@ class ParameterArena {
 
   explicit ParameterArena(Backend& backend) : backend_(&backend) {}
 
-  ParameterArena(const ParameterArena&)            = delete;
+  ParameterArena(const ParameterArena&)                    = delete;
   auto operator=(const ParameterArena&) -> ParameterArena& = delete;
 
   /**
@@ -50,6 +50,9 @@ class ParameterArena {
     host_.resize(bytes, std::byte{0});
     device_   = std::move(new_device);
     capacity_ = bytes;
+    if (used_ > 0) {
+      pending_.push_back(ByteRange{0, static_cast<std::uint32_t>(used_)});
+    }
   }
 
   /**
@@ -72,8 +75,8 @@ class ParameterArena {
       absolute.destination_offset    = offset + field.destination_offset;
       binding.fields.push_back(absolute);
     }
-    used_         = end;
-    slots_[key]   = binding;
+    used_       = end;
+    slots_[key] = binding;
     return slots_[key];
   }
 
@@ -83,6 +86,10 @@ class ParameterArena {
       throw std::runtime_error("ParameterArena: unknown slot");
     }
     return it->second;
+  }
+
+  [[nodiscard]] auto Contains(const ParameterSlotKey& key) const -> bool {
+    return slots_.contains(key);
   }
 
   /**
@@ -117,9 +124,9 @@ class ParameterArena {
       if (range.size == 0) {
         continue;
       }
-      backend_->UploadBufferRange(device_, range.offset,
-                                  std::span<const std::byte>(host_.data() + range.offset, range.size),
-                                  command_context);
+      backend_->UploadBufferRange(
+          device_, range.offset,
+          std::span<const std::byte>(host_.data() + range.offset, range.size), command_context);
     }
   }
 
@@ -168,13 +175,13 @@ class ParameterArena {
     }
   }
 
-  Backend*                             backend_ = nullptr;
-  typename Backend::Buffer             device_{};
-  std::vector<std::byte>               host_;
-  std::size_t                          capacity_ = 0;
-  std::size_t                          used_     = 0;
+  Backend*                                     backend_ = nullptr;
+  typename Backend::Buffer                     device_{};
+  std::vector<std::byte>                       host_;
+  std::size_t                                  capacity_ = 0;
+  std::size_t                                  used_     = 0;
   std::map<ParameterSlotKey, ParameterBinding> slots_;
-  std::vector<ByteRange>               pending_;
+  std::vector<ByteRange>                       pending_;
 };
 
 }  // namespace alcedo

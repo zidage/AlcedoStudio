@@ -16,15 +16,17 @@ namespace alcedo {
  * Linearize → HLR → Debayer path.
  */
 enum class GpuPassKind : std::uint8_t {
-  UploadRaw          = 0,
-  UploadRgb          = 1,
-  Linearize          = 2,
-  CfaClamp           = 3,
-  Demosaic           = 4,
-  HighlightRecover   = 5,
-  InverseCamMulPack  = 6,
-  Lens               = 7,
-  GeometryResample   = 8,
+  UploadRaw         = 0,
+  UploadRgb         = 1,
+  Linearize         = 2,
+  CfaClamp          = 3,
+  Demosaic          = 4,
+  HighlightRecover  = 5,
+  InverseCamMulPack = 6,
+  Lens              = 7,
+  GeometryResample  = 8,
+  CameraToAp1       = 9,
+  PrimaryColorGrade = 10,
 };
 
 [[nodiscard]] inline auto GpuPassKindName(GpuPassKind kind) -> const char* {
@@ -47,6 +49,10 @@ enum class GpuPassKind : std::uint8_t {
       return "Lens";
     case GpuPassKind::GeometryResample:
       return "GeometryResample";
+    case GpuPassKind::CameraToAp1:
+      return "CameraToAp1";
+    case GpuPassKind::PrimaryColorGrade:
+      return "PrimaryColorGrade";
   }
   return "Unknown";
 }

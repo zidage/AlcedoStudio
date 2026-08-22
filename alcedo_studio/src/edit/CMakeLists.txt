@@ -69,7 +69,9 @@ if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
         PRIVATE_DEPS EditInput RawProcessorOp

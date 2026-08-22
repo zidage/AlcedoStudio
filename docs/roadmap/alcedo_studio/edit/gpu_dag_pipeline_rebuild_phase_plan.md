@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G4 complete (CUDA Develop Endpoint, camera scene-linear RGB). G5 not started.
+Status: G5 complete (CUDA Primary Color Grade and Camera-to-AP1 runtime).
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2394,6 +2394,80 @@ MovingAdjustmentChangesExecutionOrderWithoutChangingOtherParameters
 - 新 CUDA 路径不调用旧 operator 的 Apply 或 SetGlobalParams；
 - 尚未移植的后端仍可通过旧代码构建；
 - LLF 不再拥有 GPU 内存池或长期缓存。
+
+##### Phase G5 completion record (2026-08-22)
+
+**Status:** complete — CUDA Primary Color Grade 使用纯 Model/DTO、序列化调整顺序、
+Camera-to-AP1、CAT02、融合 point adjustment 和 workspace 局部色调资源。
+
+**Primary success call chain:**
+
+```text
+PipelineDocument + PreparedRawInput + RenderRequest
+  -> GraphCompiler::Compile
+  -> ExecutionPlan(CameraToAp1, PrimaryColorGrade, serialized adjustment ids)
+  -> CudaRenderDevice::BeginRender
+  -> ExecuteCudaDevelop
+  -> ExecuteCudaPrimaryGrade
+  -> Model DTO / dirty Patch -> CUDA runtime POD -> ParameterArena dirty ranges
+  -> fused PrimaryGradeKernel in Model order
+  -> workspace GraphImageCache grade.primary:image
+  -> CudaRenderDevice::EndRender
+```
+
+**Primary failure call chain:**
+
+```text
+parameter upload failure
+  -> ExecuteCudaPrimaryGrade throws before patch commit
+  -> PendingParameterPatch restores Model dirty bits
+  -> caller receives GPU runtime failure; no legacy Apply or CPU pixel fallback
+
+missing graph adjustment / missing Develop image / CUDA kernel launch failure
+  -> ExecuteCudaPrimaryGrade throws
+  -> caller receives GPU runtime failure; no legacy Apply or CPU pixel fallback
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CudaPrimaryGradeDefaultParametersPreserveDevelopOutput` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaExposurePatchChangesOnlyExposureParameterRange` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaCat02WhiteBalanceZeroOffsetPreservesAp1White` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaCat02WhiteBalanceMaskedSampleMatchesFullAdjustmentAtMaskOne` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaPointAdjustmentsExecuteInSerializedModelOrder` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaLocalToneReferenceReusesAcrossViewportChanges` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaLocalToneUsesWorkspaceInsteadOfPrivateAllocation` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaColorGradeSecondRenderCreatesNoGpuAllocation` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `MovingAdjustmentChangesExecutionOrderWithoutChangingOtherParameters` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| G1–G4 graph, workspace, geometry, input and Develop regression | six existing GPU DAG targets | PASS |
+| CUDA default-grade memory access | `compute-sanitizer --tool memcheck` | PASS, 0 errors |
+| Legacy operator compatibility | `Operators` | BUILD PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target Operators GpuDagCudaPrimaryGradeTest GpuDagRawInputTest GpuDagCudaDevelopTest GpuDagModelGraphTest GpuDagCudaWorkspaceTest GpuDagGeometryTest GpuDagCudaGeometryTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaPrimaryGradeTest|GpuDagRawInputTest|GpuDagCudaDevelopTest|GpuDagModelGraphTest|GpuDagCudaWorkspaceTest|GpuDagGeometryTest|GpuDagCudaGeometryTest"
+compute-sanitizer --tool memcheck --print-limit 5 build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe --gtest_filter=CudaPrimaryGradeFixture.CudaPrimaryGradeDefaultParametersPreserveDevelopOutput
+```
+
+Suite totals: G5 `9/9` PASS; combined G1–G5 `66/66` PASS; memcheck `0` errors.
+
+**Checklist / exit condition:** all G5 checks complete. Slider edits update stable ParameterArena
+ranges without DAG recompilation. Adjustment moves change the compiled command order. The new CUDA
+runtime does not call legacy operator `Apply`, `ApplyGPU`, or `SetGlobalParams`. Local-tone reference
+and execution buffers live in `BasicRenderWorkspace`; the second render creates no CUDA allocation.
+The legacy `Operators` target continues to build for the not-yet-migrated product/OpenCL/Metal path.
+
+**LOC note (grill-code-review):** `cuda_primary_grade_pass.cu` 414 lines;
+`cuda_primary_grade_test.cpp` 206 lines; runtime registry implementation/header 41/42 lines;
+public pass header 32 lines; `graph_compiler.cpp` 126 lines. No changed file exceeds 1000 lines.
+
+**Residual gaps:** Mask texture sampling and per-pixel Normal Mix are G6 scope. DRT and product
+pipeline routing are G7 scope. OpenCL and Metal still use their legacy execution paths until G8/G9.
 
 ## 39. Phase G6 — MaskStore、CUDA Mask 和 Mix
 
