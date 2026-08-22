@@ -50,6 +50,9 @@ class PortId {
     return lhs.value_ == rhs.value_;
   }
   friend auto operator!=(const PortId& lhs, const PortId& rhs) -> bool { return !(lhs == rhs); }
+  friend auto operator<(const PortId& lhs, const PortId& rhs) -> bool {
+    return lhs.value_ < rhs.value_;
+  }
 
  private:
   std::string value_;
@@ -76,6 +79,10 @@ class AdjustmentInstanceId {
       -> bool {
     return !(lhs == rhs);
   }
+  friend auto operator<(const AdjustmentInstanceId& lhs, const AdjustmentInstanceId& rhs)
+      -> bool {
+    return lhs.value_ < rhs.value_;
+  }
 
  private:
   std::string value_;
@@ -84,7 +91,7 @@ class AdjustmentInstanceId {
 /**
  * @brief Identity of a produced graph value: producer node plus output port.
  *
- * Workspace KV cache (later phases) keys results by this id.
+ * Workspace KV cache keys results by this id.
  */
 struct GraphValueId {
   NodeId producer;
@@ -92,6 +99,12 @@ struct GraphValueId {
 
   friend auto operator==(const GraphValueId& lhs, const GraphValueId& rhs) -> bool {
     return lhs.producer == rhs.producer && lhs.output_port == rhs.output_port;
+  }
+  friend auto operator<(const GraphValueId& lhs, const GraphValueId& rhs) -> bool {
+    if (lhs.producer != rhs.producer) {
+      return lhs.producer < rhs.producer;
+    }
+    return lhs.output_port < rhs.output_port;
   }
 };
 

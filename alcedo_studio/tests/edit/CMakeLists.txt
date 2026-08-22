@@ -240,3 +240,20 @@ target_compile_definitions(GpuDagModelGraphTest PRIVATE
 gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
+
+# GPU DAG Phase G2: CUDA workspace, ParameterArena, transient bump, texture lease.
+if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/texture_lease_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/header_hygiene_test.cpp)
+  target_include_directories(GpuDagCudaWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeCuda)
+  target_compile_definitions(GpuDagCudaWorkspaceTest PRIVATE
+    ALCEDO_GPU_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/gpu"
+    ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime")
+  gtest_discover_tests(GpuDagCudaWorkspaceTest TEST_PREFIX "GpuDagCudaWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaWorkspaceTest gpu)
+endif()

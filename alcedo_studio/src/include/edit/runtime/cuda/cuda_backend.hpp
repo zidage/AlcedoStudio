@@ -1,0 +1,176 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <vector>
+
+#include <cuda_runtime.h>
+
+#include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/texture_format.hpp"
+
+namespace alcedo {
+
+/**
+ * @brief CUDA stream plus a recorded completion event for one in-flight submission.
+ *
+ * Owns the stream and event. Not thread-safe.
+ */
+class CudaCommandContext {
+ public:
+  CudaCommandContext();
+  ~CudaCommandContext();
+
+  CudaCommandContext(const CudaCommandContext&)            = delete;
+  auto operator=(const CudaCommandContext&) -> CudaCommandContext& = delete;
+  CudaCommandContext(CudaCommandContext&& other) noexcept;
+  auto operator=(CudaCommandContext&& other) noexcept -> CudaCommandContext&;
+
+  [[nodiscard]] auto Stream() const -> cudaStream_t { return stream_; }
+  [[nodiscard]] auto Event() const -> cudaEvent_t { return event_; }
+  [[nodiscard]] auto SubmissionId() const -> std::uint64_t { return submission_id_; }
+  void               SetSubmissionId(std::uint64_t id) { submission_id_ = id; }
+
+ private:
+  void Destroy() noexcept;
+
+  cudaStream_t  stream_        = nullptr;
+  cudaEvent_t   event_         = nullptr;
+  std::uint64_t submission_id_ = 0;
+};
+
+/**
+ * @brief CUDA resource factory and allocation/H2D counters for the DAG workspace.
+ *
+ * All cudaMalloc / cudaFree for this device go through CreateBuffer / CreateTexture2D
+ * and Buffer/Texture2D destructors. Not thread-safe. One in-flight submission.
+ */
+class CudaBackend {
+ public:
+  class Buffer {
+   public:
+    Buffer() = default;
+    Buffer(CudaBackend* owner, void* ptr, std::size_t bytes, std::uint64_t id);
+    ~Buffer();
+
+    Buffer(const Buffer&)            = delete;
+    auto operator=(const Buffer&) -> Buffer& = delete;
+    Buffer(Buffer&& other) noexcept;
+    auto operator=(Buffer&& other) noexcept -> Buffer&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    [[nodiscard]] auto Empty() const -> bool { return ptr_ == nullptr; }
+
+    void Reset() noexcept;
+
+   private:
+    CudaBackend*  owner_       = nullptr;
+    void*         ptr_         = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint64_t resource_id_ = 0;
+  };
+
+  class Texture2D {
+   public:
+    Texture2D() = default;
+    Texture2D(CudaBackend* owner, void* ptr, std::size_t bytes, std::uint32_t width,
+              std::uint32_t height, TextureFormat format, std::uint64_t id);
+    ~Texture2D();
+
+    Texture2D(const Texture2D&)            = delete;
+    auto operator=(const Texture2D&) -> Texture2D& = delete;
+    Texture2D(Texture2D&& other) noexcept;
+    auto operator=(Texture2D&& other) noexcept -> Texture2D&;
+
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+
+    void Reset() noexcept;
+
+   private:
+    CudaBackend*  owner_       = nullptr;
+    void*         ptr_         = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint32_t width_       = 0;
+    std::uint32_t height_      = 0;
+    TextureFormat format_      = TextureFormat::R8;
+    std::uint64_t resource_id_ = 0;
+  };
+
+  using Slab            = Buffer;
+  using CommandContext  = CudaCommandContext;
+
+  CudaBackend()  = default;
+  ~CudaBackend() = default;
+
+  CudaBackend(const CudaBackend&)            = delete;
+  auto operator=(const CudaBackend&) -> CudaBackend& = delete;
+
+  [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
+  [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
+  [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
+                                     TextureFormat format) -> Texture2D;
+
+  void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
+                         CommandContext& command_context);
+  void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
+                           CommandContext& command_context) const;
+
+  /// G6 will generate mips. G2 keeps the entry and does nothing.
+  void GenerateMaskMipLevels(Texture2D& texture);
+
+  void Submit(CommandContext& command_context);
+  void Wait(CommandContext& command_context);
+
+  [[nodiscard]] auto HasInFlightSubmission() const -> bool {
+    return in_flight_submission_ != 0;
+  }
+  [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
+    return submitted_on != 0 && submitted_on > completed_submission_;
+  }
+  [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
+
+  void NoteFree() noexcept { ++free_count_; }
+
+  void ResetCounters();
+  void FailNextUpload();
+  void NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
+
+  [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
+  [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
+  [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
+  [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
+  [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
+    return last_h2d_ranges_;
+  }
+
+ private:
+  friend class Buffer;
+  friend class Texture2D;
+
+  void NoteMalloc() noexcept { ++malloc_count_; }
+
+  std::uint64_t         malloc_count_          = 0;
+  std::uint64_t         free_count_            = 0;
+  std::uint64_t         h2d_copy_count_        = 0;
+  std::uint64_t         h2d_bytes_             = 0;
+  std::uint64_t         next_resource_id_      = 1;
+  std::uint64_t         next_submission_       = 0;
+  std::uint64_t         in_flight_submission_  = 0;
+  std::uint64_t         completed_submission_  = 0;
+  bool                  fail_next_upload_      = false;
+  std::vector<ByteRange> last_h2d_ranges_;
+};
+
+}  // namespace alcedo

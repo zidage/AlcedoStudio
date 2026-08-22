@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <utility>
 
 #include "edit/graph/graph_ids.hpp"
@@ -23,6 +25,9 @@ class IOperatorParamPayload {
 
   [[nodiscard]] virtual auto Type() const -> OperatorTypeId        = 0;
   [[nodiscard]] virtual auto DataVersion() const -> std::uint32_t = 0;
+
+  /// Immutable byte view of the payload struct. Used by ParameterArena field copies.
+  [[nodiscard]] virtual auto Bytes() const -> std::span<const std::byte> = 0;
 };
 
 /**
@@ -37,6 +42,9 @@ class TypedOperatorParamPayload final : public IOperatorParamPayload {
   [[nodiscard]] auto Type() const -> OperatorTypeId override { return type_; }
   [[nodiscard]] auto DataVersion() const -> std::uint32_t override { return version_; }
   [[nodiscard]] auto Value() const -> const T& { return value_; }
+  [[nodiscard]] auto Bytes() const -> std::span<const std::byte> override {
+    return std::span<const std::byte>(reinterpret_cast<const std::byte*>(&value_), sizeof(T));
+  }
 
  private:
   OperatorTypeId type_;

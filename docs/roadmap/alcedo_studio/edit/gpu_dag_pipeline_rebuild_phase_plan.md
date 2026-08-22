@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1 complete (Model, DTO, PipelineGraph). G2 not started.
+Status: G2 complete (CUDA workspace, ParameterArena, lifted TransientBufferArena). G3 not started.
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2026,6 +2026,85 @@ SecondRenderUsesNoCudaAllocationAfterPeakReserve
 - 未改变参数时不执行参数 H2D copy；
 - 一个字段改变时不上传完整参数区；
 - workspace 生命周期独立于 ExecutionPlan。
+
+##### Phase G2 completion record (2026-08-22)
+
+**Status:** complete — templated CUDA render workspace, grow-only ParameterArena with dirty-range H2D, TransientBufferArena lifted from `cuda::nn::WorkspacePool`, texture LRU with leases, node-result KV cache. No grading kernels. No ExecutionPlan.
+
+**Primary success call chain:**
+
+```text
+CudaRenderDevice::BeginRender
+  -> CudaBackend::Wait (previous submission)
+  -> TransientBufferArena::Reset
+  -> TakePendingParameterPatch
+  -> ParameterArena host-mirror field copy
+  -> MergeAdjacentRanges
+  -> CudaBackend::UploadBufferRange
+  -> PendingParameterPatch::Commit
+  -> EndRender (cudaEventRecord)
+```
+
+**Primary failure call chain:**
+
+```text
+CudaBackend::FailNextUpload / UploadBufferRange throws
+  -> PendingParameterPatch destructor
+  -> RestoreDirty
+  -> no Commit; next TakePending retries the latest payload
+```
+
+**Transient grow failure:**
+
+```text
+Allocate while used_bytes() != 0 and capacity short
+  -> TransientBufferArena throws
+  -> existing slab and live pointers unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ParameterArenaKeepsStableOffsetsAcrossRenders` | `GpuDagCudaWorkspaceTest` | PASS |
+| `ParameterArenaUploadsOnlyDirtyFieldRanges` | `GpuDagCudaWorkspaceTest` | PASS |
+| `AdjacentDirtyParameterRangesMergeBeforeCudaCopy` | `GpuDagCudaWorkspaceTest` | PASS |
+| `RepeatedDirtyWritesUseLatestValue` | `GpuDagCudaWorkspaceTest` | PASS |
+| `CancelledCudaParameterCopyRestoresDirtyFields` | `GpuDagCudaWorkspaceTest` | PASS |
+| `WorkspaceResetRewindsTransientMemoryWithoutFreeingCudaAllocation` | `GpuDagCudaWorkspaceTest` | PASS |
+| `WorkspaceCannotGrowWhileTransientPointersAreLive` | `GpuDagCudaWorkspaceTest` | PASS |
+| `NodeResultCacheReturnsValueByProducerNodeAndPort` | `GpuDagCudaWorkspaceTest` | PASS |
+| `TextureLeasePreventsEvictionUntilCudaSubmissionCompletes` | `GpuDagCudaWorkspaceTest` | PASS |
+| `SecondRenderUsesNoCudaAllocationAfterPeakReserve` | `GpuDagCudaWorkspaceTest` | PASS |
+| `UnchangedParametersIssueNoHostToDeviceCopy` | `GpuDagCudaWorkspaceTest` | PASS |
+| Header hygiene (`include/gpu`, `include/edit/runtime` non-cuda) | `GpuDagCudaWorkspaceTest` | PASS |
+| G1 `GpuDagModelGraphTest` regression | `GpuDagModelGraphTest` | PASS |
+| Lifted `WorkspacePool` (`MlOpsWorkspaceTest`) | `MlOpsTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaWorkspaceTest GpuDagModelGraphTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target MlOpsTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaWorkspaceTest|GpuDagModelGraphTest"
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaWorkspaceTest|MlOpsTest.MlOpsWorkspaceTest"
+```
+
+Suite totals: `12/12` GpuDagCudaWorkspaceTest PASS. `17/17` GpuDagModelGraphTest PASS. `12/12` MlOpsWorkspaceTest PASS.
+
+**Checklist / exit condition:** all G2 exit conditions met. Product `PipelineMgmtService` and old `GPUPipelineWrapper` are unchanged. Workspace is owned by `CudaRenderDevice`, not by a plan.
+
+**LOC note (grill-code-review):** largest new file is `texture_pool.hpp` (291 lines). `cuda_backend.cpp` is 251 lines. No changed file exceeds 1000 LOC.
+
+**Remaining gaps:** GraphCompiler / ExecutionPlan / `IRenderDevice::Execute` (G4+). RenderGeometryResolver (G3). Develop/grade/DRT kernels (G4–G7). MaskStore and feather (G6). OpenCL `WorkspacePool` still a separate copy until G8. DemosaicNet still uses its own `WorkspacePool` instance, not `CudaRenderWorkspace`.
+
+**Files added:** `alcedo_studio/src/include/gpu/transient_buffer_arena.hpp`, `transient_buffer_scope.hpp`, `include/cuda/cuda_check.hpp`, `cuda_slab_backend.hpp`, `include/edit/runtime/*`, `src/edit/runtime/*`, `tests/edit/runtime/*`. CMake `EditRuntime` + `EditRuntimeCuda` + `GpuDagCudaWorkspaceTest`.
+
+**Files removed:** none. `cuda/nn/workspace.hpp` is now a facade over `TransientBufferArena<CudaSlabBackend>`.
+
+**Performance and allocation evidence:** `SecondRenderUsesNoCudaAllocationAfterPeakReserve` asserts malloc/free counts stay 0 after peak reserve. `UnchangedParametersIssueNoHostToDeviceCopy` asserts H2D bytes 0. `ParameterArenaUploadsOnlyDirtyFieldRanges` asserts a 4-byte copy. `AdjacentDirtyParameterRangesMergeBeforeCudaCopy` asserts one 8-byte copy.
+
+**Open work:** G3 RenderGeometryResolver.
 
 ## 36. Phase G3 — RenderGeometryResolver
 

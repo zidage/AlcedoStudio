@@ -43,3 +43,17 @@ def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
     PUBLIC_DEPS JSON
 )
+
+# GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
+def_library(EditRuntime
+    SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
+    PUBLIC_DEPS EditGraph
+)
+
+if(ALCEDO_CUDA_ENABLED)
+    def_cuda_library(EditRuntimeCuda
+        SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+        PUBLIC_DEPS EditRuntime CUDA::cudart
+    )
+    target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
+endif()
