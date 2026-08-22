@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G7 complete (CUDA ACES 2.0/OpenDRT DRT and Windows/CUDA product DAG routing).
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R（CUDA 默认管线行为、颜色与性能恢复）为必做阶段并阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -87,21 +87,23 @@ UI scope:
 | GPU 内存 | `BasicRenderWorkspace<Backend>` 统一管理 |
 | 后端复用 | C++ 模板和 Backend Traits |
 | GPU 运行入口 | 最外层使用类型隐藏；模板内部使用静态类型 |
-| GPU 缓存 | workspace 内的通用 KV cache 和 texture LRU |
+| GPU 缓存 | workspace 内的内容感知结果缓存和 texture LRU；分配复用不等于结果命中 |
 | 持久蒙版 | app 之下的 MaskStore 模块 |
 | 主存蒙版缓存 | MaskStore 可以按字节预算保存 R8 副本 |
 | GPU 蒙版缓存 | workspace 按 GPU 字节预算管理 |
 | Rasterized Mask | R8 UNORM；任意一条边不大于 4096 |
 | Feather | GPU exact signed Euclidean distance field；持久数据仍为 R8 |
 | RAW 输入 | LibRaw open、unpack、active area 和降采样在管线外 |
-| Develop 输出 | scene-linear ACES AP1 |
+| Develop 逻辑输出 | `develop.image`，scene-linear ACES AP1；CameraColorPass 完成后才可写入 |
+| Develop 内部缓存 | `develop.sensor_linear` 保存传感器开发结果；不是用户可见端口 |
+| Geometry 后缓存 | `geometry.scene_source` 保存重采样后的 camera scene-linear RGB；不是用户可见节点 |
 | 中间调色 | scene-linear ACES AP1 |
 | 局部色温 | 基于 CAT02，以 AP1 白点为参考 |
 | DRT | ACES 2.0 或 OpenDRT |
 | Geometry | 管线文档的全局 ImageGeometryModel，不是第四个用户节点 |
 | ROI | RenderGeometryResolver 统一计算 |
 | 动态分辨率 | RenderRequest 输入；不保存进持久参数 |
-| 图像重采样 | GraphCompiler 插入一个内部 GeometryResamplePass |
+| 图像重采样 | GraphCompiler 在传感器开发缓存和 CameraColorPass 之间插入一个内部 GeometryResamplePass |
 | 后端顺序 | CUDA，然后 OpenCL，然后 Metal |
 | 稳定运行 | 每帧不得创建和销毁 GPU 缓冲区或纹理 |
 
@@ -411,6 +413,43 @@ Develop 不执行：
 - LibRaw open；
 - LibRaw unpack；
 - RAW DecodeRes 降采样。
+
+Develop 是用户可见的逻辑端点，但编译后必须保留以下内部值边界：
+
+```text
+PreparedRawInput
+  -> SensorDevelopPass
+  -> develop.sensor_linear       # camera scene-linear；可跨 CCT、调色和 DRT 编辑复用
+  -> GeometryResamplePass
+  -> geometry.scene_source       # geometry 后 camera scene-linear；可跨 CCT、调色和 DRT 编辑复用
+  -> CameraColorPass
+       - 解析 as-shot 或 custom CCT/tint
+       - 按标定光源在 CameraMatrices 的双光源矩阵间插值
+       - camera RGB -> XYZ D50 -> XYZ D60 -> ACES AP1
+  -> develop.image               # Develop 的唯一用户可见输出
+```
+
+G4 只生成 camera scene-linear，G5 再执行 CameraColorPass 的拆分是正确的缓存边界，
+不得把两者重新合并。`develop.sensor_linear`、`geometry.scene_source` 和 `develop.image`
+必须使用不同 `GraphValueId` 和不同内容 key。CCT 或 tint 改变时只让 CameraColorPass 及其
+下游失效，不得重新 open/unpack RAW，不得重新上传 CFA，不得重新执行线性化、解拜尔、
+高光恢复、镜头校正或 GeometryResamplePass。
+
+CameraColorPass 的矩阵来源必须与旧管线 `ColorTempOp::ResolveRuntime` 一致：
+
+- 优先使用 RAW/DNG metadata 或项目 CameraMatrices 数据库中的 `ColorMatrix1/2`；
+- 使用 `CalibrationIlluminant1/2` 对应的 CCT，在 mired 空间对双光源矩阵插值；
+- 有 `ForwardMatrix1/2` 时，同样插值 forward matrix，并按 DNG reference neutral 构造
+  camera RGB 到 XYZ D50；
+- 没有 forward matrix 时，反转插值后的 XYZ 到 camera matrix，再从所选白点 Bradford
+  适配到 D50；
+- 最后执行 D50 到 D60 的 Bradford 适配和 XYZ D60 到 AP1；
+- `cam_mul`、`pre_mul` 只用于传感器白平衡、as-shot neutral 推导和 RAW 归一化，不能用作
+  CameraColorPass 的对角 Camera→AP1 矩阵；
+- LibRaw `rgb_cam`/`cam_xyz` 可以保留在 metadata snapshot 中用于诊断，但 G7R 的
+  CameraColorPass 不使用它们替代 CameraMatrices/DNG profile；
+- 需要 CameraColorPass 但找不到可用矩阵时返回明确错误，禁止静默使用 identity；直接 RGB
+  输入只有在输入描述明确声明其源色域时，才允许通过已知色域矩阵进入 AP1。
 
 Develop 输出固定为：
 
@@ -1536,32 +1575,62 @@ LLF reference cache 不包含当前 viewport ROI。用户平移或缩放视图�
 
 ## 27. Cache 和 dirty 传播
 
-参数 dirty 后，GraphDirtyTracker 标记当前节点和所有下游节点：
+GraphDirtyTracker 需要同时追踪用户节点和 Develop 内部 pass 值。`ResourceId` 相同只说明
+GPU 分配被复用，不能说明图像结果仍有效。结果缓存项至少包含：
 
-```text
-Develop dirty:
-  Develop dirty
-  all ColorGrade nodes dirty
-  DRT dirty
-
-Grade B dirty:
-  upstream nodes stay valid
-  Grade B dirty
-  downstream nodes dirty
-
-DRT dirty:
-  upstream nodes stay valid
-  DRT dirty
+```cpp
+struct CachedImageResult {
+  GraphValueId value_id;
+  ContentKey content_key;
+  ImageExtent extent;
+  TextureFormat format;
+  ResourceLease texture;
+  SubmissionId last_writer;
+};
 ```
 
-MaskNode dirty 时，只标记读取该 mask 的 ColorGradeNode 及其下游。
+只有 `value_id`、`content_key`、尺寸、格式都匹配，并且 `last_writer` 已完成时才是结果命中。
+仅在相同 `GraphValueId` 下找到同尺寸纹理属于 allocation reuse，仍必须执行 pass，不能记为
+cache hit。
+
+默认 CUDA 图的内部 dirty 传播必须是：
+
+```text
+RAW 文件或输入准备参数改变:
+  PreparedRawInput -> SensorDevelop -> Geometry -> CameraColor -> Grade -> DRT
+
+线性化、解拜尔、高光恢复、AI 降噪或镜头参数改变:
+  SensorDevelop -> Geometry -> CameraColor -> Grade -> DRT
+
+crop、rotation、viewport ROI、输出尺寸或 DecodeRes 几何映射改变:
+  Geometry -> CameraColor -> Grade -> DRT
+
+RAW as-shot/custom CCT、tint 或 CameraMatrices 内容改变:
+  CameraColor -> Grade -> DRT
+
+Primary Grade 参数或其 mask 改变:
+  affected Grade -> downstream Grade -> DRT
+
+DRT 参数改变:
+  DRT only
+```
+
+MaskNode dirty 时，只标记读取该 mask 的 ColorGradeNode 及其下游。取消或失败的 submission
+不能发布任何新 cache key；它在开始前已经命中的上游结果仍保持可用。
 
 ### 27.1 缓存身份
 
-缓存使用实际输入值或内容 hash，不使用递增数字。
+缓存使用实际输入值或内容 hash，不使用递增数字，也不使用纹理地址或 `ResourceId` 代替内容
+身份。
 
 | 资源 | 是否包含 viewport ROI | key 来源 |
 | --- | ---: | --- |
+| PreparedRawInput | 否 | 原始字节内容、输入种类、DecodeRes、LibRaw 输入准备版本 |
+| `develop.sensor_linear` | 否 | PreparedRawInput key、线性化、解拜尔、高光恢复、AI 降噪、镜头参数和实现版本 |
+| `geometry.scene_source` | 是 | sensor-linear key 和完整 ResolvedRenderGeometry |
+| `develop.image` | 间接包含 | geometry key、WB mode、resolved CCT/tint、CameraMatrices 内容和颜色算法版本 |
+| Primary Grade 输出 | 间接包含 | develop AP1 key、调整顺序、每个调整参数、mask sampling key 和 mix |
+| DRT 输出 | 间接包含 | grade key、DRT method、显示色域、EOTF 和 DRT 参数 |
 | 磁盘 R8 数据 | 否 | R8 descriptor 和 pixels |
 | 主存 R8 数据 | 否 | MaskAssetKey |
 | GPU base R8 texture | 否 | MaskAssetKey |
@@ -1570,9 +1639,28 @@ MaskNode dirty 时，只标记读取该 mask 的 ColorGradeNode 及其下游。
 | mask sampling plan | 是 | descriptor 和 ResolvedRenderGeometry |
 | LLF reference | 否 | input content 和 LLF 参数 |
 | LLF 当前输出 | 是 | reference resource 和当前 geometry |
-| 普通节点输出 | 视行为而定 | input content、params 和 geometry |
+
+`develop.image` 的 CameraMatrices 内容必须包含最终选中的 `ColorMatrix1/2`、
+`ForwardMatrix1/2`、标定光源 CCT、as-shot neutral、矩阵来源和版本。`cam_mul` 与 `pre_mul`
+可以进入 sensor-linear/as-shot neutral 的 key，但不能作为 Camera→AP1 的矩阵身份。
 
 同一组实际输入产生相同 key。视图回到原位置时可以再次使用相同数据。
+
+### 27.2 必须存在的缓存层级
+
+每个打开的图像/版本至少持有以下可淘汰结果：
+
+```text
+PreparedSourceCache[source_key]
+SensorDevelopCache[sensor_develop_key]        -> develop.sensor_linear
+GeometryResultCache[geometry_key]             -> geometry.scene_source
+DevelopAp1Cache[develop_ap1_key]              -> develop.image
+NodeResultCache[grade_or_drt_key]              -> node output
+```
+
+这些缓存共享 workspace 的 GPU 字节预算和 submission 安全淘汰规则。PreparedSourceCache 使用
+主存字节预算。切换到另一张图再切回时，只要条目未被淘汰且内容 key 匹配，就可以复用已准备
+RAW 和相应 GPU 结果。任何缓存都不得依赖“这次仍使用同一纹理对象”来判定有效性。
 
 ## 28. 序列化
 
@@ -1660,26 +1748,22 @@ PipelineDocument 不保存：
 }
 ```
 
-### 28.1 旧数据读取
+### 28.1 旧数据处理
 
-迁移只提供一个方向：
+新产品路径完全废弃 legacy 参数和旧 stage JSON：
 
 ```text
-旧 stage JSON
-  -> LegacyPipelineImporter
-  -> 新 PipelineDocument
+format version 2 PipelineDocument -> load
+旧 stage JSON                     -> explicit unsupported-format error
 ```
 
-新 PipelineDocument 不再写回旧 stage JSON。
-
-导入规则：
-
-- RAW 和镜头参数进入 DevelopModel；
-- crop 和 rotation 进入 ImageGeometryModel；
-- scene-referred 调整进入 Primary Color Grade；
-- ODT 或 OpenDRT 参数进入 DrtModel；
-- 缺失字段使用新默认值；
-- 未知旧 operator 记录错误并停止导入，不静默丢弃用户参数。
+- 不在加载、编辑或每帧渲染时调用 `LegacyPipelineImporter`；
+- 不把 legacy operator 参数镜像到新 Model；
+- 不在新 JSON 中保存 nested legacy adapter；
+- 不用新默认值静默替换旧参数；旧格式必须返回清楚的版本错误；
+- `LegacyPipelineImporter`、legacy snapshot 和 CUDA 产品 legacy stage adapter 在 G7R 删除，
+  不延后到 OpenCL/Metal 移植；
+- UI 和 app service 直接读取、修改 `PipelineDocument` 中的 Model。
 
 ## 29. CPU 路径删除
 
@@ -1781,13 +1865,14 @@ OpenCL、Metal 和旧代码删除都保持可读。
 ```text
 Stack:
 [x] GPU DAG design
-[ ] Model and graph foundation        <- current
-[ ] CUDA workspace
-[ ] Render geometry
-[ ] CUDA Develop
-[ ] CUDA Color Grade
-[ ] CUDA Mask and Mix
-[ ] CUDA DRT and product path
+[x] Model and graph foundation
+[x] CUDA workspace
+[x] Render geometry
+[x] CUDA Develop
+[x] CUDA Color Grade
+[x] CUDA Mask and Mix
+[x] CUDA DRT and product path
+[ ] CUDA default pipeline recovery    <- current
 [ ] OpenCL
 [ ] Metal
 [ ] Final removal and qualification
@@ -1805,7 +1890,8 @@ Stack:
 | G5 | `feature/gpu-dag-cuda-grade` | G4 | CUDA 调色、CAT02、LLF workspace 化 |
 | G6 | `feature/gpu-dag-cuda-mask-mix` | G5 | MaskStore、R8 mask、feather、Mix |
 | G7 | `feature/gpu-dag-cuda-drt-product` | G6 | CUDA DRT 和 app 管线路径切换 |
-| G8 | `feature/gpu-dag-opencl` | G7 | OpenCL 完整移植 |
+| G7R | `feature/gpu-dag-cuda-default-recovery` | G7 | scheduler、CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
+| G8 | `feature/gpu-dag-opencl` | G7R | OpenCL 完整移植 |
 | G9 | `feature/gpu-dag-metal` | G8 | Metal 完整移植 |
 | G10 | `feature/gpu-dag-final-removal` | G9 | 删除旧 stage、CPU 图像路径和过渡代码；全平台验证 |
 
@@ -2237,8 +2323,9 @@ Base: `feature/gpu-dag-render-geometry`
 目标：
 
 - 把 LibRaw unpack 和 RAW 降采样移到管线输入之前；
-- 实现 CUDA Develop Endpoint；
-- 输出 AP1 scene-linear GPU 图像。
+- 实现 CUDA Develop Endpoint 的传感器开发子阶段；
+- 输出可缓存的 camera scene-linear GPU 图像；G5 的 CameraColorPass 再完成 Develop 的
+  AP1 scene-linear 逻辑输出。
 
 工作：
 
@@ -2248,11 +2335,11 @@ Base: `feature/gpu-dag-render-geometry`
 - 保留 CPU LibRaw unpack；
 - 保留 CPU RAW 降采样；
 - 从旧 RawDecodeOp 移出 GPU Develop 行为；
-- 把高光恢复、解拜尔、AI 降噪、RAW white balance、镜头校正和 camera-to-AP1
-  编译为 Develop Pass；
+- 把高光恢复、解拜尔、AI 降噪、RAW white balance 和镜头校正编译为 SensorDevelop Pass；
+- camera-to-AP1 延后到 G5，使 CCT/tint 修改复用本阶段输出；
 - 使用 workspace 管理所有 Develop 临时内存；
 - 建立直接 RGB 输入；
-- 建立 Develop output GraphValue。
+- 建立内部 `develop.sensor_linear` GraphValue。
 
 测试：
 
@@ -2260,8 +2347,8 @@ Base: `feature/gpu-dag-render-geometry`
 RawInputLoaderUnpacksBeforePipelineBuild
 RawInputLoaderDownsampleUpdatesCfaPatternAndPhase
 PreparedRawInputKeepsFullReferenceExtentAcrossDecodeRes
-CudaDevelopProducesFiniteAp1SceneLinearRgbFromBayerInput
-CudaDevelopProducesFiniteAp1SceneLinearRgbFromXTransInput
+CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput
+CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTransInput
 CudaDevelopUsesWorkspaceForAllTemporaryBuffers
 CudaDevelopSecondRenderCreatesNoGpuAllocation
 DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint
@@ -2272,11 +2359,15 @@ DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint
 - ExecutionPlan 中没有 LibRaw Pass；
 - GPU 不执行 RAW DecodeRes 降采样；
 - Develop 不调用 CPU 图像算子；
-- Develop 输出格式和色彩空间明确。
+- `develop.sensor_linear` 的格式和 camera scene-linear 色彩空间明确。
 
 ##### Phase G4 completion record (2026-08-22)
 
-**Status:** complete — CUDA Develop Endpoint on `feature/gpu-dag-cuda-develop`. Output is **camera scene-linear RGBA32F**, not AP1. Camera-to-AP1 is deferred to G5 as a dedicated unmaskable CameraColor node so CCT changes do not dirty Develop / re-run demosaic.
+**Status:** complete — CUDA Develop 的传感器开发部分位于
+`feature/gpu-dag-cuda-develop`。输出是 **camera scene-linear RGBA32F**，Camera-to-AP1
+延后到 G5 的独立、不可挂 mask 的内部 CameraColorPass，使 CCT 变化不让传感器开发结果失效，
+也不重新执行解拜尔。这一拆分是保留项；完整 Develop 逻辑端点仍必须在 CameraColorPass 后输出
+AP1。
 
 **Highlight recovery order:** CUDA full-frame (`ProcessCudaFullFrame`) is Linearize → (optional CFA Clamp01 when HLR is off) → Demosaic → HighlightRecover on RGB. The CPU path (`ApplyLinearization` → `ApplyHighlightReconstruct` → `ApplyDebayer`) is not the G4 reference. `GraphCompiler` emits `Demosaic` before `HighlightRecover`. Encoder matches CUDA: Bayer + HLR uses planar RCD then `ApplyHighlightCorrectionAndPackRGBAOriented`; Bayer without HLR clamps CFA then packs with inverse cam_mul; non-neural X-Trans always clamps CFA then `XTransToRGB_Ref`.
 
@@ -2289,7 +2380,8 @@ RawInputLoader::FromUnpackedCfa | LoadEncoded | FromDirectRgb
   -> CudaRenderDevice.BeginRender
   -> ExecuteCudaDevelop (workspace transients + Images() RGBA32F)
   -> Linearize -> Demosaic -> HighlightRecover (RGB) | InverseCamMulPack
-  -> GraphImageCache[develop/image] camera scene-linear RGBA32F
+  -> current GraphImageCache[develop/image] camera scene-linear RGBA32F
+     G7R migration: GraphImageCache[develop/sensor_linear]
   -> EndRender / WaitIdle
 ```
 
@@ -2312,8 +2404,8 @@ CudaBackend::FailNextUpload
 | `DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint` | `GpuDagRawInputTest` + `GpuDagCudaDevelopTest` | PASS |
 | `GraphCompilerEmitsNoLibRawOrDecodeResPass` (also no CameraToAp1) | `GpuDagRawInputTest` | PASS |
 | `GraphCompilerPlacesHighlightRecoverAfterDemosaic` | `GpuDagRawInputTest` | PASS |
-| `CudaDevelopProducesFiniteAp1SceneLinearRgbFromBayerInput` mapped to `CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput` | `GpuDagCudaDevelopTest` | PASS |
-| `CudaDevelopProducesFiniteAp1SceneLinearRgbFromXTransInput` mapped to `CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTransInput` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTransInput` | `GpuDagCudaDevelopTest` | PASS |
 | `CudaDevelopUsesWorkspaceForAllTemporaryBuffers` | `GpuDagCudaDevelopTest` | PASS |
 | `CudaDevelopSecondRenderCreatesNoGpuAllocation` | `GpuDagCudaDevelopTest` | PASS |
 | Upload failure restores dirty; no CPU Apply | `GpuDagCudaDevelopTest` | PASS |
@@ -2335,7 +2427,11 @@ Suite totals: `9/9` GpuDagRawInputTest PASS. `6/6` GpuDagCudaDevelopTest PASS. `
 
 **LOC note (grill-code-review):** `raw_input_loader.cpp` 396 lines. `cuda_develop_pass.cpp` 197 lines. `graph_compiler.cpp` 102 lines. No changed file exceeds 1000 LOC.
 
-**Remaining gaps:** Camera-to-AP1 and CAT02 stay in G5 (four-node graph: Develop → CameraColor → ColorGrade → DRT). NeuralEngine demosaic is not executed in G4 (Legacy RCD / `XTransToRGB_Ref` only). Lensfun is a no-op unless DNG warp is present; G4 tests do not cover DNG warp. Full-frame only (no 9000px tiled path). DemosaicNet arena is not unified with workspace.
+**Remaining gaps:** Camera-to-AP1 and CAT02 stay in G5。CameraColor 是 Develop 内部 pass，
+不是第四个用户节点；用户图仍为 Develop → ColorGrade → DRT。NeuralEngine demosaic is not
+executed in G4 (Legacy RCD / `XTransToRGB_Ref` only). Lensfun is a no-op unless DNG warp is
+present; G4 tests do not cover DNG warp. Full-frame only (no 9000px tiled path). DemosaicNet
+arena is not unified with workspace.
 
 **Files added:** `include/edit/input/*`, `edit/input/raw_input_loader.cpp`, `include/edit/runtime/{pass_kind,execution_plan,graph_compiler,render_context,develop_compile_source,graph_image_cache}.hpp`, `edit/runtime/graph_compiler.cpp`, `include/edit/runtime/cuda/cuda_develop_pass.hpp`, `edit/runtime/cuda/cuda_develop_pass.cpp`, `include/decoders/processor/raw_linearization_params.hpp`, G4 tests under `tests/edit/input` and `tests/edit/runtime`.
 
@@ -2350,12 +2446,17 @@ Base: `feature/gpu-dag-cuda-develop`
 目标：
 
 - 实现默认 ColorGradeNode 的 CUDA 执行；
+- 从可缓存的 G4 camera scene-linear 结果出发，在 Grade 前执行独立 CameraColorPass，并让
+  `develop.image` 成为 AP1 scene-linear；
 - 增加纯 Model，并让新 CUDA 路径只使用这些 Model；
 - 旧 operator 类只供尚未移植的 OpenCL 和 Metal 路径临时使用；
 - 把 LLF 内存和缓存迁入 workspace。
 
 工作：
 
+- 缓存 `develop.sensor_linear` 和 `geometry.scene_source`，CCT/tint 改变时只重跑
+  CameraColorPass 及其下游；
+- 按 CameraMatrices/DNG 双光源矩阵插值解析 Camera→AP1；
 - 实现 CUDA adjustment runtime registry；
 - 实现 pointwise fusion；
 - 实现 CAT02 scene white balance；
@@ -2468,6 +2569,11 @@ public pass header 32 lines; `graph_compiler.cpp` 126 lines. No changed file exc
 
 **Residual gaps:** Mask texture sampling and per-pixel Normal Mix are G6 scope. DRT and product
 pipeline routing are G7 scope. OpenCL and Metal still use their legacy execution paths until G8/G9.
+
+**G7R audit note:** G5 的缓存边界要求正确，但当前实现没有完成该要求：Camera→AP1 被融合进
+`PrimaryGradeKernel`，读取的是不完整 `RawRuntimeColorContext`，且 `develop.image` 仍指向
+camera RGB。现有 CAT02 测试使用 direct RGB identity 路径，只证明零 offset/mix 行为，未证明
+CameraMatrices 双光源插值或实际 CAT02。第 41 节负责按原意修复，不回退 G4/G5 的拆分。
 
 ## 39. Phase G6 — MaskStore、CUDA Mask 和 Mix
 
@@ -2827,14 +2933,432 @@ CUDA frees. The DRT output texture and resolved method resources remain owned by
 `pipeline_service.cpp` and `pipeline_cpu.cpp` received localized routing/persistence changes; no
 new file exceeds 500 lines.
 
-**Residual gaps:** OpenCL and Metal still execute through their existing stage adapters and consume
-the nested compatibility data; their full DAG runtime migrations remain G8 and G9 scope.
+**Residual gaps:** G7R 审计确认当前 CUDA 产品路径仍缺少完整 scheduler 意图传递、
+PreparedRawInput/ExecutionPlan/节点结果的内容感知缓存、geometry 后缓存，以及正确的
+CameraMatrices 双光源 Camera→AP1。G7 的资源 ID 与零 allocation 证据不能证明结果 cache hit
+或没有重复计算。G7 接入的 legacy 参数镜像、importer 和 nested adapter 也不是目标架构，
+G7R 必须从 CUDA 产品路径删除。OpenCL 和 Metal 仍通过旧 stage adapter 执行；它们的完整
+DAG runtime 移植必须在 G7R 达标后进入 G8/G9。
 
-## 41. Phase G8 — OpenCL 移植
+## 41. Phase G7R — CUDA 默认管线行为、颜色与性能恢复
+
+Branch: `feature/gpu-dag-cuda-default-recovery`
+
+Base: `feature/gpu-dag-cuda-drt-product`
+
+Status: required；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
+
+Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
+任务中已经明确的 Develop endpoint、GPU workspace KV cache、动态分辨率和 scheduler 集成
+要求，不重新定义产品范围。
+
+目标：
+
+- 保留 G4/G5 把传感器开发与 CameraColorPass 分开的正确设计，使 Develop 的昂贵结果可缓存；
+- 让 scheduler 独占交互帧、质量帧、细节补帧、取消、过期帧抑制、busy 和 frame sink；
+- 让 Preview 与 Export 使用完全独立的 PipelineSession/workspace，不保留状态恢复路径；
+- 从 CUDA 产品路径删除 legacy 参数、importer、snapshot 和 stage adapter；
+- 使用 CameraMatrices/DNG 双光源矩阵插值恢复正确的 RAW CCT/tint 和 Camera→AP1；
+- 增加 geometry 后 camera scene-linear 结果缓存，并让所有结果缓存使用内容 key；
+- 消除无变化渲染中的 LibRaw open/unpack、源图上传、GraphCompiler 编译和 GPU pass 重算；
+- 用同机 A/B 数据证明默认 CUDA 管线达到重构前基线，不以“没有新 GPU 分配”代替性能证据。
+
+### 41.1 审计结论与现有证据
+
+本节区分用户观察到的运行时失败、已执行测试、结构检查和覆盖缺口。代码检查可以证明调用
+发生或测试没有断言某项行为，但不能代替像素正确性测试。
+
+| 优先级 | 证据类别 | 问题 | 当前证据 | 必须恢复的行为 |
+| --- | --- | --- | --- | --- |
+| P0 | Observed failure | 真实 RAW 输出明显偏绿，色温行为不正确 | 编辑器实际使用反馈；当前本地真实 RAW E2E 被环境开关跳过，尚无自动化像素复现 | 真实 RAW 在 as-shot 与 custom CCT 下匹配旧管线参考，不出现通道异常 |
+| P0 | Structural evidence | `RawInputLoader::FillColorContext` 只写 `cam_mul`、`pre_mul`、make/model，未写 CameraMatrices、forward matrices、标定光源和 as-shot neutral | `raw_input_loader.cpp` 与 `metadata_extractor.cpp::PopulateMetadataRuntimeContext` 对比 | 输入准备使用完整、共享的 RAW 色彩 metadata 解析结果 |
+| P0 | Structural evidence | 当前 `MakeCameraToAp1` 计算 `sRGB_to_AP1 * rgb_cam`；`rgb_cam` 全零时静默返回 identity | `cuda_primary_grade_pass.cu` | CameraColorPass 使用旧管线双光源矩阵插值；缺失矩阵不能静默 identity |
+| P0 | Structural evidence | Develop 的 WB mode、as-shot/custom CCT 和 tint 已进入 Model/JSON，但 CUDA pass 未消费；Develop 只读取高光恢复开关 | `cuda_develop_pass.cpp` 与 Develop DTO/Model 对比 | CCT/tint 进入独立 CameraColorPass 内容 key 并真实改变像素 |
+| P0 | Structural evidence | `develop.image` 在当前执行路径中实际保存 geometry 后 camera RGB，而 GraphCompiler 把该端口声明为 AP1 | Develop pass、ExecutionPlan 与 Primary Grade 输入对比 | `develop.image` 只能保存 CameraColorPass 后 AP1；内部缓存使用不同值 ID |
+| P0 | Structural evidence | `CudaProductRenderer::Render` 每次都 `LoadEncoded` 和 `Compile`，executor 每次无条件运行 Develop、Grade、DRT | `cuda_product_renderer.cu`、`cuda_plan_executor.cpp` | 无变化帧不重复输入准备、编译和 GPU 节点执行 |
+| P0 | Structural evidence | `GraphImageCache`/`NodeResultCache` 只按 `GraphValueId` 保存资源，没有内容 key 和有效性；当前所谓 cache valid 只比较纹理 `ResourceId` | cache headers 与 G7 测试断言 | 分配复用与结果命中成为两个独立概念，缓存命中由内容 key 证明 |
+| P0 | Structural evidence | 当前没有 geometry 后结果缓存，CCT、Grade 或 DRT 编辑无法明确复用重采样结果 | Develop pass 与 workspace image map | `geometry.scene_source` 是内容感知的一级结果缓存 |
+| P0 | Structural evidence | scheduler 在 `Apply` 前后判断 stale，但 CUDA renderer 在 `Apply` 内部直接写 frame sink；渲染后的 stale 判断可能晚于旧帧呈现 | `pipeline_scheduler.cpp`、`pipeline_cpu.cpp`、`cuda_product_renderer.cu` | scheduler 独占 present 权限；DAG 返回未呈现结果，不接收完整 scheduler 状态机 |
+| P1 | Structural evidence | 当前 creative white balance 只做每通道指数缩放，不是计划要求的 AP1/CAT02 色适配 | CUDA adjustment runtime | 局部色温使用实际 CAT02；不与 RAW CameraColorPass 混用 |
+| P1 | Coverage gap | `ChangingDrtPeakLuminanceKeepsDevelopAndGradeCacheValid` 只比较资源 ID；第二帧测试只检查 malloc/free | `cuda_drt_product_test.cpp` | 测试断言 LibRaw、H2D、compile、每类 pass execute/skip 和内容 key |
+| P1 | Coverage gap | Primary Grade 色彩测试使用 direct RGB，并明确让 camera conversion 保持 identity | `cuda_primary_grade_test.cpp` | 加入真实 RAW、CameraMatrices、双光源插值和 AP1 reference 测试 |
+
+审计时执行的集中测试：
+
+```text
+ctest --test-dir build/debug --output-on-failure \
+  -R "GpuDagRawInputTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaDrtProductTest|EditorRealRawGpuE2eTest.CudaSustainedImageSwitches"
+```
+
+结果为 `26/26` PASS，耗时 `5.53 s`。该结果只证明现有窄测试仍通过，不否定上表问题。
+直接执行真实 RAW 编辑器用例时结果是 `0` PASS、`1` SKIPPED；它受
+`ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E` 控制。因此目前没有一个默认执行的测试同时覆盖真实
+RAW、CameraMatrices 色彩、scheduler 状态和重复渲染性能。
+
+### 41.2 恢复后的产品调用链
+
+默认三节点图不增加用户节点。产品执行链固定为：
+
+```text
+PipelineScheduler
+  -> ScheduledTask
+       request id / frame role / stale state / busy state / display sink
+       这些字段只由 scheduler 持有
+  -> resolve immutable RenderRequest
+       source content key / document snapshot
+       viewport / target extent / max edge / DecodeRes / quality
+  -> CudaProductPipelineSession::Render(RenderRequest, optional cancel query)
+  -> PreparedSourceCache lookup
+       miss -> RawInputLoader open + unpack + downsample + complete color metadata
+  -> Static ExecutionPlan lookup
+       miss -> GraphCompiler::Compile
+  -> ResolvedRenderGeometry
+  -> ResultCache lookup and minimal pass schedule
+       SensorDevelopPass -> develop.sensor_linear
+       GeometryResamplePass -> geometry.scene_source
+       CameraColorPass -> develop.image
+       optional MaskPass
+       PrimaryGradePass
+       DrtPass
+  -> completion fence
+  -> publish successful cache entries
+  -> return RenderedFrame(texture/value id/fence or host image)
+  -> PipelineScheduler checks cancel/stale/revision
+  -> latest eligible preview frame only -> IFrameSink
+  -> scheduler records completion exactly once
+
+ExportService
+  -> independent ExportPipelineSession + ExportRenderWorkspace
+  -> host/file output
+  -> never reads, changes, restores, or presents through the editor preview session
+```
+
+`CudaProductPipelineSession` 表示一个打开图像和 PipelineDocument 的可复用运行实例。它拥有
+PreparedSourceCache、静态 ExecutionPlan、CudaRenderDevice/workspace 和结果 cache metadata。
+它不能在每个 `Apply` 调用中临时创建，也不能借助旧 merged stage 保存结果。它不拥有
+`IFrameSink`，也不判断 InteractivePrimary、QualityBase 或 DetailPatch 的呈现顺序。
+
+### 41.3 G7R.1 — 收回 present 权限并精简 DAG request
+
+工作：
+
+- `RenderRequest` 只携带会改变像素、输出尺寸或 cache key 的不可变输入；不得复制 scheduler
+  状态机；
+- `InteractivePrimary`、`QualityBase` 和 `DetailPatch` 只由 scheduler 解释，并在调用 DAG 前解析
+  为具体 viewport、ROI、输出尺寸、采样策略和质量参数；DAG 不读取这些 frame-role 标签；
+- source content key 和不可变 document snapshot/revision 可以进入 `RenderRequest`，因为它们参与
+  cache 身份；UI busy、stale、最新 request id 和合成顺序不能进入 GraphCompiler 或 pass 参数；
+- 允许传入一个简单的 `cancel_requested()` 查询，使 renderer 可以少做已经没人需要的工作；
+  取消查询是性能优化，不能决定哪个结果最终呈现；
+- `CudaProductPipelineSession::Render` 返回 `RenderedFrame` 或等价结果，其中包含 GPU value/
+  texture、完成 fence、extent/format 和可选 host image；renderer 不调用 `IFrameSink`；
+- scheduler 在收到 `RenderedFrame` 后、调用 frame sink 前执行最终 cancel/stale/revision 检查；
+- 一个 scheduler task 只能完成一次：成功、取消或失败三者互斥；busy、quality 和 detail 状态只在
+  scheduler 中清理；
+- QualityBase 和 DetailPatch 的 revision 匹配、合成和呈现顺序只由 scheduler 处理；编辑变化后
+  旧 detail patch 不得合成到新 primary；
+- 保留现有 single in-flight preview 限制；已经提交的旧 GPU 工作可以安全完成和回收，但返回
+  scheduler 后可以被丢弃；
+- Preview 和 full-resolution Export 使用不同 PipelineSession、RenderDevice、workspace、cache
+  和输出目标。Export 不连接 editor frame sink，不保存或恢复 preview 参数；
+- scheduler 的旧 scratch/reset 动作在 DAG 路径只 rewind 每帧 transient，不能清空已发布的
+  Prepared RAW、sensor develop、geometry、AP1、Grade 或 DRT 结果缓存；
+- DAG 路径不再依赖旧 executor 的全局 cancel 标记、merged-stage reset 或 stage cache 状态；
+- 从 CUDA 产品路径删除 legacy stage adapter、legacy parameter snapshot、
+  `ExportPipelineParams` 镜像和 `LegacyPipelineImporter`；UI/app service 直接修改新 Model。
+
+主要文件：
+
+- `alcedo_studio/src/renderer/pipeline_scheduler.cpp`
+- `alcedo_studio/src/include/renderer/pipeline_task.hpp`
+- `alcedo_studio/src/edit/pipeline/pipeline_cpu.cpp`
+- `alcedo_studio/src/include/edit/geometry/render_request.hpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_product_renderer.cu`
+- `alcedo_studio/src/include/edit/runtime/cuda/cuda_product_renderer.hpp`
+
+### 41.4 G7R.2 — 缓存 Prepared RAW 和静态 ExecutionPlan
+
+Prepared source key 至少包含：
+
+```text
+encoded content hash
+input kind and CFA description
+DecodeRes/downsample policy
+active area and orientation inputs
+LibRaw/input-preparation implementation version
+```
+
+工作：
+
+- 同一 source key 的 preview/quality/detail 渲染共享 PreparedRawInput；
+- 未淘汰的 source 再次打开时复用主存结果，不重新执行 LibRaw open/unpack；
+- DecodeRes 或输入准备规则改变时生成新 key，不覆盖仍被 submission 使用的旧条目；
+- source host bytes 只在 `develop.sensor_linear` miss 时上传；
+- 静态 ExecutionPlan key 只包含 graph topology、节点/调整类型与顺序、source layout 和后端能力；
+- 参数值、viewport、CCT、Grade 和 DRT 编辑不触发静态 plan 重编译；
+- ResolvedRenderGeometry 和 pass dirty schedule 属于每帧只读数据，不通过重编译静态图表达；
+- 接入并测试 `GraphCompiler::NeedsRecompile`，或删除该未使用 API 并用单一 plan key 机制替代；
+- plan cache miss、hit 和 compile count 必须可查询。
+
+### 41.5 G7R.3 — 内容感知结果缓存和 geometry 后缓存
+
+实现第 27 节定义的五层缓存，并保持以下值语义：
+
+```text
+develop.sensor_linear   = camera scene-linear，geometry 前
+geometry.scene_source   = camera scene-linear，geometry 后
+develop.image           = ACES AP1 scene-linear，CameraColorPass 后
+grade.<id>.image        = ACES AP1 scene-linear
+drt.display             = display-referred output
+```
+
+工作：
+
+- 从 `GraphImageCache` 中拆出 allocation slots 与 valid results，或让 API 强制调用者明确选择
+  `AcquireTextureForWrite`、`FindValidResult`、`PublishResult`；
+- 缓存查找比较 value ID、内容 key、extent、format 和完成 submission；
+- pass 写入临时 unpublished 状态，只在 submission 成功后原子发布内容 key；
+- 取消、kernel 失败、frame-sink 失败不能把部分写入标成有效；
+- 同 key 已命中时跳过 pass，保留原 `last_writer` 和内容身份；
+- 同一物理纹理被新 key 覆写前，先移除旧结果身份；
+- geometry cache key 使用完整 ResolvedRenderGeometry，包括 crop、rotation、ROI、目标尺寸、
+  DecodeRes 映射和采样规则；
+- CCT/tint、Grade、mask 或 DRT 改变不得使 `geometry.scene_source` 失效；
+- viewport/geometry 改变复用 `develop.sensor_linear`，只重跑 Geometry 和下游；
+- workspace LRU 按 GPU 字节预算淘汰已完成且没有 lease 的结果；
+- 结果缓存支持 source/document revision 隔离，防止切图后错误命中。
+
+主要文件：
+
+- `alcedo_studio/src/include/edit/runtime/graph_image_cache.hpp`
+- `alcedo_studio/src/include/edit/runtime/node_result_cache.hpp`
+- `alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_develop_pass.cpp`
+- `alcedo_studio/src/edit/runtime/cuda/cuda_plan_executor.cpp`
+
+### 41.6 G7R.4 — 恢复 CameraMatrices 双光源插值和 Develop AP1 输出
+
+颜色实现必须从旧 `ColorTempOp::ResolveRuntime` 提取一个不依赖 `OperatorParams` 的纯解析器，
+例如：
+
+```cpp
+struct DevelopColorTransform {
+  Matrix3x3 camera_to_xyz;
+  Matrix3x3 camera_to_xyz_d50;
+  Matrix3x3 xyz_d50_to_ap1;
+  Matrix3x3 camera_to_ap1;
+  float resolved_cct;
+  float resolved_tint;
+  ContentKey content_key;
+};
+
+Expected<DevelopColorTransform, ColorTransformError>
+ResolveDevelopColorTransform(const DevelopPayload& develop,
+                             const RawRuntimeColorContext& raw);
+```
+
+算法顺序固定为：
+
+1. 从 DNG metadata 或 CameraMatrices 数据库选择 `ColorMatrix1/2`，并读取对应标定光源 CCT；
+2. 缺少任一有效标定光源时按单光源 profile 处理，不虚构 2856K/6504K 双光源区间；
+3. as-shot 模式从 `AsShotNeutral` 求解相机白点；只有 metadata 未提供 neutral 时才由
+   `cam_mul` 推导 neutral；
+4. custom 模式把 CCT/tint 转为目标 xy；
+5. 在 mired 空间按目标 CCT 插值 `ColorMatrix1/2`；
+6. 存在 `ForwardMatrix1/2` 时以相同权重插值 forward matrix，并用 reference neutral 缩放
+   得到 camera→XYZ D50；
+7. 不存在 forward matrix 时反转插值后的 XYZ→camera 矩阵，再从目标白点 Bradford 到 D50；
+8. 执行 Bradford D50→D60 和 XYZ D60→ACES AP1；
+9. 校验每个矩阵有限、可逆且输出有限，再生成 content key；
+10. CameraColorPass 只消费解析后的 3×3 矩阵，并把结果写入 `develop.image`。
+
+明确禁止：
+
+- 用 `cam_mul` 或 `pre_mul` 构造 Camera→AP1 对角矩阵；
+- 使用 LibRaw `rgb_cam`、`cam_xyz` 或 `pre_mul` 路径替代 CameraMatrices/DNG profile；
+- 先假定 camera RGB 是 sRGB，再乘 `sRGB_to_AP1`；
+- metadata 缺失、矩阵全零或不可逆时静默使用 identity；
+- 在 Primary Grade kernel 内隐式完成 Camera→AP1；CameraColorPass 必须是可单独失效和计数的
+  Develop 内部 pass；
+- 把 RAW CCT/tint 与 Primary Grade 的 creative CAT02 参数合并成一个 dirty 区域。
+
+输入准备必须复用 `MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw` 及其 CameraMatrices/
+DNG 解析能力，或提取共享 `RawColorMetadataResolver`。不得继续维护只有六个字段的
+`FillColorContext` 副本。若 `LoadEncoded` 只有字节而没有路径，DNG tag 读取必须支持内存输入，
+或由调用方把已经解析的不可变 metadata snapshot 一起传入；不能因此退回 LibRaw 对角缩放。
+
+### 41.7 G7R.5 — 正确实现独立的 creative CAT02
+
+Primary Grade 的第一个 adjustment 是 scene-linear AP1 creative white balance，与 RAW
+CameraColorPass 是两个不同功能：
+
+- 输入和输出都保持 AP1/D60；
+- temperature/tint offset 先解析成源/目标白点，不直接变成 RGB 通道指数倍率；
+- 使用 CAT02 cone response 矩阵、白点 LMS 比例和逆 CAT02 完成色适配；
+- mix 在适配后以原 AP1 像素和适配像素插值；
+- zero offset 必须是严格 identity；
+- 参数 dirty 只让当前 Grade 和 DRT 失效，不让 CameraColor、Geometry 或 SensorDevelop 失效。
+
+### 41.8 G7R.6 — 可观测性与性能恢复
+
+为测试和 profiling 增加每个 pipeline session 的只读统计快照：
+
+```text
+prepared source cache hit/miss
+LibRaw open/unpack count
+static plan cache hit/miss/compile count
+source H2D copy count and bytes
+parameter H2D ranges and bytes
+per-pass execute/skip count
+result cache hit/miss by GraphValueId
+GPU allocation/free count and bytes
+CPU prepare/compile/submit/present duration
+GPU pass and total submission duration
+renderer completed/aborted/failed count
+scheduler presented/discarded-stale/cancelled task count
+```
+
+统计默认关闭或使用低成本原子计数；测试构建可开启细粒度计时。性能验收不能依赖日志文本。
+
+### 41.9 必须新增或加强的测试
+
+#### 41.9.1 RAW metadata 与颜色单元测试
+
+```text
+RawInputLoaderPopulatesCompleteColorContextFromRealRaw
+DevelopColorTransformInterpolatesDualIlluminantMatricesInMiredSpace
+DevelopColorTransformInterpolatesForwardMatricesWithTheSameWeight
+DevelopColorTransformUsesSingleProfileWhenCalibrationIlluminantsAreIncomplete
+DevelopColorTransformSolvesAsShotNeutralWithoutUsingCamMulAsColorMatrix
+DevelopColorTransformDoesNotUseLibRawRgbCamOrPreMulAsCameraMatrix
+DevelopColorTransformRejectsMissingOrSingularCameraMatrices
+DevelopImageGraphValueIsAp1SceneLinear
+CudaCat02ZeroOffsetIsExactIdentity
+CudaCat02MapsSourceWhiteToRequestedWhiteInAp1
+```
+
+`DevelopColorTransformRejectsMissingOrSingularCameraMatrices` 必须断言明确错误，不能接受 identity
+输出。双光源测试使用非对角矩阵，使 `cam_mul` 对角实现、`rgb_cam` 固定矩阵实现和错误的
+线性 Kelvin 插值都必然失败。
+
+#### 41.9.2 真实 RAW reference 测试
+
+使用 `alcedo_studio/tests/resources/sample_images/ci_rawfiles` 中至少一个 DNG 和一个非 DNG RAW。
+reference 来自重构前提交 `bf6686fb` 的旧 CameraMatrices/ColorTemp 路径，在固定输入、
+DecodeRes、geometry 和 CCT/tint 下生成。保存可审查的浮点 reference 或确定性统计，不以肉眼
+截图作为唯一断言。
+
+```text
+CudaRealRawAsShotCameraToAp1MatchesPreRebuildReference
+CudaRealRawCustomCctCameraToAp1MatchesPreRebuildReference
+CudaRealRawCctEndpointsMatchCameraProfileMatrices
+CudaRealRawColorTransformProducesFiniteAp1WithoutChannelCollapse
+```
+
+误差范围必须在 fixture 中按阶段说明。至少断言每通道有限值、非零动态范围、参考白点、色卡或
+固定 patch 的 RGB/xy 误差；不能只断言“图像存在”。
+
+#### 41.9.3 缓存和最小执行集测试
+
+```text
+SecondUnchangedProductRenderRunsNoLibRawNoSourceUploadAndNoGpuNodePass
+ExposureEditRunsOnlyPrimaryGradeAndDrtPasses
+DevelopCctEditReusesSensorAndGeometryAndRunsCameraColorGradeDrt
+DrtEditRunsOnlyDrtPass
+ViewportChangeReusesSensorDevelopAndRunsGeometryAndDownstream
+GeometryEditReusesSensorDevelopAndInvalidatesPostGeometryResult
+RawDevelopEditInvalidatesSensorDevelopAndAllDownstreamResults
+ProductRendererCompilesStaticPlanOnlyForTopologyOrSourceLayoutChange
+ResultCacheDoesNotTreatReusedTextureAllocationAsContentHit
+FailedSubmissionDoesNotPublishResultContentKey
+CancelledSubmissionKeepsPreviouslyCompletedCacheEntriesUsable
+```
+
+每个测试断言内容 key、execute/skip counter、LibRaw count、H2D bytes 和输出像素；禁止只比较
+`ResourceId` 或 malloc/free。
+
+#### 41.9.4 Scheduler 状态回归测试
+
+```text
+RenderRequestContainsNoSchedulerRoleOrPresentationTarget
+ProductRendererReturnsFrameWithoutCallingDisplaySink
+PipelineSchedulerIsTheOnlyPreviewPresentationOwner
+InteractiveReplacementDoesNotPresentStaleFrame
+InteractiveQualityDetailSequencePresentsInOrderAndClearsBusy
+EditRevisionChangeRejectsOlderQualityAndDetailFrames
+CancelledScheduledRenderCompletesExactlyOnceAndKeepsSessionReusable
+ScheduledRenderFailureClearsBusyAndReportsTheOriginalError
+ImageSwitchBackReusesMatchingPreparedSourceWithoutPresentingOldFrame
+FullResolutionExportUsesIndependentPipelineSession
+FullResolutionExportDoesNotMutatePreviewWorkspace
+FullResolutionExportNeverWritesEditorFrameSink
+```
+
+#### 41.9.5 编辑器真实 RAW E2E
+
+```text
+RealRawEditorColorTempEditChangesPixelsWithoutRerunningDemosaic
+RealRawEditorExposureEditKeepsPreparedSensorAndGeometryResults
+RealRawEditorRapidEditsPresentOnlyLatestRevisionAndReturnToIdle
+```
+
+这些测试必须进入默认 CUDA CI，不得依赖 `ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E` 才执行。现有
+deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整个真实 RAW 行为测试来规避。
+
+### 41.10 重构前性能 A/B 验收
+
+基线固定为重构前提交 `bf6686fb`。在同一台机器、同一 CUDA driver/GPU、同一 MSVC/CMake
+配置、同一输入 RAW、同一 DecodeRes、同一 viewport/输出尺寸和同一编辑序列下比较。Debug
+用于行为测试；性能结论使用同一份 Release 构建配置。
+
+每个场景执行一次冷启动和至少 30 次 warm render，报告 median、p95、CPU 准备时间、GPU
+时间、LibRaw 次数、H2D 字节和各 pass 次数。首帧单独报告，不能用首帧或缓存预热隐藏 warm
+回归。
+
+| 场景 | G7R 的强制执行集 | 强制为零的工作 |
+| --- | --- | --- |
+| 无变化重复渲染 | DAG 只查找并返回已完成结果；scheduler 可在 DAG 外呈现 | LibRaw、source H2D、plan compile、所有图像节点 pass、GPU alloc/free |
+| Exposure 连续调整 | PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、Geometry、CameraColor、GPU alloc/free |
+| RAW CCT/tint 连续调整 | CameraColor、PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、Geometry、GPU alloc/free |
+| DRT 连续调整 | DRT | LibRaw、source H2D、SensorDevelop、Geometry、CameraColor、PrimaryGrade、GPU alloc/free |
+| viewport/geometry 改变 | Geometry、CameraColor、PrimaryGrade、DRT | LibRaw、source H2D、SensorDevelop、GPU alloc/free |
+| RAW Develop 参数改变 | SensorDevelop 及下游 | 重复 LibRaw open/unpack、无关 source preparation、GPU alloc/free |
+| 切换图像后切回 | DAG 命中仍在预算内的 source/GPU 结果；scheduler 决定是否呈现 | 对命中项的 LibRaw、source H2D 和图像节点 pass |
+
+量化完成条件：
+
+- 每个场景都满足上表的 pass/H2D/LibRaw 硬限制；任何一次多余重算都算失败；
+- warm interactive median 不高于 `bf6686fb` 基线的 `1.05x`，p95 不高于 `1.10x`；
+- QualityBase、DetailPatch 和切图返回场景的 median/p95 不比基线差 10%；
+- 无变化、Exposure、CCT 和 DRT 连续编辑从第二帧开始 GPU allocation/free 均为 0；
+- DAG 计算时间与 scheduler/frame-sink 呈现时间分别报告，不能用显示同步掩盖节点重算；
+- 若新路径优于基线，记录绝对时间与提升比例；若未达到阈值，G7R 不得标记 complete；
+- 性能报告写入本 Phase completion record，包含 GPU、driver、CPU、构建类型、fixture 和命令。
+
+### 41.11 完成条件
+
+- 用户可见图仍然只有 Develop、Primary Color Grade 和 DRT；
+- G4/G5 的缓存拆分保留，并存在独立 `develop.sensor_linear`、`geometry.scene_source`、
+  `develop.image`；
+- `develop.image` 被 reference 测试证明是 AP1 scene-linear；
+- Camera→AP1 使用 CameraMatrices/DNG 双光源插值，`cam_mul/pre_mul` 不作为颜色矩阵；
+- as-shot/custom CCT/tint 和 creative CAT02 分别通过数学单元测试和真实 RAW reference 测试；
+- DAG request 只包含像素计算和 cache 身份输入；renderer 返回未呈现的 `RenderedFrame`；
+- scheduler 独占 frame sink，并让取消、过期帧抑制、quality/detail 和 busy 清理通过默认测试；
+- Preview 与 Export 使用独立 PipelineSession/workspace；Export 不保存、修改或恢复 preview 状态；
+- CUDA 产品路径不再包含 legacy 参数镜像、stage adapter 或 `LegacyPipelineImporter`；
+- 缓存命中由内容 key 和 pass counter 证明，不由资源 ID 推断；
+- 第 41.9 节测试全部默认执行并通过；
+- 第 41.10 节 A/B 达标，并把完整测量写回 completion record；
+- G7 completion record 中“upstream cache valid”和“scheduler 已完整接入”的结论，在 G7R
+  完成前只视为历史记录，不作为 G8 的验收依据；
+- G8 必须以 G7R 分支为 base，不得从当前 G7 直接开始 OpenCL 移植。
+
+## 42. Phase G8 — OpenCL 移植
 
 Branch: `feature/gpu-dag-opencl`
 
-Base: `feature/gpu-dag-cuda-drt-product`
+Base: `feature/gpu-dag-cuda-default-recovery`
 
 目标：
 
@@ -2874,7 +3398,7 @@ OpenClBackendFailureDoesNotEnterCpuImageProcessing
 - OpenCL 稳定渲染不创建 GPU buffer 或 image；
 - OpenCL 产品路径不再使用 PipelineStage。
 
-## 42. Phase G9 — Metal 移植
+## 43. Phase G9 — Metal 移植
 
 Branch: `feature/gpu-dag-metal`
 
@@ -2918,7 +3442,7 @@ MetalBackendFailureDoesNotEnterCpuImageProcessing
 - Metal 稳定渲染不创建 buffer、texture 或 compute pipeline state；
 - Metal 产品路径不再使用 PipelineStage。
 
-## 43. Phase G10 — 最终删除与全平台验证
+## 44. Phase G10 — 最终删除与全平台验证
 
 Branch: `feature/gpu-dag-final-removal`
 
@@ -2947,6 +3471,7 @@ Base: `feature/gpu-dag-metal`
 - LLF 私有 allocator 和 cache；
 - 每个算子的 GPU 内存管理；
 - 旧 OpenCL 和 Metal adapter；
+- LegacyPipelineImporter、legacy parameter snapshot 和 nested stage adapter；
 - 已迁移后的重复 kernel 入口；
 - 旧 stage JSON writer。
 
@@ -2960,7 +3485,7 @@ NoPipelineStageTypeRemainsInFirstPartySource
 NoOperatorParamsAggregateRemainsInFirstPartySource
 NoCpuImageOperatorEntryPointRemainsInProductPipeline
 DefaultPipelineRoundTripPreservesThreeNodeGraph
-LegacyPipelineImporterPreservesSupportedUserAdjustments
+NoLegacyParameterImporterOrStageAdapterRemainsInProductPath
 RasterMaskRoundTripPreservesR8DataAndSamplingBounds
 CropRotateViewportAndDynamicResolutionMatchAcrossBackends
 SteadyStateRenderAllocatesNoGpuBufferOrTextureAcrossBackends
@@ -2978,9 +3503,9 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - 所有持久蒙版通过 MaskStore；
 - 三个后端通过共同参考测试。
 
-## 44. 测试分层
+## 45. 测试分层
 
-### 44.1 Model 单元测试
+### 45.1 Model 单元测试
 
 - 默认值；
 - 参数限制；
@@ -2991,7 +3516,7 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - RestoreDirty；
 - MakeFullDto。
 
-### 44.2 Graph 单元测试
+### 45.2 Graph 单元测试
 
 - 端口类型；
 - cycle 检查；
@@ -3001,7 +3526,7 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - topology dirty；
 - 调整实例顺序。
 
-### 44.3 Geometry property 测试
+### 45.3 Geometry property 测试
 
 - forward/inverse round trip；
 - pixel center；
@@ -3011,7 +3536,7 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - DecodeRes 不改变 ReferenceSpace；
 - mask、LLF 和 image 映射一致。
 
-### 44.4 Workspace 单元测试
+### 45.4 Workspace 单元测试
 
 - grow-only；
 - live allocation 时不增长；
@@ -3023,7 +3548,7 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - KV lookup；
 - no allocation after reserve。
 
-### 44.5 后端集成测试
+### 45.5 后端集成测试
 
 - Develop；
 - Geometry；
@@ -3036,9 +3561,9 @@ OnlyDirtyParameterRangesTransferAcrossBackends
 - DRT；
 - dynamic resolution；
 - serialization；
-- legacy import。
+- unsupported old-format error。
 
-### 44.6 后端一致性测试
+### 45.6 后端一致性测试
 
 使用同一输入、PipelineDocument、RenderRequest 和 MaskAsset：
 
@@ -3050,18 +3575,22 @@ Metal output
 
 测试需要为每类行为定义清楚的误差范围。离散 mask 边缘和随机 grain 需要固定 seed。
 
-### 44.7 性能和分配测试
+### 45.7 性能和分配测试
 
 - 首帧创建成本单独报告；
 - 第二帧开始不得分配 GPU buffer 或 texture；
+- 无变化重复渲染不得重新 open/unpack RAW、上传 source、编译静态 plan 或执行图像节点 pass；
+- Exposure、RAW CCT/tint、DRT、viewport/geometry 编辑分别断言第 41.10 节的最小执行集；
+- cache hit 必须由内容 key 和 pass skip counter 证明，不能由相同 `ResourceId` 推断；
 - 无参数变化时参数上传字节数必须为 0；
 - 单字段变化时只上传对应字段范围；
 - viewport 变化不得重新上传不变的 R8 mask；
 - dynamic resolution 变化不得重新生成不变的 feather resource；
 - LLF reference 可以跨 viewport 变化复用；
-- GPU 内存预算和 LRU 清理字节数可查询。
+- GPU 内存预算和 LRU 清理字节数可查询；
+- CUDA 产品路径必须与重构前提交 `bf6686fb` 做同机 Release A/B，并满足第 41.10 节阈值。
 
-## 45. 构建与运行
+## 46. 构建与运行
 
 Windows 配置和构建使用项目包装脚本：
 
@@ -3081,9 +3610,9 @@ ctest --test-dir build/macos-debug --output-on-failure
 
 每个 Stacked PR 只运行它影响的集中测试和必要回归测试。G10 运行完整测试集。
 
-## 46. 全局完成条件
+## 47. 全局完成条件
 
-### 46.1 架构
+### 47.1 架构
 
 - [ ] 默认 PipelineDocument 有且只有 Develop、Primary Color Grade 和 DRT 三个节点。
 - [ ] Geometry 是全局 Model 和内部 Pass，不是第四个用户节点。
@@ -3094,7 +3623,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] operators 只保存参数 Model、DTO 和序列化逻辑。
 - [ ] GPU 执行代码不在 operators 参数目录。
 
-### 46.2 参数
+### 47.2 参数
 
 - [ ] 不使用参数计数器。
 - [ ] 连续修改合并为一个 dirty Patch。
@@ -3102,24 +3631,31 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 单字段变化不上传完整参数区。
 - [ ] GPU workspace 重建时使用完整 DTO。
 
-### 46.3 GPU 资源
+### 47.3 GPU 资源
 
 - [ ] BasicRenderWorkspace 通过模板支持 CUDA、OpenCL 和 Metal。
 - [ ] 每个 RenderDevice 只有一个 workspace。
 - [ ] 每个 RenderDevice 只有一份 ParameterArena。
 - [ ] 稳定渲染不创建或销毁 GPU buffer 和 texture。
+- [ ] Prepared RAW、静态 ExecutionPlan 和节点结果都有可查询的内容感知 cache hit/miss。
+- [ ] `develop.sensor_linear` 和 `geometry.scene_source` 是独立、可淘汰、submission-safe 的结果缓存。
+- [ ] 无变化渲染不执行 LibRaw、source H2D、plan compile 或 GPU 图像节点 pass。
 - [ ] LLF 不管理自己的内存池。
 - [x] Mask GPU LRU 只存在于 workspace。
 
-### 46.4 RAW 和颜色
+### 47.4 RAW 和颜色
 
 - [ ] LibRaw unpack 在编辑管线之前完成。
 - [ ] RAW DecodeRes 降采样在 CPU 输入准备中完成。
 - [ ] Develop 输出 AP1 scene-linear RGB。
+- [ ] Camera→AP1 使用 CameraMatrices/DNG 双光源矩阵和标定光源 CCT 在 mired 空间插值。
+- [ ] `cam_mul/pre_mul` 只用于 RAW 归一化和 neutral 推导，不作为 Camera→AP1 矩阵。
+- [ ] metadata 缺失或矩阵无效时返回明确错误，不静默使用 identity。
+- [ ] RAW CameraColorPass 与 Primary Grade creative CAT02 分别拥有 dirty key 和测试。
 - [ ] CAT02 调整以 AP1 白点为参考。
 - [ ] DRT 支持 ACES 2.0 和 OpenDRT。
 
-### 46.5 Geometry 和 Mask
+### 47.5 Geometry 和 Mask
 
 - [ ] crop、rotation、view ROI 和 dynamic resolution 只执行一次图像重采样。
 - [ ] LLF 和 mask 使用相同的 RenderGeometry 数据。
@@ -3131,7 +3667,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [x] view 或 render scale 变化不重新创建不变的 mask texture。
 - [x] MaskStore root 可以由用户配置。
 
-### 46.6 后端
+### 47.6 后端
 
 - [ ] CUDA 完整通过。
 - [ ] OpenCL 完整通过。
@@ -3140,16 +3676,31 @@ ctest --test-dir build/macos-debug --output-on-failure
       workspace 模板。
 - [ ] GPU 后端失败时不进入 CPU 图像处理。
 
-### 46.7 数据
+### 47.7 数据
 
 - [ ] 新 JSON 只保存节点、边、Model 和 MaskAssetKey。
 - [ ] 新 JSON 不保存 GPU 或 viewport 短期状态。
-- [ ] 旧 stage JSON 可以单向导入。
-- [ ] 新保存不再写旧 stage JSON。
+- [ ] 旧 stage JSON 返回明确 unsupported-format error，不进入新产品路径。
+- [ ] 不存在 `LegacyPipelineImporter`、legacy parameter snapshot 或 nested stage adapter。
+- [ ] 新保存只写 format version 2，不写旧 stage JSON。
 
-## 47. 风险与处理
+### 47.8 Scheduler 和性能
 
-### 47.1 旧管线删除范围大
+- [ ] DAG request 只包含像素计算和 cache 身份输入，不包含 scheduler 状态机。
+- [ ] DAG renderer 返回未呈现的结果；scheduler 是 editor frame sink 的唯一调用者。
+- [ ] InteractivePrimary、QualityBase 和 DetailPatch 只在 scheduler 中解析和排序。
+- [ ] 取消、失败和成功都恰好完成一次，并清理 busy/quality/detail 状态。
+- [ ] 过期帧不会覆盖最新 frame sink 输出。
+- [ ] Preview 与 Export 使用独立 PipelineSession、workspace、cache 和输出目标。
+- [ ] Export 不保存、修改或恢复 Preview 状态，也不连接 editor frame sink。
+- [ ] 切图返回只命中相同 source/document revision 的缓存。
+- [ ] 真实 RAW 编辑器颜色与状态测试默认进入 CUDA CI，不依赖环境变量才执行。
+- [ ] G7R 与重构前提交 `bf6686fb` 的同机 A/B 满足第 41.10 节阈值。
+- [ ] G7R 完成后才允许以其为 base 开始 G8。
+
+## 48. 风险与处理
+
+### 48.1 旧管线删除范围大
 
 处理：
 
@@ -3157,18 +3708,19 @@ ctest --test-dir build/macos-debug --output-on-failure
 - 每个 PR 保持可构建；
 - CUDA 先完成端到端；
 - OpenCL 和 Metal 各自独立移植；
-- 最后一个 PR 才删除全部过渡代码。
+- G7R 删除 legacy 参数 importer、snapshot 和 CUDA 产品 adapter；
+- G8/G9 分别删除尚未移植后端的执行 adapter；G10 只做最终验证和剩余清理。
 
-### 47.2 默认调色顺序变化
+### 48.2 默认调色顺序变化
 
 处理：
 
 - 默认顺序写入明确列表；
-- legacy importer 使用固定映射；
+- format version 2 直接保存和读取明确 Model 顺序；旧 stage JSON 返回版本错误；
 - 使用 golden 图像和参数 round-trip 测试；
 - GraphCompiler 不自动改变 Model 顺序。
 
-### 47.3 ROI 与 mask 错位
+### 48.3 ROI 与 mask 错位
 
 处理：
 
@@ -3177,7 +3729,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - 使用 pixel-center property 测试；
 - 使用 crop、rotation、odd size 和 dynamic resolution 组合测试。
 
-### 47.4 GPU 内存增长
+### 48.4 GPU 内存增长
 
 处理：
 
@@ -3187,7 +3739,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - transient memory 在每帧完成后 rewind；
 - 测试记录稳定状态分配次数和峰值。
 
-### 47.5 Stacked PR 评审困难
+### 48.5 Stacked PR 评审困难
 
 处理：
 
@@ -3197,7 +3749,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - 每个 Phase 完成后在本文件记录主要调用路径、测试和未完成项；
 - 父 PR 变化后立即更新子分支，避免长时间分离。
 
-## 48. Phase 完成记录格式
+## 49. Phase 完成记录格式
 
 每个 Phase 完成后，在对应章节末尾增加：
 
