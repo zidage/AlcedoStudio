@@ -32,9 +32,6 @@ struct LoadedPipelineDocument {
 
 auto FinishLoadedDocument(std::shared_ptr<PipelineDocument> document, bool mirror)
     -> LoadedPipelineDocument {
-  if (kTemporaryPrimaryGradeOvalMask && document) {
-    AttachTemporaryPrimaryGradeOvalMask(*document);
-  }
   return {std::move(document), mirror};
 }
 

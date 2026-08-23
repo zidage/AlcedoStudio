@@ -65,33 +65,10 @@ class PipelineDocument {
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
 
 /**
- * @brief Temporary product probe. Set false to stop attaching the oval mask on load.
- *
- * Does not change CreateDefaultPipelineDocument. Product load remirrors the legacy
- * stage adapter onto the live graph in place, then re-attaches this oval so editor
- * sliders reach Primary Color Grade while the mask stays connected.
- */
-inline constexpr bool kTemporaryPrimaryGradeOvalMask = true;
-
-/**
- * @brief Attach a centered radial oval to Primary Color Grade.
- *
- * Idempotent. Adds node id `mask.ui_test.radial` when missing and connects its mask output
- * to `grade.primary.mask`. Sets Exposure to +1 EV only when it is still at the default 0
- * so a later legacy remirror can keep slider values. Does not replace
- * @ref CreateDefaultPipelineDocument.
- *
- * @param document Graph that already contains `grade.primary`.
- * @pre `document.PrimaryGrade()` is non-null and contains an Exposure adjustment.
- * @throws std::invalid_argument if the primary grade or Exposure model is missing.
- */
-void AttachTemporaryPrimaryGradeOvalMask(PipelineDocument& document);
-
-/**
  * @brief True when Apply may remirror the legacy stage adapter into this document.
  *
- * The default three-node graph qualifies. The temporary oval-mask probe (exactly one extra
- * `mask.ui_test.radial` node) also qualifies so UI sliders keep reaching Primary Color Grade.
+ * Requires the canonical Develop, Primary Color Grade, and DRT nodes. Extra nodes such as
+ * a mask stay in place because remirror writes operator values onto the existing graph.
  */
 [[nodiscard]] auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool;
 

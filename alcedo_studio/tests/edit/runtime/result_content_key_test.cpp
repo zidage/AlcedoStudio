@@ -4,11 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -20,6 +22,15 @@ namespace {
 auto MakePrepared() -> PreparedRawInput {
   return RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
                                        gpu_dag_test::FullSensor(16, 12));
+}
+
+void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test.raster") {
+  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
+  node->SetAssetKey(std::move(asset_key));
+  document.Graph().AddNode(std::move(node));
+  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
+  document.MarkTopologyDirty();
 }
 
 TEST(GpuDagResultContentKey, GraphCompilerAssignsDistinctSensorGeometryAndDevelopValueIds) {
@@ -143,10 +154,10 @@ TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstream
   EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
-TEST(GpuDagResultContentKey, ExposureEditWithTemporaryOvalKeepsSensorGeometryDevelopAndMask) {
+TEST(GpuDagResultContentKey, ExposureEditWithRasterMaskKeepsSensorGeometryDevelopAndMask) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
-  AttachTemporaryPrimaryGradeOvalMask(document);
+  ConnectRasterMask(document);
   auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
   ASSERT_FALSE(base.mask.Empty());
@@ -164,19 +175,16 @@ TEST(GpuDagResultContentKey, ExposureEditWithTemporaryOvalKeepsSensorGeometryDev
   EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
-TEST(GpuDagResultContentKey, AnalyticMaskParamChangeInvalidatesMaskAndGradeNotSensor) {
+TEST(GpuDagResultContentKey, RasterMaskParamChangeInvalidatesMaskAndGradeNotSensor) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
-  AttachTemporaryPrimaryGradeOvalMask(document);
+  ConnectRasterMask(document);
   auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
 
-  auto* mask = dynamic_cast<AnalyticMaskNodeModel*>(
-      document.Graph().FindNode(NodeId{"mask.ui_test.radial"}));
+  auto* mask = dynamic_cast<RasterMaskNodeModel*>(document.Graph().FindNode(NodeId{"mask.raster"}));
   ASSERT_NE(mask, nullptr);
-  auto radial            = mask->Radial();
-  radial.major_radius    = 0.41f;
-  mask->SetRadial(radial);
+  mask->SetFeatherRadius(1.25f);
   const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
   EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
   EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
@@ -214,11 +222,11 @@ TEST(GpuDagResultContentKey, CameraProfileChangeInvalidatesDevelopImageNotSensor
   EXPECT_NE(edited.develop_image, base.develop_image);
 }
 
-TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWithOval) {
+TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWithRaster) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
-  AttachTemporaryPrimaryGradeOvalMask(document);
+  ConnectRasterMask(document);
   auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
   ASSERT_FALSE(base.mask.Empty());

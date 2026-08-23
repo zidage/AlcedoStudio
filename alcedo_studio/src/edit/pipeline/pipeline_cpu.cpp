@@ -204,9 +204,12 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA && pipeline_document_) {
     // Existing editor controls still write the stage adapter during G7. Mirror it into the
-    // live document only when it changed. ApplyOnto keeps extra graph nodes (the oval-mask
-    // probe) and import-time camera matrices; replacing the document would rebuild every
-    // Model, mark them dirty, and miss GPU result cache on slider frames.
+    // live document only when it changed. ApplyOnto keeps extra graph nodes and import-time
+    // camera matrices; replacing the document would rebuild every Model, mark them dirty,
+    // and miss GPU result cache on slider frames.
+    if (!cuda_product_renderer_) {
+      cuda_product_renderer_ = std::make_shared<CudaProductRenderer>(pipeline_document_);
+    }
     if (mirror_legacy_stage_adapter_ && AllowsLegacyStageAdapterRemirror(*pipeline_document_)) {
       const auto legacy = ExportPipelineParams();
       if (legacy != cuda_product_legacy_snapshot_) {
@@ -218,13 +221,7 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
         if (injected_raw_color_context_.has_value()) {
           ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
         }
-        if (kTemporaryPrimaryGradeOvalMask) {
-          AttachTemporaryPrimaryGradeOvalMask(*pipeline_document_);
-        }
       }
-    }
-    if (!cuda_product_renderer_) {
-      cuda_product_renderer_ = std::make_shared<CudaProductRenderer>(pipeline_document_);
     }
     RenderRequest request;
     if (const auto& viewport = render_request_viewport_;
@@ -369,9 +366,6 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
   pipeline_document_            = std::move(document);
   mirror_legacy_stage_adapter_  = mirror_legacy_stage_adapter;
   cuda_product_legacy_snapshot_ = nullptr;
-  if (kTemporaryPrimaryGradeOvalMask && pipeline_document_) {
-    AttachTemporaryPrimaryGradeOvalMask(*pipeline_document_);
-  }
   if (pipeline_document_ && injected_raw_color_context_.has_value()) {
     ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
   }

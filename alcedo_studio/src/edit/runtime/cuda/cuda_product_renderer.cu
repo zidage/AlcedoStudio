@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <opencv2/core.hpp>
 #include <optional>
 #include <span>
@@ -15,6 +16,7 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/mask_store.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -180,6 +182,9 @@ CudaProductRenderer::CudaProductRenderer(std::shared_ptr<PipelineDocument> docum
                                          PreparedSourceCache::UnpackFn     unpack)
     : document_(std::move(document)),
       device_(std::make_unique<CudaRenderDevice>()),
+      one_shot_device_(),
+      mask_store_(std::make_unique<MaskStore>(std::filesystem::temp_directory_path() /
+                                              "alcedo_studio" / "product_mask_store")),
       unpack_(unpack ? std::move(unpack)
                      : PreparedSourceCache::UnpackFn{[](std::span<const std::byte> encoded,
                                                         DecodeRes                  decode_res) {
@@ -195,6 +200,8 @@ CudaProductRenderer::CudaProductRenderer(std::shared_ptr<PipelineDocument> docum
 }
 
 CudaProductRenderer::~CudaProductRenderer() = default;
+
+auto CudaProductRenderer::MaskAssets() -> MaskStore& { return *mask_store_; }
 
 void CudaProductRenderer::SetDocument(std::shared_ptr<PipelineDocument> document) {
   if (!document) {
@@ -246,7 +253,8 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
     document_->ClearTopologyDirty();
   }
   const auto& prepared  = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
-  const auto  output_id = render_device->Execute(plan, prepared, *document_, nullptr, false);
+  const auto  output_id =
+      render_device->Execute(plan, prepared, *document_, mask_store_.get(), false);
   const auto  release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;

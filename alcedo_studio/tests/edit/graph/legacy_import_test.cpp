@@ -4,8 +4,11 @@
 
 #include <gtest/gtest.h>
 
-#include "edit/graph/analytic_mask_node_model.hpp"
+#include <memory>
+
 #include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -53,6 +56,15 @@ auto MakeLegacyStageJson() -> nlohmann::json {
       {"enable", true},
       {"params", {{"odt", {{"method", "aces_2_0"}, {"peak_luminance", 200.0}}}}}};
   return json;
+}
+
+void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test.raster") {
+  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
+  node->SetAssetKey(std::move(asset_key));
+  document.Graph().AddNode(std::move(node));
+  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
+  document.MarkTopologyDirty();
 }
 
 }  // namespace
@@ -111,10 +123,10 @@ TEST(GpuDagModelGraph, LegacyImportFailsOnUnknownOperatorType) {
   EXPECT_FALSE(result.document.has_value());
 }
 
-TEST(GpuDagModelGraph, ApplyOntoKeepsOvalMaskCameraProfileAndUpdatesExposure) {
+TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) {
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
-  AttachTemporaryPrimaryGradeOvalMask(document);
+  ConnectRasterMask(document);
   document.ClearTopologyDirty();
   const auto profile_before = document.Develop()->Params().Params().camera_profile;
   const auto method_before  = document.Develop()->Params().Params().demosaic_method;
@@ -126,7 +138,8 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsOvalMaskCameraProfileAndUpdatesExposure) {
 
   EXPECT_EQ(document.Graph().NodeCount(), 4u);
   EXPECT_FALSE(document.TopologyDirty());
-  EXPECT_NE(document.Graph().FindNode(NodeId{"mask.ui_test.radial"}), nullptr);
+  EXPECT_NE(document.Graph().FindNode(NodeId{"mask.raster"}), nullptr);
+  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
   EXPECT_EQ(document.Develop()->Params().Params().camera_profile, profile_before);
   EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, method_before);
   const auto* exposure = dynamic_cast<const ExposureModel*>(
@@ -141,17 +154,16 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsOvalMaskCameraProfileAndUpdatesExposure) {
 
 TEST(GpuDagModelGraph, ApplyOntoRejectsUnknownTypeWithoutMutatingDocument) {
   auto document = CreateDefaultPipelineDocument();
-  AttachTemporaryPrimaryGradeOvalMask(document);
   document.ClearTopologyDirty();
   auto json = MakeLegacyStageJson();
   json["Basic Adjustment"]["Basic Adjustment"]["mystery"] = {
       {"type", 21}, {"enable", true}, {"params", nlohmann::json::object()}};
   EXPECT_FALSE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
-  EXPECT_EQ(document.Graph().NodeCount(), 4u);
+  EXPECT_EQ(document.Graph().NodeCount(), 3u);
   const auto* exposure = dynamic_cast<const ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
-  EXPECT_FLOAT_EQ(exposure->Value(), 1.0f);
+  EXPECT_FLOAT_EQ(exposure->Value(), 0.0f);
 }
 
 }  // namespace alcedo

@@ -21,6 +21,7 @@ namespace alcedo {
 
 class CudaRenderDevice;
 class ImageBuffer;
+class MaskStore;
 
 /** @brief Select whether a render may read or publish the editor session caches. */
 enum class CudaProductCachePolicy {
@@ -113,11 +114,13 @@ class CudaProductRenderer {
   [[nodiscard]] auto SourceCache() const -> const PreparedSourceCache& { return source_cache_; }
   [[nodiscard]] auto PlanCache() -> StaticExecutionPlanCache& { return plan_cache_; }
   [[nodiscard]] auto PlanCache() const -> const StaticExecutionPlanCache& { return plan_cache_; }
+  [[nodiscard]] auto MaskAssets() -> MaskStore&;
 
  private:
   std::shared_ptr<PipelineDocument> document_;
   std::unique_ptr<CudaRenderDevice> device_;
   std::unique_ptr<CudaRenderDevice> one_shot_device_;
+  std::unique_ptr<MaskStore>        mask_store_;
   PreparedSourceCache::UnpackFn     unpack_;
   PreparedSourceCache               source_cache_;
   StaticExecutionPlanCache          plan_cache_{kCudaDagBackendCapabilityVersion};

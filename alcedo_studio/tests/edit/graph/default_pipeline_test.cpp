@@ -7,11 +7,9 @@
 #include <cstddef>
 #include <string>
 
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
 
@@ -25,6 +23,7 @@ TEST(GpuDagModelGraph, DefaultPipelineHasDevelopGradeAndDrtNodes) {
   EXPECT_EQ(document.PrimaryGrade()->Type(), type_ids::ColorGradeNode());
   EXPECT_EQ(document.Drt()->Type(), type_ids::DrtNode());
   EXPECT_TRUE(document.Graph().Validate().empty());
+  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
 }
 
 TEST(GpuDagModelGraph, DefaultPipelineConnectsDevelopThroughPrimaryGradeToDrt) {
@@ -77,59 +76,6 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
   for (const auto& edge : document.Graph().Edges()) {
     EXPECT_NE(edge.to_port, PortId{"mask"});
   }
-}
-
-TEST(GpuDagModelGraph, TemporaryOvalMaskConnectsToPrimaryGradeMaskPort) {
-  auto document = CreateDefaultPipelineDocument();
-  ASSERT_EQ(document.Graph().NodeCount(), 3u);
-  AttachTemporaryPrimaryGradeOvalMask(document);
-  AttachTemporaryPrimaryGradeOvalMask(document);
-
-  ASSERT_EQ(document.Graph().NodeCount(), 4u);
-  EXPECT_TRUE(document.Graph().Validate().empty());
-  const auto* mask = dynamic_cast<const AnalyticMaskNodeModel*>(
-      document.Graph().FindNode(NodeId{"mask.ui_test.radial"}));
-  ASSERT_NE(mask, nullptr);
-  EXPECT_EQ(mask->Kind(), AnalyticMaskKind::Radial);
-  EXPECT_FLOAT_EQ(mask->Radial().center_x, 0.5f);
-  EXPECT_FLOAT_EQ(mask->Radial().center_y, 0.5f);
-  EXPECT_FLOAT_EQ(mask->Radial().major_radius, 0.32f);
-  EXPECT_FLOAT_EQ(mask->Radial().minor_radius, 0.20f);
-  EXPECT_FLOAT_EQ(mask->Radial().outer_feather, 0.12f);
-
-  int mask_edges = 0;
-  for (const auto& edge : document.Graph().Edges()) {
-    if (edge.to_node == NodeId{"grade.primary"} && edge.to_port == PortId{"mask"}) {
-      EXPECT_EQ(edge.from_node, NodeId{"mask.ui_test.radial"});
-      EXPECT_EQ(edge.from_port, PortId{"mask"});
-      ++mask_edges;
-    }
-  }
-  EXPECT_EQ(mask_edges, 1);
-
-  const auto* grade = document.PrimaryGrade();
-  ASSERT_NE(grade, nullptr);
-  EXPECT_FLOAT_EQ(grade->Mix(), 1.0f);
-  const auto* exposure =
-      dynamic_cast<const ExposureModel*>(grade->FindAdjustmentByType(type_ids::Exposure()));
-  ASSERT_NE(exposure, nullptr);
-  EXPECT_FLOAT_EQ(exposure->Value(), 1.0f);
-}
-
-TEST(GpuDagModelGraph, TemporaryOvalMaskKeepsNonDefaultExposureAndAllowsLegacyRemirror) {
-  auto document = CreateDefaultPipelineDocument();
-  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
-  AttachTemporaryPrimaryGradeOvalMask(document);
-  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
-
-  auto* exposure =
-      dynamic_cast<ExposureModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
-  ASSERT_NE(exposure, nullptr);
-  exposure->SetValue(2.25f);
-  AttachTemporaryPrimaryGradeOvalMask(document);
-  EXPECT_FLOAT_EQ(exposure->Value(), 2.25f);
-  EXPECT_EQ(document.Graph().NodeCount(), 4u);
-  EXPECT_TRUE(document.Graph().Validate().empty());
 }
 
 TEST(GpuDagModelGraph, BuiltinCatalogTypeIdsAreUnique) {

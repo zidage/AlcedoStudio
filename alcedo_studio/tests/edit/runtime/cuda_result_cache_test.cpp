@@ -15,10 +15,11 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -50,6 +51,20 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
                                            gpu_dag_test::DefaultLinearization(),
                                            gpu_dag_test::FullSensor(32, 32), decode_res);
   };
+}
+
+void ConnectFilledRasterMask(PipelineDocument& document, MaskStore& store) {
+  MaskAsset asset;
+  asset.key               = MaskAssetKey{"test.raster"};
+  asset.descriptor.extent = {32, 32};
+  asset.pixels.assign(32U * 32U, 255);
+  store.Save(asset);
+  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
+  node->SetAssetKey(asset.key);
+  document.Graph().AddNode(std::move(node));
+  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
+  document.MarkTopologyDirty();
 }
 
 auto RenderHost(CudaProductRenderer& renderer, const std::shared_ptr<ImageBuffer>& input,
@@ -155,8 +170,8 @@ TEST_F(CudaResultCacheProductFixture, ExposureEditRunsOnlyPrimaryGradeAndDrtPass
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       TemporaryOvalSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
-  AttachTemporaryPrimaryGradeOvalMask(*document_);
+       RasterMaskSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
+  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   ASSERT_TRUE(OutputIsFinite(Render()));
@@ -176,8 +191,8 @@ TEST_F(CudaResultCacheProductFixture,
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       ApplyOntoExposureWithTemporaryOvalReusesSensorGeometryCameraAndMask) {
-  AttachTemporaryPrimaryGradeOvalMask(*document_);
+       ApplyOntoExposureWithRasterMaskReusesSensorGeometryCameraAndMask) {
+  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   nlohmann::json json;

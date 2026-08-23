@@ -6,10 +6,12 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/pass_kind.hpp"
 
@@ -96,20 +98,24 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   EXPECT_TRUE(saw_curve);
 }
 
-TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenTemporaryOvalMaskAttached) {
+TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
-  AttachTemporaryPrimaryGradeOvalMask(document);
+  auto node     = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
+  node->SetAssetKey(MaskAssetKey{"test.raster"});
+  document.Graph().AddNode(std::move(node));
+  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskEvaluate));
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskFeather));
   ASSERT_TRUE(plan.primary_grade_mask.has_value());
-  EXPECT_EQ(plan.primary_grade_mask->node_id, NodeId{"mask.ui_test.radial"});
-  EXPECT_EQ(plan.primary_grade_mask->kind, CompiledMaskKind::Analytic);
+  EXPECT_EQ(plan.primary_grade_mask->node_id, NodeId{"mask.raster"});
+  EXPECT_EQ(plan.primary_grade_mask->kind, CompiledMaskKind::Raster);
   EXPECT_LT(plan.IndexOf(GpuPassKind::CameraToAp1), plan.IndexOf(GpuPassKind::MaskEvaluate));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskFeather));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskFeather), plan.IndexOf(GpuPassKind::PrimaryColorGrade));
