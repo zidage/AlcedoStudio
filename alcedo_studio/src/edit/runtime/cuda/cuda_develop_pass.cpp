@@ -5,12 +5,12 @@
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 
 #include <cstdint>
-#include <stdexcept>
-
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
+#include <stdexcept>
 
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
+#include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
@@ -71,15 +71,18 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     workspace.TransientBuffers().Reserve(plan.peak_transient_bytes);
   }
 
-  auto&        ctx    = device.CommandContext();
-  auto         stream = WrapStream(ctx.Stream());
-  const auto   flags  = develop->Params().Params();
-  const bool   hlr    = flags.highlights_reconstruct;
-  const GraphValueId sensor_id = plan.sensor_linear_output;
-  const auto   out_w  = plan.source.develop_output_extent.width;
-  const auto   out_h  = plan.source.develop_output_extent.height;
-  auto&        decoded_lease = AcquireRgba(workspace, sensor_id, out_w, out_h);
-  auto&        out_tex       = decoded_lease.Texture();
+  auto&              ctx           = device.CommandContext();
+  auto               stream        = WrapStream(ctx.Stream());
+  const auto         flags         = develop->Params().Params();
+  const bool         hlr           = flags.highlights_reconstruct;
+  const GraphValueId sensor_id     = plan.sensor_linear_output;
+  const GraphValueId demosaic_id   = input.dng_warp_rectilinear.has_value()
+                                         ? GraphValueId{NodeId{"develop"}, PortId{"sensor_unwarped"}}
+                                         : sensor_id;
+  const auto         out_w         = plan.source.develop_output_extent.width;
+  const auto         out_h         = plan.source.develop_output_extent.height;
+  auto&              decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
+  auto&              out_tex       = decoded_lease.Texture();
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
@@ -104,7 +107,8 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     throw std::runtime_error("ExecuteCudaDevelop: CFA plane must be tightly packed");
   }
 
-  void* u16_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(std::uint16_t));
+  void* u16_ptr =
+      AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(std::uint16_t));
   void* f32_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
   workspace.Device().UploadDeviceMemory(u16_ptr, input.pixels.Span(), ctx);
 
@@ -116,9 +120,22 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     CUDA::Clamp01(linear, &stream);
   }
 
-  cv::cuda::GpuMat packed = WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w),
-                                      static_cast<int>(out_h));
+  cv::cuda::GpuMat packed =
+      WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
   ExecuteCudaSensorDemosaicAndPack(device, input, flags, linear, packed, stream);
+
+  if (input.dng_warp_rectilinear.has_value()) {
+    auto& warped_lease = AcquireRgba(workspace, sensor_id, out_w, out_h);
+    auto* unwarped     = workspace.Images().Find(demosaic_id);
+    if (unwarped == nullptr) {
+      throw std::runtime_error("ExecuteCudaDevelop: DNG warp source was lost");
+    }
+    auto source = WrapF32C4(unwarped->Texture().DevicePointer(), static_cast<int>(out_w),
+                            static_cast<int>(out_h));
+    auto warped = WrapF32C4(warped_lease.Texture().DevicePointer(), static_cast<int>(out_w),
+                            static_cast<int>(out_h));
+    CUDA::WarpDngRectilinear(source, warped, *input.dng_warp_rectilinear, &stream);
+  }
 
   if (pending.has_value()) {
     pending->Commit();
@@ -136,8 +153,8 @@ void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& 
   }
   const auto width  = plan.geometry.render_extent.width;
   const auto height = plan.geometry.render_extent.height;
-  auto& dest = AcquireRgba(workspace, plan.geometry_output, width, height);
-  sensor     = workspace.Images().Find(plan.sensor_linear_output);
+  auto&      dest   = AcquireRgba(workspace, plan.geometry_output, width, height);
+  sensor            = workspace.Images().Find(plan.sensor_linear_output);
   if (sensor == nullptr) {
     throw std::runtime_error("ExecuteCudaGeometryResample: sensor texture lost during acquire");
   }

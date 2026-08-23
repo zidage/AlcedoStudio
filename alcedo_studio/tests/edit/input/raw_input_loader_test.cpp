@@ -2,31 +2,42 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/input/raw_input_loader.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "prepared_raw_test_support.hpp"
 
 namespace alcedo {
 namespace {
 
-TEST(GpuDagRawInput, RawInputLoaderUnpacksBeforePipelineBuild) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
-  const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+auto ReadBytes(const std::filesystem::path& path) -> std::vector<std::byte> {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return {};
+  const std::vector<char> chars((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+  std::vector<std::byte>  bytes(chars.size());
+  std::memcpy(bytes.data(), chars.data(), chars.size());
+  return bytes;
+}
 
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+TEST(GpuDagRawInput, RawInputLoaderUnpacksBeforePipelineBuild) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   EXPECT_FALSE(prepared.host_extent.Empty());
   EXPECT_FALSE(plan.Contains(GpuPassKind::UploadRgb));
@@ -40,7 +51,7 @@ TEST(GpuDagRawInput, RawInputLoaderUnpacksBeforePipelineBuild) {
 
 TEST(GpuDagRawInput, RawInputLoaderDownsampleUpdatesCfaPatternAndPhase) {
   const auto xtrans = gpu_dag_test::MakeXTransPattern();
-  const auto full = RawInputLoader::FromUnpackedCfa(
+  const auto full   = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, xtrans), xtrans, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   const auto half = RawInputLoader::FromUnpackedCfa(
@@ -50,11 +61,12 @@ TEST(GpuDagRawInput, RawInputLoaderDownsampleUpdatesCfaPatternAndPhase) {
   EXPECT_EQ(full.host_extent, (Extent2D{64, 64}));
   EXPECT_EQ(half.host_extent, (Extent2D{32, 32}));
   EXPECT_EQ(half.downsample_passes, 1);
-  EXPECT_NE(std::memcmp(full.cfa_pattern.xtrans_pattern.raw_fc, half.cfa_pattern.xtrans_pattern.raw_fc,
-                        sizeof(full.cfa_pattern.xtrans_pattern.raw_fc)),
-            0);
+  EXPECT_NE(
+      std::memcmp(full.cfa_pattern.xtrans_pattern.raw_fc, half.cfa_pattern.xtrans_pattern.raw_fc,
+                  sizeof(full.cfa_pattern.xtrans_pattern.raw_fc)),
+      0);
 
-  const auto bayer = gpu_dag_test::MakeRggbPattern();
+  const auto bayer      = gpu_dag_test::MakeRggbPattern();
   const auto bayer_full = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, bayer), bayer, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
@@ -70,12 +82,12 @@ TEST(GpuDagRawInput, RawInputLoaderDownsampleUpdatesCfaPatternAndPhase) {
 
 TEST(GpuDagRawInput, PreparedRawInputKeepsFullReferenceExtentAcrossDecodeRes) {
   const auto pattern = gpu_dag_test::MakeRggbPattern();
-  const auto full = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  const auto full    = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   const auto half = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::HALF);
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::HALF);
 
   EXPECT_EQ(full.full_reference_extent, half.full_reference_extent);
   EXPECT_NE(full.develop_output_extent, half.develop_output_extent);
@@ -88,9 +100,8 @@ TEST(GpuDagRawInput, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint) {
   EXPECT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
   EXPECT_EQ(prepared.CompileSource().kind, DevelopInputKind::DirectRgb);
 
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   EXPECT_TRUE(plan.Contains(GpuPassKind::UploadRgb));
   EXPECT_FALSE(plan.Contains(GpuPassKind::UploadRaw));
   EXPECT_FALSE(plan.Contains(GpuPassKind::Linearize));
@@ -99,7 +110,7 @@ TEST(GpuDagRawInput, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint) {
 
 TEST(GpuDagRawInput, UnsupportedCfaDoesNotProducePreparedRawInput) {
   RawCfaPattern bad;
-  bad.kind = RawCfaKind::Bayer2x2;
+  bad.kind                    = RawCfaKind::Bayer2x2;
   bad.bayer_pattern.raw_fc[0] = 0;
   bad.bayer_pattern.raw_fc[1] = 0;
   bad.bayer_pattern.raw_fc[2] = 0;
@@ -114,8 +125,9 @@ TEST(GpuDagRawInput, UnsupportedCfaDoesNotProducePreparedRawInput) {
       std::runtime_error);
 
   std::byte empty{};
-  EXPECT_FALSE(RawInputLoader::TryLoadEncoded(std::span<const std::byte>(&empty, 0), DecodeRes::FULL)
-                   .has_value());
+  EXPECT_FALSE(
+      RawInputLoader::TryLoadEncoded(std::span<const std::byte>(&empty, 0), DecodeRes::FULL)
+          .has_value());
 }
 
 TEST(GpuDagRawInput, InputHeadersDoNotIncludeGpuOrImageBuffer) {
@@ -132,6 +144,19 @@ TEST(GpuDagRawInput, InputHeadersDoNotIncludeGpuOrImageBuffer) {
       EXPECT_EQ(line.find("cuda_runtime"), std::string::npos) << entry.path();
     }
   }
+}
+
+TEST(GpuDagRawInput, EncodedDngCarriesOpcodeList3WarpIntoPreparedInput) {
+  const auto root = std::filesystem::path{ALCEDO_CI_RAW_FIXTURE_ROOT};
+  const auto path = root / "tag @ryanbreitkreutz - free raws from @signatureeditsco - DSC06683.dng";
+  const auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty()) << path;
+
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_TRUE(prepared.dng_warp_rectilinear.has_value());
+  EXPECT_GT(prepared.dng_warp_rectilinear->coefficient_set_count, 0U);
+  EXPECT_TRUE(prepared.color_context.dng_warp_rectilinear_present_);
+  EXPECT_NE(prepared.source_key.dng_warp_hash, 0U);
 }
 
 }  // namespace

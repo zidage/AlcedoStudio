@@ -42,8 +42,7 @@ auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type) -> CudaAdjustment
 
 auto IsCudaLocalToneBehavior(CudaAdjustmentBehavior behavior) -> bool {
   return behavior == CudaAdjustmentBehavior::Shadows ||
-         behavior == CudaAdjustmentBehavior::Highlights ||
-         behavior == CudaAdjustmentBehavior::Clarity;
+         behavior == CudaAdjustmentBehavior::Highlights;
 }
 
 }  // namespace alcedo

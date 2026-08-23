@@ -286,7 +286,8 @@ target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
 target_compile_definitions(GpuDagRawInputTest PRIVATE
   ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
-  ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input")
+  ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input"
+  ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles")
 gtest_discover_tests(GpuDagRawInputTest TEST_PREFIX "GpuDagRawInputTest."
   PROPERTIES LABELS "ci_core_flow;edit;input")
 alcedo_register_test_target(GpuDagRawInputTest edit)

@@ -94,10 +94,10 @@ UI scope:
 | Rasterized Mask | R8 UNORM；任意一条边不大于 4096 |
 | Feather | GPU exact signed Euclidean distance field；持久数据仍为 R8 |
 | RAW 输入 | LibRaw open、unpack、active area 和降采样在管线外 |
-| Develop 逻辑输出 | `develop.image`，scene-linear ACES AP1；CameraColorPass 完成后才可写入 |
+| Develop 逻辑输出 | `develop.image`，AP1 primaries / ACEScc encoded；CameraColorPass 完成后才可写入 |
 | Develop 内部缓存 | `develop.sensor_linear` 保存传感器开发结果；不是用户可见端口 |
 | Geometry 后缓存 | `geometry.scene_source` 保存重采样后的 camera scene-linear RGB；不是用户可见节点 |
-| 中间调色 | scene-linear ACES AP1 |
+| 中间调色 | AP1 primaries / ACEScc encoded 工作空间 |
 | 局部色温 | 基于 CAT02，以 AP1 白点为参考 |
 | DRT | ACES 2.0 或 OpenDRT |
 | Geometry | 管线文档的全局 ImageGeometryModel，不是第四个用户节点 |
@@ -426,7 +426,8 @@ PreparedRawInput
        - 解析 as-shot 或 custom CCT/tint
        - 按标定光源在 CameraMatrices 的双光源矩阵间插值
        - camera RGB -> XYZ D50 -> XYZ D60 -> ACES AP1
-  -> develop.image               # Develop 的唯一用户可见输出
+       - AP1 scene-linear -> ACEScc encode
+  -> develop.image               # AP1/ACEScc；Develop 的唯一用户可见输出
 ```
 
 G4 只生成 camera scene-linear，G5 再执行 CameraColorPass 的拆分是正确的缓存边界，
@@ -455,8 +456,8 @@ Develop 输出固定为：
 
 ```text
 float RGB
-scene-linear
 ACES AP1 primaries
+ACEScc encoded
 ACES white point
 ```
 
@@ -519,7 +520,8 @@ DRT 参数包括：
 - peak luminance；
 - OpenDRT look 和 tonescale 参数。
 
-DRT 接收 AP1 scene-linear 图像，输出 display-referred GPU texture。
+DRT 接收 AP1 primaries / ACEScc encoded 工作空间图像，在端点内部解码为 AP1
+scene-linear 后执行所选 DRT，并输出 display-referred GPU texture。
 
 ### 7.4 端点规则
 
@@ -1276,7 +1278,7 @@ Develop Endpoint 从上传 PreparedRawInput 开始。之后的图像计算只使
 | 项目 | RAW white balance | CAT02 scene white balance |
 | --- | --- | --- |
 | 所属位置 | Develop Endpoint | ColorGradeNode |
-| 输入 | camera/CFA 数据 | AP1 scene-linear RGB |
+| 输入 | camera/CFA 数据 | AP1 primaries / ACEScc encoded RGB |
 | 参考 | 相机 metadata 或用户 RAW CCT | AP1 白点 |
 | 蒙版 | 不支持局部 mask | 支持 ColorGradeNode mask |
 | 主要用途 | 胶片 develop | scene-referred 局部或全局调色 |
@@ -2324,8 +2326,8 @@ Base: `feature/gpu-dag-render-geometry`
 
 - 把 LibRaw unpack 和 RAW 降采样移到管线输入之前；
 - 实现 CUDA Develop Endpoint 的传感器开发子阶段；
-- 输出可缓存的 camera scene-linear GPU 图像；G5 的 CameraColorPass 再完成 Develop 的
-  AP1 scene-linear 逻辑输出。
+- 输出可缓存的 camera scene-linear GPU 图像；G5 的 CameraColorPass 再完成 Camera→AP1，
+  并把 Develop 的图输出编码为 AP1 primaries / ACEScc 工作空间。
 
 工作：
 
@@ -2447,7 +2449,7 @@ Base: `feature/gpu-dag-cuda-develop`
 
 - 实现默认 ColorGradeNode 的 CUDA 执行；
 - 从可缓存的 G4 camera scene-linear 结果出发，在 Grade 前执行独立 CameraColorPass，并让
-  `develop.image` 成为 AP1 scene-linear；
+  `develop.image` 成为 AP1 primaries / ACEScc encoded 工作空间图像；
 - 增加纯 Model，并让新 CUDA 路径只使用这些 Model；
 - 旧 operator 类只供尚未移植的 OpenCL 和 Metal 路径临时使用；
 - 把 LLF 内存和缓存迁入 workspace。
@@ -2659,7 +2661,7 @@ PipelineDocument mask edge + serialized MaskAssetKey + RenderRequest
   -> parallel-band exact signed Euclidean distance -> cached distance buffer -> feather sample
   -> RenderSpace R8 mask
   -> ExecuteCudaPrimaryGrade -> per-pixel Normal Mix
-  -> scene-linear output
+  -> AP1/ACEScc working-space output
 ```
 
 **Primary failure call chain:**
@@ -2828,7 +2830,7 @@ DrtParamsModel dirty fields
   -> GPUParamsConverter
   -> stable ParameterArena slot keyed by (drt, drt.output)
   -> dirty-range upload
-  -> DrtKernel(scene-linear AP1 -> DRT -> display gamut -> EOTF)
+  -> DrtKernel(AP1/ACEScc -> decode scene-linear AP1 -> DRT -> display gamut -> EOTF)
   -> GraphImageCache[(drt, display)]
 ```
 
@@ -3144,8 +3146,8 @@ failure visible until the result cache owns geometry.
 ```text
 develop.sensor_linear   = camera scene-linear，geometry 前
 geometry.scene_source   = camera scene-linear，geometry 后
-develop.image           = ACES AP1 scene-linear，CameraColorPass 后
-grade.<id>.image        = ACES AP1 scene-linear
+develop.image           = AP1 primaries / ACEScc encoded，CameraColorPass 后
+grade.<id>.image        = AP1 primaries / ACEScc encoded
 drt.display             = display-referred output
 ```
 
@@ -3377,8 +3379,9 @@ ImportService / PipelineController / ExportService
        ResolveDevelopColorTransform(DevelopPayload)   // CPU, stored matrices only
        ParameterArena BindSlot/ApplyPatch {develop, "camera_color"}
        UploadDirty
-       CameraColorKernel: ap1 = camera_to_ap1 * camera_rgb
-  -> publish develop.image (ACES AP1 scene-linear)
+        CameraColorKernel: ap1_linear = camera_to_ap1 * camera_rgb
+                           working = ACESccEncode(ap1_linear)
+   -> publish develop.image (AP1 primaries / ACEScc encoded)
 ```
 
 **Primary failure call chain:**
@@ -3408,7 +3411,7 @@ legacy JSON mirror would drop camera_profile
 | `DevelopColorTransformRejectsMissingOrSingularCameraMatrices` | `GpuDagModelGraphTest` | PASS |
 | `DevelopCameraProfileJsonRoundTripPreservesMatricesAndAsShotNeutral` | `GpuDagModelGraphTest` | PASS |
 | `BindDevelopCameraProfileWritesAsShotCctFromStoredNeutral` | `GpuDagModelGraphTest` | PASS |
-| `DevelopImageGraphValueIsAp1SceneLinear` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CameraColorEncodesAp1AsAcesccGraphWorkingSpace` | `GpuDagCudaPrimaryGradeTest` | PASS |
 | `ExecuteCudaCameraColorRejectsMissingCameraMatrices` | `GpuDagCudaPrimaryGradeTest` | PASS |
 | `BindDevelopCameraProfileCopiesDngColorMatricesFromMetadataExtractor` | `GpuDagCudaDrtProductTest` | PASS |
 | `BindDevelopCameraProfileCopiesNonDngCameraMatricesFromMetadataExtractor` | `GpuDagCudaDrtProductTest` | PASS |
@@ -3628,10 +3631,10 @@ zero CUDA node execution。
 而不是 `queue`；`queue≈50 ms, pipeline≈12.5 s` 与锁等待完全一致，不是冷启动结论。
 
 同时修复两个独立产品回归：Quality Base 在 ROI 放大期间重新读取 live viewport，导致 ROI
-结果按 full-frame 展示而拉伸；默认 Curve 把 AP1 scene-linear 中所有大于 1 的值返回为末端
-控制点 1，造成 ACES 和 OpenDRT 共同输入在 DRT 前硬裁。旧管线的 RGC 曲线没有执行该硬裁；
-新管线明确保持 Primary Grade 为 AP1 scene-linear，因此默认 Curve 改为沿首尾线段外推，
-不引入 ACEScc 往返或第二套色彩域。
+结果按 full-frame 展示而拉伸；默认 Curve 对工作空间中超过控制点范围的数值返回末端控制点，
+造成 ACES 和 OpenDRT 共同输入在 DRT 前硬裁。旧管线的 RGC 曲线没有执行该硬裁，因此默认
+Curve 改为沿首尾线段外推。这里此前把 Primary Grade 记为 AP1 scene-linear 是错误的；
+第 41.5.1 节记录工作空间边界和 LLF 修正。
 
 **Primary success call chains:**
 
@@ -3653,10 +3656,10 @@ ROI zoom -> panel/demosaic change -> Quality Base
   -> full-frame result keeps source aspect ratio
 
 scene-linear highlight > 1
-  -> CameraColorPass produces AP1 scene-linear
-  -> PrimaryGrade default Curve extrapolates the identity end segment
-  -> highlight remains > 1 at grade output
-  -> selected DRT owns highlight mapping
+  -> CameraColorPass converts camera RGB to AP1 and encodes ACEScc
+  -> PrimaryGrade reads and writes AP1/ACEScc; default Curve extrapolates its identity end segment
+  -> encoded highlight remains available at grade output
+  -> selected DRT decodes ACEScc and owns highlight mapping
 ```
 
 **Primary failure call chain:**
@@ -3700,7 +3703,7 @@ snapshot set `39/39` PASS（2 disabled）；direct real-DNG thumbnail set `2/2` 
 
 **Checklist / exit condition:** ordinary thumbnail and export no longer render on the live editor
 executor；one-shot tasks still bypass session caches；Quality Base cannot inherit a live ROI；default
-Primary Grade cannot clip AP1 highlights above 1；RAW demosaic/HLR selection and failures remain
+Primary Grade cannot clip AP1/ACEScc working values；RAW demosaic/HLR selection and failures remain
 observable。
 
 **LOC note (grill-code-review):** no new production module or dependency. The fix reuses
@@ -3713,12 +3716,175 @@ range, but do not replay the user's exact multi-photo filmstrip timing trace. Pr
 should confirm that any remaining long thumbnail duration is visible only on the thumbnail worker，
 not inside an InteractivePrimary request's `pipeline` duration。
 
+##### 41.5.1 Phase G7R.H AP1/ACEScc 工作空间与 Shadows/Highlights LLF 修正（2026-08-23）
+
+**Status:** complete — 此项修正撤销了上一条 completion record 中“Primary Grade 为 AP1
+scene-linear”的错误语义。图级工作空间现在由 CameraColorPass 建立：CameraColorPass 在 Geometry
+之后把 camera scene-linear 转换到 AP1 primaries，再编码为 ACEScc；所有 Grade 输入和输出继续
+保持 AP1/ACEScc；DRT 端点负责解码 ACEScc，然后执行 ACES 2.0 或 OpenDRT，并转换到用户选择的
+输出 encoding space、EOTF 和 limiting space。Primary Grade 不再自行执行 Camera→AP1，也不在
+节点边界做 ACEScc 往返。
+
+Shadows 和 Highlights 已从 pointwise adjustment kernel 移除，改为真正的 CUDA multi-level
+Gaussian/Laplacian local Laplacian filter。LLF 从 AP1/ACEScc 解码亮度，构建 reference/remap
+pyramids，按相邻 gamma samples 选择 Laplacian 层并 collapse，最后把局部亮度差重新应用到
+AP1，做 lower-gamut fit 后编码回 ACEScc。所有 pyramid buffer 都由 `CudaRenderWorkspace`
+持有；LLF 不调用私有 `cudaMalloc/cudaFree`，warm render 不产生 GPU allocation/free。
+
+**Primary success call chains:**
+
+```text
+Develop sensor pass -> camera scene-linear
+  -> GeometryResamplePass -> geometry.scene_source (camera scene-linear)
+  -> CameraColorKernel -> camera_to_ap1 -> ACESccEncode
+  -> publish develop.image (AP1 primaries / ACEScc encoded)
+  -> PrimaryGrade commands before Shadows/Highlights (AP1/ACEScc)
+  -> ExecuteCudaLocalTone
+       -> Extract ACEScc log intensity
+       -> Gaussian source pyramid
+       -> sampled remap pyramids
+       -> Laplacian select + collapse
+       -> apply AP1 intensity delta + ACESccEncode
+  -> PrimaryGrade commands after Shadows/Highlights (AP1/ACEScc)
+  -> grade mix/mask in AP1/ACEScc
+  -> publish grade.<id>.image (AP1 primaries / ACEScc encoded)
+  -> DrtKernel -> ACESccDecode -> selected DRT -> selected display encoding
+```
+
+**Primary failure call chain:**
+
+```text
+missing workspace image / invalid CUDA allocation / kernel launch failure
+  -> explicit exception from CameraColor, PrimaryGrade, LLF or DRT pass
+  -> CudaRenderDevice cancels submission and discards unpublished results
+  -> no CPU, legacy curve, alternate backend or lower-quality substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CameraColorEncodesAp1AsAcesccGraphWorkingSpace` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `DefaultCurvePreservesAcesccWorkingValuesWithoutClipping` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaLocalToneUsesWorkspaceInsteadOfPrivateAllocation` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaColorGradeSecondRenderCreatesNoGpuAllocation` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| Shadows/Highlights CUDA memcheck | `compute-sanitizer` | PASS, 0 errors |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagCudaDevelopTest GpuDagRawInputTest GpuDagModelGraphTest GpuDagCudaMaskTest GpuDagCudaWorkspaceTest GpuDagGeometryTest GpuDagCudaGeometryTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "^(GpuDagCudaPrimaryGradeTest|GpuDagCudaDrtProductTest|GpuDagCudaDevelopTest|GpuDagRawInputTest|GpuDagModelGraphTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|GpuDagGeometryTest|GpuDagCudaGeometryTest)\."
+compute-sanitizer --tool memcheck --print-limit 5 build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe --gtest_filter=GpuDagCudaPrimaryGrade.ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel:GpuDagCudaPrimaryGrade.HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel
+```
+
+Suite total: combined related set `155/155` PASS；post-format Primary Grade + DRT product set
+`46/46` PASS；compute-sanitizer targeted set `2/2` PASS with `ERROR SUMMARY: 0 errors`。
+
+**LOC note (grill-code-review):** `cuda_local_tone_pass.cu` 361 lines，
+`cuda_primary_grade_pass.cu` 444 lines，`cuda_primary_grade_test.cpp` 364 lines。没有本次修改的
+文件超过 1000 行；没有新增第三方依赖。
+
+**Residual gap:** 本次修复使用当前 post-Geometry render extent 构建 LLF reference，并复用
+workspace pyramid allocations；full-frame、跨 ROI 的 reference content cache 仍需沿
+`MakeLlfSamplingPlan` 接入独立的 canonical reference 输入。该项不能用 pointwise curve 或固定
+标量代替，且不影响本次已证明的 LLF 空间行为和 AP1/ACEScc 工作空间边界。
+
+##### 41.5.1 默认 DAG 算法分派与 DNG WarpRectilinear 修正（2026-08-23）
+
+**Status:** complete — 修正范围是默认文档经过 `GraphCompiler` 和 legacy/UI stage adapter 后的
+实际算法选择，以及 encoded DNG 的 OpcodeList3 `WarpRectilinear` 进入 CUDA Develop 的路径。
+
+默认文档虽然一直包含独立的 Shadows、Highlights 和 Curve type id，但旧的 compiled
+adjustment 没有记录执行算法，CUDA Primary Grade 因而曾把 Shadows/Highlights 当作 pointwise
+亮度曲线执行。`CompiledAdjustment` 现在显式记录 `Pointwise` 或 `LocalLaplacian`；compiler 只把
+Shadows/Highlights 标记为 `LocalLaplacian`，Curve 继续保持 `Pointwise`。Primary Grade 对任何没有
+被编译为 LLF 的 Shadows/Highlights 直接报错，不会静默执行 curve、CPU 或其他替代路径。
+
+`RawInputLoader` 现在从 encoded DNG 解析 OpcodeList3 warp，保存到 `PreparedRawInput`，并把完整
+系数与中心点 hash 纳入 prepared source identity。CUDA Develop 在 demosaic、HLR 和 RGBA pack
+之后、GeometryResample 和 CameraColor/ACEScc 之前，把 warp 写入 workspace-owned 目标图像；
+caller-owned warp API 不分配私有 GPU 图像。缺少图像、类型/尺寸不匹配或 CUDA kernel 失败均直接
+抛错。
+
+**Primary success call chains:**
+
+```text
+CreateDefaultPipelineDocument / LegacyPipelineImporter
+  -> GraphCompiler::CompileStatic
+  -> Shadows + Highlights => CompiledAdjustmentAlgorithm::LocalLaplacian
+  -> Curve => CompiledAdjustmentAlgorithm::Pointwise
+  -> ExecuteCudaPrimaryGrade
+  -> ExecuteCudaLocalTone -> workspace Gaussian/Laplacian pyramids
+  -> AP1/ACEScc grade output -> DRT
+```
+
+```text
+encoded DNG bytes
+  -> RawInputLoader::LoadEncoded -> ExtractMetadata(OpcodeList3 WarpRectilinear)
+  -> PreparedRawInput + dng_warp_hash
+  -> ExecuteCudaDevelop -> demosaic/HLR/pack
+  -> CUDA::WarpDngRectilinear(unwarped, sensor_linear, coefficients)
+  -> GeometryResample -> CameraColor -> AP1/ACEScc working space
+```
+
+**Primary failure call chains:**
+
+```text
+Shadows/Highlights compiled without LocalLaplacian
+  -> ExecuteCudaPrimaryGrade throws
+  -> CudaRenderDevice cancels the unpublished submission
+  -> no curve or backend substitute
+
+invalid/missing DNG warp image or CUDA launch failure
+  -> WarpDngRectilinear throws
+  -> Develop submission is cancelled
+  -> no unwarped result is published as success
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DefaultPipelineCompilesShadowsAndHighlightsToLocalLaplacianOnly` | `GpuDagRawInputTest` | PASS |
+| `LegacyShadowControlExecutesLocalLaplacianWorkspacePath` | `GpuDagCudaDrtProductTest` | PASS |
+| `ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `EncodedDngCarriesOpcodeList3WarpIntoPreparedInput` | `GpuDagRawInputTest` | PASS with real DNG |
+| `CudaDevelopAppliesPreparedDngRectilinearWarpAfterDemosaic` | `GpuDagCudaDevelopTest` | PASS |
+| LLF CUDA memcheck | `compute-sanitizer` | PASS, 0 errors |
+| DNG warp CUDA memcheck | `compute-sanitizer` | PASS, 0 errors |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagCudaDevelopTest GpuDagRawInputTest GpuDagModelGraphTest GpuDagCudaMaskTest GpuDagCudaWorkspaceTest GpuDagGeometryTest GpuDagCudaGeometryTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "^(GpuDagCudaPrimaryGradeTest|GpuDagCudaDrtProductTest|GpuDagCudaDevelopTest|GpuDagRawInputTest|GpuDagModelGraphTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|GpuDagGeometryTest|GpuDagCudaGeometryTest)\."
+compute-sanitizer --tool memcheck --print-limit 5 build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe --gtest_filter=GpuDagCudaPrimaryGrade.ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel:GpuDagCudaPrimaryGrade.HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel
+compute-sanitizer --tool memcheck --print-limit 5 build\debug\alcedo_studio\tests\edit\GpuDagCudaDevelopTest_runtime\GpuDagCudaDevelopTest.exe --gtest_filter=CudaDevelopFixture.CudaDevelopAppliesPreparedDngRectilinearWarpAfterDemosaic
+```
+
+Suite total: related discovered set `159/159` PASS；LLF memcheck `2/2` PASS；DNG warp memcheck
+`1/1` PASS；两次 sanitizer 均为 `ERROR SUMMARY: 0 errors`。
+
+**LOC note (grill-code-review):** `cuda_local_tone_pass.cu` 360 lines，
+`cuda_primary_grade_pass.cu` 452 lines，`raw_input_loader.cpp` 495 lines，
+`cuda_develop_pass.cpp` 169 lines，`cuda_dng_warp.cu` 229 lines。没有本次修改的文件超过 1000 行。
+
+**Residual gaps:** full-frame、跨 ROI 的 canonical LLF reference 仍是上一条记录明确列出的独立
+剩余项；本次没有用当前 ROI 缓存冒充 canonical reference。DNG 测试证明真实文件的 warp 元数据
+进入 prepared input，并以合成非恒等参数证明 CUDA 像素结果实际改变；没有保存新的大型 golden
+图像。
+
 ### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 
-Primary Grade 的第一个 adjustment 是 scene-linear AP1 creative white balance，与 RAW
+Primary Grade 的第一个 adjustment 是 creative white balance，与 RAW
 CameraColorPass 是两个不同功能：
 
-- 输入和输出都保持 AP1/D60；
+- 节点输入和输出都保持 AP1 primaries / ACEScc encoded；需要 scene-linear 运算时只在该
+  adjustment 内部解码并重新编码，不能改变图的工作空间；
 - temperature/tint offset 先解析成源/目标白点，不直接变成 RGB 通道指数倍率；
 - 使用 CAT02 cone response 矩阵、白点 LMS 比例和逆 CAT02 完成色适配；
 - mix 在适配后以原 AP1 像素和适配像素插值；
@@ -3757,7 +3923,7 @@ DevelopColorTransformUsesSingleProfileWhenCalibrationIlluminantsAreIncomplete
 DevelopColorTransformSolvesAsShotNeutralWithoutUsingCamMulAsColorMatrix
 DevelopColorTransformDoesNotUseLibRawRgbCamOrPreMulAsCameraMatrix
 DevelopColorTransformRejectsMissingOrSingularCameraMatrices
-DevelopImageGraphValueIsAp1SceneLinear
+CameraColorEncodesAp1AsAcesccGraphWorkingSpace
 CudaCat02ZeroOffsetIsExactIdentity
 CudaCat02MapsSourceWhiteToRequestedWhiteInAp1
 ```
@@ -3847,7 +4013,7 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 - 用户可见图仍然只有 Develop、Primary Color Grade 和 DRT；
 - G4/G5 的缓存拆分保留，并存在独立 `develop.sensor_linear`、`geometry.scene_source`、
   `develop.image`；
-- `develop.image` 被 reference 测试证明是 AP1 scene-linear；
+- `develop.image` 被 reference 测试证明是 AP1 primaries / ACEScc encoded；
 - Camera→AP1 使用 CameraMatrices/DNG 双光源插值，`cam_mul/pre_mul` 不作为颜色矩阵；
 - as-shot/custom CCT/tint 和 creative CAT02 分别通过数学单元测试和真实 RAW reference 测试；
 - CUDA 产品路径不再包含 legacy 参数镜像、stage adapter 或 `LegacyPipelineImporter`；
@@ -4144,20 +4310,21 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [x] Prepared RAW、静态 ExecutionPlan 和节点结果都有可查询的内容感知 cache hit/miss。
 - [x] `develop.sensor_linear` 和 `geometry.scene_source` 是独立、可淘汰、submission-safe 的结果缓存。
 - [x] 无变化渲染不执行 LibRaw、source H2D、plan compile 或 GPU 图像节点 pass。
-- [ ] LLF 不管理自己的内存池。
+- [x] LLF 不管理自己的内存池。
 - [x] Mask GPU LRU 只存在于 workspace。
 
 ### 47.4 RAW 和颜色
 
 - [ ] LibRaw unpack 在编辑管线之前完成。
 - [ ] RAW DecodeRes 降采样在 CPU 输入准备中完成。
-- [ ] Develop 输出 AP1 scene-linear RGB。
+- [ ] Geometry 和 CameraColor 后的 Develop 图输出 AP1 primaries / ACEScc encoded RGB。
 - [ ] Camera→AP1 使用 CameraMatrices/DNG 双光源矩阵和标定光源 CCT 在 mired 空间插值。
 - [ ] `cam_mul/pre_mul` 只用于 RAW 归一化和 neutral 推导，不作为 Camera→AP1 矩阵。
 - [ ] metadata 缺失或矩阵无效时返回明确错误，不静默使用 identity。
 - [ ] RAW CameraColorPass 与 Primary Grade creative CAT02 分别拥有 dirty key 和测试。
 - [ ] CAT02 调整以 AP1 白点为参考。
-- [ ] DRT 支持 ACES 2.0 和 OpenDRT。
+- [ ] DRT 从 AP1/ACEScc 工作空间解码后支持 ACES 2.0 和 OpenDRT，并转换到用户选择的
+  encoding space / EOTF / limiting space。
 
 ### 47.5 Geometry 和 Mask
 

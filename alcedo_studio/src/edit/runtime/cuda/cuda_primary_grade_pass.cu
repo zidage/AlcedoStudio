@@ -21,7 +21,9 @@
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
+#include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -40,11 +42,6 @@ struct alignas(16) CudaAdjustmentParams {
 
 struct CudaAdjustmentCommand {
   std::uint32_t parameter_offset = 0;
-};
-
-struct CameraToAp1Params {
-  float matrix[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-  float mix       = 1.0f;
 };
 
 auto MakeRuntimeParams(const IOperatorModel& model, CudaAdjustmentBehavior behavior)
@@ -183,10 +180,10 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, std::ui
     c.y *= exp2f(tint);
     c.z *= exp2f(-temperature - tint * 0.5f);
   } else if (behavior == CudaAdjustmentBehavior::Exposure) {
-    const float gain = exp2f(value);
-    c.x *= gain;
-    c.y *= gain;
-    c.z *= gain;
+    const float offset = value / 17.52f;
+    c.x += offset;
+    c.y += offset;
+    c.z += offset;
   } else if (behavior == CudaAdjustmentBehavior::Contrast) {
     const float scale = 1.0f + value * 0.01f;
     c.x               = (c.x - 0.18f) * scale + 0.18f;
@@ -202,15 +199,11 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, std::ui
     c.x += offset;
     c.y += offset;
     c.z += offset;
-  } else if (behavior == CudaAdjustmentBehavior::Shadows ||
-             behavior == CudaAdjustmentBehavior::Highlights ||
-             behavior == CudaAdjustmentBehavior::Clarity) {
+  } else if (behavior == CudaAdjustmentBehavior::Clarity) {
     const float l      = Luma(c);
-    float       weight = behavior == CudaAdjustmentBehavior::Highlights
-                             ? fminf(l / fmaxf(local_reference, 1.0e-4f), 1.0f)
-                             : 1.0f - fminf(l / fmaxf(local_reference, 1.0e-4f), 1.0f);
-    if (behavior == CudaAdjustmentBehavior::Clarity) weight = 0.5f - fabsf(weight - 0.5f);
-    const float gain = 1.0f + value * 0.01f * weight;
+    float       weight = 1.0f - fminf(l / fmaxf(local_reference, 1.0e-4f), 1.0f);
+    weight             = 0.5f - fabsf(weight - 0.5f);
+    const float gain   = 1.0f + value * 0.01f * weight;
     c.x *= gain;
     c.y *= gain;
     c.z *= gain;
@@ -264,26 +257,28 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, std::ui
 __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uint32_t pixel_count,
                                    const unsigned char*         parameter_base,
                                    const CudaAdjustmentCommand* commands,
-                                   std::uint32_t command_count, CameraToAp1Params camera,
-                                   float local_reference, const std::uint8_t* mask) {
+                                   std::uint32_t command_count, float local_reference) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   const float4 source = input[index];
-  float3       c;
-  c.x = camera.matrix[0] * source.x + camera.matrix[1] * source.y + camera.matrix[2] * source.z;
-  c.y = camera.matrix[3] * source.x + camera.matrix[4] * source.y + camera.matrix[5] * source.z;
-  c.z = camera.matrix[6] * source.x + camera.matrix[7] * source.y + camera.matrix[8] * source.z;
-  const float3 converted = c;
+  float3       c      = make_float3(source.x, source.y, source.z);
   for (std::uint32_t i = 0; i < command_count; ++i) {
     const auto* params = reinterpret_cast<const CudaAdjustmentParams*>(
         parameter_base + commands[i].parameter_offset);
     c = ApplyAdjustment(c, *params, index, local_reference);
   }
-  const float mix = camera.mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
-  c.x             = converted.x + (c.x - converted.x) * mix;
-  c.y             = converted.y + (c.y - converted.y) * mix;
-  c.z             = converted.z + (c.z - converted.z) * mix;
-  output[index]   = make_float4(c.x, c.y, c.z, source.w);
+  output[index] = make_float4(c.x, c.y, c.z, source.w);
+}
+
+__global__ void FinalMixKernel(const float4* source, float4* adjusted, std::uint32_t pixel_count,
+                               float grade_mix, const std::uint8_t* mask) {
+  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixel_count) return;
+  const float  mix = grade_mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
+  const float4 a   = adjusted[index];
+  const float4 s   = source[index];
+  adjusted[index] =
+      make_float4(s.x + (a.x - s.x) * mix, s.y + (a.y - s.y) * mix, s.z + (a.z - s.z) * mix, s.w);
 }
 
 }  // namespace
@@ -307,9 +302,13 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   arena.Reserve(plan.primary_grade_adjustments.size() *
                 (sizeof(CudaAdjustmentParams) + ParameterArena<CudaBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
-  std::vector<CudaAdjustmentCommand> commands;
-  commands.reserve(plan.primary_grade_adjustments.size());
-  bool                        needs_local_reference = false;
+  std::vector<CudaAdjustmentCommand> commands_before_local_tone;
+  std::vector<CudaAdjustmentCommand> commands_after_local_tone;
+  commands_before_local_tone.reserve(plan.primary_grade_adjustments.size());
+  commands_after_local_tone.reserve(plan.primary_grade_adjustments.size());
+  bool                        reached_local_tone = false;
+  float                       shadows_slider     = 0.0f;
+  float                       highlights_slider  = 0.0f;
   const ParameterFieldBinding field{DirtyFieldMask{kRuntimeParamDirtyBit}, 0, 0,
                                     sizeof(CudaAdjustmentParams)};
 
@@ -323,7 +322,11 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     if (!behavior.has_value()) {
       continue;
     }
-    needs_local_reference = needs_local_reference || IsCudaLocalToneBehavior(*behavior);
+    if (IsCudaLocalToneBehavior(*behavior) &&
+        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
+      throw std::runtime_error(
+          "ExecuteCudaPrimaryGrade: Shadows/Highlights were not compiled for LLF");
+    }
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
     const auto             runtime_params = MakeRuntimeParams(*model, *behavior);
     auto payload = std::make_shared<TypedOperatorParamPayload<CudaAdjustmentParams>>(
@@ -338,13 +341,29 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       arena.ApplyPatch(key, patch);
       pending.push_back(std::move(*change));
     }
-    commands.push_back({arena.Binding(key).offset});
+    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian &&
+        *behavior == CudaAdjustmentBehavior::Shadows) {
+      shadows_slider     = runtime_params.values[0];
+      reached_local_tone = true;
+      continue;
+    }
+    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian &&
+        *behavior == CudaAdjustmentBehavior::Highlights) {
+      highlights_slider  = runtime_params.values[0];
+      reached_local_tone = true;
+      continue;
+    }
+    auto& destination = reached_local_tone ? commands_after_local_tone : commands_before_local_tone;
+    destination.push_back({arena.Binding(key).offset});
   }
 
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
   for (auto& patch : pending) patch.Commit();
 
+  std::vector<CudaAdjustmentCommand> commands = commands_before_local_tone;
+  commands.insert(commands.end(), commands_after_local_tone.begin(),
+                  commands_after_local_tone.end());
   const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
   auto&              command_buffer = EnsureBuffer(
       workspace, command_id, std::max<std::size_t>(commands.size() * sizeof(commands[0]), 1));
@@ -353,16 +372,6 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
         command_buffer, 0,
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(commands.data()),
                                    commands.size() * sizeof(commands[0])),
-        context);
-  }
-
-  const GraphValueId reference_id{grade->Id(), PortId{"local_tone.reference"}};
-  auto&              reference = EnsureBuffer(workspace, reference_id, sizeof(float));
-  if (needs_local_reference && reference.Bytes() == sizeof(float)) {
-    const float value = 0.18f;
-    workspace.Device().UploadBufferRange(
-        reference, 0,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(&value), sizeof(value)),
         context);
   }
 
@@ -383,8 +392,6 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       ::cudaPointerGetAttributes(&output_attributes, output_pointer) != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: workspace image has no CUDA allocation");
   }
-  CameraToAp1Params camera;
-  camera.mix                       = grade->Enabled() ? grade->Mix() : 0.0f;
   const std::uint8_t* mask_pointer = nullptr;
   if (plan.primary_grade_mask) {
     auto* mask = workspace.Images().Find(plan.mask_output);
@@ -396,15 +403,50 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   }
   const std::uint32_t     pixels = input_width * input_height;
   constexpr std::uint32_t block  = 256;
-  PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
-      static_cast<const float4*>(input_pointer), static_cast<float4*>(output_pointer), pixels,
-      static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer()),
-      static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer()),
-      static_cast<std::uint32_t>(commands.size()), camera, 0.18f, mask_pointer);
+  const auto*             device_commands =
+      static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer());
+  const auto* parameter_base =
+      static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer());
+  const bool    local_tone_active     = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
+                                                                      -highlights_slider * 1.5f / 100.0f);
+  std::uint64_t reference_resource_id = 0;
+  if (local_tone_active) {
+    const GraphValueId local_input_id{grade->Id(), PortId{"local_tone.input"}};
+    const GraphValueId local_output_id{grade->Id(), PortId{"local_tone.output"}};
+    auto& local_input = EnsureImage(workspace, local_input_id, input_width, input_height);
+    input             = workspace.Images().Find(plan.develop_output);
+    PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
+        static_cast<const float4*>(input->Texture().DevicePointer()),
+        static_cast<float4*>(local_input.Texture().DevicePointer()), pixels, parameter_base,
+        device_commands, static_cast<std::uint32_t>(commands_before_local_tone.size()),
+        local_tone_mapping::kAcesccMiddleGray);
+    reference_resource_id =
+        ExecuteCudaLocalTone(device, local_input_id, local_output_id, grade->Id(), input_width,
+                             input_height, shadows_slider, highlights_slider);
+    auto* local_output = workspace.Images().Find(local_output_id);
+    output             = workspace.Images().Find(output_id);
+    PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
+        static_cast<const float4*>(local_output->Texture().DevicePointer()),
+        static_cast<float4*>(output->Texture().DevicePointer()), pixels, parameter_base,
+        device_commands + commands_before_local_tone.size(),
+        static_cast<std::uint32_t>(commands_after_local_tone.size()),
+        local_tone_mapping::kAcesccMiddleGray);
+  } else {
+    PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
+        static_cast<const float4*>(input_pointer), static_cast<float4*>(output_pointer), pixels,
+        parameter_base, device_commands, static_cast<std::uint32_t>(commands.size()),
+        local_tone_mapping::kAcesccMiddleGray);
+  }
+  input  = workspace.Images().Find(plan.develop_output);
+  output = workspace.Images().Find(output_id);
+  FinalMixKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
+      static_cast<const float4*>(input->Texture().DevicePointer()),
+      static_cast<float4*>(output->Texture().DevicePointer()), pixels,
+      grade->Enabled() ? grade->Mix() : 0.0f, mask_pointer);
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
   }
-  return {output_id, reference.ResourceId()};
+  return {output_id, reference_resource_id};
 }
 
 }  // namespace alcedo

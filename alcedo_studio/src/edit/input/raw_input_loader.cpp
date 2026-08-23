@@ -4,24 +4,24 @@
 
 #include "edit/input/raw_input_loader.hpp"
 
-#include "decoders/libraw_unpack_guard.hpp"
-#include "decoders/processor/raw_normalization.hpp"
+#include <libraw/libraw.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <opencv2/core.hpp>
 #include <stdexcept>
 #include <utility>
 
-#include <libraw/libraw.h>
-#include <opencv2/core.hpp>
+#include "decoders/libraw_unpack_guard.hpp"
+#include "decoders/processor/raw_normalization.hpp"
 
 namespace alcedo {
 namespace {
 
 constexpr int kRcdOutputCropRadius = 4;
 
-auto MixU64(std::uint64_t hash, std::uint64_t value) -> std::uint64_t {
+auto          MixU64(std::uint64_t hash, std::uint64_t value) -> std::uint64_t {
   hash ^= value;
   hash *= 1099511628211ull;
   return hash;
@@ -41,17 +41,36 @@ auto HashCfaPattern(const RawCfaPattern& pattern) -> std::uint64_t {
   return hash;
 }
 
+auto HashDngWarp(const std::optional<dng::WarpRectilinear>& warp) -> std::uint64_t {
+  if (!warp.has_value()) return 0;
+  std::uint64_t hash = MixU64(14695981039346656037ull, warp->coefficient_set_count);
+  for (const auto& set : warp->coefficient_sets) {
+    for (double value : set) {
+      std::uint64_t bits = 0;
+      static_assert(sizeof(bits) == sizeof(value));
+      std::memcpy(&bits, &value, sizeof(bits));
+      hash = MixU64(hash, bits);
+    }
+  }
+  std::uint64_t center_x = 0;
+  std::uint64_t center_y = 0;
+  std::memcpy(&center_x, &warp->center_x, sizeof(center_x));
+  std::memcpy(&center_y, &warp->center_y, sizeof(center_y));
+  return MixU64(MixU64(hash, center_x), center_y);
+}
+
 auto FillSourceKey(PreparedRawInput& input, std::uint64_t encoded_hash,
                    std::uint64_t encoded_byte_count) -> void {
-  input.content_key.content_hash       = encoded_hash;
+  input.content_key.content_hash        = encoded_hash;
   input.source_key.encoded_content_hash = encoded_hash;
-  input.source_key.encoded_byte_count  = encoded_byte_count;
-  input.source_key.input_kind          = input.input_kind;
-  input.source_key.cfa_hash            = HashCfaPattern(input.cfa_pattern);
-  input.source_key.downsample_passes   = input.downsample_passes;
-  input.source_key.sensor_active_area  = input.sensor_active_area;
-  input.source_key.orientation_flip    = input.sensor.orientation_flip;
-  input.source_key.preparation_version = kRawInputPreparationVersion;
+  input.source_key.encoded_byte_count   = encoded_byte_count;
+  input.source_key.input_kind           = input.input_kind;
+  input.source_key.cfa_hash             = HashCfaPattern(input.cfa_pattern);
+  input.source_key.dng_warp_hash        = HashDngWarp(input.dng_warp_rectilinear);
+  input.source_key.downsample_passes    = input.downsample_passes;
+  input.source_key.sensor_active_area   = input.sensor_active_area;
+  input.source_key.orientation_flip     = input.sensor.orientation_flip;
+  input.source_key.preparation_version  = kRawInputPreparationVersion;
 }
 
 auto ScaleCoordFloor(int value, int divisor) -> int { return value / divisor; }
@@ -71,12 +90,12 @@ auto BuildActiveAreaRect(const RawSensorGeometry& sensor, Extent2D image_size, i
   const int raw_right  = std::clamp(raw_left + sensor.width, raw_left, raw_width);
   const int raw_bottom = std::clamp(raw_top + sensor.height, raw_top, raw_height);
 
-  const int img_w = static_cast<int>(image_size.width);
-  const int img_h = static_cast<int>(image_size.height);
-  const int left  = std::clamp(ScaleCoordFloor(raw_left, scale_divisor), 0, img_w);
-  const int top   = std::clamp(ScaleCoordFloor(raw_top, scale_divisor), 0, img_h);
-  const int right = std::clamp(ScaleCoordCeil(raw_right, scale_divisor), left, img_w);
-  const int bottom = std::clamp(ScaleCoordCeil(raw_bottom, scale_divisor), top, img_h);
+  const int img_w      = static_cast<int>(image_size.width);
+  const int img_h      = static_cast<int>(image_size.height);
+  const int left       = std::clamp(ScaleCoordFloor(raw_left, scale_divisor), 0, img_w);
+  const int top        = std::clamp(ScaleCoordFloor(raw_top, scale_divisor), 0, img_h);
+  const int right      = std::clamp(ScaleCoordCeil(raw_right, scale_divisor), left, img_w);
+  const int bottom     = std::clamp(ScaleCoordCeil(raw_bottom, scale_divisor), top, img_h);
   if (right - left <= 0 || bottom - top <= 0) {
     return RectI{0, 0, img_w, img_h};
   }
@@ -109,16 +128,18 @@ auto BuildDecodeCropRect(const RawSensorGeometry& sensor, Extent2D image_size, i
   }
   const int img_w = static_cast<int>(image_size.width);
   const int img_h = static_cast<int>(image_size.height);
-  const int left =
-      std::clamp(ScaleCoordFloor(static_cast<int>(sensor.default_crop[0]), scale_divisor), 0, img_w);
-  const int top =
-      std::clamp(ScaleCoordFloor(static_cast<int>(sensor.default_crop[1]), scale_divisor), 0, img_h);
-  const int right = std::clamp(
-      ScaleCoordCeil(static_cast<int>(sensor.default_crop[0] + sensor.default_crop[2]), scale_divisor),
-      left, img_w);
-  const int bottom = std::clamp(
-      ScaleCoordCeil(static_cast<int>(sensor.default_crop[1] + sensor.default_crop[3]), scale_divisor),
-      top, img_h);
+  const int left  = std::clamp(
+      ScaleCoordFloor(static_cast<int>(sensor.default_crop[0]), scale_divisor), 0, img_w);
+  const int top = std::clamp(
+      ScaleCoordFloor(static_cast<int>(sensor.default_crop[1]), scale_divisor), 0, img_h);
+  const int right =
+      std::clamp(ScaleCoordCeil(static_cast<int>(sensor.default_crop[0] + sensor.default_crop[2]),
+                                scale_divisor),
+                 left, img_w);
+  const int bottom =
+      std::clamp(ScaleCoordCeil(static_cast<int>(sensor.default_crop[1] + sensor.default_crop[3]),
+                                scale_divisor),
+                 top, img_h);
   if (right - left <= 0 || bottom - top <= 0) {
     return active;
   }
@@ -137,10 +158,8 @@ auto BuildBorderLossCrop(const RawSensorGeometry& sensor, Extent2D output_size, 
   const int      out_h       = static_cast<int>(output_size.height);
   const int      left        = std::clamp(source_crop.x, 0, out_w);
   const int      top         = std::clamp(source_crop.y, 0, out_h);
-  const int      right =
-      std::clamp(source_crop.x + source_crop.width - 2 * source_border, left, out_w);
-  const int bottom =
-      std::clamp(source_crop.y + source_crop.height - 2 * source_border, top, out_h);
+  const int right  = std::clamp(source_crop.x + source_crop.width - 2 * source_border, left, out_w);
+  const int bottom = std::clamp(source_crop.y + source_crop.height - 2 * source_border, top, out_h);
   if (right <= left || bottom <= top) {
     throw std::runtime_error("RawInputLoader: decode crop is too small for demosaic border");
   }
@@ -156,36 +175,35 @@ auto OrientedExtent(Extent2D extent, int flip) -> Extent2D {
 
 void FillOutputGeometry(PreparedRawInput& input, DecodeRes decode_res_for_full_reference) {
   (void)decode_res_for_full_reference;
-  const std::uint8_t passes = input.downsample_passes;
+  const std::uint8_t passes  = input.downsample_passes;
   const int          divisor = ScaleDivisor(passes);
   const Extent2D     host    = input.host_extent;
 
   if (input.input_kind == RawInputKind::DebayeredRgb) {
-    const RectI crop               = BuildDecodeCropRect(input.sensor, host, divisor);
-    input.demosaic_output_crop     = crop;
-    input.develop_output_extent    = OrientedExtent(
+    const RectI crop            = BuildDecodeCropRect(input.sensor, host, divisor);
+    input.demosaic_output_crop  = crop;
+    input.develop_output_extent = OrientedExtent(
         Extent2D{static_cast<std::uint32_t>(crop.width), static_cast<std::uint32_t>(crop.height)},
         input.sensor.orientation_flip);
-    const int full_div = 1;
+    const int      full_div = 1;
     const Extent2D full_host{static_cast<std::uint32_t>(std::max(input.sensor.raw_width, 0)),
                              static_cast<std::uint32_t>(std::max(input.sensor.raw_height, 0))};
-    const RectI full_crop = BuildDecodeCropRect(input.sensor, full_host, full_div);
-    input.full_reference_extent = OrientedExtent(
-        Extent2D{static_cast<std::uint32_t>(full_crop.width),
-                 static_cast<std::uint32_t>(full_crop.height)},
-        input.sensor.orientation_flip);
+    const RectI    full_crop = BuildDecodeCropRect(input.sensor, full_host, full_div);
+    input.full_reference_extent =
+        OrientedExtent(Extent2D{static_cast<std::uint32_t>(full_crop.width),
+                                static_cast<std::uint32_t>(full_crop.height)},
+                       input.sensor.orientation_flip);
     input.sensor_active_area = BuildActiveAreaRect(input.sensor, host, divisor);
     return;
   }
 
-  const bool bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
-  const int  border = bayer ? kRcdOutputCropRadius : 0;
+  const bool     bayer  = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
+  const int      border = bayer ? kRcdOutputCropRadius : 0;
   const Extent2D demosaic_extent{
       static_cast<std::uint32_t>(std::max(0, static_cast<int>(host.width) - 2 * border)),
       static_cast<std::uint32_t>(std::max(0, static_cast<int>(host.height) - 2 * border))};
-  const RectI crop =
-      bayer ? BuildBorderLossCrop(input.sensor, demosaic_extent, divisor, border)
-            : BuildDecodeCropRect(input.sensor, host, divisor);
+  const RectI crop = bayer ? BuildBorderLossCrop(input.sensor, demosaic_extent, divisor, border)
+                           : BuildDecodeCropRect(input.sensor, host, divisor);
   input.demosaic_output_crop  = crop;
   input.develop_output_extent = OrientedExtent(
       Extent2D{static_cast<std::uint32_t>(crop.width), static_cast<std::uint32_t>(crop.height)},
@@ -196,24 +214,24 @@ void FillOutputGeometry(PreparedRawInput& input, DecodeRes decode_res_for_full_r
   const Extent2D full_demosaic{
       static_cast<std::uint32_t>(std::max(0, static_cast<int>(full_host.width) - 2 * border)),
       static_cast<std::uint32_t>(std::max(0, static_cast<int>(full_host.height) - 2 * border))};
-  const RectI full_crop =
-      bayer ? BuildBorderLossCrop(input.sensor, full_demosaic, 1, border)
-            : BuildDecodeCropRect(input.sensor, full_host, 1);
-  input.full_reference_extent = OrientedExtent(
-      Extent2D{static_cast<std::uint32_t>(full_crop.width),
-               static_cast<std::uint32_t>(full_crop.height)},
-      input.sensor.orientation_flip);
+  const RectI full_crop = bayer ? BuildBorderLossCrop(input.sensor, full_demosaic, 1, border)
+                                : BuildDecodeCropRect(input.sensor, full_host, 1);
+  input.full_reference_extent =
+      OrientedExtent(Extent2D{static_cast<std::uint32_t>(full_crop.width),
+                              static_cast<std::uint32_t>(full_crop.height)},
+                     input.sensor.orientation_flip);
   input.sensor_active_area = BuildActiveAreaRect(input.sensor, host, divisor);
 }
 
 auto CopyPlane(const cv::Mat& src, HostPixelFormat format) -> HostImagePlane {
   HostImagePlane plane;
-  plane.extent       = Extent2D{static_cast<std::uint32_t>(src.cols),
-                                static_cast<std::uint32_t>(src.rows)};
-  plane.stride_bytes = static_cast<std::uint32_t>(src.cols * src.elemSize());
-  plane.format       = format;
+  plane.extent =
+      Extent2D{static_cast<std::uint32_t>(src.cols), static_cast<std::uint32_t>(src.rows)};
+  plane.stride_bytes      = static_cast<std::uint32_t>(src.cols * src.elemSize());
+  plane.format            = format;
   const std::size_t bytes = plane.ByteCount();
-  auto              storage = std::shared_ptr<std::byte>(new std::byte[bytes], std::default_delete<std::byte[]>());
+  auto              storage =
+      std::shared_ptr<std::byte>(new std::byte[bytes], std::default_delete<std::byte[]>());
   if (src.isContinuous() && static_cast<std::size_t>(src.step) == plane.stride_bytes) {
     std::memcpy(storage.get(), src.data, bytes);
   } else {
@@ -245,8 +263,8 @@ void DownsampleInPlace(PreparedRawInput& input, std::uint8_t passes) {
     }
     current = DownsampleRaw2x(current, input.cfa_pattern);
   }
-  input.pixels      = CopyPlane(current, HostPixelFormat::U16Cfa);
-  input.host_extent = input.pixels.extent;
+  input.pixels            = CopyPlane(current, HostPixelFormat::U16Cfa);
+  input.host_extent       = input.pixels.extent;
   input.downsample_passes = passes;
 }
 
@@ -258,10 +276,10 @@ auto LinearizationFromLibRaw(LibRaw& raw) -> RawLinearizationParams {
     params.white_level[c] = curve.white_level[c];
     params.cam_mul[c]     = raw.imgdata.color.cam_mul[c];
   }
-  params.apply_as_shot_wb  = raw.imgdata.color.as_shot_wb_applied != 1 ? 1 : 0;
-  const int tile_width     = raw.imgdata.rawdata.color.cblack[4];
-  const int tile_height    = raw.imgdata.rawdata.color.cblack[5];
-  const int entries        = tile_width * tile_height;
+  params.apply_as_shot_wb = raw.imgdata.color.as_shot_wb_applied != 1 ? 1 : 0;
+  const int tile_width    = raw.imgdata.rawdata.color.cblack[4];
+  const int tile_height   = raw.imgdata.rawdata.color.cblack[5];
+  const int entries       = tile_width * tile_height;
   if (entries > 0 && entries <= 36) {
     params.black_tile_width  = tile_width;
     params.black_tile_height = tile_height;
@@ -338,11 +356,11 @@ auto PreparedRawInput::CompileSource() const -> DevelopCompileSource {
   } else {
     source.kind = DevelopInputKind::BayerCfa;
   }
-  source.host_extent            = host_extent;
-  source.develop_output_extent  = develop_output_extent;
-  source.full_reference_extent  = full_reference_extent;
-  source.sensor_active_area     = sensor_active_area;
-  source.downsample_passes      = downsample_passes;
+  source.host_extent           = host_extent;
+  source.develop_output_extent = develop_output_extent;
+  source.full_reference_extent = full_reference_extent;
+  source.sensor_active_area    = sensor_active_area;
+  source.downsample_passes     = downsample_passes;
   return source;
 }
 
@@ -366,12 +384,12 @@ auto RawInputLoader::FromUnpackedCfa(HostImagePlane plane, RawCfaPattern pattern
   }
 
   PreparedRawInput input;
-  input.pixels        = std::move(plane);
-  input.host_extent   = input.pixels.extent;
-  input.input_kind    = RawInputKind::BayerRaw;
-  input.cfa_pattern   = pattern;
-  input.linearization = linearization;
-  input.sensor        = sensor;
+  input.pixels                                = std::move(plane);
+  input.host_extent                           = input.pixels.extent;
+  input.input_kind                            = RawInputKind::BayerRaw;
+  input.cfa_pattern                           = pattern;
+  input.linearization                         = linearization;
+  input.sensor                                = sensor;
   input.color_context.valid_                  = true;
   input.color_context.output_in_camera_space_ = true;
   for (int i = 0; i < 3; ++i) {
@@ -394,15 +412,15 @@ auto RawInputLoader::FromDirectRgb(HostImagePlane plane, RawSensorGeometry senso
     sensor.height     = sensor.raw_height;
   }
   PreparedRawInput input;
-  input.pixels      = std::move(plane);
-  input.host_extent = input.pixels.extent;
-  input.input_kind  = RawInputKind::DebayeredRgb;
-  input.sensor      = sensor;
-  input.linearization.apply_as_shot_wb = 0;
+  input.pixels                                = std::move(plane);
+  input.host_extent                           = input.pixels.extent;
+  input.input_kind                            = RawInputKind::DebayeredRgb;
+  input.sensor                                = sensor;
+  input.linearization.apply_as_shot_wb        = 0;
   input.color_context.valid_                  = true;
   input.color_context.output_in_camera_space_ = true;
-  const auto encoded_hash  = HashContentBytes(input.pixels.Span());
-  const auto encoded_bytes = input.pixels.ByteCount();
+  const auto encoded_hash                     = HashContentBytes(input.pixels.Span());
+  const auto encoded_bytes                    = input.pixels.ByteCount();
   return FinishPrepared(std::move(input), DecodeRes::FULL, encoded_hash, encoded_bytes);
 }
 
@@ -411,9 +429,11 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   if (encoded.empty()) {
     throw std::runtime_error("RawInputLoader::LoadEncoded: empty buffer");
   }
-  LibRaw raw;
-  if (raw.open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())), encoded.size()) !=
-      LIBRAW_SUCCESS) {
+  const auto dng_metadata = dng::ExtractMetadata(std::span<const std::uint8_t>(
+      reinterpret_cast<const std::uint8_t*>(encoded.data()), encoded.size()));
+  LibRaw     raw;
+  if (raw.open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())),
+                      encoded.size()) != LIBRAW_SUCCESS) {
     throw std::runtime_error("RawInputLoader::LoadEncoded: LibRaw open_buffer failed");
   }
   if (libraw_guard::Unpack(raw) != LIBRAW_SUCCESS) {
@@ -434,6 +454,14 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   input.sensor        = SensorFromLibRaw(raw);
   input.linearization = LinearizationFromLibRaw(raw);
   FillColorContext(raw, input.color_context);
+  if (dng_metadata.warp_rectilinear.has_value()) {
+    input.dng_warp_rectilinear                        = dng_metadata.warp_rectilinear;
+    input.color_context.dng_warp_rectilinear_present_ = true;
+  }
+  if (dng_metadata.default_crop[2] > 0 && dng_metadata.default_crop[3] > 0) {
+    std::copy(dng_metadata.default_crop.begin(), dng_metadata.default_crop.end(),
+              input.sensor.default_crop);
+  }
 
   if (kind == RawInputKind::DebayeredRgb) {
     raw.recycle();
@@ -443,9 +471,10 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   }
 
   const auto& sizes = raw.imgdata.sizes;
-  cv::Mat view(sizes.raw_height, sizes.raw_width, CV_16UC1, raw.imgdata.rawdata.raw_image,
-               sizes.raw_pitch != 0 ? static_cast<std::size_t>(sizes.raw_pitch)
-                                    : static_cast<std::size_t>(sizes.raw_width) * sizeof(std::uint16_t));
+  cv::Mat     view(sizes.raw_height, sizes.raw_width, CV_16UC1, raw.imgdata.rawdata.raw_image,
+               sizes.raw_pitch != 0
+                       ? static_cast<std::size_t>(sizes.raw_pitch)
+                       : static_cast<std::size_t>(sizes.raw_width) * sizeof(std::uint16_t));
   input.pixels      = CopyPlane(view, HostPixelFormat::U16Cfa);
   input.host_extent = input.pixels.extent;
   input.input_kind  = RawInputKind::BayerRaw;

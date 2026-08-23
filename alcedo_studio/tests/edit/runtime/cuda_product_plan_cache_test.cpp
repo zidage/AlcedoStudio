@@ -18,6 +18,7 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "image/image_buffer.hpp"
 
@@ -39,9 +40,9 @@ auto MakeEncodedImage(std::uint8_t tag) -> std::shared_ptr<ImageBuffer> {
 auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
   return [](std::span<const std::byte>, DecodeRes decode_res) {
     const auto pattern = gpu_dag_test::MakeRggbPattern();
-    return RawInputLoader::FromUnpackedCfa(
-        gpu_dag_test::MakeU16CfaPlane(32, 32, pattern), pattern, gpu_dag_test::DefaultLinearization(),
-        gpu_dag_test::FullSensor(32, 32), decode_res);
+    return RawInputLoader::FromUnpackedCfa(gpu_dag_test::MakeU16CfaPlane(32, 32, pattern), pattern,
+                                           gpu_dag_test::DefaultLinearization(),
+                                           gpu_dag_test::FullSensor(32, 32), decode_res);
   };
 }
 
@@ -70,13 +71,13 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
   exposure->SetValue(0.8f);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
 
-  auto develop = document->Develop()->Params().Params();
+  auto develop       = document->Develop()->Params().Params();
   develop.wb_mode    = "custom";
   develop.custom_cct = 4800.0f;
   document->Develop()->Params().ReplaceParams(develop);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
 
-  auto drt = document->Drt()->Params().Params();
+  auto drt           = document->Drt()->Params().Params();
   drt.peak_luminance = 180.0f;
   document->Drt()->Params().ReplaceParams(drt);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
@@ -86,13 +87,13 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
 
   document->Geometry().SetCropRect({0.05f, 0.05f, 0.9f, 0.9f});
 
-  auto& encoded = image->GetBuffer();
+  auto&      encoded       = image->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  const auto source = renderer.SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
-  auto       plan   = renderer.PlanCache().GetOrCompile(*document, source.Get().CompileSource());
-  const auto key    = plan.static_key;
-  RenderRequest viewport = request;
+  const auto    source = renderer.SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
+  auto          plan   = renderer.PlanCache().GetOrCompile(*document, source.Get().CompileSource());
+  const auto    key    = plan.static_key;
+  RenderRequest viewport                   = request;
   viewport.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
   viewport.view.viewport_extent            = {24, 24};
   GraphCompiler::BindFrameGeometry(plan, *document, viewport);
@@ -147,7 +148,8 @@ TEST(GpuDagCudaDrtProduct, ProductRendererReusesPreparedSourceAfterSwitchingEnco
   EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
 }
 
-TEST(GpuDagCudaDrtProduct, ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch) {
+TEST(GpuDagCudaDrtProduct,
+     ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
@@ -158,7 +160,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererViewportAndMaxEdgeResampleDecodedSourc
   request.view.viewport_extent = {48, 32};
   request.resolution.max_edge  = 48;
 
-  const auto output = RenderHost(renderer, image, DecodeRes::FULL, request);
+  const auto output            = RenderHost(renderer, image, DecodeRes::FULL, request);
   ASSERT_NE(output, nullptr);
   const auto& cpu = output->GetCPUData();
   EXPECT_EQ(cpu.cols, 48);
@@ -166,7 +168,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererViewportAndMaxEdgeResampleDecodedSourc
 
   request.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
   request.view.viewport_extent            = {40, 24};
-  const auto cropped = RenderHost(renderer, image, DecodeRes::FULL, request);
+  const auto cropped                      = RenderHost(renderer, image, DecodeRes::FULL, request);
   ASSERT_NE(cropped, nullptr);
   EXPECT_EQ(cropped->GetCPUData().cols, 40);
   EXPECT_EQ(cropped->GetCPUData().rows, 24);
@@ -190,6 +192,25 @@ TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnre
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(41);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, RenderRequest{}), nullptr);
+}
+
+TEST(GpuDagCudaDrtProduct, LegacyShadowControlExecutesLocalLaplacianWorkspacePath) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+
+  nlohmann::json legacy;
+  legacy["Basic Adjustment"]["Basic Adjustment"]["shadows"] = {
+      {"type", 6}, {"enable", true}, {"params", {{"shadows", 60.0f}}}};
+  auto imported = LegacyPipelineImporter::Import(legacy);
+  ASSERT_TRUE(imported.Ok()) << imported.error;
+  auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
+  gpu_dag_test::EnsureTestCameraProfile(*document);
+
+  CudaProductRenderer renderer(document, MakeUnpacker());
+  ASSERT_NE(RenderHost(renderer, MakeEncodedImage(42), DecodeRes::FULL, RenderRequest{}), nullptr);
+  const auto* reference = renderer.Device().Workspace().Values().Find(
+      document->PrimaryGrade()->Id(), PortId{"local_tone.source.0"});
+  ASSERT_NE(reference, nullptr);
+  EXPECT_GT(reference->Bytes(), sizeof(float));
 }
 
 }  // namespace

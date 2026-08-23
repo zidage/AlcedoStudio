@@ -19,7 +19,10 @@ struct CudaPrimaryGradeResult {
 };
 
 /**
- * @brief Execute the serialized primary-grade Model order on AP1 scene-linear input.
+ * @brief Execute the serialized primary-grade Model order in the AP1/ACEScc working space.
+ *
+ * CameraColor produces the encoded graph input. This pass keeps every intermediate and its graph
+ * output in AP1/ACEScc, including mix, mask application, and the local-Laplacian tone stage.
  *
  * Must run between CudaRenderDevice::BeginRender and EndRender. Parameters, output images,
  * execution order, and local-tone reference data are owned by the device workspace. A failed

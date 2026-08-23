@@ -34,9 +34,80 @@ struct Rgba {
   float a;
 };
 
+auto AcesccEncode(float value) -> float {
+  constexpr float kA          = 9.72f;
+  constexpr float kB          = 17.52f;
+  constexpr float kOffset     = 0.0000152587890625f;
+  constexpr float kTransition = 0.000030517578125f;
+  constexpr float kFloor      = (-16.0f + kA) / kB;
+  if (value < 0.0f) return kFloor + value;
+  if (value < kTransition) return (std::log2(kOffset + value * 0.5f) + kA) / kB;
+  return (std::log2(value) + kA) / kB;
+}
+
+auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
+                           float center) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  [](std::byte* p) { delete[] p; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const float value = x == width / 2 && y == height / 2 ? center : surroundings;
+      const auto  index = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = value;
+      pixels[index + 1] = value;
+      pixels[index + 2] = value;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
 auto HasCudaDevice() -> bool {
   int count = 0;
   return ::cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+}
+
+auto RenderLocalToneCenter(float surroundings, float center, float shadows_value,
+                           float highlights_value) -> float {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  auto                    prepared =
+      RawInputLoader::FromDirectRgb(MakeNeighborhoodPlane(width, height, surroundings, center),
+                                    gpu_dag_test::FullSensor(width, height));
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  auto* highlights = dynamic_cast<HighlightsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Highlights()));
+  EXPECT_NE(shadows, nullptr);
+  EXPECT_NE(highlights, nullptr);
+  shadows->SetValue(shadows_value);
+  highlights->SetValue(highlights_value);
+  auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  CudaRenderDevice device;
+  device.BeginRender();
+  ExecuteCudaDevelop(device, plan, prepared, document);
+  ExecuteCudaGeometryResample(device, plan);
+  ExecuteCudaCameraColor(device, plan, document);
+  const auto result = ExecuteCudaPrimaryGrade(device, plan, prepared.color_context, document);
+  device.EndRender();
+  device.WaitIdle();
+  auto* lease = device.Workspace().Images().Find(result.output);
+  EXPECT_NE(lease, nullptr);
+  std::vector<Rgba> pixels(static_cast<std::size_t>(width) * height);
+  device.Workspace().Device().DownloadTexture2D(
+      lease->Texture(),
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
+      device.CommandContext());
+  return pixels[static_cast<std::size_t>(height / 2) * width + width / 2].r;
 }
 
 class CudaPrimaryGradeFixture : public ::testing::Test {
@@ -113,22 +184,16 @@ TEST_F(CudaPrimaryGradeFixture, CudaPrimaryGradeDefaultParametersPreserveDevelop
   EXPECT_TRUE(plan_.Contains(GpuPassKind::PrimaryColorGrade));
 }
 
-TEST_F(CudaPrimaryGradeFixture, DefaultCurvePreservesSceneLinearHighlightsAboveOne) {
+TEST_F(CudaPrimaryGradeFixture, DefaultCurvePreservesAcesccWorkingValuesWithoutClipping) {
   const auto result = Render();
   const auto input  = Download(plan_.develop_output);
   const auto output = Download(result.output);
   ASSERT_EQ(input.size(), output.size());
-  bool compared_highlight = false;
   for (std::size_t i = 0; i < input.size(); ++i) {
-    if (std::max({input[i].r, input[i].g, input[i].b}) <= 1.0f) {
-      continue;
-    }
     EXPECT_NEAR(output[i].r, input[i].r, 1.0e-6f);
     EXPECT_NEAR(output[i].g, input[i].g, 1.0e-6f);
     EXPECT_NEAR(output[i].b, input[i].b, 1.0e-6f);
-    compared_highlight = true;
   }
-  EXPECT_TRUE(compared_highlight);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaExposurePatchChangesOnlyExposureParameterRange) {
@@ -180,10 +245,10 @@ TEST_F(CudaPrimaryGradeFixture, CudaPointAdjustmentsExecuteInSerializedModelOrde
   const auto output = Download(Render().output);
   const auto input  = Download(plan_.develop_output);
   ASSERT_FALSE(output.empty());
-  EXPECT_NEAR(output.front().r, (input.front().r * 2.0f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
+  EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
 }
 
-TEST_F(CudaPrimaryGradeFixture, CudaLocalToneReferenceReusesAcrossViewportChanges) {
+TEST_F(CudaPrimaryGradeFixture, CudaLocalTonePyramidBuffersReuseAcrossViewportChanges) {
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
   const auto    first = Render();
   RenderRequest request;
@@ -198,9 +263,18 @@ TEST_F(CudaPrimaryGradeFixture, CudaLocalToneUsesWorkspaceInsteadOfPrivateAlloca
   ModelByType<HighlightsModel>(type_ids::Highlights()).SetValue(-30.0f);
   const auto result = Render();
   EXPECT_NE(result.local_tone_reference_resource_id, 0U);
-  EXPECT_NE(device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
-                                              PortId{"local_tone.reference"}),
-            nullptr);
+  const auto* source        = device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
+                                                                PortId{"local_tone.source.0"});
+  const auto* result_buffer = device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
+                                                                PortId{"local_tone.result.0"});
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(result_buffer, nullptr);
+  EXPECT_GT(source->Bytes(), sizeof(float));
+  EXPECT_EQ(source->Bytes(), result_buffer->Bytes());
+  device_.Workspace().Device().ResetCounters();
+  (void)Render();
+  EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaColorGradeSecondRenderCreatesNoGpuAllocation) {
@@ -236,7 +310,7 @@ TEST_F(CudaPrimaryGradeFixture,
   EXPECT_FLOAT_EQ(ModelByType<ContrastModel>(type_ids::Contrast()).Value(), 100.0f);
 }
 
-TEST_F(CudaPrimaryGradeFixture, DevelopImageGraphValueIsAp1SceneLinear) {
+TEST_F(CudaPrimaryGradeFixture, CameraColorEncodesAp1AsAcesccGraphWorkingSpace) {
   (void)Render();
   const auto pixels = Download(plan_.develop_output);
   ASSERT_FALSE(pixels.empty());
@@ -246,10 +320,24 @@ TEST_F(CudaPrimaryGradeFixture, DevelopImageGraphValueIsAp1SceneLinear) {
   const float  src_g = 0.5f / 12.0f;
   const float  src_b = 0.25f;
   const float* m     = resolved.transform.camera_to_ap1.data();
-  EXPECT_NEAR(pixels.front().r, m[0] * src_r + m[1] * src_g + m[2] * src_b, 1.0e-5f);
-  EXPECT_NEAR(pixels.front().g, m[3] * src_r + m[4] * src_g + m[5] * src_b, 1.0e-5f);
-  EXPECT_NEAR(pixels.front().b, m[6] * src_r + m[7] * src_g + m[8] * src_b, 1.0e-5f);
+  EXPECT_NEAR(pixels.front().r, AcesccEncode(m[0] * src_r + m[1] * src_g + m[2] * src_b), 1.0e-5f);
+  EXPECT_NEAR(pixels.front().g, AcesccEncode(m[3] * src_r + m[4] * src_g + m[5] * src_b), 1.0e-5f);
+  EXPECT_NEAR(pixels.front().b, AcesccEncode(m[6] * src_r + m[7] * src_g + m[8] * src_b), 1.0e-5f);
   EXPECT_NEAR(pixels.front().a, 1.0f, 1.0e-6f);
+}
+
+TEST(GpuDagCudaPrimaryGrade, ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  const float dark_neighborhood   = RenderLocalToneCenter(0.02f, 0.08f, 80.0f, 0.0f);
+  const float bright_neighborhood = RenderLocalToneCenter(0.45f, 0.08f, 80.0f, 0.0f);
+  EXPECT_GT(std::abs(dark_neighborhood - bright_neighborhood), 1.0e-4f);
+}
+
+TEST(GpuDagCudaPrimaryGrade, HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  const float dark_neighborhood   = RenderLocalToneCenter(0.10f, 0.80f, 0.0f, -80.0f);
+  const float bright_neighborhood = RenderLocalToneCenter(1.50f, 0.80f, 0.0f, -80.0f);
+  EXPECT_GT(std::abs(dark_neighborhood - bright_neighborhood), 1.0e-4f);
 }
 
 TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices) {

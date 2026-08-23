@@ -68,5 +68,33 @@ TEST(GpuDagGraphCompiler, HighlightFlagDoesNotChangePassList) {
   EXPECT_TRUE(plan.Contains(GpuPassKind::CfaClamp));
 }
 
+TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLaplacianOnly) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  const auto document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  bool       saw_shadows    = false;
+  bool       saw_highlights = false;
+  bool       saw_curve      = false;
+  for (const auto& adjustment : plan.primary_grade_adjustments) {
+    if (adjustment.type == type_ids::Shadows()) {
+      saw_shadows = true;
+      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::LocalLaplacian);
+    } else if (adjustment.type == type_ids::Highlights()) {
+      saw_highlights = true;
+      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::LocalLaplacian);
+    } else if (adjustment.type == type_ids::Curve()) {
+      saw_curve = true;
+      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
+    }
+  }
+  EXPECT_TRUE(saw_shadows);
+  EXPECT_TRUE(saw_highlights);
+  EXPECT_TRUE(saw_curve);
+}
+
 }  // namespace
 }  // namespace alcedo

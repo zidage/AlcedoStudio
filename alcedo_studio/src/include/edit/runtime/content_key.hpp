@@ -11,21 +11,21 @@
 
 namespace alcedo {
 
-inline constexpr std::uint64_t kContentHashOffset = 14695981039346656037ull;
-inline constexpr std::uint64_t kContentHashPrime  = 1099511628211ull;
+inline constexpr std::uint64_t kContentHashOffset                  = 14695981039346656037ull;
+inline constexpr std::uint64_t kContentHashPrime                   = 1099511628211ull;
 
 /// Bumped when SensorDevelop pixel rules change. 2: method-aware demosaic + HLR-gated Clamp01.
 inline constexpr std::uint32_t kSensorDevelopImplementationVersion = 2;
 /// Bumped when GeometryResample sampling rules change.
-inline constexpr std::uint32_t kGeometryImplementationVersion = 1;
-/// Bumped when CameraColorPass math changes. Version 2 hashes Develop camera-profile params.
-inline constexpr std::uint32_t kCameraColorImplementationVersion = 2;
+inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
+/// Bumped when CameraColorPass math changes. Version 3 encodes its AP1 result as ACEScc.
+inline constexpr std::uint32_t kCameraColorImplementationVersion   = 3;
 /// Bumped when Primary Grade pixel rules change.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion = 1;
-/// Bumped when DRT pixel rules change. 2: no hard AP1 clamp before tonescale.
-inline constexpr std::uint32_t kDrtImplementationVersion = 2;
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 2;
+/// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.
+inline constexpr std::uint32_t kDrtImplementationVersion           = 3;
 /// Bumped when mask raster sampling rules change.
-inline constexpr std::uint32_t kMaskImplementationVersion = 1;
+inline constexpr std::uint32_t kMaskImplementationVersion          = 1;
 
 /**
  * @brief Content identity of a cached GPU image result.
@@ -34,7 +34,7 @@ inline constexpr std::uint32_t kMaskImplementationVersion = 1;
  * address, or ResourceId.
  */
 struct ContentKey {
-  std::uint64_t hash = 0;
+  std::uint64_t      hash = 0;
 
   [[nodiscard]] auto Empty() const -> bool { return hash == 0; }
 };

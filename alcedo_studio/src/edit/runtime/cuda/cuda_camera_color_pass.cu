@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "cuda_acescc.cuh"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -41,10 +42,11 @@ __global__ void CameraColorKernel(const float4* input, float4* output, std::uint
   const float4 source = input[index];
   const float* m      = camera->camera_to_ap1;
   float3       c;
-  c.x               = m[0] * source.x + m[1] * source.y + m[2] * source.z;
-  c.y               = m[3] * source.x + m[4] * source.y + m[5] * source.z;
-  c.z               = m[6] * source.x + m[7] * source.y + m[8] * source.z;
-  output[index]     = make_float4(c.x, c.y, c.z, source.w);
+  c.x           = m[0] * source.x + m[1] * source.y + m[2] * source.z;
+  c.y           = m[3] * source.x + m[4] * source.y + m[5] * source.z;
+  c.z           = m[6] * source.x + m[7] * source.y + m[8] * source.z;
+  output[index] = make_float4(cuda_acescc::Encode(c.x), cuda_acescc::Encode(c.y),
+                              cuda_acescc::Encode(c.z), source.w);
 }
 
 }  // namespace
@@ -71,16 +73,16 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   }
   const auto width  = input->Texture().Width();
   const auto height = input->Texture().Height();
-  auto& output = workspace.AcquireImageForWrite(plan.develop_output,
-                                                {width, height, TextureFormat::Rgba32f});
-  input        = workspace.Images().Find(plan.geometry_output);
+  auto&      output =
+      workspace.AcquireImageForWrite(plan.develop_output, {width, height, TextureFormat::Rgba32f});
+  input = workspace.Images().Find(plan.geometry_output);
   if (input == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: geometry texture lost during acquire");
   }
 
-  const auto             gpu_params = MakeGpuParams(resolved.transform);
-  auto&                  arena      = workspace.Parameters();
-  const ParameterSlotKey key{develop->Id(), kDevelopCameraColorSlot};
+  const auto                  gpu_params = MakeGpuParams(resolved.transform);
+  auto&                       arena      = workspace.Parameters();
+  const ParameterSlotKey      key{develop->Id(), kDevelopCameraColorSlot};
   const ParameterFieldBinding field{DirtyFieldMask{DevelopDirty::WhiteBalance}, 0, 0,
                                     sizeof(CameraColorGpuParams)};
   auto payload = std::make_shared<TypedOperatorParamPayload<CameraColorGpuParams>>(
@@ -96,10 +98,10 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
 
-  const auto          binding = arena.Binding(key);
-  const std::uint32_t pixels  = width * height;
-  constexpr std::uint32_t block = 256;
-  const auto* params = reinterpret_cast<const CameraColorGpuParams*>(
+  const auto              binding = arena.Binding(key);
+  const std::uint32_t     pixels  = width * height;
+  constexpr std::uint32_t block   = 256;
+  const auto*             params  = reinterpret_cast<const CameraColorGpuParams*>(
       static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
   CameraColorKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
       static_cast<const float4*>(input->Texture().DevicePointer()),

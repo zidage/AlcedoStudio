@@ -32,12 +32,11 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
 void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& plan);
 
 /**
- * @brief Write `develop.image` from `geometry.scene_source` using the CPU-resolved
- *        camera→AP1 matrix stored in the GPU parameter body.
+ * @brief Write AP1/ACEScc `develop.image` from camera-linear `geometry.scene_source`.
  *
- * Interpolates Develop camera-profile matrices on the CPU when this pass runs
- * (CCT/tint dirty or first bind). Missing or singular matrices throw; identity
- * is never substituted. Independently skippable from SensorDevelop and Geometry.
+ * Interpolates the Develop camera-profile matrices on the CPU, applies camera→AP1 in scene-linear,
+ * then encodes AP1 as the graph working space. Missing or singular matrices throw; identity is
+ * never substituted. Independently skippable from SensorDevelop and Geometry.
  */
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
                             const PipelineDocument& document);

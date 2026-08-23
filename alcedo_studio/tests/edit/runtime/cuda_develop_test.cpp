@@ -2,6 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -10,9 +13,7 @@
 #include <string>
 #include <vector>
 
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
+#include "../input/prepared_raw_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -22,7 +23,6 @@
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
-#include "../input/prepared_raw_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -54,27 +54,28 @@ auto DownloadDevelop(CudaRenderDevice& device, const ExecutionPlan& plan) -> std
   if (lease == nullptr) {
     return {};
   }
-  const auto& tex = lease->Texture();
+  const auto&       tex = lease->Texture();
   std::vector<Rgba> pixels(static_cast<std::size_t>(tex.Width()) * tex.Height());
   device.Workspace().Device().DownloadTexture2D(
       tex,
-      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size() * sizeof(Rgba)),
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels;
 }
 
 auto SetDevelopMethod(PipelineDocument& document, std::string method, bool highlights) -> void {
-  auto payload                 = document.Develop()->Params().Params();
-  payload.demosaic_method      = std::move(method);
+  auto payload                   = document.Develop()->Params().Params();
+  payload.demosaic_method        = std::move(method);
   payload.highlights_reconstruct = highlights;
   document.Develop()->Params().ReplaceParams(std::move(payload));
 }
 
 auto MakeOverRangeCfa(const RawCfaPattern& pattern, std::uint32_t width, std::uint32_t height)
     -> HostImagePlane {
-  auto plane = gpu_dag_test::MakeU16CfaPlane(width, height, pattern);
-  auto* samples = const_cast<std::uint16_t*>(
-      reinterpret_cast<const std::uint16_t*>(plane.bytes.get()));
+  auto  plane = gpu_dag_test::MakeU16CfaPlane(width, height, pattern);
+  auto* samples =
+      const_cast<std::uint16_t*>(reinterpret_cast<const std::uint16_t*>(plane.bytes.get()));
   for (std::uint32_t i = 0; i < width * height; i += 7) {
     samples[i] = 30000;
   }
@@ -135,13 +136,12 @@ auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
 }  // namespace
 
 TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   EXPECT_EQ(plan.source.kind, DevelopInputKind::BayerCfa);
   EXPECT_LT(plan.IndexOf(GpuPassKind::Demosaic), plan.IndexOf(GpuPassKind::HighlightRecover));
 
@@ -158,14 +158,13 @@ TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromBaye
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTransInput) {
-  const auto pattern = gpu_dag_test::MakeXTransPattern();
+  const auto pattern  = gpu_dag_test::MakeXTransPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
   SetDevelopMethod(document, "legacy", true);
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   EXPECT_EQ(plan.source.kind, DevelopInputKind::XTransCfa);
 
   CudaRenderDevice device;
@@ -180,13 +179,12 @@ TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTra
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopUsesWorkspaceForAllTemporaryBuffers) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
   device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
@@ -199,13 +197,12 @@ TEST_F(CudaDevelopFixture, CudaDevelopUsesWorkspaceForAllTemporaryBuffers) {
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
   device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
@@ -225,11 +222,10 @@ TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {
 }
 
 TEST_F(CudaDevelopFixture, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint) {
-  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(32, 24),
-                                                gpu_dag_test::FullSensor(32, 24));
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(32, 24),
+                                                      gpu_dag_test::FullSensor(32, 24));
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   ASSERT_TRUE(plan.Contains(GpuPassKind::UploadRgb));
 
   CudaRenderDevice device;
@@ -245,10 +241,10 @@ TEST_F(CudaDevelopFixture, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint)
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopDefaultBayerUsesLegacyRcdNotNeural) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto def_doc = CreateDefaultPipelineDocument();
   SetDevelopMethod(def_doc, "default", true);
   auto legacy_doc = CreateDefaultPipelineDocument();
@@ -276,8 +272,8 @@ TEST_F(CudaDevelopFixture, CudaDevelopDefaultXTransUsesNeuralEngine) {
     pattern.xtrans_pattern.raw_fc[i] = kDemosaicNetXTransTargetRgb[i];
   }
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(72, 72, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(72, 72), DecodeRes::FULL);
+      gpu_dag_test::MakeU16CfaPlane(72, 72, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(72, 72), DecodeRes::FULL);
   auto def_doc = CreateDefaultPipelineDocument();
   SetDevelopMethod(def_doc, "default", true);
   auto neural_doc = CreateDefaultPipelineDocument();
@@ -295,19 +291,20 @@ TEST_F(CudaDevelopFixture, CudaDevelopExplicitNeuralEngineChangesBayerPixelsVers
   if (!NeuralEngineAvailable(DemosaicNetVariant::Bayer)) {
     GTEST_SKIP() << "Bayer Neural Engine weights are not available.";
   }
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto legacy_doc = CreateDefaultPipelineDocument();
   SetDevelopMethod(legacy_doc, "legacy", true);
   auto neural_doc = CreateDefaultPipelineDocument();
   SetDevelopMethod(neural_doc, "neural_engine", true);
-  EXPECT_TRUE(PixelsDiffer(RenderDevelop(legacy_doc, prepared), RenderDevelop(neural_doc, prepared)));
+  EXPECT_TRUE(
+      PixelsDiffer(RenderDevelop(legacy_doc, prepared), RenderDevelop(neural_doc, prepared)));
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBayerAndXTrans) {
-  const auto bayer = gpu_dag_test::MakeRggbPattern();
+  const auto bayer          = gpu_dag_test::MakeRggbPattern();
   const auto bayer_prepared = RawInputLoader::FromUnpackedCfa(
       MakeOverRangeCfa(bayer, 64, 64), bayer, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
@@ -320,7 +317,7 @@ TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBa
   EXPECT_GT(MaxChannel(bayer_on_px), 1.0f);
   EXPECT_TRUE(PixelsDiffer(bayer_on_px, bayer_off_px));
 
-  const auto xtrans = gpu_dag_test::MakeXTransPattern();
+  const auto xtrans          = gpu_dag_test::MakeXTransPattern();
   const auto xtrans_prepared = RawInputLoader::FromUnpackedCfa(
       MakeOverRangeCfa(xtrans, 64, 64), xtrans, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
@@ -334,7 +331,7 @@ TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBa
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOffAppliesCfaClamp01) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
@@ -345,7 +342,7 @@ TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOffAppliesCfaClamp01) 
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructChangesXTransRgb) {
-  const auto pattern = gpu_dag_test::MakeXTransPattern();
+  const auto pattern  = gpu_dag_test::MakeXTransPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
@@ -356,13 +353,33 @@ TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructChangesXTransRgb) {
   EXPECT_TRUE(PixelsDiffer(RenderDevelop(on_doc, prepared), RenderDevelop(off_doc, prepared)));
 }
 
-TEST_F(CudaDevelopFixture, CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoesNotFallBackToLegacy) {
+TEST_F(CudaDevelopFixture, CudaDevelopAppliesPreparedDngRectilinearWarpAfterDemosaic) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  auto       prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(96, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(96, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", false);
+  const auto           unwarped = RenderDevelop(document, prepared);
+
+  dng::WarpRectilinear warp;
+  warp.coefficient_set_count    = 1;
+  warp.coefficient_sets[0]      = {1.0, 0.28, 0.0, 0.0, 0.0, 0.0};
+  prepared.dng_warp_rectilinear = warp;
+  const auto warped             = RenderDevelop(document, prepared);
+
+  ASSERT_EQ(unwarped.size(), warped.size());
+  EXPECT_TRUE(PixelsDiffer(unwarped, warped));
+}
+
+TEST_F(CudaDevelopFixture,
+       CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoesNotFallBackToLegacy) {
   DemosaicNetModelCache failing;
   SetDevelopNeuralModelCacheForTesting(&failing);
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
   SetDevelopMethod(document, "neural_engine", true);
   try {
@@ -380,13 +397,12 @@ TEST_F(CudaDevelopFixture, CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoe
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallback) {
-  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
-      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
-      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
-  auto document = CreateDefaultPipelineDocument();
-  const auto plan =
-      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
   device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);

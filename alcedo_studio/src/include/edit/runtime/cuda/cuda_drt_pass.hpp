@@ -18,9 +18,10 @@ struct CudaDrtResult {
 /**
  * @brief Encode the selected ACES 2.0 or OpenDRT display transform on CUDA.
  *
- * The input must be the compiled primary-grade AP1 image. The device owns resolved ACES tables
- * and reuses them until DRT parameters change. A failed parameter upload retains Model dirty bits.
- * No CPU image-processing fallback is attempted.
+ * The input must be the compiled primary-grade AP1/ACEScc working-space image. The pass decodes
+ * ACEScc to AP1 scene-linear before the selected display rendering transform. The device owns
+ * resolved ACES tables and reuses them until DRT parameters change. A failed parameter upload
+ * retains Model dirty bits. No CPU image-processing fallback is attempted.
  */
 [[nodiscard]] auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan,
                                   PipelineDocument& document) -> CudaDrtResult;

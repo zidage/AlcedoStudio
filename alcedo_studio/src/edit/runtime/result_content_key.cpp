@@ -34,6 +34,7 @@ auto MixPreparedSource(ContentHash& hash, const PreparedSourceKey& key) -> void 
   hash.MixU64(key.encoded_byte_count);
   hash.MixU32(static_cast<std::uint32_t>(key.input_kind));
   hash.MixU64(key.cfa_hash);
+  hash.MixU64(key.dng_warp_hash);
   hash.MixU32(key.downsample_passes);
   MixRect(hash, key.sensor_active_area);
   hash.MixI32(key.orientation_flip);

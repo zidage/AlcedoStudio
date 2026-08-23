@@ -62,20 +62,26 @@ auto MixText(std::uint64_t hash, std::string_view text) -> std::uint64_t {
   return MixU64(hash, 0xFFull);
 }
 
+auto CompileAdjustmentAlgorithm(const OperatorTypeId& type) -> CompiledAdjustmentAlgorithm {
+  if (type == type_ids::Shadows() || type == type_ids::Highlights()) {
+    return CompiledAdjustmentAlgorithm::LocalLaplacian;
+  }
+  return CompiledAdjustmentAlgorithm::Pointwise;
+}
+
 auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
-  std::uint64_t hash = MixU64(14695981039346656037ull, 1);
+  std::uint64_t                  hash = MixU64(14695981039346656037ull, 1);
 
   std::vector<const INodeModel*> nodes;
   nodes.reserve(document.Graph().Nodes().size());
   for (const auto& node : document.Graph().Nodes()) {
     nodes.push_back(node.get());
   }
-  std::sort(nodes.begin(), nodes.end(), [](const INodeModel* a, const INodeModel* b) {
-    return a->Id() < b->Id();
-  });
+  std::sort(nodes.begin(), nodes.end(),
+            [](const INodeModel* a, const INodeModel* b) { return a->Id() < b->Id(); });
   for (const auto* node : nodes) {
-    hash = MixText(hash, node->Id().Value());
-    hash = MixText(hash, node->Type().Text());
+    hash              = MixText(hash, node->Id().Value());
+    hash              = MixText(hash, node->Type().Text());
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
     if (grade == nullptr) {
       continue;
@@ -136,7 +142,7 @@ void RequireDefaultEndpoints(const PipelineDocument& document) {
 
 }  // namespace
 
-auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument& document,
+auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument&     document,
                                       const DevelopCompileSource& source,
                                       std::uint32_t backend_capability_version) -> StaticPlanKey {
   StaticPlanKey key;
@@ -146,7 +152,7 @@ auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument& document,
   return key;
 }
 
-auto GraphCompiler::CompileStatic(const PipelineDocument& document,
+auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
                                   const DevelopCompileSource& source,
                                   std::uint32_t backend_capability_version) -> ExecutionPlan {
   RequireDefaultEndpoints(document);
@@ -156,13 +162,13 @@ auto GraphCompiler::CompileStatic(const PipelineDocument& document,
   }
 
   ExecutionPlan plan;
-  plan.static_key            = MakeStaticPlanKey(document, source, backend_capability_version);
-  plan.source                = source;
-  plan.sensor_linear_output  = GraphValueId{NodeId{"develop"}, PortId{"sensor_linear"}};
-  plan.geometry_output       = GraphValueId{NodeId{"geometry"}, PortId{"scene_source"}};
-  plan.develop_output        = GraphValueId{NodeId{"develop"}, PortId{"image"}};
-  plan.peak_transient_bytes  = EstimatePeakTransientBytes(source);
+  plan.static_key           = MakeStaticPlanKey(document, source, backend_capability_version);
+  plan.source               = source;
+  plan.sensor_linear_output = GraphValueId{NodeId{"develop"}, PortId{"sensor_linear"}};
+  plan.geometry_output      = GraphValueId{NodeId{"geometry"}, PortId{"scene_source"}};
+  plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
   const auto* grade         = document.PrimaryGrade();
+  plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
 
   if (source.kind == DevelopInputKind::DirectRgb) {
     plan.passes.push_back(GpuPassDesc{GpuPassKind::UploadRgb});
@@ -196,8 +202,9 @@ auto GraphCompiler::CompileStatic(const PipelineDocument& document,
   plan.passes.push_back(GpuPassDesc{GpuPassKind::Drt});
 
   for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+    const auto& type = grade->AdjustmentAt(index).Type();
     plan.primary_grade_adjustments.push_back(
-        {grade->AdjustmentIdAt(index), grade->AdjustmentAt(index).Type()});
+        {grade->AdjustmentIdAt(index), type, CompileAdjustmentAlgorithm(type)});
   }
   return plan;
 }

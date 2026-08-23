@@ -20,9 +20,16 @@ struct GpuPassDesc {
   GpuPassKind kind = GpuPassKind::UploadRaw;
 };
 
+/** @brief Backend algorithm selected at graph compile time for one grade adjustment. */
+enum class CompiledAdjustmentAlgorithm : std::uint8_t {
+  Pointwise,
+  LocalLaplacian,
+};
+
 struct CompiledAdjustment {
-  AdjustmentInstanceId instance_id;
-  OperatorTypeId       type;
+  AdjustmentInstanceId        instance_id;
+  OperatorTypeId              type;
+  CompiledAdjustmentAlgorithm algorithm = CompiledAdjustmentAlgorithm::Pointwise;
 };
 
 enum class CompiledMaskKind : std::uint8_t { Analytic, Raster };
@@ -38,9 +45,9 @@ struct CompiledMask {
  * Source layout is the decoded host/develop extents, not ResolvedRenderGeometry.
  */
 struct StaticPlanKey {
-  std::uint64_t        topology_hash               = 0;
+  std::uint64_t        topology_hash = 0;
   DevelopCompileSource source_layout{};
-  std::uint32_t        backend_capability_version  = 0;
+  std::uint32_t        backend_capability_version = 0;
 };
 
 inline auto operator==(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
@@ -67,7 +74,8 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
     return a.source_layout.host_extent.height < b.source_layout.host_extent.height;
   }
   if (a.source_layout.develop_output_extent.width != b.source_layout.develop_output_extent.width) {
-    return a.source_layout.develop_output_extent.width < b.source_layout.develop_output_extent.width;
+    return a.source_layout.develop_output_extent.width <
+           b.source_layout.develop_output_extent.width;
   }
   if (a.source_layout.develop_output_extent.height !=
       b.source_layout.develop_output_extent.height) {
@@ -75,7 +83,8 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
            b.source_layout.develop_output_extent.height;
   }
   if (a.source_layout.full_reference_extent.width != b.source_layout.full_reference_extent.width) {
-    return a.source_layout.full_reference_extent.width < b.source_layout.full_reference_extent.width;
+    return a.source_layout.full_reference_extent.width <
+           b.source_layout.full_reference_extent.width;
   }
   if (a.source_layout.full_reference_extent.height !=
       b.source_layout.full_reference_extent.height) {
