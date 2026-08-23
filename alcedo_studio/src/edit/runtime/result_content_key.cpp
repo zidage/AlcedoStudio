@@ -129,6 +129,28 @@ auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
   return hash.Key();
 }
 
+auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                         const PipelineDocument& document) -> ContentKey {
+  ContentHash hash;
+  MixPreparedSource(hash, input.source_key);
+  MixExtent(hash, plan.geometry.full_reference_extent);
+  MixExtent(hash, plan.geometry.edit_extent);
+  MixMatrix(hash, plan.geometry.reference_to_edit);
+  MixExtent(hash, plan.source.host_extent);
+  MixExtent(hash, plan.source.develop_output_extent);
+  MixExtent(hash, plan.source.full_reference_extent);
+  hash.MixU32(static_cast<std::uint32_t>(plan.source.kind));
+  hash.MixU32(plan.source.downsample_passes);
+  MixRect(hash, plan.source.sensor_active_area);
+  const auto* develop = document.Develop();
+  MixCameraColorParams(hash, develop == nullptr ? DevelopPayload{} : develop->Params().Params());
+  if (document.PrimaryGrade() != nullptr) {
+    MixGrade(hash, *document.PrimaryGrade());
+  }
+  hash.MixU32(kLlfReferenceImplementationVersion);
+  return hash.Key();
+}
+
 auto HashResolvedRenderGeometry(const ResolvedRenderGeometry& geometry) -> ContentKey {
   ContentHash hash;
   MixExtent(hash, geometry.decoded_extent);

@@ -26,6 +26,7 @@
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
@@ -284,9 +285,8 @@ __global__ void FinalMixKernel(const float4* source, float4* adjusted, std::uint
 }  // namespace
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const RawRuntimeColorContext& color_context,
-                             PipelineDocument&             document) -> CudaPrimaryGradeResult {
-  (void)color_context;
+                             const PreparedRawInput& prepared, PipelineDocument& document)
+    -> CudaPrimaryGradeResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: BeginRender has not been called");
@@ -409,7 +409,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer());
   const bool    local_tone_active     = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
                                                                       -highlights_slider * 1.5f / 100.0f);
-  std::uint64_t reference_resource_id = 0;
+  CudaLocalToneResult local_tone;
   if (local_tone_active) {
     const GraphValueId local_input_id{grade->Id(), PortId{"local_tone.input"}};
     const GraphValueId local_output_id{grade->Id(), PortId{"local_tone.output"}};
@@ -420,9 +420,10 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
         static_cast<float4*>(local_input.Texture().DevicePointer()), pixels, parameter_base,
         device_commands, static_cast<std::uint32_t>(commands_before_local_tone.size()),
         local_tone_mapping::kAcesccMiddleGray);
-    reference_resource_id =
+    local_tone =
         ExecuteCudaLocalTone(device, local_input_id, local_output_id, grade->Id(), input_width,
-                             input_height, shadows_slider, highlights_slider);
+                             input_height, shadows_slider, highlights_slider, plan.geometry,
+                             HashLlfReferenceKey(plan, prepared, document));
     auto* local_output = workspace.Images().Find(local_output_id);
     output             = workspace.Images().Find(output_id);
     PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
@@ -446,7 +447,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
   }
-  return {output_id, reference_resource_id};
+  return {output_id, local_tone.reference_resource_id, local_tone.rebuilt_reference,
+          local_tone.sampled_canonical_reference};
 }
 
 }  // namespace alcedo

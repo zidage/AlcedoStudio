@@ -95,7 +95,7 @@ auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput
                    completed)) {
       ++stats.primary_grade_skip;
     } else {
-      (void)ExecuteCudaPrimaryGrade(*this, plan, input.color_context, document);
+      (void)ExecuteCudaPrimaryGrade(*this, plan, input, document);
       Record(*this, plan.primary_grade_output, keys.primary_grade, keys.geometry_extent);
       ++stats.primary_grade_execute;
     }

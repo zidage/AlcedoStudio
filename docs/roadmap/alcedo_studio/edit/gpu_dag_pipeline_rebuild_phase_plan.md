@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离修复）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离修复与 canonical LLF ROI 采样）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -3878,6 +3878,65 @@ Suite total: related discovered set `159/159` PASS；LLF memcheck `2/2` PASS；D
 进入 prepared input，并以合成非恒等参数证明 CUDA 像素结果实际改变；没有保存新的大型 golden
 图像。
 
+##### 41.5.1 Canonical LLF reference 与 ROI 坐标采样（2026-08-23）
+
+**Status:** complete — CUDA Shadows/Highlights 不再从当前 viewport ROI 重建内部蒙版。
+全 EditSpace 帧按 `full_reference_extent` 把 log-intensity 提取到 ReferenceSpace 的
+canonical LLF 平面（长边不超过 `kReferenceMaskMaxLongEdge`），并写入 workspace pyramid。
+后续 ROI 帧用 G3 `MakeLlfSamplingPlan` 把 render 像素中心映射到该平面，只应用已有
+reference/adjusted 亮度，不重跑 Gaussian/Laplacian。`HashLlfReferenceKey` 含 source、
+crop/rotation、CameraColor 和 Grade，不含 viewport。没有 canonical 缓存的 ROI 仍从
+当前帧局部构建，且不会把局部结果标成 canonical。
+
+**Primary success call chain:**
+
+```text
+full-EditSpace PrimaryGrade
+  -> ExecuteCudaLocalTone
+  -> ExtractReferenceKernel (reference_to_render)
+  -> workspace local_tone.source/result pyramids
+  -> ApplyKernel + MakeLlfSamplingPlan
+viewport ROI PrimaryGrade (same HashLlfReferenceKey)
+  -> ExecuteCudaLocalTone
+  -> skip extract/remap/select/collapse
+  -> ApplyKernel samples canonical planes by render_to_texture_uv
+```
+
+**Primary failure call chain:**
+
+```text
+missing input / zero geometry extent / CUDA launch failure
+  -> ExecuteCudaLocalTone throws
+  -> CudaRenderDevice cancels unpublished submission
+  -> no CPU, curve, or other-backend substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuilding` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `CudaLocalTonePyramidBuffersReuseAcrossViewportChanges` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `FullViewCoversEditSpaceAndViewportRoiDoesNot` | `GpuDagGeometryTest` | PASS |
+| `LlfReferenceKeyIgnoresViewportAndFollowsCropAndGrade` | `GpuDagRawInputTest` | PASS |
+| `ShadowsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `HighlightsLlfRespondsToNeighborhoodWithIdenticalCenterPixel` | `GpuDagCudaPrimaryGradeTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaPrimaryGradeTest GpuDagGeometryTest GpuDagRawInputTest GpuDagCudaMaskTest GpuDagCudaDrtProductTest GpuDagCudaDevelopTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "^(GpuDagCudaPrimaryGradeTest|GpuDagGeometryTest|GpuDagRawInputTest|GpuDagCudaMaskTest|GpuDagCudaDrtProductTest|GpuDagCudaDevelopTest)\."
+```
+
+Suite total: `119/119` PASS。
+
+**Checklist / exit condition:** G3 “图像、LLF 和 mask 使用相同的 render-to-reference 数据” 已接到 CUDA LLF apply。ROI 放大不再重算 canonical 蒙版。
+
+**LOC note (grill-code-review):** `cuda_local_tone_pass.cu` 488 lines，`cuda_primary_grade_pass.cu` 454 lines，`cuda_primary_grade_test.cpp` 490 lines。没有本次修改的文件超过 1000 行。
+
+**Residual gaps:** 没有先行全图帧时，孤立 ROI 仍走局部 extract，不会伪造 canonical 缓存。canonical 身份的主机侧槽以 workspace 指针为键，GPU 平面仍由 workspace `Values()` 持有；`ReleaseSessionResources` 清掉平面后下一次全图帧会重新播种。G7R.4 CAT02 与 G7R.5 统计仍未做。
+
 ### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 
 Primary Grade 的第一个 adjustment 是 creative white balance，与 RAW
@@ -4329,7 +4388,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 ### 47.5 Geometry 和 Mask
 
 - [ ] crop、rotation、view ROI 和 dynamic resolution 只执行一次图像重采样。
-- [ ] LLF 和 mask 使用相同的 RenderGeometry 数据。
+- [x] LLF 和 mask 使用相同的 RenderGeometry 数据。
 - [x] Rasterized Mask 使用 R8。
 - [x] Rasterized Mask 任意一条边不大于 4096。
 - [x] Rasterized Mask 作为 GPU texture 采样。

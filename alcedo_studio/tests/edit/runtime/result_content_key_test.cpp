@@ -95,6 +95,34 @@ TEST(GpuDagResultContentKey, GeometryKeyIncludesViewportAndCropAndIgnoresGrade) 
   EXPECT_NE(after_grade.primary_grade, base.primary_grade);
 }
 
+TEST(GpuDagResultContentKey, LlfReferenceKeyIgnoresViewportAndFollowsCropAndGrade) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base      = HashLlfReferenceKey(plan, prepared, document);
+  const auto base_keys = BuildFrameResultContentKeys(plan, prepared, document);
+
+  RenderRequest viewport;
+  viewport.view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
+  viewport.view.viewport_extent            = {8, 6};
+  GraphCompiler::BindFrameGeometry(plan, document, viewport);
+  EXPECT_EQ(HashLlfReferenceKey(plan, prepared, document), base);
+  EXPECT_NE(BuildFrameResultContentKeys(plan, prepared, document).geometry_scene_source,
+            base_keys.geometry_scene_source);
+
+  document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  GraphCompiler::BindFrameGeometry(plan, document, viewport);
+  EXPECT_NE(HashLlfReferenceKey(plan, prepared, document), base);
+
+  document.Geometry().SetCropRect({});
+  GraphCompiler::BindFrameGeometry(plan, document, RenderRequest{});
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(40.0f);
+  EXPECT_NE(HashLlfReferenceKey(plan, prepared, document), base);
+}
+
 TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstreamKeys) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();

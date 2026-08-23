@@ -9,11 +9,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cuda_acescc.cuh"
+#include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -128,6 +131,11 @@ __device__ auto RemapDelta(float delta, float sigma, float alpha, float beta) ->
   return sign * (sigma + beta * (magnitude - sigma));
 }
 
+__device__ auto Transform(const float* matrix, float x, float y) -> float2 {
+  return make_float2(matrix[0] * x + matrix[1] * y + matrix[2],
+                     matrix[3] * x + matrix[4] * y + matrix[5]);
+}
+
 __global__ void ExtractKernel(const float4* input, float* output, int input_width, int input_height,
                               int output_width, int output_height) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -137,6 +145,20 @@ __global__ void ExtractKernel(const float4* input, float* output, int input_widt
   const float sy = (y + 0.5f) * input_height / static_cast<float>(output_height) - 0.5f;
   output[y * output_width + x] =
       LogIntensity(ReadRgbaBilinear(input, input_width, input_height, sx, sy));
+}
+
+__global__ void ExtractReferenceKernel(const float4* input, float* output, int input_width,
+                                       int input_height, int output_width, int output_height,
+                                       Matrix3x3 reference_to_render, float full_ref_w,
+                                       float full_ref_h) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= output_width || y >= output_height) return;
+  const float  u   = (x + 0.5f) / static_cast<float>(output_width);
+  const float  v   = (y + 0.5f) / static_cast<float>(output_height);
+  const float2 src = Transform(reference_to_render.m, u * full_ref_w, v * full_ref_h);
+  output[y * output_width + x] =
+      LogIntensity(ReadRgbaBilinear(input, input_width, input_height, src.x - 0.5f, src.y - 0.5f));
 }
 
 __global__ void DownKernel(const float* input, float* output, int input_width, int input_height,
@@ -212,13 +234,14 @@ __device__ auto Bilinear(const float* plane, int width, int height, float x, flo
 
 __global__ void ApplyKernel(const float4* input, const float* reference, const float* adjusted,
                             float4* output, int width, int height, int adjusted_width,
-                            int adjusted_height) {
+                            int adjusted_height, Matrix3x3 render_to_uv) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x >= width || y >= height) return;
   const int       index       = y * width + x;
-  const float     ax          = (x + 0.5f) * adjusted_width / static_cast<float>(width) - 0.5f;
-  const float     ay          = (y + 0.5f) * adjusted_height / static_cast<float>(height) - 0.5f;
+  const float2    uv          = Transform(render_to_uv.m, x + 0.5f, y + 0.5f);
+  const float     ax          = uv.x * adjusted_width - 0.5f;
+  const float     ay          = uv.y * adjusted_height - 0.5f;
   const float     reference_l = Bilinear(reference, adjusted_width, adjusted_height, ax, ay);
   const float     adjusted_l  = Bilinear(adjusted, adjusted_width, adjusted_height, ax, ay);
   const float4    pixel       = input[index];
@@ -259,24 +282,91 @@ void CheckLaunch(const char* operation) {
   }
 }
 
+struct CanonicalLlfCache {
+  ContentKey key{};
+  int        mask_width        = 0;
+  int        mask_height       = 0;
+  int        source_long_edge  = 0;
+  bool       canonical         = false;
+};
+
+auto CacheSlot(const CudaRenderWorkspace& workspace, const NodeId& grade_id) -> CanonicalLlfCache& {
+  static std::map<std::pair<const void*, std::string>, CanonicalLlfCache> slots;
+  return slots[std::make_pair(&workspace, std::string{grade_id.Value()})];
+}
+
+auto LocalUvPlan(std::uint32_t width, std::uint32_t height) -> Matrix3x3 {
+  Matrix3x3 matrix;
+  matrix.m[0] = 1.0f / static_cast<float>(width);
+  matrix.m[4] = 1.0f / static_cast<float>(height);
+  return matrix;
+}
+
 }  // namespace
 
 auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id,
                           const GraphValueId& output_id, const NodeId& grade_id,
                           std::uint32_t width, std::uint32_t height, float shadows_slider,
-                          float highlights_slider) -> std::uint64_t {
+                          float highlights_slider, const ResolvedRenderGeometry& geometry,
+                          ContentKey reference_key) -> CudaLocalToneResult {
   auto& workspace = device.Workspace();
   auto* input     = workspace.Images().Find(input_id);
   if (!workspace.IsRendering() || input == nullptr || input->Empty()) {
     throw std::runtime_error("ExecuteCudaLocalTone: missing active input");
   }
+  if (geometry.full_reference_extent.Empty() || geometry.render_extent.Empty()) {
+    throw std::runtime_error("ExecuteCudaLocalTone: geometry extents must be positive");
+  }
   auto& output = workspace.AcquireImageForWrite(output_id, {width, height, TextureFormat::Rgba32f});
   input        = workspace.Images().Find(input_id);
 
-  const auto reference_dims =
-      local_tone_mapping::ComputeMaskDimensions(static_cast<int>(width), static_cast<int>(height),
-                                                local_tone_mapping::kReferenceMaskMaxLongEdge);
-  const auto                     layout = MakeLayout(reference_dims.width, reference_dims.height);
+  const auto canonical_dims = local_tone_mapping::ComputeMaskDimensions(
+      static_cast<int>(geometry.full_reference_extent.width),
+      static_cast<int>(geometry.full_reference_extent.height),
+      local_tone_mapping::kReferenceMaskMaxLongEdge);
+  const bool full_edit = CoversFullEditSpace(geometry);
+  const int  current_long_edge =
+      std::max(static_cast<int>(width), static_cast<int>(height));
+  auto&      slot            = CacheSlot(workspace, grade_id);
+  const auto canonical_bytes = static_cast<std::size_t>(canonical_dims.width) *
+                               static_cast<std::size_t>(canonical_dims.height) * sizeof(float);
+  auto* cached_source = workspace.Values().Find(LevelId(grade_id, "source", 0));
+  auto* cached_result = workspace.Values().Find(LevelId(grade_id, "result", 0));
+  const bool cache_valid =
+      slot.canonical && slot.key == reference_key && slot.mask_width == canonical_dims.width &&
+      slot.mask_height == canonical_dims.height && cached_source != nullptr &&
+      cached_source->Bytes() >= canonical_bytes && cached_result != nullptr &&
+      cached_result->Bytes() >= canonical_bytes;
+  const bool sample_canonical = cache_valid && !(full_edit && current_long_edge > slot.source_long_edge);
+
+  const dim3          block{16, 16, 1};
+  auto                stream = device.CommandContext().Stream();
+  CudaLocalToneResult tone;
+
+  if (sample_canonical) {
+    const auto sampling = MakeLlfSamplingPlan(
+        geometry, Extent2D{static_cast<std::uint32_t>(slot.mask_width),
+                           static_cast<std::uint32_t>(slot.mask_height)});
+    ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
+                  stream>>>(
+        static_cast<const float4*>(input->Texture().DevicePointer()),
+        static_cast<const float*>(cached_source->DevicePointer()),
+        static_cast<const float*>(cached_result->DevicePointer()),
+        static_cast<float4*>(output.Texture().DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), slot.mask_width, slot.mask_height, sampling.render_to_texture_uv);
+    CheckLaunch("canonical sample");
+    tone.reference_resource_id       = cached_source->ResourceId();
+    tone.sampled_canonical_reference = true;
+    return tone;
+  }
+
+  const bool seed_canonical = full_edit;
+  const auto mask_dims =
+      seed_canonical ? canonical_dims
+                     : local_tone_mapping::ComputeMaskDimensions(
+                           static_cast<int>(width), static_cast<int>(height),
+                           local_tone_mapping::kReferenceMaskMaxLongEdge);
+  const auto                     layout = MakeLayout(mask_dims.width, mask_dims.height);
   std::array<float*, kMaxLevels> source{};
   std::array<float*, kMaxLevels> remap_a{};
   std::array<float*, kMaxLevels> remap_b{};
@@ -296,11 +386,17 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
     if (level == 0) reference_id = source_buffer.ResourceId();
   }
 
-  const dim3 block{16, 16, 1};
-  auto       stream = device.CommandContext().Stream();
-  ExtractKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0, stream>>>(
-      static_cast<const float4*>(input->Texture().DevicePointer()), source[0],
-      static_cast<int>(width), static_cast<int>(height), layout.widths[0], layout.heights[0]);
+  if (seed_canonical) {
+    ExtractReferenceKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0, stream>>>(
+        static_cast<const float4*>(input->Texture().DevicePointer()), source[0],
+        static_cast<int>(width), static_cast<int>(height), layout.widths[0], layout.heights[0],
+        geometry.reference_to_render, static_cast<float>(geometry.full_reference_extent.width),
+        static_cast<float>(geometry.full_reference_extent.height));
+  } else {
+    ExtractKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0, stream>>>(
+        static_cast<const float4*>(input->Texture().DevicePointer()), source[0],
+        static_cast<int>(width), static_cast<int>(height), layout.widths[0], layout.heights[0]);
+  }
   for (int level = 1; level < layout.count; ++level) {
     DownKernel<<<Grid(layout.widths[level], layout.heights[level], block), block, 0, stream>>>(
         source[level - 1], source[level], layout.widths[level - 1], layout.heights[level - 1],
@@ -349,12 +445,44 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
         layout.heights[level], layout.widths[level + 1], layout.heights[level + 1]);
     std::swap(result[level], remap_a[level]);
   }
+  auto* named_result = workspace.Values().Find(LevelId(grade_id, "result", 0));
+  if (named_result == nullptr) {
+    throw std::runtime_error("ExecuteCudaLocalTone: missing result.0 after pyramid collapse");
+  }
+  if (result[0] != named_result->DevicePointer()) {
+    if (::cudaMemcpyAsync(named_result->DevicePointer(), result[0],
+                          static_cast<std::size_t>(layout.widths[0]) * layout.heights[0] *
+                              sizeof(float),
+                          cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+      throw std::runtime_error("ExecuteCudaLocalTone: cannot store collapsed reference");
+    }
+    result[0] = static_cast<float*>(named_result->DevicePointer());
+  }
+
+  const Matrix3x3 apply_uv =
+      seed_canonical
+          ? MakeLlfSamplingPlan(geometry, Extent2D{static_cast<std::uint32_t>(layout.widths[0]),
+                                                   static_cast<std::uint32_t>(layout.heights[0])})
+                .render_to_texture_uv
+          : LocalUvPlan(width, height);
   ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0, stream>>>(
       static_cast<const float4*>(input->Texture().DevicePointer()), source[0], result[0],
       static_cast<float4*>(output.Texture().DevicePointer()), static_cast<int>(width),
-      static_cast<int>(height), layout.widths[0], layout.heights[0]);
+      static_cast<int>(height), layout.widths[0], layout.heights[0], apply_uv);
   CheckLaunch("kernel launch");
-  return reference_id;
+
+  if (seed_canonical) {
+    slot.key              = reference_key;
+    slot.mask_width       = layout.widths[0];
+    slot.mask_height      = layout.heights[0];
+    slot.source_long_edge = current_long_edge;
+    slot.canonical        = true;
+  } else {
+    slot = {};
+  }
+  tone.reference_resource_id = reference_id;
+  tone.rebuilt_reference     = true;
+  return tone;
 }
 
 }  // namespace alcedo

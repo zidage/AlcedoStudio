@@ -105,6 +105,32 @@ TEST(GpuDagGeometry, OddImageDimensionsUseOneRoundingResultAcrossImageMaskAndLlf
   EXPECT_NEAR(uv_l.y, n.y, 1.0e-5f);
 }
 
+TEST(GpuDagGeometry, FullViewCoversEditSpaceAndViewportRoiDoesNot) {
+  const auto source = MakeSourceGeometry({200, 100}, {200, 100});
+  const auto full   = ResolveRenderGeometry(source, {}, {}, {}, {});
+  EXPECT_TRUE(CoversFullEditSpace(full));
+
+  ResolutionRequest scaled;
+  scaled.max_edge = 50;
+  const auto downscaled = ResolveRenderGeometry(source, {}, {}, scaled, {});
+  EXPECT_TRUE(CoversFullEditSpace(downscaled));
+  EXPECT_LT(downscaled.render_extent.width, full.render_extent.width);
+
+  ViewRequest roi;
+  roi.visible_rect_in_edit_space = {0.25f, 0.10f, 0.40f, 0.50f};
+  const auto cropped = ResolveRenderGeometry(source, {}, roi, {}, {});
+  EXPECT_FALSE(CoversFullEditSpace(cropped));
+
+  const auto llf = MakeLlfSamplingPlan(cropped, Extent2D{128, 64});
+  const auto full_uv =
+      TransformPoint(MakeLlfSamplingPlan(full, Extent2D{128, 64}).render_to_texture_uv,
+                     TransformPoint(full.reference_to_render, Vector2{120.0f, 40.0f}));
+  const auto roi_uv = TransformPoint(llf.render_to_texture_uv,
+                                     TransformPoint(cropped.reference_to_render, Vector2{120.0f, 40.0f}));
+  EXPECT_NEAR(full_uv.x, roi_uv.x, 1.0e-5f);
+  EXPECT_NEAR(full_uv.y, roi_uv.y, 1.0e-5f);
+}
+
 TEST(GpuDagGeometry, DefaultPipelineDocumentHasNoGeometryNode) {
   const auto document = CreateDefaultPipelineDocument();
   ASSERT_EQ(document.Graph().NodeCount(), 3u);

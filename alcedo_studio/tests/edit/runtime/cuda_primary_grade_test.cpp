@@ -11,7 +11,10 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
+
+#include "edit/geometry/types.hpp"
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
@@ -96,7 +99,7 @@ auto RenderLocalToneCenter(float surroundings, float center, float shadows_value
   ExecuteCudaDevelop(device, plan, prepared, document);
   ExecuteCudaGeometryResample(device, plan);
   ExecuteCudaCameraColor(device, plan, document);
-  const auto result = ExecuteCudaPrimaryGrade(device, plan, prepared.color_context, document);
+  const auto result = ExecuteCudaPrimaryGrade(device, plan, prepared, document);
   device.EndRender();
   device.WaitIdle();
   auto* lease = device.Workspace().Images().Find(result.output);
@@ -128,7 +131,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     ExecuteCudaDevelop(device_, plan_, prepared_, document_);
     ExecuteCudaGeometryResample(device_, plan_);
     ExecuteCudaCameraColor(device_, plan_, document_);
-    auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_.color_context, document_);
+    auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
     device_.EndRender();
     device_.WaitIdle();
     return result;
@@ -257,6 +260,10 @@ TEST_F(CudaPrimaryGradeFixture, CudaLocalTonePyramidBuffersReuseAcrossViewportCh
   const auto second = Render();
   EXPECT_NE(first.local_tone_reference_resource_id, 0U);
   EXPECT_EQ(first.local_tone_reference_resource_id, second.local_tone_reference_resource_id);
+  EXPECT_TRUE(first.local_tone_rebuilt_reference);
+  EXPECT_FALSE(first.local_tone_sampled_canonical_reference);
+  EXPECT_FALSE(second.local_tone_rebuilt_reference);
+  EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaLocalToneUsesWorkspaceInsteadOfPrivateAllocation) {
@@ -338,6 +345,129 @@ TEST(GpuDagCudaPrimaryGrade, HighlightsLlfRespondsToNeighborhoodWithIdenticalCen
   const float dark_neighborhood   = RenderLocalToneCenter(0.10f, 0.80f, 0.0f, -80.0f);
   const float bright_neighborhood = RenderLocalToneCenter(1.50f, 0.80f, 0.0f, -80.0f);
   EXPECT_GT(std::abs(dark_neighborhood - bright_neighborhood), 1.0e-4f);
+}
+
+auto MakeSplitPlane(std::uint32_t width, std::uint32_t height, float left, float right)
+    -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  [](std::byte* p) { delete[] p; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const float value = x < width / 2 ? left : right;
+      const auto  index = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = value;
+      pixels[index + 1] = value;
+      pixels[index + 2] = value;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+auto DownloadLocalTonePlane(CudaRenderDevice& device, const NodeId& grade_id) -> std::vector<float> {
+  auto* buffer = device.Workspace().Values().Find(grade_id, PortId{"local_tone.source.0"});
+  EXPECT_NE(buffer, nullptr);
+  if (buffer == nullptr) return {};
+  std::vector<float> plane(buffer->Bytes() / sizeof(float));
+  device.Workspace().Device().DownloadBufferRange(
+      *buffer, 0,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(plane.data()), buffer->Bytes()),
+      device.CommandContext());
+  return plane;
+}
+
+auto RenderPreparedGrade(CudaRenderDevice& device, PipelineDocument& document,
+                         const PreparedRawInput& prepared, const ExecutionPlan& plan)
+    -> CudaPrimaryGradeResult {
+  device.BeginRender();
+  ExecuteCudaDevelop(device, plan, prepared, document);
+  ExecuteCudaGeometryResample(device, plan);
+  ExecuteCudaCameraColor(device, plan, document);
+  auto result = ExecuteCudaPrimaryGrade(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  return result;
+}
+
+auto DownloadGrade(CudaRenderDevice& device, const GraphValueId& id) -> std::vector<Rgba> {
+  auto* lease = device.Workspace().Images().Find(id);
+  EXPECT_NE(lease, nullptr);
+  if (lease == nullptr) return {};
+  const auto&       texture = lease->Texture();
+  std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+  device.Workspace().Device().DownloadTexture2D(
+      texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
+      device.CommandContext());
+  return pixels;
+}
+
+TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuilding) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  constexpr std::uint32_t kWidth  = 64;
+  constexpr std::uint32_t kHeight = 64;
+  auto                    prepared =
+      RawInputLoader::FromDirectRgb(MakeSplitPlane(kWidth, kHeight, 1.0f, 0.05f),
+                                    gpu_dag_test::FullSensor(kWidth, kHeight));
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(80.0f);
+
+  auto             full_plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  CudaRenderDevice device;
+  const auto       full_grade = RenderPreparedGrade(device, document, prepared, full_plan);
+  EXPECT_TRUE(full_grade.local_tone_rebuilt_reference);
+  EXPECT_FALSE(full_grade.local_tone_sampled_canonical_reference);
+  const auto full_pixels = DownloadGrade(device, full_grade.output);
+  const auto full_mask   = DownloadLocalTonePlane(device, document.PrimaryGrade()->Id());
+  ASSERT_FALSE(full_pixels.empty());
+  ASSERT_FALSE(full_mask.empty());
+
+  RenderRequest roi_request;
+  roi_request.view.visible_rect_in_edit_space = {0.5f, 0.0f, 0.5f, 1.0f};
+  auto roi_plan = GraphCompiler::Compile(document, prepared.CompileSource(), roi_request);
+  const auto roi_grade = RenderPreparedGrade(device, document, prepared, roi_plan);
+  EXPECT_FALSE(roi_grade.local_tone_rebuilt_reference);
+  EXPECT_TRUE(roi_grade.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(full_grade.local_tone_reference_resource_id, roi_grade.local_tone_reference_resource_id);
+  const auto roi_pixels = DownloadGrade(device, roi_grade.output);
+  const auto roi_mask   = DownloadLocalTonePlane(device, document.PrimaryGrade()->Id());
+  ASSERT_FALSE(roi_pixels.empty());
+  ASSERT_EQ(full_mask, roi_mask);
+
+  const auto full_probe =
+      TransformPoint(full_plan.geometry.render_to_reference, PixelCenter(48, 32));
+  const auto roi_probe = TransformPoint(roi_plan.geometry.reference_to_render, full_probe);
+  const auto roi_x     = static_cast<int>(std::floor(roi_probe.x));
+  const auto roi_y     = static_cast<int>(std::floor(roi_probe.y));
+  const auto roi_w     = static_cast<int>(roi_plan.geometry.render_extent.width);
+  const auto roi_h     = static_cast<int>(roi_plan.geometry.render_extent.height);
+  ASSERT_GE(roi_x, 0);
+  ASSERT_GE(roi_y, 0);
+  ASSERT_LT(roi_x, roi_w);
+  ASSERT_LT(roi_y, roi_h);
+  const float sampled = roi_pixels[static_cast<std::size_t>(roi_y) * roi_w + roi_x].r;
+  const float full    = full_pixels[static_cast<std::size_t>(32) * kWidth + 48].r;
+  EXPECT_NEAR(sampled, full, 2.0e-3f);
+
+  CudaRenderDevice isolated;
+  const auto       isolated_grade = RenderPreparedGrade(isolated, document, prepared, roi_plan);
+  EXPECT_TRUE(isolated_grade.local_tone_rebuilt_reference);
+  EXPECT_FALSE(isolated_grade.local_tone_sampled_canonical_reference);
+  const auto isolated_pixels = DownloadGrade(isolated, isolated_grade.output);
+  ASSERT_FALSE(isolated_pixels.empty());
+  const float rebuilt = isolated_pixels[static_cast<std::size_t>(roi_y) * roi_w + roi_x].r;
+  EXPECT_GT(std::abs(rebuilt - sampled), 1.0e-4f);
 }
 
 TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices) {

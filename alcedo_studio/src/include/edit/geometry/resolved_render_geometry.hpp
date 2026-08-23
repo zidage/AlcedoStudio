@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 #include "edit/geometry/types.hpp"
@@ -56,6 +57,32 @@ struct ResolvedRenderGeometry {
 [[nodiscard]] inline auto IsIdentityResample(const ResolvedRenderGeometry& geometry) -> bool {
   return geometry.decoded_extent == geometry.render_extent &&
          IsApproxIdentity(geometry.render_to_decoded);
+}
+
+/**
+ * @brief True when this render covers the whole EditSpace, not a viewport ROI.
+ *
+ * A full-view dynamic-resolution frame still returns true. A visible subrect returns
+ * false. LLF uses this to decide whether the frame can seed the canonical reference.
+ */
+[[nodiscard]] inline auto CoversFullEditSpace(const ResolvedRenderGeometry& geometry) -> bool {
+  if (geometry.edit_extent.Empty() || geometry.render_extent.Empty()) {
+    return false;
+  }
+  const float det = geometry.edit_to_render.m[0] * geometry.edit_to_render.m[4] -
+                    geometry.edit_to_render.m[1] * geometry.edit_to_render.m[3];
+  if (!std::isfinite(det) || std::fabs(det) < 1e-12f) {
+    return false;
+  }
+  const auto render_to_edit = InvertAffine(geometry.edit_to_render);
+  const auto top_left       = TransformPoint(render_to_edit, {0.0f, 0.0f});
+  const auto bottom_right   = TransformPoint(
+      render_to_edit, {static_cast<float>(geometry.render_extent.width),
+                       static_cast<float>(geometry.render_extent.height)});
+  constexpr float kPixel = 1.5f;
+  return top_left.x <= kPixel && top_left.y <= kPixel &&
+         bottom_right.x >= static_cast<float>(geometry.edit_extent.width) - kPixel &&
+         bottom_right.y >= static_cast<float>(geometry.edit_extent.height) - kPixel;
 }
 
 }  // namespace alcedo

@@ -39,6 +39,15 @@ struct FrameResultContentKeys {
 [[nodiscard]] auto HashResolvedRenderGeometry(const ResolvedRenderGeometry& geometry) -> ContentKey;
 
 /**
+ * @brief Identity of the canonical LLF reference. Viewport ROI is omitted.
+ *
+ * Includes prepared source, user crop/rotation, CameraColor params, and Primary Grade
+ * adjustments. Viewport, render extent, and dynamic scale are not mixed.
+ */
+[[nodiscard]] auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                                       const PipelineDocument& document) -> ContentKey;
+
+/**
  * @brief Build layer keys for the current document, prepared source, and bound geometry.
  *
  * @pre @p plan.geometry is the per-frame ResolvedRenderGeometry.
