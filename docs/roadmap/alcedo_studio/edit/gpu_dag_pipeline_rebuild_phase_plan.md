@@ -1892,7 +1892,7 @@ Stack:
 | G5 | `feature/gpu-dag-cuda-grade` | G4 | CUDA 调色、CAT02、LLF workspace 化 |
 | G6 | `feature/gpu-dag-cuda-mask-mix` | G5 | MaskStore、R8 mask、feather、Mix |
 | G7 | `feature/gpu-dag-cuda-drt-product` | G6 | CUDA DRT 和 app 管线路径切换 |
-| G7R | `feature/gpu-dag-cuda-default-recovery` | G7 | CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
+| G7R | `feature/gpu-dag-cuda-check-and-fix` | G7 | CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
 | G8 | `feature/gpu-dag-opencl` | G7R | OpenCL 完整移植 |
 | G9 | `feature/gpu-dag-metal` | G8 | Metal 完整移植 |
 | G10 | `feature/gpu-dag-final-removal` | G9 | 删除旧 stage、CPU 图像路径和过渡代码；全平台验证 |
@@ -2944,7 +2944,7 @@ DAG runtime 移植必须在 G7R 达标后进入 G8/G9。
 
 ## 41. Phase G7R — CUDA 默认管线行为、颜色与性能恢复
 
-Branch: `feature/gpu-dag-cuda-default-recovery`
+Branch: `feature/gpu-dag-cuda-check-and-fix`
 
 Base: `feature/gpu-dag-cuda-drt-product`
 
@@ -3461,7 +3461,7 @@ timing remains G7R.5.
 
 ### 41.5b G7R.H — CUDA 默认管线产品回归修复
 
-Branch: `feature/gpu-dag-cuda-default-recovery`
+Branch: `feature/gpu-dag-cuda-check-and-fix`
 
 在 G7R.4 CAT02 之前修复三件产品回归：RAW demosaic/HLR 未接入 CUDA Develop、归还 pipeline 时 GPU 会话缓存不释放、DRT 入口硬裁 scene-linear。
 
@@ -4198,7 +4198,7 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 
 Branch: `feature/gpu-dag-opencl`
 
-Base: `feature/gpu-dag-cuda-default-recovery`
+Base: `feature/gpu-dag-cuda-check-and-fix`
 
 目标：
 
