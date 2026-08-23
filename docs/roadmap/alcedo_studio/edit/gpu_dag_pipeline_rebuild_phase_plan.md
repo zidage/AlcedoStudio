@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离修复与 canonical LLF ROI 采样）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离、canonical LLF ROI 采样，以及 CUDA 产品 present 示波器 tap）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -3936,6 +3936,117 @@ Suite total: `119/119` PASS。
 **LOC note (grill-code-review):** `cuda_local_tone_pass.cu` 488 lines，`cuda_primary_grade_pass.cu` 454 lines，`cuda_primary_grade_test.cpp` 490 lines。没有本次修改的文件超过 1000 行。
 
 **Residual gaps:** 没有先行全图帧时，孤立 ROI 仍走局部 extract，不会伪造 canonical 缓存。canonical 身份的主机侧槽以 workspace 指针为键，GPU 平面仍由 workspace `Values()` 持有；`ReleaseSessionResources` 清掉平面后下一次全图帧会重新播种。G7R.4 CAT02 与 G7R.5 统计仍未做。
+
+##### Phase G7R.H CUDA 产品 present 恢复 histogram/waveform tap（2026-08-23）
+
+**Status:** complete — CUDA DAG 产品路径在拷贝 DRT 输出到 viewport 之后，把同一张 display-encoded 纹理提交给 `FinalDisplayFrameTapSink`，histogram 和 waveform 可以再次读取。
+
+**Root cause:** 旧 CUDA `GPU_KernelLauncher` 在 present 时调用 `SubmitFinalDisplayFrame`。`CudaProductRenderer::PresentCudaTexture` 只做了 `BindFrameSubmission` / `MapResourceForWrite` / copy / `UnmapResource` / `NotifyFrameReady`。示波器 tap 因此永远拿不到 staged frame，QML 停在 `Reading display scope`。
+
+**Primary success call chain:**
+
+```text
+editor session render (CUDA DAG)
+  -> CPUPipelineExecutor::Apply
+  -> CudaProductRenderer::Render
+       PresentCudaTexture
+         BindFrameSubmission
+         copy DRT texture -> frame sink
+         SubmitFinalDisplayFrame (CUDA linear buffer + render stream)
+           FinalDisplayFrameTapSink::SubmitFinalDisplayFrame
+             IScopeAnalyzer::StageFrame
+         cudaStreamSynchronize
+         UnmapResource / NotifyFrameReady
+  -> EditorScopeController poll
+       SubmitFrame + ReadScopeRenderSnapshot
+       hasSnapshot true
+```
+
+**Primary failure call chain:**
+
+```text
+frame sink rejects CUDA RGBA32F mapping
+  -> throw runtime_error
+  -> UnmapResource
+  -> no NotifyFrameReady
+  -> scheduler on_complete_(false, what())
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ProductPresentSubmitsReadableCudaDisplayFrameBeforeUnmapAndNotify` | `GpuDagCudaDrtProductTest` | PASS |
+| `ProductPresentDisplayConfigMatchesDrtEncoding` | `GpuDagCudaDrtProductTest` | PASS |
+| existing CUDA product suite | `GpuDagCudaDrtProductTest` | PASS, `35/35` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaDrtProductTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R GpuDagCudaDrtProductTest
+```
+
+Suite totals: `35/35` PASS.
+
+**Checklist / exit condition:** CUDA 产品 present 在 Unmap/Notify 之前提交可读的 CUDA display frame；显示配置跟随 DRT encoding。
+
+**LOC note (grill-code-review):** `cuda_product_renderer.cu` 339 lines，`cuda_product_scope_present_test.cpp` 258 lines。没有文件超过 1000 行。
+
+**Residual gaps:** 本二进制没有驱动 QML `EditorScopeController` 或真实 analyzer kernel；tap 与 analyzer 的既有测试仍在 `EditorScopeControllerTest`。编辑器里真实 RAW 的 histogram/waveform 仍需产品侧确认。G7R.4 CAT02 与 G7R.5 统计仍未做。
+
+##### Phase G7R.H CUDA scope slot reclaim and [SCOPE] diagnostics（2026-08-23）
+
+**Status:** complete — CUDA analyzer 不再在 deferred poll 读走结果之前把唯一完成槽标成 Idle；控制台增加 `[SCOPE]` 门闩日志，`ALCEDO_RENDER_E2E=0` 可关掉 `[RENDER_E2E]`。
+
+**Root cause:** DAG 产品 present 已经 `SubmitFinalDisplayFrame`。示波器仍空白，是因为 `CudaScopeAnalyzer` 在 `StageFrame` 里把 `Dispatched` 且 `analysis_done` 的槽立刻标成 `Idle`。生产路径是 deferred poll：先 `GetLatestOutput` 再 `SubmitFrame`。连续 present 时，下一次 `StageFrame` 会复用那个刚算完的 histogram 槽，poll 永远读到空输出，QML 停在 Reading display scope。`[RENDER_E2E]` 走 stdout 且每帧一行，盖住了示波器是否 staging/polling。
+
+**Primary success call chain:**
+
+```text
+CudaProductRenderer::PresentCudaTexture
+  -> FinalDisplayFrameTapSink::SubmitFinalDisplayFrame
+       StageFrame (slot Staged)
+  -> EditorScopeController poll
+       SubmitFrame (slot Dispatched)
+       GetLatestOutput keeps newest completed Dispatched slot until consumed
+       ReadScopeRenderSnapshot
+       hasSnapshot true
+```
+
+**Primary failure call chain:**
+
+```text
+StageFrame while newer generation is not yet consumed
+  -> completed slot stays Dispatched
+  -> later StageFrame uses a different idle slot
+  -> GetLatestOutput still returns the completed histogram
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DeferredTapKeepsCompletedHistogramAfterLaterPresentWouldHaveReclaimedTheSlot` | `GpuDagCudaDrtProductTest` | PASS |
+| `ProductPresentSubmitsReadableCudaDisplayFrameBeforeUnmapAndNotify` | `GpuDagCudaDrtProductTest` | PASS |
+| existing CUDA product suite | `GpuDagCudaDrtProductTest` | PASS, `36/36` |
+| existing scope controller suite | `EditorScopeControllerTest` | PASS, `15/15` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaDrtProductTest EditorScopeControllerTest alcedo_main --parallel 4
+ctest --test-dir build/debug --output-on-failure -R GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R EditorScopeControllerTest
+```
+
+Suite totals: `36/36` and `15/15` PASS.
+
+**Checklist / exit condition:** completed histogram survives a later present; `[SCOPE]` lines identify staging/poll/publish; `alcedo_main` relinked.
+
+**LOC note (grill-code-review):** `cuda_scope_analyzer.cu` 512 lines，`final_display_frame_tap.cpp` 307 lines，`editor_scope_controller.cpp` 280 lines。没有文件超过 1000 行。
+
+**Residual gaps:** `[SCOPE]` 同类行超过 16 次后抑制。未在本二进制里驱动真实 QML 面板。G7R.4 / G7R.5 仍未做。
 
 ### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 

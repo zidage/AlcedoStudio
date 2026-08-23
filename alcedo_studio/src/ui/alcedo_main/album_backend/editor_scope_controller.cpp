@@ -7,7 +7,10 @@
 #include <QMetaObject>
 #include <QThreadPool>
 #include <algorithm>
+#include <sstream>
 #include <utility>
+
+#include "utils/diagnostics/scope_diag.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -60,6 +63,12 @@ void EditorScopeController::set_visual_active(bool active) {
   frame_tap_->SetScopeActive(active);
   last_scheduled_display_generation_ = 0;
   last_scheduled_frame_id_           = 0;
+  {
+    std::ostringstream line;
+    line << "visual_active=" << (active ? 1 : 0) << " identity=" << image_identity_
+         << " epoch=" << session_epoch_;
+    alcedo::diag::NoteScope(line.str());
+  }
   if (active) {
     poll_timer_.start();
   } else {
@@ -151,6 +160,7 @@ void EditorScopeController::scheduleSnapshotRefresh() {
 
   const auto scope_frame = frame_tap_->GetCurrentScopeFrameView();
   if (!scope_frame) {
+    alcedo::diag::NoteScope("poll no_staged_frame");
     refresh_in_flight_->store(false);
     return;
   }
@@ -179,6 +189,15 @@ void EditorScopeController::scheduleSnapshotRefresh() {
       const auto output = analyzer->GetLatestOutput();
       if (output.generation != 0) {
         next_snapshot = alcedo::ReadScopeRenderSnapshot(output);
+      }
+      {
+        std::ostringstream line;
+        line << "poll output_gen=" << output.generation
+             << " hist=" << (next_snapshot.histogram.valid ? 1 : 0)
+             << " wave=" << (next_snapshot.waveform.valid ? 1 : 0)
+             << " submit_new=" << (submit_new_frame ? 1 : 0)
+             << " frame_gen=" << scope_frame.display_generation;
+        alcedo::diag::NoteScope(line.str());
       }
       if (submit_new_frame) {
         analyzer->SubmitFrame(scope_frame, request);
@@ -216,15 +235,21 @@ auto EditorScopeController::publishSnapshot(alcedo::ScopeRenderSnapshot next_sna
   if (!visual_active_ || expected_request_revision != request_revision_ ||
       expected_image_identity != image_identity_ ||
       expected_session_epoch != session_epoch_) {
+    alcedo::diag::NoteScope("snapshot_reject stale_controller_identity");
     return false;
   }
   if (next_snapshot.generation == 0 ||
       (next_snapshot.image_identity != 0 && next_snapshot.image_identity != image_identity_) ||
       (next_snapshot.session_epoch != 0 &&
        next_snapshot.session_epoch != session_epoch_)) {
+    std::ostringstream line;
+    line << "snapshot_reject identity have=" << next_snapshot.image_identity << "/"
+         << next_snapshot.session_epoch << " want=" << image_identity_ << "/" << session_epoch_;
+    alcedo::diag::NoteScope(line.str());
     return false;
   }
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
+    alcedo::diag::NoteScope("snapshot_reject empty_plot");
     return false;
   }
   // Publish the latest completed analysis of the current image. During
@@ -239,6 +264,14 @@ auto EditorScopeController::publishSnapshot(alcedo::ScopeRenderSnapshot next_sna
   }
 
   snapshot_ = std::move(next_snapshot);
+  {
+    std::ostringstream line;
+    line << "snapshot_published gen=" << snapshot_.generation
+         << " hist=" << (snapshot_.histogram.valid ? 1 : 0)
+         << " wave=" << (snapshot_.waveform.valid ? 1 : 0)
+         << " display=" << snapshot_.display_generation;
+    alcedo::diag::NoteScope(line.str());
+  }
   emit SnapshotChanged();
   return true;
 }

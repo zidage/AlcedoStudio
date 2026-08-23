@@ -316,10 +316,11 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeCuda EditInput Image)
+    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline)
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)

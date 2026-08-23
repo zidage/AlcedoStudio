@@ -18,14 +18,85 @@
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/scope/detail/scope_cuda_shared.cuh"
+#include "edit/scope/scope_analyzer.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 namespace {
 
+auto ViewerDisplayConfigFromDrt(const DrtPayload& payload) -> ViewerDisplayConfig {
+  ViewerDisplayConfig config;
+  switch (payload.encoding_space) {
+    case DrtColorSpace::Rec2020:
+      config.encoding_space = ColorUtils::ColorSpace::REC2020;
+      break;
+    case DrtColorSpace::P3D65:
+      config.encoding_space = ColorUtils::ColorSpace::P3_D65;
+      break;
+    case DrtColorSpace::Rec709:
+    default:
+      config.encoding_space = ColorUtils::ColorSpace::REC709;
+      break;
+  }
+  switch (payload.encoding_eotf) {
+    case DrtEotf::Linear:
+      config.encoding_eotf = ColorUtils::EOTF::LINEAR;
+      break;
+    case DrtEotf::St2084:
+      config.encoding_eotf = ColorUtils::EOTF::ST2084;
+      break;
+    case DrtEotf::Hlg:
+      config.encoding_eotf = ColorUtils::EOTF::HLG;
+      break;
+    case DrtEotf::Gamma26:
+      config.encoding_eotf = ColorUtils::EOTF::GAMMA_2_6;
+      break;
+    case DrtEotf::Bt1886:
+      config.encoding_eotf = ColorUtils::EOTF::BT1886;
+      break;
+    case DrtEotf::Gamma18:
+      config.encoding_eotf = ColorUtils::EOTF::GAMMA_1_8;
+      break;
+    case DrtEotf::Gamma22:
+    default:
+      config.encoding_eotf = ColorUtils::EOTF::GAMMA_2_2;
+      break;
+  }
+  config.peak_luminance = payload.peak_luminance;
+  return config;
+}
+
+void SubmitCudaDisplayFrame(IFrameSink& sink, const CudaBackend::Texture2D& texture,
+                            cudaStream_t stream, const FrameWriteMapping& mapping,
+                            const ViewerDisplayConfig& display_config) {
+  const auto width     = static_cast<int>(texture.Width());
+  const auto height    = static_cast<int>(texture.Height());
+  const auto row_bytes = static_cast<std::size_t>(width) * sizeof(float4);
+
+  auto final_image           = std::make_shared<scope::cuda_detail::CudaLinearImageResource>();
+  final_image->device_ptr    = texture.DevicePointer();
+  final_image->row_bytes     = row_bytes;
+  final_image->width         = width;
+  final_image->height        = height;
+  final_image->format        = FramePixelFormat::RGBA32F;
+  final_image->owns_memory   = false;
+  final_image->native_object = mapping.native_object;
+
+  auto ready_signal    = std::make_shared<scope::cuda_detail::CudaStreamSignalResource>();
+  ready_signal->stream = stream;
+
+  sink.SubmitFinalDisplayFrame(FinalDisplayFrameView{
+      SharedGpuImageHandle{GpuBackend::Cuda, std::move(final_image), width, height, row_bytes,
+                           FramePixelFormat::RGBA32F},
+      width, height, FramePixelFormat::RGBA32F, display_config, AnalysisDomain::DisplayEncoded,
+      GpuSignalHandle{GpuBackend::Cuda, std::move(ready_signal)}, 0});
+}
+
 void PresentCudaTexture(CudaRenderDevice& device, const GraphValueId& output_id, IFrameSink& sink,
-                        const FrameCompletionSubmission& submission) {
+                        const FrameCompletionSubmission& submission,
+                        const ViewerDisplayConfig& display_config) {
   auto* lease = device.Workspace().Images().Find(output_id);
   if (lease == nullptr || lease->Empty()) {
     throw std::runtime_error("CudaProductRenderer: DRT output is missing");
@@ -72,6 +143,10 @@ void PresentCudaTexture(CudaRenderDevice& device, const GraphValueId& output_id,
                                                           device.CommandContext().Stream()),
                       "CudaProductRenderer: signal frame sink");
     }
+    // Histogram/waveform StageFrame copies this DRT texture on the same stream.
+    // Submit before synchronize so that copy is enqueued while the pointer is valid.
+    SubmitCudaDisplayFrame(sink, texture, device.CommandContext().Stream(), mapping,
+                           display_config);
     cuda::CheckCuda(::cudaStreamSynchronize(device.CommandContext().Stream()),
                     "CudaProductRenderer: wait for frame sink copy");
   } catch (...) {
@@ -181,9 +256,14 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
     render_device->Workspace().ReleaseSessionResources();
   };
 
+  ViewerDisplayConfig display_config{};
+  if (const auto* drt = document_->Drt()) {
+    display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
+  }
+
   try {
     if (sink != nullptr) {
-      PresentCudaTexture(*render_device, output_id, *sink, submission);
+      PresentCudaTexture(*render_device, output_id, *sink, submission, display_config);
     }
     if (require_host_output) {
       auto host = DownloadCudaTexture(*render_device, output_id);
