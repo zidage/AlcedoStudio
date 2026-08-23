@@ -40,24 +40,25 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::mutex                                                                  render_lock_;
 
   OperatorParams                                                              global_params_;
-  std::optional<RawRuntimeColorContext>                                       injected_raw_color_context_;
+  std::optional<RawRuntimeColorContext> injected_raw_color_context_;
 
-  bool                                                                        is_thumbnail_ = false;
+  bool                                  is_thumbnail_     = false;
 
-  bool                             force_cpu_output_                                        = false;
-  DecodeRes                        decode_res_ = DecodeRes::FULL;
-  std::function<bool()>            cancel_requested_;
-  AcceleratorBackendPreference     accelerator_preference_ = AcceleratorBackendPreference::Auto;
-  GpuBackendKind                   resolved_accelerator_backend_ = GpuBackendKind::None;
+  bool                                  force_cpu_output_ = false;
+  DecodeRes                             decode_res_       = DecodeRes::FULL;
+  std::function<bool()>                 cancel_requested_;
+  AcceleratorBackendPreference        accelerator_preference_ = AcceleratorBackendPreference::Auto;
+  GpuBackendKind                      resolved_accelerator_backend_ = GpuBackendKind::None;
 
-  nlohmann::json                   render_params_                = {};
+  nlohmann::json                      render_params_                = {};
+  std::optional<ViewportRenderRegion> render_request_viewport_      = std::nullopt;
 
-  static constexpr PipelineBackend backend_                      = PipelineBackend::CPU;
+  static constexpr PipelineBackend    backend_                      = PipelineBackend::CPU;
 
-  std::vector<PipelineStage*>      exec_stages_;
-  std::unique_ptr<PipelineStage>   merged_stages_;
-  IFrameSink*                      frame_sink_ = nullptr;
-  FrameCompletionSubmission        bound_frame_submission_{};
+  std::vector<PipelineStage*>         exec_stages_;
+  std::unique_ptr<PipelineStage>      merged_stages_;
+  IFrameSink*                         frame_sink_ = nullptr;
+  FrameCompletionSubmission           bound_frame_submission_{};
 #ifdef HAVE_CUDA
   std::shared_ptr<PipelineDocument>    pipeline_document_;
   std::shared_ptr<CudaProductRenderer> cuda_product_renderer_;
@@ -121,6 +122,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
   auto GetFrameSink() const -> IFrameSink* { return frame_sink_; }
 
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion>;
+  /// Freeze the viewport geometry carried by the current render request.
+  /// A null value explicitly means full-frame rendering; Apply never re-reads live UI state.
+  void SetRenderRequestViewport(std::optional<ViewportRenderRegion> viewport) {
+    render_request_viewport_ = std::move(viewport);
+  }
   void BindFrameSubmission(const FramePreviewMetadata& metadata, FramePresentationMode mode);
   [[nodiscard]] auto BoundFrameSubmission() const -> FrameCompletionSubmission;
 
@@ -149,10 +155,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
 
   /// Snapshot of one-shot render parameters that must not leak across Apply calls.
   struct OneShotRenderParamsSnapshot {
-    DecodeRes      decode_res_       = DecodeRes::FULL;
-    nlohmann::json render_params_    = {};
-    bool           force_cpu_output_ = false;
-    bool           enable_cache_     = true;
+    DecodeRes                           decode_res_              = DecodeRes::FULL;
+    nlohmann::json                      render_params_           = {};
+    bool                                force_cpu_output_        = false;
+    bool                                enable_cache_            = true;
+    std::optional<ViewportRenderRegion> render_request_viewport_ = std::nullopt;
   };
 
   [[nodiscard]] auto CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot;
@@ -200,5 +207,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
   /// cache. Used by tests to assert re-attaching a frame sink does not wipe
   /// the cross-frame LLF mask cache (the 42ed19b CanReuseReferenceForRoi path).
   [[nodiscard]] auto DebugGetMergedStageIdentity() const -> std::uintptr_t;
+
+#ifdef HAVE_CUDA
+  [[nodiscard]] auto DebugCudaProductRenderer() -> CudaProductRenderer* {
+    return cuda_product_renderer_.get();
+  }
+#endif
 };
 };  // namespace alcedo

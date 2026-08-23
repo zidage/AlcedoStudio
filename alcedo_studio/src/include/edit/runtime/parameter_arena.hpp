@@ -140,6 +140,18 @@ class ParameterArena {
   [[nodiscard]] auto used_bytes() const -> std::size_t { return used_; }
   [[nodiscard]] auto DeviceBuffer() const -> const typename Backend::Buffer& { return device_; }
 
+  /**
+   * @brief Drop host and device parameter storage. Caller must WaitIdle first.
+   */
+  void Clear() {
+    slots_.clear();
+    pending_.clear();
+    host_.clear();
+    device_   = {};
+    used_     = 0;
+    capacity_ = 0;
+  }
+
  private:
   static auto AlignUp(std::size_t value, std::uint32_t alignment) -> std::size_t {
     return (value + alignment - 1) & ~(static_cast<std::size_t>(alignment) - 1);

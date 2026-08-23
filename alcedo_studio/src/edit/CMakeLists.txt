@@ -2,8 +2,8 @@
 # 5. Business Logic & State
 # ==============================================================================
 
-set(HISTORY_SRCS 
-    ${ALCEDO_SRC_ROOT}/edit/history/edit_history.cpp 
+set(HISTORY_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/history/edit_history.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/version.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/edit_transaction.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/editor_transaction_journal.cpp
@@ -85,6 +85,8 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_plan_executor.cpp
@@ -92,7 +94,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp Operators
+        PRIVATE_DEPS EditInput RawProcessorOp Operators CudaDemosaicNetEntry
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()

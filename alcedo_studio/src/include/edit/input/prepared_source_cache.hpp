@@ -89,6 +89,14 @@ class PreparedSourceCache {
   [[nodiscard]] auto GetStats() const -> Stats { return stats_; }
   void               ResetStats() { stats_ = {}; }
 
+  /**
+   * @brief Drop every host prepared-source entry, including leased ones.
+   *
+   * Call after WaitIdle when returning a pipeline session. Live Lease objects
+   * then see an empty cache on next use.
+   */
+  void Clear();
+
  private:
   struct Entry {
     PreparedSourceKey                       key{};

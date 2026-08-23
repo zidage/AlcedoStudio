@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <opencv2/core.hpp>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -13,6 +14,7 @@
 #include "cuda/cuda_check.hpp"
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -103,8 +105,14 @@ CudaProductRenderer::CudaProductRenderer(std::shared_ptr<PipelineDocument> docum
                                          PreparedSourceCache::UnpackFn     unpack)
     : document_(std::move(document)),
       device_(std::make_unique<CudaRenderDevice>()),
-      source_cache_(std::move(unpack)),
+      unpack_(unpack ? std::move(unpack)
+                     : PreparedSourceCache::UnpackFn{[](std::span<const std::byte> encoded,
+                                                        DecodeRes                  decode_res) {
+                         return RawInputLoader::LoadEncoded(encoded, decode_res);
+                       }}),
+      source_cache_(unpack_),
       plan_cache_(kCudaDagBackendCapabilityVersion) {
+  device_->Workspace().Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
   device_->SetErrorReporter([](std::string_view message) {
     std::fprintf(stderr, "[ERROR] CUDA DAG product render failed: %.*s\n",
                  static_cast<int>(message.size()), message.data());
@@ -123,7 +131,8 @@ void CudaProductRenderer::SetDocument(std::shared_ptr<PipelineDocument> document
 auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
                                  const RenderRequest& request, IFrameSink* sink,
                                  const FrameCompletionSubmission& submission,
-                                 bool require_host_output) -> std::shared_ptr<ImageBuffer> {
+                                 bool require_host_output, CudaProductCachePolicy cache_policy)
+    -> std::shared_ptr<ImageBuffer> {
   if (!document_) {
     throw std::runtime_error("CudaProductRenderer: PipelineDocument is not configured");
   }
@@ -134,36 +143,73 @@ auto CudaProductRenderer::Render(const std::shared_ptr<ImageBuffer>& input, Deco
   auto&      encoded       = input->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  const auto prepared_lease = source_cache_.AcquireEncoded(encoded_bytes, decode_res);
-  auto       plan           = plan_cache_.GetOrCompile(*document_, prepared_lease.Get().CompileSource());
+  const bool use_session_cache = cache_policy == CudaProductCachePolicy::UseSessionCache;
+  if (!use_session_cache && !one_shot_device_) {
+    one_shot_device_ = std::make_unique<CudaRenderDevice>();
+    one_shot_device_->Workspace().Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
+    one_shot_device_->SetErrorReporter([](std::string_view message) {
+      std::fprintf(stderr, "[ERROR] CUDA DAG one-shot render failed: %.*s\n",
+                   static_cast<int>(message.size()), message.data());
+    });
+  }
+
+  std::optional<PreparedSourceCache::Lease> prepared_lease;
+  std::optional<PreparedRawInput>           one_shot_prepared;
+  ExecutionPlan                             plan;
+  CudaRenderDevice*                         render_device = device_.get();
+  if (use_session_cache) {
+    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, decode_res));
+    plan = plan_cache_.GetOrCompile(*document_, prepared_lease->Get().CompileSource());
+  } else {
+    one_shot_prepared.emplace(unpack_(encoded_bytes, decode_res));
+    plan          = GraphCompiler::CompileStatic(*document_, one_shot_prepared->CompileSource(),
+                                                 kCudaDagBackendCapabilityVersion);
+    render_device = one_shot_device_.get();
+  }
   GraphCompiler::BindFrameGeometry(plan, *document_, request);
   if (document_->TopologyDirty()) {
     document_->ClearTopologyDirty();
   }
-  const auto output_id =
-      device_->Execute(plan, prepared_lease.Get(), *document_, nullptr, false);
+  const auto& prepared  = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
+  const auto  output_id = render_device->Execute(plan, prepared, *document_, nullptr, false);
+  const auto  release_one_shot_resources = [&]() {
+    if (use_session_cache) {
+      return;
+    }
+    render_device->Workspace().Images().DiscardUnpublished();
+    render_device->WaitIdle();
+    render_device->Workspace().ReleaseSessionResources();
+  };
 
   try {
     if (sink != nullptr) {
-      PresentCudaTexture(*device_, output_id, *sink, submission);
+      PresentCudaTexture(*render_device, output_id, *sink, submission);
     }
     if (require_host_output) {
-      auto host = DownloadCudaTexture(*device_, output_id);
-      device_->PublishResults();
+      auto host = DownloadCudaTexture(*render_device, output_id);
+      if (use_session_cache) {
+        render_device->PublishResults();
+      } else {
+        release_one_shot_resources();
+      }
       return host;
     }
-    device_->PublishResults();
+    if (use_session_cache) {
+      render_device->PublishResults();
+    } else {
+      release_one_shot_resources();
+    }
   } catch (const std::exception& ex) {
-    device_->Workspace().Images().DiscardUnpublished();
-    device_->ReportError(ex.what());
+    render_device->Workspace().Images().DiscardUnpublished();
+    render_device->ReportError(ex.what());
     throw;
   }
   return std::make_shared<ImageBuffer>();
 }
 
 auto CudaProductRenderer::Stats() const -> CudaProductSessionStats {
-  const auto source = source_cache_.GetStats();
-  const auto plan   = plan_cache_.GetStats();
+  const auto              source = source_cache_.GetStats();
+  const auto              plan   = plan_cache_.GetStats();
   CudaProductSessionStats stats;
   stats.prepared_source_hits     = source.hits;
   stats.prepared_source_misses   = source.misses;
@@ -179,6 +225,34 @@ void CudaProductRenderer::ResetStats() {
   source_cache_.ResetStats();
   plan_cache_.ResetStats();
   device_->ResetPassStats();
+}
+
+void CudaProductRenderer::ReleaseSessionCaches() {
+  if (!device_) {
+    return;
+  }
+  device_->WaitIdle();
+  device_->Workspace().ReleaseSessionResources();
+  device_->ReleaseNeuralDemosaicWorkspace();
+  one_shot_device_.reset();
+  source_cache_.Clear();
+  plan_cache_.Clear();
+  device_->ResetPassStats();
+}
+
+auto CudaProductRenderer::SessionResources() const -> CudaProductSessionResources {
+  CudaProductSessionResources resources;
+  if (!device_) {
+    return resources;
+  }
+  const auto& workspace                 = device_->Workspace();
+  resources.published_result_count      = workspace.Images().PublishedCount();
+  resources.texture_pool_used_bytes     = workspace.Textures().UsedBytes();
+  resources.texture_pool_entry_count    = workspace.Textures().EntryCount();
+  resources.prepared_source_host_bytes  = source_cache_.HostBytesUsed();
+  resources.prepared_source_entry_count = source_cache_.EntryCount();
+  resources.session_value_ids           = workspace.Images().CurrentValueIds();
+  return resources;
 }
 
 }  // namespace alcedo

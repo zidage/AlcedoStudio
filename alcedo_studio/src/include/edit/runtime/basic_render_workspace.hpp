@@ -45,6 +45,7 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Parameters() -> ParameterArena<Backend>& { return parameters_; }
   [[nodiscard]] auto TransientBuffers() -> TransientBufferArena<Backend>& { return transients_; }
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
+  [[nodiscard]] auto Textures() const -> const TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto MaskTextures() -> MaskTextureCache<Backend>& { return mask_textures_; }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
@@ -96,6 +97,24 @@ class BasicRenderWorkspace {
   void CancelRender() {
     images_.DiscardUnpublished();
     rendering_ = false;
+  }
+
+  /**
+   * @brief Drop published GPU results, textures, transients, and parameter slots.
+   *
+   * @pre Not rendering. Caller WaitIdle first so no texture is still busy.
+   */
+  void ReleaseSessionResources() {
+    if (rendering_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::ReleaseSessionResources: cannot release while rendering");
+    }
+    images_.Clear();
+    values_.Clear();
+    mask_textures_.Clear();
+    textures_.ReleaseUnleased();
+    transients_.ReleaseDeviceMemory();
+    parameters_.Clear();
   }
 
  private:

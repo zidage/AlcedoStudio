@@ -196,4 +196,12 @@ class CudaBackend {
   std::vector<RectI>     last_texture_rectangles_;
 };
 
+/**
+ * @brief Per-session TexturePool budget from device memory.
+ *
+ * Uses a quarter of total device memory, floored at 256 MiB so a preview ROI
+ * still fits when the card reports a small total. Not the 64 MiB test leftover.
+ */
+[[nodiscard]] auto DefaultProductTextureBudgetBytes() -> std::size_t;
+
 }  // namespace alcedo

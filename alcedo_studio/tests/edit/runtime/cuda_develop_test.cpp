@@ -2,18 +2,24 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include "decoders/processor/nn/demosaicnet_cache.hpp"
+#include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "../input/prepared_raw_test_support.hpp"
@@ -55,6 +61,64 @@ auto DownloadDevelop(CudaRenderDevice& device, const ExecutionPlan& plan) -> std
       std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels;
+}
+
+auto SetDevelopMethod(PipelineDocument& document, std::string method, bool highlights) -> void {
+  auto payload                 = document.Develop()->Params().Params();
+  payload.demosaic_method      = std::move(method);
+  payload.highlights_reconstruct = highlights;
+  document.Develop()->Params().ReplaceParams(std::move(payload));
+}
+
+auto MakeOverRangeCfa(const RawCfaPattern& pattern, std::uint32_t width, std::uint32_t height)
+    -> HostImagePlane {
+  auto plane = gpu_dag_test::MakeU16CfaPlane(width, height, pattern);
+  auto* samples = const_cast<std::uint16_t*>(
+      reinterpret_cast<const std::uint16_t*>(plane.bytes.get()));
+  for (std::uint32_t i = 0; i < width * height; i += 7) {
+    samples[i] = 30000;
+  }
+  return plane;
+}
+
+auto MaxChannel(const std::vector<Rgba>& pixels) -> float {
+  float max_value = 0.0f;
+  for (const auto& p : pixels) {
+    max_value = std::max(max_value, std::max(p.r, std::max(p.g, p.b)));
+  }
+  return max_value;
+}
+
+auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> bool {
+  if (a.size() != b.size() || a.empty()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    if (std::abs(a[i].r - b[i].r) > 1.0e-4f || std::abs(a[i].g - b[i].g) > 1.0e-4f ||
+        std::abs(a[i].b - b[i].b) > 1.0e-4f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+auto NeuralEngineAvailable(DemosaicNetVariant variant) -> bool {
+  DemosaicNetLoadOptions options;
+  return DemosaicNetModelCache::Instance().EnsureLoaded(variant, options);
+}
+
+auto RenderDevelop(PipelineDocument& document, const PreparedRawInput& prepared)
+    -> std::vector<Rgba> {
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  CudaRenderDevice device;
+  if (plan.peak_transient_bytes > 0) {
+    device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
+  }
+  device.BeginRender();
+  ExecuteCudaDevelop(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  return DownloadDevelop(device, plan);
 }
 
 auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
@@ -99,6 +163,7 @@ TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromXTra
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
       gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", true);
   const auto plan =
       GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   EXPECT_EQ(plan.source.kind, DevelopInputKind::XTransCfa);
@@ -177,6 +242,141 @@ TEST_F(CudaDevelopFixture, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint)
   ASSERT_EQ(pixels.size(), 32U * 24U);
   EXPECT_NEAR(pixels.front().a, 1.0f, 1e-5f);
   EXPECT_TRUE(std::isfinite(pixels.front().r));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopDefaultBayerUsesLegacyRcdNotNeural) {
+  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto def_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(def_doc, "default", true);
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(legacy_doc, "legacy", true);
+  const auto default_pixels = RenderDevelop(def_doc, prepared);
+  const auto legacy_pixels  = RenderDevelop(legacy_doc, prepared);
+  ASSERT_EQ(default_pixels.size(), legacy_pixels.size());
+  EXPECT_FALSE(PixelsDiffer(default_pixels, legacy_pixels));
+  if (NeuralEngineAvailable(DemosaicNetVariant::Bayer)) {
+    auto neural_doc = CreateDefaultPipelineDocument();
+    SetDevelopMethod(neural_doc, "neural_engine", true);
+    const auto neural_pixels = RenderDevelop(neural_doc, prepared);
+    EXPECT_TRUE(PixelsDiffer(default_pixels, neural_pixels));
+  }
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopDefaultXTransUsesNeuralEngine) {
+  if (!NeuralEngineAvailable(DemosaicNetVariant::XTrans)) {
+    GTEST_SKIP() << "X-Trans Neural Engine weights are not available.";
+  }
+  RawCfaPattern pattern;
+  pattern.kind = RawCfaKind::XTrans6x6;
+  for (int i = 0; i < 36; ++i) {
+    pattern.xtrans_pattern.rgb_fc[i] = kDemosaicNetXTransTargetRgb[i];
+    pattern.xtrans_pattern.raw_fc[i] = kDemosaicNetXTransTargetRgb[i];
+  }
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(72, 72, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(72, 72), DecodeRes::FULL);
+  auto def_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(def_doc, "default", true);
+  auto neural_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(neural_doc, "neural_engine", true);
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(legacy_doc, "legacy", true);
+  const auto default_pixels = RenderDevelop(def_doc, prepared);
+  const auto neural_pixels  = RenderDevelop(neural_doc, prepared);
+  const auto legacy_pixels  = RenderDevelop(legacy_doc, prepared);
+  EXPECT_FALSE(PixelsDiffer(default_pixels, neural_pixels));
+  EXPECT_TRUE(PixelsDiffer(default_pixels, legacy_pixels));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopExplicitNeuralEngineChangesBayerPixelsVersusLegacy) {
+  if (!NeuralEngineAvailable(DemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer Neural Engine weights are not available.";
+  }
+  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(legacy_doc, "legacy", true);
+  auto neural_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(neural_doc, "neural_engine", true);
+  EXPECT_TRUE(PixelsDiffer(RenderDevelop(legacy_doc, prepared), RenderDevelop(neural_doc, prepared)));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBayerAndXTrans) {
+  const auto bayer = gpu_dag_test::MakeRggbPattern();
+  const auto bayer_prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(bayer, 64, 64), bayer, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto bayer_on = CreateDefaultPipelineDocument();
+  SetDevelopMethod(bayer_on, "legacy", true);
+  auto bayer_off = CreateDefaultPipelineDocument();
+  SetDevelopMethod(bayer_off, "legacy", false);
+  const auto bayer_on_px  = RenderDevelop(bayer_on, bayer_prepared);
+  const auto bayer_off_px = RenderDevelop(bayer_off, bayer_prepared);
+  EXPECT_GT(MaxChannel(bayer_on_px), 1.0f);
+  EXPECT_TRUE(PixelsDiffer(bayer_on_px, bayer_off_px));
+
+  const auto xtrans = gpu_dag_test::MakeXTransPattern();
+  const auto xtrans_prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(xtrans, 64, 64), xtrans, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto xtrans_on = CreateDefaultPipelineDocument();
+  SetDevelopMethod(xtrans_on, "legacy", true);
+  auto xtrans_off = CreateDefaultPipelineDocument();
+  SetDevelopMethod(xtrans_off, "legacy", false);
+  const auto xtrans_on_px  = RenderDevelop(xtrans_on, xtrans_prepared);
+  const auto xtrans_off_px = RenderDevelop(xtrans_off, xtrans_prepared);
+  EXPECT_TRUE(PixelsDiffer(xtrans_on_px, xtrans_off_px));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructOffAppliesCfaClamp01) {
+  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", false);
+  const auto pixels = RenderDevelop(document, prepared);
+  EXPECT_TRUE(AllFiniteNonZero(pixels));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopHighlightReconstructChangesXTransRgb) {
+  const auto pattern = gpu_dag_test::MakeXTransPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto on_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(on_doc, "legacy", true);
+  auto off_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(off_doc, "legacy", false);
+  EXPECT_TRUE(PixelsDiffer(RenderDevelop(on_doc, prepared), RenderDevelop(off_doc, prepared)));
+}
+
+TEST_F(CudaDevelopFixture, CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoesNotFallBackToLegacy) {
+  DemosaicNetModelCache failing;
+  SetDevelopNeuralModelCacheForTesting(&failing);
+  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "neural_engine", true);
+  try {
+    (void)RenderDevelop(document, prepared);
+    SetDevelopNeuralModelCacheForTesting(nullptr);
+    FAIL() << "Neural Engine failure must throw";
+  } catch (const std::runtime_error& ex) {
+    SetDevelopNeuralModelCacheForTesting(nullptr);
+    const std::string message = ex.what();
+    EXPECT_NE(message.find("Neural Engine"), std::string::npos);
+  } catch (...) {
+    SetDevelopNeuralModelCacheForTesting(nullptr);
+    throw;
+  }
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallback) {

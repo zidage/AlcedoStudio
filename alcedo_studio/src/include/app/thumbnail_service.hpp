@@ -79,9 +79,10 @@ class ThumbnailService {
                     bool pin_if_found = true, CallbackDispatcher dispatcher = nullptr,
                     ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Request a thumbnail and receive a detailed result. This distinguishes
-  // cancellation from render/load failures, while GetThumbnail preserves the
-  // legacy guard/null callback contract.
+  // Request a thumbnail and receive a detailed result. Rendering uses an independent pipeline
+  // snapshot, so background filmstrip work never occupies the live editor executor. This
+  // distinguishes cancellation from render/load failures, while GetThumbnail preserves the
+  // legacy guard/null callback behavior.
   void GetThumbnailDetailed(sl_element_id_t id, image_id_t image_id,
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,

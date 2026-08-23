@@ -122,6 +122,9 @@ class TransientBufferArena {
   /// Rewind bump pointer to zero. Does not free device memory.
   void Reset() noexcept { offset_ = 0; }
 
+  /// Free the device slab. Requires no live bump allocations (`used_bytes() == 0`).
+  void ReleaseDeviceMemory() noexcept { ResetSlab(); }
+
   void Rewind(std::size_t mark_bytes) {
     if (mark_bytes > offset_) {
       throw std::runtime_error("TransientBufferArena::Rewind: mark is past current offset");

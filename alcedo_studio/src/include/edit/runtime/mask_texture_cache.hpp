@@ -73,6 +73,14 @@ class MaskTextureCache {
   [[nodiscard]] auto UsedBytes() const -> std::size_t { return used_bytes_; }
   [[nodiscard]] auto EntryCount() const -> std::size_t { return entries_.size(); }
 
+  /**
+   * @brief Drop every mask texture. Caller must not hold MaskTextureLease objects.
+   */
+  void Clear() {
+    entries_.clear();
+    used_bytes_ = 0;
+  }
+
   void               BeginFrame() {
     for (auto& [key, entry] : entries_) entry.used_this_frame = false;
   }

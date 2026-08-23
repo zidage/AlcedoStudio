@@ -36,7 +36,8 @@ namespace {
 using ProfileClock = std::chrono::steady_clock;
 
 #ifdef HAVE_CUDA
-void ApplyImportedCameraProfile(PipelineDocument& document, const RawRuntimeColorContext& imported) {
+void ApplyImportedCameraProfile(PipelineDocument&             document,
+                                const RawRuntimeColorContext& imported) {
   auto* develop = document.Develop();
   if (develop == nullptr) {
     return;
@@ -221,7 +222,7 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
       cuda_product_renderer_ = std::make_shared<CudaProductRenderer>(pipeline_document_);
     }
     RenderRequest request;
-    if (const auto viewport = GetViewportRenderRegion();
+    if (const auto& viewport = render_request_viewport_;
         viewport.has_value() && viewport->reference_width_ > 0 && viewport->reference_height_ > 0) {
       request.view.visible_rect_in_edit_space = {
           static_cast<float>(viewport->x_) / viewport->reference_width_,
@@ -240,8 +241,10 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
       }
     }
     request.resolution.quality = force_cpu_output_ ? RenderQuality::Export : RenderQuality::Preview;
+    const auto cache_policy    = enable_cache_ ? CudaProductCachePolicy::UseSessionCache
+                                               : CudaProductCachePolicy::BypassSessionCache;
     return cuda_product_renderer_->Render(input, decode_res_, request, frame_sink_,
-                                          bound_frame_submission_, force_cpu_output_);
+                                          bound_frame_submission_, force_cpu_output_, cache_policy);
   }
 #endif
   if (exec_stages_.empty()) {
@@ -667,10 +670,11 @@ void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
 
 auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
   OneShotRenderParamsSnapshot snapshot;
-  snapshot.decode_res_       = decode_res_;
-  snapshot.render_params_    = render_params_;
-  snapshot.force_cpu_output_ = force_cpu_output_;
-  snapshot.enable_cache_     = enable_cache_;
+  snapshot.decode_res_              = decode_res_;
+  snapshot.render_params_           = render_params_;
+  snapshot.force_cpu_output_        = force_cpu_output_;
+  snapshot.enable_cache_            = enable_cache_;
+  snapshot.render_request_viewport_ = render_request_viewport_;
   return snapshot;
 }
 
@@ -680,7 +684,8 @@ void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSn
     // SetEnableCache rebuilds stage cache flags; only call when the value changes.
     SetEnableCache(snapshot.enable_cache_);
   }
-  render_params_ = snapshot.render_params_;
+  render_params_           = snapshot.render_params_;
+  render_request_viewport_ = snapshot.render_request_viewport_;
   stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
       OperatorType::RESIZE, render_params_);
 
@@ -815,7 +820,8 @@ void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
 #ifdef HAVE_CUDA
     if (pipeline_document_ != nullptr && pipeline_document_->Develop() != nullptr) {
       const auto& develop = pipeline_document_->Develop()->Params().Params();
-      if (!color_temp_params.contains("color_temp") || !color_temp_params["color_temp"].is_object()) {
+      if (!color_temp_params.contains("color_temp") ||
+          !color_temp_params["color_temp"].is_object()) {
         color_temp_params["color_temp"] = nlohmann::json::object();
       }
       color_temp_params["color_temp"]["as_shot_cct"]  = develop.as_shot_cct;
@@ -850,6 +856,11 @@ void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
     merged_stages_->ResetRuntimeResources(
         PipelineStage::RuntimeResetMode::ClearIntermediateBuffers);
   }
+#ifdef HAVE_CUDA
+  if (cuda_product_renderer_) {
+    cuda_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 void CPUPipelineExecutor::ReleasePreviewGpuScratch() {
@@ -866,6 +877,11 @@ void CPUPipelineExecutor::ReleaseAllGPUResources() {
   if (merged_stages_) {
     merged_stages_->ResetRuntimeResources(PipelineStage::RuntimeResetMode::ReleaseGpuResources);
   }
+#ifdef HAVE_CUDA
+  if (cuda_product_renderer_) {
+    cuda_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 auto CPUPipelineExecutor::DebugGetMergedStageScratchBytes() const -> size_t {

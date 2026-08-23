@@ -49,6 +49,7 @@ class StaticExecutionPlanCache {
   [[nodiscard]] auto BackendCapabilityVersion() const -> std::uint32_t {
     return backend_capability_version_;
   }
+  void Clear() { plans_.clear(); }
 
  private:
   std::uint32_t                     backend_capability_version_ = 0;

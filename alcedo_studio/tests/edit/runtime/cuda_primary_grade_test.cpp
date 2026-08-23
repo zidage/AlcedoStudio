@@ -49,7 +49,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
     gpu_dag_test::EnsureTestCameraProfile(document_);
-    plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
   auto Render() -> CudaPrimaryGradeResult {
@@ -111,6 +111,24 @@ TEST_F(CudaPrimaryGradeFixture, CudaPrimaryGradeDefaultParametersPreserveDevelop
   EXPECT_GT(compared, 0U);
   EXPECT_TRUE(plan_.Contains(GpuPassKind::CameraToAp1));
   EXPECT_TRUE(plan_.Contains(GpuPassKind::PrimaryColorGrade));
+}
+
+TEST_F(CudaPrimaryGradeFixture, DefaultCurvePreservesSceneLinearHighlightsAboveOne) {
+  const auto result = Render();
+  const auto input  = Download(plan_.develop_output);
+  const auto output = Download(result.output);
+  ASSERT_EQ(input.size(), output.size());
+  bool compared_highlight = false;
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    if (std::max({input[i].r, input[i].g, input[i].b}) <= 1.0f) {
+      continue;
+    }
+    EXPECT_NEAR(output[i].r, input[i].r, 1.0e-6f);
+    EXPECT_NEAR(output[i].g, input[i].g, 1.0e-6f);
+    EXPECT_NEAR(output[i].b, input[i].b, 1.0e-6f);
+    compared_highlight = true;
+  }
+  EXPECT_TRUE(compared_highlight);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaExposurePatchChangesOnlyExposureParameterRange) {

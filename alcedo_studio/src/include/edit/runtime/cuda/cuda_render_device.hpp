@@ -22,6 +22,10 @@ using CudaRenderWorkspace = BasicRenderWorkspace<CudaBackend>;
 class CudaDrtRuntimeState;
 class MaskStore;
 
+namespace CUDA {
+class NeuralDemosaicWorkspace;
+}
+
 /**
  * @brief Owns a CUDA workspace and one command context. Does not own a graph or plan.
  *
@@ -69,6 +73,14 @@ class CudaRenderDevice {
   [[nodiscard]] auto DrtRuntime() -> CudaDrtRuntimeState&;
 
   /**
+   * @brief Session-owned Neural Engine activation workspace. Created on first use.
+   */
+  [[nodiscard]] auto NeuralDemosaicWorkspace() -> CUDA::NeuralDemosaicWorkspace&;
+
+  /** @brief Drop the session Neural Engine workspace. Weights stay in the process cache. */
+  void ReleaseNeuralDemosaicWorkspace();
+
+  /**
    * @brief Execute the complete compiled CUDA DAG and return its display texture identity.
    *
    * Skips GPU node passes whose content keys are already published. When
@@ -82,11 +94,12 @@ class CudaRenderDevice {
                              bool publish_on_success = true) -> GraphValueId;
 
  private:
-  CudaRenderWorkspace                   workspace_;
-  CudaCommandContext                    command_context_;
-  std::unique_ptr<CudaDrtRuntimeState>  drt_runtime_;
-  std::function<void(std::string_view)> error_reporter_;
-  GpuNodePassStats                      pass_stats_{};
+  CudaRenderWorkspace                              workspace_;
+  CudaCommandContext                               command_context_;
+  std::unique_ptr<CudaDrtRuntimeState>             drt_runtime_;
+  std::unique_ptr<CUDA::NeuralDemosaicWorkspace>   neural_workspace_;
+  std::function<void(std::string_view)>            error_reporter_;
+  GpuNodePassStats                                 pass_stats_{};
 };
 
 }  // namespace alcedo

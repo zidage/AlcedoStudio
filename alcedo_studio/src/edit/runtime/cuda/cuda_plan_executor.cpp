@@ -41,7 +41,7 @@ auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput
   try {
     auto& workspace = Workspace();
     if (workspace.Textures().ByteBudget() == 0) {
-      workspace.Textures().SetByteBudget(64ull << 20);
+      workspace.Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
     }
     BeginRender();
     const auto keys       = BuildFrameResultContentKeys(plan, input, document);

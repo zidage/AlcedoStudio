@@ -119,8 +119,18 @@ __device__ auto Luma(const float3& c) -> float {
   return 0.272229f * c.x + 0.674082f * c.y + 0.053689f * c.z;
 }
 
+__device__ auto ExtrapolateCurve(float value, const CudaAdjustmentParams& p, std::uint32_t a,
+                                 std::uint32_t b) -> float {
+  const float x0 = p.values[a * 2];
+  const float y0 = p.values[a * 2 + 1];
+  const float x1 = p.values[b * 2];
+  const float y1 = p.values[b * 2 + 1];
+  return y0 + (value - x0) * (y1 - y0) / fmaxf(x1 - x0, 1.0e-6f);
+}
+
 __device__ auto ApplyCurve(float value, const CudaAdjustmentParams& p) -> float {
   if (p.count < 2) return value;
+  if (value <= p.values[0]) return ExtrapolateCurve(value, p, 0, 1);
   for (std::uint32_t i = 1; i < p.count; ++i) {
     const float x1 = p.values[i * 2];
     if (value <= x1) {
@@ -131,7 +141,7 @@ __device__ auto ApplyCurve(float value, const CudaAdjustmentParams& p) -> float 
       return y0 + t * (y1 - y0);
     }
   }
-  return p.values[(p.count - 1) * 2 + 1];
+  return ExtrapolateCurve(value, p, p.count - 2, p.count - 1);
 }
 
 __device__ auto ApplyHls(float3 c, const CudaAdjustmentParams& p) -> float3 {
@@ -374,7 +384,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     throw std::runtime_error("ExecuteCudaPrimaryGrade: workspace image has no CUDA allocation");
   }
   CameraToAp1Params camera;
-  camera.mix = grade->Enabled() ? grade->Mix() : 0.0f;
+  camera.mix                       = grade->Enabled() ? grade->Mix() : 0.0f;
   const std::uint8_t* mask_pointer = nullptr;
   if (plan.primary_grade_mask) {
     auto* mask = workspace.Images().Find(plan.mask_output);

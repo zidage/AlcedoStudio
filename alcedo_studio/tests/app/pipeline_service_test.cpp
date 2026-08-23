@@ -618,7 +618,8 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveG
     auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
     ASSERT_NE(snap, nullptr);
     ASSERT_NE(snap->executor_, nullptr);
-    EXPECT_NE(snap->executor_, g1->pipeline_);                      // independent instance
+    EXPECT_NE(snap->executor_, g1->pipeline_);  // independent instance
+    EXPECT_NE(&snap->executor_->GetRenderLock(), &g1->pipeline_->GetRenderLock());
     EXPECT_EQ(snap->pipeline_params_, params_v1);                   // captured current params
     EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);  // snapshot holds them
 

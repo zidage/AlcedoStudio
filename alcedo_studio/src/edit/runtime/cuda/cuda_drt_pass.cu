@@ -56,23 +56,6 @@ __global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pix
 
 }  // namespace
 
-CudaRenderDevice::CudaRenderDevice() : drt_runtime_(std::make_unique<CudaDrtRuntimeState>()) {}
-
-CudaRenderDevice::~CudaRenderDevice() {
-  try {
-    WaitIdle();
-  } catch (...) {
-  }
-}
-
-void CudaRenderDevice::CancelRender() noexcept {
-  if (!workspace_.IsRendering()) return;
-  (void)::cudaStreamSynchronize(command_context_.Stream());
-  workspace_.CancelRender();
-}
-
-auto CudaRenderDevice::DrtRuntime() -> CudaDrtRuntimeState& { return *drt_runtime_; }
-
 auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document)
     -> CudaDrtResult {
   auto& workspace = device.Workspace();

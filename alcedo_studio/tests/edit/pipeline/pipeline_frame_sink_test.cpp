@@ -156,7 +156,7 @@ TEST_F(PipelineFrameSinkTest, BindFrameSubmissionIsNoOpWhenSinkIsDetached) {
 }
 
 TEST_F(PipelineFrameSinkTest, BindFrameSubmissionForwardsToAttachedSink) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
   exec->SetExecutionStages(&sink);
 
@@ -333,10 +333,8 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
 
   EXPECT_EQ(sink.viewport_render_region_calls_, 0);
   EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::DetailPatch);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 316.0f / 903.0f,
-              1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 428.0f / 1351.0f,
-              1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 316.0f / 903.0f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 428.0f / 1351.0f, 1.0e-5f);
   EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.491694f, 1.0e-5f);
   EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.170244f, 1.0e-5f);
 
@@ -348,6 +346,43 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
   const auto params = resize_entry.value()->op_->GetParams();
   ASSERT_TRUE(params.contains("resize"));
   EXPECT_EQ(params["resize"].value("maximum_edge", 0), 3008);
+  const auto frozen = exec->CaptureOneShotRenderParams().render_request_viewport_;
+  ASSERT_TRUE(frozen.has_value());
+  EXPECT_EQ(frozen->x_, requested_region.x_);
+  EXPECT_EQ(frozen->y_, requested_region.y_);
+}
+
+TEST_F(PipelineFrameSinkTest, QualityBaseAfterRoiClearsFrozenViewportGeometry) {
+  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  MockFrameSink sink;
+  exec->SetExecutionStages(&sink);
+  sink.viewport_render_region_ = ViewportRenderRegion{.x_                = 700,
+                                                      .y_                = 300,
+                                                      .scale_x_          = 0.2f,
+                                                      .scale_y_          = 0.3f,
+                                                      .reference_width_  = 5000,
+                                                      .reference_height_ = 3000,
+                                                      .target_width_     = 1800,
+                                                      .target_height_    = 1200};
+
+  PipelineTask roi;
+  roi.pipeline_executor_                         = exec;
+  roi.options_.render_desc_.render_type_         = RenderType::DETAIL_ROI_PREVIEW;
+  roi.options_.render_desc_.use_viewport_region_ = true;
+  roi.SetExecutorRenderParams();
+  ASSERT_TRUE(exec->CaptureOneShotRenderParams().render_request_viewport_.has_value());
+
+  PipelineTask quality_base;
+  quality_base.pipeline_executor_                 = exec;
+  quality_base.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
+  quality_base.SetExecutorRenderParams();
+
+  EXPECT_FALSE(exec->CaptureOneShotRenderParams().render_request_viewport_.has_value());
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::ViewportTransformed);
+  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.0f);
+  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.0f);
+  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.width, 1.0f);
+  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.height, 1.0f);
 }
 
 TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsDetailRoiPreviewAsPatch) {
@@ -750,7 +785,7 @@ TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
 TEST_F(PipelineFrameSinkTest, HistoryQueuesBehindRenderOwnershipOfLivePipeline) {
   // render_lock_ is sole live-pipeline ownership for the full frame. History
   // must wait until render releases it — not race under a second occupancy bit.
-  auto                     exec = std::make_shared<CPUPipelineExecutor>();
+  auto                         exec = std::make_shared<CPUPipelineExecutor>();
   std::unique_lock<std::mutex> worker_lock(exec->GetRenderLock());
   EXPECT_TRUE(worker_lock.owns_lock());
 
@@ -796,7 +831,8 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
       {
         std::unique_lock<std::mutex> lock(exec->GetRenderLock());
         // Simulate the render path's use of frame sink methods.
-        exec->BindFrameSubmission(FramePreviewMetadata{}, FramePresentationMode::ViewportTransformed);
+        exec->BindFrameSubmission(FramePreviewMetadata{},
+                                  FramePresentationMode::ViewportTransformed);
         (void)exec->GetViewportRenderRegion();
       }
       ops.fetch_add(1);
@@ -1011,19 +1047,17 @@ TEST_F(PipelineFrameSinkTest, ImportedRawBackendCannotOverrideRuntimePreference)
 
   // Params never carry the backend: exported state has no backend key.
   // Exported stage state is nested as stage name -> {script_name -> {…}}.
-  const nlohmann::json exported = exec->ExportPipelineParams();
-  const nlohmann::json raw_params =
-      exported.value("Image_Loading", nlohmann::json::object())
-          .value("Image_Loading", nlohmann::json::object())
-          .value("raw_decode", nlohmann::json::object())
-          .value("params", nlohmann::json::object())
-          .value("raw", nlohmann::json::object());
+  const nlohmann::json exported   = exec->ExportPipelineParams();
+  const nlohmann::json raw_params = exported.value("Image_Loading", nlohmann::json::object())
+                                        .value("Image_Loading", nlohmann::json::object())
+                                        .value("raw_decode", nlohmann::json::object())
+                                        .value("params", nlohmann::json::object())
+                                        .value("raw", nlohmann::json::object());
   EXPECT_FALSE(raw_params.contains("gpu_backend"));
 
   // A state saved under a different backend (CUDA) must not change the decode.
-  nlohmann::json stored = exported;
-  stored["Image_Loading"]["Image_Loading"]["raw_decode"]["params"]["raw"]["gpu_backend"] =
-      "cuda";
+  nlohmann::json stored                                                                  = exported;
+  stored["Image_Loading"]["Image_Loading"]["raw_decode"]["params"]["raw"]["gpu_backend"] = "cuda";
   exec->ImportPipelineParams(stored);
 
   EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);

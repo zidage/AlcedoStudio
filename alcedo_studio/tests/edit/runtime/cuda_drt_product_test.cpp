@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <span>
@@ -182,6 +183,122 @@ TEST_F(CudaDrtProductFixture, CudaBackendFailureDoesNotEnterCpuImageProcessing) 
       std::runtime_error);
   EXPECT_FALSE(reported.empty());
   EXPECT_FALSE(device_.Workspace().IsRendering());
+}
+
+auto MakeConstantRgb(std::uint32_t width, std::uint32_t height, float value) -> HostImagePlane {
+  auto plane = gpu_dag_test::MakeF32RgbaPlane(width, height);
+  auto* px   = const_cast<float*>(reinterpret_cast<const float*>(plane.bytes.get()));
+  for (std::uint32_t i = 0; i < width * height; ++i) {
+    px[i * 4 + 0] = value;
+    px[i * 4 + 1] = value;
+    px[i * 4 + 2] = value;
+    px[i * 4 + 3] = 1.0f;
+  }
+  return plane;
+}
+
+auto MaxRgb(const std::vector<Rgba>& pixels) -> float {
+  float max_value = 0.0f;
+  for (const auto& pixel : pixels) {
+    max_value = std::max(max_value, std::max(pixel.r, std::max(pixel.g, pixel.b)));
+  }
+  return max_value;
+}
+
+TEST_F(CudaDrtProductFixture, DrtInputIsNotHardClampedToForwardLimitBeforeTonescale) {
+  auto low_doc  = CreateDefaultPipelineDocument();
+  auto high_doc = CreateDefaultPipelineDocument();
+  auto params   = low_doc.Drt()->Params().Params();
+  params.method = DrtMethod::Aces20;
+  low_doc.Drt()->Params().ReplaceParams(params);
+  high_doc.Drt()->Params().ReplaceParams(params);
+  PreparedRawInput low_input =
+      RawInputLoader::FromDirectRgb(MakeConstantRgb(16, 12, 1.0f), gpu_dag_test::FullSensor(16, 12));
+  PreparedRawInput high_input =
+      RawInputLoader::FromDirectRgb(MakeConstantRgb(16, 12, 4.0f), gpu_dag_test::FullSensor(16, 12));
+  gpu_dag_test::EnsureTestCameraProfile(low_doc);
+  gpu_dag_test::EnsureTestCameraProfile(high_doc);
+  const auto low_pixels  = Download(device_, device_.Execute(
+      GraphCompiler::Compile(low_doc, low_input.CompileSource(), RenderRequest{}), low_input,
+      low_doc));
+  CudaRenderDevice high_device;
+  const auto high_pixels = Download(high_device, high_device.Execute(
+      GraphCompiler::Compile(high_doc, high_input.CompileSource(), RenderRequest{}), high_input,
+      high_doc));
+  ASSERT_EQ(low_pixels.size(), high_pixels.size());
+  bool differ = false;
+  for (std::size_t i = 0; i < low_pixels.size(); ++i) {
+    if (std::abs(low_pixels[i].r - high_pixels[i].r) > 1.0e-4f ||
+        std::abs(low_pixels[i].g - high_pixels[i].g) > 1.0e-4f ||
+        std::abs(low_pixels[i].b - high_pixels[i].b) > 1.0e-4f) {
+      differ = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(differ);
+  EXPECT_TRUE(AllFiniteDisplayValues(low_pixels));
+  EXPECT_TRUE(AllFiniteDisplayValues(high_pixels));
+}
+
+TEST_F(CudaDrtProductFixture, HighlightReconstructOnSurvivesIntoDrtInsteadOfBeingClippedToUnitCube) {
+  const auto pattern = gpu_dag_test::MakeRggbPattern();
+  auto plane         = gpu_dag_test::MakeU16CfaPlane(64, 64, pattern);
+  auto* samples      = const_cast<std::uint16_t*>(
+      reinterpret_cast<const std::uint16_t*>(plane.bytes.get()));
+  for (std::uint32_t i = 0; i < 64 * 64; i += 5) {
+    samples[i] = 30000;
+  }
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      plane, pattern, gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(64, 64),
+      DecodeRes::FULL);
+  auto on_doc = CreateDefaultPipelineDocument();
+  auto payload = on_doc.Develop()->Params().Params();
+  payload.demosaic_method        = "legacy";
+  payload.highlights_reconstruct = true;
+  on_doc.Develop()->Params().ReplaceParams(payload);
+  auto off_doc = CreateDefaultPipelineDocument();
+  payload.highlights_reconstruct = false;
+  off_doc.Develop()->Params().ReplaceParams(payload);
+  gpu_dag_test::EnsureTestCameraProfile(on_doc);
+  gpu_dag_test::EnsureTestCameraProfile(off_doc);
+  const auto on_pixels = Download(device_, device_.Execute(
+      GraphCompiler::Compile(on_doc, prepared.CompileSource(), RenderRequest{}), prepared, on_doc));
+  CudaRenderDevice off_device;
+  const auto off_pixels = Download(off_device, off_device.Execute(
+      GraphCompiler::Compile(off_doc, prepared.CompileSource(), RenderRequest{}), prepared, off_doc));
+  EXPECT_TRUE(AllFiniteDisplayValues(on_pixels));
+  EXPECT_TRUE(AllFiniteDisplayValues(off_pixels));
+  bool differ = false;
+  for (std::size_t i = 0; i < on_pixels.size() && i < off_pixels.size(); ++i) {
+    if (std::abs(on_pixels[i].r - off_pixels[i].r) > 1.0e-4f ||
+        std::abs(on_pixels[i].g - off_pixels[i].g) > 1.0e-4f ||
+        std::abs(on_pixels[i].b - off_pixels[i].b) > 1.0e-4f) {
+      differ = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(differ);
+}
+
+TEST_F(CudaDrtProductFixture, OpenDrtAndAcesStillLimitDisplayReferredOutput) {
+  auto open_doc = CreateDefaultPipelineDocument();
+  auto aces_doc = CreateDefaultPipelineDocument();
+  auto aces     = aces_doc.Drt()->Params().Params();
+  aces.method   = DrtMethod::Aces20;
+  aces_doc.Drt()->Params().ReplaceParams(aces);
+  auto input = RawInputLoader::FromDirectRgb(MakeConstantRgb(16, 12, 1000.0f),
+                                             gpu_dag_test::FullSensor(16, 12));
+  gpu_dag_test::EnsureTestCameraProfile(open_doc);
+  gpu_dag_test::EnsureTestCameraProfile(aces_doc);
+  const auto open_pixels = Download(device_, device_.Execute(
+      GraphCompiler::Compile(open_doc, input.CompileSource(), RenderRequest{}), input, open_doc));
+  CudaRenderDevice aces_device;
+  const auto aces_pixels = Download(aces_device, aces_device.Execute(
+      GraphCompiler::Compile(aces_doc, input.CompileSource(), RenderRequest{}), input, aces_doc));
+  EXPECT_TRUE(AllFiniteDisplayValues(open_pixels));
+  EXPECT_TRUE(AllFiniteDisplayValues(aces_pixels));
+  EXPECT_LT(MaxRgb(open_pixels), 4.0f);
+  EXPECT_LT(MaxRgb(aces_pixels), 4.0f);
 }
 
 TEST_F(CudaDrtProductFixture, CudaDefaultPipelineSecondRenderCreatesNoGpuAllocation) {

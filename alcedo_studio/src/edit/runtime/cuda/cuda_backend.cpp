@@ -341,4 +341,15 @@ void CudaBackend::ResetCounters() {
 
 void CudaBackend::FailNextUpload() { fail_next_upload_ = true; }
 
+auto DefaultProductTextureBudgetBytes() -> std::size_t {
+  constexpr std::size_t kFloorBytes = 256ull << 20;
+  std::size_t           free_bytes  = 0;
+  std::size_t           total_bytes = 0;
+  if (::cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || total_bytes == 0) {
+    return kFloorBytes;
+  }
+  const auto quarter = total_bytes / 4;
+  return quarter > kFloorBytes ? quarter : kFloorBytes;
+}
+
 }  // namespace alcedo

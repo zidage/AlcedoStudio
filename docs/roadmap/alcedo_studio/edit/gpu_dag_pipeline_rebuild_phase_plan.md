@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离修复）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2946,7 +2946,7 @@ Branch: `feature/gpu-dag-cuda-default-recovery`
 
 Base: `feature/gpu-dag-cuda-drt-product`
 
-Status: G7R.1–G7R.3 complete；G7R.4–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
+Status: G7R.1–G7R.3 complete；G7R.H complete；G7R.4–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
 
 Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
 任务中已经明确的 Develop endpoint、GPU workspace KV cache 和动态分辨率要求，不重新定义
@@ -3455,6 +3455,263 @@ the CUDA product path does not use that context for CameraColor. OpenCL/Metal
 `ColorTempOp` still has a `cam_xyz` fallback when ColorMatrix is missing; CUDA
 does not. Creative CAT02 remains per-channel scaling until G7R.4. 41.9 A/B
 timing remains G7R.5.
+
+### 41.5b G7R.H — CUDA 默认管线产品回归修复
+
+Branch: `feature/gpu-dag-cuda-default-recovery`
+
+在 G7R.4 CAT02 之前修复三件产品回归：RAW demosaic/HLR 未接入 CUDA Develop、归还 pipeline 时 GPU 会话缓存不释放、DRT 入口硬裁 scene-linear。
+
+工作：
+
+- [x] SensorDevelop 读取 `demosaic_method`；default Bayer=Legacy RCD，default X-Trans=Neural Engine
+- [x] Neural 失败抛错误字符串，不静默落到 Legacy
+- [x] HLR on 时 CFA 不 Clamp01；HLR 在 Bayer 和 X-Trans demosaic 之后的 RGB 上运行
+- [x] `CudaProductRenderer::ReleaseSessionCaches` 在 `ClearAllIntermediateBuffers` / `ReleaseAllGPUResources` 中调用
+- [x] 产品 TexturePool 预算来自设备显存（下限 256 MiB），不再写死 64 MiB
+- [x] 删除 `OutputTransform_fwd` 入口 `clamp_AP1`；`kDrtImplementationVersion = 2`；`kSensorDevelopImplementationVersion = 2`
+- [x] `PipelineScheduler` 把异常 `what()` 传给 `on_complete_(success, message)`
+
+##### Phase G7R.H completion record (2026-08-23)
+
+**Status:** complete — CUDA Develop honors demosaic/HLR, session caches drop on pipeline return, DRT no longer hard-clips AP1 before tonescale.
+
+**Primary success call chain:**
+
+```text
+EditorRawDecodePanel submit method / highlights_reconstruct
+  -> CPUPipelineExecutor::Apply mirrors legacy JSON
+  -> ExecuteCudaDevelop
+       ToLinearRef
+       Clamp01(CFA) only if HLR off
+       ResolveDevelopDemosaicMethod
+       RCD | XTrans interpolator | Neural student tiles
+       optional HighlightCorrection on RGB
+       pack develop.sensor_linear
+
+editor switch image -> SavePipeline last pin
+  -> ClearAllIntermediateBuffers
+       -> CudaProductRenderer::ReleaseSessionCaches
+            WaitIdle
+            GraphImageCache::Clear + TexturePool::ReleaseUnleased
+            PreparedSourceCache::Clear
+            NeuralDemosaicWorkspace reset
+```
+
+**Primary failure call chain:**
+
+```text
+Neural preprocess / tile / EnsureLoaded failed
+  -> throw runtime_error("Neural Engine ...")
+  -> CudaRenderDevice::CancelRender + ReportError
+  -> PipelineScheduler catch exception -> on_complete_(false, what())
+  -> FinishJob(false, message) -> editor last_error_
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CudaDevelopDefaultBayerUsesLegacyRcdNotNeural` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopDefaultXTransUsesNeuralEngine` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopExplicitNeuralEngineChangesBayerPixelsVersusLegacy` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBayerAndXTrans` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopHighlightReconstructOffAppliesCfaClamp01` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopHighlightReconstructChangesXTransRgb` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoesNotFallBackToLegacy` | `GpuDagCudaDevelopTest` | PASS |
+| `EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult` | `PipelineSchedulerRequestIdTest` | PASS |
+| `ClearAllIntermediateBuffersReleasesCudaProductSessionGpuAndHostCaches` | `GpuDagCudaDrtProductTest` | PASS |
+| `ThreeSequentialImagePinsDoNotRetainPreviousImageGpuTextures` | `GpuDagCudaDrtProductTest` | PASS |
+| `TexturePoolBudgetNoLongerHardCodedTo64MiBOnProductPath` | `GpuDagCudaDrtProductTest` | PASS |
+| `ImageSwitchBackAfterReleaseSessionCachesMissesAndReexecutes` | `GpuDagCudaDrtProductTest` | PASS |
+| `ViewportChangeAfterSessionReleaseStillReusesSensorLinearOnTheLivePipeline` | `GpuDagCudaDrtProductTest` | PASS |
+| `DrtInputIsNotHardClampedToForwardLimitBeforeTonescale` | `GpuDagCudaDrtProductTest` | PASS |
+| `HighlightReconstructOnSurvivesIntoDrtInsteadOfBeingClippedToUnitCube` | `GpuDagCudaDrtProductTest` | PASS |
+| `OpenDrtAndAcesStillLimitDisplayReferredOutput` | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaDevelopTest GpuDagCudaDrtProductTest GpuDagCudaWorkspaceTest PipelineSchedulerRequestIdTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaDevelopTest|GpuDagCudaDrtProductTest|GpuDagCudaWorkspaceTest|PipelineSchedulerRequestIdTest"
+```
+
+Suite totals: `67/67` PASS.
+
+**Checklist / exit condition:** all G7R.H work items checked.
+
+**LOC note (grill-code-review):** `cuda_sensor_demosaic.cpp` 252, `cuda_sensor_demosaic.hpp` 48, `cuda_develop_pass.cpp` 152, `cuda_render_device.cpp` 40, `cuda_product_renderer.cu` 212. No new file exceeds 1000 lines.
+
+**Residual gaps:** `SavePipeline` / `HandleEviction` themselves were not driven through `PipelineMgmtService` in this binary (DuckDB + LibRaw winsock clash). They call `ClearAllIntermediateBuffers`, which calls `ReleaseSessionCaches` (proven). Real Fuji/Sony files in the editor still need a product pass. CAT02 remains G7R.4. 41.9 A/B remains G7R.5.
+
+##### Phase G7R.H one-shot cache isolation correction (2026-08-23)
+
+**Status:** complete — thumbnail/export 继续复用同一个 `CPUPipelineExecutor` 和
+`PipelineDocument`，但不读取、发布或清空 editor session cache。
+
+**Root cause:** CUDA DAG product path 没有读取 `CPUPipelineExecutor::enable_cache_`。
+`THUMBNAIL` / `FULL_RES_EXPORT` 虽然调用 `SetEnableCache(false)`，仍写入
+`CudaProductRenderer` 的 PreparedSource、static plan 和 GPU result cache。thumbnail 完成后
+`ResetThumbnailRenderParams` 又调用 `ClearAllIntermediateBuffers`，进而执行
+`ReleaseSessionCaches`。filmstrip 的后台 thumbnail 因此会清空同一 pipeline 的 editor cache，
+下一次 ImageSwitch 偶发承担 LibRaw、H2D 和所有 CUDA pass 的冷启动成本。export 不执行这次
+清理，反而会把 one-shot full-resolution 结果留在 editor cache。
+
+**Primary success call chain:**
+
+```text
+filmstrip ImageSwitch editor preview
+  -> PipelineTask::SetExecutorRenderParams -> SetEnableCache(true)
+  -> CPUPipelineExecutor::Apply
+  -> CudaProductRenderer::Render(UseSessionCache)
+  -> PreparedSourceCache / StaticExecutionPlanCache / GraphImageCache hit
+  -> no LibRaw, no H2D, no CUDA node pass on unchanged matching content
+
+thumbnail or export
+  -> PipelineTask::SetExecutorRenderParams -> SetEnableCache(false)
+  -> CPUPipelineExecutor::Apply
+  -> CudaProductRenderer::Render(BypassSessionCache)
+  -> direct prepare + static compile + isolated one-shot CudaRenderDevice/workspace
+  -> present or host download
+  -> discard unpublished results + wait idle + release one-shot GPU result resources
+  -> restore one-shot render params; editor session cache remains unchanged
+```
+
+**Primary failure call chain:**
+
+```text
+one-shot unpack / compile / CUDA execute / present fails
+  -> CudaRenderDevice::CancelRender or renderer discards unpublished results
+  -> exception reaches PipelineScheduler
+  -> on_complete_(false, what()) / blocking promise exception
+  -> editor session cache remains owned only by the session render lane
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OneShotRenderDoesNotReadWriteOrClearEditorSessionCaches` | `GpuDagCudaDrtProductTest` | PASS, repeated 3/3 |
+| `ImageSwitchBackReusesMatchingPreparedSourceAndGpuResults` | `GpuDagCudaDrtProductTest` | PASS |
+| CUDA product cache/develop/DRT regression suite | `GpuDagCudaDrtProductTest` | 32/32 PASS |
+| scheduler request identity, cache reuse and error propagation suite | `PipelineSchedulerRequestIdTest` | 7/7 PASS |
+| one-shot pipeline/sink state suite | `PipelineFrameSinkTest` | 31/32 initial; isolated allocator-address assertion 3/3 PASS on rerun |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagCudaDrtProductTest PipelineSchedulerRequestIdTest PipelineFrameSinkTest --parallel 4
+build\debug\alcedo_studio\tests\edit\GpuDagCudaDrtProductTest_runtime\GpuDagCudaDrtProductTest.exe
+build\debug\alcedo_studio\tests\edit\PipelineSchedulerRequestIdTest_runtime\PipelineSchedulerRequestIdTest.exe
+build\debug\alcedo_studio\tests\edit\PipelineFrameSinkTest_runtime\PipelineFrameSinkTest.exe
+build\debug\alcedo_studio\tests\edit\PipelineFrameSinkTest_runtime\PipelineFrameSinkTest.exe --gtest_filter=PipelineFrameSinkTest.ReattachingFrameSinkPreservesMergedStage --gtest_repeat=3
+```
+
+**Checklist / exit condition:** one-shot work cannot observe or mutate editor session result caches；
+thumbnail completion no longer clears those caches；matching ImageSwitch still proves zero LibRaw and
+zero CUDA node execution。
+
+**LOC note (grill-code-review):** `cuda_product_renderer.hpp` 126，
+`cuda_product_renderer.cu` 258，`pipeline_cpu.cpp` 893，`pipeline_scheduler.cpp` 751，
+`cuda_result_cache_test.cpp` 437。没有文件超过 1000 行；本修复没有增加新模块或新依赖。
+
+**Residual gaps:** 尚未在当前自动化测试中重放用户的真实 filmstrip trace，因此 12.6 s 尖峰的
+产品侧消失仍需真实 RAW 手动验证。首次完整 `PipelineFrameSinkTest` 中
+`ReattachingFrameSinkPreservesMergedStage` 因 allocator 复用同一地址失败一次；单测连续复跑
+3/3 通过。该断言用对象地址判断重建，属于独立的测试稳定性问题，本修复未修改它。
+
+##### Phase G7R.H filmstrip 争用、请求几何与 scene-linear 高光修正（2026-08-23）
+
+**Status:** complete — 更正上一条记录对 12.6 s 尖峰的解释；one-shot cache 隔离是必要的，
+但不是全部根因。普通 thumbnail 和 export 仍曾复用 live editor executor，因此后台完整渲染
+会占用同一把 `render_lock_`。该等待发生在 scheduler worker 内，计入 `[RENDER_E2E] pipeline`
+而不是 `queue`；`queue≈50 ms, pipeline≈12.5 s` 与锁等待完全一致，不是冷启动结论。
+
+同时修复两个独立产品回归：Quality Base 在 ROI 放大期间重新读取 live viewport，导致 ROI
+结果按 full-frame 展示而拉伸；默认 Curve 把 AP1 scene-linear 中所有大于 1 的值返回为末端
+控制点 1，造成 ACES 和 OpenDRT 共同输入在 DRT 前硬裁。旧管线的 RGC 曲线没有执行该硬裁；
+新管线明确保持 Primary Grade 为 AP1 scene-linear，因此默认 Curve 改为沿首尾线段外推，
+不引入 ACEScc 往返或第二套色彩域。
+
+**Primary success call chains:**
+
+```text
+filmstrip thumbnail / export
+  -> PipelineMgmtService::LoadPipelineSnapshot
+       -> briefly copy current params under live render_lock_
+       -> build independent CPUPipelineExecutor + independent render_lock_
+  -> PipelineScheduler renders on snapshot executor with BypassSessionCache
+  -> ReleasePipelineSnapshot clears only snapshot resources
+  -> live editor pin, dirty state, executor and session caches remain untouched
+
+ROI zoom -> panel/demosaic change -> Quality Base
+  -> request captures optional ViewportRenderRegion
+  -> PipelineTask::SetExecutorRenderParams
+       -> FAST/DETAIL stores the frozen ROI
+       -> Quality Base stores explicit null/full-frame geometry
+  -> CPUPipelineExecutor::Apply builds RenderRequest only from frozen task geometry
+  -> full-frame result keeps source aspect ratio
+
+scene-linear highlight > 1
+  -> CameraColorPass produces AP1 scene-linear
+  -> PrimaryGrade default Curve extrapolates the identity end segment
+  -> highlight remains > 1 at grade output
+  -> selected DRT owns highlight mapping
+```
+
+**Primary failure call chain:**
+
+```text
+snapshot capture / RAW metadata inject / thumbnail or export render fails
+  -> explicit error or blocking promise exception
+  -> ReleasePipelineSnapshot clears isolated resources
+  -> live editor executor and caches remain valid
+  -> no Legacy/backend/quality substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OrdinaryThumbnailRendersWithoutUsingLiveEditorExecutor` | `ThumbnailServiceTest` | PASS, real DNG |
+| `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` | `ThumbnailServiceTest` | PASS, real DNG |
+| `LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveGuard` | `PipelineMapperTest` | PASS, independent executor and mutex |
+| `QualityBaseAfterRoiClearsFrozenViewportGeometry` | `PipelineFrameSinkTest` | PASS |
+| `DetailRoiPreviewUsesFrozenRequestRegionInsteadOfChangedSinkRegion` | `PipelineFrameSinkTest` | PASS |
+| `DefaultCurvePreservesSceneLinearHighlightsAboveOne` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `DrtInputIsNotHardClampedToForwardLimitBeforeTonescale` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaDevelopDefaultXTransUsesNeuralEngine` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopExplicitNeuralEngineChangesBayerPixelsVersusLegacy` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopHighlightReconstructOnSkipsCfaClamp01ForBayerAndXTrans` | `GpuDagCudaDevelopTest` | PASS |
+| `CudaDevelopNeuralEngineFailureThrowsErrorStringAndDoesNotFallBackToLegacy` | `GpuDagCudaDevelopTest` | PASS |
+| export snapshot path writes readable SDR and Ultra HDR files | `ExportServiceTest` | 2/2 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target PipelineFrameSinkTest ThumbnailServiceTest ExportServiceTest PipelineMapperTest GpuDagCudaDevelopTest GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest EditorRawDecodePanelQmlTest EditorSessionRenderSchedulerPortTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "^(PipelineFrameSinkTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaDrtProductTest|PipelineMapperTest|ExportServiceTest|EditorRawDecodePanelQmlTest|EditorSessionRenderSchedulerPortTest)\."
+build\debug\alcedo_studio\tests\app\ThumbnailServiceTest_runtime\ThumbnailServiceTest.exe --gtest_filter=ThumbnailServiceTests.OrdinaryThumbnailRendersWithoutUsingLiveEditorExecutor:ThumbnailServiceTests.AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard
+ctest --test-dir build/debug --output-on-failure -R "^(GpuDagCudaDevelopTest|PipelineMapperTest)\."
+```
+
+Suite totals: combined discovered set `123/123` PASS（4 disabled）；RAW Develop + latest pipeline
+snapshot set `39/39` PASS（2 disabled）；direct real-DNG thumbnail set `2/2` PASS。
+
+**Checklist / exit condition:** ordinary thumbnail and export no longer render on the live editor
+executor；one-shot tasks still bypass session caches；Quality Base cannot inherit a live ROI；default
+Primary Grade cannot clip AP1 highlights above 1；RAW demosaic/HLR selection and failures remain
+observable。
+
+**LOC note (grill-code-review):** no new production module or dependency. The fix reuses
+`PipelineSnapshot` and adds one request-scoped optional viewport value. Existing large files remain
+`thumbnail_service.cpp` 1190 lines and `thumbnail_service_test.cpp` 3215 lines；this change does not
+split them because the snapshot lifecycle already belongs to the existing service path。
+
+**Residual gaps:** automated tests prove ownership, cache isolation, request geometry and pixel
+range, but do not replay the user's exact multi-photo filmstrip timing trace. Product validation
+should confirm that any remaining long thumbnail duration is visible only on the thumbnail worker，
+not inside an InteractivePrimary request's `pipeline` duration。
 
 ### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 

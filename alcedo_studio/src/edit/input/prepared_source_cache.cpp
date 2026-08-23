@@ -138,4 +138,12 @@ auto PreparedSourceCache::AcquireEncoded(std::span<const std::byte> encoded, Dec
   return MakeLease(it->second);
 }
 
+void PreparedSourceCache::Clear() {
+  entries_.clear();
+  bytes_used_ = 0;
+  memo_ptr_   = nullptr;
+  memo_size_  = 0;
+  memo_hash_  = 0;
+}
+
 }  // namespace alcedo

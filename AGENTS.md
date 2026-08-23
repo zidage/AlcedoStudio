@@ -12,6 +12,20 @@ Agents working in this repository must be decisive and implementation-driven. Do
 
 When the user names a concrete integration or capability, treat it as the target and work out the implementation path, constraints, tests, and risks directly. If there are real blockers, state them as concrete engineering facts and propose the closest viable implementation, not a soft retreat to a weaker product.
 
+## No fallback unless the user explicitly allows it
+
+Do **not** add, restore, or "temporarily" use any fallback, degraded path, silent substitute, or weaker stand-in unless the user has **explicitly** allowed that specific fallback in this conversation (or in an existing, already-landed product rule they pointed at).
+
+This includes, and is not limited to:
+
+- Lowering decode / render / quality settings to hide slowness (for example changing Interactive `DecodeRes::FULL` to `HALF` so Neural Engine or a slow GPU path does not run)
+- Falling back from Neural Engine / GPU / CUDA to Legacy, CPU, another backend, or a cheaper operator when the requested path fails or looks expensive
+- Catch-and-continue that swallows the real error and proceeds on a substitute implementation
+- Preview-only, downsample-only, or "good enough for now" substitutes for a requested full-quality path
+- Retrying a different algorithm, resolution, or backend after a failure without being told to
+
+If the requested path cannot be implemented, **fail with the real error** and state the engineering blocker. Do not ship a weaker product and call it a fix. Performance of a CUDA **debug** build is not a reason to change product decode or quality policy.
+
 ## Temporary files and local workspace
 
 Do **not** create temporary directories or ad-hoc dump files at the repository root

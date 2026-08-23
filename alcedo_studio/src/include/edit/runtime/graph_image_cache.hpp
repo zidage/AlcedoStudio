@@ -10,6 +10,7 @@
 #include <map>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -253,6 +254,15 @@ class GraphImageCache {
     write_slots_.clear();
     published_.clear();
     current_.clear();
+  }
+
+  [[nodiscard]] auto CurrentValueIds() const -> std::vector<GraphValueId> {
+    std::vector<GraphValueId> ids;
+    ids.reserve(current_.size());
+    for (const auto& [id, key] : current_) {
+      ids.push_back(id);
+    }
+    return ids;
   }
 
  private:

@@ -618,12 +618,9 @@ GPU_FUNC float3 OutputTransform_fwd(const float3& in_color, GPU_ODTParams& p) {
   if (!isfinite_f(in_color.x) || !isfinite_f(in_color.y) || !isfinite_f(in_color.z)) {
     return make_float3(0.f, 0.f, 0.f);
   }
-  // float3 color          = make_float3(in_color.x, in_color.y, in_color.z);
-  // float3 color          = mult_f3_f33(in_color, AP1_TO_AP0);
-  // float3 in_AP1 = clamp_f3(in_color, 0.f, 1.f);
-  float3 AP0_clamped    = clamp_AP1(in_color, 0.0f, p.ts_.forward_limit_);
+  float3 AP0 = mult_f3_f33(in_color, AP1_TO_AP0);
 
-  float3 JMh            = RGB_to_JMh(AP0_clamped, p.input_params_);
+  float3 JMh            = RGB_to_JMh(AP0, p.input_params_);
   float3 tonemapped_JMh = tonemap_and_compress_fwd(JMh, p);
   float3 compressed_JMh = gamut_compress_fwd(tonemapped_JMh, p);
   float3 out_rgb = JMh_to_RGB(compressed_JMh, p.limit_params_);

@@ -166,6 +166,25 @@ class TexturePool {
   }
 
   /**
+   * @brief Destroy every unleased, idle texture. Does not wait; caller must WaitIdle first.
+   *
+   * GraphImageCache::Clear drops leases. This call then frees the device memory.
+   */
+  void ReleaseUnleased() {
+    for (auto& entry : entries_) {
+      if (!entry.alive || entry.lease_count > 0) {
+        continue;
+      }
+      if (backend_->IsResourceBusy(entry.submitted_on)) {
+        continue;
+      }
+      used_bytes_ -= entry.bytes;
+      entry.texture = {};
+      entry.alive   = false;
+    }
+  }
+
+  /**
    * @brief Drop unleased, idle textures until used + needed fits the budget, if possible.
    */
   void EvictUntil(std::size_t needed_bytes) {

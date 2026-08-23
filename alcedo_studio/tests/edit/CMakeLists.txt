@@ -296,7 +296,8 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaDevelopTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp)
   target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
+  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
+    DemosaicNet)
   gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
