@@ -10,9 +10,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -38,12 +41,14 @@ auto HasCudaDevice() -> bool {
 
 class CudaPrimaryGradeFixture : public ::testing::Test {
  protected:
-  // Direct RGB keeps camera conversion identity so adjustment assertions stay isolated.
+  // Direct RGB plus a stored dual-illuminant camera profile. Grade assertions
+  // compare against develop.image after CameraColor, not camera RGB.
   void SetUp() override {
     if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
     prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
     plan_     = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
@@ -51,7 +56,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     device_.BeginRender();
     ExecuteCudaDevelop(device_, plan_, prepared_, document_);
     ExecuteCudaGeometryResample(device_, plan_);
-    ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_.color_context, document_);
     device_.EndRender();
     device_.WaitIdle();
@@ -90,11 +95,20 @@ TEST_F(CudaPrimaryGradeFixture, CudaPrimaryGradeDefaultParametersPreserveDevelop
   const auto input  = Download(plan_.develop_output);
   const auto output = Download(result.output);
   ASSERT_EQ(input.size(), output.size());
+  std::size_t compared = 0;
   for (std::size_t i = 0; i < input.size(); ++i) {
+    // Default grade is identity inside the unclamped AP1 unit cube. CameraColor
+    // of Direct RGB can produce values > 1; those are outside this assertion.
+    if (input[i].r < 0.0f || input[i].r > 1.0f || input[i].g < 0.0f || input[i].g > 1.0f ||
+        input[i].b < 0.0f || input[i].b > 1.0f) {
+      continue;
+    }
     EXPECT_NEAR(output[i].r, input[i].r, 1.0e-6f);
     EXPECT_NEAR(output[i].g, input[i].g, 1.0e-6f);
     EXPECT_NEAR(output[i].b, input[i].b, 1.0e-6f);
+    ++compared;
   }
+  EXPECT_GT(compared, 0U);
   EXPECT_TRUE(plan_.Contains(GpuPassKind::CameraToAp1));
   EXPECT_TRUE(plan_.Contains(GpuPassKind::PrimaryColorGrade));
 }
@@ -202,6 +216,38 @@ TEST_F(CudaPrimaryGradeFixture,
   EXPECT_GT(std::abs(before.front().r - after.front().r), 0.05f);
   EXPECT_FLOAT_EQ(ModelByType<ExposureModel>(type_ids::Exposure()).Value(), 1.0f);
   EXPECT_FLOAT_EQ(ModelByType<ContrastModel>(type_ids::Contrast()).Value(), 100.0f);
+}
+
+TEST_F(CudaPrimaryGradeFixture, DevelopImageGraphValueIsAp1SceneLinear) {
+  (void)Render();
+  const auto pixels = Download(plan_.develop_output);
+  ASSERT_FALSE(pixels.empty());
+  const auto resolved = ResolveDevelopColorTransform(document_.Develop()->Params().Params());
+  ASSERT_TRUE(resolved.ok);
+  const float  src_r = 0.5f / 16.0f;
+  const float  src_g = 0.5f / 12.0f;
+  const float  src_b = 0.25f;
+  const float* m     = resolved.transform.camera_to_ap1.data();
+  EXPECT_NEAR(pixels.front().r, m[0] * src_r + m[1] * src_g + m[2] * src_b, 1.0e-5f);
+  EXPECT_NEAR(pixels.front().g, m[3] * src_r + m[4] * src_g + m[5] * src_b, 1.0e-5f);
+  EXPECT_NEAR(pixels.front().b, m[6] * src_r + m[7] * src_g + m[8] * src_b, 1.0e-5f);
+  EXPECT_NEAR(pixels.front().a, 1.0f, 1.0e-6f);
+}
+
+TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices) {
+  if (!HasCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                                gpu_dag_test::FullSensor(16, 12));
+  auto document = CreateDefaultPipelineDocument();
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  CudaRenderDevice device;
+  device.BeginRender();
+  ExecuteCudaDevelop(device, plan, prepared, document);
+  ExecuteCudaGeometryResample(device, plan);
+  EXPECT_THROW(ExecuteCudaCameraColor(device, plan, document), std::runtime_error);
+  device.EndRender();
 }
 
 }  // namespace

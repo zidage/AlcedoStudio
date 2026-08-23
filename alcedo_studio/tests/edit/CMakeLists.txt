@@ -231,7 +231,8 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
 target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph)
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
@@ -312,7 +313,8 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeCuda EditInput Image)

@@ -19,8 +19,11 @@
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
+#ifdef HAVE_CUDA
+#include "edit/graph/pipeline_document.hpp"
+#endif
+
 namespace alcedo {
-class PipelineDocument;
 #ifdef HAVE_CUDA
 class CudaProductRenderer;
 #endif
@@ -37,6 +40,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::mutex                                                                  render_lock_;
 
   OperatorParams                                                              global_params_;
+  std::optional<RawRuntimeColorContext>                                       injected_raw_color_context_;
 
   bool                                                                        is_thumbnail_ = false;
 

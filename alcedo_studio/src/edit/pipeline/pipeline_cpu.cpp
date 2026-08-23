@@ -24,6 +24,7 @@
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
 #ifdef HAVE_CUDA
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -33,6 +34,18 @@ namespace alcedo {
 
 namespace {
 using ProfileClock = std::chrono::steady_clock;
+
+#ifdef HAVE_CUDA
+void ApplyImportedCameraProfile(PipelineDocument& document, const RawRuntimeColorContext& imported) {
+  auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return;
+  }
+  auto payload = develop->Params().Params();
+  BindDevelopCameraProfile(payload, imported);
+  develop->Params().ReplaceParams(std::move(payload));
+}
+#endif
 
 auto DurationToMs(const ProfileClock::duration duration) -> double {
   return std::chrono::duration<double, std::milli>(duration).count();
@@ -199,6 +212,9 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
         }
         *pipeline_document_           = std::move(*imported.document);
         cuda_product_legacy_snapshot_ = legacy;
+        if (injected_raw_color_context_.has_value()) {
+          ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
+        }
       }
     }
     if (!cuda_product_renderer_) {
@@ -345,11 +361,15 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
   pipeline_document_            = std::move(document);
   mirror_legacy_stage_adapter_  = mirror_legacy_stage_adapter;
   cuda_product_legacy_snapshot_ = nullptr;
+  if (pipeline_document_ && injected_raw_color_context_.has_value()) {
+    ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
+  }
   if (cuda_product_renderer_) {
     cuda_product_renderer_->SetDocument(pipeline_document_);
   }
 #else
   (void)document;
+  (void)mirror_legacy_stage_adapter;
 #endif
 }
 
@@ -778,6 +798,32 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
+  injected_raw_color_context_ = ctx;
+#ifdef HAVE_CUDA
+  if (pipeline_document_) {
+    ApplyImportedCameraProfile(*pipeline_document_, ctx);
+  }
+#endif
+
+  // EditorColorTempModel loads as_shot_cct from ColorTempOp JSON. Persist the
+  // import-time solve so the panel does not re-parse RAW.
+  auto& to_ws_stage = GetStage(PipelineStageName::To_WorkingSpace);
+  if (const auto color_temp_entry = to_ws_stage.GetOperator(OperatorType::COLOR_TEMP);
+      color_temp_entry.has_value() && color_temp_entry.value() && color_temp_entry.value()->op_) {
+    color_temp_entry.value()->op_->SetGlobalParams(global_params_);
+    auto color_temp_params = color_temp_entry.value()->op_->GetParams();
+#ifdef HAVE_CUDA
+    if (pipeline_document_ != nullptr && pipeline_document_->Develop() != nullptr) {
+      const auto& develop = pipeline_document_->Develop()->Params().Params();
+      if (!color_temp_params.contains("color_temp") || !color_temp_params["color_temp"].is_object()) {
+        color_temp_params["color_temp"] = nlohmann::json::object();
+      }
+      color_temp_params["color_temp"]["as_shot_cct"]  = develop.as_shot_cct;
+      color_temp_params["color_temp"]["as_shot_tint"] = develop.as_shot_tint;
+    }
+#endif
+    to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params_);
+  }
 
   // Install image-local inherent RAW context on the decode operator so later
   // GetParams/SetGlobalParams/Apply use the same durable state without a

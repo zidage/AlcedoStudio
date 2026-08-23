@@ -5,12 +5,11 @@
 #pragma once
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/execution_plan.hpp"
 
 namespace alcedo {
-
-class PipelineDocument;
 
 struct CudaDrtResult {
   GraphValueId output{NodeId{"drt"}, PortId{"display"}};

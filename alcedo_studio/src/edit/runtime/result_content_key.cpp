@@ -74,8 +74,7 @@ auto MixSensorDevelopParams(ContentHash& hash, const DevelopPayload& params) -> 
   hash.MixText(params.lens_profile_db_path);
 }
 
-auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params,
-                          const RawRuntimeColorContext& color) -> void {
+auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> void {
   hash.MixBool(params.use_camera_wb);
   hash.MixF32(params.user_wb);
   hash.MixText(params.wb_mode);
@@ -83,39 +82,31 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params,
   hash.MixF32(params.custom_tint);
   hash.MixF32(params.as_shot_cct);
   hash.MixF32(params.as_shot_tint);
-  hash.MixBool(color.valid_);
-  hash.MixBool(color.color_matrices_valid_);
-  hash.MixBool(color.forward_matrices_valid_);
-  hash.MixBool(color.as_shot_neutral_valid_);
-  hash.MixBool(color.calibration_illuminants_valid_);
-  for (float value : color.cam_mul_) {
+  const auto& profile = params.camera_profile;
+  hash.MixBool(profile.color_matrices_valid);
+  hash.MixBool(profile.forward_matrices_valid);
+  hash.MixBool(profile.as_shot_neutral_valid);
+  hash.MixBool(profile.calibration_illuminants_valid);
+  for (double value : profile.color_matrix_1) {
+    hash.MixF64(value);
+  }
+  for (double value : profile.color_matrix_2) {
+    hash.MixF64(value);
+  }
+  for (double value : profile.forward_matrix_1) {
+    hash.MixF64(value);
+  }
+  for (double value : profile.forward_matrix_2) {
+    hash.MixF64(value);
+  }
+  for (double value : profile.as_shot_neutral) {
+    hash.MixF64(value);
+  }
+  for (float value : profile.cam_mul) {
     hash.MixF32(value);
   }
-  for (float value : color.pre_mul_) {
-    hash.MixF32(value);
-  }
-  for (float value : color.rgb_cam_) {
-    hash.MixF32(value);
-  }
-  for (double value : color.color_matrix_1_) {
-    hash.MixF64(value);
-  }
-  for (double value : color.color_matrix_2_) {
-    hash.MixF64(value);
-  }
-  for (double value : color.forward_matrix_1_) {
-    hash.MixF64(value);
-  }
-  for (double value : color.forward_matrix_2_) {
-    hash.MixF64(value);
-  }
-  for (double value : color.as_shot_neutral_) {
-    hash.MixF64(value);
-  }
-  hash.MixF64(color.color_matrix_1_cct_);
-  hash.MixF64(color.color_matrix_2_cct_);
-  hash.MixText(color.camera_make_);
-  hash.MixText(color.camera_model_);
+  hash.MixF64(profile.color_matrix_1_cct);
+  hash.MixF64(profile.color_matrix_2_cct);
 }
 
 auto MixGrade(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
@@ -193,7 +184,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
 
   ContentHash camera;
   camera.MixKey(keys.geometry_scene_source);
-  MixCameraColorParams(camera, params, input.color_context);
+  MixCameraColorParams(camera, params);
   camera.MixU32(kCameraColorImplementationVersion);
   keys.develop_image = camera.Key();
 

@@ -8,8 +8,11 @@
 #include <memory>
 #include <string_view>
 
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
+#include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 
 namespace alcedo {
@@ -18,9 +21,6 @@ using CudaRenderWorkspace = BasicRenderWorkspace<CudaBackend>;
 
 class CudaDrtRuntimeState;
 class MaskStore;
-class PipelineDocument;
-struct ExecutionPlan;
-struct PreparedRawInput;
 
 /**
  * @brief Owns a CUDA workspace and one command context. Does not own a graph or plan.

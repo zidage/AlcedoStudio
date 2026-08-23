@@ -4,66 +4,67 @@
 
 #include <cuda_runtime.h>
 
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
 #include <stdexcept>
+#include <string>
 
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/operator_param_dto.hpp"
+#include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
 namespace {
 
-struct CameraToAp1Params {
-  float matrix[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-};
-
-auto MakeCameraToAp1(const RawRuntimeColorContext& context) -> CameraToAp1Params {
-  CameraToAp1Params result;
-  if (!context.valid_) {
-    return result;
+auto MakeGpuParams(const DevelopColorTransform& transform) -> CameraColorGpuParams {
+  CameraColorGpuParams params;
+  for (int i = 0; i < 9; ++i) {
+    params.camera_to_ap1[i] = transform.camera_to_ap1[static_cast<std::size_t>(i)];
   }
-  constexpr float srgb_to_ap1[9] = {0.613097f, 0.339523f, 0.047380f, 0.070194f, 0.916354f,
-                                    0.013452f, 0.020616f, 0.109570f, 0.869815f};
-  float           absolute_sum   = 0.0f;
-  for (float value : context.rgb_cam_) {
-    absolute_sum += std::abs(value);
-  }
-  if (absolute_sum <= 1.0e-6f) {
-    return result;
-  }
-  for (int row = 0; row < 3; ++row) {
-    for (int column = 0; column < 3; ++column) {
-      result.matrix[row * 3 + column] = srgb_to_ap1[row * 3] * context.rgb_cam_[column] +
-                                        srgb_to_ap1[row * 3 + 1] * context.rgb_cam_[3 + column] +
-                                        srgb_to_ap1[row * 3 + 2] * context.rgb_cam_[6 + column];
-    }
-  }
-  return result;
+  return params;
 }
 
 __global__ void CameraColorKernel(const float4* input, float4* output, std::uint32_t pixel_count,
-                                  CameraToAp1Params camera) {
+                                  const CameraColorGpuParams* camera) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) {
     return;
   }
   const float4 source = input[index];
+  const float* m      = camera->camera_to_ap1;
   float3       c;
-  c.x = camera.matrix[0] * source.x + camera.matrix[1] * source.y + camera.matrix[2] * source.z;
-  c.y = camera.matrix[3] * source.x + camera.matrix[4] * source.y + camera.matrix[5] * source.z;
-  c.z = camera.matrix[6] * source.x + camera.matrix[7] * source.y + camera.matrix[8] * source.z;
-  output[index] = make_float4(c.x, c.y, c.z, source.w);
+  c.x               = m[0] * source.x + m[1] * source.y + m[2] * source.z;
+  c.y               = m[3] * source.x + m[4] * source.y + m[5] * source.z;
+  c.z               = m[6] * source.x + m[7] * source.y + m[8] * source.z;
+  output[index]     = make_float4(c.x, c.y, c.z, source.w);
 }
 
 }  // namespace
 
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            const RawRuntimeColorContext& color_context,
-                            const PipelineDocument& /*document*/) {
+                            const PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaCameraColor: BeginRender has not been called");
   }
+  const auto* develop = document.Develop();
+  if (develop == nullptr) {
+    throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
+  }
+  const auto resolved = ResolveDevelopColorTransform(develop->Params().Params());
+  if (!resolved.ok) {
+    throw std::runtime_error(std::string("ExecuteCudaCameraColor: ") +
+                             std::string(ColorTransformErrorMessage(resolved.error)));
+  }
+
   auto* input = workspace.Images().Find(plan.geometry_output);
   if (input == nullptr || input->Empty()) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing geometry.scene_source");
@@ -76,12 +77,33 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (input == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: geometry texture lost during acquire");
   }
-  const auto camera = MakeCameraToAp1(color_context);
-  const std::uint32_t     pixels = width * height;
-  constexpr std::uint32_t block  = 256;
-  CameraColorKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+
+  const auto             gpu_params = MakeGpuParams(resolved.transform);
+  auto&                  arena      = workspace.Parameters();
+  const ParameterSlotKey key{develop->Id(), kDevelopCameraColorSlot};
+  const ParameterFieldBinding field{DirtyFieldMask{DevelopDirty::WhiteBalance}, 0, 0,
+                                    sizeof(CameraColorGpuParams)};
+  auto payload = std::make_shared<TypedOperatorParamPayload<CameraColorGpuParams>>(
+      type_ids::DevelopNode(), 1, gpu_params);
+  if (!arena.Contains(key)) {
+    arena.BindSlot(key, sizeof(CameraColorGpuParams), std::span{&field, 1});
+    arena.InitializeFromFullDto(key, OperatorParamDto{type_ids::DevelopNode(), 1, payload});
+  } else {
+    OperatorParamPatchDto patch{develop->Id(), kDevelopCameraColorSlot, type_ids::DevelopNode(),
+                                DirtyFieldMask{DevelopDirty::WhiteBalance}, payload};
+    arena.ApplyPatch(key, patch);
+  }
+  auto& context = device.CommandContext();
+  arena.UploadDirty(context);
+
+  const auto          binding = arena.Binding(key);
+  const std::uint32_t pixels  = width * height;
+  constexpr std::uint32_t block = 256;
+  const auto* params = reinterpret_cast<const CameraColorGpuParams*>(
+      static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
+  CameraColorKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
       static_cast<const float4*>(input->Texture().DevicePointer()),
-      static_cast<float4*>(output.Texture().DevicePointer()), pixels, camera);
+      static_cast<float4*>(output.Texture().DevicePointer()), pixels, params);
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaCameraColor: CUDA kernel launch failed");
   }

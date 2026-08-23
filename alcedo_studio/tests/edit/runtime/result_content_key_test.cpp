@@ -125,5 +125,21 @@ TEST(GpuDagResultContentKey, IdenticalInputsProduceIdenticalKeys) {
   EXPECT_EQ(a.drt_display, b.drt_display);
 }
 
+TEST(GpuDagResultContentKey, CameraProfileChangeInvalidatesDevelopImageNotSensorLinear) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto develop = document.Develop()->Params().Params();
+  develop.camera_profile.color_matrices_valid = true;
+  develop.camera_profile.color_matrix_1[0]    = 0.91;
+  document.Develop()->Params().ReplaceParams(develop);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_NE(edited.develop_image, base.develop_image);
+}
+
 }  // namespace
 }  // namespace alcedo

@@ -17,6 +17,53 @@ inline auto ReadFloat(const nlohmann::json& json, const char* key, float fallbac
   return json[key].get<float>();
 }
 
+inline auto ReadDouble(const nlohmann::json& json, const char* key, double fallback) -> double {
+  if (!json.contains(key) || !json[key].is_number()) {
+    return fallback;
+  }
+  return json[key].get<double>();
+}
+
+inline void ReadNumberArray(const nlohmann::json& json, const char* key, double* dest, int count) {
+  if (dest == nullptr || count <= 0 || !json.contains(key) || !json[key].is_array()) {
+    return;
+  }
+  const auto& values = json[key];
+  for (int i = 0; i < count && i < static_cast<int>(values.size()); ++i) {
+    if (values[i].is_number()) {
+      dest[i] = values[i].get<double>();
+    }
+  }
+}
+
+inline void ReadNumberArray(const nlohmann::json& json, const char* key, float* dest, int count) {
+  if (dest == nullptr || count <= 0 || !json.contains(key) || !json[key].is_array()) {
+    return;
+  }
+  const auto& values = json[key];
+  for (int i = 0; i < count && i < static_cast<int>(values.size()); ++i) {
+    if (values[i].is_number()) {
+      dest[i] = values[i].get<float>();
+    }
+  }
+}
+
+inline auto MakeJsonArray(const double* values, int count) -> nlohmann::json {
+  nlohmann::json array = nlohmann::json::array();
+  for (int i = 0; i < count; ++i) {
+    array.push_back(values[i]);
+  }
+  return array;
+}
+
+inline auto MakeJsonArray(const float* values, int count) -> nlohmann::json {
+  nlohmann::json array = nlohmann::json::array();
+  for (int i = 0; i < count; ++i) {
+    array.push_back(values[i]);
+  }
+  return array;
+}
+
 inline auto ReadBool(const nlohmann::json& json, const char* key, bool fallback) -> bool {
   if (!json.contains(key) || !json[key].is_boolean()) {
     return fallback;

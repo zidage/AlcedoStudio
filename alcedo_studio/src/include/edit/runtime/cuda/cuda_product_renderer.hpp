@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "edit/geometry/render_request.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
@@ -18,7 +19,6 @@ namespace alcedo {
 
 class CudaRenderDevice;
 class ImageBuffer;
-class PipelineDocument;
 
 /// CUDA DAG backend capability mixed into the static plan key. Bump when pass
 /// lists or backend traits that affect compilation change.

@@ -8,9 +8,11 @@
 #include <cmath>
 #include <cstddef>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -69,6 +71,7 @@ class CudaDrtProductFixture : public ::testing::Test {
   }
 
   auto Render(PipelineDocument& document) -> std::vector<Rgba> {
+    gpu_dag_test::EnsureTestCameraProfile(document);
     const auto plan   = GraphCompiler::Compile(document, input_.CompileSource(), RenderRequest{});
     const auto output = device_.Execute(plan, input_, document);
     EXPECT_TRUE(plan.Contains(GpuPassKind::Drt));
@@ -145,6 +148,8 @@ TEST_F(CudaDrtProductFixture, LegacyPipelineImportRendersSameCudaReferenceWithin
   auto imported = LegacyPipelineImporter::Import(legacy);
   ASSERT_TRUE(imported.Ok()) << imported.error;
   auto  reference = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(reference);
+  gpu_dag_test::EnsureTestCameraProfile(*imported.document);
   auto* exposure  = dynamic_cast<ExposureModel*>(
       reference.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
@@ -165,6 +170,7 @@ TEST_F(CudaDrtProductFixture, LegacyPipelineImportRendersSameCudaReferenceWithin
 
 TEST_F(CudaDrtProductFixture, CudaBackendFailureDoesNotEnterCpuImageProcessing) {
   auto        document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
   std::string reported;
   device_.SetErrorReporter([&reported](std::string_view message) { reported = message; });
   device_.Workspace().Device().FailNextUpload();

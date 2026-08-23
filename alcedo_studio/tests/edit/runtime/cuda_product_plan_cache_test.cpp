@@ -10,6 +10,7 @@
 #include <span>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
@@ -54,6 +55,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*document);
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(11);
   RenderRequest       request;
@@ -129,6 +131,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererReusesPreparedSourceAfterSwitchingEnco
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*document);
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image_a = MakeEncodedImage(21);
   const auto          image_b = MakeEncodedImage(22);
@@ -148,6 +151,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererViewportAndMaxEdgeResampleDecodedSourc
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*document);
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(31);
   RenderRequest       request;
@@ -179,6 +183,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnre
   ASSERT_EQ(imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
 
   auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
+  gpu_dag_test::EnsureTestCameraProfile(*document);
   document->InsertAdjustment(NodeId{"grade.primary"}, document->PrimaryGrade()->AdjustmentCount(),
                              AdjustmentInstanceId{"grade.primary.tint"},
                              std::make_unique<TintModel>());

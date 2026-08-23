@@ -17,6 +17,45 @@
 
 namespace alcedo {
 
+/**
+ * @brief Import-time camera colour matrices stored on the Develop node.
+ *
+ * ColorMatrix/ForwardMatrix/AsShotNeutral/illuminant CCT are copied from the
+ * image at import. CameraColor interpolates these fields; it does not parse RAW
+ * or look up the CameraMatrices database at render time. cam_mul is only used
+ * to derive as-shot neutral when AsShotNeutral is absent.
+ */
+struct DevelopCameraProfile {
+  bool                  color_matrices_valid = false;
+  std::array<double, 9> color_matrix_1{};
+  std::array<double, 9> color_matrix_2{};
+  bool                  forward_matrices_valid = false;
+  std::array<double, 9> forward_matrix_1{};
+  std::array<double, 9> forward_matrix_2{};
+  bool                  as_shot_neutral_valid = false;
+  std::array<double, 3> as_shot_neutral{};
+  bool                  calibration_illuminants_valid = false;
+  double                color_matrix_1_cct            = 2856.0;
+  double                color_matrix_2_cct            = 6504.0;
+  std::array<float, 3>  cam_mul{1.0f, 1.0f, 1.0f};
+};
+
+inline auto operator==(const DevelopCameraProfile& a, const DevelopCameraProfile& b) -> bool {
+  return a.color_matrices_valid == b.color_matrices_valid && a.color_matrix_1 == b.color_matrix_1 &&
+         a.color_matrix_2 == b.color_matrix_2 &&
+         a.forward_matrices_valid == b.forward_matrices_valid &&
+         a.forward_matrix_1 == b.forward_matrix_1 && a.forward_matrix_2 == b.forward_matrix_2 &&
+         a.as_shot_neutral_valid == b.as_shot_neutral_valid &&
+         a.as_shot_neutral == b.as_shot_neutral &&
+         a.calibration_illuminants_valid == b.calibration_illuminants_valid &&
+         a.color_matrix_1_cct == b.color_matrix_1_cct &&
+         a.color_matrix_2_cct == b.color_matrix_2_cct && a.cam_mul == b.cam_mul;
+}
+
+inline auto operator!=(const DevelopCameraProfile& a, const DevelopCameraProfile& b) -> bool {
+  return !(a == b);
+}
+
 struct DevelopPayload {
   std::string demosaic_method          = "default";
   bool        highlights_reconstruct   = true;
@@ -27,6 +66,7 @@ struct DevelopPayload {
   float       custom_tint              = 0.0f;
   float       as_shot_cct              = 6500.0f;
   float       as_shot_tint             = 0.0f;
+  DevelopCameraProfile camera_profile{};
   bool        lens_enabled             = false;
   bool        apply_vignetting         = true;
   bool        apply_distortion         = true;

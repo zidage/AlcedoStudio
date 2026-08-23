@@ -2,7 +2,7 @@
 
 Date: 2026-08-22
 
-Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.2 complete；G7R.3–G7R.5 remaining；G7R 仍阻塞 G8。
+Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
@@ -2946,7 +2946,7 @@ Branch: `feature/gpu-dag-cuda-default-recovery`
 
 Base: `feature/gpu-dag-cuda-drt-product`
 
-Status: G7R.1–G7R.2 complete；G7R.3–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
+Status: G7R.1–G7R.3 complete；G7R.4–G7R.5 remaining；G7R 完成前禁止开始 G8 的 OpenCL 像素路径移植。
 
 Requirement source: `codex://threads/01a0273a-48bd-7702-9503-127bb5e2ec1e`。本阶段恢复该
 任务中已经明确的 Develop endpoint、GPU workspace KV cache 和动态分辨率要求，不重新定义
@@ -3326,6 +3326,135 @@ ResolveDevelopColorTransform(const DevelopPayload& develop,
 DNG 解析能力，或提取共享 `RawColorMetadataResolver`。不得继续维护只有六个字段的
 `FillColorContext` 副本。若 `LoadEncoded` 只有字节而没有路径，DNG tag 读取必须支持内存输入，
 或由调用方把已经解析的不可变 metadata snapshot 一起传入；不能因此退回 LibRaw 对角缩放。
+
+实施时 ColorMatrix/ForwardMatrix/AsShotNeutral 作为 Develop JSON 的可序列化参数存在，在导入时
+由 MetadataExtractor 写入 `DevelopPayload::camera_profile`。`ResolveDevelopColorTransform`
+只读该 payload，不接收 `RawRuntimeColorContext`，也不在 GPU execute 时打开 RAW 或查询
+CameraMatrices 数据库。用户 CCT/tint 由 CPU 做 mired 双光源插值，把解析后的 3×3 写入
+`CameraColorGpuParams`；kernel 只做 camera RGB × 该矩阵。`develop_color_transform.hpp`
+包含 `develop_node_model.hpp`，`BindDevelopCameraProfile` 只接受 `DevelopPayload&`。
+`PipelineDocument` 绑定发生在 `CPUPipelineExecutor` 内部。CUDA/executor 头文件包含
+`pipeline_document.hpp`，不使用 `PipelineDocument` 前向声明。解析结果用
+`ColorTransformResult`，不用 `std::expected`。
+
+工作：
+
+- [x] `DevelopCameraProfile` 进入 `DevelopPayload`，JSON `camera_profile` 可往返；
+- [x] `ResolveDevelopColorTransform(const DevelopPayload&)` 执行第 1–9 步，不依赖
+  `OperatorParams`、LibRaw、`rgb_cam`、`cam_xyz`、`pre_mul` 或 CameraMatrices 数据库；
+- [x] `BindDevelopCameraProfile` 在 `InjectRawMetadata` 时从 MetadataExtractor 上下文复制矩阵，
+  并求解 as-shot CCT/tint；`SetPipelineDocument` 与 CUDA legacy JSON mirror 之后重新绑定，
+  避免 profile 被擦掉；
+- [x] CameraColorPass 在 CPU 插值后 `BindSlot`/`ApplyPatch` 到 ParameterArena slot
+  `{develop, "camera_color"}`，kernel 只乘 `camera_to_ap1`；
+- [x] 缺失或奇异矩阵抛错，CUDA 路径不静默 identity；
+- [x] `develop.image` 内容 key 哈希 camera_profile 与 WB/CCT；
+  `kCameraColorImplementationVersion = 2`；
+- [x] OpenCL/Metal 仍走的 `ColorTempOp` 改为调用同一解析器。
+
+##### Phase G7R.3 completion record (2026-08-23)
+
+**Status:** complete — serializable Develop camera profile, CPU mired dual-illuminant
+interpolation, CUDA CameraColor multiplies the uploaded 3×3, import bind from
+MetadataExtractor. Creative CAT02 remains G7R.4. 41.8.2 `bf6686fb` pixel goldens
+and 41.8.4 editor E2E remain residual.
+
+**Primary success call chain:**
+
+```text
+ImportService / PipelineController / ExportService
+  -> MetadataExtractor::ExtractEXIF_ToImage
+       PopulateRuntimeContextFromOpenLibRaw (ColorMatrix/ForwardMatrix/AsShotNeutral)
+  -> CPUPipelineExecutor::InjectRawMetadata
+  -> BindDevelopCameraProfile(DevelopPayload, RawRuntimeColorContext)
+       copy matrices onto DevelopPayload.camera_profile
+       as-shot resolve -> as_shot_cct / as_shot_tint
+  -> ColorTempOp JSON {as_shot_cct, as_shot_tint, mode, custom_cct, custom_tint}
+       EditorColorTempModel::loadFromOperatorParams
+  -> user CCT/tint edit submits ColorTemp JSON
+  -> CUDA legacy import copies mode/CCT/tint onto DevelopPayload
+  -> ExecuteCudaCameraColor
+       ResolveDevelopColorTransform(DevelopPayload)   // CPU, stored matrices only
+       ParameterArena BindSlot/ApplyPatch {develop, "camera_color"}
+       UploadDirty
+       CameraColorKernel: ap1 = camera_to_ap1 * camera_rgb
+  -> publish develop.image (ACES AP1 scene-linear)
+```
+
+**Primary failure call chain:**
+
+```text
+missing / singular / non-finite ColorMatrix on DevelopPayload
+  -> ResolveDevelopColorTransform returns ColorTransformResult.ok = false
+  -> ExecuteCudaCameraColor throws (no identity camera_to_ap1)
+  -> CudaRenderDevice::CancelRender + DiscardUnpublished
+  -> previously published geometry.scene_source remains valid
+  -> exception returns through CPUPipelineExecutor (no CPU image processing)
+
+legacy JSON mirror would drop camera_profile
+  -> InjectRawMetadata stashes RawRuntimeColorContext
+  -> ApplyImportedCameraProfile after SetPipelineDocument and after each mirror
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DevelopColorTransformInterpolatesDualIlluminantMatricesInMiredSpace` | `GpuDagModelGraphTest` | PASS |
+| `DevelopColorTransformInterpolatesForwardMatricesWithTheSameWeight` | `GpuDagModelGraphTest` | PASS |
+| `DevelopColorTransformUsesSingleProfileWhenCalibrationIlluminantsAreIncomplete` | `GpuDagModelGraphTest` | PASS |
+| `DevelopColorTransformSolvesAsShotNeutralWithoutUsingCamMulAsColorMatrix` | `GpuDagModelGraphTest` | PASS |
+| `DevelopColorTransformDoesNotUseLibRawRgbCamOrPreMulAsCameraMatrix` | `GpuDagModelGraphTest` | PASS |
+| `DevelopColorTransformRejectsMissingOrSingularCameraMatrices` | `GpuDagModelGraphTest` | PASS |
+| `DevelopCameraProfileJsonRoundTripPreservesMatricesAndAsShotNeutral` | `GpuDagModelGraphTest` | PASS |
+| `BindDevelopCameraProfileWritesAsShotCctFromStoredNeutral` | `GpuDagModelGraphTest` | PASS |
+| `DevelopImageGraphValueIsAp1SceneLinear` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `ExecuteCudaCameraColorRejectsMissingCameraMatrices` | `GpuDagCudaPrimaryGradeTest` | PASS |
+| `BindDevelopCameraProfileCopiesDngColorMatricesFromMetadataExtractor` | `GpuDagCudaDrtProductTest` | PASS |
+| `BindDevelopCameraProfileCopiesNonDngCameraMatricesFromMetadataExtractor` | `GpuDagCudaDrtProductTest` | PASS |
+| `CameraProfileChangeInvalidatesDevelopImageNotSensorLinear` | `GpuDagRawInputTest` | PASS |
+| `DevelopCctEditReusesSensorAndGeometryAndRunsCameraColorGradeDrt` | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaCat02WhiteBalanceZeroOffsetPreservesAp1White` | `GpuDagCudaPrimaryGradeTest` | PASS (channel-scale CAT02; G7R.4 replaces) |
+
+`RawInputLoaderPopulatesCompleteColorContextFromRealRaw` is not added. EditInput stays
+Image-free; CameraColor no longer reads `PreparedRawInput.color_context`. Import-time
+MetadataExtractor bind is the source of the serializable profile. The two
+`BindDevelopCameraProfileCopies*` tests cover DNG and ARW.
+
+`CudaCat02ZeroOffsetIsExactIdentity` and `CudaCat02MapsSourceWhiteToRequestedWhiteInAp1`
+belong to G7R.4.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagCudaMaskTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagCudaWorkspaceTest GpuDagCudaDevelopTest --parallel 4
+ctest --test-dir build/debug --output-on-failure -R "GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagCudaDevelopTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaDrtProductTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest"
+```
+
+Suite totals: `123/123` PASS (`GpuDagModelGraphTest` 26, `GpuDagRawInputTest` 30,
+CUDA Develop 6, CUDA Primary Grade 11, CUDA DRT product 23, CUDA Mask 11,
+CUDA workspace 16).
+
+**Checklist / exit condition:** seven of seven G7R.3 work items checked. Algorithm
+steps 1–10 run from stored Develop params (step 1 at import bind, steps 2–9 in
+`ResolveDevelopColorTransform`, step 10 in CameraColorPass).
+
+**LOC note (grill-code-review):** new files: `develop_color_transform.cpp` 665,
+`develop_color_transform.hpp` 74, `camera_color_gpu_params.hpp` 18,
+`develop_color_transform_test.cpp` 251, `test_camera_profile.hpp` 39,
+`develop_camera_profile_import_test.cpp` 83. `color_temp_op.cpp` 418 (was ~1087).
+`cuda_camera_color_pass.cu` 100. `develop_node_model.hpp` 114,
+`develop_node_model.cpp` 121. No new file exceeds 1000 lines.
+`pipeline_cpu.cpp` remains 742; this phase only binds the camera profile on inject,
+document set, and legacy mirror.
+
+**Remaining gaps:** 41.8.2 `bf6686fb` CameraToAp1 pixel goldens are not generated.
+41.8.4 editor real-RAW E2E still sits behind `ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E`.
+`RawInputLoader::FillColorContext` still writes only cam_mul/pre_mul/make/model;
+the CUDA product path does not use that context for CameraColor. OpenCL/Metal
+`ColorTempOp` still has a `cam_xyz` fallback when ColorMatrix is missing; CUDA
+does not. Creative CAT02 remains per-channel scaling until G7R.4. 41.9 A/B
+timing remains G7R.5.
 
 ### 41.6 G7R.4 — 正确实现独立的 creative CAT02
 

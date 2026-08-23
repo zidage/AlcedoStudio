@@ -45,6 +45,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/analytic_mask_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/drt_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/legacy_pipeline_importer.cpp
@@ -56,6 +57,7 @@ set(EDIT_GRAPH_SRCS
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
     PUBLIC_DEPS JSON EditGeometry EditMaskStore
+    PRIVATE_DEPS ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.

@@ -17,6 +17,7 @@ auto DevelopParamsModel::IsDefault() const -> bool {
 
 auto DevelopParamsModel::ToJson() const -> nlohmann::json {
   const auto payload = PayloadCopy();
+  const auto& profile = payload.camera_profile;
   return {{"demosaic_method", payload.demosaic_method},
           {"highlights_reconstruct", payload.highlights_reconstruct},
           {"use_camera_wb", payload.use_camera_wb},
@@ -26,6 +27,19 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
           {"custom_tint", payload.custom_tint},
           {"as_shot_cct", payload.as_shot_cct},
           {"as_shot_tint", payload.as_shot_tint},
+          {"camera_profile",
+           {{"color_matrices_valid", profile.color_matrices_valid},
+            {"color_matrix_1", json_util::MakeJsonArray(profile.color_matrix_1.data(), 9)},
+            {"color_matrix_2", json_util::MakeJsonArray(profile.color_matrix_2.data(), 9)},
+            {"forward_matrices_valid", profile.forward_matrices_valid},
+            {"forward_matrix_1", json_util::MakeJsonArray(profile.forward_matrix_1.data(), 9)},
+            {"forward_matrix_2", json_util::MakeJsonArray(profile.forward_matrix_2.data(), 9)},
+            {"as_shot_neutral_valid", profile.as_shot_neutral_valid},
+            {"as_shot_neutral", json_util::MakeJsonArray(profile.as_shot_neutral.data(), 3)},
+            {"calibration_illuminants_valid", profile.calibration_illuminants_valid},
+            {"color_matrix_1_cct", profile.color_matrix_1_cct},
+            {"color_matrix_2_cct", profile.color_matrix_2_cct},
+            {"cam_mul", json_util::MakeJsonArray(profile.cam_mul.data(), 3)}}},
           {"lens_enabled", payload.lens_enabled},
           {"apply_vignetting", payload.apply_vignetting},
           {"apply_distortion", payload.apply_distortion},
@@ -50,6 +64,30 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
     payload.custom_tint            = json_util::ReadFloat(json, "custom_tint", payload.custom_tint);
     payload.as_shot_cct            = json_util::ReadFloat(json, "as_shot_cct", payload.as_shot_cct);
     payload.as_shot_tint           = json_util::ReadFloat(json, "as_shot_tint", payload.as_shot_tint);
+    if (json.contains("camera_profile") && json["camera_profile"].is_object()) {
+      const auto& profile_json = json["camera_profile"];
+      auto&       profile      = payload.camera_profile;
+      profile.color_matrices_valid =
+          json_util::ReadBool(profile_json, "color_matrices_valid", profile.color_matrices_valid);
+      json_util::ReadNumberArray(profile_json, "color_matrix_1", profile.color_matrix_1.data(), 9);
+      json_util::ReadNumberArray(profile_json, "color_matrix_2", profile.color_matrix_2.data(), 9);
+      profile.forward_matrices_valid = json_util::ReadBool(
+          profile_json, "forward_matrices_valid", profile.forward_matrices_valid);
+      json_util::ReadNumberArray(profile_json, "forward_matrix_1", profile.forward_matrix_1.data(),
+                                 9);
+      json_util::ReadNumberArray(profile_json, "forward_matrix_2", profile.forward_matrix_2.data(),
+                                 9);
+      profile.as_shot_neutral_valid =
+          json_util::ReadBool(profile_json, "as_shot_neutral_valid", profile.as_shot_neutral_valid);
+      json_util::ReadNumberArray(profile_json, "as_shot_neutral", profile.as_shot_neutral.data(), 3);
+      profile.calibration_illuminants_valid = json_util::ReadBool(
+          profile_json, "calibration_illuminants_valid", profile.calibration_illuminants_valid);
+      profile.color_matrix_1_cct =
+          json_util::ReadDouble(profile_json, "color_matrix_1_cct", profile.color_matrix_1_cct);
+      profile.color_matrix_2_cct =
+          json_util::ReadDouble(profile_json, "color_matrix_2_cct", profile.color_matrix_2_cct);
+      json_util::ReadNumberArray(profile_json, "cam_mul", profile.cam_mul.data(), 3);
+    }
     payload.lens_enabled           = json_util::ReadBool(json, "lens_enabled", payload.lens_enabled);
     payload.apply_vignetting       = json_util::ReadBool(json, "apply_vignetting", payload.apply_vignetting);
     payload.apply_distortion       = json_util::ReadBool(json, "apply_distortion", payload.apply_distortion);

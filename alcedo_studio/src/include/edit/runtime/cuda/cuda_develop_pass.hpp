@@ -32,12 +32,14 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
 void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& plan);
 
 /**
- * @brief Write `develop.image` from `geometry.scene_source` using the current camera matrix.
+ * @brief Write `develop.image` from `geometry.scene_source` using the CPU-resolved
+ *        camera→AP1 matrix stored in the GPU parameter body.
  *
- * G7R.3 replaces the matrix construction. This pass is independently skippable.
+ * Interpolates Develop camera-profile matrices on the CPU when this pass runs
+ * (CCT/tint dirty or first bind). Missing or singular matrices throw; identity
+ * is never substituted. Independently skippable from SensorDevelop and Geometry.
  */
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            const RawRuntimeColorContext& color_context,
-                            const PipelineDocument&       document);
+                            const PipelineDocument& document);
 
 }  // namespace alcedo

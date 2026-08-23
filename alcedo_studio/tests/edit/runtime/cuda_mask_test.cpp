@@ -13,6 +13,7 @@
 #include <span>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
@@ -49,6 +50,7 @@ class CudaMaskFixture : public ::testing::Test {
     prepared_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(width, height),
                                               gpu_dag_test::FullSensor(width, height));
     document_ = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
   auto MakeRaster(std::string key, std::uint8_t fill = 0) -> MaskAsset {
@@ -100,7 +102,7 @@ class CudaMaskFixture : public ::testing::Test {
     device_.BeginRender();
     (void)ExecuteCudaDevelop(device_, plan_, prepared_, document_);
     ExecuteCudaGeometryResample(device_, plan_);
-    ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
     (void)ExecuteCudaMask(device_, plan_, document_, store_.get());
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_.color_context, document_);
     device_.EndRender();
@@ -308,7 +310,7 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   device_.BeginRender();
   (void)ExecuteCudaDevelop(device_, plan_, prepared_, document_);
   ExecuteCudaGeometryResample(device_, plan_);
-  ExecuteCudaCameraColor(device_, plan_, prepared_.color_context, document_);
+  ExecuteCudaCameraColor(device_, plan_, document_);
   const RectI dirty{0, 0, static_cast<std::int32_t>(width_ / 2),
                     static_cast<std::int32_t>(height_)};
   (void)ExecuteCudaMask(device_, plan_, document_, store_.get(), std::span{&dirty, 1});

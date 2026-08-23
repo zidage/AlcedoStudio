@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -82,6 +83,7 @@ class CudaResultCacheProductFixture : public ::testing::Test {
       GTEST_SKIP() << "No CUDA device available.";
     }
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+    gpu_dag_test::EnsureTestCameraProfile(*document_);
     renderer_ = std::make_unique<CudaProductRenderer>(document_, MakeUnpacker());
     image_    = MakeEncodedImage(71);
   }
@@ -260,6 +262,7 @@ class CudaResultCacheDeviceFixture : public ::testing::Test {
     input_    = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
   auto Compile(const RenderRequest& request = {}) -> ExecutionPlan {

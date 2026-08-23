@@ -75,7 +75,7 @@ auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput
                    completed)) {
       ++stats.camera_color_skip;
     } else {
-      ExecuteCudaCameraColor(*this, plan, input.color_context, document);
+      ExecuteCudaCameraColor(*this, plan, document);
       Record(*this, plan.develop_output, keys.develop_image, keys.geometry_extent);
       ++stats.camera_color_execute;
     }
