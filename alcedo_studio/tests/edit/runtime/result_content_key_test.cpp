@@ -4,7 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/analytic_mask_node_model.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -140,6 +143,48 @@ TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstream
   EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
+TEST(GpuDagResultContentKey, ExposureEditWithTemporaryOvalKeepsSensorGeometryDevelopAndMask) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  AttachTemporaryPrimaryGradeOvalMask(document);
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_FALSE(base.mask.Empty());
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(2.0f);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_EQ(edited.mask, base.mask);
+  EXPECT_NE(edited.primary_grade, base.primary_grade);
+  EXPECT_NE(edited.drt_display, base.drt_display);
+}
+
+TEST(GpuDagResultContentKey, AnalyticMaskParamChangeInvalidatesMaskAndGradeNotSensor) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  AttachTemporaryPrimaryGradeOvalMask(document);
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto* mask = dynamic_cast<AnalyticMaskNodeModel*>(
+      document.Graph().FindNode(NodeId{"mask.ui_test.radial"}));
+  ASSERT_NE(mask, nullptr);
+  auto radial            = mask->Radial();
+  radial.major_radius    = 0.41f;
+  mask->SetRadial(radial);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_NE(edited.mask, base.mask);
+  EXPECT_NE(edited.primary_grade, base.primary_grade);
+}
+
 TEST(GpuDagResultContentKey, IdenticalInputsProduceIdenticalKeys) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
@@ -167,6 +212,29 @@ TEST(GpuDagResultContentKey, CameraProfileChangeInvalidatesDevelopImageNotSensor
   EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
   EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
   EXPECT_NE(edited.develop_image, base.develop_image);
+}
+
+TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWithOval) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  AttachTemporaryPrimaryGradeOvalMask(document);
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_FALSE(base.mask.Empty());
+
+  nlohmann::json json;
+  json["Basic Adjustment"]["Basic Adjustment"]["exposure"] = {
+      {"type", 2}, {"enable", true}, {"params", {{"exposure", 2.0}}}};
+  ASSERT_TRUE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
+  GraphCompiler::BindFrameGeometry(plan, document, RenderRequest{});
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_EQ(edited.mask, base.mask);
+  EXPECT_NE(edited.primary_grade, base.primary_grade);
+  EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
 }  // namespace

@@ -104,6 +104,9 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
 }
 
 void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
+  if (payload == PayloadCopy()) {
+    return;
+  }
   Mutate(DevelopDirty::All, [payload = std::move(payload)](DevelopPayload& dest) mutable {
     dest = std::move(payload);
   });

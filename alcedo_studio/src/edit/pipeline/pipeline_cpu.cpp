@@ -43,8 +43,11 @@ void ApplyImportedCameraProfile(PipelineDocument&             document,
     return;
   }
   auto payload = develop->Params().Params();
-  BindDevelopCameraProfile(payload, imported);
-  develop->Params().ReplaceParams(std::move(payload));
+  auto next    = payload;
+  BindDevelopCameraProfile(next, imported);
+  if (next != payload) {
+    develop->Params().ReplaceParams(std::move(next));
+  }
 }
 #endif
 
@@ -201,20 +204,22 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA && pipeline_document_) {
     // Existing editor controls still write the stage adapter during G7. Mirror it into the
-    // default three-node document only when it changed. Documents with additional graph nodes
-    // are edited as v2 data and must not be flattened by this transition path.
-    if (mirror_legacy_stage_adapter_ && pipeline_document_->Graph().Nodes().size() == 3U) {
+    // live document only when it changed. ApplyOnto keeps extra graph nodes (the oval-mask
+    // probe) and import-time camera matrices; replacing the document would rebuild every
+    // Model, mark them dirty, and miss GPU result cache on slider frames.
+    if (mirror_legacy_stage_adapter_ && AllowsLegacyStageAdapterRemirror(*pipeline_document_)) {
       const auto legacy = ExportPipelineParams();
       if (legacy != cuda_product_legacy_snapshot_) {
-        auto imported = LegacyPipelineImporter::Import(legacy);
-        if (!imported.Ok()) {
-          throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " +
-                                   imported.error);
+        const auto error = LegacyPipelineImporter::ApplyOnto(*pipeline_document_, legacy);
+        if (!error.empty()) {
+          throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " + error);
         }
-        *pipeline_document_           = std::move(*imported.document);
         cuda_product_legacy_snapshot_ = legacy;
         if (injected_raw_color_context_.has_value()) {
           ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
+        }
+        if (kTemporaryPrimaryGradeOvalMask) {
+          AttachTemporaryPrimaryGradeOvalMask(*pipeline_document_);
         }
       }
     }
@@ -364,6 +369,9 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
   pipeline_document_            = std::move(document);
   mirror_legacy_stage_adapter_  = mirror_legacy_stage_adapter;
   cuda_product_legacy_snapshot_ = nullptr;
+  if (kTemporaryPrimaryGradeOvalMask && pipeline_document_) {
+    AttachTemporaryPrimaryGradeOvalMask(*pipeline_document_);
+  }
   if (pipeline_document_ && injected_raw_color_context_.has_value()) {
     ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
   }

@@ -30,6 +30,17 @@ class LegacyPipelineImporter {
    * @return Document on success; error string and empty document on failure.
    */
   [[nodiscard]] static auto Import(const nlohmann::json& stage_json) -> LegacyImportResult;
+
+  /**
+   * @brief Write imported operator values onto an existing document without replacing the graph.
+   *
+   * Keeps extra nodes (masks), camera-profile fields the JSON does not own, and topology.
+   * Missing operators in @p stage_json are left unchanged. Unknown types fail before mutation.
+   *
+   * @return Empty string on success; error text and an unmodified graph on failure.
+   */
+  [[nodiscard]] static auto ApplyOnto(PipelineDocument&     document,
+                                      const nlohmann::json& stage_json) -> std::string;
 };
 
 }  // namespace alcedo

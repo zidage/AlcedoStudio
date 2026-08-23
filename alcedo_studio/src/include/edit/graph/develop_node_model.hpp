@@ -80,6 +80,25 @@ struct DevelopPayload {
   std::string lens_profile_db_path     = "src/config/lens_calib";
 };
 
+inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool {
+  return a.demosaic_method == b.demosaic_method &&
+         a.highlights_reconstruct == b.highlights_reconstruct &&
+         a.use_camera_wb == b.use_camera_wb && a.user_wb == b.user_wb && a.wb_mode == b.wb_mode &&
+         a.custom_cct == b.custom_cct && a.custom_tint == b.custom_tint &&
+         a.as_shot_cct == b.as_shot_cct && a.as_shot_tint == b.as_shot_tint &&
+         a.camera_profile == b.camera_profile && a.lens_enabled == b.lens_enabled &&
+         a.apply_vignetting == b.apply_vignetting && a.apply_distortion == b.apply_distortion &&
+         a.apply_tca == b.apply_tca && a.apply_crop == b.apply_crop &&
+         a.auto_scale == b.auto_scale && a.use_user_scale == b.use_user_scale &&
+         a.user_scale == b.user_scale && a.projection_enabled == b.projection_enabled &&
+         a.target_projection == b.target_projection &&
+         a.lens_profile_db_path == b.lens_profile_db_path;
+}
+
+inline auto operator!=(const DevelopPayload& a, const DevelopPayload& b) -> bool {
+  return !(a == b);
+}
+
 enum class DevelopDirty : std::uint32_t {
   None        = 0,
   Demosaic    = 1U << 0,

@@ -4,10 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "test_camera_profile.hpp"
 
 namespace alcedo {
 
@@ -107,6 +109,49 @@ TEST(GpuDagModelGraph, LegacyImportFailsOnUnknownOperatorType) {
   EXPECT_FALSE(result.Ok());
   EXPECT_FALSE(result.error.empty());
   EXPECT_FALSE(result.document.has_value());
+}
+
+TEST(GpuDagModelGraph, ApplyOntoKeepsOvalMaskCameraProfileAndUpdatesExposure) {
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  AttachTemporaryPrimaryGradeOvalMask(document);
+  document.ClearTopologyDirty();
+  const auto profile_before = document.Develop()->Params().Params().camera_profile;
+  const auto method_before  = document.Develop()->Params().Params().demosaic_method;
+
+  nlohmann::json json;
+  json["Basic Adjustment"]["Basic Adjustment"]["exposure"] = {
+      {"type", 2}, {"enable", true}, {"params", {{"exposure", 2.25}}}};
+  EXPECT_TRUE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
+
+  EXPECT_EQ(document.Graph().NodeCount(), 4u);
+  EXPECT_FALSE(document.TopologyDirty());
+  EXPECT_NE(document.Graph().FindNode(NodeId{"mask.ui_test.radial"}), nullptr);
+  EXPECT_EQ(document.Develop()->Params().Params().camera_profile, profile_before);
+  EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, method_before);
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 2.25f);
+  const auto* contrast = dynamic_cast<const ContrastModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast()));
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_FLOAT_EQ(contrast->Value(), 0.0f);
+}
+
+TEST(GpuDagModelGraph, ApplyOntoRejectsUnknownTypeWithoutMutatingDocument) {
+  auto document = CreateDefaultPipelineDocument();
+  AttachTemporaryPrimaryGradeOvalMask(document);
+  document.ClearTopologyDirty();
+  auto json = MakeLegacyStageJson();
+  json["Basic Adjustment"]["Basic Adjustment"]["mystery"] = {
+      {"type", 21}, {"enable", true}, {"params", nlohmann::json::object()}};
+  EXPECT_FALSE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
+  EXPECT_EQ(document.Graph().NodeCount(), 4u);
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 1.0f);
 }
 
 }  // namespace alcedo

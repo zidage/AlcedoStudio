@@ -43,6 +43,9 @@ class ScalarOperatorModel final
    */
   void SetValue(float value) {
     const float clamped = std::clamp(value, Traits::kMin, Traits::kMax);
+    if (Value() == clamped) {
+      return;
+    }
     this->Mutate(Dirty::Value, [clamped](Payload& payload) { payload.value = clamped; });
   }
 

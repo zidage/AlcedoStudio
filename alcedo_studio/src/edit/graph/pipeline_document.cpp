@@ -10,6 +10,7 @@
 #include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
 
@@ -138,6 +139,50 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});
   document.MarkTopologyDirty();
   return document;
+}
+
+void AttachTemporaryPrimaryGradeOvalMask(PipelineDocument& document) {
+  auto* grade = document.PrimaryGrade();
+  if (grade == nullptr) {
+    throw std::invalid_argument(
+        "AttachTemporaryPrimaryGradeOvalMask: missing primary color grade");
+  }
+
+  const NodeId mask_id{"mask.ui_test.radial"};
+  if (document.Graph().FindNode(mask_id) == nullptr) {
+    auto node = std::make_unique<AnalyticMaskNodeModel>(mask_id, AnalyticMaskKind::Radial);
+    RadialMaskParams radial;
+    radial.center_x      = 0.5f;
+    radial.center_y      = 0.5f;
+    radial.major_radius  = 0.32f;
+    radial.minor_radius  = 0.20f;
+    radial.rotation      = 0.0f;
+    radial.inner_feather = 0.0f;
+    radial.outer_feather = 0.12f;
+    radial.invert        = false;
+    node->SetRadial(radial);
+    document.Graph().AddNode(std::move(node));
+    document.Graph().Connect(mask_id, PortId{"mask"}, NodeId{"grade.primary"}, PortId{"mask"});
+    document.MarkTopologyDirty();
+  }
+
+  auto* exposure =
+      dynamic_cast<ExposureModel*>(grade->FindAdjustmentByType(type_ids::Exposure()));
+  if (exposure == nullptr) {
+    throw std::invalid_argument("AttachTemporaryPrimaryGradeOvalMask: missing exposure adjustment");
+  }
+  if (exposure->Value() == ExposureTraits::kDefault) {
+    exposure->SetValue(1.0f);
+  }
+}
+
+auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool {
+  const auto count = document.Graph().NodeCount();
+  if (count == 3U) {
+    return true;
+  }
+  return kTemporaryPrimaryGradeOvalMask && count == 4U &&
+         document.Graph().FindNode(NodeId{"mask.ui_test.radial"}) != nullptr;
 }
 
 }  // namespace alcedo

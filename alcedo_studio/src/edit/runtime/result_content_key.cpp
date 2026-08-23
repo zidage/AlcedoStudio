@@ -4,9 +4,11 @@
 
 #include "edit/runtime/result_content_key.hpp"
 
+#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/raster_mask_node_model.hpp"
 
 namespace alcedo {
 namespace {
@@ -121,6 +123,48 @@ auto MixGrade(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   }
 }
 
+auto MixNormalizedRect(ContentHash& hash, NormalizedRect rect) -> void {
+  hash.MixF32(rect.x);
+  hash.MixF32(rect.y);
+  hash.MixF32(rect.w);
+  hash.MixF32(rect.h);
+}
+
+auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const CompiledMask& mask)
+    -> void {
+  hash.MixText(mask.node_id.Value());
+  hash.MixU32(static_cast<std::uint32_t>(mask.kind));
+  const auto* node = document.Graph().FindNode(mask.node_id);
+  if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
+    hash.MixU32(static_cast<std::uint32_t>(analytic->Kind()));
+    const auto& radial = analytic->Radial();
+    hash.MixF32(radial.center_x);
+    hash.MixF32(radial.center_y);
+    hash.MixF32(radial.major_radius);
+    hash.MixF32(radial.minor_radius);
+    hash.MixF32(radial.rotation);
+    hash.MixF32(radial.inner_feather);
+    hash.MixF32(radial.outer_feather);
+    hash.MixBool(radial.invert);
+    const auto& graduated = analytic->GraduatedNd();
+    hash.MixF32(graduated.origin_x);
+    hash.MixF32(graduated.origin_y);
+    hash.MixF32(graduated.normal_x);
+    hash.MixF32(graduated.normal_y);
+    hash.MixF32(graduated.transition_distance);
+    hash.MixF32(graduated.start_value);
+    hash.MixF32(graduated.end_value);
+    hash.MixBool(graduated.invert);
+    return;
+  }
+  if (const auto* raster = dynamic_cast<const RasterMaskNodeModel*>(node)) {
+    hash.MixText(raster->AssetKey().Value());
+    MixNormalizedRect(hash, raster->ReferenceBounds());
+    hash.MixF32(raster->FeatherRadius());
+    hash.MixBool(raster->Invert());
+  }
+}
+
 }  // namespace
 
 auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
@@ -214,8 +258,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   if (plan.primary_grade_mask) {
     ContentHash mask;
     mask.MixKey(keys.geometry_scene_source);
-    mask.MixText(plan.primary_grade_mask->node_id.Value());
-    mask.MixU32(static_cast<std::uint32_t>(plan.primary_grade_mask->kind));
+    MixCompiledMask(mask, document, *plan.primary_grade_mask);
     mask.MixU32(kMaskImplementationVersion);
     keys.mask = mask.Key();
   }

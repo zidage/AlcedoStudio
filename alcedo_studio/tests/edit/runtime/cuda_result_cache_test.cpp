@@ -15,6 +15,8 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/analytic_mask_node_model.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -24,6 +26,7 @@
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "image/image_buffer.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 namespace {
@@ -149,6 +152,51 @@ TEST_F(CudaResultCacheProductFixture, ExposureEditRunsOnlyPrimaryGradeAndDrtPass
   EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
   EXPECT_EQ(stats.pass.camera_color_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture,
+       TemporaryOvalSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
+  AttachTemporaryPrimaryGradeOvalMask(*document_);
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_EQ(stats.pass.camera_color_execute, 0U);
+  EXPECT_EQ(stats.pass.mask_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.drt_execute, 0U);
+  EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
+  EXPECT_EQ(stats.pass.geometry_skip, 1U);
+  EXPECT_EQ(stats.pass.camera_color_skip, 1U);
+  EXPECT_EQ(stats.pass.mask_skip, 1U);
+  EXPECT_EQ(stats.pass.primary_grade_skip, 1U);
+  EXPECT_EQ(stats.pass.drt_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture,
+       ApplyOntoExposureWithTemporaryOvalReusesSensorGeometryCameraAndMask) {
+  AttachTemporaryPrimaryGradeOvalMask(*document_);
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  renderer_->ResetStats();
+  nlohmann::json json;
+  json["Basic Adjustment"]["Basic Adjustment"]["exposure"] = {
+      {"type", 2}, {"enable", true}, {"params", {{"exposure", 0.75}}}};
+  ASSERT_TRUE(LegacyPipelineImporter::ApplyOnto(*document_, json).empty());
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.source_h2d_count, 0U);
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_EQ(stats.pass.camera_color_execute, 0U);
+  EXPECT_EQ(stats.pass.mask_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
+  EXPECT_EQ(stats.pass.drt_execute, 1U);
+  EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
+  EXPECT_EQ(stats.pass.geometry_skip, 1U);
+  EXPECT_EQ(stats.pass.camera_color_skip, 1U);
+  EXPECT_EQ(stats.pass.mask_skip, 1U);
 }
 
 TEST_F(CudaResultCacheProductFixture,

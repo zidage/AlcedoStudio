@@ -17,12 +17,18 @@ auto Cat02WhiteBalanceModel::IsDefault() const -> bool {
 }
 
 void Cat02WhiteBalanceModel::SetEnabled(bool enabled) {
+  if (Enabled() == enabled) {
+    return;
+  }
   Mutate(Cat02WhiteBalanceDirty::Enabled,
          [enabled](Cat02WhiteBalancePayload& payload) { payload.enabled = enabled; });
 }
 
 void Cat02WhiteBalanceModel::SetTemperatureOffset(float offset) {
   const float clamped = std::clamp(offset, -100.0f, 100.0f);
+  if (TemperatureOffset() == clamped) {
+    return;
+  }
   Mutate(Cat02WhiteBalanceDirty::Temperature, [clamped](Cat02WhiteBalancePayload& payload) {
     payload.temperature_offset = clamped;
   });
@@ -30,6 +36,9 @@ void Cat02WhiteBalanceModel::SetTemperatureOffset(float offset) {
 
 void Cat02WhiteBalanceModel::SetTintOffset(float offset) {
   const float clamped = std::clamp(offset, -100.0f, 100.0f);
+  if (TintOffset() == clamped) {
+    return;
+  }
   Mutate(Cat02WhiteBalanceDirty::Tint,
          [clamped](Cat02WhiteBalancePayload& payload) { payload.tint_offset = clamped; });
 }

@@ -30,13 +30,22 @@ struct LoadedPipelineDocument {
   bool                              mirror_legacy_stage_adapter = false;
 };
 
+auto FinishLoadedDocument(std::shared_ptr<PipelineDocument> document, bool mirror)
+    -> LoadedPipelineDocument {
+  if (kTemporaryPrimaryGradeOvalMask && document) {
+    AttachTemporaryPrimaryGradeOvalMask(*document);
+  }
+  return {std::move(document), mirror};
+}
+
 auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
                           const std::shared_ptr<CPUPipelineExecutor>& legacy)
     -> LoadedPipelineDocument {
   const auto stored = store.GetPipelineJsonByElementId(id);
   if (stored && stored->is_object() && stored->value("format_version", 0) == 2) {
-    return {std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored)),
-            stored->contains("legacy_stage_adapter")};
+    return FinishLoadedDocument(
+        std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored)),
+        stored->contains("legacy_stage_adapter"));
   }
   if (legacy) {
     auto imported = LegacyPipelineImporter::Import(legacy->ExportPipelineParams());
@@ -44,9 +53,11 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
       throw std::runtime_error("PipelineMgmtService: legacy pipeline import failed: " +
                                imported.error);
     }
-    return {std::make_shared<PipelineDocument>(std::move(*imported.document)), true};
+    return FinishLoadedDocument(
+        std::make_shared<PipelineDocument>(std::move(*imported.document)), true);
   }
-  return {std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()), true};
+  return FinishLoadedDocument(
+      std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()), true);
 }
 
 void ResetToDefaults(OperatorParams& params) {

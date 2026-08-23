@@ -26,8 +26,8 @@ inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 3;
 inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 1;
 /// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 3;
-/// Bumped when mask raster sampling rules change.
-inline constexpr std::uint32_t kMaskImplementationVersion          = 1;
+/// Bumped when mask raster sampling rules change. Version 2 mixes analytic/raster params.
+inline constexpr std::uint32_t kMaskImplementationVersion          = 2;
 
 /**
  * @brief Content identity of a cached GPU image result.

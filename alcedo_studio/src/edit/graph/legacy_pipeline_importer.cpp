@@ -9,6 +9,7 @@
 
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/json_read.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 
@@ -104,6 +105,18 @@ auto FindOp(const std::vector<LegacyOperator>& operators, int type) -> const Leg
   return nullptr;
 }
 
+void LoadJsonIfChanged(IOperatorModel* model, const nlohmann::json& json) {
+  if (model == nullptr || json.empty()) {
+    return;
+  }
+  const auto before    = model->ToJson();
+  const bool was_dirty = model->IsDirty();
+  model->LoadJson(json);
+  if (!was_dirty && model->ToJson() == before) {
+    (void)model->TakeDirtyPatch();
+  }
+}
+
 void ApplyScalar(IOperatorModel* model, const nlohmann::json& value, const char* new_key) {
   if (model == nullptr) {
     return;
@@ -116,9 +129,7 @@ void ApplyScalar(IOperatorModel* model, const nlohmann::json& value, const char*
   } else if (value.is_object()) {
     json = value;
   }
-  if (!json.empty()) {
-    model->LoadJson(json);
-  }
+  LoadJsonIfChanged(model, json);
 }
 
 void ApplyCrop(ImageGeometryModel& geometry, const LegacyOperator& op) {
@@ -203,21 +214,16 @@ void ApplyGradeScalar(ColorGradeNodeModel& grade, const OperatorTypeId& type,
     const float multiplier = std::max(0.0f, 1.0f + offset / 100.0f);
     nlohmann::json json;
     json[new_key] = multiplier;
-    model->LoadJson(json);
+    LoadJsonIfChanged(model, json);
     return;
   }
   ApplyScalar(model, value, new_key);
 }
 
-}  // namespace
-
-auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyImportResult {
-  LegacyImportResult result;
-  const auto         operators = CollectOperators(stage_json);
+auto ValidateOperators(const std::vector<LegacyOperator>& operators) -> std::string {
   for (const auto& op : operators) {
     if (IsFatalUnknown(op.type)) {
-      result.error = "Unknown legacy operator type: " + std::to_string(op.type);
-      return result;
+      return "Unknown legacy operator type: " + std::to_string(op.type);
     }
     if (!IsSkippedType(op.type) && op.type != kLegacyRawDecode && op.type != kLegacyExposure &&
         op.type != kLegacyContrast && op.type != kLegacyWhite && op.type != kLegacyBlack &&
@@ -227,56 +233,60 @@ auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyI
         op.type != kLegacyClarity && op.type != kLegacySharpen && op.type != kLegacyColorWheel &&
         op.type != kLegacyCropRotate && op.type != kLegacyLensCalibration &&
         op.type != kLegacyColorTemp && op.type != kLegacyFilmGrain && op.type != kLegacyHalation) {
-      result.error = "Unknown legacy operator type: " + std::to_string(op.type);
-      return result;
+      return "Unknown legacy operator type: " + std::to_string(op.type);
     }
   }
+  return {};
+}
 
-  auto document = CreateDefaultPipelineDocument();
+auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator>& operators)
+    -> std::string {
+  auto* grade = document.PrimaryGrade();
+  auto* drt   = document.Drt();
+  if (grade == nullptr || drt == nullptr) {
+    return "Document is missing grade or DRT";
+  }
+
   if (const auto* crop = FindOp(operators, kLegacyCropRotate)) {
     ApplyCrop(document.Geometry(), *crop);
   }
   if (auto* develop = document.Develop()) {
     ApplyDevelop(develop->Params(), operators);
   }
-  auto* grade = document.PrimaryGrade();
-  auto* drt   = document.Drt();
-  if (grade == nullptr || drt == nullptr) {
-    result.error = "Default document is missing grade or DRT";
-    return result;
-  }
 
   ApplyGradeScalar(*grade, type_ids::Exposure(), FindOp(operators, kLegacyExposure), "exposure",
                    "exposure_ev", false);
   ApplyGradeScalar(*grade, type_ids::Contrast(), FindOp(operators, kLegacyContrast), "contrast",
                    "contrast", false);
-  ApplyGradeScalar(*grade, type_ids::White(), FindOp(operators, kLegacyWhite), "white", "white", false);
-  ApplyGradeScalar(*grade, type_ids::Black(), FindOp(operators, kLegacyBlack), "black", "black", false);
-  ApplyGradeScalar(*grade, type_ids::Shadows(), FindOp(operators, kLegacyShadows), "shadows", "shadows",
+  ApplyGradeScalar(*grade, type_ids::White(), FindOp(operators, kLegacyWhite), "white", "white",
                    false);
-  ApplyGradeScalar(*grade, type_ids::Highlights(), FindOp(operators, kLegacyHighlights), "highlights",
-                   "highlights", false);
-  ApplyGradeScalar(*grade, type_ids::Saturation(), FindOp(operators, kLegacySaturation), "saturation",
-                   "saturation", true);
+  ApplyGradeScalar(*grade, type_ids::Black(), FindOp(operators, kLegacyBlack), "black", "black",
+                   false);
+  ApplyGradeScalar(*grade, type_ids::Shadows(), FindOp(operators, kLegacyShadows), "shadows",
+                   "shadows", false);
+  ApplyGradeScalar(*grade, type_ids::Highlights(), FindOp(operators, kLegacyHighlights),
+                   "highlights", "highlights", false);
+  ApplyGradeScalar(*grade, type_ids::Saturation(), FindOp(operators, kLegacySaturation),
+                   "saturation", "saturation", true);
   ApplyGradeScalar(*grade, type_ids::Vibrance(), FindOp(operators, kLegacyVibrance), "vibrance",
                    "vibrance", false);
-  ApplyGradeScalar(*grade, type_ids::Clarity(), FindOp(operators, kLegacyClarity), "clarity", "clarity",
-                   false);
+  ApplyGradeScalar(*grade, type_ids::Clarity(), FindOp(operators, kLegacyClarity), "clarity",
+                   "clarity", false);
 
   if (const auto* curve = FindOp(operators, kLegacyCurve)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Curve())) {
       const auto nested = NestedOrSelf(curve->params, "curve");
-      model->LoadJson(nested.is_object() ? nested : curve->params);
+      LoadJsonIfChanged(model, nested.is_object() ? nested : curve->params);
     }
   }
   if (const auto* hls = FindOp(operators, kLegacyHls)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Hls())) {
-      model->LoadJson(NestedOrSelf(hls->params, "HLS"));
+      LoadJsonIfChanged(model, NestedOrSelf(hls->params, "HLS"));
     }
   }
   if (const auto* wheel = FindOp(operators, kLegacyColorWheel)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::ColorWheel())) {
-      model->LoadJson(NestedOrSelf(wheel->params, "color_wheel"));
+      LoadJsonIfChanged(model, NestedOrSelf(wheel->params, "color_wheel"));
     }
   }
   if (const auto* lmt = FindOp(operators, kLegacyLmt)) {
@@ -287,17 +297,18 @@ auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyI
       } else {
         json["cube_path"] = json_util::ReadString(lmt->params, "cube_path", {});
       }
-      model->LoadJson(json);
+      LoadJsonIfChanged(model, json);
     }
   }
   if (const auto* sharpen = FindOp(operators, kLegacySharpen)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Sharpen())) {
       const auto nested = NestedOrSelf(sharpen->params, "sharpen");
       nlohmann::json json;
-      json["amount"]    = json_util::ReadFloat(nested, "offset", json_util::ReadFloat(nested, "amount", 0.0f));
+      json["amount"] =
+          json_util::ReadFloat(nested, "offset", json_util::ReadFloat(nested, "amount", 0.0f));
       json["radius"]    = json_util::ReadFloat(nested, "radius", 3.0f);
       json["threshold"] = json_util::ReadFloat(nested, "threshold", 0.0f);
-      model->LoadJson(json);
+      LoadJsonIfChanged(model, json);
     }
   }
   if (const auto* grain = FindOp(operators, kLegacyFilmGrain)) {
@@ -328,11 +339,30 @@ auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyI
     }
   }
   if (const auto* odt = FindOp(operators, kLegacyOdt)) {
-    drt->Params().LoadJson(NestedOrSelf(odt->params, "odt"));
+    LoadJsonIfChanged(&drt->Params(), NestedOrSelf(odt->params, "odt"));
   }
+  return {};
+}
 
-  result.document = std::move(document);
+}  // namespace
+
+auto LegacyPipelineImporter::Import(const nlohmann::json& stage_json) -> LegacyImportResult {
+  LegacyImportResult result;
+  auto               document = CreateDefaultPipelineDocument();
+  result.error                = ApplyOnto(document, stage_json);
+  if (result.error.empty()) {
+    result.document = std::move(document);
+  }
   return result;
+}
+
+auto LegacyPipelineImporter::ApplyOnto(PipelineDocument&     document,
+                                       const nlohmann::json& stage_json) -> std::string {
+  const auto operators = CollectOperators(stage_json);
+  if (const auto error = ValidateOperators(operators); !error.empty()) {
+    return error;
+  }
+  return ApplyOperators(document, operators);
 }
 
 }  // namespace alcedo
