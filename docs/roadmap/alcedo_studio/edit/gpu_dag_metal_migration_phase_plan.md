@@ -4,9 +4,7 @@ Date: 2026-08-24
 
 Status: M0 complete; M1–M7 planned
 
-Plan branch: `feature/gpu-dag-metal-phase-plan`
-
-Implementation branch: `feature/gpu-dag-metal`
+Branch: `feature/gpu-dag-metal`
 
 Primary owner: Alcedo Studio 编辑管线 Metal 后端。
 
