@@ -14,6 +14,7 @@
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
+#include "edit/runtime/render_device_type.hpp"
 
 namespace alcedo {
 
@@ -100,6 +101,11 @@ class CudaRenderDevice {
   std::unique_ptr<CUDA::NeuralDemosaicWorkspace>   neural_workspace_;
   std::function<void(std::string_view)>            error_reporter_;
   GpuNodePassStats                                 pass_stats_{};
+};
+
+template <>
+struct RenderDeviceType<CudaBackend> {
+  using Type = CudaRenderDevice;
 };
 
 }  // namespace alcedo

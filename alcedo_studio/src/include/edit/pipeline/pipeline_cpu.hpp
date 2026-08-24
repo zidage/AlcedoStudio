@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -25,7 +26,11 @@
 
 namespace alcedo {
 #ifdef HAVE_CUDA
-class CudaProductRenderer;
+template <class Backend>
+class Renderer;
+class CudaBackend;
+using CudaRenderer        = Renderer<CudaBackend>;
+using CudaProductRenderer = CudaRenderer;
 #endif
 class CPUPipelineExecutor : public PipelineExecutor {
  private:
@@ -61,7 +66,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   FrameCompletionSubmission           bound_frame_submission_{};
 #ifdef HAVE_CUDA
   std::shared_ptr<PipelineDocument>    pipeline_document_;
-  std::shared_ptr<CudaProductRenderer> cuda_product_renderer_;
+  std::shared_ptr<CudaRenderer> cuda_product_renderer_;
   nlohmann::json                       cuda_product_legacy_snapshot_;
   bool                                 mirror_legacy_stage_adapter_ = false;
 #endif
@@ -209,9 +214,8 @@ class CPUPipelineExecutor : public PipelineExecutor {
   [[nodiscard]] auto DebugGetMergedStageIdentity() const -> std::uintptr_t;
 
 #ifdef HAVE_CUDA
-  [[nodiscard]] auto DebugCudaProductRenderer() -> CudaProductRenderer* {
-    return cuda_product_renderer_.get();
-  }
+  [[nodiscard]] auto DebugCudaRenderer() -> CudaRenderer* { return cuda_product_renderer_.get(); }
+  [[nodiscard]] auto DebugCudaProductRenderer() -> CudaRenderer* { return DebugCudaRenderer(); }
 #endif
 };
 };  // namespace alcedo

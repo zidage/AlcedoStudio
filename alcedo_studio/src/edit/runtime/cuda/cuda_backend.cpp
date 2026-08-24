@@ -341,6 +341,10 @@ void CudaBackend::ResetCounters() {
 
 void CudaBackend::FailNextUpload() { fail_next_upload_ = true; }
 
+auto CudaBackend::DefaultTextureBudgetBytes() -> std::size_t {
+  return DefaultProductTextureBudgetBytes();
+}
+
 auto DefaultProductTextureBudgetBytes() -> std::size_t {
   constexpr std::size_t kFloorBytes = 256ull << 20;
   std::size_t           free_bytes  = 0;

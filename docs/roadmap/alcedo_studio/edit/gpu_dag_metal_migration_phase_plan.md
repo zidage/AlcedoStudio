@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: planned
+Status: M0 complete; M1–M7 planned
 
 Plan branch: `feature/gpu-dag-metal-phase-plan`
 
@@ -298,6 +298,61 @@ GraphCompilerPassListIsBackendNativeTypeFree
 - CUDA 现有集中测试通过；
 - Metal 可以接入同一 source/plan/result cache 流程；
 - 没有新增运行时 fallback。
+
+##### Phase M0 completion record (2026-08-24)
+
+**Status:** complete — shared `Renderer<Backend>` / `PlanExecutor<Backend>` / `PassEncoder<Backend, Kind>` skeleton; CUDA product path unchanged; Metal host types instantiate the same session caches.
+
+**Primary success call chain:**
+
+```text
+CPUPipelineExecutor::Apply (CUDA)
+  -> Renderer<CudaBackend>::Render(UseSessionCache)
+  -> PreparedSourceCache::AcquireEncoded
+  -> StaticExecutionPlanCache::GetOrCompile(kCudaDagBackendCapabilityVersion)
+  -> GraphCompiler::BindFrameGeometry
+  -> PlanExecutor<CudaBackend>::Execute
+       miss -> PassEncoder<CudaBackend, Kind>::Encode
+       hit  -> skip + GpuNodePassStats
+  -> FramePresenter<CudaBackend>::Present / Download
+  -> PublishResults
+```
+
+**Primary failure call chain:**
+
+```text
+PassEncoder / upload / present throws
+  -> PlanExecutor::CancelRender (discard unpublished)
+  -> Renderer does not PublishResults
+  -> ReportError + rethrow
+  -> no CPU, no old Metal pipeline, no unpublished content key
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RendererTemplateInstantiatesCudaWithoutMetalHeaders` | `GpuDagCudaWorkspaceTest` | PASS |
+| `RendererTemplateInstantiatesMetalWithoutCudaHeaders` | `GpuDagRawInputTest` | PASS |
+| `CudaRendererPreservesCurrentPlanAndResultCacheKeys` | `GpuDagCudaDrtProductTest` | PASS |
+| `RendererOneShotWorkspaceCannotPublishIntoSessionCache` | `GpuDagCudaDrtProductTest` | PASS |
+| `RendererFailureDoesNotPublishUnfinishedContentKeys` | `GpuDagCudaDrtProductTest` | PASS |
+| `GraphCompilerPassListIsBackendNativeTypeFree` | `GpuDagRawInputTest` | PASS |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest GpuDagCudaWorkspaceTest GpuDagCudaDrtProductTest EditPipeline`
+- `ctest --test-dir build/debug -R GpuDagRawInputTest --output-on-failure` → 39/39
+- `ctest --test-dir build/debug -R GpuDagCudaWorkspaceTest --output-on-failure` → 17/17
+- `ctest --test-dir build/debug -R GpuDagCudaDrtProductTest --output-on-failure` → 41/41
+
+Suite totals: 39/39 RawInput, 17/17 CUDA workspace, 41/41 CUDA product.
+
+**Checklist / exit condition:** all M0 exit conditions met.
+
+**LOC note (grill-code-review):** new shared headers stay under 250 LOC (`renderer.hpp` 233, `plan_executor.hpp` 147, `metal_backend.hpp` 154). `cuda_result_cache_test.cpp` 565 LOC. `pipeline_cpu.cpp` 790 LOC, only call-site rename. No file crossed 1000 LOC in this change.
+
+**Residual gaps:** Metal `CreateBuffer` / `PassEncoder` / present still throw until M1–M6 implement GPU resources and encode-only passes. CUDA pixel math and G7R.4/R.5 were not changed.
 
 ## 6. Phase M1 — MetalBackend、workspace 与 pipeline warm-up
 

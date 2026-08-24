@@ -11,6 +11,7 @@
 #include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #include "../graph/test_camera_profile.hpp"
@@ -24,6 +25,7 @@
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "image/image_buffer.hpp"
@@ -427,6 +429,119 @@ TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditor
   EXPECT_EQ(after_preview.pass.drt_execute, 0U);
   EXPECT_EQ(after_preview.pass.sensor_develop_skip, 1U);
   EXPECT_EQ(after_preview.pass.drt_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultCacheKeys) {
+  static_assert(std::is_same_v<CudaRenderer, Renderer<CudaBackend>>);
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_EQ(renderer_->PlanCache().BackendCapabilityVersion(), kCudaDagBackendCapabilityVersion);
+
+  auto&      encoded       = image_->GetBuffer();
+  const auto encoded_bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
+  auto       source_lease = renderer_->SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
+  const auto& prepared    = source_lease.Get();
+  const auto expected_plan = GraphCompiler::CompileStatic(
+      *document_, prepared.CompileSource(), kCudaDagBackendCapabilityVersion);
+  auto plan = renderer_->PlanCache().GetOrCompile(*document_, prepared.CompileSource());
+  GraphCompiler::BindFrameGeometry(plan, *document_, {});
+  EXPECT_EQ(plan.static_key.backend_capability_version, kCudaDagBackendCapabilityVersion);
+  EXPECT_EQ(plan.static_key, expected_plan.static_key);
+  EXPECT_EQ(plan.sensor_linear_output.producer.Value(), "develop");
+  EXPECT_EQ(plan.sensor_linear_output.output_port.Value(), "sensor_linear");
+  EXPECT_EQ(plan.geometry_output.producer.Value(), "geometry");
+  EXPECT_EQ(plan.geometry_output.output_port.Value(), "scene_source");
+  EXPECT_EQ(plan.develop_output.producer.Value(), "develop");
+  EXPECT_EQ(plan.develop_output.output_port.Value(), "image");
+  EXPECT_EQ(plan.passes.size(), expected_plan.passes.size());
+  for (std::size_t i = 0; i < expected_plan.passes.size(); ++i) {
+    EXPECT_EQ(plan.passes[i].kind, expected_plan.passes[i].kind);
+  }
+
+  const auto keys = BuildFrameResultContentKeys(plan, prepared, *document_);
+  renderer_->Device().WaitIdle();
+  const auto completed = renderer_->Device().Workspace().Device().CompletedSubmission();
+  auto&      images    = renderer_->Device().Workspace().Images();
+  EXPECT_EQ(images.PublishedContentKey(plan.sensor_linear_output), keys.sensor_linear);
+  EXPECT_EQ(images.PublishedContentKey(plan.geometry_output), keys.geometry_scene_source);
+  EXPECT_EQ(images.PublishedContentKey(plan.develop_output), keys.develop_image);
+  EXPECT_EQ(images.PublishedContentKey(plan.primary_grade_output), keys.primary_grade);
+  EXPECT_EQ(images.PublishedContentKey(plan.display_output), keys.drt_display);
+  EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, keys.sensor_linear,
+                                     keys.sensor_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(plan.geometry_output, keys.geometry_scene_source,
+                                     keys.geometry_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(plan.develop_output, keys.develop_image, keys.geometry_extent,
+                                     TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(plan.primary_grade_output, keys.primary_grade,
+                                     keys.geometry_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(plan.display_output, keys.drt_display, keys.geometry_extent,
+                                     TextureFormat::Rgba32f, completed));
+}
+
+TEST_F(CudaResultCacheProductFixture, RendererOneShotWorkspaceCannotPublishIntoSessionCache) {
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto session_before = renderer_->SessionResources();
+  EXPECT_GT(session_before.published_result_count, 0U);
+  renderer_->ResetStats();
+
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
+  EXPECT_EQ(renderer_->SessionResources().published_result_count,
+            session_before.published_result_count);
+  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+            session_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(renderer_->Stats().plan_cache_hits, 0U);
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_EQ(renderer_->Stats().prepared_source_hits, 1U);
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedContentKeys) {
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  auto&      encoded       = image_->GetBuffer();
+  const auto encoded_bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
+  auto        source_lease = renderer_->SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
+  const auto& prepared     = source_lease.Get();
+  auto        first_plan   = renderer_->PlanCache().GetOrCompile(*document_, prepared.CompileSource());
+  GraphCompiler::BindFrameGeometry(first_plan, *document_, {});
+  const auto first_keys = BuildFrameResultContentKeys(first_plan, prepared, *document_);
+  const auto published_before = renderer_->SessionResources().published_result_count;
+
+  auto develop                   = document_->Develop()->Params().Params();
+  develop.highlights_reconstruct = !develop.highlights_reconstruct;
+  document_->Develop()->Params().ReplaceParams(develop);
+  renderer_->Device().Workspace().Device().FailNextUpload();
+  EXPECT_THROW(Render(), std::runtime_error);
+
+  auto second_plan = GraphCompiler::CompileStatic(*document_, prepared.CompileSource(),
+                                                  kCudaDagBackendCapabilityVersion);
+  GraphCompiler::BindFrameGeometry(second_plan, *document_, {});
+  const auto second_keys = BuildFrameResultContentKeys(second_plan, prepared, *document_);
+  ASSERT_NE(second_keys.sensor_linear, first_keys.sensor_linear);
+
+  renderer_->Device().WaitIdle();
+  auto&      images    = renderer_->Device().Workspace().Images();
+  const auto completed = renderer_->Device().Workspace().Device().CompletedSubmission();
+  EXPECT_EQ(renderer_->SessionResources().published_result_count, published_before);
+  EXPECT_TRUE(images.FindValidResult(first_plan.sensor_linear_output, first_keys.sensor_linear,
+                                     first_keys.sensor_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(first_plan.display_output, first_keys.drt_display,
+                                     first_keys.geometry_extent, TextureFormat::Rgba32f,
+                                     completed));
+  EXPECT_FALSE(images.FindValidResult(second_plan.sensor_linear_output, second_keys.sensor_linear,
+                                      second_keys.sensor_extent, TextureFormat::Rgba32f,
+                                      completed));
+  EXPECT_FALSE(images.FindValidResult(second_plan.display_output, second_keys.drt_display,
+                                      second_keys.geometry_extent, TextureFormat::Rgba32f,
+                                      completed));
+  EXPECT_EQ(images.UnpublishedCount(), 0U);
 }
 
 class CudaResultCacheDeviceFixture : public ::testing::Test {

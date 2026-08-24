@@ -208,7 +208,7 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     // camera matrices; replacing the document would rebuild every Model, mark them dirty,
     // and miss GPU result cache on slider frames.
     if (!cuda_product_renderer_) {
-      cuda_product_renderer_ = std::make_shared<CudaProductRenderer>(pipeline_document_);
+      cuda_product_renderer_ = std::make_shared<CudaRenderer>(pipeline_document_);
     }
     if (mirror_legacy_stage_adapter_ && AllowsLegacyStageAdapterRemirror(*pipeline_document_)) {
       const auto legacy = ExportPipelineParams();
@@ -243,8 +243,8 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
       }
     }
     request.resolution.quality = force_cpu_output_ ? RenderQuality::Export : RenderQuality::Preview;
-    const auto cache_policy    = enable_cache_ ? CudaProductCachePolicy::UseSessionCache
-                                               : CudaProductCachePolicy::BypassSessionCache;
+    const auto cache_policy    = enable_cache_ ? RenderCachePolicy::UseSessionCache
+                                               : RenderCachePolicy::BypassSessionCache;
     return cuda_product_renderer_->Render(input, decode_res_, request, frame_sink_,
                                           bound_frame_submission_, force_cpu_output_, cache_policy);
   }

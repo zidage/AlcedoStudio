@@ -6,13 +6,19 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/pass_kind.hpp"
 
 namespace alcedo {
@@ -119,6 +125,47 @@ TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected)
   EXPECT_LT(plan.IndexOf(GpuPassKind::CameraToAp1), plan.IndexOf(GpuPassKind::MaskEvaluate));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskFeather));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskFeather), plan.IndexOf(GpuPassKind::PrimaryColorGrade));
+}
+
+TEST(GpuDagGraphCompiler, GraphCompilerPassListIsBackendNativeTypeFree) {
+  static_assert(std::is_same_v<decltype(GpuPassDesc{}.kind), GpuPassKind>);
+  static_assert(std::is_trivially_copyable_v<GpuPassDesc>);
+
+  const char* files[] = {"graph_compiler.hpp", "execution_plan.hpp", "pass_kind.hpp"};
+  const std::filesystem::path root{ALCEDO_RUNTIME_HEADER_ROOT};
+  for (const char* name : files) {
+    std::ifstream input(root / name);
+    ASSERT_TRUE(input) << name;
+    std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(text.find("cuda_runtime"), std::string::npos) << name;
+    EXPECT_EQ(text.find("cuda.h"), std::string::npos) << name;
+    EXPECT_EQ(text.find("Metal/"), std::string::npos) << name;
+    EXPECT_EQ(text.find("metal.h"), std::string::npos) << name;
+    EXPECT_EQ(text.find("OpenCL"), std::string::npos) << name;
+  }
+
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto cuda_plan =
+      GraphCompiler::CompileStatic(document, prepared.CompileSource(), /*cuda*/ 1U);
+  const auto metal_plan = GraphCompiler::CompileStatic(document, prepared.CompileSource(),
+                                                       kMetalDagBackendCapabilityVersion);
+
+  ASSERT_EQ(cuda_plan.passes.size(), metal_plan.passes.size());
+  ASSERT_FALSE(cuda_plan.passes.empty());
+  for (std::size_t i = 0; i < cuda_plan.passes.size(); ++i) {
+    EXPECT_EQ(cuda_plan.passes[i].kind, metal_plan.passes[i].kind);
+  }
+  EXPECT_EQ(cuda_plan.static_key.backend_capability_version, 1U);
+  EXPECT_EQ(metal_plan.static_key.backend_capability_version, kMetalDagBackendCapabilityVersion);
+  EXPECT_NE(cuda_plan.static_key, metal_plan.static_key);
+  EXPECT_NE(kMetalDagBackendCapabilityVersion, 1U);
+  EXPECT_EQ(cuda_plan.sensor_linear_output, metal_plan.sensor_linear_output);
+  EXPECT_EQ(cuda_plan.geometry_output, metal_plan.geometry_output);
+  EXPECT_EQ(cuda_plan.develop_output, metal_plan.develop_output);
 }
 
 }  // namespace
