@@ -4240,6 +4240,14 @@ OpenClBackendFailureDoesNotEnterCpuImageProcessing
 
 ## 43. Phase G9 — Metal 移植
 
+详细的 Metal 架构、统一资源机制、模板后端区分、逐 Phase 删除范围和性能门槛见：
+
+- [GPU DAG Metal 移植逐 Phase 计划](gpu_dag_metal_migration_phase_plan.md)
+
+执行 G9 前必须同时阅读本主计划和上述 Metal 专项计划。专项计划是 G9 的工作拆分与 Metal
+验收细则；PipelineDocument、GraphCompiler、ExecutionPlan、缓存 key 和 Geometry 语义仍以
+本主计划为准。Metal 专项计划明确 G7R.4/G7R.5 不作为 Metal 移植前置条件。
+
 Branch: `feature/gpu-dag-metal`
 
 Base: `feature/gpu-dag-opencl`
