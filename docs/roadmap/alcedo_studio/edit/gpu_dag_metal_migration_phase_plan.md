@@ -399,7 +399,7 @@ MetalRenderDeviceUsesThePresentationDevice
 **Status:** complete
 **Date:** 2026-08-25
 **Branch:** `feature/gpu-dag-metal`
-**Commit:** `481df564`
+**Commit:** `e3230a14`
 
 **Implemented:**
 
