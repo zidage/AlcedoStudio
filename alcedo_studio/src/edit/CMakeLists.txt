@@ -69,14 +69,38 @@ def_library(EditInput
 )
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
+set(EDIT_RUNTIME_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
+)
+if(NOT ALCEDO_METAL_ENABLED)
+    list(APPEND EDIT_RUNTIME_SRCS
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend_host.cpp
+    )
+endif()
 def_library(EditRuntime
-    SOURCES
-        ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
-        ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
-        ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
-        ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
+    SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry EditInput
 )
+
+if(ALCEDO_METAL_ENABLED)
+    def_library(EditRuntimeMetal
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
+        PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
+    )
+    target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
+    set_source_files_properties(
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
+        PROPERTIES LANGUAGE OBJCXX
+    )
+    target_link_libraries(EditRuntimeMetal PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+    )
+endif()
 
 if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda

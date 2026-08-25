@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0 complete; M1–M7 planned
+Status: M0–M1 complete; M2–M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -393,6 +393,68 @@ MetalRenderDeviceUsesThePresentationDevice
 - 无 dirty 参数时 ParameterArena 上传字节为零；
 - BeginRender/EndRender 之外不存在 pass 级 wait；
 - 统计通过 API 快照读取，不依赖日志解析。
+
+##### Phase M1 completion record (2026-08-25)
+
+**Status:** complete
+**Date:** 2026-08-25
+**Branch:** `feature/gpu-dag-metal`
+**Commit:** `481df564`
+
+**Implemented:**
+
+- `EditRuntimeMetal` with `metal_backend.mm`: move-only Buffer/Texture2D, one command buffer per render, private MTLHeap page allocator, shared/managed ParameterArena buffer with `didModifyRange` on managed storage, R8 rect blit, RGBA32F/R32F texture upload/download, submission id + completed-handler + `IsResourceBusy`.
+- Instantiated `BasicRenderWorkspace<MetalBackend>`: ParameterArena, TransientBufferArena, TexturePool, MaskTextureCache, GraphImageCache, NodeResultCache.
+- `ComputePipelineCache` hit/miss/create snapshot API; `MetalBackend::WarmUpPipelines` / `WarmUpPlan` before `PlanExecutor::Execute`.
+- One process Metal device: `MetalContext::BindPresentationDevice`; Qt Quick `setGraphicsDevice` uses `MetalContext` device/queue. Workspace `NativeDevice()` is that same pointer.
+
+**Deleted:**
+
+- Header-only MetalBackend stubs that threw on every GPU allocation (replaced by host TU on non-Metal and Metal runtime on macOS).
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalWorkspaceTest GpuDagRawInputTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R GpuDagMetalWorkspaceTest --output-on-failure`
+- result: 8/8 PASS
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalParameterArenaUploadsOnlyDirtyRanges` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalTransientArenaRewindsWithoutReallocatingItsSlab` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalTexturePoolReusesMatchingPrivateTextures` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalTexturePoolDoesNotEvictBusySubmissionResources` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalMaskTextureCacheUsesOneWorkspaceByteBudget` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalSecondEmptyRenderCreatesNoBufferTextureHeapOrPipelineState` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalFailedUploadRestoresDirtyFieldsAndPublishesNoResult` | `GpuDagMetalWorkspaceTest` | PASS |
+| `MetalRenderDeviceUsesThePresentationDevice` | `GpuDagMetalWorkspaceTest` | PASS |
+
+Also: `GpuDagRawInputTest.RendererTemplateInstantiatesMetalWithoutCudaHeaders` PASS (Metal host header remains Metal.hpp-free).
+
+**Resource evidence:**
+
+- buffer create/free: second empty render 0/0 (`MetalSecondEmptyRenderCreatesNoBufferTextureHeapOrPipelineState`; transient rewind 0 malloc/free)
+- texture create/free: second matching acquire 0/0 (`MetalTexturePoolReusesMatchingPrivateTextures`)
+- heap growth: second empty render 0 (`HeapCreateCount() == 0`)
+- pipeline create/hit: first `convert_r32f_to_r32f` warm-up creates >= 1; second warm-up hits >= 1; second empty render create 0 (API snapshot, not logs)
+- upload ranges/bytes: dirty sharpen amount is one 4-byte range; unchanged parameters upload 0 bytes
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: `MetalRenderDevice` BeginRender/EndRender after peak reserve; no product RAW frame in M1
+- cold: first reserve + first render allocates heap/buffer/texture/pipeline
+- warm median: not a product-frame A/B; second empty render GPU resource create/free = 0
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M2: encode-only Develop/Geometry/CameraColor on this command context and workspace; no RAW Processor product path; pixel comparison with CUDA.
+
+**LOC note:** `metal_backend.hpp` 213, `plan_executor.hpp` 169, `metal_backend.mm` 785. No new file crossed 1000 LOC.
+
+**Residual gaps:** PassEncoder Metal specializations still throw until M2–M6. LUT/Neural ownership slots exist as sampler/cache hooks only. Product present/download remains unimplemented until M6.
 
 ## 7. Phase M2 — Develop、Geometry 与 CameraColor
 

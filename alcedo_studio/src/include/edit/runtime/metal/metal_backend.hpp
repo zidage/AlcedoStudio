@@ -6,8 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
-#include <stdexcept>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
@@ -16,121 +16,132 @@
 
 namespace alcedo {
 
+struct ExecutionPlan;
+class MetalBackendImpl;
+
 inline constexpr std::uint32_t kMetalDagBackendCapabilityVersion = 2;
 
-/**
- * @brief Host command-buffer identity for one in-flight Metal submission.
- *
- * Native MTLCommandBuffer lives in later Metal runtime TUs. Not thread-safe.
- */
+struct MetalPipelineWarmup {
+  const char* metallib_path = nullptr;
+  const char* function_name = nullptr;
+  const char* debug_label   = nullptr;
+};
+
 class MetalCommandContext {
  public:
-  MetalCommandContext() = default;
+  MetalCommandContext();
+  ~MetalCommandContext();
+  MetalCommandContext(const MetalCommandContext&)                    = delete;
+  auto operator=(const MetalCommandContext&) -> MetalCommandContext& = delete;
+  MetalCommandContext(MetalCommandContext&&) noexcept;
+  auto               operator=(MetalCommandContext&&) noexcept -> MetalCommandContext&;
 
   [[nodiscard]] auto SubmissionId() const -> std::uint64_t { return submission_id_; }
   void               SetSubmissionId(std::uint64_t id) { submission_id_ = id; }
+  [[nodiscard]] auto NativeCommandBuffer() const -> void*;
 
  private:
-  std::uint64_t submission_id_ = 0;
+  friend class MetalBackend;
+  friend class MetalBackendImpl;
+  class Gpu;
+  std::unique_ptr<Gpu> gpu_;
+  std::uint64_t        submission_id_ = 0;
 };
 
-/**
- * @brief Host-side Metal backend traits for Renderer and workspace instantiation.
- *
- * Native Metal types are not included. Resource creation fails explicitly until
- * the Metal runtime lands. There is no CPU or CUDA substitute.
- */
 class MetalBackend {
  public:
+  static constexpr std::uint32_t kCapabilityVersion = kMetalDagBackendCapabilityVersion;
+  static constexpr const char*   kName              = "Metal";
+  static auto                    DefaultTextureBudgetBytes() -> std::size_t { return 256ull << 20; }
+
   class Buffer {
    public:
     Buffer() = default;
-    Buffer(Buffer&&) noexcept = default;
-    auto operator=(Buffer&&) noexcept -> Buffer& = default;
-    Buffer(const Buffer&)                        = delete;
-    auto operator=(const Buffer&) -> Buffer&     = delete;
-    ~Buffer()                                    = default;
+    Buffer(MetalBackend* owner, void* native, void* device_pointer, std::size_t bytes,
+           std::uint64_t id);
+    ~Buffer();
+    Buffer(const Buffer&)                    = delete;
+    auto operator=(const Buffer&) -> Buffer& = delete;
+    Buffer(Buffer&& other) noexcept;
+    auto               operator=(Buffer&& other) noexcept -> Buffer&;
 
-    [[nodiscard]] auto DevicePointer() const -> void* { return nullptr; }
-    [[nodiscard]] auto Bytes() const -> std::size_t { return 0; }
-    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return 0; }
-    [[nodiscard]] auto Empty() const -> bool { return true; }
-    void               Reset() noexcept {}
+    [[nodiscard]] auto DevicePointer() const -> void* { return ptr_; }
+    [[nodiscard]] auto Native() const -> void* { return native_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    [[nodiscard]] auto Empty() const -> bool { return native_ == nullptr; }
+    void               Reset() noexcept;
+
+   private:
+    MetalBackend* owner_       = nullptr;
+    void*         native_      = nullptr;
+    void*         ptr_         = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint64_t resource_id_ = 0;
   };
 
   class Texture2D {
    public:
     Texture2D() = default;
-    Texture2D(Texture2D&&) noexcept = default;
-    auto operator=(Texture2D&&) noexcept -> Texture2D& = default;
-    Texture2D(const Texture2D&)                        = delete;
-    auto operator=(const Texture2D&) -> Texture2D&     = delete;
-    ~Texture2D()                                       = default;
+    Texture2D(MetalBackend* owner, void* native, std::size_t bytes, std::uint32_t width,
+              std::uint32_t height, TextureFormat format, std::uint64_t id);
+    ~Texture2D();
+    Texture2D(const Texture2D&)                    = delete;
+    auto operator=(const Texture2D&) -> Texture2D& = delete;
+    Texture2D(Texture2D&& other) noexcept;
+    auto               operator=(Texture2D&& other) noexcept -> Texture2D&;
 
-    [[nodiscard]] auto DevicePointer() const -> void* { return nullptr; }
-    [[nodiscard]] auto Bytes() const -> std::size_t { return 0; }
-    [[nodiscard]] auto Width() const -> std::uint32_t { return 0; }
-    [[nodiscard]] auto Height() const -> std::uint32_t { return 0; }
-    [[nodiscard]] auto Format() const -> TextureFormat { return TextureFormat::R8; }
-    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return 0; }
-    void               Reset() noexcept {}
+    [[nodiscard]] auto DevicePointer() const -> void* { return native_; }
+    [[nodiscard]] auto Native() const -> void* { return native_; }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return bytes_; }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
+    void               Reset() noexcept;
+
+   private:
+    MetalBackend* owner_       = nullptr;
+    void*         native_      = nullptr;
+    std::size_t   bytes_       = 0;
+    std::uint32_t width_       = 0;
+    std::uint32_t height_      = 0;
+    TextureFormat format_      = TextureFormat::R8;
+    std::uint64_t resource_id_ = 0;
   };
 
   using Slab           = Buffer;
   using CommandContext = MetalCommandContext;
 
-  static constexpr std::uint32_t kCapabilityVersion = kMetalDagBackendCapabilityVersion;
-  static constexpr const char*   kName              = "Metal";
+  MetalBackend();
+  ~MetalBackend();
+  MetalBackend(const MetalBackend&)                                  = delete;
+  auto               operator=(const MetalBackend&) -> MetalBackend& = delete;
 
-  /**
-   * @brief Session texture budget used until Metal device queries land.
-   *
-   * Matches the CUDA floor so plan compilation and workspace setup share size policy.
-   */
-  static auto DefaultTextureBudgetBytes() -> std::size_t { return 256ull << 20; }
+  [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
+  [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer;
+  [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
+                                     TextureFormat format) -> Texture2D;
 
-  MetalBackend()                                   = default;
-  MetalBackend(const MetalBackend&)                = delete;
-  auto operator=(const MetalBackend&) -> MetalBackend& = delete;
+  void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
+                         CommandContext& command_context);
+  void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
+                           CommandContext& command_context);
+  void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
+                       CommandContext& command_context);
+  void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
+  void UploadR8TextureRect(Texture2D& texture, RectI rectangle, std::span<const std::byte> bytes,
+                           CommandContext& command_context);
+  void DownloadTexture2D(const Texture2D& texture, std::span<std::byte> out,
+                         CommandContext& command_context);
+  void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
+                          CommandContext& command_context);
 
-  [[nodiscard]] auto CreateBuffer(std::size_t) -> Buffer {
-    throw std::runtime_error("MetalBackend: GPU buffer allocation is not implemented");
-  }
-  [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
-  [[nodiscard]] auto CreateTexture2D(std::uint32_t, std::uint32_t, TextureFormat) -> Texture2D {
-    throw std::runtime_error("MetalBackend: GPU texture allocation is not implemented");
-  }
+  void Submit(CommandContext& command_context);
+  void Wait(CommandContext& command_context);
 
-  void UploadBufferRange(Buffer&, std::uint32_t, std::span<const std::byte>, CommandContext&) {
-    throw std::runtime_error("MetalBackend: buffer upload is not implemented");
-  }
-  void DownloadBufferRange(const Buffer&, std::uint32_t, std::span<std::byte>,
-                           CommandContext&) const {
-    throw std::runtime_error("MetalBackend: buffer download is not implemented");
-  }
-  void UploadTexture2D(Texture2D&, std::span<const std::byte>, CommandContext&) {
-    throw std::runtime_error("MetalBackend: texture upload is not implemented");
-  }
-  void CopyTexture2D(const Texture2D&, Texture2D&, CommandContext&) {
-    throw std::runtime_error("MetalBackend: texture copy is not implemented");
-  }
-  void UploadR8TextureRect(Texture2D&, RectI, std::span<const std::byte>, CommandContext&) {
-    throw std::runtime_error("MetalBackend: R8 upload is not implemented");
-  }
-  void DownloadTexture2D(const Texture2D&, std::span<std::byte>, CommandContext&) const {
-    throw std::runtime_error("MetalBackend: texture download is not implemented");
-  }
-
-  void Submit(CommandContext& command_context) {
-    in_flight_submission_ = command_context.SubmissionId();
-  }
-  void Wait(CommandContext&) {
-    if (in_flight_submission_ == 0) {
-      return;
-    }
-    completed_submission_ = in_flight_submission_;
-    in_flight_submission_ = 0;
-  }
+  void WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines);
+  void WarmUpPlan(const ExecutionPlan& plan);
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
@@ -139,20 +150,21 @@ class MetalBackend {
   }
   [[nodiscard]] auto NextSubmissionId() -> std::uint64_t { return ++next_submission_; }
 
-  void NoteFree() noexcept { ++free_count_; }
-  void ResetCounters() {
-    malloc_count_   = 0;
-    free_count_     = 0;
-    h2d_copy_count_ = 0;
-    h2d_bytes_      = 0;
-    last_h2d_ranges_.clear();
-    last_texture_rectangles_.clear();
-  }
-  void FailNextUpload() { fail_next_upload_ = true; }
-  void NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
+  void               NoteFree() noexcept { ++free_count_; }
+  void               ResetCounters();
+  void               FailNextUpload();
+  void               NoteHostToDeviceBegin() { last_h2d_ranges_.clear(); }
 
+  [[nodiscard]] auto NativeDevice() const -> void*;
+  [[nodiscard]] auto NativeQueue() const -> void*;
+  [[nodiscard]] auto WorkingSetBudgetBytes() const -> std::size_t;
   [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
   [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
+  [[nodiscard]] auto BufferCreateCount() const -> std::uint64_t { return buffer_create_count_; }
+  [[nodiscard]] auto TextureCreateCount() const -> std::uint64_t { return texture_create_count_; }
+  [[nodiscard]] auto HeapCreateCount() const -> std::uint64_t { return heap_create_count_; }
+  [[nodiscard]] auto PipelineCreateCount() const -> std::uint64_t;
+  [[nodiscard]] auto PipelineHitCount() const -> std::uint64_t;
   [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
   [[nodiscard]] auto HostToDeviceBytes() const -> std::uint64_t { return h2d_bytes_; }
   [[nodiscard]] auto LastHostToDeviceRanges() const -> const std::vector<ByteRange>& {
@@ -163,10 +175,30 @@ class MetalBackend {
   }
 
  private:
+  friend class Buffer;
+  friend class Texture2D;
+  friend class MetalBackendImpl;
+  class Gpu;
+  void NoteMalloc() noexcept { ++malloc_count_; }
+  void NoteBufferCreate() noexcept {
+    ++buffer_create_count_;
+    NoteMalloc();
+  }
+  void NoteTextureCreate() noexcept {
+    ++texture_create_count_;
+    NoteMalloc();
+  }
+  void                   NoteHeapCreate() noexcept { ++heap_create_count_; }
+
+  std::unique_ptr<Gpu>   gpu_{};
   std::uint64_t          malloc_count_         = 0;
   std::uint64_t          free_count_           = 0;
+  std::uint64_t          buffer_create_count_  = 0;
+  std::uint64_t          texture_create_count_ = 0;
+  std::uint64_t          heap_create_count_    = 0;
   std::uint64_t          h2d_copy_count_       = 0;
   std::uint64_t          h2d_bytes_            = 0;
+  std::uint64_t          next_resource_id_     = 1;
   std::uint64_t          next_submission_      = 0;
   std::uint64_t          in_flight_submission_ = 0;
   std::uint64_t          completed_submission_ = 0;
@@ -174,5 +206,8 @@ class MetalBackend {
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
 };
+
+[[nodiscard]] auto BindSystemDefaultMetalPresentationDevice() -> void*;
+[[nodiscard]] auto MetalPresentationDeviceHandle() -> void*;
 
 }  // namespace alcedo

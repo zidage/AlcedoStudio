@@ -285,6 +285,9 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
+if(ALCEDO_METAL_ENABLED)
+  target_link_libraries(GpuDagRawInputTest PRIVATE EditRuntimeMetal)
+endif()
 target_compile_definitions(GpuDagRawInputTest PRIVATE
   ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
   ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input"
@@ -348,4 +351,17 @@ if(ALCEDO_CUDA_ENABLED)
   gtest_discover_tests(GpuDagCudaWorkspaceTest TEST_PREFIX "GpuDagCudaWorkspaceTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaWorkspaceTest gpu)
+endif()
+
+if(ALCEDO_METAL_ENABLED)
+  add_executable(GpuDagMetalWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_workspace_test.cpp)
+  target_include_directories(GpuDagMetalWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeMetal)
+  target_compile_definitions(GpuDagMetalWorkspaceTest PRIVATE
+    ALCEDO_METAL_UTILS_METALLIB_PATH="${METAL_UTILS_METALLIB}")
+  add_dependencies(GpuDagMetalWorkspaceTest MetalUtilsShaders)
+  gtest_discover_tests(GpuDagMetalWorkspaceTest TEST_PREFIX "GpuDagMetalWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalWorkspaceTest gpu ci_metal)
 endif()

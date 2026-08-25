@@ -46,14 +46,19 @@ class PlanExecutor {
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();
+      if constexpr (requires(Backend& backend, const ExecutionPlan& compiled) {
+                      backend.WarmUpPlan(compiled);
+                    }) {
+        workspace.Device().WarmUpPlan(plan);
+      }
       if (workspace.Textures().ByteBudget() == 0) {
         workspace.Textures().SetByteBudget(Backend::DefaultTextureBudgetBytes());
       }
       device.BeginRender();
-      const auto keys        = BuildFrameResultContentKeys(plan, input, document);
-      const auto completed   = workspace.Device().CompletedSubmission();
-      auto&      stats       = device.PassStats();
-      const auto hits_before = workspace.Images().ContentHitCount();
+      const auto keys          = BuildFrameResultContentKeys(plan, input, document);
+      const auto completed     = workspace.Device().CompletedSubmission();
+      auto&      stats         = device.PassStats();
+      const auto hits_before   = workspace.Images().ContentHitCount();
       const auto misses_before = workspace.Images().ContentMissCount();
 
       if (BindOrMiss(workspace, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent,
