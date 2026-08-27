@@ -633,7 +633,7 @@ MetalUnknownAdjustmentReturnsExplicitBackendError
 **Status:** complete
 **Date:** 2026-08-26
 **Branch:** `feature/gpu-dag-metal`
-**Commit:** working tree on `feature/gpu-dag-metal` (HEAD `48fb7465` plus this change)
+**Commit:** `b5622cfe`
 
 **Implemented:**
 
