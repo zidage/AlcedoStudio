@@ -825,6 +825,7 @@ MetalMaskCacheDoesNotEvictBusyTextures
 **Status:** complete
 **Date:** 2026-08-26
 **Branch:** `feature/gpu-dag-metal`
+**Commit:** `fd1850e9`
 
 **Implemented:**
 
