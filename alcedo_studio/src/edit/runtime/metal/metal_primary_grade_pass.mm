@@ -20,8 +20,10 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
+#include "edit/runtime/metal/metal_local_tone_pass.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 #include "utils/lut/cube_lut.hpp"
@@ -30,20 +32,20 @@ namespace alcedo {
 namespace {
 
 struct PrimaryGradeDispatchParams {
-  std::uint32_t command_count  = 0;
-  std::uint32_t command_offset = 0;
-  std::uint32_t lut_edge       = 0;
+  std::uint32_t command_count   = 0;
+  std::uint32_t command_offset  = 0;
+  std::uint32_t lut_edge        = 0;
   float         local_reference = 0.0f;
-  std::uint32_t width          = 0;
-  std::uint32_t pad[3]         = {};
+  std::uint32_t width           = 0;
+  std::uint32_t pad[3]          = {};
 };
 
 enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
 
 struct GradeOp {
-  GradeOpKind              kind = GradeOpKind::Fused;
+  GradeOpKind                kind = GradeOpKind::Fused;
   std::vector<std::uint32_t> offsets;
-  ParameterSlotKey         detail_key{};
+  ParameterSlotKey           detail_key{};
 };
 
 auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
@@ -90,10 +92,10 @@ void DispatchThreads(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineSt
 void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
                        MetalBackend::Texture2D& dst, const MetalBackend::Buffer& params,
                        const MetalBackend::Buffer& commands, std::uint32_t command_offset,
-                       std::uint32_t command_count, const MetalLutBinding& lut,
-                       std::uint32_t width, std::uint32_t height) {
-  auto pipeline = Pipeline("primary_grade_pointwise", "Metal PrimaryGrade");
-  auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
+                       std::uint32_t command_count, const MetalLutBinding& lut, std::uint32_t width,
+                       std::uint32_t height) {
+  auto  pipeline = Pipeline("primary_grade_pointwise", "Metal PrimaryGrade");
+  auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
   if (encoder == nullptr) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: compute encoder is missing");
@@ -118,8 +120,8 @@ void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D&
 void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
                  const MetalBackend::Texture2D& adjusted, MetalBackend::Texture2D& dst, float mix,
                  std::uint32_t width, std::uint32_t height) {
-  auto pipeline = Pipeline("primary_grade_mix", "Metal PrimaryGrade Mix");
-  auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
+  auto  pipeline = Pipeline("primary_grade_mix", "Metal PrimaryGrade Mix");
+  auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
   if (encoder == nullptr) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: mix encoder is missing");
@@ -134,8 +136,8 @@ void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& sourc
 }
 
 auto PackLutRgba(const CubeLut& lut) -> std::vector<std::byte> {
-  const auto edge   = static_cast<std::size_t>(lut.edge3d_);
-  const auto voxels = edge * edge * edge;
+  const auto             edge   = static_cast<std::size_t>(lut.edge3d_);
+  const auto             voxels = edge * edge * edge;
   std::vector<std::byte> packed(voxels * 4 * sizeof(float));
   auto*                  out = reinterpret_cast<float*>(packed.data());
   for (std::size_t i = 0; i < voxels; ++i) {
@@ -158,13 +160,12 @@ auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutB
     throw std::runtime_error("ExecuteMetalPrimaryGrade: failed to load LMT cube '" +
                              model->CubePath() + "': " + error);
   }
-  const auto packed = PackLutRgba(cube);
+  const auto  packed = PackLutRgba(cube);
   ContentHash hash;
   hash.MixBytes(packed);
   hash.MixU32(static_cast<std::uint32_t>(cube.edge3d_));
-  return device.Workspace().Device().AcquireLut(hash.Key(), packed,
-                                                static_cast<std::uint32_t>(cube.edge3d_),
-                                                device.CommandContext());
+  return device.Workspace().Device().AcquireLut(
+      hash.Key(), packed, static_cast<std::uint32_t>(cube.edge3d_), device.CommandContext());
 }
 
 auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector<GradeOp> {
@@ -210,10 +211,11 @@ void AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines) 
 #else
   (void)pipelines;
 #endif
+  AppendMetalLocalToneWarmup(pipelines);
 }
 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                              const PreparedRawInput&, PipelineDocument& document)
+                              const PreparedRawInput& prepared, PipelineDocument& document)
     -> MetalPrimaryGradeResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
@@ -239,7 +241,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     kGradeRuntimeParamBytes};
 
-  auto FlushFused = [&]() -> GradeOp* {
+  auto                        FlushFused = [&]() -> GradeOp* {
     if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
       ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
     }
@@ -299,11 +301,11 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     FlushFused()->offsets.push_back(arena.Binding(key).offset);
   }
 
-  const bool local_tone_active = local_tone_mapping::ShouldRun(
-      shadows_slider * 1.5f / 80.0f, -highlights_slider * 1.5f / 100.0f);
-  ops = CompactOps(std::move(ops), local_tone_active);
+  const bool local_tone_active = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
+                                                               -highlights_slider * 1.5f / 100.0f);
+  ops                          = CompactOps(std::move(ops), local_tone_active);
 
-  auto& context = device.CommandContext();
+  auto& context                = device.CommandContext();
   arena.UploadDirty(context);
   for (auto& patch : pending) {
     patch.Commit();
@@ -323,7 +325,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
       command_offsets.push_back(offset);
     }
   }
-  const auto topology_hash = topology.Key().hash;
+  const auto              topology_hash = topology.Key().hash;
 
   MetalPrimaryGradeResult result;
   result.output = plan.primary_grade_output;
@@ -343,29 +345,29 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     }
   }
 
-  const auto lut = LoadLut(device, *grade);
+  const auto lut         = LoadLut(device, *grade);
   result.lut_resource_id = lut.resource_id;
 
-  input = workspace.Images().Find(plan.develop_output);
+  input                  = workspace.Images().Find(plan.develop_output);
   if (input == nullptr) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: develop image lost during parameter bind");
   }
-  const auto width  = input->Texture().Width();
-  const auto height = input->Texture().Height();
-  const float mix   = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool skip_mix = mix == 1.0f && !plan.primary_grade_mask.has_value();
-  const auto write_count = CountGpuWrites(ops, skip_mix);
+  const auto  width       = input->Texture().Width();
+  const auto  height      = input->Texture().Height();
+  const float mix         = grade->Enabled() ? grade->Mix() : 0.0f;
+  const bool  skip_mix    = mix == 1.0f && !plan.primary_grade_mask.has_value();
+  const auto  write_count = CountGpuWrites(ops, skip_mix);
 
   std::vector<ResourceLease<MetalBackend>> scratches;
   scratches.reserve(write_count + 1);
   auto remaining = write_count;
   enum class ImageSlot : std::uint8_t { Input, Scratch, Output };
-  ImageSlot   current_slot        = ImageSlot::Input;
-  std::size_t current_scratch     = 0;
-  ImageSlot   dest_slot           = ImageSlot::Scratch;
-  std::size_t dest_scratch        = 0;
+  ImageSlot   current_slot    = ImageSlot::Input;
+  std::size_t current_scratch = 0;
+  ImageSlot   dest_slot       = ImageSlot::Scratch;
+  std::size_t dest_scratch    = 0;
 
-  auto Resolve = [&](ImageSlot slot, std::size_t scratch_index) -> MetalBackend::Texture2D& {
+  auto        Resolve = [&](ImageSlot slot, std::size_t scratch_index) -> MetalBackend::Texture2D& {
     if (slot == ImageSlot::Input) {
       auto* source = workspace.Images().Find(plan.develop_output);
       if (source == nullptr) {
@@ -402,21 +404,27 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   };
 
   if (write_count == 0) {
-    auto& dest = AcquireRgba(workspace, plan.primary_grade_output, width, height);
+    auto& dest   = AcquireRgba(workspace, plan.primary_grade_output, width, height);
     auto* source = workspace.Images().Find(plan.develop_output);
     workspace.Device().CopyTexture2D(source->Texture(), dest.Texture(), context);
     return result;
   }
 
-  auto* commands_buffer =
-      command_offsets.empty() ? nullptr : workspace.Values().Find(command_id);
+  auto* commands_buffer = command_offsets.empty() ? nullptr : workspace.Values().Find(command_id);
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const auto& op = ops[index];
     AllocateDest();
     auto& src  = Resolve(current_slot, current_scratch);
     auto& dest = Resolve(dest_slot, dest_scratch);
     if (op.kind == GradeOpKind::LlfBarrier) {
-      workspace.Device().CopyTexture2D(src, dest, context);
+      const auto tone =
+          ExecuteMetalLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
+                                plan.geometry, HashLlfSourceKey(plan, prepared, document),
+                                HashLlfReferenceKey(plan, prepared, document));
+      result.local_tone_reference_resource_id       = tone.reference_resource_id;
+      result.local_tone_rebuilt_reference           = tone.rebuilt_reference;
+      result.local_tone_sampled_canonical_reference = tone.sampled_canonical_reference;
+      result.local_tone_transient_bytes             = tone.transient_bytes;
     } else if (op.kind == GradeOpKind::Fused) {
       if (commands_buffer == nullptr) {
         throw std::runtime_error("ExecuteMetalPrimaryGrade: missing fused command buffer");

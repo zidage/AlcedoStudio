@@ -19,10 +19,14 @@ namespace alcedo {
 
 struct MetalPrimaryGradeResult {
   GraphValueId  output{NodeId{"grade.primary"}, PortId{"image"}};
-  std::uint32_t pointwise_dispatch_count = 0;
-  std::uint32_t detail_pass_count        = 0;
-  std::uint32_t command_upload_bytes     = 0;
-  std::uint64_t lut_resource_id          = 0;
+  std::uint32_t pointwise_dispatch_count               = 0;
+  std::uint32_t detail_pass_count                      = 0;
+  std::uint32_t command_upload_bytes                   = 0;
+  std::uint64_t lut_resource_id                        = 0;
+  std::uint64_t local_tone_reference_resource_id       = 0;
+  bool          local_tone_rebuilt_reference           = false;
+  bool          local_tone_sampled_canonical_reference = false;
+  std::uint32_t local_tone_transient_bytes             = 0;
 };
 
 /**

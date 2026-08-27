@@ -91,6 +91,7 @@ if(ALCEDO_METAL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
         PRIVATE_DEPS RawProcessorOp MetalGeometryUtils MetalImage MetalDemosaicNetEntry
@@ -106,11 +107,13 @@ if(ALCEDO_METAL_ENABLED)
         ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}"
         ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH="${METAL_PRIMARY_GRADE_METALLIB}"
+        ALCEDO_METAL_LOCAL_TONE_METALLIB_PATH="${METAL_LOCAL_TONE_METALLIB}"
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PROPERTIES LANGUAGE OBJCXX
     )

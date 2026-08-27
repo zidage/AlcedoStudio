@@ -48,6 +48,13 @@ struct FrameResultContentKeys {
                                        const PipelineDocument& document) -> ContentKey;
 
 /**
+ * @brief Identity of the canonical LLF source pyramid. Viewport ROI and
+ * Shadows/Highlights slider values are omitted so a slider edit can reuse it.
+ */
+[[nodiscard]] auto HashLlfSourceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                                    const PipelineDocument& document) -> ContentKey;
+
+/**
  * @brief Build layer keys for the current document, prepared source, and bound geometry.
  *
  * @pre @p plan.geometry is the per-frame ResolvedRenderGeometry.

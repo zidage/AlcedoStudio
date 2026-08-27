@@ -18,6 +18,7 @@
 #include "edit/graph/pipeline_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
+#include "edit/pipeline/local_tone_mapping.hpp"
 
 namespace alcedo {
 namespace {
@@ -32,15 +33,18 @@ auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size
   const std::size_t w      = source.host_extent.width;
   const std::size_t h      = source.host_extent.height;
   const std::size_t pixels = w * h;
+  const std::size_t llf    = local_tone_mapping::EstimateLlfTransientBytes(
+      static_cast<int>(source.full_reference_extent.width),
+      static_cast<int>(source.full_reference_extent.height), kAlign);
   if (source.kind == DevelopInputKind::DirectRgb) {
-    return AlignUp(4096, kAlign);
+    return AlignUp(4096, kAlign) + llf;
   }
   // U16 CFA + F32 CFA + 5 RCD planes + merge RGB + HLR result + HLR stats + XTrans green/rgb.
   const std::size_t bytes = AlignUp(pixels * 2, kAlign) + AlignUp(pixels * 4, kAlign) +
                             5 * AlignUp(pixels * 4, kAlign) + AlignUp(pixels * 12, kAlign) +
                             AlignUp(pixels * 12, kAlign) + AlignUp(4 + 16 + 16, kAlign) +
                             AlignUp(pixels * 4, kAlign) + AlignUp(pixels * 12, kAlign);
-  return bytes + 64 * kAlign;
+  return bytes + 64 * kAlign + llf;
 }
 
 auto ImageParamsFromDocument(const PipelineDocument& document) -> ImageGeometryParams {

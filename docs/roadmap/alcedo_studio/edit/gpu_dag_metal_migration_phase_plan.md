@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0–M3 complete; M4–M7 planned
+Status: M0–M4 complete; M5–M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -724,6 +724,69 @@ MetalLlfFailedSubmissionDoesNotPublishReference
 MetalLlfSecondStableRenderCreatesNoBufferTextureOrPipelineState
 MetalLlfMatchesCudaReferenceWithinTolerance
 ```
+
+##### Phase M4 completion record (2026-08-26)
+
+**Status:** complete
+**Date:** 2026-08-26
+**Branch:** `feature/gpu-dag-metal`
+**Commit:** working tree on `feature/gpu-dag-metal` (M4 implementation)
+
+**Implemented:**
+
+- `ExecuteMetalLocalTone` encode-only LLF on the current command buffer. Source/remap/result pyramids allocate from `TransientBufferArena`. Canonical `local_tone.source.0` / `local_tone.result.0` live in workspace `Values()` with GraphValueId and `HashLlfSourceKey` / `HashLlfReferenceKey`.
+- Full EditSpace frames seed the canonical reference through `reference_to_render`. Later ROI frames sample it with `MakeLlfSamplingPlan`. Isolated ROI without a canonical plane rebuilds locally and does not mark a hit.
+- Shadows/Highlights slider edits reuse the canonical source plane (`HashLlfSourceKey` omits those slider values) and rebuild only the adjusted result.
+- `GraphCompiler` writes LLF pyramid peak bytes into `ExecutionPlan.peak_transient_bytes`. Pipeline states come from `ComputePipelineCache` (`local_tone.metal` → `GpuDagMetalShaders`). Missing metallib throws.
+- DAG path does not call `highlight_shadow_local_tone::MetalStage`. That type still exists for the pre-DAG fused pipeline until M7.
+
+**Deleted:**
+
+- None of the old Metal product wrappers. `MetalStage` remains until M7. The DAG path does not own its pyramid arrays, cached keys, or allocator.
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalGradeTest GpuDagMetalDevelopTest GpuDagMetalWorkspaceTest GpuDagRawInputTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R 'GpuDagMetalGradeTest|GpuDagMetalWorkspaceTest|GpuDagMetalDevelopTest|GpuDagRawInputTest.GpuDagGraphCompiler|GpuDagRawInputTest.GpuDagResultContentKey' --output-on-failure`
+- result: 17/17 grade (9 M3 + 8 M4), 8/8 workspace, 10/10 develop, 15/15 GraphCompiler, 11/11 ResultContentKey PASS
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalLlfUsesWorkspaceTransientArenaForEveryPyramid` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfFullFrameBuildsCanonicalReferenceOnce` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfSliderEditReusesCanonicalReference` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfFailedSubmissionDoesNotPublishReference` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfSecondStableRenderCreatesNoBufferTextureOrPipelineState` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLlfMatchesCudaReferenceWithinTolerance` | `GpuDagMetalGradeTest` | PASS |
+| Missing metallib throws (`MetalLocalToneMissingMetallibThrowsExplicitError`) | `GpuDagMetalGradeTest` | PASS |
+
+**Resource evidence:**
+
+- buffer create/free: second stable LLF render 0/0 (`MetalLlfSecondStableRenderCreatesNoBufferTextureOrPipelineState`); slider edit reuses `local_tone.source.0` ResourceId (`MetalLlfSliderEditReusesCanonicalReference`)
+- texture create/free: second matching LLF render 0/0
+- heap growth: second matching LLF render 0
+- pipeline create/hit: first WarmUp/GetPipelineState creates extract/pyr_down/remap/select/collapse/apply; second identical render create 0 (API snapshot, not logs)
+- upload ranges/bytes: canonical source is not re-extracted on a Shadows slider edit; failed encode leaves the previous canonical ResourceId unpublished for the failed frame
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: synthetic Direct RGB 16×12 / 32×32 / 64×64 split and neighborhood planes; `ExecuteMetalPrimaryGrade` after Develop/Geometry/CameraColor
+- cold: first reserve + first LLF render allocates heap/buffer/texture/pipeline and transient pyramids
+- warm median: not a product-frame A/B; second identical full-frame LLF render GPU resource create/free = 0 and samples the canonical plane
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M5: Mask/Feather/Mix with R8 and signed distance. Disconnected mask still uses constant 1.
+- M6: DRT/present. Identity DRT copy is not a display path.
+- M7: delete `highlight_shadow_local_tone::MetalStage` and the old fused Metal product path.
+
+**LOC note:** `metal_local_tone_pass.hpp` 46, `metal_local_tone_pass.mm` 543, `local_tone.metal` 339, `metal_llf_test.cpp` 703, `metal_backend.mm` 929. No new file crossed 1000 LOC.
+
+**Residual gaps:** DRT Metal encoder still copies Grade output until M6. Old RAW Metal wrappers and `MetalStage` still own static scratch for the pre-DAG product path.
 
 ## 10. Phase M5 — Mask、Feather 与 Mix
 

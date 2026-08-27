@@ -734,6 +734,25 @@ void MetalBackend::FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t v
   command_context.gpu_->blit->fillBuffer(found->native, NS::Range(offset, bytes), value);
 }
 
+void MetalBackend::CopyDeviceMemoryToBuffer(void* src, Buffer& dst, std::uint32_t dst_offset,
+                                            std::size_t bytes, CommandContext& command_context) {
+  if (bytes == 0) {
+    return;
+  }
+  if (src == nullptr || dst.Empty() || dst.Native() == nullptr) {
+    throw std::runtime_error("MetalBackend::CopyDeviceMemoryToBuffer: null source or destination");
+  }
+  if (static_cast<std::size_t>(dst_offset) + bytes > dst.Bytes()) {
+    throw std::runtime_error("MetalBackend::CopyDeviceMemoryToBuffer: range exceeds destination");
+  }
+  const auto resolved = ResolveDeviceMemory(src, bytes);
+  MetalBackendImpl::AttachGpu(*gpu_);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
+  command_context.gpu_->blit->copyFromBuffer(
+      static_cast<MTL::Buffer*>(resolved.first), resolved.second,
+      static_cast<MTL::Buffer*>(dst.Native()), dst_offset, bytes);
+}
+
 auto MetalBackend::EnsureComputeCommandEncoder(CommandContext& command_context) -> void* {
   MetalBackendImpl::AttachGpu(*gpu_);
   MetalBackendImpl::EnsureComputeEncoder(*this, *gpu_, command_context);
@@ -849,16 +868,16 @@ auto MetalBackend::DummyLut() -> MetalLutBinding {
 void MetalBackend::SetLutByteBudget(std::size_t bytes) { lut_byte_budget_ = bytes; }
 
 void MetalBackend::ResetCounters() {
-  malloc_count_         = 0;
-  free_count_           = 0;
-  buffer_create_count_  = 0;
-  texture_create_count_ = 0;
-  heap_create_count_            = 0;
-  command_buffer_create_count_  = 0;
-  h2d_copy_count_               = 0;
-  h2d_bytes_            = 0;
-  compute_dispatch_count_       = 0;
-  lut_upload_bytes_             = 0;
+  malloc_count_                = 0;
+  free_count_                  = 0;
+  buffer_create_count_         = 0;
+  texture_create_count_        = 0;
+  heap_create_count_           = 0;
+  command_buffer_create_count_ = 0;
+  h2d_copy_count_              = 0;
+  h2d_bytes_                   = 0;
+  compute_dispatch_count_      = 0;
+  lut_upload_bytes_            = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
   if (gpu_) {

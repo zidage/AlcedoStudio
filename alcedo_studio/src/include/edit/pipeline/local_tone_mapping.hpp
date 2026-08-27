@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -15,6 +16,7 @@ namespace alcedo::local_tone_mapping {
 constexpr int   kMaxLevels                = 12;
 constexpr int   kMaxSamples               = 32;
 constexpr int   kReferenceMaskMaxLongEdge = 2048;
+constexpr float kPyramidRadius            = 18.0f;
 constexpr float kGammaMinL                = -0.15f;
 constexpr float kGammaMaxL                = 1.18f;
 constexpr float kBaseSigmaR               = 0.07545252f;
@@ -101,8 +103,7 @@ inline auto BuildRoiAdjustedResultCacheKey(const Params& params, std::uint64_t b
 }
 
 inline auto CanReuseReferenceForRoi(bool roi_frame_with_source_reference,
-                                    bool reference_source_cache_valid,
-                                    int roi_reference_width,
+                                    bool reference_source_cache_valid, int roi_reference_width,
                                     int roi_reference_height) -> bool {
   return roi_frame_with_source_reference && reference_source_cache_valid &&
          roi_reference_width > 0 && roi_reference_height > 0;
@@ -127,6 +128,32 @@ inline auto ComputeLevelCount(int width, int height, float radius) -> int {
     ++count;
   }
   return count;
+}
+
+inline auto AlignUpBytes(std::size_t value, std::size_t alignment) -> std::size_t {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+/** @brief Byte size of one Gaussian pyramid at the canonical LLF mask resolution. */
+inline auto EstimatePyramidBytes(int width, int height, float radius, std::size_t alignment)
+    -> std::size_t {
+  const auto  dims  = ComputeMaskDimensions(width, height, kReferenceMaskMaxLongEdge);
+  const int   count = ComputeLevelCount(dims.width, dims.height, radius);
+  std::size_t total = 0;
+  int         w     = dims.width;
+  int         h     = dims.height;
+  for (int level = 0; level < count; ++level) {
+    total += AlignUpBytes(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * sizeof(float),
+                          alignment);
+    w = std::max(1, (w + 1) / 2);
+    h = std::max(1, (h + 1) / 2);
+  }
+  return total;
+}
+
+/** @brief Peak transient bytes for source, remap A/B, and result pyramids. */
+inline auto EstimateLlfTransientBytes(int width, int height, std::size_t alignment) -> std::size_t {
+  return 4U * EstimatePyramidBytes(width, height, kPyramidRadius, alignment);
 }
 
 inline auto SigmaR(float shadow_amount, float highlight_amount) -> float {

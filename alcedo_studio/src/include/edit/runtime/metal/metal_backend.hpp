@@ -146,6 +146,8 @@ class MetalBackend {
                           CommandContext& command_context);
   void FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t value,
                         CommandContext& command_context);
+  void CopyDeviceMemoryToBuffer(void* src, Buffer& dst, std::uint32_t dst_offset, std::size_t bytes,
+                                CommandContext& command_context);
   [[nodiscard]] auto ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
       -> std::pair<void*, std::uint32_t>;
 

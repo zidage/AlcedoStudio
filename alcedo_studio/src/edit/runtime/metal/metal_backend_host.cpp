@@ -150,6 +150,10 @@ void MetalBackend::UploadDeviceMemory(void*, std::span<const std::byte>, Command
 void MetalBackend::FillDeviceMemory(void*, std::size_t, std::uint8_t, CommandContext&) {
   throw std::runtime_error("MetalBackend: device memory fill is not implemented");
 }
+void MetalBackend::CopyDeviceMemoryToBuffer(void*, Buffer&, std::uint32_t, std::size_t,
+                                            CommandContext&) {
+  throw std::runtime_error("MetalBackend: device memory copy is not implemented");
+}
 auto MetalBackend::ResolveDeviceMemory(void*, std::size_t) const
     -> std::pair<void*, std::uint32_t> {
   throw std::runtime_error("MetalBackend: device memory resolve is not implemented");

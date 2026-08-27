@@ -2,6 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/runtime/result_content_key.hpp"
+
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -14,7 +16,6 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
-#include "edit/runtime/result_content_key.hpp"
 
 namespace alcedo {
 namespace {
@@ -35,7 +36,8 @@ void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test
 
 TEST(GpuDagResultContentKey, GraphCompilerAssignsDistinctSensorGeometryAndDevelopValueIds) {
   auto       document = CreateDefaultPipelineDocument();
-  const auto plan = GraphCompiler::Compile(document, MakePrepared().CompileSource(), RenderRequest{});
+  const auto plan =
+      GraphCompiler::Compile(document, MakePrepared().CompileSource(), RenderRequest{});
   EXPECT_EQ(plan.sensor_linear_output.producer.Value(), "develop");
   EXPECT_EQ(plan.sensor_linear_output.output_port.Value(), "sensor_linear");
   EXPECT_EQ(plan.geometry_output.producer.Value(), "geometry");
@@ -51,21 +53,21 @@ TEST(GpuDagResultContentKey, GraphCompilerAssignsDistinctSensorGeometryAndDevelo
 }
 
 TEST(GpuDagResultContentKey, SensorLinearKeyIgnoresCctTintGradeAndDrt) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
 
-  auto develop = document.Develop()->Params().Params();
-  develop.wb_mode    = "custom";
-  develop.custom_cct = 4200.0f;
+  auto       develop  = document.Develop()->Params().Params();
+  develop.wb_mode     = "custom";
+  develop.custom_cct  = 4200.0f;
   develop.custom_tint = 8.0f;
   document.Develop()->Params().ReplaceParams(develop);
   auto* exposure = dynamic_cast<ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(1.25f);
-  auto drt = document.Drt()->Params().Params();
+  auto drt           = document.Drt()->Params().Params();
   drt.peak_luminance = 200.0f;
   document.Drt()->Params().ReplaceParams(drt);
 
@@ -78,10 +80,10 @@ TEST(GpuDagResultContentKey, SensorLinearKeyIgnoresCctTintGradeAndDrt) {
 }
 
 TEST(GpuDagResultContentKey, GeometryKeyIncludesViewportAndCropAndIgnoresGrade) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  auto          prepared = MakePrepared();
+  auto          document = CreateDefaultPipelineDocument();
+  auto          plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto    base = BuildFrameResultContentKeys(plan, prepared, document);
 
   RenderRequest viewport;
   viewport.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
@@ -110,11 +112,11 @@ TEST(GpuDagResultContentKey, GeometryKeyIncludesViewportAndCropAndIgnoresGrade) 
 }
 
 TEST(GpuDagResultContentKey, LlfReferenceKeyIgnoresViewportAndFollowsCropAndGrade) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto base      = HashLlfReferenceKey(plan, prepared, document);
-  const auto base_keys = BuildFrameResultContentKeys(plan, prepared, document);
+  auto          prepared = MakePrepared();
+  auto          document = CreateDefaultPipelineDocument();
+  auto          plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto    base = HashLlfReferenceKey(plan, prepared, document);
+  const auto    base_keys = BuildFrameResultContentKeys(plan, prepared, document);
 
   RenderRequest viewport;
   viewport.view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
@@ -137,13 +139,34 @@ TEST(GpuDagResultContentKey, LlfReferenceKeyIgnoresViewportAndFollowsCropAndGrad
   EXPECT_NE(HashLlfReferenceKey(plan, prepared, document), base);
 }
 
-TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstreamKeys) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+TEST(GpuDagResultContentKey, LlfSourceKeyIgnoresShadowsAndHighlightsSliderValues) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base_source = HashLlfSourceKey(plan, prepared, document);
+  const auto base_result = HashLlfReferenceKey(plan, prepared, document);
 
-  auto develop = document.Develop()->Params().Params();
+  auto*      shadows     = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(40.0f);
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document), base_source);
+  EXPECT_NE(HashLlfReferenceKey(plan, prepared, document), base_result);
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(-0.5f);
+  EXPECT_NE(HashLlfSourceKey(plan, prepared, document), base_source);
+}
+
+TEST(GpuDagResultContentKey, HighlightRecoverChangesSensorLinearAndAllDownstreamKeys) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto       develop  = document.Develop()->Params().Params();
   develop.highlights_reconstruct = !develop.highlights_reconstruct;
   document.Develop()->Params().ReplaceParams(develop);
   const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
@@ -158,7 +181,7 @@ TEST(GpuDagResultContentKey, ExposureEditWithRasterMaskKeepsSensorGeometryDevelo
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
   ConnectRasterMask(document);
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
   ASSERT_FALSE(base.mask.Empty());
 
@@ -179,7 +202,7 @@ TEST(GpuDagResultContentKey, RasterMaskParamChangeInvalidatesMaskAndGradeNotSens
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
   ConnectRasterMask(document);
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
 
   auto* mask = dynamic_cast<RasterMaskNodeModel*>(document.Graph().FindNode(NodeId{"mask.raster"}));
@@ -194,11 +217,11 @@ TEST(GpuDagResultContentKey, RasterMaskParamChangeInvalidatesMaskAndGradeNotSens
 }
 
 TEST(GpuDagResultContentKey, IdenticalInputsProduceIdenticalKeys) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto a  = BuildFrameResultContentKeys(plan, prepared, document);
-  const auto b  = BuildFrameResultContentKeys(plan, prepared, document);
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto a        = BuildFrameResultContentKeys(plan, prepared, document);
+  const auto b        = BuildFrameResultContentKeys(plan, prepared, document);
   EXPECT_EQ(a.sensor_linear, b.sensor_linear);
   EXPECT_EQ(a.geometry_scene_source, b.geometry_scene_source);
   EXPECT_EQ(a.develop_image, b.develop_image);
@@ -207,12 +230,12 @@ TEST(GpuDagResultContentKey, IdenticalInputsProduceIdenticalKeys) {
 }
 
 TEST(GpuDagResultContentKey, CameraProfileChangeInvalidatesDevelopImageNotSensorLinear) {
-  auto prepared = MakePrepared();
-  auto document = CreateDefaultPipelineDocument();
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
 
-  auto develop = document.Develop()->Params().Params();
+  auto       develop  = document.Develop()->Params().Params();
   develop.camera_profile.color_matrices_valid = true;
   develop.camera_profile.color_matrix_1[0]    = 0.91;
   document.Develop()->Params().ReplaceParams(develop);
@@ -227,7 +250,7 @@ TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWi
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
   ConnectRasterMask(document);
-  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
   ASSERT_FALSE(base.mask.Empty());
 

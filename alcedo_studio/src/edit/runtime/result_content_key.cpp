@@ -9,6 +9,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
 namespace {
@@ -123,6 +124,19 @@ auto MixGrade(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   }
 }
 
+auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
+  hash.MixU64(grade.AdjustmentCount());
+  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+    const auto& type = grade.AdjustmentAt(index).Type();
+    hash.MixText(grade.AdjustmentIdAt(index).Value());
+    hash.MixText(type.Text());
+    if (type == type_ids::Shadows() || type == type_ids::Highlights()) {
+      continue;
+    }
+    hash.MixText(grade.AdjustmentAt(index).ToJson().dump());
+  }
+}
+
 auto MixNormalizedRect(ContentHash& hash, NormalizedRect rect) -> void {
   hash.MixF32(rect.x);
   hash.MixF32(rect.y);
@@ -165,17 +179,8 @@ auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const 
   }
 }
 
-}  // namespace
-
-auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
-  ContentHash hash;
-  MixPreparedSource(hash, key);
-  return hash.Key();
-}
-
-auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
-                         const PipelineDocument& document) -> ContentKey {
-  ContentHash hash;
+auto MixLlfSharedIdentity(ContentHash& hash, const ExecutionPlan& plan,
+                          const PreparedRawInput& input, const PipelineDocument& document) -> void {
   MixPreparedSource(hash, input.source_key);
   MixExtent(hash, plan.geometry.full_reference_extent);
   MixExtent(hash, plan.geometry.edit_extent);
@@ -188,8 +193,33 @@ auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& inpu
   MixRect(hash, plan.source.sensor_active_area);
   const auto* develop = document.Develop();
   MixCameraColorParams(hash, develop == nullptr ? DevelopPayload{} : develop->Params().Params());
+}
+
+}  // namespace
+
+auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
+  ContentHash hash;
+  MixPreparedSource(hash, key);
+  return hash.Key();
+}
+
+auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                         const PipelineDocument& document) -> ContentKey {
+  ContentHash hash;
+  MixLlfSharedIdentity(hash, plan, input, document);
   if (document.PrimaryGrade() != nullptr) {
     MixGrade(hash, *document.PrimaryGrade());
+  }
+  hash.MixU32(kLlfReferenceImplementationVersion);
+  return hash.Key();
+}
+
+auto HashLlfSourceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                      const PipelineDocument& document) -> ContentKey {
+  ContentHash hash;
+  MixLlfSharedIdentity(hash, plan, input, document);
+  if (document.PrimaryGrade() != nullptr) {
+    MixGradeExcludingLocalToneValues(hash, *document.PrimaryGrade());
   }
   hash.MixU32(kLlfReferenceImplementationVersion);
   return hash.Key();

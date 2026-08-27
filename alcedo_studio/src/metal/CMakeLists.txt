@@ -75,6 +75,10 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_PRIMARY_GRADE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.air")
     set(METAL_PRIMARY_GRADE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.metallib"
         CACHE INTERNAL "Metal DAG primary grade metallib path" FORCE)
+    set(METAL_LOCAL_TONE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/local_tone.metal")
+    set(METAL_LOCAL_TONE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.air")
+    set(METAL_LOCAL_TONE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.metallib"
+        CACHE INTERNAL "Metal DAG local tone metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -305,10 +309,20 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DAG primary grade library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagLocalToneShaders
+        "${METAL_LOCAL_TONE_SRC}"
+        "${METAL_LOCAL_TONE_AIR}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "Compiling Metal DAG local tone shader"
+        "Linking Metal DAG local tone library"
+    )
+
     add_custom_target(GpuDagMetalShaders DEPENDS
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
         "${METAL_PRIMARY_GRADE_METALLIB}"
+        "${METAL_LOCAL_TONE_METALLIB}"
     )
 
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
@@ -334,6 +348,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
         "${METAL_PRIMARY_GRADE_METALLIB}"
+        "${METAL_LOCAL_TONE_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE
