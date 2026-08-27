@@ -7,11 +7,16 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -29,6 +34,24 @@ auto ReadBytes(const std::filesystem::path& path) -> std::vector<std::byte> {
   std::memcpy(bytes.data(), chars.data(), chars.size());
   return bytes;
 }
+
+#if defined(__APPLE__)
+struct ProductWorkerRawLoadContext {
+  const std::vector<std::byte>*   encoded = nullptr;
+  std::optional<PreparedRawInput> prepared;
+  std::exception_ptr              failure;
+};
+
+auto LoadEncodedOnProductWorkerStack(void* opaque) noexcept -> void* {
+  auto& context = *static_cast<ProductWorkerRawLoadContext*>(opaque);
+  try {
+    context.prepared = RawInputLoader::LoadEncoded(*context.encoded, DecodeRes::FULL);
+  } catch (...) {
+    context.failure = std::current_exception();
+  }
+  return nullptr;
+}
+#endif
 
 TEST(GpuDagRawInput, RawInputLoaderUnpacksBeforePipelineBuild) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
@@ -158,6 +181,44 @@ TEST(GpuDagRawInput, EncodedDngCarriesOpcodeList3WarpIntoPreparedInput) {
   EXPECT_TRUE(prepared.color_context.dng_warp_rectilinear_present_);
   EXPECT_NE(prepared.source_key.dng_warp_hash, 0U);
 }
+
+#if defined(__APPLE__)
+TEST(GpuDagRawInput, EncodedRawLoadCompletesOnProductWorkerStack) {
+  const auto root = std::filesystem::path{ALCEDO_CI_RAW_FIXTURE_ROOT};
+  const auto path = root / "tag @ryanbreitkreutz - free raws from @signatureeditsco - DSC06683.dng";
+  const auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty()) << path;
+
+  pthread_attr_t attributes;
+  ASSERT_EQ(pthread_attr_init(&attributes), 0);
+  constexpr std::size_t kProductWorkerStackBytes = 512U * 1024U;
+  const int set_stack_result = pthread_attr_setstacksize(&attributes, kProductWorkerStackBytes);
+  if (set_stack_result != 0) {
+    pthread_attr_destroy(&attributes);
+    FAIL() << "pthread_attr_setstacksize failed: " << set_stack_result;
+  }
+
+  ProductWorkerRawLoadContext context{.encoded = &encoded};
+  pthread_t                   thread;
+  const int                   create_result =
+      pthread_create(&thread, &attributes, LoadEncodedOnProductWorkerStack, &context);
+  pthread_attr_destroy(&attributes);
+  ASSERT_EQ(create_result, 0);
+  ASSERT_EQ(pthread_join(thread, nullptr), 0);
+
+  if (context.failure) {
+    try {
+      std::rethrow_exception(context.failure);
+    } catch (const std::exception& error) {
+      FAIL() << error.what();
+    } catch (...) {
+      FAIL() << "RawInputLoader failed with a non-standard exception";
+    }
+  }
+  ASSERT_TRUE(context.prepared.has_value());
+  EXPECT_FALSE(context.prepared->host_extent.Empty());
+}
+#endif
 
 }  // namespace
 }  // namespace alcedo

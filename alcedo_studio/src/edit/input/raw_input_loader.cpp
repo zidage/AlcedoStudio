@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <opencv2/core.hpp>
 #include <stdexcept>
 #include <utility>
@@ -431,29 +432,31 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   }
   const auto dng_metadata = dng::ExtractMetadata(std::span<const std::uint8_t>(
       reinterpret_cast<const std::uint8_t*>(encoded.data()), encoded.size()));
-  LibRaw     raw;
-  if (raw.open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())),
-                      encoded.size()) != LIBRAW_SUCCESS) {
+  // LibRaw is larger than the macOS product worker stack; it must not be a local object.
+  auto       raw          = std::make_unique<LibRaw>();
+  if (raw->open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())),
+                       encoded.size()) != LIBRAW_SUCCESS) {
     throw std::runtime_error("RawInputLoader::LoadEncoded: LibRaw open_buffer failed");
   }
-  if (libraw_guard::Unpack(raw) != LIBRAW_SUCCESS) {
-    raw.recycle();
+  if (libraw_guard::Unpack(*raw) != LIBRAW_SUCCESS) {
+    raw->recycle();
     throw std::runtime_error("RawInputLoader::LoadEncoded: LibRaw unpack failed");
   }
 
-  const auto kind    = ClassifyRawInput(raw.imgdata.rawdata, raw.imgdata.idata);
-  const auto pattern = kind == RawInputKind::BayerRaw ? ReadLibRawCfaPattern(raw) : RawCfaPattern{};
+  const auto kind = ClassifyRawInput(raw->imgdata.rawdata, raw->imgdata.idata);
+  const auto pattern =
+      kind == RawInputKind::BayerRaw ? ReadLibRawCfaPattern(*raw) : RawCfaPattern{};
   try {
-    ThrowIfUnsupported(raw, kind, pattern);
+    ThrowIfUnsupported(*raw, kind, pattern);
   } catch (...) {
-    raw.recycle();
+    raw->recycle();
     throw;
   }
 
   PreparedRawInput input;
-  input.sensor        = SensorFromLibRaw(raw);
-  input.linearization = LinearizationFromLibRaw(raw);
-  FillColorContext(raw, input.color_context);
+  input.sensor        = SensorFromLibRaw(*raw);
+  input.linearization = LinearizationFromLibRaw(*raw);
+  FillColorContext(*raw, input.color_context);
   if (dng_metadata.warp_rectilinear.has_value()) {
     input.dng_warp_rectilinear                        = dng_metadata.warp_rectilinear;
     input.color_context.dng_warp_rectilinear_present_ = true;
@@ -464,14 +467,14 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   }
 
   if (kind == RawInputKind::DebayeredRgb) {
-    raw.recycle();
+    raw->recycle();
     throw std::runtime_error(
         "RawInputLoader::LoadEncoded: encoded direct RGB is not used in G4 tests; "
         "call FromDirectRgb");
   }
 
-  const auto& sizes = raw.imgdata.sizes;
-  cv::Mat     view(sizes.raw_height, sizes.raw_width, CV_16UC1, raw.imgdata.rawdata.raw_image,
+  const auto& sizes = raw->imgdata.sizes;
+  cv::Mat     view(sizes.raw_height, sizes.raw_width, CV_16UC1, raw->imgdata.rawdata.raw_image,
                sizes.raw_pitch != 0
                        ? static_cast<std::size_t>(sizes.raw_pitch)
                        : static_cast<std::size_t>(sizes.raw_width) * sizeof(std::uint16_t));
@@ -479,7 +482,7 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   input.host_extent = input.pixels.extent;
   input.input_kind  = RawInputKind::BayerRaw;
   input.cfa_pattern = pattern;
-  raw.recycle();
+  raw->recycle();
   return FinishPrepared(std::move(input), decode_res, HashContentBytes(encoded), encoded.size());
 }
 
