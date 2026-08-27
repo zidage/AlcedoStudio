@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0–M2 complete; M3–M7 planned
+Status: M0–M3 complete; M4–M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -627,6 +627,73 @@ MetalUnknownAdjustmentReturnsExplicitBackendError
 - 相同拓扑的 slider 编辑不创建 buffer、texture 或 pipeline state；
 - Grade command offset buffer 只在拓扑改变时更新；
 - LUT 未变化时上传字节为零。
+
+##### Phase M3 completion record (2026-08-26)
+
+**Status:** complete
+**Date:** 2026-08-26
+**Branch:** `feature/gpu-dag-metal`
+**Commit:** working tree on `feature/gpu-dag-metal` (HEAD `48fb7465` plus this change)
+
+**Implemented:**
+
+- Backend-neutral `AdjustmentBehavior` / `GradeAdjustmentParams` / `MakeGradeRuntimeParams` in `EditRuntime`. CUDA aliases remain in `cuda_adjustment_runtime.hpp`.
+- GraphCompiler records Neighborhood for Clarity/Sharpen/Halation/Film Grain and fused `primary_grade_stages` (pointwise segments around LocalLaplacian). Slider values still do not recompile.
+- `ExecuteMetalPrimaryGrade` on `Renderer<MetalBackend>` / `PlanExecutor<MetalBackend>`: ParameterArena dirty ranges, one command-offset buffer uploaded only when topology changes, fused pointwise dispatch per LLF segment, explicit TexturePool detail passes, Normal Mix without a fake mask texture.
+- LUT voxels owned by MetalBackend content-key cache with a byte budget. The DAG path does not use `MetalLutBuffer`.
+- `primary_grade.metal` (`primary_grade_pointwise`, `primary_grade_mix`) compiled into `GpuDagMetalShaders`. `WarmUpPlan` warms those states. Missing metallib throws.
+
+**Deleted:**
+
+- CUDA-only adjustment runtime TU (`cuda_adjustment_runtime.cpp` is no longer a compile source; symbols live in shared `adjustment_runtime.cpp`).
+- Metal PrimaryGrade identity copy. DRT still copies `grade.primary:image` until M6. Old `MetalLutBuffer` remains for the pre-DAG fused path until M7.
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalGradeTest GpuDagMetalDevelopTest GpuDagMetalWorkspaceTest GpuDagRawInputTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R GpuDagMetalGradeTest --output-on-failure`
+- result: 9/9 PASS
+- command: `ctest --test-dir build/macos-debug-tests -R 'GpuDagMetalWorkspaceTest|GpuDagMetalDevelopTest|GpuDagRawInputTest.GpuDagGraphCompiler' --output-on-failure`
+- result: 8/8 workspace, 10/10 develop, 15/15 GraphCompiler PASS
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalPrimaryGradePreservesCompiledAdjustmentOrder` | `GpuDagMetalGradeTest` | PASS |
+| `MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment` | `GpuDagMetalGradeTest` | PASS |
+| `MetalSingleSliderEditUploadsOnlyItsParameterRange` | `GpuDagMetalGradeTest` | PASS |
+| `MetalExposureEditRunsOnlyPrimaryGradeAndDrt` | `GpuDagMetalGradeTest` | PASS |
+| `MetalLutTextureIsReusedByContentKey` | `GpuDagMetalGradeTest` | PASS |
+| `MetalDetailPassesAcquireAllTexturesFromWorkspace` | `GpuDagMetalGradeTest` | PASS |
+| `MetalPrimaryGradeMatchesCudaReferenceWithinTolerance` | `GpuDagMetalGradeTest` | PASS |
+| `MetalUnknownAdjustmentReturnsExplicitBackendError` | `GpuDagMetalGradeTest` | PASS |
+| Missing metallib throws (`MetalPrimaryGradeMissingMetallibThrowsExplicitError`) | `GpuDagMetalGradeTest` | PASS |
+
+**Resource evidence:**
+
+- buffer create/free: second slider / detail / LUT-stable render 0/0 (`MetalSingleSliderEditUploadsOnlyItsParameterRange`, `MetalDetailPassesAcquireAllTexturesFromWorkspace`, `MetalLutTextureIsReusedByContentKey`)
+- texture create/free: second matching Grade render 0/0
+- heap growth: second matching Grade render 0
+- pipeline create/hit: first WarmUpPlan creates `primary_grade_pointwise` / `primary_grade_mix`; second identical render create 0
+- upload ranges/bytes: Exposure slider uploads one ParameterArena slot range; unchanged LUT `LutUploadBytes() == 0`; command-offset buffer is not rewritten when topology is unchanged
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: synthetic Direct RGB 16×12; `ExecuteMetalPrimaryGrade` / `MetalRenderDevice::Execute` after pipeline warm-up
+- cold: first reserve + first render allocates heap/buffer/texture/pipeline
+- warm median: not a product-frame A/B; second identical Grade render GPU resource create/free = 0; one fused pointwise dispatch when LLF is inactive, two when Shadows is non-zero
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M4: LLF workspace pyramids. M3 copies through the LLF barrier so pointwise order is preserved; it does not run Local Laplacian.
+- M5: Mask/Feather/Mix with R8 and signed distance. Disconnected mask still uses constant 1.
+- M6: DRT/present. Identity DRT copy is not a display path.
+
+**LOC note:** `adjustment_runtime.hpp` 74, `metal_primary_grade_pass.hpp` 43, `metal_backend.hpp` 262, `metal_primary_grade_pass.mm` 450, `primary_grade.metal` 242, `metal_grade_test.cpp` 427. No new file crossed 1000 LOC.
+
+**Residual gaps:** LLF pixel math waits for M4. DRT Metal encoder still copies Grade output until M6. Old RAW Metal wrappers still own static scratch for the pre-DAG product path.
 
 ## 9. Phase M4 — LLF workspace 化
 

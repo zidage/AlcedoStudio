@@ -4,47 +4,24 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
-
-#include "edit/operators/models/operator_type_id.hpp"
+#include "edit/runtime/adjustment_runtime.hpp"
 
 namespace alcedo {
 
-enum class CudaAdjustmentBehavior : std::uint32_t {
-  Cat02WhiteBalance,
-  Exposure,
-  Contrast,
-  White,
-  Black,
-  Shadows,
-  Highlights,
-  Curve,
-  Hls,
-  Saturation,
-  Vibrance,
-  ColorWheel,
-  Lmt,
-  Clarity,
-  Sharpen,
-  Halation,
-  FilmGrain,
-};
+using CudaAdjustmentBehavior = AdjustmentBehavior;
 
-/**
- * @brief Resolve a built-in Model type to its CUDA runtime behavior.
- * @return nullopt when the type has no CUDA grade implementation (legacy Tint, etc.).
- */
-[[nodiscard]] auto TryResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
-    -> std::optional<CudaAdjustmentBehavior>;
+[[nodiscard]] inline auto TryResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
+    -> std::optional<CudaAdjustmentBehavior> {
+  return TryResolveAdjustmentBehavior(type);
+}
 
-/**
- * @brief Resolve a built-in Model type to its CUDA runtime behavior.
- * @throws std::runtime_error when G5 has no CUDA implementation for the type.
- */
-[[nodiscard]] auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
-    -> CudaAdjustmentBehavior;
+[[nodiscard]] inline auto ResolveCudaAdjustmentBehavior(const OperatorTypeId& type)
+    -> CudaAdjustmentBehavior {
+  return ResolveAdjustmentBehavior(type);
+}
 
-[[nodiscard]] auto IsCudaLocalToneBehavior(CudaAdjustmentBehavior behavior) -> bool;
+[[nodiscard]] inline auto IsCudaLocalToneBehavior(CudaAdjustmentBehavior behavior) -> bool {
+  return IsLocalToneBehavior(behavior);
+}
 
 }  // namespace alcedo

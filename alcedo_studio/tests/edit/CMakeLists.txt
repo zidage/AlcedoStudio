@@ -378,4 +378,16 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(GpuDagMetalDevelopTest TEST_PREFIX "GpuDagMetalDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalDevelopTest gpu ci_metal)
+
+  add_executable(GpuDagMetalGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp)
+  target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalGradeTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalGradeTest PRIVATE
+    ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH="${METAL_PRIMARY_GRADE_METALLIB}")
+  add_dependencies(GpuDagMetalGradeTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalGradeTest TEST_PREFIX "GpuDagMetalGradeTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalGradeTest gpu ci_metal)
 endif()

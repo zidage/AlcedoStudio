@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 
 #include <array>
 #include <cmath>
@@ -347,6 +348,7 @@ void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan) {
 #ifdef ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH
   add(ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH, "camera_color_acescc", "Metal CameraColor");
 #endif
+  AppendMetalPrimaryGradeWarmup(pipelines);
   (void)plan;
   backend.WarmUpPipelines(pipelines);
 }

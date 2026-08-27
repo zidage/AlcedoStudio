@@ -13,6 +13,7 @@
 
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
@@ -26,6 +27,12 @@ struct MetalPipelineWarmup {
   const char* metallib_path = nullptr;
   const char* function_name = nullptr;
   const char* debug_label   = nullptr;
+};
+
+struct MetalLutBinding {
+  void*         native      = nullptr;
+  std::uint64_t resource_id = 0;
+  std::uint32_t edge_size   = 0;
 };
 
 class MetalCommandContext {
@@ -145,11 +152,19 @@ class MetalBackend {
   [[nodiscard]] auto EnsureComputeCommandEncoder(CommandContext& command_context) -> void*;
   void               EndCommandEncoders(CommandContext& command_context);
 
-  void Submit(CommandContext& command_context);
-  void Wait(CommandContext& command_context);
+  void               Submit(CommandContext& command_context);
+  void               Wait(CommandContext& command_context);
 
-  void WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines);
-  void WarmUpPlan(const ExecutionPlan& plan);
+  void               WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines);
+  void               WarmUpPlan(const ExecutionPlan& plan);
+
+  [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                                std::uint32_t edge, CommandContext& command_context)
+      -> MetalLutBinding;
+  [[nodiscard]] auto DummyLut() -> MetalLutBinding;
+  void               SetLutByteBudget(std::size_t bytes);
+  void               NoteComputeDispatch() noexcept { ++compute_dispatch_count_; }
+  void SetGradeCommandTopologyHash(std::uint64_t hash) { grade_command_topology_hash_ = hash; }
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
@@ -184,6 +199,14 @@ class MetalBackend {
   [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
     return last_texture_rectangles_;
   }
+  [[nodiscard]] auto ComputeDispatchCount() const -> std::uint64_t {
+    return compute_dispatch_count_;
+  }
+  [[nodiscard]] auto LutUploadBytes() const -> std::uint64_t { return lut_upload_bytes_; }
+  [[nodiscard]] auto LastLutResourceId() const -> std::uint64_t { return last_lut_resource_id_; }
+  [[nodiscard]] auto GradeCommandTopologyHash() const -> std::uint64_t {
+    return grade_command_topology_hash_;
+  }
 
  private:
   friend class Buffer;
@@ -202,21 +225,35 @@ class MetalBackend {
   void                   NoteHeapCreate() noexcept { ++heap_create_count_; }
 
   std::unique_ptr<Gpu>   gpu_{};
-  std::uint64_t          malloc_count_         = 0;
-  std::uint64_t          free_count_           = 0;
-  std::uint64_t          buffer_create_count_  = 0;
-  std::uint64_t          texture_create_count_ = 0;
+  std::uint64_t          malloc_count_                = 0;
+  std::uint64_t          free_count_                  = 0;
+  std::uint64_t          buffer_create_count_         = 0;
+  std::uint64_t          texture_create_count_        = 0;
   std::uint64_t          heap_create_count_           = 0;
   std::uint64_t          command_buffer_create_count_ = 0;
   std::uint64_t          h2d_copy_count_              = 0;
-  std::uint64_t          h2d_bytes_            = 0;
-  std::uint64_t          next_resource_id_     = 1;
-  std::uint64_t          next_submission_      = 0;
-  std::uint64_t          in_flight_submission_ = 0;
-  std::uint64_t          completed_submission_ = 0;
-  bool                   fail_next_upload_     = false;
+  std::uint64_t          h2d_bytes_                   = 0;
+  std::uint64_t          next_resource_id_            = 1;
+  std::uint64_t          next_submission_             = 0;
+  std::uint64_t          in_flight_submission_        = 0;
+  std::uint64_t          completed_submission_        = 0;
+  bool                   fail_next_upload_            = false;
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
+  std::uint64_t          compute_dispatch_count_      = 0;
+  std::uint64_t          lut_upload_bytes_            = 0;
+  std::uint64_t          last_lut_resource_id_        = 0;
+  std::uint64_t          grade_command_topology_hash_ = 0;
+  std::size_t            lut_byte_budget_             = 64ull << 20;
+  std::size_t            lut_cache_bytes_             = 0;
+  struct LutCacheEntry {
+    ContentKey    key;
+    Buffer        buffer;
+    std::uint32_t edge_size = 0;
+    std::size_t   bytes     = 0;
+  };
+  std::vector<LutCacheEntry> lut_cache_;
+  Buffer                     dummy_lut_;
 };
 
 [[nodiscard]] auto BindSystemDefaultMetalPresentationDevice() -> void*;

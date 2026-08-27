@@ -7,6 +7,7 @@
 #ifdef HAVE_METAL
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 
 namespace alcedo {
@@ -45,11 +46,9 @@ struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
 
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
-  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&, MaskStore*) {
-    ExecuteMetalIdentityCopy(device, plan.develop_output, plan.primary_grade_output,
-                             ImageExtent{plan.geometry.render_extent.width,
-                                         plan.geometry.render_extent.height});
+  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*) {
+    (void)ExecuteMetalPrimaryGrade(device, plan, input, document);
   }
 };
 
@@ -57,9 +56,9 @@ template <>
 struct PassEncoder<MetalBackend, GpuPassKind::Drt> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      PipelineDocument&, MaskStore*) {
-    ExecuteMetalIdentityCopy(device, plan.primary_grade_output, plan.display_output,
-                             ImageExtent{plan.geometry.render_extent.width,
-                                         plan.geometry.render_extent.height});
+    ExecuteMetalIdentityCopy(
+        device, plan.primary_grade_output, plan.display_output,
+        ImageExtent{plan.geometry.render_extent.width, plan.geometry.render_extent.height});
   }
 };
 

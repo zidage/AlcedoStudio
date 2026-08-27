@@ -150,7 +150,8 @@ void MetalBackend::UploadDeviceMemory(void*, std::span<const std::byte>, Command
 void MetalBackend::FillDeviceMemory(void*, std::size_t, std::uint8_t, CommandContext&) {
   throw std::runtime_error("MetalBackend: device memory fill is not implemented");
 }
-auto MetalBackend::ResolveDeviceMemory(void*, std::size_t) const -> std::pair<void*, std::uint32_t> {
+auto MetalBackend::ResolveDeviceMemory(void*, std::size_t) const
+    -> std::pair<void*, std::uint32_t> {
   throw std::runtime_error("MetalBackend: device memory resolve is not implemented");
 }
 auto MetalBackend::EnsureComputeCommandEncoder(CommandContext&) -> void* {
@@ -171,15 +172,25 @@ void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup>) {
   throw std::runtime_error("MetalBackend: pipeline warm-up is not implemented");
 }
 void MetalBackend::WarmUpPlan(const ExecutionPlan&) {}
+auto MetalBackend::AcquireLut(ContentKey, std::span<const std::byte>, std::uint32_t,
+                              CommandContext&) -> MetalLutBinding {
+  throw std::runtime_error("MetalBackend: LUT cache is not implemented");
+}
+auto MetalBackend::DummyLut() -> MetalLutBinding {
+  throw std::runtime_error("MetalBackend: LUT cache is not implemented");
+}
+void MetalBackend::SetLutByteBudget(std::size_t) {}
 void MetalBackend::ResetCounters() {
-  malloc_count_         = 0;
-  free_count_           = 0;
-  buffer_create_count_  = 0;
-  texture_create_count_ = 0;
+  malloc_count_                = 0;
+  free_count_                  = 0;
+  buffer_create_count_         = 0;
+  texture_create_count_        = 0;
   heap_create_count_           = 0;
   command_buffer_create_count_ = 0;
   h2d_copy_count_              = 0;
-  h2d_bytes_            = 0;
+  h2d_bytes_                   = 0;
+  compute_dispatch_count_      = 0;
+  lut_upload_bytes_            = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
 }

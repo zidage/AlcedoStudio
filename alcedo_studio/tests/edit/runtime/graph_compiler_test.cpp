@@ -17,6 +17,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/pass_kind.hpp"
@@ -97,11 +98,25 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
     } else if (adjustment.type == type_ids::Curve()) {
       saw_curve = true;
       EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
+    } else if (adjustment.type == type_ids::Clarity() || adjustment.type == type_ids::Sharpen() ||
+               adjustment.type == type_ids::Halation() ||
+               adjustment.type == type_ids::FilmGrain()) {
+      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
     }
   }
   EXPECT_TRUE(saw_shadows);
   EXPECT_TRUE(saw_highlights);
   EXPECT_TRUE(saw_curve);
+  ASSERT_GE(plan.primary_grade_stages.size(), 5U);
+  EXPECT_EQ(plan.primary_grade_stages.front().kind, CompiledGradeStageKind::Pointwise);
+  bool saw_llf_stage = false;
+  for (const auto& stage : plan.primary_grade_stages) {
+    if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
+      saw_llf_stage = true;
+      EXPECT_EQ(stage.count, 2U);
+    }
+  }
+  EXPECT_TRUE(saw_llf_stage);
 }
 
 TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected) {

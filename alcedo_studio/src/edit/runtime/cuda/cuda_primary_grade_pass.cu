@@ -13,15 +13,9 @@
 #include <stdexcept>
 #include <vector>
 
-#include "edit/operators/models/cat02_white_balance_model.hpp"
-#include "edit/operators/models/color_wheel_model.hpp"
-#include "edit/operators/models/curve_model.hpp"
-#include "edit/operators/models/hls_model.hpp"
-#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
-#include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/models/sharpen_model.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
@@ -32,73 +26,8 @@
 namespace alcedo {
 namespace {
 
-constexpr std::uint32_t kRuntimeParamDirtyBit = 1;
-constexpr std::size_t   kMaxCurvePoints       = 8;
-
-struct alignas(16) CudaAdjustmentParams {
-  std::uint32_t behavior = 0;
-  std::uint32_t count    = 0;
-  float         values[30]{};
-};
-
-struct CudaAdjustmentCommand {
-  std::uint32_t parameter_offset = 0;
-};
-
-auto MakeRuntimeParams(const IOperatorModel& model, CudaAdjustmentBehavior behavior)
-    -> CudaAdjustmentParams {
-  CudaAdjustmentParams result;
-  result.behavior = static_cast<std::uint32_t>(behavior);
-  const auto dto  = model.MakeFullDto();
-
-  if (const auto* p = PayloadAs<ScalarFloatPayload>(dto.payload.get())) {
-    result.values[0] = p->value;
-    return result;
-  }
-  if (const auto* p = PayloadAs<Cat02WhiteBalancePayload>(dto.payload.get())) {
-    result.values[0] = p->enabled ? 1.0f : 0.0f;
-    result.values[1] = p->temperature_offset;
-    result.values[2] = p->tint_offset;
-    return result;
-  }
-  if (const auto* p = PayloadAs<CurvePayload>(dto.payload.get())) {
-    result.count = static_cast<std::uint32_t>(std::min(p->points.size(), kMaxCurvePoints));
-    for (std::uint32_t i = 0; i < result.count; ++i) {
-      result.values[i * 2]     = p->points[i].x;
-      result.values[i * 2 + 1] = p->points[i].y;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<HlsPayload>(dto.payload.get())) {
-    for (int i = 0; i < kHlsHueBinCount; ++i) {
-      result.values[i]      = p->hls_adj_table[i].h;
-      result.values[8 + i]  = p->hls_adj_table[i].l;
-      result.values[16 + i] = p->hls_adj_table[i].s;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<ColorWheelPayload>(dto.payload.get())) {
-    const ColorWheelControl controls[3] = {p->lift, p->gamma, p->gain};
-    for (int i = 0; i < 3; ++i) {
-      result.values[i * 4]     = controls[i].color_offset.x;
-      result.values[i * 4 + 1] = controls[i].color_offset.y;
-      result.values[i * 4 + 2] = controls[i].color_offset.z;
-      result.values[i * 4 + 3] = controls[i].luminance_offset;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<SharpenPayload>(dto.payload.get())) {
-    result.values[0] = p->amount;
-    result.values[1] = p->radius;
-    result.values[2] = p->threshold;
-    return result;
-  }
-  if (const auto* p = PayloadAs<LmtPayload>(dto.payload.get())) {
-    result.values[0] = p->cube_path.empty() ? 0.0f : 1.0f;
-    return result;
-  }
-  throw std::runtime_error("CUDA primary grade: Model DTO is not supported");
-}
+using CudaAdjustmentParams  = GradeAdjustmentParams;
+using CudaAdjustmentCommand = GradeAdjustmentCommand;
 
 auto EnsureImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<CudaBackend>& {
@@ -309,7 +238,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   bool                        reached_local_tone = false;
   float                       shadows_slider     = 0.0f;
   float                       highlights_slider  = 0.0f;
-  const ParameterFieldBinding field{DirtyFieldMask{kRuntimeParamDirtyBit}, 0, 0,
+  const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     sizeof(CudaAdjustmentParams)};
 
   for (const auto& compiled : plan.primary_grade_adjustments) {
@@ -328,7 +257,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
           "ExecuteCudaPrimaryGrade: Shadows/Highlights were not compiled for LLF");
     }
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    const auto             runtime_params = MakeRuntimeParams(*model, *behavior);
+    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     auto payload = std::make_shared<TypedOperatorParamPayload<CudaAdjustmentParams>>(
         compiled.type, 1, runtime_params);
     if (!arena.Contains(key)) {
@@ -337,7 +266,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       if (auto first = TakePendingParameterPatch(*model)) pending.push_back(std::move(*first));
     } else if (auto change = TakePendingParameterPatch(*model)) {
       OperatorParamPatchDto patch{grade->Id(), compiled.instance_id, compiled.type,
-                                  DirtyFieldMask{kRuntimeParamDirtyBit}, payload};
+                                  DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
       arena.ApplyPatch(key, patch);
       pending.push_back(std::move(*change));
     }
@@ -407,8 +336,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer());
   const auto* parameter_base =
       static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer());
-  const bool    local_tone_active     = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
-                                                                      -highlights_slider * 1.5f / 100.0f);
+  const bool local_tone_active = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
+                                                               -highlights_slider * 1.5f / 100.0f);
   CudaLocalToneResult local_tone;
   if (local_tone_active) {
     const GraphValueId local_input_id{grade->Id(), PortId{"local_tone.input"}};
@@ -420,10 +349,9 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
         static_cast<float4*>(local_input.Texture().DevicePointer()), pixels, parameter_base,
         device_commands, static_cast<std::uint32_t>(commands_before_local_tone.size()),
         local_tone_mapping::kAcesccMiddleGray);
-    local_tone =
-        ExecuteCudaLocalTone(device, local_input_id, local_output_id, grade->Id(), input_width,
-                             input_height, shadows_slider, highlights_slider, plan.geometry,
-                             HashLlfReferenceKey(plan, prepared, document));
+    local_tone         = ExecuteCudaLocalTone(device, local_input_id, local_output_id, grade->Id(),
+                                              input_width, input_height, shadows_slider, highlights_slider,
+                                              plan.geometry, HashLlfReferenceKey(plan, prepared, document));
     auto* local_output = workspace.Images().Find(local_output_id);
     output             = workspace.Images().Find(output_id);
     PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(

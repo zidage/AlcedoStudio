@@ -24,12 +24,26 @@ struct GpuPassDesc {
 enum class CompiledAdjustmentAlgorithm : std::uint8_t {
   Pointwise,
   LocalLaplacian,
+  Neighborhood,
 };
 
 struct CompiledAdjustment {
   AdjustmentInstanceId        instance_id;
   OperatorTypeId              type;
   CompiledAdjustmentAlgorithm algorithm = CompiledAdjustmentAlgorithm::Pointwise;
+};
+
+/** @brief Fused or standalone Grade work produced from the Model list. */
+enum class CompiledGradeStageKind : std::uint8_t {
+  Pointwise,
+  LocalLaplacian,
+  Neighborhood,
+};
+
+struct CompiledGradeStage {
+  CompiledGradeStageKind kind  = CompiledGradeStageKind::Pointwise;
+  std::uint32_t          begin = 0;
+  std::uint32_t          count = 0;
 };
 
 enum class CompiledMaskKind : std::uint8_t { Analytic, Raster };
@@ -125,6 +139,7 @@ struct ExecutionPlan {
   bool                            encode_geometry_resample = false;
   std::size_t                     peak_transient_bytes     = 0;
   std::vector<CompiledAdjustment> primary_grade_adjustments;
+  std::vector<CompiledGradeStage> primary_grade_stages;
   std::optional<CompiledMask>     primary_grade_mask;
   GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
   GraphValueId                    primary_grade_output{NodeId{"grade.primary"}, PortId{"image"}};

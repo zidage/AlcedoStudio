@@ -71,6 +71,10 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_CAMERA_COLOR_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.air")
     set(METAL_CAMERA_COLOR_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.metallib"
         CACHE INTERNAL "Metal DAG camera color metallib path" FORCE)
+    set(METAL_PRIMARY_GRADE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/primary_grade.metal")
+    set(METAL_PRIMARY_GRADE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.air")
+    set(METAL_PRIMARY_GRADE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.metallib"
+        CACHE INTERNAL "Metal DAG primary grade metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -292,9 +296,19 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DAG camera color library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagPrimaryGradeShaders
+        "${METAL_PRIMARY_GRADE_SRC}"
+        "${METAL_PRIMARY_GRADE_AIR}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "Compiling Metal DAG primary grade shader"
+        "Linking Metal DAG primary grade library"
+    )
+
     add_custom_target(GpuDagMetalShaders DEPENDS
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
     )
 
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
@@ -319,6 +333,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_DEMOSAICNET_IO_METALLIB}"
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE

@@ -800,6 +800,54 @@ void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup> pipeline
 
 void MetalBackend::WarmUpPlan(const ExecutionPlan& plan) { WarmUpMetalDagPlan(*this, plan); }
 
+auto MetalBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                              std::uint32_t edge, CommandContext&) -> MetalLutBinding {
+  if (key.Empty() || edge <= 1 || packed_rgba.empty()) {
+    return DummyLut();
+  }
+  for (auto& entry : lut_cache_) {
+    if (entry.key == key && entry.edge_size == edge) {
+      last_lut_resource_id_ = entry.buffer.ResourceId();
+      return MetalLutBinding{entry.buffer.Native(), entry.buffer.ResourceId(), entry.edge_size};
+    }
+  }
+  if (lut_byte_budget_ > 0 && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
+    while (!lut_cache_.empty() && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
+      lut_cache_bytes_ -= lut_cache_.front().bytes;
+      lut_cache_.erase(lut_cache_.begin());
+    }
+  }
+  auto buffer = CreateBuffer(packed_rgba.size());
+  if (buffer.Empty() || buffer.DevicePointer() == nullptr) {
+    throw std::runtime_error("MetalBackend::AcquireLut: failed to allocate LUT buffer");
+  }
+  std::memcpy(buffer.DevicePointer(), packed_rgba.data(), packed_rgba.size());
+  MetalBackendImpl::MarkDidModifyIfManaged(static_cast<MTL::Buffer*>(buffer.Native()), 0,
+                                           packed_rgba.size());
+  lut_upload_bytes_ += packed_rgba.size();
+  last_lut_resource_id_ = buffer.ResourceId();
+  LutCacheEntry entry;
+  entry.key       = key;
+  entry.edge_size = edge;
+  entry.bytes     = packed_rgba.size();
+  entry.buffer    = std::move(buffer);
+  lut_cache_bytes_ += entry.bytes;
+  lut_cache_.push_back(std::move(entry));
+  return MetalLutBinding{lut_cache_.back().buffer.Native(), last_lut_resource_id_, edge};
+}
+
+auto MetalBackend::DummyLut() -> MetalLutBinding {
+  if (dummy_lut_.Empty()) {
+    dummy_lut_ = CreateBuffer(16);
+    if (dummy_lut_.DevicePointer() != nullptr) {
+      std::memset(dummy_lut_.DevicePointer(), 0, dummy_lut_.Bytes());
+    }
+  }
+  return MetalLutBinding{dummy_lut_.Native(), dummy_lut_.ResourceId(), 0};
+}
+
+void MetalBackend::SetLutByteBudget(std::size_t bytes) { lut_byte_budget_ = bytes; }
+
 void MetalBackend::ResetCounters() {
   malloc_count_         = 0;
   free_count_           = 0;
@@ -809,6 +857,8 @@ void MetalBackend::ResetCounters() {
   command_buffer_create_count_  = 0;
   h2d_copy_count_               = 0;
   h2d_bytes_            = 0;
+  compute_dispatch_count_       = 0;
+  lut_upload_bytes_             = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
   if (gpu_) {

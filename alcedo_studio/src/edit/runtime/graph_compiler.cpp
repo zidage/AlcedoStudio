@@ -66,7 +66,36 @@ auto CompileAdjustmentAlgorithm(const OperatorTypeId& type) -> CompiledAdjustmen
   if (type == type_ids::Shadows() || type == type_ids::Highlights()) {
     return CompiledAdjustmentAlgorithm::LocalLaplacian;
   }
+  if (type == type_ids::Clarity() || type == type_ids::Sharpen() || type == type_ids::Halation() ||
+      type == type_ids::FilmGrain()) {
+    return CompiledAdjustmentAlgorithm::Neighborhood;
+  }
   return CompiledAdjustmentAlgorithm::Pointwise;
+}
+
+auto StageKindFor(CompiledAdjustmentAlgorithm algorithm) -> CompiledGradeStageKind {
+  switch (algorithm) {
+    case CompiledAdjustmentAlgorithm::LocalLaplacian:
+      return CompiledGradeStageKind::LocalLaplacian;
+    case CompiledAdjustmentAlgorithm::Neighborhood:
+      return CompiledGradeStageKind::Neighborhood;
+    case CompiledAdjustmentAlgorithm::Pointwise:
+      return CompiledGradeStageKind::Pointwise;
+  }
+  return CompiledGradeStageKind::Pointwise;
+}
+
+void AppendGradeStage(ExecutionPlan& plan, CompiledAdjustmentAlgorithm algorithm) {
+  const auto kind  = StageKindFor(algorithm);
+  const auto index = static_cast<std::uint32_t>(plan.primary_grade_adjustments.size() - 1);
+  if (!plan.primary_grade_stages.empty()) {
+    auto& last = plan.primary_grade_stages.back();
+    if (last.kind == kind && kind != CompiledGradeStageKind::Neighborhood) {
+      ++last.count;
+      return;
+    }
+  }
+  plan.primary_grade_stages.push_back(CompiledGradeStage{kind, index, 1});
 }
 
 auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
@@ -202,9 +231,10 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
   plan.passes.push_back(GpuPassDesc{GpuPassKind::Drt});
 
   for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-    const auto& type = grade->AdjustmentAt(index).Type();
-    plan.primary_grade_adjustments.push_back(
-        {grade->AdjustmentIdAt(index), type, CompileAdjustmentAlgorithm(type)});
+    const auto& type      = grade->AdjustmentAt(index).Type();
+    const auto  algorithm = CompileAdjustmentAlgorithm(type);
+    plan.primary_grade_adjustments.push_back({grade->AdjustmentIdAt(index), type, algorithm});
+    AppendGradeStage(plan, algorithm);
   }
   return plan;
 }

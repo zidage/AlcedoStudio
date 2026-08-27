@@ -70,6 +70,7 @@ def_library(EditInput
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
 set(EDIT_RUNTIME_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/runtime/adjustment_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
@@ -90,6 +91,7 @@ if(ALCEDO_METAL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
         PRIVATE_DEPS RawProcessorOp MetalGeometryUtils MetalImage MetalDemosaicNetEntry
     )
@@ -103,11 +105,13 @@ if(ALCEDO_METAL_ENABLED)
         ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}"
         ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}"
+        ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH="${METAL_PRIMARY_GRADE_METALLIB}"
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PROPERTIES LANGUAGE OBJCXX
     )
     add_dependencies(EditRuntimeMetal GpuDagMetalShaders RawProcessorOpMetalShaders MetalGeometryUtilsShaders)
@@ -123,7 +127,6 @@ if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
-            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_adjustment_runtime.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
