@@ -922,7 +922,7 @@ MetalRealRawEditorUsesTheThreeNodeDag
 **Status:** complete
 **Date:** 2026-08-26
 **Branch:** `feature/gpu-dag-metal`
-**Commit:** local working tree on `c17a8a41`
+**Commit:** `548e493d`
 
 **Implemented:**
 
