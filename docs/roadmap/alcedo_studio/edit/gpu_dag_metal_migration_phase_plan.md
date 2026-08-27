@@ -730,7 +730,7 @@ MetalLlfMatchesCudaReferenceWithinTolerance
 **Status:** complete
 **Date:** 2026-08-26
 **Branch:** `feature/gpu-dag-metal`
-**Commit:** working tree on `feature/gpu-dag-metal` (M4 implementation)
+**Commit:** `94415693`
 
 **Implemented:**
 
