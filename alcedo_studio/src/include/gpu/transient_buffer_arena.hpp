@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <utility>
+
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -19,7 +22,9 @@ namespace alcedo {
  * - `CreateSlab(std::size_t bytes) -> Slab`
  *
  * Capacity grows only when no bump allocations are live (`used_bytes() == 0`).
- * `Reset()` / `Rewind` do not free the slab. Not thread-safe.
+ * `Reset()` / `Rewind` do not free the slab; `ReleaseDeviceMemory()` does.
+ * SensorDevelop scratch must be released after that pass, not held across
+ * Geometry / Grade / DRT. Not thread-safe.
  *
  * @tparam Backend Slab factory. Must outlive this arena when passed by reference.
  */
@@ -73,9 +78,17 @@ class TransientBufferArena {
           "TransientBufferArena::Reserve: cannot grow while allocations are live; "
           "Reset() first or Reserve peak size before Allocate");
     }
-    auto new_slab = backend_->CreateSlab(bytes);
-    slab_         = std::move(new_slab);
-    capacity_     = bytes;
+    const auto previous = capacity_;
+    auto       new_slab = backend_->CreateSlab(bytes);
+    slab_               = std::move(new_slab);
+    capacity_           = bytes;
+    if (ShouldTraceGpuPoolAlloc(bytes)) {
+      std::fprintf(stderr, "[GPU_POOL] transient reserve %.1f MiB (was %.1f)\n", GpuPoolMiB(bytes),
+                   GpuPoolMiB(previous));
+      if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
+        PrintGpuDeviceMemory(backend_->QueryDeviceMemory());
+      }
+    }
   }
 
   /**
@@ -122,8 +135,20 @@ class TransientBufferArena {
   /// Rewind bump pointer to zero. Does not free device memory.
   void Reset() noexcept { offset_ = 0; }
 
-  /// Free the device slab. Requires no live bump allocations (`used_bytes() == 0`).
-  void ReleaseDeviceMemory() noexcept { ResetSlab(); }
+  /**
+   * @brief Free the device slab. Caller must GPU-synchronize if kernels still read it.
+   *
+   * Develop scratch is released after SensorDevelop, not kept for later frames.
+   */
+  void ReleaseDeviceMemory() noexcept {
+    if (capacity_ > 0 && ShouldTraceGpuPoolAlloc(capacity_)) {
+      std::fprintf(stderr, "[GPU_POOL] transient release %.1f MiB\n", GpuPoolMiB(capacity_));
+      if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
+        PrintGpuDeviceMemory(backend_->QueryDeviceMemory());
+      }
+    }
+    ResetSlab();
+  }
 
   void Rewind(std::size_t mark_bytes) {
     if (mark_bytes > offset_) {

@@ -35,22 +35,35 @@ auto EstimateMaskSdfTransientBytes(Extent2D extent) -> std::size_t {
   return 5 * AlignUp(pixels * sizeof(float), kAlign);
 }
 
+auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t {
+  return AlignUp(pixels * bytes_per_pixel, kAlign);
+}
+
+auto EstimateDevelopTransientBytes(const DevelopCompileSource& source) -> std::size_t {
+  if (source.kind == DevelopInputKind::DirectRgb) {
+    return AlignUp(4096, kAlign);
+  }
+  const std::size_t pixels =
+      static_cast<std::size_t>(source.host_extent.width) * source.host_extent.height;
+  const std::size_t cfa_u16 = PlaneBytes(pixels, 2);
+  const std::size_t cfa_f32 = PlaneBytes(pixels, 4);
+  const std::size_t stats   = AlignUp(4 + 16 + 16, kAlign);
+  const std::size_t pad     = 64 * kAlign;
+  if (source.kind == DevelopInputKind::XTransCfa) {
+    // U16 CFA + F32 CFA + green + RGB + HLR RGB. HLR coexists with the RGB plane.
+    return cfa_u16 + cfa_f32 + PlaneBytes(pixels, 4) + PlaneBytes(pixels, 12) +
+           PlaneBytes(pixels, 12) + stats + pad;
+  }
+  // Bayer / Neural-on-Bayer: U16 CFA + F32 CFA + 5 RCD planes + merge-or-HLR RGB.
+  // Merge and HLR are exclusive; both are 12 bytes/pixel.
+  return cfa_u16 + cfa_f32 + 5 * PlaneBytes(pixels, 4) + PlaneBytes(pixels, 12) + stats + pad;
+}
+
 auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size_t {
-  const std::size_t w      = source.host_extent.width;
-  const std::size_t h      = source.host_extent.height;
-  const std::size_t pixels = w * h;
-  const std::size_t llf    = local_tone_mapping::EstimateLlfTransientBytes(
+  const std::size_t llf = local_tone_mapping::EstimateLlfTransientBytes(
       static_cast<int>(source.full_reference_extent.width),
       static_cast<int>(source.full_reference_extent.height), kAlign);
-  if (source.kind == DevelopInputKind::DirectRgb) {
-    return AlignUp(4096, kAlign) + llf;
-  }
-  // U16 CFA + F32 CFA + 5 RCD planes + merge RGB + HLR result + HLR stats + XTrans green/rgb.
-  const std::size_t bytes = AlignUp(pixels * 2, kAlign) + AlignUp(pixels * 4, kAlign) +
-                            5 * AlignUp(pixels * 4, kAlign) + AlignUp(pixels * 12, kAlign) +
-                            AlignUp(pixels * 12, kAlign) + AlignUp(4 + 16 + 16, kAlign) +
-                            AlignUp(pixels * 4, kAlign) + AlignUp(pixels * 12, kAlign);
-  return bytes + 64 * kAlign + llf;
+  return (std::max)(EstimateDevelopTransientBytes(source), llf);
 }
 
 auto ImageParamsFromDocument(const PipelineDocument& document) -> ImageGeometryParams {
@@ -236,7 +249,8 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
         const Extent2D mask_extent{
             std::max(source.full_reference_extent.width, source.host_extent.width),
             std::max(source.full_reference_extent.height, source.host_extent.height)};
-        plan.peak_transient_bytes += EstimateMaskSdfTransientBytes(mask_extent);
+        plan.peak_transient_bytes =
+            (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
       }
       break;
     }

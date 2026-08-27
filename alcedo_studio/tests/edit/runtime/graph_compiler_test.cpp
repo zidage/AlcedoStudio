@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -140,6 +141,79 @@ TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected)
   EXPECT_LT(plan.IndexOf(GpuPassKind::CameraToAp1), plan.IndexOf(GpuPassKind::MaskEvaluate));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskFeather));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskFeather), plan.IndexOf(GpuPassKind::PrimaryColorGrade));
+}
+
+auto Align256(std::size_t value) -> std::size_t { return (value + 255) & ~std::size_t{255}; }
+
+auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t {
+  return Align256(pixels * bytes_per_pixel);
+}
+
+auto ExclusiveBayerDevelopBytes(std::size_t pixels) -> std::size_t {
+  return PlaneBytes(pixels, 2) + PlaneBytes(pixels, 4) + 5 * PlaneBytes(pixels, 4) +
+         PlaneBytes(pixels, 12) + Align256(4 + 16 + 16) + 64 * 256;
+}
+
+auto ExclusiveXTransDevelopBytes(std::size_t pixels) -> std::size_t {
+  return PlaneBytes(pixels, 2) + PlaneBytes(pixels, 4) + PlaneBytes(pixels, 4) +
+         PlaneBytes(pixels, 12) + PlaneBytes(pixels, 12) + Align256(4 + 16 + 16) + 64 * 256;
+}
+
+auto SummedExclusiveDemosaicBytes(std::size_t pixels) -> std::size_t {
+  return PlaneBytes(pixels, 2) + PlaneBytes(pixels, 4) + 5 * PlaneBytes(pixels, 4) +
+         PlaneBytes(pixels, 12) + PlaneBytes(pixels, 12) + Align256(4 + 16 + 16) +
+         PlaneBytes(pixels, 4) + PlaneBytes(pixels, 12) + 64 * 256;
+}
+
+TEST(GpuDagGraphCompiler, PeakTransientUsesOneDemosaicPathInsteadOfSummingBayerAndXTrans) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(256, 256, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(256, 256), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  constexpr std::size_t kPixels = 256U * 256U;
+  const auto            bayer   = ExclusiveBayerDevelopBytes(kPixels);
+  const auto            summed  = SummedExclusiveDemosaicBytes(kPixels);
+  EXPECT_EQ(prepared.CompileSource().kind, DevelopInputKind::BayerCfa);
+  EXPECT_EQ(plan.peak_transient_bytes, bayer);
+  EXPECT_LT(plan.peak_transient_bytes, summed);
+  EXPECT_GT(summed - bayer, PlaneBytes(kPixels, 12));
+}
+
+TEST(GpuDagGraphCompiler, PeakTransientForXTransDoesNotReserveBayerRcdPlanes) {
+  const auto pattern  = gpu_dag_test::MakeXTransPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(256, 256, pattern), pattern,
+      gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(256, 256), DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  constexpr std::size_t kPixels = 256U * 256U;
+  EXPECT_EQ(prepared.CompileSource().kind, DevelopInputKind::XTransCfa);
+  EXPECT_EQ(plan.peak_transient_bytes, ExclusiveXTransDevelopBytes(kPixels));
+  EXPECT_LT(plan.peak_transient_bytes, ExclusiveBayerDevelopBytes(kPixels));
+}
+
+TEST(GpuDagGraphCompiler, RasterMaskDoesNotAddMaskSdfOnTopOfDevelopTransientPeak) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  const auto without_mask =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
+  node->SetAssetKey(MaskAssetKey{"test.raster"});
+  document.Graph().AddNode(std::move(node));
+  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
+  const auto with_mask =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  EXPECT_TRUE(with_mask.Contains(GpuPassKind::MaskEvaluate));
+  EXPECT_EQ(with_mask.peak_transient_bytes, without_mask.peak_transient_bytes);
 }
 
 TEST(GpuDagGraphCompiler, GraphCompilerPassListIsBackendNativeTypeFree) {

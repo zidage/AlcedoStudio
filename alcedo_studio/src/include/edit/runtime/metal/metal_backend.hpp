@@ -16,6 +16,7 @@
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -157,6 +158,12 @@ class MetalBackend {
 
   void               Submit(CommandContext& command_context);
   void               Wait(CommandContext& command_context);
+  /**
+   * @brief Commit recorded Metal work and wait. The next encode gets a new command buffer.
+   *
+   * Used to free Develop scratch before Geometry runs.
+   */
+  void SynchronizeRecordedWork(CommandContext& command_context);
 
   void               WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines);
   void               WarmUpPlan(const ExecutionPlan& plan);
@@ -184,6 +191,7 @@ class MetalBackend {
   [[nodiscard]] auto NativeDevice() const -> void*;
   [[nodiscard]] auto NativeQueue() const -> void*;
   [[nodiscard]] auto WorkingSetBudgetBytes() const -> std::size_t;
+  [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
   [[nodiscard]] auto MallocCount() const -> std::uint64_t { return malloc_count_; }
   [[nodiscard]] auto FreeCount() const -> std::uint64_t { return free_count_; }
   [[nodiscard]] auto BufferCreateCount() const -> std::uint64_t { return buffer_create_count_; }

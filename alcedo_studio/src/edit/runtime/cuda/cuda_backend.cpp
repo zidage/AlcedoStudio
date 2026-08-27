@@ -330,6 +330,11 @@ void CudaBackend::Wait(CommandContext& command_context) {
   in_flight_submission_ = 0;
 }
 
+void CudaBackend::SynchronizeRecordedWork(CommandContext& command_context) {
+  cuda::CheckCuda(::cudaStreamSynchronize(command_context.Stream()),
+                  "CudaBackend::SynchronizeRecordedWork");
+}
+
 void CudaBackend::ResetCounters() {
   malloc_count_   = 0;
   free_count_     = 0;
@@ -340,6 +345,14 @@ void CudaBackend::ResetCounters() {
 }
 
 void CudaBackend::FailNextUpload() { fail_next_upload_ = true; }
+
+auto CudaBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot {
+  GpuDeviceMemorySnapshot snapshot;
+  if (::cudaMemGetInfo(&snapshot.free_bytes, &snapshot.total_bytes) == cudaSuccess) {
+    snapshot.valid = true;
+  }
+  return snapshot;
+}
 
 auto CudaBackend::DefaultTextureBudgetBytes() -> std::size_t {
   return DefaultProductTextureBudgetBytes();

@@ -7,6 +7,8 @@
 #include <stdexcept>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 namespace {
@@ -85,6 +87,29 @@ TEST_F(CudaWorkspaceFixture, SecondRenderUsesNoCudaAllocationAfterPeakReserve) {
 
   EXPECT_EQ(workspace.Device().MallocCount(), 0U);
   EXPECT_EQ(workspace.Device().FreeCount(), 0U);
+}
+
+TEST(GpuDagGpuPoolTrace, LargeAllocThresholdIsSixteenMebibytes) {
+  EXPECT_TRUE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes));
+  EXPECT_TRUE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes + 1));
+  if (!GpuPoolTraceEnvEnabled()) {
+    EXPECT_FALSE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes - 1));
+    EXPECT_FALSE(GpuPoolTraceVerbose());
+  } else {
+    EXPECT_TRUE(GpuPoolTraceVerbose());
+  }
+}
+
+TEST_F(CudaWorkspaceFixture, DumpGpuPoolsPrintsResidentTexturesAndTransientsWithoutThrowing) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  workspace.Textures().SetByteBudget(64 * 64 * 16);
+  device.BeginRender();
+  const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
+  (void)workspace.AcquireImageForWrite(id, {8, 8, TextureFormat::Rgba32f});
+  (void)workspace.TransientBuffers().Allocate(512);
+  workspace.DumpGpuPools("test");
+  device.CancelRender();
 }
 
 }  // namespace

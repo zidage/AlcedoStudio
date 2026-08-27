@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 
 #include "edit/mask/mask_asset.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -114,7 +116,24 @@ class MaskTextureCache {
     }
     used_bytes_ += entry.bytes;
     auto it = entries_.emplace(key, std::move(entry)).first;
+    if (ShouldTraceGpuPoolAlloc(it->second.bytes) && GpuPoolTraceVerbose()) {
+      DumpToStderr("mask-alloc");
+    }
     return TakeLease(it->first, it->second);
+  }
+
+  void DumpToStderr(const char* reason) const {
+    std::fprintf(stderr, "[GPU_POOL] masks %s entries=%zu used=%.1f MiB\n",
+                 reason == nullptr ? "" : reason, entries_.size(), GpuPoolMiB(used_bytes_));
+    if (!GpuPoolTraceVerbose()) {
+      return;
+    }
+    for (const auto& [key, entry] : entries_) {
+      std::fprintf(stderr, "[GPU_POOL]   mask %.*s %ux%u mips=%zu %.1f MiB leases=%u\n",
+                   static_cast<int>(key.Value().size()), key.Value().data(), entry.extent.width,
+                   entry.extent.height, entry.mip_levels.size(), GpuPoolMiB(entry.bytes),
+                   entry.lease_count);
+    }
   }
 
   [[nodiscard]] auto Contains(const MaskAssetKey& key) const -> bool {

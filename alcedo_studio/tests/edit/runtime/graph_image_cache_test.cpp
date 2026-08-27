@@ -4,6 +4,8 @@
 
 #include "cuda_workspace_test_support.hpp"
 
+#include <stdexcept>
+
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -97,6 +99,56 @@ TEST_F(CudaWorkspaceFixture, CancelledSubmissionKeepsPreviouslyCompletedCacheEnt
   EXPECT_FALSE(workspace.Images().FindValidResult(id, second, {kWidth, kHeight},
                                                   TextureFormat::Rgba32f,
                                                   workspace.Device().CompletedSubmission()));
+}
+
+TEST_F(CudaWorkspaceFixture, AliasTextureFromSharesOneAllocationAcrossTwoValueIds) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId sensor{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const GraphValueId geometry{NodeId{"geometry"}, PortId{"scene_source"}};
+  const ContentKey   sensor_key{61};
+  const ContentKey   geometry_key{62};
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(sensor, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(sensor, sensor_key, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  const auto used_before = workspace.Textures().UsedBytes();
+  const auto entries_before = workspace.Textures().EntryCount();
+  const auto sensor_id =
+      workspace.Images().Find(sensor)->Texture().ResourceId();
+  (void)workspace.AliasImageFrom(geometry, sensor);
+  workspace.Images().RecordUnpublished(geometry, geometry_key, {kWidth, kHeight},
+                                       TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  EXPECT_EQ(workspace.Images().Find(geometry)->Texture().ResourceId(), sensor_id);
+  EXPECT_EQ(workspace.Textures().UsedBytes(), used_before);
+  EXPECT_EQ(workspace.Textures().EntryCount(), entries_before);
+  device.EndRender();
+  device.PublishResults();
+  device.WaitIdle();
+
+  const auto completed = workspace.Device().CompletedSubmission();
+  EXPECT_TRUE(workspace.Images().FindValidResult(sensor, sensor_key, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(workspace.Images().FindValidResult(geometry, geometry_key, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+  EXPECT_EQ(workspace.Images().Find(sensor)->Texture().ResourceId(),
+            workspace.Images().Find(geometry)->Texture().ResourceId());
+  EXPECT_EQ(workspace.Images().PublishedCount(), 2U);
+  EXPECT_EQ(workspace.Textures().EntryCount(), 1U);
+}
+
+TEST_F(CudaWorkspaceFixture, AliasTextureFromRejectsMissingSourceAndSelfAlias) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId sensor{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const GraphValueId geometry{NodeId{"geometry"}, PortId{"scene_source"}};
+  device.BeginRender();
+  EXPECT_THROW((void)workspace.AliasImageFrom(geometry, sensor), std::runtime_error);
+  (void)workspace.AcquireImageForWrite(sensor, {kWidth, kHeight, TextureFormat::Rgba32f});
+  EXPECT_THROW((void)workspace.AliasImageFrom(sensor, sensor), std::runtime_error);
+  device.CancelRender();
 }
 
 TEST_F(CudaWorkspaceFixture, UnpublishedWriteIsNotAContentHitUntilPublish) {

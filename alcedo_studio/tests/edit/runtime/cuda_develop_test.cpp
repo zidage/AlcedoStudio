@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
@@ -394,6 +395,84 @@ TEST_F(CudaDevelopFixture,
     SetDevelopNeuralModelCacheForTesting(nullptr);
     throw;
   }
+}
+
+TEST_F(CudaDevelopFixture, IdentityGeometryResampleAliasesSensorLinearWithoutASecondTexture) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(32, 24, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(32, 24), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  ASSERT_FALSE(plan.encode_geometry_resample);
+
+  CudaRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  auto* sensor   = device.Workspace().Images().Find(plan.sensor_linear_output);
+  auto* geometry = device.Workspace().Images().Find(plan.geometry_output);
+  auto* develop  = device.Workspace().Images().Find(plan.develop_output);
+  ASSERT_NE(sensor, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_NE(develop, nullptr);
+  EXPECT_EQ(sensor->Texture().ResourceId(), geometry->Texture().ResourceId());
+  EXPECT_NE(sensor->Texture().ResourceId(), develop->Texture().ResourceId());
+  EXPECT_EQ(device.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+}
+
+TEST_F(CudaDevelopFixture, PlanExecuteFreesDevelopScratchAfterSensorDevelop) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  ASSERT_GT(plan.peak_transient_bytes, 64U * 64U);
+
+  CudaRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+  EXPECT_EQ(device.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+  EXPECT_NE(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
+}
+
+TEST_F(CudaDevelopFixture, ViewportGeometryResampleAllocatesADistinctDisplaySizedTexture) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(32, 24, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(32, 24), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  RenderRequest request;
+  request.view.visible_rect_in_edit_space = {0.0f, 0.0f, 1.0f, 1.0f};
+  request.view.viewport_extent            = {16, 12};
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), request);
+  ASSERT_TRUE(plan.encode_geometry_resample);
+  ASSERT_EQ(plan.geometry.render_extent.width, 16U);
+  ASSERT_EQ(plan.geometry.render_extent.height, 12U);
+  ASSERT_NE(plan.source.develop_output_extent, plan.geometry.render_extent);
+
+  CudaRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  auto* sensor   = device.Workspace().Images().Find(plan.sensor_linear_output);
+  auto* geometry = device.Workspace().Images().Find(plan.geometry_output);
+  ASSERT_NE(sensor, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  EXPECT_NE(sensor->Texture().ResourceId(), geometry->Texture().ResourceId());
+  EXPECT_EQ(sensor->Texture().Width(), plan.source.develop_output_extent.width);
+  EXPECT_EQ(sensor->Texture().Height(), plan.source.develop_output_extent.height);
+  EXPECT_EQ(geometry->Texture().Width(), plan.geometry.render_extent.width);
+  EXPECT_EQ(geometry->Texture().Height(), plan.geometry.render_extent.height);
 }
 
 TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallback) {

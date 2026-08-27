@@ -17,6 +17,22 @@ enum class TextureFormat : std::uint8_t {
   R16u    = 4,
 };
 
+[[nodiscard]] inline auto TextureFormatName(TextureFormat format) -> const char* {
+  switch (format) {
+    case TextureFormat::R8:
+      return "R8";
+    case TextureFormat::Rgba8:
+      return "Rgba8";
+    case TextureFormat::R32f:
+      return "R32f";
+    case TextureFormat::Rgba32f:
+      return "Rgba32f";
+    case TextureFormat::R16u:
+      return "R16u";
+  }
+  return "?";
+}
+
 [[nodiscard]] inline auto TextureFormatBytesPerPixel(TextureFormat format) -> std::size_t {
   switch (format) {
     case TextureFormat::R8:

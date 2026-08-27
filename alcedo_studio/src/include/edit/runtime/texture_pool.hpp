@@ -6,12 +6,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -119,6 +121,20 @@ class TexturePool {
     return TakeLease(entries_.back());
   }
 
+  /**
+   * @brief Extra lease on an already-leased texture. Does not allocate.
+   *
+   * Identity geometry uses this so `geometry.scene_source` can share
+   * `develop.sensor_linear` without a second device copy.
+   */
+  [[nodiscard]] auto DuplicateLease(std::uint64_t handle) -> ResourceLease<Backend> {
+    auto* entry = Find(handle);
+    if (entry == nullptr || entry->lease_count == 0) {
+      throw std::runtime_error("TexturePool::DuplicateLease: handle is not leased");
+    }
+    return TakeLease(*entry);
+  }
+
   void MarkSubmitted(std::uint64_t submission_id) {
     for (auto& entry : entries_) {
       if (entry.alive && (entry.used_this_frame || entry.lease_count > 0)) {
@@ -181,6 +197,30 @@ class TexturePool {
       used_bytes_ -= entry.bytes;
       entry.texture = {};
       entry.alive   = false;
+    }
+  }
+
+  /** @brief Print texture pool totals. Per-texture lines require ALCEDO_GPU_POOL_TRACE. */
+  void DumpToStderr(const char* reason) const {
+    std::fprintf(stderr, "[GPU_POOL] textures %s entries=%zu used=%.1f budget=%.1f MiB\n",
+                 reason == nullptr ? "" : reason, EntryCount(), GpuPoolMiB(used_bytes_),
+                 GpuPoolMiB(budget_bytes_));
+    if (!GpuPoolTraceVerbose()) {
+      return;
+    }
+    for (const auto& entry : entries_) {
+      if (!entry.alive) {
+        continue;
+      }
+      std::fprintf(stderr,
+                   "[GPU_POOL]   tex handle=%llu %ux%u %s %.1f MiB leases=%u busy_sub=%llu "
+                   "lru=%llu frame=%d\n",
+                   static_cast<unsigned long long>(entry.handle), entry.request.width,
+                   entry.request.height, TextureFormatName(entry.request.format),
+                   GpuPoolMiB(entry.bytes), entry.lease_count,
+                   static_cast<unsigned long long>(entry.submitted_on),
+                   static_cast<unsigned long long>(entry.lru_tick),
+                   entry.used_this_frame ? 1 : 0);
     }
   }
 

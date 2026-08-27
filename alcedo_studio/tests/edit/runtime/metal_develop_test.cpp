@@ -432,6 +432,54 @@ TEST_F(MetalDevelopFixture, MetalCameraColorConsumesSharedDualIlluminantTransfor
   EXPECT_NEAR(pixels.front().a, 1.0f, 1.0e-6f);
 }
 
+TEST_F(MetalDevelopFixture, IdentityGeometryResampleAliasesSensorLinearWithoutASecondTexture) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                                gpu_dag_test::FullSensor(16, 12));
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  ASSERT_FALSE(plan.encode_geometry_resample);
+
+  MetalRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  auto* sensor   = device.Workspace().Images().Find(plan.sensor_linear_output);
+  auto* geometry = device.Workspace().Images().Find(plan.geometry_output);
+  auto* develop  = device.Workspace().Images().Find(plan.develop_output);
+  ASSERT_NE(sensor, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_NE(develop, nullptr);
+  EXPECT_EQ(sensor->Texture().ResourceId(), geometry->Texture().ResourceId());
+  EXPECT_NE(sensor->Texture().ResourceId(), develop->Texture().ResourceId());
+}
+
+TEST_F(MetalDevelopFixture, ViewportGeometryResampleAllocatesADistinctDisplaySizedTexture) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(32, 24),
+                                                gpu_dag_test::FullSensor(32, 24));
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  RenderRequest request;
+  request.view.visible_rect_in_edit_space = {0.0f, 0.0f, 1.0f, 1.0f};
+  request.view.viewport_extent            = {16, 12};
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), request);
+  ASSERT_TRUE(plan.encode_geometry_resample);
+
+  MetalRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  auto* sensor   = device.Workspace().Images().Find(plan.sensor_linear_output);
+  auto* geometry = device.Workspace().Images().Find(plan.geometry_output);
+  ASSERT_NE(sensor, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  EXPECT_NE(sensor->Texture().ResourceId(), geometry->Texture().ResourceId());
+  EXPECT_EQ(sensor->Texture().Width(), 32U);
+  EXPECT_EQ(sensor->Texture().Height(), 24U);
+  EXPECT_EQ(geometry->Texture().Width(), 16U);
+  EXPECT_EQ(geometry->Texture().Height(), 12U);
+}
+
 TEST_F(MetalDevelopFixture, MetalCctEditReusesSensorAndGeometryResults) {
   auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
                                                 gpu_dag_test::FullSensor(16, 12));

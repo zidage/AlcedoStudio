@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <utility>
 
 #include "edit/graph/graph_ids.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -23,7 +25,35 @@ template <class Backend>
 class NodeResultCache {
  public:
   void Store(GraphValueId id, typename Backend::Buffer buffer) {
+    const auto bytes = buffer.Bytes();
     values_.insert_or_assign(std::move(id), std::move(buffer));
+    if (ShouldTraceGpuPoolAlloc(bytes) && GpuPoolTraceVerbose()) {
+      DumpToStderr("value-store");
+    }
+  }
+
+  [[nodiscard]] auto UsedBytes() const -> std::size_t {
+    std::size_t total = 0;
+    for (const auto& [id, buffer] : values_) {
+      (void)id;
+      total += buffer.Bytes();
+    }
+    return total;
+  }
+
+  void DumpToStderr(const char* reason) const {
+    std::fprintf(stderr, "[GPU_POOL] values %s count=%zu total=%.1f MiB\n",
+                 reason == nullptr ? "" : reason, values_.size(), GpuPoolMiB(UsedBytes()));
+    if (!GpuPoolTraceVerbose()) {
+      return;
+    }
+    for (const auto& [id, buffer] : values_) {
+      std::fprintf(stderr, "[GPU_POOL]   value %.*s:%.*s %.1f MiB resource=%llu\n",
+                   static_cast<int>(id.producer.Value().size()), id.producer.Value().data(),
+                   static_cast<int>(id.output_port.Value().size()), id.output_port.Value().data(),
+                   GpuPoolMiB(buffer.Bytes()),
+                   static_cast<unsigned long long>(buffer.ResourceId()));
+    }
   }
 
   [[nodiscard]] auto Find(const GraphValueId& id) -> typename Backend::Buffer* {

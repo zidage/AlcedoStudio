@@ -151,16 +151,16 @@ void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& 
   if (sensor == nullptr || sensor->Empty()) {
     throw std::runtime_error("ExecuteCudaGeometryResample: missing develop.sensor_linear");
   }
+  if (!plan.encode_geometry_resample) {
+    workspace.AliasImageFrom(plan.geometry_output, plan.sensor_linear_output);
+    return;
+  }
   const auto width  = plan.geometry.render_extent.width;
   const auto height = plan.geometry.render_extent.height;
   auto&      dest   = AcquireRgba(workspace, plan.geometry_output, width, height);
   sensor            = workspace.Images().Find(plan.sensor_linear_output);
   if (sensor == nullptr) {
     throw std::runtime_error("ExecuteCudaGeometryResample: sensor texture lost during acquire");
-  }
-  if (!plan.encode_geometry_resample) {
-    workspace.Device().CopyTexture2D(sensor->Texture(), dest.Texture(), device.CommandContext());
-    return;
   }
   GeometryResamplePass pass;
   pass.Encode(plan.geometry, sensor->Texture(), dest.Texture(), device.CommandContext());

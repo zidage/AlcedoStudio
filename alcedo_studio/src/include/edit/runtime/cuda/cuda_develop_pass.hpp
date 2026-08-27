@@ -27,7 +27,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
 /**
  * @brief Write `geometry.scene_source` from `develop.sensor_linear`.
  *
- * Identity geometry copies the sensor texture. Non-identity runs GeometryResamplePass.
+ * Identity geometry aliases the sensor texture. Non-identity runs GeometryResamplePass.
  */
 void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& plan);
 

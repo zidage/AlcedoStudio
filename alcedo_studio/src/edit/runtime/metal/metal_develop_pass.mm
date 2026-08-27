@@ -370,9 +370,6 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
   if (workspace.Textures().ByteBudget() == 0) {
     workspace.Textures().SetByteBudget(MetalBackend::DefaultTextureBudgetBytes());
   }
-  if (plan.peak_transient_bytes > 0) {
-    workspace.TransientBuffers().Reserve(plan.peak_transient_bytes);
-  }
 
   const auto         flags         = develop->Params().Params();
   const bool         hlr           = flags.highlights_reconstruct;
@@ -451,15 +448,15 @@ void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan
   if (sensor == nullptr || sensor->Empty()) {
     throw std::runtime_error("ExecuteMetalGeometryResample: missing develop.sensor_linear");
   }
+  if (!plan.encode_geometry_resample) {
+    workspace.AliasImageFrom(plan.geometry_output, plan.sensor_linear_output);
+    return;
+  }
   auto& dest = AcquireRgba(workspace, plan.geometry_output, plan.geometry.render_extent.width,
                            plan.geometry.render_extent.height);
   sensor     = workspace.Images().Find(plan.sensor_linear_output);
   if (sensor == nullptr) {
     throw std::runtime_error("ExecuteMetalGeometryResample: sensor texture lost during acquire");
-  }
-  if (!plan.encode_geometry_resample) {
-    workspace.Device().CopyTexture2D(sensor->Texture(), dest.Texture(), device.CommandContext());
-    return;
   }
   auto* command_buffer = CommandBuffer(device);
   DispatchGeometryResample(command_buffer, plan.geometry, sensor->Texture(), dest.Texture());

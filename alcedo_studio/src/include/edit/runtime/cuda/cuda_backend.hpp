@@ -14,6 +14,7 @@
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -158,6 +159,13 @@ class CudaBackend {
 
   void Submit(CommandContext& command_context);
   void Wait(CommandContext& command_context);
+  /**
+   * @brief Block until kernels already recorded on this stream have finished.
+   *
+   * Used to free Develop scratch before Geometry runs. Does not submit or change
+   * in-flight submission state.
+   */
+  void SynchronizeRecordedWork(CommandContext& command_context);
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
@@ -182,6 +190,8 @@ class CudaBackend {
   [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
     return last_texture_rectangles_;
   }
+
+  [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
 
  private:
   friend class Buffer;

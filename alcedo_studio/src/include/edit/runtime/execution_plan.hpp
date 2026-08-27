@@ -125,8 +125,12 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
  *
  * Always includes GeometryResample so a viewport change does not recompile.
  * @ref geometry and @ref encode_geometry_resample are per-frame and are filled by
- * GraphCompiler::BindFrameGeometry. The encoder skips the kernel when
- * @ref encode_geometry_resample is false.
+ * GraphCompiler::BindFrameGeometry. When @ref encode_geometry_resample is false the
+ * encoder aliases `geometry.scene_source` onto `develop.sensor_linear` instead of
+ * copying a second full-resolution texture.
+ *
+ * @ref peak_transient_bytes is the bump-allocator high-water for one exclusive
+ * stage (Develop demosaic, mask SDF, or LLF), not the sum of those stages.
  */
 struct ExecutionPlan {
   StaticPlanKey                   static_key{};

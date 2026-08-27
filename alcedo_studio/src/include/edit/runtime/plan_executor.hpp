@@ -77,7 +77,12 @@ class PlanExecutor {
         ++stats.source_h2d_count;
         Record(device, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent);
         ++stats.sensor_develop_execute;
+        // RCD planes are not a cache. Wait this stream so pack has finished, then
+        // cudaFree / Metal free the slab before Geometry allocates display textures.
+        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
       }
+      workspace.TransientBuffers().Reset();
+      workspace.TransientBuffers().ReleaseDeviceMemory();
 
       if (BindOrMiss(workspace, plan.geometry_output, keys.geometry_scene_source,
                      keys.geometry_extent, completed)) {
@@ -109,6 +114,7 @@ class PlanExecutor {
           Record(device, plan.mask_output, keys.mask, keys.geometry_extent, TextureFormat::R8);
           ++stats.mask_execute;
         }
+        workspace.TransientBuffers().Reset();
       }
 
       if (BindOrMiss(workspace, plan.primary_grade_output, keys.primary_grade, keys.geometry_extent,

@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_pool.hpp"
+#include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
@@ -112,6 +114,40 @@ class GraphImageCache {
     slot.extent  = ImageExtent{request.width, request.height};
     slot.format  = request.format;
     auto [it, inserted] = write_slots_.emplace(id, std::move(slot));
+    (void)inserted;
+    return it->second.texture;
+  }
+
+  /**
+   * @brief Bind @p dest to the current texture of @p source without allocating.
+   *
+   * Used when GeometryResample is identity. Content keys stay independent:
+   * publishing @p dest does not replace @p source. Overwriting a dest write
+   * slot drops its unrecorded identity.
+   *
+   * @throws std::runtime_error when @p dest equals @p source or @p source has
+   *         no current texture.
+   */
+  auto AliasTextureFrom(TexturePool<Backend>& pool, const GraphValueId& dest,
+                        const GraphValueId& source) -> ResourceLease<Backend>& {
+    if (dest == source) {
+      throw std::runtime_error("GraphImageCache::AliasTextureFrom: dest and source are the same");
+    }
+    auto* source_lease = Find(source);
+    if (source_lease == nullptr || source_lease->Empty()) {
+      throw std::runtime_error("GraphImageCache::AliasTextureFrom: source is missing");
+    }
+    if (FindWrite(dest) != nullptr) {
+      write_slots_.erase(dest);
+    }
+    current_.erase(dest);
+
+    const auto& source_tex = source_lease->Texture();
+    WriteSlot   slot;
+    slot.texture = pool.DuplicateLease(source_lease->Handle());
+    slot.extent  = ImageExtent{source_tex.Width(), source_tex.Height()};
+    slot.format  = source_tex.Format();
+    auto [it, inserted] = write_slots_.emplace(dest, std::move(slot));
     (void)inserted;
     return it->second.texture;
   }
@@ -265,7 +301,49 @@ class GraphImageCache {
     return ids;
   }
 
+  /**
+   * @brief Print published and unpublished image results with pool handles.
+   *
+   * @p pool is the TexturePool that owns the leases.
+   */
+  void DumpToStderr(const char* reason, const TexturePool<Backend>& pool) const {
+    (void)pool;
+    std::fprintf(stderr, "[GPU_POOL] images %s published=%zu write=%zu current=%zu\n",
+                 reason == nullptr ? "" : reason, published_.size(), write_slots_.size(),
+                 current_.size());
+    if (!GpuPoolTraceVerbose()) {
+      return;
+    }
+    for (const auto& [id, slot] : write_slots_) {
+      PrintSlot("write", id, slot.key, slot.has_key, slot.extent, slot.format, slot.texture,
+                slot.last_writer, false);
+    }
+    for (const auto& [identity, entry] : published_) {
+      const auto current = current_.find(identity.value_id);
+      const bool is_current =
+          current != current_.end() && current->second == identity.content_key;
+      PrintSlot("published", identity.value_id, identity.content_key, true, entry.extent,
+                entry.format, entry.texture, entry.last_writer, is_current);
+    }
+  }
+
  private:
+  static void PrintSlot(const char* kind, const GraphValueId& id, ContentKey key, bool has_key,
+                        ImageExtent extent, TextureFormat format,
+                        const ResourceLease<Backend>& texture, std::uint64_t last_writer,
+                        bool is_current) {
+    const auto handle = texture.Empty() ? 0 : texture.Handle();
+    std::fprintf(stderr,
+                 "[GPU_POOL]   %-9s %.*s:%.*s %ux%u %s handle=%llu key=%llx writer=%llu "
+                 "has_key=%d current=%d\n",
+                 kind, static_cast<int>(id.producer.Value().size()), id.producer.Value().data(),
+                 static_cast<int>(id.output_port.Value().size()), id.output_port.Value().data(),
+                 extent.width, extent.height, TextureFormatName(format),
+                 static_cast<unsigned long long>(handle),
+                 static_cast<unsigned long long>(has_key ? key.hash : 0),
+                 static_cast<unsigned long long>(last_writer), has_key ? 1 : 0,
+                 is_current ? 1 : 0);
+  }
   struct WriteSlot {
     ResourceLease<Backend> texture;
     ContentKey             key{};

@@ -778,6 +778,28 @@ void MetalBackend::Submit(CommandContext& command_context) {
   in_flight_submission_ = submission_id;
 }
 
+void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
+  if (command_context.gpu_ == nullptr || command_context.gpu_->buffer.get() == nullptr) {
+    return;
+  }
+  command_context.gpu_->EndEncoders();
+  auto* command_buffer = command_context.gpu_->buffer.get();
+  command_buffer->commit();
+  command_buffer->waitUntilCompleted();
+  if (command_buffer->status() == MTL::CommandBufferStatusError) {
+    std::string message = "MetalBackend: Develop scratch wait failed";
+    if (auto* error = command_buffer->error(); error != nullptr) {
+      if (auto* description = error->localizedDescription(); description != nullptr) {
+        message += ": ";
+        message += description->utf8String();
+      }
+    }
+    command_context.gpu_->Reset();
+    throw std::runtime_error(message);
+  }
+  command_context.gpu_->Reset();
+}
+
 void MetalBackend::Wait(CommandContext& command_context) {
   if (in_flight_submission_ == 0) {
     if (command_context.gpu_) {
@@ -903,6 +925,19 @@ auto MetalBackend::WorkingSetBudgetBytes() const -> std::size_t {
   const auto recommended = static_cast<std::size_t>(gpu_->device->recommendedMaxWorkingSetSize());
   const auto usable      = recommended - recommended / 4;
   return usable > kFloor ? usable : kFloor;
+}
+
+auto MetalBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot {
+  GpuDeviceMemorySnapshot snapshot;
+  if (gpu_ == nullptr || gpu_->device == nullptr) {
+    return snapshot;
+  }
+  snapshot.total_bytes = static_cast<std::size_t>(gpu_->device->recommendedMaxWorkingSetSize());
+  const auto allocated = static_cast<std::size_t>(gpu_->device->currentAllocatedSize());
+  snapshot.free_bytes =
+      snapshot.total_bytes > allocated ? snapshot.total_bytes - allocated : 0;
+  snapshot.valid = snapshot.total_bytes > 0;
+  return snapshot;
 }
 auto MetalBackend::PipelineCreateCount() const -> std::uint64_t {
   const auto creates  = metal::ComputePipelineCache::Instance().GetStats().creates;

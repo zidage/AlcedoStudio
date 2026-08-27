@@ -172,6 +172,7 @@ void MetalBackend::Wait(CommandContext&) {
   completed_submission_ = in_flight_submission_;
   in_flight_submission_ = 0;
 }
+void MetalBackend::SynchronizeRecordedWork(CommandContext&) {}
 void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup>) {
   throw std::runtime_error("MetalBackend: pipeline warm-up is not implemented");
 }
@@ -204,6 +205,7 @@ auto MetalBackend::NativeQueue() const -> void* { return nullptr; }
 auto MetalBackend::WorkingSetBudgetBytes() const -> std::size_t {
   return DefaultTextureBudgetBytes();
 }
+auto MetalBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot { return {}; }
 auto MetalBackend::PipelineCreateCount() const -> std::uint64_t { return 0; }
 auto MetalBackend::PipelineHitCount() const -> std::uint64_t { return 0; }
 
