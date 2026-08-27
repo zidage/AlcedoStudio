@@ -6,6 +6,7 @@
 
 #include <span>
 #include <stdexcept>
+#include <string>
 
 #include <alcedo/metal/Metal.hpp>
 #include <opencv2/core.hpp>
@@ -16,6 +17,24 @@
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
+namespace {
+
+void WaitForViewerTexture(MTL::CommandBuffer* command_buffer) {
+  command_buffer->waitUntilCompleted();
+  if (command_buffer->status() != MTL::CommandBufferStatusError) {
+    return;
+  }
+  std::string message = "MetalRenderer: viewer texture command buffer failed";
+  if (auto* error = command_buffer->error(); error != nullptr) {
+    if (auto* description = error->localizedDescription(); description != nullptr) {
+      message += ": ";
+      message += description->utf8String();
+    }
+  }
+  throw std::runtime_error(message);
+}
+
+}  // namespace
 
 void FramePresenter<MetalBackend>::Present(BasicRenderDevice<MetalBackend>& device,
                                            const GraphValueId& output_id, IFrameSink& sink,
@@ -34,11 +53,16 @@ void FramePresenter<MetalBackend>::Present(BasicRenderDevice<MetalBackend>& devi
   if (command_buffer == nullptr) {
     throw std::runtime_error("MetalRenderer: present requires the frame command buffer");
   }
+  // The DAG uses a command queue separate from Qt Quick's QRhi queue. The old Metal pipeline
+  // completed its command buffer before publishing the MTLTexture; the refactor published it
+  // immediately after commit, leaving the viewer without a cross-queue readiness guarantee.
+  // Restore that ordering before the sink can import or sample the texture.
+  WaitForViewerTexture(command_buffer);
 
-  const auto width  = static_cast<int>(lease->Texture().Width());
-  const auto height = static_cast<int>(lease->Texture().Height());
+  const auto width      = static_cast<int>(lease->Texture().Width());
+  const auto height     = static_cast<int>(lease->Texture().Height());
 
-  auto image            = std::make_shared<scope::metal_detail::MetalTextureImageResource>();
+  auto       image      = std::make_shared<scope::metal_detail::MetalTextureImageResource>();
   image->texture        = NS::RetainPtr(native);
   image->width          = width;
   image->height         = height;
@@ -55,10 +79,9 @@ void FramePresenter<MetalBackend>::Present(BasicRenderDevice<MetalBackend>& devi
                            height, 0, FramePixelFormat::RGBA32F},
       width, height, FramePixelFormat::RGBA32F, display_config, AnalysisDomain::DisplayEncoded,
       GpuSignalHandle{GpuBackend::Metal, std::shared_ptr<void>(ready, ready.get())}, 0});
-  sink.SubmitMetalFrame(ViewerMetalFrame{
-      width, height, image->native_object,
-      std::shared_ptr<const void>(image, image->texture.get()), display_config, submission.mode,
-      submission.metadata});
+  sink.SubmitMetalFrame(ViewerMetalFrame{width, height, image->native_object,
+                                         std::shared_ptr<const void>(image, image->texture.get()),
+                                         display_config, submission.mode, submission.metadata});
   sink.NotifyFrameReady(submission);
 }
 

@@ -384,6 +384,31 @@ Item {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         target: null
+                        property bool _forwardingDrag: false
+                        property int _activeButton: Qt.LeftButton
+                        onActiveChanged: {
+                            if (active) {
+                                _forwardingDrag = true
+                                _activeButton = (centroid.pressedButtons & Qt.MiddleButton)
+                                        ? Qt.MiddleButton : Qt.LeftButton
+                                // DragHandler can take the exclusive grab before PointHandler
+                                // forwards its press. Start a complete controller sequence from
+                                // the original press position so pan never depends on handler
+                                // activation order.
+                                editorInteraction.handlePress(
+                                            centroid.pressPosition.x,
+                                            centroid.pressPosition.y,
+                                            _activeButton)
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            } else if (_forwardingDrag) {
+                                editorInteraction.handleRelease(
+                                            centroid.position.x, centroid.position.y,
+                                            _activeButton)
+                                _forwardingDrag = false
+                            }
+                        }
                         onTranslationChanged: {
                             if (active) {
                                 editorInteraction.handleMove(

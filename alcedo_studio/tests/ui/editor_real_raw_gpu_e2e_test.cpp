@@ -32,12 +32,16 @@
 namespace alcedo::ui::test {
 namespace {
 
-editor_rhi::EditorBackend       g_backend = editor_rhi::EditorBackend::Cuda;
+#ifdef __APPLE__
+editor_rhi::EditorBackend g_backend = editor_rhi::EditorBackend::Metal;
+#else
+editor_rhi::EditorBackend g_backend = editor_rhi::EditorBackend::Cuda;
+#endif
 editor_rhi::EditorStartupResult g_startup{};
 
-auto MainQmlUrl() -> QUrl {
-  const auto path = std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml" /
-                    "Main.qml";
+auto                            MainQmlUrl() -> QUrl {
+  const auto path =
+      std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml" / "Main.qml";
 #ifdef _WIN32
   return QUrl::fromLocalFile(QString::fromStdWString(path.wstring()));
 #else
@@ -46,7 +50,7 @@ auto MainQmlUrl() -> QUrl {
 }
 
 auto CollectCiRawFiles(std::size_t max_count = 2) -> std::vector<std::filesystem::path> {
-  const std::filesystem::path root{std::string(TEST_IMG_PATH) + "/ci_rawfiles"};
+  const std::filesystem::path        root{std::string(TEST_IMG_PATH) + "/ci_rawfiles"};
   std::vector<std::filesystem::path> paths;
   if (!std::filesystem::exists(root)) {
     return paths;
@@ -77,15 +81,14 @@ auto WaitUntil(Predicate&& predicate, std::chrono::milliseconds timeout) -> bool
 }
 
 void WaitForImportFinished(ApplicationModuleHost& host) {
-  ASSERT_TRUE(WaitUntil([&] { return !host.import_export()->ImportRunning(); },
-                        std::chrono::minutes(2)));
+  ASSERT_TRUE(
+      WaitUntil([&] { return !host.import_export()->ImportRunning(); }, std::chrono::minutes(2)));
   ProcessEvents(500);
 }
 
 class EditorRealRawGpuE2eTest : public ApplicationModuleHostTestFixture {};
 
-TEST_F(EditorRealRawGpuE2eTest,
-       RealRawGpuFramesRemainReadyAcrossSustainedImageSwitches) {
+TEST_F(EditorRealRawGpuE2eTest, RealRawGpuFramesRemainReadyAcrossSustainedImageSwitches) {
   if (!qEnvironmentVariableIsSet("ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E")) {
     GTEST_SKIP() << "Temporarily disabled: the standalone native GPU/Qt teardown path "
                     "deadlocks after sustained RAW image switches. The narrower WorkspaceShell "
@@ -101,8 +104,8 @@ TEST_F(EditorRealRawGpuE2eTest,
   // production DirectPresent + RAW + zoom/pan path with a working present backend.
   if (g_backend == editor_rhi::EditorBackend::OpenCl) {
     GTEST_SKIP() << "OpenCL direct present is host_upload-only here and deadlocks the GUI "
-                     "pump while waiting for FrameReady; run with "
-                     "ALCEDO_TEST_EDITOR_BACKEND=cuda for the production present E2E";
+                    "pump while waiting for FrameReady; run with "
+                    "ALCEDO_TEST_EDITOR_BACKEND=cuda for the production present E2E";
   }
 
   const auto raw_files = CollectCiRawFiles();
@@ -143,7 +146,7 @@ TEST_F(EditorRealRawGpuE2eTest,
   // Production alcedo_main uses Basic; Material pads/ripples break dense chrome.
   QQuickStyle::setStyle(QStringLiteral("Basic"));
 
-  QQmlApplicationEngine engine;
+  QQmlApplicationEngine  engine;
   std::vector<QQmlError> warnings;
   engine.addImportPath(QStringLiteral("qrc:/"));
 #ifdef ALCEDO_QT_QML_IMPORT_PATH
@@ -154,10 +157,9 @@ TEST_F(EditorRealRawGpuE2eTest,
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("languageManager"), &language_manager);
-  QObject::connect(&engine, &QQmlEngine::warnings,
-                   [&warnings](const QList<QQmlError>& emitted) {
-                     warnings.insert(warnings.end(), emitted.begin(), emitted.end());
-                   });
+  QObject::connect(&engine, &QQmlEngine::warnings, [&warnings](const QList<QQmlError>& emitted) {
+    warnings.insert(warnings.end(), emitted.begin(), emitted.end());
+  });
   engine.load(MainQmlUrl());
   if (engine.rootObjects().empty()) {
     std::string errors;
@@ -188,11 +190,11 @@ TEST_F(EditorRealRawGpuE2eTest,
   ASSERT_GT(images[1].element_id, 0u);
   ASSERT_GT(images[1].image_id, 0u);
 
-  bool ok = false;
+  bool      ok                  = false;
   const int configured_switches = qEnvironmentVariableIntValue("ALCEDO_REAL_RAW_E2E_SWITCHES", &ok);
-  const int switch_count = ok ? std::max(1, configured_switches) : 8;
-  qulonglong expected_presented_count = 0;
-  std::uint64_t previous_request_id = 0;
+  const int switch_count        = ok ? std::max(1, configured_switches) : 8;
+  qulonglong    expected_presented_count = 0;
+  std::uint64_t previous_request_id      = 0;
 
   for (int i = 0; i < switch_count; ++i) {
     const auto key = images[static_cast<std::size_t>(i) % images.size()];
@@ -218,11 +220,11 @@ TEST_F(EditorRealRawGpuE2eTest,
       const auto first_frame_timeout = g_backend == editor_rhi::EditorBackend::OpenCl
                                            ? std::chrono::seconds(45)
                                            : std::chrono::minutes(2);
-      const bool first_submitted = WaitUntil(
+      const bool first_submitted     = WaitUntil(
           [&] {
             const auto results = host.editor_render_coordinator()->results();
             return std::any_of(results.begin(), results.end(),
-                               [&](const EditorRenderResult& result) {
+                                   [&](const EditorRenderResult& result) {
                                  return result.request_id == first_request_id &&
                                         result.kind == EditorRenderResultKind::FrameReady;
                                });
@@ -236,8 +238,7 @@ TEST_F(EditorRealRawGpuE2eTest,
                      << " status=" << viewport->statusText().toStdString()
                      << " presented=" << viewport->presentedFrameCount();
       }
-      ASSERT_TRUE(first_submitted)
-          << "Primary frame never reached the submitted/visible state";
+      ASSERT_TRUE(first_submitted) << "Primary frame never reached the submitted/visible state";
 
       // Production QML enables viewport interaction only when actions.canEdit is
       // true (Interactive). Double-tap before that is a no-op on the controller.
@@ -254,8 +255,7 @@ TEST_F(EditorRealRawGpuE2eTest,
           QStringLiteral("editorInteractionController"));
       ASSERT_NE(interaction, nullptr);
       ASSERT_TRUE(interaction->interactionEnabled());
-      const auto scheduled_before_zoom =
-          host.editor_session_scheduler()->last_scheduled().size();
+      const auto scheduled_before_zoom = host.editor_session_scheduler()->last_scheduled().size();
 
       interaction->handleDoubleTap(viewport->width() * 0.5, viewport->height() * 0.5);
 
@@ -292,10 +292,9 @@ TEST_F(EditorRealRawGpuE2eTest,
           << "First DetailPatch left the coordinator busy";
       ProcessEvents(250);
 
-      const auto scheduled_before_pan =
-          host.editor_session_scheduler()->last_scheduled().size();
-      const auto center_x = viewport->width() * 0.5;
-      const auto center_y = viewport->height() * 0.5;
+      const auto scheduled_before_pan = host.editor_session_scheduler()->last_scheduled().size();
+      const auto center_x             = viewport->width() * 0.5;
+      const auto center_y             = viewport->height() * 0.5;
       interaction->handlePress(center_x, center_y, static_cast<int>(Qt::LeftButton));
       interaction->handleMove(center_x + 80.0, center_y + 30.0, static_cast<int>(Qt::LeftButton));
       interaction->handleRelease(center_x + 80.0, center_y + 30.0,
@@ -303,8 +302,7 @@ TEST_F(EditorRealRawGpuE2eTest,
 
       ASSERT_TRUE(WaitUntil(
           [&] {
-            return host.editor_session_scheduler()->last_scheduled().size() >
-                   scheduled_before_pan;
+            return host.editor_session_scheduler()->last_scheduled().size() > scheduled_before_pan;
           },
           std::chrono::seconds(5)))
           << "Settled pan did not schedule a replacement DetailPatch";
@@ -330,8 +328,7 @@ TEST_F(EditorRealRawGpuE2eTest,
 
     const auto first_frame_ready = [&] {
       return host.editor_session_service()->state() == EditorSessionState::Interactive &&
-             viewport->lastPresentedSessionEpoch() ==
-                 viewport->sessionEpoch() &&
+             viewport->lastPresentedSessionEpoch() == viewport->sessionEpoch() &&
              viewport->lastPresentedRequestId() != 0 &&
              viewport->lastPresentedRequestId() != previous_request_id;
     };
@@ -341,31 +338,32 @@ TEST_F(EditorRealRawGpuE2eTest,
                  host.editor_session_service()->state() == EditorSessionState::Failed;
         },
         std::chrono::minutes(2)));
-    const auto scheduled = host.editor_session_scheduler()->last_scheduled();
+    const auto  scheduled   = host.editor_session_scheduler()->last_scheduled();
     const auto* last_intent = scheduled.empty() ? nullptr : &scheduled.back().intent;
     ASSERT_TRUE(first_frame_ready())
-        << host.editor_session_service()->last_error() << " backend="
-        << viewport->backendName().toStdString() << " status="
-        << viewport->statusText().toStdString() << " available="
-        << viewport->presentationAvailable() << " live=" << viewport->liveTargetCount()
-        << " targetGen=" << viewport->targetGeneration() << " imageGen="
-        << viewport->sessionEpoch() << " item=" << viewport->width() << 'x'
+        << host.editor_session_service()->last_error()
+        << " backend=" << viewport->backendName().toStdString()
+        << " status=" << viewport->statusText().toStdString()
+        << " available=" << viewport->presentationAvailable()
+        << " live=" << viewport->liveTargetCount() << " targetGen=" << viewport->targetGeneration()
+        << " imageGen=" << viewport->sessionEpoch() << " item=" << viewport->width() << 'x'
         << viewport->height() << " requested=" << (last_intent ? last_intent->requested_width : 0)
         << 'x' << (last_intent ? last_intent->requested_height : 0)
         << " windowExposed=" << window->isExposed() << " itemVisible=" << viewport->isVisible()
         << " parentVisible="
-        << (viewport->parentItem() ? viewport->parentItem()->isVisible() : false) << " opacity="
-        << viewport->opacity() << " warning="
+        << (viewport->parentItem() ? viewport->parentItem()->isVisible() : false)
+        << " opacity=" << viewport->opacity() << " warning="
         << (warnings.empty() ? std::string{} : warnings.front().toString().toStdString());
 
     const auto first_request_id = viewport->lastPresentedRequestId();
-    previous_request_id = first_request_id;
+    previous_request_id         = first_request_id;
     // Direct-present composition counts every primary drawn into a Qt Quick
     // window frame (InteractivePrimary then QualityBase). These renderer-owned
     // diagnostics are deliberately separate from request scheduling.
     expected_presented_count += 2;
-    ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() >= expected_presented_count; },
-                          std::chrono::minutes(2)))
+    ASSERT_TRUE(
+        WaitUntil([&] { return viewport->presentedFrameCount() >= expected_presented_count; },
+                  std::chrono::minutes(2)))
         << "QualityBase was not composed after InteractivePrimary";
 
     if (i == 0) {
@@ -374,8 +372,8 @@ TEST_F(EditorRealRawGpuE2eTest,
       // frame while QualityBase and the zoom DetailPatch have already exercised
       // the other presentation layers.
       const auto composed_before_drag = viewport->presentedFrameCount();
-      const auto wakeups_before_drag = viewport->adjustmentFrameRequestCount();
-      auto* session = host.editor_session();
+      const auto wakeups_before_drag  = viewport->adjustmentFrameRequestCount();
+      auto*      session              = host.editor_session();
       ASSERT_NE(session, nullptr);
       ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
                                        QStringLiteral(R"({"value":0.10})"), false));
@@ -389,26 +387,31 @@ TEST_F(EditorRealRawGpuE2eTest,
       ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() > composed_before_drag; },
                             std::chrono::minutes(2)))
           << "FAST adjustment frame was not composed before pointer release; status="
-          << viewport->statusText().toStdString()
-          << " liveTargets=" << viewport->liveTargetCount();
+          << viewport->statusText().toStdString() << " liveTargets=" << viewport->liveTargetCount();
     }
 
     EXPECT_EQ(viewport->lastPresentedSessionEpoch(), viewport->sessionEpoch());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);
-    EXPECT_GT(viewport->liveTargetCount(), 0);
+    // CUDA/OpenCL keep renderer-owned interop targets in DirectPresentQueue slots.
+    // Metal imports the completed producer texture directly, so a composed Metal
+    // frame intentionally has no queue-owned native target to count.
+    if (g_backend != editor_rhi::EditorBackend::Metal) {
+      EXPECT_GT(viewport->liveTargetCount(), 0);
+    }
     EXPECT_TRUE(viewport->presentationAvailable());
   }
 
   const auto coordinator_results = host.editor_render_coordinator()->results();
-  const auto ready_count = std::count_if(
-      coordinator_results.begin(), coordinator_results.end(), [](const EditorRenderResult& result) {
-        return result.kind == EditorRenderResultKind::FrameReady;
-      });
+  const auto ready_count = std::count_if(coordinator_results.begin(), coordinator_results.end(),
+                                         [](const EditorRenderResult& result) {
+                                           return result.kind == EditorRenderResultKind::FrameReady;
+                                         });
   EXPECT_GE(ready_count, switch_count);
 
   host.workspace_router()->OpenLibrary();
   ProcessEvents(200);
-  EXPECT_FALSE(host.editor_session()->presentation_viewport_bound());
+  EXPECT_TRUE(host.editor_session()->presentation_viewport_bound())
+      << "route changes retain the editor session and its presentation binding";
   EXPECT_TRUE(warnings.empty()) << (warnings.empty() ? std::string{}
                                                      : warnings.front().toString().toStdString());
 }
@@ -428,7 +431,9 @@ int main(int argc, char** argv) {
                                            /*force_offscreen=*/false);
 
   const QByteArray requested = qgetenv("ALCEDO_TEST_EDITOR_BACKEND").toLower();
-  if (requested == "opencl") {
+  if (requested == "metal") {
+    alcedo::ui::test::g_backend = alcedo::editor_rhi::EditorBackend::Metal;
+  } else if (requested == "opencl") {
     alcedo::ui::test::g_backend = alcedo::editor_rhi::EditorBackend::OpenCl;
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
   }

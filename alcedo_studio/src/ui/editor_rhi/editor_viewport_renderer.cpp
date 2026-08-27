@@ -599,10 +599,14 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     diag::NoteRenderE2eConsumeBegin(request_id);
     qCDebug(editorPresentLog,
             "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
-            "size=%dx%d handle=%llu",
+            "role=%d mode=%d size=%dx%d roi=%.6f,%.6f,%.6f,%.6f handle=%llu",
             static_cast<unsigned long long>(request_id),
             static_cast<unsigned long long>(frame.image_identity),
-            static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
+            static_cast<unsigned long long>(frame.session_epoch), static_cast<int>(role),
+            static_cast<int>(frame.presentation_mode), frame.width, frame.height,
+            frame.preview_metadata.source_roi_norm.x, frame.preview_metadata.source_roi_norm.y,
+            frame.preview_metadata.source_roi_norm.width,
+            frame.preview_metadata.source_roi_norm.height,
             static_cast<unsigned long long>(frame.texture_handle));
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-import-begin] request="
@@ -745,13 +749,20 @@ void EditorViewportRenderer::traceDetailDecision(
   const bool          has_roi     = detail && current_roi.has_value();
   const bool          roi_changed = has_roi != last_detail_trace_has_roi_ ||
                            (has_roi && !SameRoi(*current_roi, last_detail_trace_roi_));
+  const auto& transform    = view_state_.snapshot.view_transform;
+  const bool  view_changed = std::abs(transform.zoom - last_detail_trace_zoom_) > 1.0e-5f ||
+                            std::abs(transform.pan.x() - last_detail_trace_pan_x_) > 1.0e-5f ||
+                            std::abs(transform.pan.y() - last_detail_trace_pan_y_) > 1.0e-5f;
   if (last_detail_trace_decision_ == decision && last_detail_trace_request_id_ == request_id &&
-      !roi_changed) {
+      !roi_changed && !view_changed) {
     return;
   }
   last_detail_trace_decision_   = decision;
   last_detail_trace_request_id_ = request_id;
   last_detail_trace_has_roi_    = has_roi;
+  last_detail_trace_zoom_       = transform.zoom;
+  last_detail_trace_pan_x_      = transform.pan.x();
+  last_detail_trace_pan_y_      = transform.pan.y();
   if (has_roi) last_detail_trace_roi_ = *current_roi;
 
   if (!editorPresentLog().isDebugEnabled()) {
@@ -762,7 +773,8 @@ void EditorViewportRenderer::traceDetailDecision(
   QString     msg =
       QStringLiteral(
           "[ROI_TRACE][renderer-decision] decision=%1 detail_request=%2 detail_valid=%3 "
-          "quality_request=%4 interactive_request=%5 base_request=%6 image=%7 session_epoch=%8")
+          "quality_request=%4 interactive_request=%5 base_request=%6 image=%7 session_epoch=%8 "
+          "view_zoom=%9 view_pan=%10,%11 ref=%12x%13")
           .arg(QLatin1String(decision))
           .arg(request_id)
           .arg((detail && detail->valid) ? 1 : 0)
@@ -770,7 +782,12 @@ void EditorViewportRenderer::traceDetailDecision(
           .arg(interactive.valid ? interactive.preview_metadata.presentation_request_id : 0)
           .arg(base ? base->preview_metadata.presentation_request_id : 0)
           .arg(image_identity_)
-          .arg(session_epoch_);
+          .arg(session_epoch_)
+          .arg(transform.zoom)
+          .arg(transform.pan.x())
+          .arg(transform.pan.y())
+          .arg(view_state_.snapshot.render_reference_width)
+          .arg(view_state_.snapshot.render_reference_height);
   const auto* selected_primary = selectedPrimaryLayer();
   if (selected_primary) {
     msg += QStringLiteral(" selected_primary_size=%1x%2 selected_primary_mode=%3")
@@ -802,6 +819,15 @@ void EditorViewportRenderer::traceDetailDecision(
                .arg(current_roi->height);
   } else {
     msg += QStringLiteral(" current_roi=none");
+  }
+  if (const auto& region = view_state_.snapshot.viewport_render_region_cache; region.has_value()) {
+    msg += QStringLiteral(" viewport_target=%1x%2 viewport_ref=%3x%4")
+               .arg(region->target_width_)
+               .arg(region->target_height_)
+               .arg(region->reference_width_)
+               .arg(region->reference_height_);
+  } else {
+    msg += QStringLiteral(" viewport_target=none");
   }
   qCDebug(editorPresentLog).noquote() << msg;
 }

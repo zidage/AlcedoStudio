@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -17,6 +19,42 @@
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
+namespace detail {
+
+template <class Backend>
+void TraceGpuDagGeometry(const ExecutionPlan& plan, const RenderRequest& request,
+                         const FrameCompletionSubmission& submission) {
+  const char* enabled = std::getenv("ALCEDO_ROI_TRACE");
+  if (enabled == nullptr || enabled[0] == '\0' || enabled[0] == '0') {
+    return;
+  }
+  const auto& view                  = request.view.visible_rect_in_edit_space;
+  const auto& geometry              = plan.geometry;
+  const auto  native_visible_width  = static_cast<float>(geometry.edit_extent.width) * view.w;
+  const auto  native_visible_height = static_cast<float>(geometry.edit_extent.height) * view.h;
+  const bool  nearest_viewer_expansion =
+      !view.IsFullFrame() && (request.view.viewport_extent.width > geometry.render_extent.width ||
+                              request.view.viewport_extent.height > geometry.render_extent.height);
+  std::fprintf(
+      stderr,
+      "[ROI_TRACE][gpu-dag-geometry] backend=%s request=%llu role=%d mode=%d "
+      "decoded=%ux%u full_ref=%ux%u edit=%ux%u roi=%.6f,%.6f,%.6f,%.6f "
+      "native_roi=%.2fx%.2f viewport_target=%ux%u max_edge=%u render=%ux%u filter=%d "
+      "viewer_nearest_expand=%d required_decoded=%d,%d,%d,%d\n",
+      Backend::kName, static_cast<unsigned long long>(submission.metadata.presentation_request_id),
+      static_cast<int>(submission.metadata.frame_role), static_cast<int>(submission.mode),
+      geometry.decoded_extent.width, geometry.decoded_extent.height,
+      geometry.full_reference_extent.width, geometry.full_reference_extent.height,
+      geometry.edit_extent.width, geometry.edit_extent.height, view.x, view.y, view.w, view.h,
+      native_visible_width, native_visible_height, request.view.viewport_extent.width,
+      request.view.viewport_extent.height, request.resolution.max_edge,
+      geometry.render_extent.width, geometry.render_extent.height,
+      static_cast<int>(geometry.filter), nearest_viewer_expansion ? 1 : 0,
+      geometry.required_decoded_region.x, geometry.required_decoded_region.y,
+      geometry.required_decoded_region.width, geometry.required_decoded_region.height);
+}
+
+}  // namespace detail
 
 template <class Backend>
 auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
@@ -53,13 +91,14 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
     render_device = one_shot_device_.get();
   }
   GraphCompiler::BindFrameGeometry(plan, *document_, request);
+  detail::TraceGpuDagGeometry<Backend>(plan, request, submission);
   if (document_->TopologyDirty()) {
     document_->ClearTopologyDirty();
   }
-  const auto& prepared  = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
+  const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
   const auto  output_id =
       render_device->Execute(plan, prepared, *document_, mask_store_.get(), false);
-  const auto  release_one_shot_resources = [&]() {
+  const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;
     }

@@ -2,8 +2,11 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/runtime/metal/metal_renderer.hpp"
+
 #include <gtest/gtest.h>
 
+#include <alcedo/metal/Metal.hpp>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -15,7 +18,6 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/runtime/metal/metal_renderer.hpp"
 #include "edit/scope/detail/scope_metal_shared.hpp"
 #include "edit/scope/final_display_frame_tap.hpp"
 #include "edit/scope/scope_analyzer.hpp"
@@ -85,6 +87,13 @@ class RecordingMetalPresentSink : public IFrameSink {
   void SubmitMetalFrame(const ViewerMetalFrame& frame) override {
     events_.push_back(PresentEvent::SubmitMetal);
     last_metal_ = frame;
+    if (last_frame_.ready_signal.resource) {
+      const auto* signal = static_cast<scope::metal_detail::MetalCommandBufferSignalResource*>(
+          last_frame_.ready_signal.resource.get());
+      viewer_texture_completed_before_submit_ =
+          signal != nullptr && signal->command_buffer &&
+          signal->command_buffer->status() == MTL::CommandBufferStatusCompleted;
+    }
   }
 
   void SubmitFinalDisplayFrame(const FinalDisplayFrameView& frame) override {
@@ -98,15 +107,16 @@ class RecordingMetalPresentSink : public IFrameSink {
     last_notified_ = submission;
   }
 
-  auto GetWidth() const -> int override { return width_; }
-  auto GetHeight() const -> int override { return height_; }
+  auto                      GetWidth() const -> int override { return width_; }
+  auto                      GetHeight() const -> int override { return height_; }
 
   std::vector<PresentEvent> events_;
   FinalDisplayFrameView     last_frame_{};
   ViewerMetalFrame          last_metal_{};
   FrameCompletionSubmission last_bound_{};
   FrameCompletionSubmission last_notified_{};
-  int                       submit_count_ = 0;
+  int                       submit_count_                           = 0;
+  bool                      viewer_texture_completed_before_submit_ = false;
 
  private:
   int width_  = 0;
@@ -134,9 +144,9 @@ class MetalRendererFixture : public ::testing::Test {
   }
 
   auto RenderHost(bool session = true) -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
-                             session ? RenderCachePolicy::UseSessionCache
-                                     : RenderCachePolicy::BypassSessionCache);
+    return renderer_->Render(
+        image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
+        session ? RenderCachePolicy::UseSessionCache : RenderCachePolicy::BypassSessionCache);
   }
 
   auto RenderTo(IFrameSink& sink, const FrameCompletionSubmission& submission = {})
@@ -157,9 +167,9 @@ TEST_F(MetalRendererFixture, MetalRendererPresentsWorkspaceTextureWithoutHostDow
   submission.metadata.presentation_request_id = 249;
   ASSERT_NE(RenderTo(sink, submission), nullptr);
 
-  const std::vector<PresentEvent> expected = {
-      PresentEvent::Bind, PresentEvent::Ensure, PresentEvent::SubmitFinal, PresentEvent::SubmitMetal,
-      PresentEvent::Notify};
+  const std::vector<PresentEvent> expected = {PresentEvent::Bind, PresentEvent::Ensure,
+                                              PresentEvent::SubmitFinal, PresentEvent::SubmitMetal,
+                                              PresentEvent::Notify};
   EXPECT_EQ(sink.events_, expected);
   EXPECT_EQ(sink.submit_count_, 1);
   EXPECT_EQ(sink.last_bound_.metadata.presentation_request_id, 249U);
@@ -171,24 +181,44 @@ TEST_F(MetalRendererFixture, MetalRendererPresentsWorkspaceTextureWithoutHostDow
   EXPECT_GT(sink.last_frame_.width, 0);
   EXPECT_GT(sink.last_frame_.height, 0);
   ASSERT_TRUE(static_cast<bool>(sink.last_metal_));
-  EXPECT_EQ(sink.last_metal_.texture_handle, sink.last_frame_.image.resource
-                                                 ? static_cast<scope::metal_detail::MetalTextureImageResource*>(
-                                                       sink.last_frame_.image.resource.get())
-                                                       ->native_object
-                                                 : 0U);
+  EXPECT_EQ(sink.last_metal_.texture_handle,
+            sink.last_frame_.image.resource
+                ? static_cast<scope::metal_detail::MetalTextureImageResource*>(
+                      sink.last_frame_.image.resource.get())
+                      ->native_object
+                : 0U);
+  EXPECT_TRUE(sink.viewer_texture_completed_before_submit_)
+      << "Qt Quick must not import a Metal texture before the DAG command buffer completes";
 
   renderer_->Device().WaitIdle();
-  auto* display = renderer_->Device().Workspace().Images().Find(
-      GraphValueId{NodeId{"drt"}, PortId{"display"}});
+  auto* display =
+      renderer_->Device().Workspace().Images().Find(GraphValueId{NodeId{"drt"}, PortId{"display"}});
   ASSERT_NE(display, nullptr);
   EXPECT_EQ(sink.last_metal_.texture_handle,
             reinterpret_cast<std::uintptr_t>(display->Texture().Native()));
 }
 
+TEST_F(MetalRendererFixture, MetalRoiKeepsNativePixelsWhenViewportTargetIsLarger) {
+  RecordingMetalPresentSink sink;
+  RenderRequest             request;
+  request.view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.25f, 0.25f, 0.25f};
+  request.view.viewport_extent            = Extent2D{100, 100};
+
+  ASSERT_NE(renderer_->Render(image_, DecodeRes::FULL, request, &sink, {}, false), nullptr);
+
+  // The prepared Bayer fixture has a 24x24 full-reference image after the demosaic border.
+  // Its quarter-size ROI therefore contains 6x6 native pixels. The viewer may enlarge those
+  // pixels with nearest-neighbor sampling; the Metal DAG must not interpolate them to 100x100.
+  EXPECT_EQ(sink.GetWidth(), 6);
+  EXPECT_EQ(sink.GetHeight(), 6);
+  EXPECT_EQ(sink.last_metal_.width, 6);
+  EXPECT_EQ(sink.last_metal_.height, 6);
+}
+
 TEST_F(MetalRendererFixture, MetalScopeTapUsesTheFinalDisplayTextureAndSubmissionSignal) {
-  RecordingMetalPresentSink     downstream;
-  FinalDisplayFrameTapSink      tap(&downstream, nullptr);
-  FrameCompletionSubmission     submission;
+  RecordingMetalPresentSink downstream;
+  FinalDisplayFrameTapSink  tap(&downstream, nullptr);
+  FrameCompletionSubmission submission;
   submission.metadata.image_identity          = 7;
   submission.metadata.session_epoch           = 2;
   submission.metadata.presentation_request_id = 88;
@@ -205,8 +235,8 @@ TEST_F(MetalRendererFixture, MetalScopeTapUsesTheFinalDisplayTextureAndSubmissio
   ASSERT_NE(signal, nullptr);
   EXPECT_NE(signal->command_buffer.get(), nullptr);
   ASSERT_TRUE(static_cast<bool>(downstream.last_metal_));
-  const auto* image = static_cast<scope::metal_detail::MetalTextureImageResource*>(
-      frame.image.resource.get());
+  const auto* image =
+      static_cast<scope::metal_detail::MetalTextureImageResource*>(frame.image.resource.get());
   ASSERT_NE(image, nullptr);
   EXPECT_EQ(downstream.last_metal_.texture_handle, image->native_object);
 }
@@ -240,8 +270,8 @@ TEST_F(MetalRendererFixture, MetalPipelineReturnReleasesSessionResourcesAfterGpu
 
 TEST_F(MetalRendererFixture, MetalBackendFailureDoesNotEnterCpuOrLegacyMetalExecution) {
   ASSERT_NE(RenderHost(true), nullptr);
-  const auto published_before = renderer_->SessionResources().published_result_count;
-  auto       develop          = document_->Develop()->Params().Params();
+  const auto published_before    = renderer_->SessionResources().published_result_count;
+  auto       develop             = document_->Develop()->Params().Params();
   develop.highlights_reconstruct = !develop.highlights_reconstruct;
   document_->Develop()->Params().ReplaceParams(develop);
   renderer_->Device().Workspace().Device().FailNextUpload();

@@ -122,6 +122,13 @@ QML properties, are the only exception. Keep the exception at the call site and 
 external wording in Alcedo-owned API names or surrounding prose. Before completing relevant edits,
 search first-party source, tests, docs, and plans for violations.
 
+**`Seed` verb ban in code.** Project-authored code identifiers, tests, and comments must not use
+`Seed` / `seed` as a verb for populate, insert, initialize, restore, copy, or apply operations. Name
+the concrete operation instead. Conventional seed usage remains allowed when it means an input to
+a random-number generator, cryptographic primitive, deterministic fuzz run, or an exact external
+API/model identifier. When touching code that contains a non-conventional `Seed` verb, replace it
+with the precise operation name in the same change.
+
 WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
 LibRaw test paths have hit stack overflows in this repository.

@@ -2,22 +2,22 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/geometry/render_geometry_resolver.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
-#include "edit/geometry/render_geometry_resolver.hpp"
-
 namespace alcedo {
 namespace {
 
 constexpr float kPxEps = 1e-4f;
 
-auto ResolveSimple(const SourceGeometry& source, const ImageGeometryParams& image = {},
-                   const ViewRequest& view = {}, const ResolutionRequest& resolution = {},
-                   const SamplingFootprint& footprint = {}) -> ResolvedRenderGeometry {
+auto            ResolveSimple(const SourceGeometry& source, const ImageGeometryParams& image = {},
+                              const ViewRequest& view = {}, const ResolutionRequest& resolution = {},
+                              const SamplingFootprint& footprint = {}) -> ResolvedRenderGeometry {
   return ResolveRenderGeometry(source, image, view, resolution, footprint);
 }
 
@@ -25,16 +25,15 @@ auto ResolveSimple(const SourceGeometry& source, const ImageGeometryParams& imag
 
 TEST(GpuDagGeometry, RenderGeometryRoundTripsReferenceAndRenderPixelCenters) {
   ImageGeometryParams image;
-  image.crop_rect         = NormalizedRect{0.10f, 0.15f, 0.70f, 0.60f};
-  image.rotation_degrees  = 23.0f;
-  image.expand_to_fit     = true;
+  image.crop_rect        = NormalizedRect{0.10f, 0.15f, 0.70f, 0.60f};
+  image.rotation_degrees = 23.0f;
+  image.expand_to_fit    = true;
   ViewRequest view;
   view.visible_rect_in_edit_space = NormalizedRect{0.20f, 0.10f, 0.50f, 0.60f};
   view.viewport_extent            = Extent2D{320, 240};
-  const auto geometry =
-      ResolveSimple(MakeSourceGeometry({80, 60}, {80, 60}), image, view, {}, {});
+  const auto geometry = ResolveSimple(MakeSourceGeometry({80, 60}, {80, 60}), image, view, {}, {});
 
-  float max_err = 0.0f;
+  float      max_err  = 0.0f;
   for (std::uint32_t y = 0; y < geometry.render_extent.height; y += 7) {
     for (std::uint32_t x = 0; x < geometry.render_extent.width; x += 11) {
       const auto center = PixelCenter(x, y);
@@ -64,10 +63,10 @@ TEST(GpuDagGeometry, FullCropZeroRotationMapsReferenceCornersToRenderCorners) {
 
 TEST(GpuDagGeometry, RotatedCropBoundsContainAllFourTransformedCorners) {
   ImageGeometryParams image;
-  image.crop_rect        = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
-  image.rotation_degrees = 35.0f;
-  image.expand_to_fit    = true;
-  const auto geometry = ResolveSimple(MakeSourceGeometry({200, 100}, {200, 100}), image);
+  image.crop_rect         = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
+  image.rotation_degrees  = 35.0f;
+  image.expand_to_fit     = true;
+  const auto    geometry  = ResolveSimple(MakeSourceGeometry({200, 100}, {200, 100}), image);
 
   const Vector2 corners[] = {{50.0f, 25.0f}, {150.0f, 25.0f}, {150.0f, 75.0f}, {50.0f, 75.0f}};
   const float   edit_w    = static_cast<float>(geometry.edit_extent.width);
@@ -88,8 +87,7 @@ TEST(GpuDagGeometry, ViewportCropAndDynamicScaleProduceRequestedRenderExtent) {
   view.viewport_extent = Extent2D{1920, 1080};
   ResolutionRequest half;
   half.render_scale = 0.5f;
-  const auto scaled =
-      ResolveSimple(MakeSourceGeometry({100, 100}, {100, 100}), {}, view, half, {});
+  const auto scaled = ResolveSimple(MakeSourceGeometry({100, 100}, {100, 100}), {}, view, half, {});
   EXPECT_EQ(scaled.render_extent, (Extent2D{960, 540}));
 
   ResolutionRequest clamped;
@@ -100,22 +98,44 @@ TEST(GpuDagGeometry, ViewportCropAndDynamicScaleProduceRequestedRenderExtent) {
   EXPECT_EQ(capped.render_extent, (Extent2D{800, 450}));
 }
 
+TEST(GpuDagGeometry, RoiLargerThanViewportIsDownsampledToPhysicalTarget) {
+  ViewRequest view;
+  view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
+  view.viewport_extent            = Extent2D{800, 600};
+
+  const auto geometry =
+      ResolveSimple(MakeSourceGeometry({4000, 3000}, {4000, 3000}), {}, view, {}, {});
+
+  EXPECT_EQ(geometry.render_extent, (Extent2D{800, 600}));
+  EXPECT_EQ(geometry.filter, TextureFilter::Bilinear);
+}
+
+TEST(GpuDagGeometry, RoiSmallerThanViewportKeepsNativePixelsForNearestViewerExpansion) {
+  ViewRequest view;
+  view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.25f, 0.125f, 0.125f};
+  view.viewport_extent            = Extent2D{800, 600};
+
+  const auto geometry =
+      ResolveSimple(MakeSourceGeometry({4000, 3000}, {4000, 3000}), {}, view, {}, {});
+
+  EXPECT_EQ(geometry.render_extent, (Extent2D{500, 375}));
+  EXPECT_EQ(geometry.filter, TextureFilter::Bilinear);
+}
+
 TEST(GpuDagGeometry, DecodeScaleDoesNotChangeNormalizedReferenceCoordinates) {
   ImageGeometryParams image;
-  image.crop_rect = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
-  const auto full =
-      ResolveSimple(MakeSourceGeometry({400, 300}, {400, 300}), image);
-  const auto quarter =
-      ResolveSimple(MakeSourceGeometry({100, 75}, {400, 300}, {}, 2), image);
+  image.crop_rect    = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
+  const auto full    = ResolveSimple(MakeSourceGeometry({400, 300}, {400, 300}), image);
+  const auto quarter = ResolveSimple(MakeSourceGeometry({100, 75}, {400, 300}, {}, 2), image);
 
   EXPECT_EQ(full.edit_extent, quarter.edit_extent);
   EXPECT_EQ(full.render_extent, quarter.render_extent);
 
   const auto n_full = NormalizedFromPixelCenter(
       TransformPoint(full.render_to_reference, PixelCenter(10, 8)), full.full_reference_extent);
-  const auto n_quarter = NormalizedFromPixelCenter(
-      TransformPoint(quarter.render_to_reference, PixelCenter(10, 8)),
-      quarter.full_reference_extent);
+  const auto n_quarter =
+      NormalizedFromPixelCenter(TransformPoint(quarter.render_to_reference, PixelCenter(10, 8)),
+                                quarter.full_reference_extent);
   EXPECT_NEAR(n_full.x, n_quarter.x, 1.0e-5f);
   EXPECT_NEAR(n_full.y, n_quarter.y, 1.0e-5f);
 
