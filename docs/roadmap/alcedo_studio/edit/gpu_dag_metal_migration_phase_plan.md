@@ -523,7 +523,7 @@ MetalDevelopPassesUseOneCommandBuffer
 **Status:** complete
 **Date:** 2026-08-26
 **Branch:** `feature/gpu-dag-metal`
-**Commit:** `da9c63a0` (working tree)
+**Commit:** `f3522df5`
 
 **Implemented:**
 
