@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0–M4 complete; M5–M7 planned
+Status: M0–M5 complete; M6–M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -819,6 +819,67 @@ MetalDisconnectedMaskUsesConstantOneWithoutTextureAllocation
 MetalNormalMixMatchesCudaReferenceWithinTolerance
 MetalMaskCacheDoesNotEvictBusyTextures
 ```
+
+##### Phase M5 completion record (2026-08-26)
+
+**Status:** complete
+**Date:** 2026-08-26
+**Branch:** `feature/gpu-dag-metal`
+
+**Implemented:**
+
+- `ExecuteMetalMask` encode-only MaskEvaluate/MaskFeather on the current command buffer. Raster R8 assets load from MaskStore into workspace `MaskTextureCache` mip chains. Dirty rectangles union to one blit; unchanged texels are not uploaded.
+- Analytic Radial/GraduatedNd and raster sampling both use `ResolvedRenderGeometry` / `MakeRasterMaskSamplingPlan`. Feather uses exact signed Euclidean distance (parallel-band horizontal/vertical + compose) matching the CUDA coverage, plateau, and antialiased-boundary rules.
+- Signed-distance intermediates allocate from `TransientBufferArena`. The signed-distance result lives in workspace `Values()` under GraphValueId and a mask content key (asset key + extent, no feather radius). A radius-only edit reuses the same ResourceId.
+- Primary Grade has one Normal Mix exit. Connected masks multiply `grade.Mix` by the RenderSpace R8 coverage. Disconnected masks use constant 1 and do not allocate a white R8 texture.
+- `GraphCompiler` adds raster signed-distance peak bytes to `ExecutionPlan.peak_transient_bytes`. Mask pipeline states come from `ComputePipelineCache` (`mask.metal` → `GpuDagMetalShaders`). Missing metallib throws.
+
+**Deleted:**
+
+- None of the old Metal product wrappers. The DAG path does not call fused-pipeline mask or CPU image processing.
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalGradeTest GpuDagMetalDevelopTest GpuDagMetalWorkspaceTest GpuDagRawInputTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R 'GpuDagMetalGradeTest|GpuDagMetalWorkspaceTest|GpuDagMetalDevelopTest|GpuDagRawInputTest.GpuDagGraphCompiler|GpuDagRawInputTest.GpuDagResultContentKey' --output-on-failure`
+- result: 25/25 grade (9 M3 + 8 M4 + 8 M5), 8/8 workspace, 10/10 develop, 15/15 GraphCompiler, 11/11 ResultContentKey PASS
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalRasterMaskUploadsOnlyChangedR8Rectangle` | `GpuDagMetalGradeTest` | PASS |
+| `MetalRasterMaskMipChainUsesWorkspaceCache` | `GpuDagMetalGradeTest` | PASS |
+| `MetalMaskFeatherMatchesExactSignedDistanceReference` | `GpuDagMetalGradeTest` | PASS |
+| `MetalFeatherRadiusEditReusesSignedDistanceResult` | `GpuDagMetalGradeTest` | PASS |
+| `MetalMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution` | `GpuDagMetalGradeTest` | PASS |
+| `MetalDisconnectedMaskUsesConstantOneWithoutTextureAllocation` | `GpuDagMetalGradeTest` | PASS |
+| `MetalNormalMixMatchesCudaReferenceWithinTolerance` | `GpuDagMetalGradeTest` | PASS |
+| `MetalMaskCacheDoesNotEvictBusyTextures` | `GpuDagMetalGradeTest` | PASS |
+
+**Resource evidence:**
+
+- buffer create/free: feather-radius edit reuses the signed-distance ResourceId and reports 0 additional SDF transient bytes (`MetalFeatherRadiusEditReusesSignedDistanceResult`)
+- texture create/free: same MaskAssetKey at full and half render scale keeps the persistent R8 ResourceId and mip chain (`MetalRasterMaskMipChainUsesWorkspaceCache`)
+- dirty upload: unioned R8 rectangle `{1,1,4,4}` and 16 host-to-device bytes (`MetalRasterMaskUploadsOnlyChangedR8Rectangle`)
+- cache: busy submission textures are not evicted under a 1-byte budget (`MetalMaskCacheDoesNotEvictBusyTextures`)
+- disconnected mix: `MaskTextures` entry count stays 0 and no mask GraphValueId is allocated (`MetalDisconnectedMaskUsesConstantOneWithoutTextureAllocation`)
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: synthetic Direct RGB 16×12 / 9×9; `ExecuteMetalMask` and `ExecuteMetalPrimaryGrade` after Develop/Geometry/CameraColor
+- cold: first raster upload + mip chain + optional signed-distance transients allocate heap/buffer/texture/pipeline
+- warm median: not a product-frame A/B; identical mask asset at a new render scale reuses the persistent texture; radius-only feather reuses signed distance
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M6: DRT/present. Identity DRT copy is not a display path.
+- M7: delete `highlight_shadow_local_tone::MetalStage` and the old fused Metal product path.
+
+**LOC note:** `metal_mask_pass.hpp` 45, `metal_mask_pass.mm` 511, `mask.metal` 322, `metal_mask_test.cpp` 439, `metal_primary_grade_pass.mm` 476, `primary_grade.metal` 257. No new file crossed 1000 LOC.
+
+**Residual gaps:** DRT Metal encoder still copies Grade output until M6. Old RAW Metal wrappers and `MetalStage` still own static scratch for the pre-DAG product path.
 
 ## 11. Phase M6 — DRT、scope、present 与产品切换
 

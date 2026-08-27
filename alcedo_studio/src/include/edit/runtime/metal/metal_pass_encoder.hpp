@@ -7,6 +7,7 @@
 #ifdef HAVE_METAL
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 
@@ -41,6 +42,14 @@ struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      PipelineDocument& document, MaskStore*) {
     ExecuteMetalCameraColor(device, plan, document);
+  }
+};
+
+template <>
+struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
+  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     PipelineDocument& document, MaskStore* mask_store) {
+    (void)ExecuteMetalMask(device, plan, document, mask_store);
   }
 };
 

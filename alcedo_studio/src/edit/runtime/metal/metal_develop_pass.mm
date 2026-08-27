@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 
 #include <array>
@@ -42,17 +43,17 @@ namespace {
 MetalDemosaicNetModelCache* g_metal_neural_cache_for_test = nullptr;
 
 struct GeometryResampleParams {
-  float        m00;
-  float        m01;
-  float        m02;
-  float        m10;
-  float        m11;
-  float        m12;
+  float         m00;
+  float         m01;
+  float         m02;
+  float         m10;
+  float         m11;
+  float         m12;
   std::uint32_t decoded_width;
   std::uint32_t decoded_height;
   std::uint32_t render_width;
   std::uint32_t render_height;
-  float        border[4];
+  float         border[4];
   std::uint32_t use_bicubic;
 };
 
@@ -91,7 +92,7 @@ void DispatchGeometryResample(void* command_buffer, const ResolvedRenderGeometry
       ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH, "geometry_resample_rgba32f",
       "Metal GeometryResample");
 #endif
-  const auto& gpu = geometry.gpu_data;
+  const auto&            gpu = geometry.gpu_data;
   GeometryResampleParams params{
       .m00            = gpu.render_to_decoded[0],
       .m01            = gpu.render_to_decoded[1],
@@ -103,9 +104,8 @@ void DispatchGeometryResample(void* command_buffer, const ResolvedRenderGeometry
       .decoded_height = gpu.decoded_height,
       .render_width   = gpu.render_width,
       .render_height  = gpu.render_height,
-      .border         = {gpu.border_rgba[0], gpu.border_rgba[1], gpu.border_rgba[2],
-                         gpu.border_rgba[3]},
-      .use_bicubic    = geometry.filter == TextureFilter::Bicubic ? 1U : 0U,
+      .border = {gpu.border_rgba[0], gpu.border_rgba[1], gpu.border_rgba[2], gpu.border_rgba[3]},
+      .use_bicubic = geometry.filter == TextureFilter::Bicubic ? 1U : 0U,
   };
   auto* buffer  = static_cast<MTL::CommandBuffer*>(command_buffer);
   auto  compute = NS::RetainPtr(buffer->computeCommandEncoder());
@@ -161,30 +161,30 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
                   ResourceLease<MetalBackend>& linear, ResourceLease<MetalBackend>& packed,
                   bool hlr) {
   std::string error;
-  const auto geometry = ComputeNeuralAlignedGeometry(
-      input.cfa_pattern, static_cast<int>(linear.Texture().Width()),
-      static_cast<int>(linear.Texture().Height()), 32, &error);
+  const auto  geometry =
+      ComputeNeuralAlignedGeometry(input.cfa_pattern, static_cast<int>(linear.Texture().Width()),
+                                   static_cast<int>(linear.Texture().Height()), 32, &error);
   if (!geometry.has_value()) {
     throw std::runtime_error("ExecuteMetalDevelop: Neural Engine preprocess failed: " + error);
   }
-  const RectI crop = CropOrFull(input, static_cast<std::uint32_t>(geometry->aligned_width),
-                                static_cast<std::uint32_t>(geometry->aligned_height));
-  const auto out_w = static_cast<std::uint32_t>(crop.width);
-  const auto out_h = static_cast<std::uint32_t>(crop.height);
-  auto neural_out  = AcquireScratch(device.Workspace(), out_w, out_h, TextureFormat::Rgba32f);
-  auto cfa_image =
-      metal::MetalImage::Wrap(static_cast<MTL::Texture*>(linear.Texture().Native()));
-  auto out_image = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(neural_out.Texture().Native()));
+  const RectI crop       = CropOrFull(input, static_cast<std::uint32_t>(geometry->aligned_width),
+                                      static_cast<std::uint32_t>(geometry->aligned_height));
+  const auto  out_w      = static_cast<std::uint32_t>(crop.width);
+  const auto  out_h      = static_cast<std::uint32_t>(crop.height);
+  auto        neural_out = AcquireScratch(device.Workspace(), out_w, out_h, TextureFormat::Rgba32f);
+  auto cfa_image = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(linear.Texture().Native()));
+  auto out_image =
+      metal::MetalImage::Wrap(static_cast<MTL::Texture*>(neural_out.Texture().Native()));
 
   MetalDemosaicNetLoadOptions load_options;
   if (g_metal_neural_cache_for_test != nullptr) {
     load_options.model_dir = "alcedo-missing-demosaicnet-models";
   }
-  MetalDemosaicNetModelCache& cache = g_metal_neural_cache_for_test == nullptr
-                                          ? MetalDemosaicNetModelCache::Instance()
-                                          : *g_metal_neural_cache_for_test;
-  const bool is_bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
-  const auto variant  = is_bayer ? MetalDemosaicNetVariant::Bayer : MetalDemosaicNetVariant::XTrans;
+  MetalDemosaicNetModelCache& cache    = g_metal_neural_cache_for_test == nullptr
+                                             ? MetalDemosaicNetModelCache::Instance()
+                                             : *g_metal_neural_cache_for_test;
+  const bool                  is_bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
+  const auto variant = is_bayer ? MetalDemosaicNetVariant::Bayer : MetalDemosaicNetVariant::XTrans;
   if (!cache.EnsureLoaded(variant, load_options)) {
     throw std::runtime_error(std::string("ExecuteMetalDevelop: Neural Engine unavailable: ") +
                              cache.LastError());
@@ -236,29 +236,29 @@ void EncodeLegacyDemosaic(MetalRenderDevice& device, void* command_buffer,
   const auto width  = linear.Texture().Width();
   const auto height = linear.Texture().Height();
   if (input.cfa_pattern.kind == RawCfaKind::XTrans6x6) {
-    auto green = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-    auto rgb   = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    auto      green  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+    auto      rgb    = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
     const int passes = input.downsample_passes == 0 ? 3 : 1;
     metal::EncodeXTrans(command_buffer, Native(linear.Texture()), Native(green.Texture()),
                         Native(rgb.Texture()), input.cfa_pattern.xtrans_pattern, width, height,
                         passes);
     auto* src = Native(rgb.Texture());
     if (hlr) {
-      auto hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
-      void* stats  = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
+      auto  hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+      void* stats   = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
       auto [native_stats, offset] =
           device.Workspace().Device().ResolveDeviceMemory(stats, 6 * sizeof(float));
       device.Workspace().Device().FillDeviceMemory(stats, 6 * sizeof(float), 0,
                                                    device.CommandContext());
       device.Workspace().Device().EndCommandEncoders(device.CommandContext());
-      metal::EncodeHighlightReconstruct(command_buffer, src, Native(hlr_dst.Texture()), native_stats,
-                                        offset, input.linearization.cam_mul, width, height);
+      metal::EncodeHighlightReconstruct(command_buffer, src, Native(hlr_dst.Texture()),
+                                        native_stats, offset, input.linearization.cam_mul, width,
+                                        height);
       src = Native(hlr_dst.Texture());
     }
-    metal::EncodeCopyRgbaCropInverseOrient(command_buffer, src, Native(packed.Texture()),
-                                           CropOrFull(input, width, height),
-                                           input.linearization.cam_mul,
-                                           input.sensor.orientation_flip);
+    metal::EncodeCopyRgbaCropInverseOrient(
+        command_buffer, src, Native(packed.Texture()), CropOrFull(input, width, height),
+        input.linearization.cam_mul, input.sensor.orientation_flip);
     return;
   }
 
@@ -271,14 +271,14 @@ void EncodeLegacyDemosaic(MetalRenderDevice& device, void* command_buffer,
                         Native(g.Texture()), Native(b.Texture()), Native(vh.Texture()),
                         Native(pq.Texture()), input.cfa_pattern.bayer_pattern, width, height);
   if (hlr) {
-    auto rgba = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    auto        rgba = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
     const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     metal::EncodePackPlanesCropInverseOrient(
         command_buffer, Native(r.Texture()), Native(g.Texture()), Native(b.Texture()),
         Native(rgba.Texture()), RectI{0, 0, static_cast<int>(width), static_cast<int>(height)},
         identity, 0);
-    auto hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
-    void* stats  = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
+    auto  hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    void* stats   = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
     auto [native_stats, offset] =
         device.Workspace().Device().ResolveDeviceMemory(stats, 6 * sizeof(float));
     device.Workspace().Device().FillDeviceMemory(stats, 6 * sizeof(float), 0,
@@ -287,10 +287,10 @@ void EncodeLegacyDemosaic(MetalRenderDevice& device, void* command_buffer,
     metal::EncodeHighlightReconstruct(command_buffer, Native(rgba.Texture()),
                                       Native(hlr_dst.Texture()), native_stats, offset,
                                       input.linearization.cam_mul, width, height);
-    metal::EncodeCopyRgbaCropInverseOrient(command_buffer, Native(hlr_dst.Texture()),
-                                           Native(packed.Texture()), CropOrFull(input, width, height),
-                                           input.linearization.cam_mul,
-                                           input.sensor.orientation_flip);
+    metal::EncodeCopyRgbaCropInverseOrient(
+        command_buffer, Native(hlr_dst.Texture()), Native(packed.Texture()),
+        CropOrFull(input, width, height), input.linearization.cam_mul,
+        input.sensor.orientation_flip);
     return;
   }
   metal::EncodePackPlanesCropInverseOrient(
@@ -349,6 +349,7 @@ void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan) {
   add(ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH, "camera_color_acescc", "Metal CameraColor");
 #endif
   AppendMetalPrimaryGradeWarmup(pipelines);
+  AppendMetalMaskWarmup(pipelines);
   (void)plan;
   backend.WarmUpPipelines(pipelines);
 }
@@ -371,15 +372,15 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     workspace.TransientBuffers().Reserve(plan.peak_transient_bytes);
   }
 
-  const auto flags     = develop->Params().Params();
-  const bool hlr       = flags.highlights_reconstruct;
-  const auto out_w     = plan.source.develop_output_extent.width;
-  const auto out_h     = plan.source.develop_output_extent.height;
-  const GraphValueId sensor_id   = plan.sensor_linear_output;
-  const GraphValueId demosaic_id = input.dng_warp_rectilinear.has_value()
-                                       ? GraphValueId{NodeId{"develop"}, PortId{"sensor_unwarped"}}
-                                       : sensor_id;
-  auto& decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
+  const auto         flags         = develop->Params().Params();
+  const bool         hlr           = flags.highlights_reconstruct;
+  const auto         out_w         = plan.source.develop_output_extent.width;
+  const auto         out_h         = plan.source.develop_output_extent.height;
+  const GraphValueId sensor_id     = plan.sensor_linear_output;
+  const GraphValueId demosaic_id   = input.dng_warp_rectilinear.has_value()
+                                         ? GraphValueId{NodeId{"develop"}, PortId{"sensor_unwarped"}}
+                                         : sensor_id;
+  auto&              decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
@@ -429,8 +430,9 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
       throw std::runtime_error("ExecuteMetalDevelop: DNG warp source was lost");
     }
     command_buffer = CommandBuffer(device);
-    metal::EncodeWarpRectilinear(command_buffer, Native(source->Texture()), Native(warped.Texture()),
-                                 *input.dng_warp_rectilinear, out_w, out_h);
+    metal::EncodeWarpRectilinear(command_buffer, Native(source->Texture()),
+                                 Native(warped.Texture()), *input.dng_warp_rectilinear, out_w,
+                                 out_h);
   }
 
   if (pending.has_value()) {
@@ -482,7 +484,7 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   }
   const auto width  = input->Texture().Width();
   const auto height = input->Texture().Height();
-  auto& output =
+  auto&      output =
       workspace.AcquireImageForWrite(plan.develop_output, {width, height, TextureFormat::Rgba32f});
   input = workspace.Images().Find(plan.geometry_output);
   if (input == nullptr) {
@@ -508,8 +510,8 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
     arena.ApplyPatch(key, patch);
   }
   arena.UploadDirty(device.CommandContext());
-  const auto binding         = arena.Binding(key);
-  auto*      command_buffer  = CommandBuffer(device);
+  const auto binding        = arena.Binding(key);
+  auto*      command_buffer = CommandBuffer(device);
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),
                       binding.offset);
 }

@@ -29,6 +29,12 @@ auto                  AlignUp(std::size_t value, std::size_t alignment) -> std::
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
+auto EstimateMaskSdfTransientBytes(Extent2D extent) -> std::size_t {
+  const std::size_t pixels =
+      static_cast<std::size_t>(std::max(extent.width, 1u)) * std::max(extent.height, 1u);
+  return 5 * AlignUp(pixels * sizeof(float), kAlign);
+}
+
 auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size_t {
   const std::size_t w      = source.host_extent.width;
   const std::size_t h      = source.host_extent.height;
@@ -226,6 +232,12 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
       plan.mask_output        = GraphValueId{mask->Id(), PortId{"mask"}};
       plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskEvaluate});
       plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskFeather});
+      if (kind == CompiledMaskKind::Raster) {
+        const Extent2D mask_extent{
+            std::max(source.full_reference_extent.width, source.host_extent.width),
+            std::max(source.full_reference_extent.height, source.host_extent.height)};
+        plan.peak_transient_bytes += EstimateMaskSdfTransientBytes(mask_extent);
+      }
       break;
     }
   }

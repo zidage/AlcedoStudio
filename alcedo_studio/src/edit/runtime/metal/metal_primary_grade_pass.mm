@@ -119,8 +119,10 @@ void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D&
 
 void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
                  const MetalBackend::Texture2D& adjusted, MetalBackend::Texture2D& dst, float mix,
-                 std::uint32_t width, std::uint32_t height) {
-  auto  pipeline = Pipeline("primary_grade_mix", "Metal PrimaryGrade Mix");
+                 const MetalBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
+  auto  pipeline = mask == nullptr
+                       ? Pipeline("primary_grade_mix", "Metal PrimaryGrade Mix")
+                       : Pipeline("primary_grade_mix_masked", "Metal PrimaryGrade Mix Masked");
   auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
   if (encoder == nullptr) {
@@ -130,6 +132,9 @@ void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& sourc
   encoder->setTexture(static_cast<MTL::Texture*>(source.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(adjusted.Native()), 1);
   encoder->setTexture(static_cast<MTL::Texture*>(dst.Native()), 2);
+  if (mask != nullptr) {
+    encoder->setTexture(static_cast<MTL::Texture*>(mask->Native()), 3);
+  }
   encoder->setBytes(&mix, sizeof(mix), 0);
   DispatchThreads(encoder, pipeline.get(), width, height);
   device.Workspace().Device().NoteComputeDispatch();
@@ -208,6 +213,9 @@ void AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines) 
                                           "primary_grade_pointwise", "Metal PrimaryGrade"});
   pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH,
                                           "primary_grade_mix", "Metal PrimaryGrade Mix"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH,
+                                          "primary_grade_mix_masked",
+                                          "Metal PrimaryGrade Mix Masked"});
 #else
   (void)pipelines;
 #endif
@@ -447,10 +455,20 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
 
   if (!skip_mix) {
     AllocateDest();
-    auto& source   = Resolve(ImageSlot::Input, 0);
-    auto& adjusted = Resolve(current_slot, current_scratch);
-    auto& dest     = Resolve(dest_slot, dest_scratch);
-    DispatchMix(device, source, adjusted, dest, mix, width, height);
+    auto&                          source       = Resolve(ImageSlot::Input, 0);
+    auto&                          adjusted     = Resolve(current_slot, current_scratch);
+    auto&                          dest         = Resolve(dest_slot, dest_scratch);
+    const MetalBackend::Texture2D* mask_texture = nullptr;
+    if (plan.primary_grade_mask) {
+      auto* mask = workspace.Images().Find(plan.mask_output);
+      if (mask == nullptr || mask->Texture().Native() == nullptr ||
+          mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
+          mask->Texture().Height() != height) {
+        throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled mask output is missing");
+      }
+      mask_texture = &mask->Texture();
+    }
+    DispatchMix(device, source, adjusted, dest, mix, mask_texture, width, height);
   }
   return result;
 }

@@ -240,3 +240,18 @@ kernel void primary_grade_mix(texture2d<float, access::read> source [[texture(0)
   const float4 s = source.read(gid);
   dst.write(float4(s.xyz + (a.xyz - s.xyz) * grade_mix, s.w), gid);
 }
+
+kernel void primary_grade_mix_masked(texture2d<float, access::read> source [[texture(0)]],
+                                     texture2d<float, access::read> adjusted [[texture(1)]],
+                                     texture2d<float, access::write> dst [[texture(2)]],
+                                     texture2d<float, access::read> mask [[texture(3)]],
+                                     constant float& grade_mix [[buffer(0)]],
+                                     uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= source.get_width() || gid.y >= source.get_height()) {
+    return;
+  }
+  const float4 a   = adjusted.read(gid);
+  const float4 s   = source.read(gid);
+  const float  mix = grade_mix * mask.read(gid).r;
+  dst.write(float4(s.xyz + (a.xyz - s.xyz) * mix, s.w), gid);
+}
