@@ -83,6 +83,10 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_MASK_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.air")
     set(METAL_MASK_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.metallib"
         CACHE INTERNAL "Metal DAG mask metallib path" FORCE)
+    set(METAL_DRT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt.metal")
+    set(METAL_DRT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.air")
+    set(METAL_DRT_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.metallib"
+        CACHE INTERNAL "Metal DAG DRT metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -331,12 +335,25 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DAG mask library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagDrtShaders
+        "${METAL_DRT_SRC}"
+        "${METAL_DRT_AIR}"
+        "${METAL_DRT_METALLIB}"
+        "Compiling Metal DAG DRT shader"
+        "Linking Metal DAG DRT library"
+        DEPENDS
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
+    )
+
     add_custom_target(GpuDagMetalShaders DEPENDS
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
         "${METAL_PRIMARY_GRADE_METALLIB}"
         "${METAL_LOCAL_TONE_METALLIB}"
         "${METAL_MASK_METALLIB}"
+        "${METAL_DRT_METALLIB}"
     )
 
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
@@ -364,6 +381,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_PRIMARY_GRADE_METALLIB}"
         "${METAL_LOCAL_TONE_METALLIB}"
         "${METAL_MASK_METALLIB}"
+        "${METAL_DRT_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE

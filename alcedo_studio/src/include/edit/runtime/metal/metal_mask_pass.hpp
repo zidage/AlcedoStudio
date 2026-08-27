@@ -14,7 +14,6 @@
 #include "edit/mask/mask_store.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
-#include "edit/runtime/metal/metal_renderer.hpp"
 
 namespace alcedo {
 

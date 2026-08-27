@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "edit/runtime/basic_render_device.hpp"
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "image/image_buffer.hpp"
@@ -11,22 +12,18 @@
 namespace alcedo {
 
 /**
- * @brief Metal present/download. Fails until the Metal presenter lands.
+ * @brief Metal DRT texture present and host download. No CPU image-processing path.
  *
- * Does not copy to CPU as a stand-in for display, and does not call CUDA present.
+ * Present submits the workspace MTLTexture to the sink. Host download runs only
+ * when the product path requested an export or test ImageBuffer.
  */
 template <>
 struct FramePresenter<MetalBackend> {
-  template <class Device>
-  static void Present(Device&, const GraphValueId&, IFrameSink&, const FrameCompletionSubmission&,
-                      const ViewerDisplayConfig&) {
-    throw std::runtime_error("FramePresenter<MetalBackend>: present is not implemented");
-  }
-
-  template <class Device>
-  static auto Download(Device&, const GraphValueId&) -> std::shared_ptr<ImageBuffer> {
-    throw std::runtime_error("FramePresenter<MetalBackend>: host download is not implemented");
-  }
+  static void Present(BasicRenderDevice<MetalBackend>& device, const GraphValueId& output_id,
+                      IFrameSink& sink, const FrameCompletionSubmission& submission,
+                      const ViewerDisplayConfig& display_config);
+  static auto Download(BasicRenderDevice<MetalBackend>& device, const GraphValueId& output_id)
+      -> std::shared_ptr<ImageBuffer>;
 };
 
 }  // namespace alcedo

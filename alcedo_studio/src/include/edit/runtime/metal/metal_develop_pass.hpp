@@ -11,7 +11,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/execution_plan.hpp"
-#include "edit/runtime/metal/metal_renderer.hpp"
+#include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
 
@@ -28,9 +28,6 @@ void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan
 
 void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& plan,
                              const PipelineDocument& document);
-
-void ExecuteMetalIdentityCopy(MetalRenderDevice& device, const GraphValueId& source,
-                              const GraphValueId& destination, ImageExtent extent);
 
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
 

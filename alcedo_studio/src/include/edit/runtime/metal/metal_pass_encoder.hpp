@@ -7,6 +7,7 @@
 #ifdef HAVE_METAL
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "edit/runtime/pass_encoder.hpp"
@@ -64,10 +65,8 @@ struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::Drt> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&, MaskStore*) {
-    ExecuteMetalIdentityCopy(
-        device, plan.primary_grade_output, plan.display_output,
-        ImageExtent{plan.geometry.render_extent.width, plan.geometry.render_extent.height});
+                     PipelineDocument& document, MaskStore*) {
+    (void)ExecuteMetalDrt(device, plan, document);
   }
 };
 

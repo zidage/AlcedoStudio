@@ -23,11 +23,17 @@
 #include "edit/pipeline/pipeline.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#include "edit/geometry/render_request.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#endif
+#ifdef HAVE_CUDA
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#endif
+#ifdef HAVE_METAL
+#include "edit/runtime/metal/metal_renderer.hpp"
 #endif
 
 namespace alcedo {
@@ -35,7 +41,7 @@ namespace alcedo {
 namespace {
 using ProfileClock = std::chrono::steady_clock;
 
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
 void ApplyImportedCameraProfile(PipelineDocument&             document,
                                 const RawRuntimeColorContext& imported) {
   auto* develop = document.Develop();
@@ -48,6 +54,61 @@ void ApplyImportedCameraProfile(PipelineDocument&             document,
   if (next != payload) {
     develop->Params().ReplaceParams(std::move(next));
   }
+}
+
+auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewport,
+                              const nlohmann::json& render_params, bool force_cpu_output)
+    -> RenderRequest {
+  RenderRequest request;
+  if (viewport.has_value() && viewport->reference_width_ > 0 && viewport->reference_height_ > 0) {
+    request.view.visible_rect_in_edit_space = {
+        static_cast<float>(viewport->x_) / viewport->reference_width_,
+        static_cast<float>(viewport->y_) / viewport->reference_height_, viewport->scale_x_,
+        viewport->scale_y_};
+    if (viewport->target_width_ > 0 && viewport->target_height_ > 0) {
+      request.view.viewport_extent = {static_cast<std::uint32_t>(viewport->target_width_),
+                                      static_cast<std::uint32_t>(viewport->target_height_)};
+    }
+  }
+  if (render_params.contains("resize") && render_params["resize"].is_object()) {
+    const auto& resize = render_params["resize"];
+    if (resize.value("enable_scale", false)) {
+      request.resolution.max_edge =
+          static_cast<std::uint32_t>(std::max(0, resize.value("maximum_edge", 0)));
+    }
+  }
+  request.resolution.quality = force_cpu_output ? RenderQuality::Export : RenderQuality::Preview;
+  return request;
+}
+
+template <class ProductRenderer>
+auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
+                        const std::shared_ptr<PipelineDocument>&     document,
+                        nlohmann::json&                              legacy_snapshot,
+                        bool                                         mirror_legacy,
+                        const std::optional<RawRuntimeColorContext>& injected,
+                        const nlohmann::json&                        legacy_params,
+                        const std::shared_ptr<ImageBuffer>&          input, DecodeRes decode_res,
+                        const RenderRequest& request, IFrameSink* sink,
+                        const FrameCompletionSubmission& submission, bool require_host_output,
+                        RenderCachePolicy cache_policy) -> std::shared_ptr<ImageBuffer> {
+  if (!renderer) {
+    renderer = std::make_shared<ProductRenderer>(document);
+  }
+  if (mirror_legacy && AllowsLegacyStageAdapterRemirror(*document)) {
+    if (legacy_params != legacy_snapshot) {
+      const auto error = LegacyPipelineImporter::ApplyOnto(*document, legacy_params);
+      if (!error.empty()) {
+        throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " + error);
+      }
+      legacy_snapshot = legacy_params;
+      if (injected.has_value()) {
+        ApplyImportedCameraProfile(*document, *injected);
+      }
+    }
+  }
+  return renderer->Render(input, decode_res, request, sink, submission, require_host_output,
+                          cache_policy);
 }
 #endif
 
@@ -201,52 +262,38 @@ auto CPUPipelineExecutor::GetStage(PipelineStageName stage) -> PipelineStage& {
 auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     -> std::shared_ptr<ImageBuffer> {
   const auto apply_start = ProfileClock::now();
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+  const bool use_gpu_dag =
 #ifdef HAVE_CUDA
-  if (resolved_accelerator_backend_ == GpuBackendKind::CUDA && pipeline_document_) {
-    // Existing editor controls still write the stage adapter during G7. Mirror it into the
-    // live document only when it changed. ApplyOnto keeps extra graph nodes and import-time
-    // camera matrices; replacing the document would rebuild every Model, mark them dirty,
-    // and miss GPU result cache on slider frames.
-    if (!cuda_product_renderer_) {
-      cuda_product_renderer_ = std::make_shared<CudaRenderer>(pipeline_document_);
+      resolved_accelerator_backend_ == GpuBackendKind::CUDA ||
+#endif
+#ifdef HAVE_METAL
+      resolved_accelerator_backend_ == GpuBackendKind::Metal ||
+#endif
+      false;
+  if (pipeline_document_ && use_gpu_dag) {
+    const auto request = BuildGpuDagRenderRequest(render_request_viewport_, render_params_,
+                                                  force_cpu_output_);
+    const auto cache_policy = enable_cache_ ? RenderCachePolicy::UseSessionCache
+                                            : RenderCachePolicy::BypassSessionCache;
+#ifdef HAVE_CUDA
+    if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
+      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
     }
-    if (mirror_legacy_stage_adapter_ && AllowsLegacyStageAdapterRemirror(*pipeline_document_)) {
-      const auto legacy = ExportPipelineParams();
-      if (legacy != cuda_product_legacy_snapshot_) {
-        const auto error = LegacyPipelineImporter::ApplyOnto(*pipeline_document_, legacy);
-        if (!error.empty()) {
-          throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " + error);
-        }
-        cuda_product_legacy_snapshot_ = legacy;
-        if (injected_raw_color_context_.has_value()) {
-          ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
-        }
-      }
+#endif
+#ifdef HAVE_METAL
+    if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
+      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
     }
-    RenderRequest request;
-    if (const auto& viewport = render_request_viewport_;
-        viewport.has_value() && viewport->reference_width_ > 0 && viewport->reference_height_ > 0) {
-      request.view.visible_rect_in_edit_space = {
-          static_cast<float>(viewport->x_) / viewport->reference_width_,
-          static_cast<float>(viewport->y_) / viewport->reference_height_, viewport->scale_x_,
-          viewport->scale_y_};
-      if (viewport->target_width_ > 0 && viewport->target_height_ > 0) {
-        request.view.viewport_extent = {static_cast<std::uint32_t>(viewport->target_width_),
-                                        static_cast<std::uint32_t>(viewport->target_height_)};
-      }
-    }
-    if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
-      const auto& resize = render_params_["resize"];
-      if (resize.value("enable_scale", false)) {
-        request.resolution.max_edge =
-            static_cast<std::uint32_t>(std::max(0, resize.value("maximum_edge", 0)));
-      }
-    }
-    request.resolution.quality = force_cpu_output_ ? RenderQuality::Export : RenderQuality::Preview;
-    const auto cache_policy    = enable_cache_ ? RenderCachePolicy::UseSessionCache
-                                               : RenderCachePolicy::BypassSessionCache;
-    return cuda_product_renderer_->Render(input, decode_res_, request, frame_sink_,
-                                          bound_frame_submission_, force_cpu_output_, cache_policy);
+#endif
   }
 #endif
   if (exec_stages_.empty()) {
@@ -362,16 +409,23 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 
 void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                                               bool mirror_legacy_stage_adapter) {
-#ifdef HAVE_CUDA
-  pipeline_document_            = std::move(document);
-  mirror_legacy_stage_adapter_  = mirror_legacy_stage_adapter;
-  cuda_product_legacy_snapshot_ = nullptr;
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+  pipeline_document_           = std::move(document);
+  mirror_legacy_stage_adapter_ = mirror_legacy_stage_adapter;
+  gpu_dag_legacy_snapshot_     = nullptr;
   if (pipeline_document_ && injected_raw_color_context_.has_value()) {
     ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
   }
+#ifdef HAVE_CUDA
   if (cuda_product_renderer_) {
     cuda_product_renderer_->SetDocument(pipeline_document_);
   }
+#endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->SetDocument(pipeline_document_);
+  }
+#endif
 #else
   (void)document;
   (void)mirror_legacy_stage_adapter;
@@ -806,7 +860,7 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
   injected_raw_color_context_ = ctx;
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
   if (pipeline_document_) {
     ApplyImportedCameraProfile(*pipeline_document_, ctx);
   }
@@ -819,7 +873,7 @@ void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
       color_temp_entry.has_value() && color_temp_entry.value() && color_temp_entry.value()->op_) {
     color_temp_entry.value()->op_->SetGlobalParams(global_params_);
     auto color_temp_params = color_temp_entry.value()->op_->GetParams();
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
     if (pipeline_document_ != nullptr && pipeline_document_->Develop() != nullptr) {
       const auto& develop = pipeline_document_->Develop()->Params().Params();
       if (!color_temp_params.contains("color_temp") ||
@@ -863,6 +917,11 @@ void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
     cuda_product_renderer_->ReleaseSessionCaches();
   }
 #endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 void CPUPipelineExecutor::ReleasePreviewGpuScratch() {
@@ -882,6 +941,11 @@ void CPUPipelineExecutor::ReleaseAllGPUResources() {
 #ifdef HAVE_CUDA
   if (cuda_product_renderer_) {
     cuda_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->ReleaseSessionCaches();
   }
 #endif
 }

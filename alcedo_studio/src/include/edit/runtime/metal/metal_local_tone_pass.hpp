@@ -13,7 +13,6 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
-#include "edit/runtime/metal/metal_renderer.hpp"
 
 namespace alcedo {
 

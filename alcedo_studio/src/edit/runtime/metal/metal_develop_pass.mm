@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 
@@ -350,6 +351,7 @@ void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan) {
 #endif
   AppendMetalPrimaryGradeWarmup(pipelines);
   AppendMetalMaskWarmup(pipelines);
+  AppendMetalDrtWarmup(pipelines);
   (void)plan;
   backend.WarmUpPipelines(pipelines);
 }
@@ -514,22 +516,6 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   auto*      command_buffer = CommandBuffer(device);
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),
                       binding.offset);
-}
-
-void ExecuteMetalIdentityCopy(MetalRenderDevice& device, const GraphValueId& source,
-                              const GraphValueId& destination, ImageExtent extent) {
-  auto& workspace = device.Workspace();
-  auto* input     = workspace.Images().Find(source);
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteMetalIdentityCopy: missing source texture");
-  }
-  auto& output = workspace.AcquireImageForWrite(
-      destination, {extent.width, extent.height, TextureFormat::Rgba32f});
-  input = workspace.Images().Find(source);
-  if (input == nullptr) {
-    throw std::runtime_error("ExecuteMetalIdentityCopy: source texture lost during acquire");
-  }
-  workspace.Device().CopyTexture2D(input->Texture(), output.Texture(), device.CommandContext());
 }
 
 }  // namespace alcedo

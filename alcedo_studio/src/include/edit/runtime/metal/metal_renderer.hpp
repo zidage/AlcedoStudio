@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/basic_render_device.hpp"
+#include "edit/runtime/metal/metal_backend.hpp"
+#include "edit/runtime/metal/metal_frame_presenter.hpp"
+#include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/renderer.hpp"
+#include "edit/runtime/detail/renderer.inl.hpp"
 
 namespace alcedo {
 
-using MetalRenderDevice    = BasicRenderDevice<MetalBackend>;
-using MetalRenderWorkspace = BasicRenderWorkspace<MetalBackend>;
-using MetalRenderer        = Renderer<MetalBackend>;
+using MetalRenderer = Renderer<MetalBackend>;
 
 }  // namespace alcedo

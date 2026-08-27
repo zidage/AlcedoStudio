@@ -394,4 +394,28 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(GpuDagMetalGradeTest TEST_PREFIX "GpuDagMetalGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalGradeTest gpu ci_metal)
+
+  add_executable(GpuDagMetalDrtTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp)
+  target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalDrtTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalDrtTest PRIVATE
+    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
+  add_dependencies(GpuDagMetalDrtTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalDrtTest TEST_PREFIX "GpuDagMetalDrtTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalDrtTest gpu ci_metal)
+
+  add_executable(GpuDagMetalRendererTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp)
+  target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalRendererTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalRendererTest PRIVATE
+    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
+  add_dependencies(GpuDagMetalRendererTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalRendererTest TEST_PREFIX "GpuDagMetalRendererTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalRendererTest gpu ci_metal)
 endif()

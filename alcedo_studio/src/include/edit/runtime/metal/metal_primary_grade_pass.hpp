@@ -13,7 +13,6 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
-#include "edit/runtime/metal/metal_renderer.hpp"
 
 namespace alcedo {
 

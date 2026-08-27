@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0–M5 complete; M6–M7 planned
+Status: M0–M6 complete; M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -916,6 +916,68 @@ MetalPipelineReturnReleasesSessionResourcesAfterGpuCompletion
 MetalBackendFailureDoesNotEnterCpuOrLegacyMetalExecution
 MetalRealRawEditorUsesTheThreeNodeDag
 ```
+
+##### Phase M6 completion record (2026-08-26)
+
+**Status:** complete
+**Date:** 2026-08-26
+**Branch:** `feature/gpu-dag-metal`
+**Commit:** local working tree on `c17a8a41`
+
+**Implemented:**
+
+- Encode-only `ExecuteMetalDrt` on the current command buffer. ACES 2.0 and OpenDRT consume AP1/ACEScc primary-grade output, decode ACEScc, and write a workspace RGBA32F display texture. DRT parameters live in ParameterArena (`MetalDrtGpuParams`). ACES 2.0 converts AP1 to AP0 without a pre-tonescale clamp, matching the CUDA DAG.
+- `drt.metal` / `drt_aces.metal` / `drt_opendrt.metal` compiled into `GpuDagMetalShaders`. `WarmUpPlan` warms `drt_display`. Missing metallib throws.
+- `FramePresenter<MetalBackend>` submits the retained workspace MTLTexture to `IFrameSink` (`SubmitMetalFrame` + `SubmitFinalDisplayFrame`) with the same command-buffer submission signal. Host download runs only when the product path requested an export/test `ImageBuffer`.
+- macOS Auto/Metal product `Apply` creates `MetalRenderer` on the shared `Renderer<Backend>` session path. Session cache stays isolated from one-shot workspaces. Pipeline return waits idle and releases session results, transients, and parameters.
+
+**Deleted:**
+
+- Metal DRT identity copy in `PassEncoder<MetalBackend, GpuPassKind::Drt>`. Old fused Metal product wrappers remain until M7.
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalDrtTest GpuDagMetalRendererTest GpuDagMetalGradeTest GpuDagMetalDevelopTest GpuDagMetalWorkspaceTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R 'GpuDagMetalDrtTest|GpuDagMetalRendererTest|GpuDagMetalGradeTest|GpuDagMetalWorkspaceTest|GpuDagMetalDevelopTest' --output-on-failure`
+- result: 53/53 PASS (4 DRT + 6 renderer + 25 grade + 10 develop + 8 workspace)
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalDrtAcesMatchesCudaReferenceWithinTolerance` | `GpuDagMetalDrtTest` | PASS |
+| `MetalDrtOpenDrtMatchesCudaReferenceWithinTolerance` | `GpuDagMetalDrtTest` | PASS |
+| `MetalDrtEditRunsOnlyDrtPass` | `GpuDagMetalDrtTest` | PASS |
+| `MetalRendererPresentsWorkspaceTextureWithoutHostDownload` | `GpuDagMetalRendererTest` | PASS |
+| `MetalScopeTapUsesTheFinalDisplayTextureAndSubmissionSignal` | `GpuDagMetalRendererTest` | PASS |
+| `MetalOneShotRenderDoesNotPublishIntoSessionCache` | `GpuDagMetalRendererTest` | PASS |
+| `MetalPipelineReturnReleasesSessionResourcesAfterGpuCompletion` | `GpuDagMetalRendererTest` | PASS |
+| `MetalBackendFailureDoesNotEnterCpuOrLegacyMetalExecution` | `GpuDagMetalRendererTest` | PASS |
+| `MetalRealRawEditorUsesTheThreeNodeDag` | `GpuDagMetalRendererTest` | PASS |
+| Missing metallib throws (`MetalDrtMissingMetallibThrowsExplicitError`) | `GpuDagMetalDrtTest` | PASS |
+
+**Resource evidence:**
+
+- buffer create/free: third identical DRT render 0/0 (`MetalDrtEditRunsOnlyDrtPass`); one-shot render does not change session published count
+- texture create/free: identical DRT re-render after a peak-luminance edit 0/0
+- heap growth: DRT-only edit 0
+- pipeline create/hit: first WarmUpPlan creates `drt_display`; later identical renders create 0
+- upload ranges/bytes: DRT peak-luminance edit uploads the ParameterArena DRT slot; present path does not host-download
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: synthetic Direct RGB 16×12 and unpacked CFA 32×32; `MetalRenderDevice::Execute` / `MetalRenderer::Render` after pipeline warm-up
+- cold: first reserve + first DRT render allocates heap/buffer/texture/pipeline
+- warm median: not a product-frame A/B; second identical DRT render GPU resource create/free = 0; present submits the workspace texture
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M7: delete `pipeline_metal_impl.cpp`, fused Metal stages, `MetalStage`, and leftover operator-private Metal scratch. Record same-Mac old/new Metal A/B.
+
+**LOC note:** `metal_drt_pass.hpp` 35, `metal_drt_gpu_params.hpp` 159, `metal_drt_pass.mm` 118, `metal_drt_params.cpp` 185, `metal_frame_presenter.mm` 80, `drt.metal` 419, `drt_aces.metal` 403, `drt_opendrt.metal` 255, `pipeline_cpu.cpp` 961. No new file crossed 1000 LOC.
+
+**Residual gaps:** Old fused Metal product wrappers and `MetalStage` remain until M7. Product A/B performance remains M7.
 
 ## 12. Phase M7 — 旧 Metal 管线删除与性能验收
 

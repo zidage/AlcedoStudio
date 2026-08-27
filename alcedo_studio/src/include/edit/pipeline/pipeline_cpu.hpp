@@ -20,17 +20,24 @@
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
 #include "edit/graph/pipeline_document.hpp"
 #endif
 
 namespace alcedo {
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
 template <class Backend>
 class Renderer;
+#endif
+#ifdef HAVE_CUDA
 class CudaBackend;
 using CudaRenderer        = Renderer<CudaBackend>;
 using CudaProductRenderer = CudaRenderer;
+#endif
+#ifdef HAVE_METAL
+class MetalBackend;
+using MetalRenderer        = Renderer<MetalBackend>;
+using MetalProductRenderer = MetalRenderer;
 #endif
 class CPUPipelineExecutor : public PipelineExecutor {
  private:
@@ -64,11 +71,16 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::unique_ptr<PipelineStage>      merged_stages_;
   IFrameSink*                         frame_sink_ = nullptr;
   FrameCompletionSubmission           bound_frame_submission_{};
+#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+  std::shared_ptr<PipelineDocument> pipeline_document_;
+  nlohmann::json                    gpu_dag_legacy_snapshot_;
+  bool                              mirror_legacy_stage_adapter_ = false;
+#endif
 #ifdef HAVE_CUDA
-  std::shared_ptr<PipelineDocument>    pipeline_document_;
   std::shared_ptr<CudaRenderer> cuda_product_renderer_;
-  nlohmann::json                       cuda_product_legacy_snapshot_;
-  bool                                 mirror_legacy_stage_adapter_ = false;
+#endif
+#ifdef HAVE_METAL
+  std::shared_ptr<MetalRenderer> metal_product_renderer_;
 #endif
 
   void ResetStages();
@@ -107,7 +119,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   auto GetStage(PipelineStageName stage) -> PipelineStage& override;
   auto Apply(std::shared_ptr<ImageBuffer> input) -> std::shared_ptr<ImageBuffer> override;
 
-  /** @brief Select the format-version-2 document used by the CUDA product path. */
+  /** @brief Select the format-version-2 document used by the GPU DAG product path. */
   void SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                            bool                              mirror_legacy_stage_adapter = false);
 
@@ -216,6 +228,9 @@ class CPUPipelineExecutor : public PipelineExecutor {
 #ifdef HAVE_CUDA
   [[nodiscard]] auto DebugCudaRenderer() -> CudaRenderer* { return cuda_product_renderer_.get(); }
   [[nodiscard]] auto DebugCudaProductRenderer() -> CudaRenderer* { return DebugCudaRenderer(); }
+#endif
+#ifdef HAVE_METAL
+  [[nodiscard]] auto DebugMetalRenderer() -> MetalRenderer* { return metal_product_renderer_.get(); }
 #endif
 };
 };  // namespace alcedo

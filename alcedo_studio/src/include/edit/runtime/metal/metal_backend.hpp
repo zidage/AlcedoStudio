@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "edit/geometry/types.hpp"
+#include "edit/runtime/basic_render_device.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -260,5 +261,8 @@ class MetalBackend {
 
 [[nodiscard]] auto BindSystemDefaultMetalPresentationDevice() -> void*;
 [[nodiscard]] auto MetalPresentationDeviceHandle() -> void*;
+
+using MetalRenderDevice    = BasicRenderDevice<MetalBackend>;
+using MetalRenderWorkspace = BasicRenderWorkspace<MetalBackend>;
 
 }  // namespace alcedo

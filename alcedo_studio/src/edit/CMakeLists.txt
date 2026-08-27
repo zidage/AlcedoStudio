@@ -91,11 +91,14 @@ if(ALCEDO_METAL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_params.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
-        PRIVATE_DEPS RawProcessorOp MetalGeometryUtils MetalImage MetalDemosaicNetEntry
+        PRIVATE_DEPS RawProcessorOp Operators MetalGeometryUtils MetalImage MetalDemosaicNetEntry
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
     target_compile_definitions(EditRuntimeMetal PRIVATE
@@ -110,11 +113,14 @@ if(ALCEDO_METAL_ENABLED)
         ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH="${METAL_PRIMARY_GRADE_METALLIB}"
         ALCEDO_METAL_LOCAL_TONE_METALLIB_PATH="${METAL_LOCAL_TONE_METALLIB}"
         ALCEDO_METAL_MASK_METALLIB_PATH="${METAL_MASK_METALLIB}"
+        ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}"
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
@@ -151,7 +157,10 @@ if(ALCEDO_CUDA_ENABLED)
 endif()
 
 if(ALCEDO_CUDA_ENABLED)
-    # The existing scheduler owns CPUPipelineExecutor. Its CUDA branch is now a thin adapter into
-    # EditRuntimeCuda; OpenCL and Metal continue using the established stage adapters.
+    # The existing scheduler owns CPUPipelineExecutor. Its CUDA branch is a thin adapter into
+    # EditRuntimeCuda.
     target_link_libraries(EditPipeline PRIVATE EditRuntimeCuda EditInput EditGraph)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditPipeline PRIVATE EditRuntimeMetal EditInput EditGraph)
 endif()
