@@ -32,6 +32,7 @@ if(ALCEDO_METAL_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_cvt_ref_space.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_debayer_rcd.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_encode.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_highlight_reconstruct.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_to_linear_ref.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_xtrans_interpolate.cpp
@@ -60,13 +61,15 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(RawProcessorOp PUBLIC HAVE_CUDA)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    add_dependencies(RawProcessorOp RawProcessorOpMetalShaders)
+    add_dependencies(RawProcessorOp RawProcessorOpMetalShaders MetalGeometryUtilsShaders)
+    target_link_libraries(RawProcessorOp PRIVATE MetalGeometryUtils MetalImage MetalContext)
     target_compile_definitions(RawProcessorOp PRIVATE
         ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
         ALCEDO_METAL_DEBAYER_RCD_METALLIB_PATH="${METAL_DEBAYER_RCD_METALLIB}"
         ALCEDO_METAL_HIGHLIGHT_RECONSTRUCT_METALLIB_PATH="${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         ALCEDO_METAL_XTRANS_INTERPOLATE_METALLIB_PATH="${METAL_XTRANS_INTERPOLATE_METALLIB}"
         ALCEDO_METAL_CVT_REF_SPACE_METALLIB_PATH="${METAL_CVT_REF_SPACE_METALLIB}"
+        ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}"
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)

@@ -89,16 +89,33 @@ if(ALCEDO_METAL_ENABLED)
     def_library(EditRuntimeMetal
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
+        PRIVATE_DEPS RawProcessorOp MetalGeometryUtils MetalImage MetalDemosaicNetEntry
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
+    target_compile_definitions(EditRuntimeMetal PRIVATE
+        ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
+        ALCEDO_METAL_DEBAYER_RCD_METALLIB_PATH="${METAL_DEBAYER_RCD_METALLIB}"
+        ALCEDO_METAL_HIGHLIGHT_RECONSTRUCT_METALLIB_PATH="${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
+        ALCEDO_METAL_XTRANS_INTERPOLATE_METALLIB_PATH="${METAL_XTRANS_INTERPOLATE_METALLIB}"
+        ALCEDO_METAL_CVT_REF_SPACE_METALLIB_PATH="${METAL_CVT_REF_SPACE_METALLIB}"
+        ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}"
+        ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}"
+        ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
+    )
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
         PROPERTIES LANGUAGE OBJCXX
     )
+    add_dependencies(EditRuntimeMetal GpuDagMetalShaders RawProcessorOpMetalShaders MetalGeometryUtilsShaders)
     target_link_libraries(EditRuntimeMetal PUBLIC
         "-framework Foundation"
         "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
     )
 endif()
 

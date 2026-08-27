@@ -17,6 +17,10 @@
 #include "metal/metal_context.hpp"
 
 namespace alcedo {
+void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
+}  // namespace alcedo
+
+namespace alcedo {
 namespace {
 
 constexpr std::size_t kMinHeapPageBytes = 16ull << 20;
@@ -38,6 +42,8 @@ auto ToPixelFormat(TextureFormat format) -> MTL::PixelFormat {
       return MTL::PixelFormatR32Float;
     case TextureFormat::Rgba32f:
       return MTL::PixelFormatRGBA32Float;
+    case TextureFormat::R16u:
+      return MTL::PixelFormatR16Uint;
   }
   throw std::runtime_error("MetalBackend: unsupported texture format");
 }
@@ -277,17 +283,20 @@ class MetalBackendImpl {
     return texture;
   }
 
-  static void EnsureCommandBuffer(MetalBackend::Gpu& gpu, MetalCommandContext& command_context) {
+  static void EnsureCommandBuffer(MetalBackend& backend, MetalBackend::Gpu& gpu,
+                                  MetalCommandContext& command_context) {
     auto& ctx = *command_context.gpu_;
     if (ctx.buffer) {
       return;
     }
     ctx.buffer = NS::RetainPtr(gpu.queue->commandBuffer());
     ThrowIfNull(ctx.buffer.get(), "MetalBackend: failed to create MTLCommandBuffer");
+    ++backend.command_buffer_create_count_;
   }
 
-  static void EnsureBlitEncoder(MetalBackend::Gpu& gpu, MetalCommandContext& command_context) {
-    EnsureCommandBuffer(gpu, command_context);
+  static void EnsureBlitEncoder(MetalBackend& backend, MetalBackend::Gpu& gpu,
+                                MetalCommandContext& command_context) {
+    EnsureCommandBuffer(backend, gpu, command_context);
     auto& ctx = *command_context.gpu_;
     if (ctx.compute) {
       ctx.compute->endEncoding();
@@ -296,6 +305,20 @@ class MetalBackendImpl {
     if (!ctx.blit) {
       ctx.blit = NS::RetainPtr(ctx.buffer->blitCommandEncoder());
       ThrowIfNull(ctx.blit.get(), "MetalBackend: failed to create blit encoder");
+    }
+  }
+
+  static void EnsureComputeEncoder(MetalBackend& backend, MetalBackend::Gpu& gpu,
+                                   MetalCommandContext& command_context) {
+    EnsureCommandBuffer(backend, gpu, command_context);
+    auto& ctx = *command_context.gpu_;
+    if (ctx.blit) {
+      ctx.blit->endEncoding();
+      ctx.blit.reset();
+    }
+    if (!ctx.compute) {
+      ctx.compute = NS::RetainPtr(ctx.buffer->computeCommandEncoder());
+      ThrowIfNull(ctx.compute.get(), "MetalBackend: failed to create compute encoder");
     }
   }
 
@@ -495,7 +518,7 @@ void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
     MetalBackendImpl::AttachGpu(*gpu_);
     MetalBackendImpl::EnsureStaging(*this, *gpu_, bytes.size());
     std::memcpy(gpu_->staging->contents(), bytes.data(), bytes.size());
-    MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+    MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
     command_context.gpu_->blit->copyFromBuffer(gpu_->staging.get(), 0, native, offset,
                                                bytes.size());
   }
@@ -543,7 +566,7 @@ void MetalBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte
   MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
   CopyPackedToAligned(bytes, texture.Width(), texture.Height(), texture.Format(),
                       gpu_->staging->contents());
-  MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromBuffer(
       gpu_->staging.get(), 0, row_bytes, staging, MTL::Size{texture.Width(), texture.Height(), 1},
       static_cast<MTL::Texture*>(texture.Native()), 0, 0, MTL::Origin{0, 0, 0});
@@ -563,7 +586,7 @@ void MetalBackend::CopyTexture2D(const Texture2D& src, Texture2D& dst,
     return;
   }
   MetalBackendImpl::AttachGpu(*gpu_);
-  MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromTexture(static_cast<MTL::Texture*>(src.Native()),
                                               static_cast<MTL::Texture*>(dst.Native()));
 }
@@ -589,7 +612,7 @@ void MetalBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
   const auto staging   = row_bytes * height;
   MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
   CopyPackedToAligned(bytes, width, height, TextureFormat::R8, gpu_->staging->contents());
-  MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromBuffer(
       gpu_->staging.get(), 0, row_bytes, staging, MTL::Size{width, height, 1},
       static_cast<MTL::Texture*>(texture.Native()), 0, 0,
@@ -618,7 +641,7 @@ void MetalBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::by
   const auto row_bytes = AlignedRowBytes(texture.Width(), texture.Format());
   const auto staging   = row_bytes * texture.Height();
   MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
-  MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromTexture(
       static_cast<MTL::Texture*>(texture.Native()), 0, 0, MTL::Origin{0, 0, 0},
       MTL::Size{texture.Width(), texture.Height(), 1}, gpu_->staging.get(), 0, row_bytes, staging);
@@ -664,7 +687,7 @@ void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byte
   } else {
     MetalBackendImpl::EnsureStaging(*this, *gpu_, bytes.size());
     std::memcpy(gpu_->staging->contents(), bytes.data(), bytes.size());
-    MetalBackendImpl::EnsureBlitEncoder(*gpu_, command_context);
+    MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
     command_context.gpu_->blit->copyFromBuffer(gpu_->staging.get(), 0, found->native, offset,
                                                bytes.size());
   }
@@ -672,9 +695,60 @@ void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byte
   h2d_bytes_ += bytes.size();
 }
 
+auto MetalBackend::ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
+    -> std::pair<void*, std::uint32_t> {
+  if (device_pointer == nullptr || bytes == 0 || !gpu_) {
+    throw std::runtime_error("MetalBackend::ResolveDeviceMemory: invalid destination");
+  }
+  const auto address = reinterpret_cast<std::uint64_t>(device_pointer);
+  for (const auto& entry : gpu_->live_buffers) {
+    if (address >= entry.gpu_address && address + bytes <= entry.gpu_address + entry.bytes) {
+      return {entry.native, static_cast<std::uint32_t>(address - entry.gpu_address)};
+    }
+  }
+  throw std::runtime_error("MetalBackend::ResolveDeviceMemory: destination is not a live buffer");
+}
+
+void MetalBackend::FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t value,
+                                    CommandContext& command_context) {
+  if (bytes == 0) {
+    return;
+  }
+  if (dst == nullptr) {
+    throw std::runtime_error("MetalBackend::FillDeviceMemory: null destination");
+  }
+  MetalBackendImpl::AttachGpu(*gpu_);
+  const auto        address = reinterpret_cast<std::uint64_t>(dst);
+  const LiveBuffer* found   = nullptr;
+  for (const auto& entry : gpu_->live_buffers) {
+    if (address >= entry.gpu_address && address + bytes <= entry.gpu_address + entry.bytes) {
+      found = &entry;
+      break;
+    }
+  }
+  if (found == nullptr) {
+    throw std::runtime_error("MetalBackend::FillDeviceMemory: destination is not a live buffer");
+  }
+  const auto offset = static_cast<NS::UInteger>(address - found->gpu_address);
+  MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
+  command_context.gpu_->blit->fillBuffer(found->native, NS::Range(offset, bytes), value);
+}
+
+auto MetalBackend::EnsureComputeCommandEncoder(CommandContext& command_context) -> void* {
+  MetalBackendImpl::AttachGpu(*gpu_);
+  MetalBackendImpl::EnsureComputeEncoder(*this, *gpu_, command_context);
+  return command_context.gpu_->compute.get();
+}
+
+void MetalBackend::EndCommandEncoders(CommandContext& command_context) {
+  if (command_context.gpu_) {
+    command_context.gpu_->EndEncoders();
+  }
+}
+
 void MetalBackend::Submit(CommandContext& command_context) {
   MetalBackendImpl::AttachGpu(*gpu_);
-  MetalBackendImpl::EnsureCommandBuffer(*gpu_, command_context);
+  MetalBackendImpl::EnsureCommandBuffer(*this, *gpu_, command_context);
   command_context.gpu_->EndEncoders();
   auto*      command_buffer = command_context.gpu_->buffer.get();
   const auto submission_id  = command_context.SubmissionId();
@@ -724,15 +798,16 @@ void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup> pipeline
   }
 }
 
-void MetalBackend::WarmUpPlan(const ExecutionPlan& plan) { (void)plan; }
+void MetalBackend::WarmUpPlan(const ExecutionPlan& plan) { WarmUpMetalDagPlan(*this, plan); }
 
 void MetalBackend::ResetCounters() {
   malloc_count_         = 0;
   free_count_           = 0;
   buffer_create_count_  = 0;
   texture_create_count_ = 0;
-  heap_create_count_    = 0;
-  h2d_copy_count_       = 0;
+  heap_create_count_            = 0;
+  command_buffer_create_count_  = 0;
+  h2d_copy_count_               = 0;
   h2d_bytes_            = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();

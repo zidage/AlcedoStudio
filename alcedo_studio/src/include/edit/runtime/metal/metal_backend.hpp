@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
@@ -136,6 +137,13 @@ class MetalBackend {
                          CommandContext& command_context);
   void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                           CommandContext& command_context);
+  void FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t value,
+                        CommandContext& command_context);
+  [[nodiscard]] auto ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
+      -> std::pair<void*, std::uint32_t>;
+
+  [[nodiscard]] auto EnsureComputeCommandEncoder(CommandContext& command_context) -> void*;
+  void               EndCommandEncoders(CommandContext& command_context);
 
   void Submit(CommandContext& command_context);
   void Wait(CommandContext& command_context);
@@ -163,6 +171,9 @@ class MetalBackend {
   [[nodiscard]] auto BufferCreateCount() const -> std::uint64_t { return buffer_create_count_; }
   [[nodiscard]] auto TextureCreateCount() const -> std::uint64_t { return texture_create_count_; }
   [[nodiscard]] auto HeapCreateCount() const -> std::uint64_t { return heap_create_count_; }
+  [[nodiscard]] auto CommandBufferCreateCount() const -> std::uint64_t {
+    return command_buffer_create_count_;
+  }
   [[nodiscard]] auto PipelineCreateCount() const -> std::uint64_t;
   [[nodiscard]] auto PipelineHitCount() const -> std::uint64_t;
   [[nodiscard]] auto HostToDeviceCopyCount() const -> std::uint64_t { return h2d_copy_count_; }
@@ -195,8 +206,9 @@ class MetalBackend {
   std::uint64_t          free_count_           = 0;
   std::uint64_t          buffer_create_count_  = 0;
   std::uint64_t          texture_create_count_ = 0;
-  std::uint64_t          heap_create_count_    = 0;
-  std::uint64_t          h2d_copy_count_       = 0;
+  std::uint64_t          heap_create_count_           = 0;
+  std::uint64_t          command_buffer_create_count_ = 0;
+  std::uint64_t          h2d_copy_count_              = 0;
   std::uint64_t          h2d_bytes_            = 0;
   std::uint64_t          next_resource_id_     = 1;
   std::uint64_t          next_submission_      = 0;

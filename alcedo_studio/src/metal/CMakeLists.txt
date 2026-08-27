@@ -63,6 +63,14 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_DEMOSAICNET_IO_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
     set(METAL_DEMOSAICNET_IO_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib"
         CACHE INTERNAL "Metal DemosaicNet IO metallib path" FORCE)
+    set(METAL_GEOMETRY_RESAMPLE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/geometry_resample.metal")
+    set(METAL_GEOMETRY_RESAMPLE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.air")
+    set(METAL_GEOMETRY_RESAMPLE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.metallib"
+        CACHE INTERNAL "Metal DAG geometry resample metallib path" FORCE)
+    set(METAL_CAMERA_COLOR_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/camera_color.metal")
+    set(METAL_CAMERA_COLOR_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.air")
+    set(METAL_CAMERA_COLOR_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.metallib"
+        CACHE INTERNAL "Metal DAG camera color metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -266,6 +274,29 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DemosaicNet IO library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagGeometryResampleShaders
+        "${METAL_GEOMETRY_RESAMPLE_SRC}"
+        "${METAL_GEOMETRY_RESAMPLE_AIR}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "Compiling Metal DAG geometry resample shader"
+        "Linking Metal DAG geometry resample library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagCameraColorShaders
+        "${METAL_CAMERA_COLOR_SRC}"
+        "${METAL_CAMERA_COLOR_AIR}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "Compiling Metal DAG camera color shader"
+        "Linking Metal DAG camera color library"
+    )
+
+    add_custom_target(GpuDagMetalShaders DEPENDS
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+    )
+
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
@@ -286,6 +317,8 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
         "${METAL_DEMOSAICNET_IO_METALLIB}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE

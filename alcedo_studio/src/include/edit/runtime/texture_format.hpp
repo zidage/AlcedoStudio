@@ -14,6 +14,7 @@ enum class TextureFormat : std::uint8_t {
   Rgba8   = 1,
   R32f    = 2,
   Rgba32f = 3,
+  R16u    = 4,
 };
 
 [[nodiscard]] inline auto TextureFormatBytesPerPixel(TextureFormat format) -> std::size_t {
@@ -26,6 +27,8 @@ enum class TextureFormat : std::uint8_t {
       return 4;
     case TextureFormat::Rgba32f:
       return 16;
+    case TextureFormat::R16u:
+      return 2;
   }
   return 1;
 }

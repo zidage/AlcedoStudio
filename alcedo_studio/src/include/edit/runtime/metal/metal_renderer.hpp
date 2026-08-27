@@ -10,7 +10,8 @@
 
 namespace alcedo {
 
-using MetalRenderDevice = BasicRenderDevice<MetalBackend>;
-using MetalRenderer     = Renderer<MetalBackend>;
+using MetalRenderDevice    = BasicRenderDevice<MetalBackend>;
+using MetalRenderWorkspace = BasicRenderWorkspace<MetalBackend>;
+using MetalRenderer        = Renderer<MetalBackend>;
 
 }  // namespace alcedo

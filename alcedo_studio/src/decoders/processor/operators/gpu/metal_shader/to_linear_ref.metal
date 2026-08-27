@@ -30,7 +30,7 @@ static inline uint RawColorAt(constant ToLinearRefParams& params, uint y, uint x
   return params.raw_fc[tile_y * params.tile_width + tile_x];
 }
 
-static inline float PatternBlackAt(constant ToLinearRefParams& params, device const float* pattern_black,
+static inline float PatternBlackAt(constant ToLinearRefParams& params, constant float* pattern_black,
                                    uint y, uint x) {
   if (params.black_tile_width == 0u || params.black_tile_height == 0u) {
     return 0.0f;
@@ -41,7 +41,7 @@ static inline float PatternBlackAt(constant ToLinearRefParams& params, device co
 }
 
 static inline float LinearizeSample(float sample, uint color_idx, constant ToLinearRefParams& params,
-                                    constant WBParams& wb_params, device const float* pattern_black,
+                                    constant WBParams& wb_params, constant float* pattern_black,
                                     uint y, uint x) {
   const float black =
       wb_params.black_level[color_idx] + PatternBlackAt(params, pattern_black, y, x);
@@ -59,7 +59,7 @@ kernel void to_linear_ref_r16u(texture2d<ushort, access::read> src [[texture(0)]
                                texture2d<float, access::write> dst [[texture(1)]],
                                constant ToLinearRefParams&     params [[buffer(0)]],
                                constant WBParams&              wb_params [[buffer(1)]],
-                               device const float*             pattern_black [[buffer(2)]],
+                               constant float*                 pattern_black [[buffer(2)]],
                                uint2                           gid [[thread_position_in_grid]]) {
   if (gid.x >= params.width || gid.y >= params.height) {
     return;
@@ -69,4 +69,19 @@ kernel void to_linear_ref_r16u(texture2d<ushort, access::read> src [[texture(0)]
   const float sample    = float(src.read(gid).r);
   dst.write(LinearizeSample(sample, color_idx, params, wb_params, pattern_black, gid.y, gid.x),
             gid);
+}
+
+struct ClampParams {
+  uint width;
+  uint height;
+};
+
+kernel void cfa_clamp01_r32f(texture2d<float, access::read_write> image [[texture(0)]],
+                             constant ClampParams&                params [[buffer(0)]],
+                             uint2                                gid [[thread_position_in_grid]]) {
+  if (gid.x >= params.width || gid.y >= params.height) {
+    return;
+  }
+  const float sample = image.read(gid).r;
+  image.write(clamp(sample, 0.0f, 1.0f), gid);
 }

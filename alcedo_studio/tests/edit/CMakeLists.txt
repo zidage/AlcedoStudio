@@ -364,4 +364,18 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(GpuDagMetalWorkspaceTest TEST_PREFIX "GpuDagMetalWorkspaceTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalWorkspaceTest gpu ci_metal)
+
+  add_executable(GpuDagMetalDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_develop_test.cpp)
+  target_include_directories(GpuDagMetalDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalDevelopTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalDevelopTest PRIVATE
+    ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
+    ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+    ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}")
+  add_dependencies(GpuDagMetalDevelopTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  gtest_discover_tests(GpuDagMetalDevelopTest TEST_PREFIX "GpuDagMetalDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalDevelopTest gpu ci_metal)
 endif()

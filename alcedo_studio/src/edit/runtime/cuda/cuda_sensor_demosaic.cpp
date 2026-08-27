@@ -215,19 +215,6 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
 
 }  // namespace
 
-auto ResolveDevelopDemosaicMethod(const DevelopPayload& params, RawCfaKind cfa_kind,
-                                  std::uint32_t downsample_passes) -> RawDemosaicMethod {
-  if (downsample_passes != 0) {
-    return RawDemosaicMethod::Legacy;
-  }
-  const auto parsed = RawDemosaicMethodFromString(params.demosaic_method);
-  if (parsed != RawDemosaicMethod::Default) {
-    return parsed;
-  }
-  return cfa_kind == RawCfaKind::XTrans6x6 ? RawDemosaicMethod::NeuralEngine
-                                           : RawDemosaicMethod::Legacy;
-}
-
 void SetDevelopNeuralModelCacheForTesting(DemosaicNetModelCache* cache) {
   g_neural_model_cache_for_test = cache;
 }

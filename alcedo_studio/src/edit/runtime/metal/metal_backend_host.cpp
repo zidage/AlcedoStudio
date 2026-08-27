@@ -147,6 +147,16 @@ void MetalBackend::DownloadTexture2D(const Texture2D&, std::span<std::byte>, Com
 void MetalBackend::UploadDeviceMemory(void*, std::span<const std::byte>, CommandContext&) {
   throw std::runtime_error("MetalBackend: device memory upload is not implemented");
 }
+void MetalBackend::FillDeviceMemory(void*, std::size_t, std::uint8_t, CommandContext&) {
+  throw std::runtime_error("MetalBackend: device memory fill is not implemented");
+}
+auto MetalBackend::ResolveDeviceMemory(void*, std::size_t) const -> std::pair<void*, std::uint32_t> {
+  throw std::runtime_error("MetalBackend: device memory resolve is not implemented");
+}
+auto MetalBackend::EnsureComputeCommandEncoder(CommandContext&) -> void* {
+  throw std::runtime_error("MetalBackend: compute encoder is not implemented");
+}
+void MetalBackend::EndCommandEncoders(CommandContext&) {}
 void MetalBackend::Submit(CommandContext& command_context) {
   in_flight_submission_ = command_context.SubmissionId();
 }
@@ -166,8 +176,9 @@ void MetalBackend::ResetCounters() {
   free_count_           = 0;
   buffer_create_count_  = 0;
   texture_create_count_ = 0;
-  heap_create_count_    = 0;
-  h2d_copy_count_       = 0;
+  heap_create_count_           = 0;
+  command_buffer_create_count_ = 0;
+  h2d_copy_count_              = 0;
   h2d_bytes_            = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();

@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: M0–M1 complete; M2–M7 planned
+Status: M0–M2 complete; M3–M7 planned
 
 Branch: `feature/gpu-dag-metal`
 
@@ -517,6 +517,73 @@ MetalDevelopPassesUseOneCommandBuffer
 - Develop 稳定重绘不分配 GPU 资源；
 - RAW Metal operator 不保存长期 scratch；
 - kernel/metallib 错误直接失败。
+
+##### Phase M2 completion record (2026-08-26)
+
+**Status:** complete
+**Date:** 2026-08-26
+**Branch:** `feature/gpu-dag-metal`
+**Commit:** `da9c63a0` (working tree)
+
+**Implemented:**
+
+- Encode-only RAW Metal entrypoints (`metal_encode.hpp/.cpp`) that take the current command buffer plus workspace textures/buffers: linearize, CFA Clamp01, RCD, X-Trans, highlight reconstruct, pack/orient, DNG warp.
+- `ExecuteMetalDevelop` / `ExecuteMetalGeometryResample` / `ExecuteMetalCameraColor` on `Renderer<MetalBackend>` / `PlanExecutor<MetalBackend>` with the CUDA Develop order and the three content-key boundaries (`develop.sensor_linear`, `geometry.scene_source`, `develop.image`).
+- DAG geometry resample and camera-color ACEScc shaders under `edit/runtime/metal/shader/`; DNG warp texture encode stays in `metal/metal_utils/`.
+- Neural Engine tiles encode onto the session command buffer (`MetalDemosaicNetTiledDispatch::command_buffer`); load failure throws and does not select Legacy.
+- `MetalBackend::WarmUpPlan` warms Develop/Geometry/CameraColor pipeline states before execute. One command buffer per render (`CommandBufferCreateCount`).
+- Identity texture copy for PrimaryGrade and DRT so PlanExecutor can finish M2 cache-skip tests. Pixel math for those passes remains M3/M6.
+
+**Deleted:**
+
+- None of the old Metal product wrappers. They remain until M7. The DAG path does not call them.
+
+**Tests:**
+
+- command: `cmake --preset macos_debug_tests`
+- command: `cmake --build --preset macos_debug_tests --target GpuDagMetalDevelopTest GpuDagMetalWorkspaceTest --parallel 8`
+- command: `ctest --test-dir build/macos-debug-tests -R GpuDagMetalDevelopTest --output-on-failure`
+- result: 10/10 PASS
+- command: `ctest --test-dir build/macos-debug-tests -R GpuDagMetalWorkspaceTest --output-on-failure`
+- result: 8/8 PASS
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalDevelopLinearizeMatchesCudaReferenceWithinTolerance` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalDevelopRcdOrderMatchesCudaDemosaicThenHighlightRecovery` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalDevelopXTransMatchesCudaReferenceWithinTolerance` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectLegacyOnFailure` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalGeometryUsesOneResampleForCropRotationViewportAndScale` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalCameraColorConsumesSharedDualIlluminantTransform` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalCctEditReusesSensorAndGeometryResults` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalSecondDevelopRenderRunsNoSourceUploadOrDevelopPass` | `GpuDagMetalDevelopTest` | PASS |
+| `MetalDevelopPassesUseOneCommandBuffer` | `GpuDagMetalDevelopTest` | PASS |
+| Missing metallib throws (`MetalGeometryResampleMissingMetallibThrowsExplicitError`) | `GpuDagMetalDevelopTest` | PASS |
+
+**Resource evidence:**
+
+- buffer create/free: second stable Develop render 0/0 (`MetalSecondDevelopRenderRunsNoSourceUploadOrDevelopPass`)
+- texture create/free: second stable Develop render 0/0
+- heap growth: second stable Develop render 0
+- pipeline create/hit: first WarmUpPlan creates Develop/Geometry/CameraColor states; second identical render create 0
+- upload ranges/bytes: second identical render `source_h2d_count == 0`; CCT edit uploads only CameraColor parameter range and skips SensorDevelop/Geometry
+
+**Performance evidence:**
+
+- device/macOS/Xcode/build: MacBook Air (Mac16,12) Apple M4, macOS 26.5.2 (25F84), Xcode 26.3 (17C529), `macos_debug_tests` Debug
+- fixture and render request: synthetic 64×64 Bayer / 64×64 X-Trans / 16×12 Direct RGB; `MetalRenderDevice::Execute` after pipeline warm-up
+- cold: first reserve + first render allocates heap/buffer/texture/pipeline
+- warm median: not a product-frame A/B; second identical Develop render GPU resource create/free = 0
+- warm p95: same; product A/B remains M7
+
+**Remaining work owned by the next named Phase:**
+
+- M3: Primary Grade fusion (replace identity copy), ParameterArena slider dirty ranges, LUT texture cache.
+- M4–M6: LLF, Mask/Mix, DRT/present. Identity DRT copy is not a display path.
+
+**LOC note:** `metal_backend.hpp` 225, `metal_develop_pass.hpp` 41, `metal_pass_encoder.hpp` 68, `metal_encode.hpp` 53, `metal_backend.mm` 860, `metal_develop_pass.mm` 531, `metal_encode.cpp` 455. No new file crossed 1000 LOC.
+
+**Residual gaps:** PrimaryGrade and DRT Metal encoders copy `develop.image` until M3/M6. Old RAW Metal wrappers still own static scratch for the pre-DAG product path. Product present/download remains unimplemented until M6.
 
 ## 8. Phase M3 — Primary Grade 融合路径
 

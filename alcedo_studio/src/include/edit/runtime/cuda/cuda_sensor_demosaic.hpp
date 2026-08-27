@@ -13,20 +13,11 @@
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
 
 namespace alcedo {
 
 class CudaRenderDevice;
-
-/**
- * @brief Resolve the product demosaic method from Develop params and CFA.
- *
- * Reduced-resolution inputs (downsample_passes != 0) always use Legacy.
- * Default is Legacy on Bayer and Neural Engine on X-Trans.
- */
-[[nodiscard]] auto ResolveDevelopDemosaicMethod(const DevelopPayload& params, RawCfaKind cfa_kind,
-                                                std::uint32_t downsample_passes)
-    -> RawDemosaicMethod;
 
 /**
  * @brief Test hook: inject a model cache so Neural load failure can be asserted.
