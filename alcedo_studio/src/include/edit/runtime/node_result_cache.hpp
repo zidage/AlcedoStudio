@@ -8,9 +8,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
@@ -24,12 +27,33 @@ namespace alcedo {
 template <class Backend>
 class NodeResultCache {
  public:
+  struct Metadata {
+    ContentKey  content_key{};
+    ImageExtent extent{};
+  };
+
   void Store(GraphValueId id, typename Backend::Buffer buffer) {
     const auto bytes = buffer.Bytes();
+    const auto key   = id;
     values_.insert_or_assign(std::move(id), std::move(buffer));
+    metadata_.erase(key);
     if (ShouldTraceGpuPoolAlloc(bytes) && GpuPoolTraceVerbose()) {
       DumpToStderr("value-store");
     }
+  }
+
+  /** @brief Attach the content identity used to validate a cached node buffer. */
+  void StoreMetadata(const GraphValueId& id, ContentKey content_key, ImageExtent extent) {
+    if (!values_.contains(id)) {
+      throw std::runtime_error("NodeResultCache::StoreMetadata: value buffer is missing");
+    }
+    metadata_.insert_or_assign(id, Metadata{content_key, extent});
+  }
+
+  /** @brief Return cached identity metadata for a node buffer, when available. */
+  [[nodiscard]] auto GetMetadata(const GraphValueId& id) const -> std::optional<Metadata> {
+    const auto it = metadata_.find(id);
+    return it == metadata_.end() ? std::nullopt : std::optional<Metadata>{it->second};
   }
 
   [[nodiscard]] auto UsedBytes() const -> std::size_t {
@@ -66,17 +90,24 @@ class NodeResultCache {
     return it == values_.end() ? nullptr : &it->second;
   }
 
-  [[nodiscard]] auto Find(const NodeId& producer, const PortId& output_port)
-      -> typename Backend::Buffer* {
+  [[nodiscard]] auto Find(const NodeId& producer, const PortId& output_port) ->
+      typename Backend::Buffer* {
     return Find(GraphValueId{producer, output_port});
   }
 
-  void Erase(const GraphValueId& id) { values_.erase(id); }
-  void Clear() { values_.clear(); }
+  void Erase(const GraphValueId& id) {
+    values_.erase(id);
+    metadata_.erase(id);
+  }
+  void Clear() {
+    values_.clear();
+    metadata_.clear();
+  }
   [[nodiscard]] auto Size() const -> std::size_t { return values_.size(); }
 
  private:
   std::map<GraphValueId, typename Backend::Buffer> values_;
+  std::map<GraphValueId, Metadata>                 metadata_;
 };
 
 }  // namespace alcedo

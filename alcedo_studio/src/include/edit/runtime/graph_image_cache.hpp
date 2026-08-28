@@ -24,7 +24,7 @@ struct ResultIdentity {
   GraphValueId value_id;
   ContentKey   content_key;
 
-  friend auto operator<(const ResultIdentity& a, const ResultIdentity& b) -> bool {
+  friend auto  operator<(const ResultIdentity& a, const ResultIdentity& b) -> bool {
     if (a.value_id != b.value_id) {
       return a.value_id < b.value_id;
     }
@@ -110,9 +110,9 @@ class GraphImageCache {
     EvictCompletedUnleased(pool, backend, request);
 
     WriteSlot slot;
-    slot.texture = pool.Acquire(request);
-    slot.extent  = ImageExtent{request.width, request.height};
-    slot.format  = request.format;
+    slot.texture        = pool.Acquire(request);
+    slot.extent         = ImageExtent{request.width, request.height};
+    slot.format         = request.format;
     auto [it, inserted] = write_slots_.emplace(id, std::move(slot));
     (void)inserted;
     return it->second.texture;
@@ -144,9 +144,9 @@ class GraphImageCache {
 
     const auto& source_tex = source_lease->Texture();
     WriteSlot   slot;
-    slot.texture = pool.DuplicateLease(source_lease->Handle());
-    slot.extent  = ImageExtent{source_tex.Width(), source_tex.Height()};
-    slot.format  = source_tex.Format();
+    slot.texture        = pool.DuplicateLease(source_lease->Handle());
+    slot.extent         = ImageExtent{source_tex.Width(), source_tex.Height()};
+    slot.format         = source_tex.Format();
     auto [it, inserted] = write_slots_.emplace(dest, std::move(slot));
     (void)inserted;
     return it->second.texture;
@@ -162,7 +162,8 @@ class GraphImageCache {
    * @throws std::runtime_error when @p id has no write slot.
    */
   void RecordUnpublished(const GraphValueId& id, ContentKey key, ImageExtent extent,
-                         TextureFormat format, std::uint64_t submission_id) {
+                         TextureFormat format, std::uint64_t submission_id,
+                         std::uint64_t auxiliary = 0) {
     auto* slot = FindWrite(id);
     if (slot == nullptr) {
       throw std::runtime_error("GraphImageCache::RecordUnpublished: no write slot");
@@ -173,6 +174,7 @@ class GraphImageCache {
     slot->key         = key;
     slot->has_key     = true;
     slot->last_writer = submission_id;
+    slot->auxiliary   = auxiliary;
   }
 
   /**
@@ -192,6 +194,7 @@ class GraphImageCache {
       published.extent      = slot.extent;
       published.format      = slot.format;
       published.last_writer = slot.last_writer;
+      published.auxiliary   = slot.auxiliary;
       published.lru_tick    = ++lru_clock_;
       published_.insert_or_assign(ResultIdentity{id, slot.key}, std::move(published));
       current_[id] = slot.key;
@@ -202,7 +205,7 @@ class GraphImageCache {
   /**
    * @brief Drop unpublished writes without publishing. Previously published results stay.
    */
-  void DiscardUnpublished() { write_slots_.clear(); }
+  void               DiscardUnpublished() { write_slots_.clear(); }
 
   /**
    * @brief Current texture for @p id: this-frame write slot, else last bound/published result.
@@ -245,8 +248,8 @@ class GraphImageCache {
     bool released_matching = false;
     while (!released_matching && pool.UsedBytes() + needed_bytes > pool.ByteBudget()) {
       ResultIdentity   victim_id;
-      PublishedResult* victim  = nullptr;
-      std::uint64_t    oldest  = (std::numeric_limits<std::uint64_t>::max)();
+      PublishedResult* victim = nullptr;
+      std::uint64_t    oldest = (std::numeric_limits<std::uint64_t>::max)();
       for (auto& [identity, entry] : published_) {
         if (backend.IsResourceBusy(entry.last_writer)) {
           continue;
@@ -286,6 +289,18 @@ class GraphImageCache {
     return published == nullptr ? 0 : published->last_writer;
   }
 
+  /**
+   * @brief Return optional caller-owned metadata attached to a published image result.
+   *
+   * The value is published and discarded with the image identity. It is intended for small
+   * resource descriptors such as a canonical source resolution; it is not a second content key.
+   */
+  [[nodiscard]] auto PublishedAuxiliary(const GraphValueId& id, ContentKey key) const
+      -> std::uint64_t {
+    const auto* published = FindPublished(id, key);
+    return published == nullptr ? 0 : published->auxiliary;
+  }
+
   void Clear() {
     write_slots_.clear();
     published_.clear();
@@ -319,9 +334,8 @@ class GraphImageCache {
                 slot.last_writer, false);
     }
     for (const auto& [identity, entry] : published_) {
-      const auto current = current_.find(identity.value_id);
-      const bool is_current =
-          current != current_.end() && current->second == identity.content_key;
+      const auto current    = current_.find(identity.value_id);
+      const bool is_current = current != current_.end() && current->second == identity.content_key;
       PrintSlot("published", identity.value_id, identity.content_key, true, entry.extent,
                 entry.format, entry.texture, entry.last_writer, is_current);
     }
@@ -341,15 +355,15 @@ class GraphImageCache {
                  extent.width, extent.height, TextureFormatName(format),
                  static_cast<unsigned long long>(handle),
                  static_cast<unsigned long long>(has_key ? key.hash : 0),
-                 static_cast<unsigned long long>(last_writer), has_key ? 1 : 0,
-                 is_current ? 1 : 0);
+                 static_cast<unsigned long long>(last_writer), has_key ? 1 : 0, is_current ? 1 : 0);
   }
   struct WriteSlot {
     ResourceLease<Backend> texture;
     ContentKey             key{};
     ImageExtent            extent{};
-    TextureFormat          format = TextureFormat::R8;
+    TextureFormat          format      = TextureFormat::R8;
     std::uint64_t          last_writer = 0;
+    std::uint64_t          auxiliary   = 0;
     bool                   has_key     = false;
   };
 
@@ -358,6 +372,7 @@ class GraphImageCache {
     ImageExtent            extent{};
     TextureFormat          format      = TextureFormat::R8;
     std::uint64_t          last_writer = 0;
+    std::uint64_t          auxiliary   = 0;
     std::uint64_t          lru_tick    = 0;
   };
 
@@ -406,12 +421,12 @@ class GraphImageCache {
     return FindPublished(id, it->second);
   }
 
-  std::map<GraphValueId, WriteSlot>           write_slots_;
-  std::map<ResultIdentity, PublishedResult>   published_;
-  std::map<GraphValueId, ContentKey>          current_;
-  std::uint64_t                               lru_clock_      = 0;
-  std::uint64_t                               content_hits_   = 0;
-  std::uint64_t                               content_misses_ = 0;
+  std::map<GraphValueId, WriteSlot>         write_slots_;
+  std::map<ResultIdentity, PublishedResult> published_;
+  std::map<GraphValueId, ContentKey>        current_;
+  std::uint64_t                             lru_clock_      = 0;
+  std::uint64_t                             content_hits_   = 0;
+  std::uint64_t                             content_misses_ = 0;
 };
 
 }  // namespace alcedo

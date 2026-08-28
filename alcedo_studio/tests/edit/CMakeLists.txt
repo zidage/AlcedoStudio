@@ -446,7 +446,8 @@ if(ALCEDO_OPENCL_ENABLED)
   alcedo_register_test_target(GpuDagOpenClDevelopTest gpu)
 
   add_executable(GpuDagOpenClGradeTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)

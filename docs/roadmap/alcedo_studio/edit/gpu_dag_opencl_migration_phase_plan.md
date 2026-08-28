@@ -2,7 +2,7 @@
 
 Date: 2026-08-27
 
-Status: O0–O2 complete; O3–O6 planned
+Status: O0–O4 complete; O5–O6 planned
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -910,6 +910,160 @@ OpenClLlfPassDoesNotFinishTheQueue
 - LLF 没有私有 allocator、长期 scratch、private cache 或 queue wait；
 - stable LLF render 的资源创建和 program/kernel 创建为零。
 
+##### Phase O3 completion record (2026-08-28)
+
+**Status:** complete — OpenCL DAG local tone now executes the real CUDA-aligned LLF reference,
+pyramid, remap, collapse, sampling, and pixel-application path through the shared workspace.
+
+**Date:** 2026-08-28
+**Branch:** `feature/gpu-dag-opencl`
+**Commit:** uncommitted working tree (no commit requested)
+
+**Primary success call chain:**
+
+```text
+Renderer<OpenClBackend>::Execute / PlanExecutor<OpenClBackend>::Execute
+  -> OpenClBackend::WarmUpPlan
+       -> gpu_dag / CL1.2 local-tone compilation unit
+       -> OpenClKernelCache entries for extract, reference-extract, pyramid-down, remap,
+          select, collapse, and apply
+  -> BeginRender assigns the product-queue submission id and resets the transient offset
+  -> PassEncoder<OpenClBackend, PrimaryColorGrade>
+       -> ExecuteOpenClPrimaryGrade
+            -> HashLlfSourceKey and HashLlfReferenceKey
+            -> ExecuteOpenClLocalTone
+                 -> GraphImageCache local_tone.source.0/result.0 content-key lookup
+                 -> TransientBufferArena source/remap-A/remap-B/result pyramid planes
+                 -> local_tone_extract_reference for a full EditSpace frame, or local_tone_extract
+                    for an isolated ROI
+                 -> local_tone_pyr_down, local_tone_remap, local_tone_select, and
+                    local_tone_collapse
+                 -> MakeLlfSamplingPlan for canonical full-frame and ROI sampling
+                 -> local_tone_apply on the same in-order product queue
+                 -> GraphImageCache records canonical source/result writes as unpublished
+  -> PlanExecutor records the primary-grade output key
+  -> EndRender marker + clFlush; PublishResults publishes only the successful submission
+```
+
+**Primary failure call chain:**
+
+```text
+Invalid geometry/texture/key / transient allocation / program, kernel, argument, copy,
+or OpenCL enqueue error
+  -> throw std::runtime_error with the operation and original resource/error context
+  -> BasicRenderDevice::CancelRender waits recorded work and discards unpublished image writes
+  -> previously published canonical source/result identities remain available
+  -> PlanExecutor reports the error and publishes no new canonical content key
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OpenClLlfUsesWorkspaceTransientArenaForEveryPyramid` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfFullFrameBuildsCanonicalReferenceOnce` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfSliderEditReusesCanonicalReference` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfFailedSubmissionDoesNotPublishReference` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfSecondStableRenderCreatesNoBufferImageProgramOrKernel` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfMatchesCudaReferenceWithinTolerance` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLlfPassDoesNotFinishTheQueue` | `GpuDagOpenClGradeTest` | PASS |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagOpenClGradeTest`
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagOpenClWorkspaceTest GpuDagOpenClDevelopTest`
+- `ctest --test-dir build/debug -R "GpuDagOpenClGradeTest" --output-on-failure` → 17/17
+- `ctest --test-dir build/debug -R "GpuDagOpenCl(Workspace|Develop|Grade)Test" --output-on-failure` → 39/39
+
+Suite totals: 8/8 required O3 tests; 17/17 GpuDagOpenClGradeTest tests; 39/39 combined OpenCL
+O0–O3 tests.
+
+**Checklist / exit condition:** all O3 exit conditions met. `GraphImageCache` owns stable
+`local_tone.source.0` and `local_tone.result.0` identities, their source/reference content keys,
+and the source long-edge descriptor needed to decide whether a full-frame resolution change
+requires a rebuild. Full-frame and ROI frames use `MakeLlfSamplingPlan` from the shared resolved
+geometry; an isolated ROI builds its own local reference and does not report a canonical hit.
+The four LLF pyramid families use `TransientBufferArena` slab subranges, while canonical planes
+use `GraphImageCache` leases backed by `TexturePool`. The local-tone pass has no private allocator,
+long-lived scratch, or private result cache, and it does not wait for or finish the queue. The
+identity barrier kernel was removed from the DAG path. A second stable LLF render creates zero
+buffer, image, program, or kernel resources, and a failed submission leaves the previously
+published canonical identities unchanged.
+
+**LOC note (grill-code-review):** `opencl_local_tone_pass.cpp` 496,
+`opencl_local_tone_pass.hpp` 34, `local_tone.cl` 332, `opencl_primary_grade_pass.cpp` 462,
+`opencl_primary_grade_pass.hpp` 37, `opencl_backend.cpp` 829, `opencl_dag_programs.hpp` 39,
+`graph_image_cache.hpp` 393, `opencl_grade_test.cpp` 939. No new production file crossed 1000
+LOC.
+
+**Implemented:**
+
+- Replaced the OpenCL DAG local-tone identity copy with the CUDA-aligned ACEScc LLF math: source
+  extraction, Gaussian pyramid construction, sampled remap selection, pyramid collapse, and
+  RGB intensity application.
+- Added seven centralized local-tone kernel names and a CL1.2 implementation in the DAG local-tone
+  compilation unit. `WarmUpPlan` creates all required kernel objects before encode.
+- Added `ExecuteOpenClLocalTone` with full-frame canonical reference creation, content-keyed source
+  reuse across Shadows/Highlights edits, canonical ROI sampling, and isolated-ROI computation.
+- Added GraphImageCache auxiliary metadata for the published canonical source resolution. The
+  source and adjusted canonical images are recorded as unpublished until `PublishResults`.
+- Routed all transient source/remap/sample/output planes through `TransientBufferArena`, including
+  byte-offset views into one OpenCL slab, and kept all image ownership in `TexturePool` through
+  `GraphImageCache`.
+- Added the eight exact O3 behavior, failure, resource, queue, ROI, and pixel-tolerance tests;
+  existing O0–O2 tests remain green.
+
+**Deleted:** the `local_tone_llf_rgba32f` identity kernel and the DAG
+`DispatchLocalToneBarrier` helper. The legacy `OpenClStage` remains outside the DAG path until
+O6 as allowed by this phase plan.
+
+**Program evidence:**
+
+- The existing `gpu_dag` manifest local-tone descriptor now compiles the seven-kernel
+  `local_tone.cl` unit with `-cl-std=CL1.2`; no per-frame program registration was added.
+- `OpenClBackend::WarmUpPlan` obtains all local-tone kernel names from
+  `opencl_dag_programs.hpp` and the process-wide `OpenClKernelCache`.
+- The stable-render test observes zero program builds and kernel creates after warm-up; runtime
+  execution created and used the real kernels on the configured OpenCL device.
+
+**Resource evidence:**
+
+- `GraphCompiler::EstimatePeakTransientBytes` includes `EstimateLlfTransientBytes`; the arena
+  test verifies the plan reservation covers the four aligned pyramid families and the measured
+  slab subranges.
+- Canonical source/result images use stable graph IDs and content keys. The full-frame test
+  confirms the second render samples the same source resource, and the slider test confirms the
+  source key remains unchanged while the adjusted result key changes.
+- The ROI test confirms the full-frame and viewport plans share the same geometry-derived LLF
+  sampling function, while a separate device without a canonical result computes an isolated ROI
+  reference instead of claiming a cache hit.
+- The stable-render test observes zero buffer/image/program/kernel creation. The failed-submission
+  test confirms cancellation preserves the previously published canonical source/result pair.
+- Every copy and kernel event is retained by `OpenClCommandContext`; the queue test observes no
+  additional wait while the local-tone pass is encoding. `EndRender` owns the marker/flush and
+  `Wait` owns completion and event release.
+
+**Performance evidence:**
+
+- device/driver/OpenCL C/Windows/build: configured OpenCL device selected by `OpenClContext`,
+  Windows MSVC `win_debug`, OpenCL C 1.2 source, and runtime execution of the real local-tone
+  kernels. The exact driver string was not captured by this behavior suite.
+- fixture and render request: direct RGBA32F input for the grade suite; the ROI test uses a 64×64
+  full-frame render followed by a 32×64 visible viewport render and an isolated-device control.
+  Pixel tolerance compares the OpenCL output with a CPU mirror of the CUDA LLF math.
+- cold: first LLF render builds the local-tone program/kernel set during plan warm-up, allocates
+  the workspace transient slab and canonical images, and records the canonical source/result.
+- warm median: not measured by the O3 behavior suite; the stable-render test proves zero resource
+  and program/kernel creation after warm-up. Quantified warm median and p95 remain part of O6.
+- warm p95: not measured by the O3 behavior suite; O6 owns the benchmark matrix and threshold.
+
+**Remaining work owned by the next named Phase:** O4 — production R8 mask, exact signed distance,
+feather, and normal mix integration. O5 owns DRT, scope, present, and product OpenCL switching;
+O6 owns old OpenCL pipeline deletion and the final performance acceptance matrix. The legacy
+`OpenClStage` continues to serve only the pre-DAG product path and is not called or held by the
+DAG local-tone implementation.
+
 ## 9. Phase O4 — Mask、Feather 与 Mix
 
 目标：
@@ -953,6 +1107,124 @@ OpenClMaskLevelsUseSeparateOpenCl12Images
 - signed distance 内容 key 不包含 feather radius；
 - disconnected mask 不增加 image 分配；
 - mask、feather、mix 不调用旧 fused kernel。
+
+##### Phase O4 completion record (2026-08-28)
+
+**Status:** complete — OpenCL DAG now evaluates analytic and R8 raster masks, caches independent
+mip images, computes exact signed distance and feathering, and sends one logical Normal Mix stage
+through primary grade.
+
+**Date:** 2026-08-28
+**Branch:** `feature/gpu-dag-opencl`
+**Commit:** uncommitted working tree (no commit requested)
+
+**Primary success call chain:**
+
+```text
+OpenClRenderDevice::Execute / PlanExecutor<OpenClBackend>::Execute
+  -> PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate>
+       -> ExecuteOpenClMask
+            -> GraphImageCache::AcquireImageForWrite(mask_output)
+            -> analytic mask: mask_analytic_r8
+               or raster mask: MaskStore::Load -> MaskTextureCache::Acquire
+                  -> UploadTexture2D on cache miss, or UploadR8TextureRect for the dirty union
+                  -> mask_generate_r8_mip for independent cached R8 image2d levels
+                  -> mask_raster_sample_r8
+               or raster feather: exact mask_band_horizontal/vertical
+                  -> mask_compose_signed_distance -> mask_feather_sample
+  -> ExecuteOpenClPrimaryGrade::DispatchMix
+       -> one logical Normal Mix stage using the masked or unmasked CL entrypoint
+            (original Grade input + adjusted result + grade mix * optional mask)
+  -> PlanExecutor records unpublished results -> EndRender/clFlush -> PublishResults
+```
+
+**Primary failure call chain:**
+
+```text
+Unsupported R8/image capability, missing MaskStore, invalid mask asset, transient allocation,
+program/kernel, argument, or OpenCL enqueue failure
+  -> OpenClBackend capability validation or ExecuteOpenClMask throws with the operation context
+  -> PlanExecutor catches -> BasicRenderDevice::CancelRender waits tracked work, releases
+     unsubmitted resource uses, and discards unpublished image writes
+  -> the error is reported and rethrown; previously published values remain and no CPU or
+     alternate-backend substitute is selected
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OpenClRasterMaskUploadsOnlyChangedR8Rectangle` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClRasterMaskLevelsUseWorkspaceCache` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClMaskFeatherMatchesExactSignedDistanceReference` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClFeatherRadiusEditReusesSignedDistanceResult` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClDisconnectedMaskUsesConstantOneWithoutImageAllocation` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClNormalMixMatchesCudaReferenceWithinTolerance` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClMaskCacheDoesNotEvictBusyImages` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClMaskLevelsUseSeparateOpenCl12Images` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClGraduatedNdMaskFollowsReferenceSpaceNormal` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClRasterMaskRequiresMaskStoreAndReportsTheFailure` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+| `OpenClPlanExecutorRunsRasterMaskBeforePrimaryGrade` | `GpuDagOpenClGradeTest_runtime/GpuDagOpenClGradeTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagOpenClGradeTest --parallel 4
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe --gtest_filter='OpenClMaskFixture.*' --gtest_color=no
+ctest --test-dir build\debug --output-on-failure -R "GpuDagOpenCl(Workspace|Grade)Test"
+cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagCudaMaskTest --parallel 4
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaMaskTest_runtime\GpuDagCudaMaskTest.exe --gtest_color=no
+```
+
+Suite totals: 12/12 focused OpenCL mask tests; 41/41 registered OpenCL workspace and grade tests;
+11/11 CUDA mask tests. The focused OpenCL suite includes all nine required O4 names, the
+graduated analytic and explicit MaskStore-failure checks, and the real PlanExecutor ordering test.
+
+**Checklist / exit condition:** all O4 exit conditions met.
+
+- [x] Dirty raster upload records the union rectangle and only its packed R8 bytes; the test
+  observes one `{1,1,4,4}` upload and 16 host-to-device bytes.
+- [x] Workspace cache reuse, independent CL1.2 `image2d` mip resources, and busy-image protection
+  have resource-id, object-type, entry-count, and in-flight cache evidence.
+- [x] Exact signed distance uses transient slab subranges, while the saved content identity is
+  derived from mask asset key and extent and excludes feather radius; the radius-edit test
+  observes the same distance resource and zero new transient bytes.
+- [x] The exact reference test covers binary distance, partial coverage, boundary quantization,
+  and the feather result within two R8 levels; analytic radial and graduated masks use the shared
+  resolved geometry path.
+- [x] Disconnected masks keep the mask cache and mask image unallocated and use constant-one
+  mixing; masked and unmasked normal mix outputs match the CUDA reference at the asserted points.
+- [x] The OpenCL mask pass resolves only the named CL1.2 mask kernels, and the PlanExecutor test
+  proves mask evaluation reaches primary grade before result publication; no retired combined
+  mask/grade dispatch is used by this DAG path.
+
+**LOC note (grill-code-review):** full-file LOC for the O4 implementation and wiring is
+`opencl_mask_pass.cpp` 538, `opencl_mask_pass.hpp` 42, `mask.cl` 320,
+`opencl_mask_test.cpp` 616, `node_result_cache.hpp` 113, `opencl_pass_encoder.hpp` 94,
+`primary_grade.cl` 276, `opencl_dag_programs.hpp` 56, `opencl_backend.cpp` 907,
+`src/edit/CMakeLists.txt` 179, and `tests/edit/CMakeLists.txt` 459. No O4 production or test file
+crossed 1000 LOC; the focused test fixture remains within one mask/cache/integration
+responsibility. Earlier O3 working-tree edits remain preserved.
+
+**Implemented:**
+
+- Replaced the OpenCL mask identity path with analytic radial/graduated evaluation, R8 raster
+  upload and sampling, independent workspace-owned mip images, exact signed-distance banding, and
+  radius-only feather sampling.
+- Added the seven mask kernel names to the DAG manifest usage and plan warm-up. The runtime suite
+  compiled and executed the CL1.2 mask program on the configured OpenCL device.
+- Added device-buffer metadata for the signed-distance content identity without copying an
+  OpenCL virtual pointer to host memory, and routed all distance intermediates through the shared
+  transient arena.
+- Routed the real mask pass through `PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate>` and
+  made primary grade mix use the original input, adjusted result, grade mix, and optional R8 mask.
+- Registered the twelve focused tests in `GpuDagOpenClGradeTest`; existing OpenCL workspace/grade
+  and CUDA mask tests remain green.
+
+**Residual gaps:** none inside the written O4 checklist. O5 still owns OpenCL DRT, scope, present,
+and product switching. O6 still owns deletion of the legacy OpenCL stage and the final quantified
+performance matrix; no warm median or p95 measurement is claimed here.
 
 ## 10. Phase O5 — DRT、scope、present 与产品切换
 

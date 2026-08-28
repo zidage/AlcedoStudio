@@ -17,20 +17,24 @@ namespace alcedo {
 
 struct OpenClPrimaryGradeResult {
   GraphValueId  output{NodeId{"grade.primary"}, PortId{"image"}};
-  std::uint32_t pointwise_dispatch_count = 0;
-  std::uint32_t detail_pass_count        = 0;
-  std::uint32_t local_tone_pass_count    = 0;
-  std::uint32_t command_upload_bytes     = 0;
-  std::uint64_t lut_resource_id          = 0;
+  std::uint32_t pointwise_dispatch_count               = 0;
+  std::uint32_t detail_pass_count                      = 0;
+  std::uint32_t local_tone_pass_count                  = 0;
+  std::uint32_t local_tone_transient_bytes             = 0;
+  std::uint32_t command_upload_bytes                   = 0;
+  std::uint64_t lut_resource_id                        = 0;
+  std::uint64_t local_tone_reference_resource_id       = 0;
+  bool          local_tone_rebuilt_reference           = false;
+  bool          local_tone_sampled_canonical_reference = false;
 };
 
 /**
  * @brief Encode the shared Primary Grade adjustment order on the OpenCL queue.
  *
  * Pointwise adjustments are packed into fused dispatches, neighborhood work is
- * a separate workspace texture pass, and local-tone stages remain explicit
- * ordering barriers until their dedicated implementation replaces the barrier.
- * Parameters are stored in ParameterArena and failures are reported directly.
+ * a separate workspace texture pass, and local-tone stages build or sample the
+ * canonical workspace reference. Parameters are stored in ParameterArena and
+ * failures are reported directly.
  */
 [[nodiscard]] auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                              const PreparedRawInput& prepared,

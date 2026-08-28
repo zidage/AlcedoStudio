@@ -8,6 +8,7 @@
 
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -67,15 +68,8 @@ struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&, MaskStore*) {
-    auto& workspace = device.Workspace();
-    auto* source    = workspace.Images().Find(plan.geometry_output);
-    if (source == nullptr || source->Empty()) {
-      throw std::runtime_error("OpenCL mask identity: missing geometry.scene_source");
-    }
-    (void)workspace.AcquireImageForWrite(
-        plan.mask_output,
-        {source->Texture().Width(), source->Texture().Height(), TextureFormat::R8});
+                     PipelineDocument& document, MaskStore* store) {
+    (void)ExecuteOpenClMask(device, plan, document, store);
   }
 };
 

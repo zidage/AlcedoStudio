@@ -13,11 +13,11 @@
 #include <stdexcept>
 #include <utility>
 
+#include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/execution_plan.hpp"
-#include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
-#include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
+#include "edit/runtime/pass_kind.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_check.hpp"
@@ -30,7 +30,7 @@ namespace {
 
 constexpr std::size_t kTextureBudgetFloorBytes = 256ull << 20;
 
-auto ImageFormatFor(TextureFormat format) -> cl_image_format {
+auto                  ImageFormatFor(TextureFormat format) -> cl_image_format {
   switch (format) {
     case TextureFormat::R8:
       return cl_image_format{CL_R, CL_UNORM_INT8};
@@ -48,9 +48,8 @@ auto ImageFormatFor(TextureFormat format) -> cl_image_format {
 
 auto SupportsImageFormat(cl_context context, const cl_image_format& wanted) -> bool {
   cl_uint count = 0;
-  cl_int  error =
-      clGetSupportedImageFormats(context, CL_MEM_READ_WRITE, CL_MEM_OBJECT_IMAGE2D, 0, nullptr,
-                                 &count);
+  cl_int  error = clGetSupportedImageFormats(context, CL_MEM_READ_WRITE, CL_MEM_OBJECT_IMAGE2D, 0,
+                                             nullptr, &count);
   if (error != CL_SUCCESS || count == 0) {
     return false;
   }
@@ -97,8 +96,8 @@ void ValidateOpenClDagCapabilities(const OpenClContext& context) {
 
   std::size_t max_image_width  = 0;
   std::size_t max_image_height = 0;
-  CheckOpenCl(clGetDeviceInfo(context.Device(), CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(max_image_width),
-                              &max_image_width, nullptr),
+  CheckOpenCl(clGetDeviceInfo(context.Device(), CL_DEVICE_IMAGE2D_MAX_WIDTH,
+                              sizeof(max_image_width), &max_image_width, nullptr),
               "OpenClBackend: CL_DEVICE_IMAGE2D_MAX_WIDTH");
   CheckOpenCl(clGetDeviceInfo(context.Device(), CL_DEVICE_IMAGE2D_MAX_HEIGHT,
                               sizeof(max_image_height), &max_image_height, nullptr),
@@ -111,8 +110,7 @@ void ValidateOpenClDagCapabilities(const OpenClContext& context) {
   }
 }
 
-void RequirePackedTextureBytes(const OpenClBackend::Texture2D& texture,
-                               std::size_t                     byte_count) {
+void RequirePackedTextureBytes(const OpenClBackend::Texture2D& texture, std::size_t byte_count) {
   if (texture.Native() == nullptr) {
     throw std::runtime_error("OpenClBackend: empty texture");
   }
@@ -312,11 +310,10 @@ OpenClBackend::~OpenClBackend() {
 }
 
 void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
-  live_buffers_.erase(std::remove_if(live_buffers_.begin(), live_buffers_.end(),
-                                     [native](const LiveBuffer& entry) {
-                                       return entry.native == native;
-                                     }),
-                      live_buffers_.end());
+  live_buffers_.erase(
+      std::remove_if(live_buffers_.begin(), live_buffers_.end(),
+                     [native](const LiveBuffer& entry) { return entry.native == native; }),
+      live_buffers_.end());
 }
 
 void OpenClBackend::TrackKernelEvent(CommandContext& command_context, cl_event event) {
@@ -368,8 +365,7 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   const auto    image_format = ImageFormatFor(format);
   cl_image_desc desc         = MakeImageDesc(width, height);
   cl_int        error        = CL_SUCCESS;
-  cl_mem        native =
-      clCreateImage(context_, CL_MEM_READ_WRITE, &image_format, &desc, nullptr, &error);
+  cl_mem native = clCreateImage(context_, CL_MEM_READ_WRITE, &image_format, &desc, nullptr, &error);
   CheckOpenCl(error, "OpenClBackend::CreateTexture2D");
   if (native == nullptr) {
     throw std::runtime_error("OpenClBackend::CreateTexture2D: clCreateImage returned null");
@@ -549,7 +545,7 @@ void OpenClBackend::CopyImageToDeviceMemory(const Texture2D& src, void* dst, std
   if (bytes != src.Bytes()) {
     throw std::runtime_error("OpenClBackend::CopyImageToDeviceMemory: size mismatch");
   }
-  const auto        resolved = ResolveDeviceMemory(dst, bytes);
+  const auto        resolved  = ResolveDeviceMemory(dst, bytes);
   const std::size_t origin[3] = {0, 0, 0};
   const std::size_t region[3] = {src.Width(), src.Height(), 1};
   cl_event          event     = nullptr;
@@ -613,9 +609,9 @@ void OpenClBackend::FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t 
   if (bytes == 0) {
     return;
   }
-  const auto        resolved = ResolveDeviceMemory(dst, bytes);
+  const auto         resolved = ResolveDeviceMemory(dst, bytes);
   const std::uint8_t pattern  = value;
-  cl_event          event    = nullptr;
+  cl_event           event    = nullptr;
   CheckOpenCl(clEnqueueFillBuffer(queue_, resolved.first, &pattern, sizeof(pattern),
                                   resolved.second, bytes, 0, nullptr, &event),
               "OpenClBackend::FillDeviceMemory");
@@ -724,13 +720,27 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
     (void)DummyLut();
     for (const auto& stage : plan.primary_grade_stages) {
       if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
-        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneExtractKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName,
+            OpenCL::GpuDag::kLocalToneExtractReferenceKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalTonePyramidDownKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneRemapKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneSelectKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneCollapseKernelName);
+        add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneApplyKernelName);
         break;
       }
     }
   }
   if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskFeather)) {
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskEvaluateKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskMipKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterSampleKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskBandHorizontalKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskBandVerticalKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName,
+        OpenCL::GpuDag::kMaskComposeSignedDistanceKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFeatherSampleKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
   }
   if (plan.Contains(GpuPassKind::Drt)) {
     add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDrtKernelName);
@@ -826,17 +836,17 @@ void OpenClBackend::ReleaseUnsubmittedResourceUses() noexcept {
 }
 
 void OpenClBackend::ResetCounters() {
-  malloc_count_           = 0;
-  free_count_             = 0;
-  buffer_create_count_    = 0;
-  texture_create_count_   = 0;
-  event_create_count_     = 0;
-  event_release_count_    = 0;
-  flush_count_            = 0;
-  wait_count_             = 0;
-  h2d_copy_count_         = 0;
-  h2d_bytes_              = 0;
-  lut_upload_bytes_       = 0;
+  malloc_count_         = 0;
+  free_count_           = 0;
+  buffer_create_count_  = 0;
+  texture_create_count_ = 0;
+  event_create_count_   = 0;
+  event_release_count_  = 0;
+  flush_count_          = 0;
+  wait_count_           = 0;
+  h2d_copy_count_       = 0;
+  h2d_bytes_            = 0;
+  lut_upload_bytes_     = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
   kernel_create_baseline_ = OpenClKernelCache::Instance().CreateCount();
@@ -851,9 +861,9 @@ auto OpenClBackend::DefaultTextureBudgetBytes() -> std::size_t {
   if (!context.IsInitialized()) {
     return kTextureBudgetFloorBytes;
   }
-  const auto& cap     = context.Capabilities();
-  const auto  quarter = static_cast<std::size_t>(cap.global_memory_bytes / 4);
-  auto        budget  = quarter > kTextureBudgetFloorBytes ? quarter : kTextureBudgetFloorBytes;
+  const auto& cap       = context.Capabilities();
+  const auto  quarter   = static_cast<std::size_t>(cap.global_memory_bytes / 4);
+  auto        budget    = quarter > kTextureBudgetFloorBytes ? quarter : kTextureBudgetFloorBytes;
   const auto  max_alloc = static_cast<std::size_t>(cap.max_single_allocation_bytes);
   if (max_alloc > 0 && max_alloc < budget) {
     budget = max_alloc;

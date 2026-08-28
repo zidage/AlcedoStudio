@@ -24,8 +24,10 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_local_tone_pass.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
@@ -133,15 +135,6 @@ void DispatchPointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2
   DispatchKernel(device, kernel, width, height);
 }
 
-void DispatchLocalToneBarrier(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
-                              OpenClBackend::Texture2D& dst, std::uint32_t width,
-                              std::uint32_t height) {
-  auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kLocalToneProgramName,
-                                                        OpenCL::GpuDag::kLocalToneKernelName);
-  SetImageKernelArgs(kernel, src.Native(), dst.Native());
-  DispatchKernel(device, kernel, width, height);
-}
-
 void DispatchMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
                  const OpenClBackend::Texture2D& adjusted, OpenClBackend::Texture2D& dst, float mix,
                  const OpenClBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
@@ -242,7 +235,6 @@ auto CountGpuWrites(const std::vector<GradeOp>& ops, bool skip_mix) -> std::size
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                const PreparedRawInput& prepared, PipelineDocument& document)
     -> OpenClPrimaryGradeResult {
-  (void)prepared;
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: BeginRender has not been called");
@@ -462,7 +454,14 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
     auto& src  = Resolve(current_slot, current_scratch);
     auto& dest = Resolve(dest_slot, dest_scratch);
     if (op.kind == GradeOpKind::LlfBarrier) {
-      DispatchLocalToneBarrier(device, src, dest, width, height);
+      const auto local_tone =
+          ExecuteOpenClLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
+                                 plan.geometry, HashLlfSourceKey(plan, prepared, document),
+                                 HashLlfReferenceKey(plan, prepared, document));
+      result.local_tone_reference_resource_id       = local_tone.reference_resource_id;
+      result.local_tone_rebuilt_reference           = local_tone.rebuilt_reference;
+      result.local_tone_sampled_canonical_reference = local_tone.sampled_canonical_reference;
+      result.local_tone_transient_bytes             = local_tone.transient_bytes;
       ++result.local_tone_pass_count;
     } else if (op.kind == GradeOpKind::Fused) {
       if (commands_buffer == nullptr) {

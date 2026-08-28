@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -18,6 +19,7 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -31,6 +33,8 @@
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/result_content_key.hpp"
+#include "gpu/transient_buffer_arena.hpp"
 #include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
@@ -205,12 +209,355 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
   return c;
 }
 
+auto CpuAcesccEncode(float value) -> float {
+  constexpr float kA          = 9.72f;
+  constexpr float kB          = 17.52f;
+  constexpr float kOffset     = 0.0000152587890625f;
+  constexpr float kTransition = 0.000030517578125f;
+  constexpr float kFloor      = (-16.0f + kA) / kB;
+  if (value < 0.0f) {
+    return kFloor + value;
+  }
+  if (value < kTransition) {
+    return (std::log2(kOffset + value * 0.5f) + kA) / kB;
+  }
+  return (std::log2(value) + kA) / kB;
+}
+
+auto CpuAcesccDecode(float value) -> float {
+  constexpr float kA         = 9.72f;
+  constexpr float kB         = 17.52f;
+  constexpr float kOffset    = 0.0000152587890625f;
+  constexpr float kFloor     = (-16.0f + kA) / kB;
+  constexpr float kThreshold = (-15.0f + kA) / kB;
+  if (value < kFloor) {
+    return value - kFloor;
+  }
+  if (value <= kThreshold) {
+    return (std::exp2(value * kB - kA) - kOffset) * 2.0f;
+  }
+  return std::exp2(value * kB - kA);
+}
+
+auto CpuLogIntensity(const Rgba& pixel) -> float {
+  const float r = CpuAcesccDecode(pixel.r);
+  const float g = CpuAcesccDecode(pixel.g);
+  const float b = CpuAcesccDecode(pixel.b);
+  return CpuAcesccEncode(std::max(0.272229f * r + 0.674082f * g + 0.053689f * b, 1.0e-6f));
+}
+
+auto CpuReadRgbaBilinear(const std::vector<Rgba>& pixels, int width, int height, float x, float y)
+    -> Rgba {
+  x               = std::clamp(x, 0.0f, static_cast<float>(width - 1));
+  y               = std::clamp(y, 0.0f, static_cast<float>(height - 1));
+  const int   x0  = static_cast<int>(std::floor(x));
+  const int   y0  = static_cast<int>(std::floor(y));
+  const int   x1  = std::min(x0 + 1, width - 1);
+  const int   y1  = std::min(y0 + 1, height - 1);
+  const float tx  = x - static_cast<float>(x0);
+  const float ty  = y - static_cast<float>(y0);
+  const auto  mix = [](const Rgba& a, const Rgba& b, float t) -> Rgba {
+    return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t,
+            a.a + (b.a - a.a) * t};
+  };
+  const Rgba ab = mix(pixels[static_cast<std::size_t>(y0 * width + x0)],
+                      pixels[static_cast<std::size_t>(y0 * width + x1)], tx);
+  const Rgba cd = mix(pixels[static_cast<std::size_t>(y1 * width + x0)],
+                      pixels[static_cast<std::size_t>(y1 * width + x1)], tx);
+  return mix(ab, cd, ty);
+}
+
+struct CpuPlane {
+  int                width  = 1;
+  int                height = 1;
+  std::vector<float> values;
+
+  CpuPlane() = default;
+  CpuPlane(int width_value, int height_value)
+      : width(width_value),
+        height(height_value),
+        values(static_cast<std::size_t>(width_value) * static_cast<std::size_t>(height_value)) {}
+
+  auto At(int x, int y) const -> float {
+    x = std::clamp(x, 0, width - 1);
+    y = std::clamp(y, 0, height - 1);
+    return values[static_cast<std::size_t>(y * width + x)];
+  }
+
+  auto At(int x, int y) -> float& { return values[static_cast<std::size_t>(y * width + x)]; }
+};
+
+auto CpuPyramidLevelCount(int width, int height) -> int {
+  return local_tone_mapping::ComputeLevelCount(width, height, local_tone_mapping::kPyramidRadius);
+}
+
+auto CpuDownsample(const CpuPlane& source, int width, int height) -> CpuPlane {
+  CpuPlane destination(width, height);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      float sum = 0.0f;
+      for (int ky = -2; ky <= 2; ++ky) {
+        for (int kx = -2; kx <= 2; ++kx) {
+          const float weight   = (kx == -2 || kx == 2)   ? 1.0f / 16.0f
+                                 : (kx == -1 || kx == 1) ? 4.0f / 16.0f
+                                                         : 6.0f / 16.0f;
+          const float y_weight = (ky == -2 || ky == 2)   ? 1.0f / 16.0f
+                                 : (ky == -1 || ky == 1) ? 4.0f / 16.0f
+                                                         : 6.0f / 16.0f;
+          sum += weight * y_weight * source.At(x * 2 + kx, y * 2 + ky);
+        }
+      }
+      destination.At(x, y) = sum;
+    }
+  }
+  return destination;
+}
+
+auto CpuBuildPyramid(const CpuPlane& base) -> std::vector<CpuPlane> {
+  const int             count = CpuPyramidLevelCount(base.width, base.height);
+  std::vector<CpuPlane> levels;
+  levels.reserve(static_cast<std::size_t>(count));
+  levels.push_back(base);
+  for (int level = 1; level < count; ++level) {
+    levels.push_back(CpuDownsample(levels.back(), std::max(1, (levels.back().width + 1) / 2),
+                                   std::max(1, (levels.back().height + 1) / 2)));
+  }
+  return levels;
+}
+
+auto CpuExpand(const CpuPlane& coarse, int x, int y) -> float {
+  const auto weight = [](int tap) -> float {
+    return (tap == -2 || tap == 2)   ? 1.0f / 16.0f
+           : (tap == -1 || tap == 1) ? 4.0f / 16.0f
+                                     : 6.0f / 16.0f;
+  };
+  float sum = 0.0f;
+  for (int ky = -2; ky <= 2; ++ky) {
+    const int sample_y = y - ky;
+    if ((sample_y & 1) != 0) {
+      continue;
+    }
+    for (int kx = -2; kx <= 2; ++kx) {
+      const int sample_x = x - kx;
+      if ((sample_x & 1) != 0) {
+        continue;
+      }
+      sum += 4.0f * weight(kx) * weight(ky) * coarse.At(sample_x / 2, sample_y / 2);
+    }
+  }
+  return sum;
+}
+
+auto CpuBilinear(const CpuPlane& plane, float x, float y) -> float {
+  x              = std::clamp(x, 0.0f, static_cast<float>(plane.width - 1));
+  y              = std::clamp(y, 0.0f, static_cast<float>(plane.height - 1));
+  const int   x0 = static_cast<int>(std::floor(x));
+  const int   y0 = static_cast<int>(std::floor(y));
+  const int   x1 = std::min(x0 + 1, plane.width - 1);
+  const int   y1 = std::min(y0 + 1, plane.height - 1);
+  const float tx = x - static_cast<float>(x0);
+  const float ty = y - static_cast<float>(y0);
+  const float a  = plane.At(x0, y0) + (plane.At(x1, y0) - plane.At(x0, y0)) * tx;
+  const float b  = plane.At(x0, y1) + (plane.At(x1, y1) - plane.At(x0, y1)) * tx;
+  return a + (b - a) * ty;
+}
+
+auto CpuApplyLlf(const std::vector<Rgba>& input, int width, int height, float shadows_slider,
+                 float highlights_slider) -> std::vector<Rgba> {
+  const auto mask_dims = local_tone_mapping::ComputeMaskDimensions(
+      width, height, local_tone_mapping::kReferenceMaskMaxLongEdge);
+  CpuPlane source_base(mask_dims.width, mask_dims.height);
+  for (int y = 0; y < source_base.height; ++y) {
+    for (int x = 0; x < source_base.width; ++x) {
+      const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(width) /
+                           static_cast<float>(source_base.width) -
+                       0.5f;
+      const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(height) /
+                           static_cast<float>(source_base.height) -
+                       0.5f;
+      source_base.At(x, y) = CpuLogIntensity(CpuReadRgbaBilinear(input, width, height, sx, sy));
+    }
+  }
+  auto        source = CpuBuildPyramid(source_base);
+
+  const float shadow_amount =
+      std::clamp(shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
+                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
+  const float highlight_amount =
+      std::clamp(-highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f,
+                 -local_tone_mapping::kBackendAmountLimit, local_tone_mapping::kBackendAmountLimit);
+  const float sigma       = local_tone_mapping::SigmaR(shadow_amount, highlight_amount);
+  const auto  samples     = local_tone_mapping::BuildSamples(shadow_amount, highlight_amount);
+
+  const auto  build_remap = [&](const local_tone_mapping::LlfSample& sample) {
+    CpuPlane base(source_base.width, source_base.height);
+    for (std::size_t index = 0; index < base.values.size(); ++index) {
+      const float delta     = source_base.values[index] - sample.gamma;
+      const float magnitude = std::fabs(delta);
+      float       remapped  = 0.0f;
+      if (magnitude > 1.0e-6f) {
+        const float sign = std::copysign(1.0f, delta);
+        if (magnitude <= sigma) {
+          remapped = sign * sigma *
+                     std::pow(std::min(magnitude / std::max(sigma, 1.0e-6f), 1.0f), sample.alpha);
+        } else {
+          remapped = sign * (sigma + sample.beta * (magnitude - sigma));
+        }
+      }
+      base.values[index] = sample.target + remapped;
+    }
+    return CpuBuildPyramid(base);
+  };
+
+  auto                  remap_a = build_remap(samples[0]);
+  auto                  remap_b = build_remap(samples[1]);
+  std::vector<CpuPlane> result;
+  result.reserve(source.size());
+  for (const auto& level : source) {
+    result.emplace_back(level.width, level.height);
+  }
+
+  for (std::size_t pair = 0; pair + 1 < samples.size(); ++pair) {
+    for (std::size_t level = 0; level < source.size(); ++level) {
+      const bool  top         = level + 1 == source.size();
+      const auto& low         = remap_a[level];
+      const auto& high        = remap_b[level];
+      const auto& low_coarse  = top ? remap_a[level] : remap_a[level + 1];
+      const auto& high_coarse = top ? remap_b[level] : remap_b[level + 1];
+      auto&       destination = result[level];
+      for (int y = 0; y < destination.height; ++y) {
+        for (int x = 0; x < destination.width; ++x) {
+          const float value = source[level].At(x, y);
+          if (!((pair == 0 && value <= samples[pair + 1].gamma) ||
+                (pair + 2 == samples.size() && value >= samples[pair].gamma) ||
+                (value >= samples[pair].gamma && value < samples[pair + 1].gamma))) {
+            continue;
+          }
+          const float t =
+              std::clamp((value - samples[pair].gamma) /
+                             std::max(samples[pair + 1].gamma - samples[pair].gamma, 1.0e-6f),
+                         0.0f, 1.0f);
+          if (top) {
+            destination.At(x, y) = low.At(x, y) + (high.At(x, y) - low.At(x, y)) * t;
+          } else {
+            const float low_laplacian  = low.At(x, y) - CpuExpand(low_coarse, x, y);
+            const float high_laplacian = high.At(x, y) - CpuExpand(high_coarse, x, y);
+            destination.At(x, y)       = low_laplacian + (high_laplacian - low_laplacian) * t;
+          }
+        }
+      }
+    }
+    if (pair + 2 < samples.size()) {
+      std::swap(remap_a, remap_b);
+      remap_b = build_remap(samples[pair + 2]);
+    }
+  }
+
+  for (int level = static_cast<int>(source.size()) - 2; level >= 0; --level) {
+    CpuPlane collapsed(source[static_cast<std::size_t>(level)].width,
+                       source[static_cast<std::size_t>(level)].height);
+    for (int y = 0; y < collapsed.height; ++y) {
+      for (int x = 0; x < collapsed.width; ++x) {
+        collapsed.At(x, y) = result[static_cast<std::size_t>(level)].At(x, y) +
+                             CpuExpand(result[static_cast<std::size_t>(level + 1)], x, y);
+      }
+    }
+    result[static_cast<std::size_t>(level)] = std::move(collapsed);
+  }
+
+  const auto&       adjusted = result[0];
+  std::vector<Rgba> output(input.size());
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const float ax =
+          (static_cast<float>(x) + 0.5f) * adjusted.width / static_cast<float>(width) - 0.5f;
+      const float ay =
+          (static_cast<float>(y) + 0.5f) * adjusted.height / static_cast<float>(height) - 0.5f;
+      const float     reference_l      = CpuBilinear(source_base, ax, ay);
+      const float     adjusted_l       = CpuBilinear(adjusted, ax, ay);
+      const auto&     pixel            = input[static_cast<std::size_t>(y * width + x)];
+      const float     source_l         = CpuLogIntensity(pixel);
+      const float     source_intensity = std::max(CpuAcesccDecode(source_l), 1.0e-5f);
+      const float     target_intensity = CpuAcesccDecode(source_l + adjusted_l - reference_l);
+      const float     ratio       = std::clamp(target_intensity / source_intensity, 0.0f, 32.0f);
+      float           r           = CpuAcesccDecode(pixel.r) * ratio;
+      float           g           = CpuAcesccDecode(pixel.g) * ratio;
+      float           b           = CpuAcesccDecode(pixel.b) * ratio;
+      constexpr float kLower      = -1.0e-5f;
+      float           gamut_scale = 1.0f;
+      if (r < kLower && target_intensity > r) {
+        gamut_scale = std::min(gamut_scale, (target_intensity - kLower) / (target_intensity - r));
+      }
+      if (g < kLower && target_intensity > g) {
+        gamut_scale = std::min(gamut_scale, (target_intensity - kLower) / (target_intensity - g));
+      }
+      if (b < kLower && target_intensity > b) {
+        gamut_scale = std::min(gamut_scale, (target_intensity - kLower) / (target_intensity - b));
+      }
+      gamut_scale = std::clamp(gamut_scale, 0.0f, 1.0f);
+      r           = target_intensity + (r - target_intensity) * gamut_scale;
+      g           = target_intensity + (g - target_intensity) * gamut_scale;
+      b           = target_intensity + (b - target_intensity) * gamut_scale;
+      output[static_cast<std::size_t>(y * width + x)] = {CpuAcesccEncode(r), CpuAcesccEncode(g),
+                                                         CpuAcesccEncode(b), pixel.a};
+    }
+  }
+  return output;
+}
+
 void WriteIdentityCube(const std::filesystem::path& path) {
   std::filesystem::create_directories(path.parent_path());
   std::ofstream out(path);
   out << "LUT_3D_SIZE 2\n"
       << "0 0 0\n1 0 0\n0 1 0\n1 1 0\n"
       << "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+}
+
+auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
+  auto* lease = device.Workspace().Images().Find(id);
+  EXPECT_NE(lease, nullptr);
+  if (lease == nullptr) {
+    return {};
+  }
+  const auto& texture = lease->Texture();
+  EXPECT_EQ(texture.Format(), TextureFormat::R32f);
+  std::vector<float> values(static_cast<std::size_t>(texture.Width()) * texture.Height());
+  device.Workspace().Device().DownloadTexture2D(
+      texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(values.data()),
+                           values.size() * sizeof(float)),
+      device.CommandContext());
+  return values;
+}
+
+auto RenderPreparedGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                         const PreparedRawInput& prepared, PipelineDocument& document,
+                         std::vector<Rgba>* output_pixels  = nullptr,
+                         std::vector<Rgba>* develop_pixels = nullptr) -> OpenClPrimaryGradeResult {
+  device.BeginRender();
+  try {
+    ExecuteOpenClDevelop(device, plan, prepared, document);
+    ExecuteOpenClGeometryResample(device, plan);
+    ExecuteOpenClCameraColor(device, plan, document);
+    auto result = ExecuteOpenClPrimaryGrade(device, plan, prepared, document);
+    device.EndRender();
+    device.WaitIdle();
+    if (develop_pixels != nullptr) {
+      *develop_pixels = Download(device, plan.develop_output);
+    }
+    if (output_pixels != nullptr) {
+      *output_pixels = Download(device, result.output);
+    }
+    device.PublishResults();
+    return result;
+  } catch (...) {
+    device.CancelRender();
+    throw;
+  }
+}
+
+auto LocalToneValueId(const NodeId& grade_id, const char* family) -> GraphValueId {
+  return {grade_id, PortId{std::string{"local_tone."} + family + ".0"}};
 }
 
 class OpenClGradeFixture : public ::testing::Test {
@@ -235,6 +582,9 @@ class OpenClGradeFixture : public ::testing::Test {
     auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
     device_->EndRender();
     device_->WaitIdle();
+    last_develop_pixels_ = Download(*device_, plan_.develop_output);
+    last_output_pixels_  = Download(*device_, result.output);
+    device_->PublishResults();
     return result;
   }
 
@@ -249,6 +599,8 @@ class OpenClGradeFixture : public ::testing::Test {
   PipelineDocument                    document_;
   ExecutionPlan                       plan_;
   std::unique_ptr<OpenClRenderDevice> device_;
+  std::vector<Rgba>                   last_develop_pixels_;
+  std::vector<Rgba>                   last_output_pixels_;
 };
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
@@ -262,9 +614,9 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
   }
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);
-  const auto result = RenderGrade();
-  const auto input  = Download(*device_, plan_.develop_output);
-  const auto output = Download(*device_, result.output);
+  const auto  result = RenderGrade();
+  const auto& input  = last_develop_pixels_;
+  const auto& output = last_output_pixels_;
   ASSERT_FALSE(output.empty());
   EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
 }
@@ -358,9 +710,9 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(40.0f);
   ModelByType<WhiteModel>(type_ids::White()).SetValue(12.0f);
   ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.2f);
-  const auto result = RenderGrade();
-  const auto input  = Download(*device_, plan_.develop_output);
-  const auto output = Download(*device_, result.output);
+  const auto  result = RenderGrade();
+  const auto& input  = last_develop_pixels_;
+  const auto& output = last_output_pixels_;
   ASSERT_EQ(input.size(), output.size());
   ASSERT_FALSE(input.empty());
 
@@ -420,6 +772,240 @@ TEST_F(OpenClGradeFixture, OpenClStableGradeCreatesNoDummyLutOrStageParameterBuf
   EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().KernelCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().ProgramBuildCount(), 0U);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfUsesWorkspaceTransientArenaForEveryPyramid) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(80.0f);
+  const auto result = RenderGrade();
+  ASSERT_TRUE(result.local_tone_rebuilt_reference);
+  EXPECT_FALSE(result.local_tone_sampled_canonical_reference);
+
+  const auto canonical = local_tone_mapping::ComputeMaskDimensions(
+      static_cast<int>(plan_.geometry.full_reference_extent.width),
+      static_cast<int>(plan_.geometry.full_reference_extent.height),
+      local_tone_mapping::kReferenceMaskMaxLongEdge);
+  const auto expected_bytes = local_tone_mapping::EstimateLlfTransientBytes(
+      canonical.width, canonical.height, TransientBufferArena<OpenClBackend>::kDefaultAlignment);
+  EXPECT_GE(plan_.peak_transient_bytes, expected_bytes);
+  std::size_t raw_plane_bytes = 0;
+  int         width           = canonical.width;
+  int         height          = canonical.height;
+  const int   level_count =
+      local_tone_mapping::ComputeLevelCount(width, height, local_tone_mapping::kPyramidRadius);
+  for (int level = 0; level < level_count; ++level) {
+    raw_plane_bytes +=
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * sizeof(float);
+    width  = std::max(1, (width + 1) / 2);
+    height = std::max(1, (height + 1) / 2);
+  }
+  EXPECT_GE(result.local_tone_transient_bytes, 4U * raw_plane_bytes);
+  EXPECT_LE(result.local_tone_transient_bytes, expected_bytes);
+  EXPECT_GE(device_->Workspace().TransientBuffers().used_bytes(),
+            result.local_tone_transient_bytes);
+  EXPECT_GE(device_->Workspace().TransientBuffers().capacity_bytes(), plan_.peak_transient_bytes);
+
+  const auto  source_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto  result_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto  source_key    = HashLlfSourceKey(plan_, prepared_, document_);
+  const auto  reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
+  const auto* source        = device_->Workspace().Images().Find(source_id);
+  const auto* adjusted      = device_->Workspace().Images().Find(result_id);
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(adjusted, nullptr);
+  EXPECT_EQ(source->Texture().Format(), TextureFormat::R32f);
+  EXPECT_EQ(adjusted->Texture().Format(), TextureFormat::R32f);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
+  EXPECT_EQ(device_->Workspace().Values().Find(source_id), nullptr);
+  EXPECT_EQ(device_->Workspace().Values().Find(result_id), nullptr);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfFullFrameBuildsCanonicalReferenceOnce) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(55.0f);
+  const auto first = RenderGrade();
+  ASSERT_TRUE(first.local_tone_rebuilt_reference);
+  EXPECT_FALSE(first.local_tone_sampled_canonical_reference);
+  ASSERT_NE(first.local_tone_reference_resource_id, 0U);
+
+  const auto source_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto result_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto source_key    = HashLlfSourceKey(plan_, prepared_, document_);
+  const auto reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id, source_key), 16U);
+
+  const auto second = RenderGrade();
+  EXPECT_FALSE(second.local_tone_rebuilt_reference);
+  EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(second.local_tone_reference_resource_id, first.local_tone_reference_resource_id);
+  EXPECT_LE(device_->Workspace().Images().PublishedLastWriter(source_id, source_key),
+            device_->Workspace().Device().CompletedSubmission());
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfSliderEditReusesCanonicalReference) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
+  const auto first               = RenderGrade();
+  const auto source_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto result_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto source_key          = HashLlfSourceKey(plan_, prepared_, document_);
+  const auto first_reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
+  ASSERT_TRUE(first.local_tone_rebuilt_reference);
+
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(70.0f);
+  const auto second               = RenderGrade();
+  const auto second_reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
+  EXPECT_EQ(HashLlfSourceKey(plan_, prepared_, document_), source_key);
+  EXPECT_NE(second_reference_key, first_reference_key);
+  EXPECT_TRUE(second.local_tone_rebuilt_reference);
+  EXPECT_FALSE(second.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(second.local_tone_reference_resource_id, first.local_tone_reference_resource_id);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), second_reference_key);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfSecondStableRenderCreatesNoBufferImageProgramOrKernel) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  (void)RenderGrade();
+  device_->Workspace().Device().ResetCounters();
+  const auto second = RenderGrade();
+  EXPECT_FALSE(second.local_tone_rebuilt_reference);
+  EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);
+  EXPECT_EQ(device_->Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(device_->Workspace().Device().ProgramBuildCount(), 0U);
+  EXPECT_EQ(device_->Workspace().Device().KernelCreateCount(), 0U);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfFailedSubmissionDoesNotPublishReference) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(65.0f);
+  const auto first = RenderGrade();
+  ASSERT_TRUE(first.local_tone_rebuilt_reference);
+  const auto source_id          = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto result_id          = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto source_key         = HashLlfSourceKey(plan_, prepared_, document_);
+  const auto reference_key      = HashLlfReferenceKey(plan_, prepared_, document_);
+  const auto source_resource_id = first.local_tone_reference_resource_id;
+
+  auto       failed_plan        = plan_;
+  failed_plan.geometry.full_reference_extent = {};
+  device_->BeginRender();
+  ExecuteOpenClDevelop(*device_, failed_plan, prepared_, document_);
+  ExecuteOpenClGeometryResample(*device_, failed_plan);
+  ExecuteOpenClCameraColor(*device_, failed_plan, document_);
+  EXPECT_THROW((void)ExecuteOpenClPrimaryGrade(*device_, failed_plan, prepared_, document_),
+               std::runtime_error);
+  device_->CancelRender();
+
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id, source_key), 16U);
+
+  const auto recovered = RenderGrade();
+  EXPECT_FALSE(recovered.local_tone_rebuilt_reference);
+  EXPECT_TRUE(recovered.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(recovered.local_tone_reference_resource_id, source_resource_id);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfMatchesCudaReferenceWithinTolerance) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(80.0f);
+  const auto  result = RenderGrade();
+  const auto& input  = last_develop_pixels_;
+  const auto& output = last_output_pixels_;
+  ASSERT_EQ(input.size(), output.size());
+  ASSERT_FALSE(input.empty());
+
+  const auto expected =
+      CpuApplyLlf(input, static_cast<int>(plan_.geometry.render_extent.width),
+                  static_cast<int>(plan_.geometry.render_extent.height), 80.0f, 0.0f);
+  ASSERT_EQ(expected.size(), output.size());
+  float max_error = 0.0f;
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    max_error = std::max(max_error, std::fabs(expected[index].r - output[index].r));
+    max_error = std::max(max_error, std::fabs(expected[index].g - output[index].g));
+    max_error = std::max(max_error, std::fabs(expected[index].b - output[index].b));
+    EXPECT_TRUE(std::isfinite(output[index].r));
+    EXPECT_TRUE(std::isfinite(output[index].g));
+    EXPECT_TRUE(std::isfinite(output[index].b));
+  }
+  EXPECT_LT(max_error, 2.0e-3f);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLlfPassDoesNotFinishTheQueue) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  device_->Workspace().Device().ResetCounters();
+  device_->BeginRender();
+  ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+  ExecuteOpenClGeometryResample(*device_, plan_);
+  ExecuteOpenClCameraColor(*device_, plan_, document_);
+  const auto waits_before = device_->Workspace().Device().WaitCount();
+  const auto result       = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
+  EXPECT_TRUE(result.local_tone_rebuilt_reference);
+  EXPECT_EQ(device_->Workspace().Device().WaitCount(), waits_before);
+  device_->EndRender();
+  device_->WaitIdle();
+  device_->PublishResults();
+}
+
+TEST(GpuDagOpenClGrade, OpenClLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan) {
+  if (!TryInitializeOpenClRuntime()) {
+    GTEST_SKIP() << "No OpenCL device available.";
+  }
+  constexpr std::uint32_t kWidth   = 64;
+  constexpr std::uint32_t kHeight  = 64;
+  const auto              prepared = RawInputLoader::FromDirectRgb(
+      gpu_dag_test::MakeF32RgbaPlane(kWidth, kHeight), gpu_dag_test::FullSensor(kWidth, kHeight));
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(75.0f);
+
+  const auto full_plan =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  OpenClRenderDevice device;
+  const auto         full_result = RenderPreparedGrade(device, full_plan, prepared, document);
+  ASSERT_TRUE(full_result.local_tone_rebuilt_reference);
+  ASSERT_FALSE(full_result.local_tone_sampled_canonical_reference);
+  ASSERT_NE(full_result.local_tone_reference_resource_id, 0U);
+
+  const auto    full_source_key    = HashLlfSourceKey(full_plan, prepared, document);
+  const auto    full_reference_key = HashLlfReferenceKey(full_plan, prepared, document);
+  const auto    source_id          = LocalToneValueId(document.PrimaryGrade()->Id(), "source");
+  const auto    result_id          = LocalToneValueId(document.PrimaryGrade()->Id(), "result");
+  const auto    full_sampling = MakeLlfSamplingPlan(full_plan.geometry, Extent2D{kWidth, kHeight});
+
+  RenderRequest roi_request;
+  roi_request.view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.0f, 0.5f, 1.0f};
+  roi_request.view.viewport_extent            = Extent2D{32, kHeight};
+  const auto roi_plan = GraphCompiler::Compile(document, prepared.CompileSource(), roi_request);
+  EXPECT_EQ(HashLlfSourceKey(roi_plan, prepared, document), full_source_key);
+  EXPECT_EQ(HashLlfReferenceKey(roi_plan, prepared, document), full_reference_key);
+  const auto roi_sampling = MakeLlfSamplingPlan(roi_plan.geometry, Extent2D{kWidth, kHeight});
+  EXPECT_NE(roi_sampling.render_to_texture_uv.m[2], full_sampling.render_to_texture_uv.m[2]);
+
+  std::vector<Rgba> roi_pixels;
+  const auto roi_result = RenderPreparedGrade(device, roi_plan, prepared, document, &roi_pixels);
+  EXPECT_FALSE(roi_result.local_tone_rebuilt_reference);
+  EXPECT_TRUE(roi_result.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(roi_result.local_tone_reference_resource_id,
+            full_result.local_tone_reference_resource_id);
+  EXPECT_EQ(device.Workspace().Images().PublishedContentKey(source_id), full_source_key);
+  EXPECT_EQ(device.Workspace().Images().PublishedContentKey(result_id), full_reference_key);
+  EXPECT_EQ(roi_pixels.size(), static_cast<std::size_t>(32) * kHeight);
+  for (const auto& pixel : roi_pixels) {
+    EXPECT_TRUE(std::isfinite(pixel.r));
+    EXPECT_TRUE(std::isfinite(pixel.g));
+    EXPECT_TRUE(std::isfinite(pixel.b));
+  }
+
+  OpenClRenderDevice isolated_device;
+  const auto isolated_result = RenderPreparedGrade(isolated_device, roi_plan, prepared, document);
+  EXPECT_TRUE(isolated_result.local_tone_rebuilt_reference);
+  EXPECT_FALSE(isolated_result.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(isolated_result.local_tone_reference_resource_id, 0U);
+  EXPECT_EQ(isolated_device.Workspace().Images().PublishedCount(), 0U);
 }
 
 }  // namespace

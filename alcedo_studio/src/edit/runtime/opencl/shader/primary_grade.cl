@@ -257,7 +257,8 @@ __kernel void primary_grade_mix_rgba32f(__read_only image2d_t source,
   }
   const float4 a = read_imagef(adjusted, kNearestClamp, gid);
   const float4 s = read_imagef(source, kNearestClamp, gid);
-  write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * grade_mix, s.w));
+  const float mix = clamp(grade_mix, 0.0f, 1.0f);
+  write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * mix, s.w));
 }
 
 __kernel void primary_grade_mix_masked_rgba32f(
@@ -270,6 +271,6 @@ __kernel void primary_grade_mix_masked_rgba32f(
   }
   const float4 a   = read_imagef(adjusted, kNearestClamp, gid);
   const float4 s   = read_imagef(source, kNearestClamp, gid);
-  const float  mix = grade_mix * read_imagef(mask, kNearestClamp, gid).x;
+  const float  mix = clamp(grade_mix * read_imagef(mask, kNearestClamp, gid).x, 0.0f, 1.0f);
   write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * mix, s.w));
 }
