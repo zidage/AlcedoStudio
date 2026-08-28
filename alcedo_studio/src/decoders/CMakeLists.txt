@@ -45,6 +45,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_xtrans_interpolate.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_highlight_reconstruct.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_cvt_ref_space.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_encode.cpp
     )
 endif()
 

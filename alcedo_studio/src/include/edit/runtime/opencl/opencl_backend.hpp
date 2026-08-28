@@ -177,6 +177,9 @@ class OpenClBackend {
                          CommandContext& command_context);
   void CopyImageToBuffer(const Texture2D& src, Buffer& dst, std::uint32_t dst_offset,
                          CommandContext& command_context);
+  void CopyImageToDeviceMemory(const Texture2D& src, void* dst, std::size_t bytes,
+                               CommandContext& command_context);
+  void CopyDeviceMemoryToImage(void* src, Texture2D& dst, CommandContext& command_context);
   void UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
                           CommandContext& command_context);
   void FillDeviceMemory(void* dst, std::size_t bytes, std::uint8_t value,
@@ -185,6 +188,13 @@ class OpenClBackend {
                                 CommandContext& command_context);
   [[nodiscard]] auto ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
       -> std::pair<cl_mem, std::uint32_t>;
+
+  /**
+   * @brief Take ownership of an enqueue event (refcount 1) and count it.
+   * @param command_context Current render command context.
+   * @param event Event produced by clEnqueue*; null is ignored.
+   */
+  void TrackKernelEvent(CommandContext& command_context, cl_event event);
 
   void Submit(CommandContext& command_context);
   void Wait(CommandContext& command_context);

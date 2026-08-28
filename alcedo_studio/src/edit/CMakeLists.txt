@@ -160,7 +160,8 @@ if(ALCEDO_OPENCL_ENABLED)
     def_library(EditRuntimeOpenCl
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_backend.cpp
-        PUBLIC_DEPS EditRuntime OpenClContext OpenClProgramLibrary OpenCL::OpenCL
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_develop_pass.cpp
+        PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()

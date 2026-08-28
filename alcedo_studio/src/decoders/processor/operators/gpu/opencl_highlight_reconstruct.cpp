@@ -170,6 +170,13 @@ void HighlightReconstruct(opencl::OpenClImage& img, LibRaw& raw_processor) {
     CheckOpenCl(err, "clSetKernelArg(build_mask,2)");
     err = clSetKernelArg(kernel, 3, sizeof(params), &params);
     CheckOpenCl(err, "clSetKernelArg(build_mask,3)");
+    const cl_uint zero = 0;
+    err = clSetKernelArg(kernel, 4, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(build_mask,4)");
+    err = clSetKernelArg(kernel, 5, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(build_mask,5)");
+    err = clSetKernelArg(kernel, 6, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(build_mask,6)");
     DispatchKernel(kernel, width, height);
     clReleaseKernel(kernel);
   }
@@ -184,6 +191,11 @@ void HighlightReconstruct(opencl::OpenClImage& img, LibRaw& raw_processor) {
     CheckOpenCl(err, "clSetKernelArg(dilate_mask,1)");
     err = clSetKernelArg(kernel, 2, sizeof(params), &params);
     CheckOpenCl(err, "clSetKernelArg(dilate_mask,2)");
+    const cl_uint zero = 0;
+    err = clSetKernelArg(kernel, 3, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(dilate_mask,3)");
+    err = clSetKernelArg(kernel, 4, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(dilate_mask,4)");
     DispatchKernel(kernel, width, height);
     clReleaseKernel(kernel);
   }
@@ -202,6 +214,15 @@ void HighlightReconstruct(opencl::OpenClImage& img, LibRaw& raw_processor) {
     CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,3)");
     err = clSetKernelArg(kernel, 4, sizeof(params), &params);
     CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,4)");
+    const cl_uint zero = 0;
+    err = clSetKernelArg(kernel, 5, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,5)");
+    err = clSetKernelArg(kernel, 6, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,6)");
+    err = clSetKernelArg(kernel, 7, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,7)");
+    err = clSetKernelArg(kernel, 8, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, "clSetKernelArg(chrominance_contrib,8)");
     DispatchKernel(kernel, width, height);
     clReleaseKernel(kernel);
   }

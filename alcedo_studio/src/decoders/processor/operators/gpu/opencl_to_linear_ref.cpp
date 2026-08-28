@@ -128,6 +128,11 @@ void ToLinearRef(opencl::OpenClImage& img, LibRaw& raw_processor, const RawCfaPa
   CheckOpenCl(err, "clSetKernelArg(2)");
   err = clSetKernelArg(kernel, 3, sizeof(PatternParams), &pattern_params);
   CheckOpenCl(err, "clSetKernelArg(3)");
+  const cl_uint zero = 0;
+  err = clSetKernelArg(kernel, 4, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(4)");
+  err = clSetKernelArg(kernel, 5, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(5)");
 
   const size_t local_size[2]  = {16, 16};
   const size_t global_size[2] = {

@@ -432,4 +432,16 @@ if(ALCEDO_OPENCL_ENABLED)
   gtest_discover_tests(GpuDagOpenClWorkspaceTest TEST_PREFIX "GpuDagOpenClWorkspaceTest."
     PROPERTIES LABELS "gpu;edit;runtime;opencl")
   alcedo_register_test_target(GpuDagOpenClWorkspaceTest gpu)
+
+  add_executable(GpuDagOpenClDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_develop_test.cpp)
+  target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNetEntry
+    OpenClProgramLibrary)
+  target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  gtest_discover_tests(GpuDagOpenClDevelopTest TEST_PREFIX "GpuDagOpenClDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl")
+  alcedo_register_test_target(GpuDagOpenClDevelopTest gpu)
 endif()

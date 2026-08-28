@@ -18,6 +18,7 @@ inline constexpr const char* kDrtProgramName            = "opencl_dag_drt";
 
 inline constexpr const char* kGeometryResampleKernelName     = "geometry_resample_rgba32f";
 inline constexpr const char* kCameraColorKernelName          = "camera_color_acescc";
+inline constexpr const char* kWarpRectilinearKernelName      = "warp_rectilinear_rgba32f";
 inline constexpr const char* kPrimaryGradePointwiseKernelName = "primary_grade_pointwise_rgba32f";
 inline constexpr const char* kLocalToneKernelName            = "local_tone_llf_rgba32f";
 inline constexpr const char* kMaskEvaluateKernelName         = "mask_evaluate_r8";

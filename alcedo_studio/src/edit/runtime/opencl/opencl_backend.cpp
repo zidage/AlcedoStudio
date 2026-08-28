@@ -12,8 +12,11 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_check.hpp"
@@ -315,6 +318,10 @@ void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
                       live_buffers_.end());
 }
 
+void OpenClBackend::TrackKernelEvent(CommandContext& command_context, cl_event event) {
+  TrackEnqueueEvent(command_context, event);
+}
+
 void OpenClBackend::TrackEnqueueEvent(CommandContext& command_context, cl_event event) {
   if (event == nullptr) {
     return;
@@ -533,6 +540,39 @@ void OpenClBackend::CopyImageToBuffer(const Texture2D& src, Buffer& dst, std::ui
   TrackEnqueueEvent(command_context, event);
 }
 
+void OpenClBackend::CopyImageToDeviceMemory(const Texture2D& src, void* dst, std::size_t bytes,
+                                            CommandContext& command_context) {
+  if (src.Native() == nullptr || dst == nullptr) {
+    throw std::runtime_error("OpenClBackend::CopyImageToDeviceMemory: empty resource");
+  }
+  if (bytes != src.Bytes()) {
+    throw std::runtime_error("OpenClBackend::CopyImageToDeviceMemory: size mismatch");
+  }
+  const auto        resolved = ResolveDeviceMemory(dst, bytes);
+  const std::size_t origin[3] = {0, 0, 0};
+  const std::size_t region[3] = {src.Width(), src.Height(), 1};
+  cl_event          event     = nullptr;
+  CheckOpenCl(clEnqueueCopyImageToBuffer(queue_, src.Native(), resolved.first, origin, region,
+                                         resolved.second, 0, nullptr, &event),
+              "OpenClBackend::CopyImageToDeviceMemory");
+  TrackEnqueueEvent(command_context, event);
+}
+
+void OpenClBackend::CopyDeviceMemoryToImage(void* src, Texture2D& dst,
+                                            CommandContext& command_context) {
+  if (src == nullptr || dst.Native() == nullptr) {
+    throw std::runtime_error("OpenClBackend::CopyDeviceMemoryToImage: empty resource");
+  }
+  const auto        resolved  = ResolveDeviceMemory(src, dst.Bytes());
+  const std::size_t origin[3] = {0, 0, 0};
+  const std::size_t region[3] = {dst.Width(), dst.Height(), 1};
+  cl_event          event     = nullptr;
+  CheckOpenCl(clEnqueueCopyBufferToImage(queue_, resolved.first, dst.Native(), resolved.second,
+                                         origin, region, 0, nullptr, &event),
+              "OpenClBackend::CopyDeviceMemoryToImage");
+  TrackEnqueueEvent(command_context, event);
+}
+
 auto OpenClBackend::ResolveDeviceMemory(void* device_pointer, std::size_t bytes) const
     -> std::pair<cl_mem, std::uint32_t> {
   if (device_pointer == nullptr || bytes == 0) {
@@ -640,8 +680,32 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
     (void)cache.GetKernel(program, kernel);
   };
 
+  if (plan.Contains(GpuPassKind::UploadRaw) || plan.Contains(GpuPassKind::UploadRgb)) {
+    using namespace OpenCL::RawProcessor;
+    if (plan.source.kind != DevelopInputKind::DirectRgb) {
+      add(kCoreProgramName, kToLinearRefKernelName);
+      add(kCoreProgramName, kCfaClamp01KernelName);
+      add(kCvtRefSpaceProgramName, kPackPlanesCropInverseOrientKernelName);
+      add(kCvtRefSpaceProgramName, kCopyRgbaCropInverseOrientKernelName);
+      add(kHighlightProgramName, kHlrBuildMaskKernelName);
+      add(kHighlightProgramName, kHlrDilateMaskKernelName);
+      add(kHighlightProgramName, kHlrChrominanceContribKernelName);
+      add(kHighlightProgramName, kHlrReconstructFromStatsKernelName);
+      if (plan.source.kind == DevelopInputKind::XTransCfa) {
+        add(kXTransProgramName, kXTransGreenKernelName);
+        add(kXTransProgramName, kXTransRgbaKernelName);
+      } else {
+        add(kDebayerRcdProgramName, kRcdInitAndVhKernelName);
+        add(kDebayerRcdProgramName, kRcdGreenAtRbKernelName);
+        add(kDebayerRcdProgramName, kRcdPqDirKernelName);
+        add(kDebayerRcdProgramName, kRcdRbAtRbKernelName);
+        add(kDebayerRcdProgramName, kRcdRbAtGKernelName);
+      }
+    }
+  }
   if (plan.Contains(GpuPassKind::GeometryResample)) {
     add(OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kGeometryResampleKernelName);
+    add(OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kWarpRectilinearKernelName);
   }
   if (plan.Contains(GpuPassKind::CameraToAp1)) {
     add(OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kCameraColorKernelName);

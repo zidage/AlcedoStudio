@@ -2,7 +2,7 @@
 
 Date: 2026-08-27
 
-Status: O0 complete; O1–O6 planned
+Status: O0–O1 complete; O2–O6 planned
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -576,6 +576,100 @@ OpenClMissingRawProgramReturnsItsBuildOrLookupError
 - Develop 稳定重绘不分配 OpenCL 资源；
 - RAW OpenCL operator 不保存长期 scratch 或私有 kernel cache；
 - 设备、program、kernel 和 event 错误直接失败。
+
+##### Phase O1 completion record (2026-08-28)
+
+**Status:** complete — encode-only OpenCL Develop, GeometryResample, and CameraColor on `Renderer<OpenClBackend>` with CUDA order and the three content-key boundaries.
+
+**Date:** 2026-08-28
+**Branch:** `feature/gpu-dag-opencl`
+**Commit:** working tree (uncommitted)
+
+**Primary success call chain:**
+
+```text
+OpenClRenderDevice::Execute / PassEncoder<OpenClBackend, UploadRaw|UploadRgb>
+  -> ExecuteOpenClDevelop
+       -> transient U16 upload + EncodeToLinearRef (+ optional EncodeCfaClamp01)
+       -> EncodeBayerRcd | EncodeXTrans | EncodeNeural (session ActivationSlots)
+       -> pack/copy to workspace RGBA32F image
+       -> optional warp_rectilinear_rgba32f
+  -> ExecuteOpenClGeometryResample (alias or one geometry_resample_rgba32f)
+  -> ExecuteOpenClCameraColor (shared DevelopColorTransform -> ParameterArena -> camera_color_acescc)
+  -> identity CopyTexture2D for PrimaryGrade and DRT until O2/O5
+  -> EndRender marker + clFlush; Wait releases events
+```
+
+**Primary failure call chain:**
+
+```text
+Neural model load / missing RAW program or kernel / OpenCL enqueue error
+  -> throw std::runtime_error (original status, program name, kernel name, or Neural Engine error)
+  -> CancelRender discards unpublished writes, publishes no content key
+  -> no Legacy/RCD/CPU/CUDA/Metal/old OpenCLGPUPipeline substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OpenClDevelopLinearizeMatchesCudaReferenceWithinTolerance` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClDevelopRcdOrderMatchesCudaDemosaicThenHighlightRecovery` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClDevelopXTransMatchesCudaReferenceWithinTolerance` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectAnotherDemosaicOnFailure` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClGeometryUsesOneResampleForCropRotationViewportAndScale` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClCameraColorConsumesSharedDualIlluminantTransform` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClCctEditReusesSensorAndGeometryResults` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClSecondDevelopRenderRunsNoSourceUploadOrDevelopPass` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClDevelopPassesUseOneQueueAndOneRenderEventChain` | `GpuDagOpenClDevelopTest` | PASS |
+| `OpenClMissingRawProgramReturnsItsBuildOrLookupError` | `GpuDagOpenClDevelopTest` | PASS |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagOpenClDevelopTest --target GpuDagOpenClWorkspaceTest`
+- `ctest --test-dir build/debug -R GpuDagOpenClDevelopTest --output-on-failure` → 10/10
+- `ctest --test-dir build/debug -R GpuDagOpenClWorkspaceTest --output-on-failure` → 12/12 (O0 still green)
+
+Suite totals: 10/10 GpuDagOpenClDevelopTest; 12/12 GpuDagOpenClWorkspaceTest.
+
+**Checklist / exit condition:** all O1 exit conditions met. `develop.sensor_linear`, `geometry.scene_source`, and `develop.image` have independent content keys (CCT edit skips SensorDevelop and Geometry). Stable identical Develop render creates no buffer/image/program/kernel. RAW encode-only entrypoints take the product queue and workspace views; they do not own a queue or call `clFinish`. Missing program/kernel and Neural load failure throw and publish no result.
+
+**LOC note (grill-code-review):** `opencl_encode.cpp` 485, `opencl_develop_pass.cpp` 528, `opencl_backend.cpp` 770, `opencl_develop_test.cpp` 525. No new production file crossed 1000 LOC.
+
+**Implemented:**
+
+- RAW encode-only API (`opencl_encode.hpp/.cpp`) using `OpenClKernelCache`, product queue, and buffer-offset views
+- `ExecuteOpenClDevelop` / `ExecuteOpenClGeometryResample` / `ExecuteOpenClCameraColor` and PassEncoder specializations
+- DAG `geometry_resample_rgba32f`, `camera_color_acescc`, and `warp_rectilinear_rgba32f` in `geometry_camera.cl`
+- RAW pack/clamp/HLR-from-stats kernels; program/kernel names in `opencl_raw_programs.hpp`
+- `WarmUpPlan` builds selected RAW kernels for the compiled CFA kind plus Geometry/CameraColor
+- Identity PrimaryGrade and DRT copies so PlanExecutor cache-skip tests can finish
+
+**Deleted:** none of the old OpenCL product wrappers. They remain until O6. The DAG path does not call them.
+
+**Program evidence:**
+
+- RAW programs stay in the `raw_processor` manifest; DAG warp/geometry/camera stay in `opencl_dag_geometry_camera`
+- Bayer warm-up builds linearize/clamp/RCD/pack/HLR; X-Trans builds xtrans instead of RCD
+- Missing kernel/program lookup returns program name plus kernel name or "not registered"
+
+**Resource evidence:**
+
+- buffer/image/program/kernel create: second identical Develop render 0 (`OpenClSecondDevelopRenderRunsNoSourceUploadOrDevelopPass`)
+- CCT edit: `source_h2d_count == 0`, SensorDevelop/Geometry skip, CameraColor execute 1, kernel create 0
+- event create == event release after Wait; product queue is `OpenClContext::Instance().Queue()`
+- no DAG `clFinish`; HLR chrominance stays on device via `hlr_reconstruct_from_stats`
+
+**Performance evidence:**
+
+- device/driver/OpenCL C/Windows/build: Windows MSVC `win_debug`; OpenCL GPU selected by `OpenClContext::Initialize`
+- fixture: synthetic 64×64 Bayer / 64×64 X-Trans / 16×12 Direct RGB; `OpenClRenderDevice::Execute` after plan warm-up
+- cold: first reserve + first render allocates transients, textures, and kernels
+- warm: second identical Develop render GPU resource/program/kernel create = 0; product A/B remains O6
+
+**Residual gaps:** PrimaryGrade and DRT OpenCL encoders copy `develop.image` until O2/O5. Old RAW OpenCL wrappers still own `clFinish` and `OpenClImage` scratch for the pre-DAG product path. Neural success pixels are not asserted; load failure is. Product present/download remains unimplemented until O5.
+
+**Remaining work owned by the next named Phase:** O2 — Primary Grade fusion (replace identity copy), ParameterArena slider dirty ranges, LUT image cache.
 
 ## 7. Phase O2 — Primary Grade 融合路径
 
