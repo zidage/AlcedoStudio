@@ -732,7 +732,7 @@ workspace-backed DAG pass with fused pointwise, explicit detail, LUT, mix, and L
 
 **Date:** 2026-08-28
 **Branch:** `feature/gpu-dag-opencl`
-**Commit:** working tree (uncommitted)
+**Commit:** `350cd643`
 
 **Primary success call chain:**
 
