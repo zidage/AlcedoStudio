@@ -2,7 +2,7 @@
 
 Date: 2026-08-27
 
-Status: O0–O6 planned
+Status: O0 complete; O1–O6 planned
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -410,6 +410,104 @@ OpenClCommandContextReleasesEveryRetainedEvent
 - DAG manifest 经 backend registry 激活；
 - program/kernel 预热和错误 build log 可测试；
 - 没有新增运行时 fallback。
+
+##### Phase O0 completion record (2026-08-27)
+
+**Status:** complete — `OpenClBackend` Traits, `Renderer<OpenClBackend>` / workspace instantiation, process-wide kernel cache, `gpu_dag` program manifest, and plan-level warm-up.
+
+**Date:** 2026-08-27
+**Branch:** `feature/gpu-dag-opencl`
+**Commit:** `d02ec87d`
+
+**Primary success call chain:**
+
+```text
+OpenClRenderer / OpenClRenderDevice construction
+  -> OpenClBackend (OpenClContext device/context/product queue, capability check)
+  -> BasicRenderWorkspace<OpenClBackend> (ParameterArena, TransientBufferArena,
+     TexturePool, MaskTextureCache, GraphImageCache, NodeResultCache)
+  -> RegisterOpenClBackendPrograms
+       -> RegisterOpenClGpuDagPrograms (manifest only)
+  -> OpenClBackend::WarmUpPlan(ExecutionPlan)
+       -> OpenClProgramLibrary::GetProgram (required compilation units only)
+       -> OpenClKernelCache::GetKernel (program name + kernel name)
+  -> BeginRender / UploadDirty / EndRender (marker event + clFlush)
+  -> Wait (final event, event release, completed submission)
+```
+
+**Primary failure call chain:**
+
+```text
+FailNextUpload / program build / missing kernel / missing image format
+  -> throw std::runtime_error (original OpenCL status or build log)
+  -> PendingParameterPatch restores Model dirty bits
+  -> CancelRender discards unpublished writes, does not publish content keys
+  -> no CPU, CUDA, Metal, or old OpenCLGPUPipeline substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RendererTemplateInstantiatesOpenClWithoutCudaOrMetalHeaders` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClBackendUsesThePreparedProcessContextAndProductQueue` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClParameterArenaUploadsOnlyDirtyRanges` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClTransientArenaRewindsWithoutAllocatingAnotherBuffer` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClTexturePoolReusesMatchingImages` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClTexturePoolDoesNotEvictBusySubmissionImages` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClMaskTextureCacheUsesOneWorkspaceByteBudget` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClPlanWarmUpBuildsOnlyRequiredProgramsAndKernels` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClSecondEmptyRenderCreatesNoBufferImageProgramOrKernel` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClFailedUploadRestoresDirtyFieldsAndPublishesNoResult` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClProgramManifestCanLoadFromInstalledResourceLayout` | `GpuDagOpenClWorkspaceTest` | PASS |
+| `OpenClCommandContextReleasesEveryRetainedEvent` | `GpuDagOpenClWorkspaceTest` | PASS |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagOpenClWorkspaceTest`
+- `ctest --test-dir build/debug -R GpuDagOpenClWorkspaceTest --output-on-failure` → 12/12
+
+Suite totals: 12/12 GpuDagOpenClWorkspaceTest.
+
+**Checklist / exit condition:** all O0 exit conditions met. `OpenClRenderer` is `Renderer<OpenClBackend>`. Session source/plan/result caches construct. `gpu_dag` manifest is activated through `RegisterOpenClBackendPrograms`. Warm-up builds only requested programs/kernels. Failed upload restores dirty fields and publishes no result. No runtime fallback was added.
+
+**LOC note (grill-code-review):** `opencl_backend.hpp` 315, `opencl_backend.cpp` 776 (under 1000). `opencl_workspace_test.cpp` 489. `OpenClKernelCache` is a separate process-wide module (81+84 LOC). No changed production file crossed 1000 LOC.
+
+**Implemented:**
+
+- `edit/runtime/opencl/opencl_backend.hpp/.cpp` and `OpenClCommandContext`
+- move-only `Buffer` / `Texture2D` owning `cl_mem`
+- `OpenClKernelCache` (program name + kernel name)
+- `RegisterOpenClGpuDagPrograms()` manifest (`opencl_dag_geometry_camera`, `opencl_dag_primary_grade`, `opencl_dag_local_tone`, `opencl_dag_mask`, `opencl_dag_drt`)
+- OpenClApiCounters fields for image/event/flush
+- installed-layout `.cl` resolution via existing `exe/opencl/<relative>` search plus CMake install of DAG shaders
+
+**Deleted:** none
+
+**Program evidence:**
+
+- manifests/programs: `gpu_dag` with five compilation units, `required_at_startup = false`
+- build/create/hit: Geometry-only `WarmUpPlan` builds `opencl_dag_geometry_camera` and the resample kernel; grade/tone/mask/drt stay unbuilt; second warm-up is a kernel cache hit
+- missing source/build/kernel errors: installed-layout probe loads a program whose source-tree path does not exist; `OpenClProgramLibrary` still reports build failures with device/driver/options (existing library test)
+
+**Resource evidence:**
+
+- buffer create/release: second empty render buffer create/release = 0
+- image create/release: second empty render image create = 0; matching TexturePool reuse keeps ResourceId
+- event retain/release: create_event == release_event after WaitIdle
+- upload/download ranges and bytes: dirty Amount upload is 4 bytes; second `UploadDirty` is 0 bytes
+- waits/flushes: Submit uses marker + `clFlush`; Wait uses `clWaitForEvents` on the final marker; no `clFinish` on the product path
+
+**Performance evidence:**
+
+- device/driver/OpenCL C/Windows/build: Windows MSVC `win_debug`; OpenCL GPU selected by `OpenClContext::Initialize`
+- fixture and render request: empty/workspace renders on `OpenClRenderDevice` after Geometry-only warm-up
+- cold: first render allocates parameters, transient slab, textures, mask chain, and one value buffer
+- warm median / p95: not a timed harness; second identical empty render create/release of buffer, image, program, and kernel is zero
+
+**Residual gaps:** PassEncoder specializations, Develop/Geometry/CameraColor kernels, and product present/scope are O1–O5. O0 stub `.cl` files compile and warm up; they are not CUDA pixel references. Device name/driver string was not written to a separate performance JSON.
+
+**Remaining work owned by the next named Phase:** O1 — Develop, Geometry, and CameraColor encode-only passes using this backend, workspace, and RAW-owned programs.
 
 ## 6. Phase O1 — Develop、Geometry 与 CameraColor
 

@@ -156,6 +156,15 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()
 
+if(ALCEDO_OPENCL_ENABLED)
+    def_library(EditRuntimeOpenCl
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_backend.cpp
+        PUBLIC_DEPS EditRuntime OpenClContext OpenClProgramLibrary OpenCL::OpenCL
+    )
+    target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
+endif()
+
 if(ALCEDO_CUDA_ENABLED)
     # The existing scheduler owns CPUPipelineExecutor. Its CUDA branch is a thin adapter into
     # EditRuntimeCuda.

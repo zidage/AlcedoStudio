@@ -889,6 +889,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
+                DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/opencl/shader")
         endif()
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
@@ -1003,6 +1005,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/opencl/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
+                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/opencl/shader")
         endif()
         alcedo_install_duckdb_extensions("${CMAKE_INSTALL_BINDIR}")
 

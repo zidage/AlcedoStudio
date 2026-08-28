@@ -419,3 +419,17 @@ if(ALCEDO_METAL_ENABLED)
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalRendererTest gpu ci_metal)
 endif()
+
+if(ALCEDO_OPENCL_ENABLED)
+  add_executable(GpuDagOpenClWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_workspace_test.cpp)
+  target_include_directories(GpuDagOpenClWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClWorkspaceTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl OpenClProgramLibrary)
+  target_compile_definitions(GpuDagOpenClWorkspaceTest PRIVATE
+    ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  gtest_discover_tests(GpuDagOpenClWorkspaceTest TEST_PREFIX "GpuDagOpenClWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl")
+  alcedo_register_test_target(GpuDagOpenClWorkspaceTest gpu)
+endif()
