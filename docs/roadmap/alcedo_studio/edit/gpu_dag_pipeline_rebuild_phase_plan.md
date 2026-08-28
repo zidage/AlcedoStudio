@@ -4196,9 +4196,19 @@ deadlock teardown 问题需要拆成单独回归并修复，不能用跳过整�
 
 ## 42. Phase G8 — OpenCL 移植
 
+详细的 OpenCL 1.2 架构、program registry 生命周期、统一资源机制、逐 Phase 删除范围和性能
+门槛见：
+
+- [GPU DAG OpenCL 移植逐 Phase 计划](gpu_dag_opencl_migration_phase_plan.md)
+
+执行 G8 前必须同时阅读本主计划和上述 OpenCL 专项计划。专项计划是 G8 的工作拆分与 OpenCL
+验收细则；PipelineDocument、GraphCompiler、ExecutionPlan、缓存 key 和 Geometry 语义仍以
+本主计划为准。专项计划以已经包含 CUDA/Metal DAG、共享 Renderer 和现行 workspace 修正的
+集成基线为起点，不重复已完成的共享 host 重构。
+
 Branch: `feature/gpu-dag-opencl`
 
-Base: `feature/gpu-dag-cuda-check-and-fix`
+Base: `feature/gpu-dag-workspace-vram`
 
 目标：
 
