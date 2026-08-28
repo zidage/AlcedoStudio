@@ -1,4 +1,4 @@
 interface:
   display_name: "OpenCL Program Registry"
   short_description: "Register Alcedo OpenCL program manifests."
-  default_prompt: "Use the OpenCL program registry workflow for Alcedo OpenCL backend work."
+  default_prompt: "Use $opencl-program-registry for Alcedo OpenCL backend registration work."

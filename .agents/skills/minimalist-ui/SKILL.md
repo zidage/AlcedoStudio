@@ -46,8 +46,8 @@ Color is a scarce resource, utilized only for semantic meaning or subtle accents
   - Border-radius must be crisp: `8px` or `12px` maximum.
   - Internal padding must be generous (e.g., `24px` to `40px`).
 - Primary Call-To-Action (Buttons):
-  - Solid background `#111111`, text `#FFFFFF`. 
-  - Slight border-radius (`4px` to `6px`). No box-shadow. 
+  - Solid background `#111111`, text `#FFFFFF`.
+  - Slight border-radius (`4px` to `6px`). No box-shadow.
   - Hover state should be a subtle color shift to `#333333` or a micro-scale `transform: scale(0.98)`.
 - Tags & Status Badges:
   - Pill-shaped (`border-radius: 9999px`), very small typography (`text-xs`), uppercase with wide tracking (`letter-spacing: 0.05em`).

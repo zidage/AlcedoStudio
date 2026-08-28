@@ -43,9 +43,9 @@ phase review JSON/CSV dumps).
 do not overwrite each other. Do not commit contents of `build/tmp/`.
 
 Agent tool local state (`.uv-cache/`, `.uv-python/`, `.scratch/`, `skills-lock.json`)
-is also gitignored. Skills under `.claude/skills/`, `.codex/skills/`, and
-`.agents/skills/` remain trackable; other files in those tool directories stay local
-via nested `.gitignore` files.
+is also gitignored. Shared repository skills are canonical under `.agents/skills/` and remain
+trackable. Do not copy them into `.claude/skills/` or `.codex/skills/`; those tool directories are
+reserved for local state and ignored through their nested `.gitignore` files.
 
 ## Build Commands
 
@@ -177,6 +177,8 @@ These façade services are the **only** API surface the UI layer may call. They 
 ## Skills
 
 Skills are reusable, composable capabilities that enhance agent abilities. Each skill is a self-contained directory with a `SKILL.md` file.
+The canonical, complete catalog is `.agents/skills/`; the summaries below are highlights and are not
+an exhaustive list. Agents should read the matching canonical `SKILL.md` before using a skill.
 
 ### alcedo-msvc-cmake
 Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or `scripts/msvc_env.cmd`, or when an agent would otherwise run bare cmake commands in this repository.
@@ -200,7 +202,7 @@ Use when working on alcedo with CMake on Windows/MSVC, especially when the user 
 - If the user asks for a `cmake --build build/...` style command, translate it to the wrapper form instead of changing the build intent.
 
 ### alcedo-qml-ui
-Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md` (junctions under `.claude/skills/` and `.codex/skills/`).
+Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md`.
 
 **Rules (summary — full skill is authoritative):**
 - Production style is **Basic**, never Material for dense editor chrome.
@@ -215,11 +217,11 @@ Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adj
 Use when modifying the RAW Processor module in alcedo, shared Metal GPU utilities, or Metal RAW shaders and their CMake wiring.
 
 **Workflow:**
-- Keep RAW pipeline entrypoint changes in `alcedo/src/decoders/processor/raw_processor.cpp`.
-- Keep RAW GPU operator code under `alcedo/src/decoders/processor/operators/gpu/`.
-- For Metal implementations in the RAW Processor module, place shader sources in `alcedo/src/decoders/processor/operators/gpu/metal_shader/`.
-- When adding or renaming a RAW Processor Metal shader, update `alcedo/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
-- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
+- Keep RAW pipeline entrypoint changes in `alcedo_studio/src/decoders/processor/raw_processor.cpp`.
+- Keep RAW GPU operator code under `alcedo_studio/src/decoders/processor/operators/gpu/`.
+- For Metal implementations in the RAW Processor module, place shader sources in `alcedo_studio/src/decoders/processor/operators/gpu/metal_shader/`.
+- When adding or renaming a RAW Processor Metal shader, update `alcedo_studio/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
+- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo_studio/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
 
 **Rules:**
 - Match RAW Metal operator behavior to the corresponding CPU or CUDA implementation before changing pipeline flow.

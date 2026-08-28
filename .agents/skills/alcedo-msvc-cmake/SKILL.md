@@ -1,6 +1,6 @@
 ---
 name: alcedo-msvc-cmake
-description: Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or scripts/msvc_env.cmd, or when Claude would otherwise run bare cmake commands in this repository.
+description: Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or scripts/msvc_env.cmd, or when an agent would otherwise run bare cmake commands in this repository.
 ---
 
 # Alcedo Studio MSVC CMake
