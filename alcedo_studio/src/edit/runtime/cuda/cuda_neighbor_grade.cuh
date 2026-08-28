@@ -119,39 +119,21 @@ __device__ __forceinline__ auto FilmBlurHorizontal(const float4* src, int x, int
     -> float4 {
   float result[3]{};
   for (int channel = 0; channel < 3; ++channel) {
-    result[channel] =
-        CUDA::FilmGrainGaussian7(FilmSampleAt(src, x, y, channel, width, height, params),
-                                 FilmSampleAt(src, x - 1, y, channel, width, height, params),
-                                 FilmSampleAt(src, x + 1, y, channel, width, height, params),
-                                 FilmSampleAt(src, x - 2, y, channel, width, height, params),
-                                 FilmSampleAt(src, x + 2, y, channel, width, height, params),
-                                 FilmSampleAt(src, x - 3, y, channel, width, height, params),
-                                 FilmSampleAt(src, x + 3, y, channel, width, height, params));
+    float acc = FilmSampleAt(src, x, y, channel, width, height, params) * params.weights[0];
+    for (int tap = 1; tap < static_cast<int>(params.tap_count); ++tap) {
+      acc += (FilmSampleAt(src, x - tap, y, channel, width, height, params) +
+              FilmSampleAt(src, x + tap, y, channel, width, height, params)) *
+             params.weights[tap];
+    }
+    result[channel] = acc;
   }
   return make_float4(result[0], result[1], result[2], ReadClamped(src, x, y, width, height).w);
-}
-
-__device__ __forceinline__ auto FilmBlurVertical(const float4* src, int x, int y, int width,
-                                                 int height) -> float4 {
-  const auto c0 = ReadClamped(src, x, y, width, height);
-  const auto n1 = ReadClamped(src, x, y - 1, width, height);
-  const auto p1 = ReadClamped(src, x, y + 1, width, height);
-  const auto n2 = ReadClamped(src, x, y - 2, width, height);
-  const auto p2 = ReadClamped(src, x, y + 2, width, height);
-  const auto n3 = ReadClamped(src, x, y - 3, width, height);
-  const auto p3 = ReadClamped(src, x, y + 3, width, height);
-  return make_float4(CUDA::FilmGrainGaussian7(c0.x, n1.x, p1.x, n2.x, p2.x, n3.x, p3.x),
-                     CUDA::FilmGrainGaussian7(c0.y, n1.y, p1.y, n2.y, p2.y, n3.y, p3.y),
-                     CUDA::FilmGrainGaussian7(c0.z, n1.z, p1.z, n2.z, p2.z, n3.z, p3.z), c0.w);
 }
 
 __device__ __forceinline__ auto VerticalRadius(const GradeNeighborParams& params) -> int {
   const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
   if (behavior == AdjustmentBehavior::Halation) {
     return HalationRadius(params.sigma_y);
-  }
-  if (behavior == AdjustmentBehavior::FilmGrain) {
-    return 3;
   }
   return static_cast<int>(params.radius);
 }
@@ -269,17 +251,17 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
   }
 
   const auto c0 = tile[center];
-  const auto n1 = tile[center - tile_width];
-  const auto p1 = tile[center + tile_width];
-  const auto n2 = tile[center - 2 * tile_width];
-  const auto p2 = tile[center + 2 * tile_width];
-  const auto n3 = tile[center - 3 * tile_width];
-  const auto p3 = tile[center + 3 * tile_width];
-  const auto blur =
-      make_float4(CUDA::FilmGrainGaussian7(c0.x, n1.x, p1.x, n2.x, p2.x, n3.x, p3.x),
-                  CUDA::FilmGrainGaussian7(c0.y, n1.y, p1.y, n2.y, p2.y, n3.y, p3.y),
-                  CUDA::FilmGrainGaussian7(c0.z, n1.z, p1.z, n2.z, p2.z, n3.z, p3.z), c0.w);
-  dst[index] = CUDA::FilmGrainApplyDyeClouds(source, blur, params.amount);
+  float4     blur = Scale(c0, params.weights[0]);
+  for (int tap = 1; tap < static_cast<int>(params.tap_count); ++tap) {
+    const auto top    = tile[center - tap * tile_width];
+    const auto bottom = tile[center + tap * tile_width];
+    const auto weight = params.weights[tap];
+    blur.x += (top.x + bottom.x) * weight;
+    blur.y += (top.y + bottom.y) * weight;
+    blur.z += (top.z + bottom.z) * weight;
+  }
+  blur.w       = c0.w;
+  dst[index]   = CUDA::FilmGrainApplyDyeClouds(source, blur, params.amount);
 }
 
 }  // namespace alcedo::cuda_neighbor_grade

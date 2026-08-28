@@ -24,11 +24,16 @@
 namespace alcedo {
 namespace {
 
-constexpr std::size_t   kMaxCurvePoints        = 8;
-constexpr float         kHalationSigma         = 7.0f;
-constexpr float         kHalationStrengthScale = 2.0f;
-constexpr float         kHalationRedshift[3]   = {1.0f, 0.05f, 0.02f};
-constexpr std::uint64_t kFilmGrainSeed         = 0x6a09e667f3bcc909ULL;
+constexpr std::size_t   kMaxCurvePoints             = 8;
+constexpr float         kHalationSigma              = 7.0f;
+constexpr float         kHalationStrengthScale      = 2.0f;
+constexpr float         kHalationRedshift[3]        = {1.0f, 0.05f, 0.02f};
+constexpr float         kClarityNeighborhoodSigma   = 15.0f;
+constexpr float         kFilmGrainDyeCloudSigma     = 0.8f;
+constexpr std::uint32_t kSharpenMaxRadius           = 15U;
+constexpr std::uint32_t kClarityMaxRadius           = 60U;
+constexpr std::uint32_t kFilmGrainMaxRadius         = 3U;
+constexpr std::uint64_t kFilmGrainSeed              = 0x6a09e667f3bcc909ULL;
 
 void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborParams& result) {
   if (!(sigma > 0.0f)) {
@@ -66,6 +71,11 @@ auto RenderAxisScale(const ResolvedRenderGeometry& geometry, bool horizontal) ->
     return 1.0f;
   }
   return std::clamp(1.0f / reference_pixels_per_render_pixel, 1.0e-4f, 1.0f);
+}
+
+/** @brief Mean of the X/Y render-to-reference scales, clamped like the per-axis helper. */
+auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float {
+  return 0.5f * (RenderAxisScale(geometry, true) + RenderAxisScale(geometry, false));
 }
 
 void CopyRenderMapping(const ResolvedRenderGeometry& geometry, GradeNeighborParams& result) {
@@ -188,6 +198,8 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   CopyRenderMapping(geometry, result);
   const auto dto = model.MakeFullDto();
 
+  const float render_scale = NeighborhoodRenderScale(geometry);
+
   if (behavior == AdjustmentBehavior::Sharpen) {
     const auto* sharpen = PayloadAs<SharpenPayload>(dto.payload.get());
     if (sharpen == nullptr) {
@@ -196,7 +208,9 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
     result.amount    = std::clamp(sharpen->amount / 100.0f, 0.0f, 1.0f);
     result.threshold = std::clamp(sharpen->threshold, 0.0f, 1.0f);
     result.enabled   = result.amount > 0.0f ? 1U : 0U;
-    BuildGaussianWeights(sharpen->radius, 15U, result);
+    result.sigma_x   = sharpen->radius * render_scale;
+    result.sigma_y   = result.sigma_x;
+    BuildGaussianWeights(result.sigma_x, kSharpenMaxRadius, result);
     return result;
   }
 
@@ -208,7 +222,9 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   if (behavior == AdjustmentBehavior::Clarity) {
     result.amount  = std::clamp(scalar->value / 100.0f, -1.0f, 1.0f);
     result.enabled = result.amount != 0.0f ? 1U : 0U;
-    BuildGaussianWeights(15.0f, 60U, result);
+    result.sigma_x = kClarityNeighborhoodSigma * render_scale;
+    result.sigma_y = result.sigma_x;
+    BuildGaussianWeights(result.sigma_x, kClarityMaxRadius, result);
     return result;
   }
 
@@ -223,8 +239,11 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
 
   result.amount  = std::clamp(scalar->value, 0.0f, 1.0f) / 3.0f;
   result.enabled = result.amount > 0.0f ? 1U : 0U;
+  result.sigma_x = kFilmGrainDyeCloudSigma * render_scale;
+  result.sigma_y = result.sigma_x;
   result.seed_lo = static_cast<std::uint32_t>(kFilmGrainSeed & 0xffffffffULL);
   result.seed_hi = static_cast<std::uint32_t>((kFilmGrainSeed >> 32U) & 0xffffffffULL);
+  BuildGaussianWeights(result.sigma_x, kFilmGrainMaxRadius, result);
   return result;
 }
 

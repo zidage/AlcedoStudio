@@ -79,9 +79,6 @@ auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t 
     return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
                       kGradeNeighborMaxTapCount - 1U);
   }
-  if (behavior == AdjustmentBehavior::FilmGrain) {
-    return 3U;
-  }
   return params.radius;
 }
 

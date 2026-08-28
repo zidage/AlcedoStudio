@@ -106,7 +106,11 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
  * @brief Build the original separable-neighborhood parameters for one compiled adjustment.
  *
  * Slider normalization, hidden effect defaults, Gaussian weights, and render-space scaling are
- * resolved on the CPU once per dispatch rather than recomputed for every GPU pixel.
+ * resolved on the CPU once per dispatch rather than recomputed for every GPU pixel. Spatial
+ * radii and sigmas are specified in full-reference pixels and scaled by the current
+ * render-to-reference mapping so preview, max-edge, and DecodeRes downscales keep the same
+ * image-space neighborhood as a full-resolution render (the same reference-space rule LLF and
+ * mask sampling use).
  */
 [[nodiscard]] auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,
                                            const ResolvedRenderGeometry& geometry)

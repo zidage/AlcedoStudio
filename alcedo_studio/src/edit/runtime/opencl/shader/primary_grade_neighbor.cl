@@ -160,39 +160,31 @@ static inline float GradeFilmSample(read_only image2d_t src, int2 coord, int cha
                                                                                             : 0.0f;
 }
 
-static inline float GradeFilmGaussian7(float c0, float n1, float p1, float n2, float p2, float n3,
-                                       float p3) {
-  return c0 * 0.49867642f + (n1 + p1) * 0.22831073f + (n2 + p2) * 0.02192964f +
-         (n3 + p3) * 0.00042142f;
-}
-
 static inline float4 GradeFilmHorizontal(read_only image2d_t src, int2 coord,
                                          const GradeNeighborParams* params) {
   float result[3];
   for (int channel = 0; channel < 3; ++channel) {
-    result[channel] =
-        GradeFilmGaussian7(GradeFilmSample(src, coord, channel, params),
-                           GradeFilmSample(src, coord + (int2)(-1, 0), channel, params),
-                           GradeFilmSample(src, coord + (int2)(1, 0), channel, params),
-                           GradeFilmSample(src, coord + (int2)(-2, 0), channel, params),
-                           GradeFilmSample(src, coord + (int2)(2, 0), channel, params),
-                           GradeFilmSample(src, coord + (int2)(-3, 0), channel, params),
-                           GradeFilmSample(src, coord + (int2)(3, 0), channel, params));
+    float acc = GradeFilmSample(src, coord, channel, params) * params->weights[0];
+    for (uint tap = 1u; tap < params->tap_count; ++tap) {
+      const int distance = (int)tap;
+      acc += (GradeFilmSample(src, coord + (int2)(-distance, 0), channel, params) +
+              GradeFilmSample(src, coord + (int2)(distance, 0), channel, params)) *
+             params->weights[tap];
+    }
+    result[channel] = acc;
   }
   return (float4)(result[0], result[1], result[2], GradeNeighborRead(src, coord).w);
 }
 
-static inline float4 GradeFilmVertical(__local const float4* tile, int center, int tile_stride) {
-  const float4 c0 = tile[center];
-  const float4 n1 = tile[center - tile_stride];
-  const float4 p1 = tile[center + tile_stride];
-  const float4 n2 = tile[center - 2 * tile_stride];
-  const float4 p2 = tile[center + 2 * tile_stride];
-  const float4 n3 = tile[center - 3 * tile_stride];
-  const float4 p3 = tile[center + 3 * tile_stride];
-  return (float4)(GradeFilmGaussian7(c0.x, n1.x, p1.x, n2.x, p2.x, n3.x, p3.x),
-                  GradeFilmGaussian7(c0.y, n1.y, p1.y, n2.y, p2.y, n3.y, p3.y),
-                  GradeFilmGaussian7(c0.z, n1.z, p1.z, n2.z, p2.z, n3.z, p3.z), c0.w);
+static inline float4 GradeFilmVertical(__local const float4* tile, int center, int tile_stride,
+                                       const GradeNeighborParams* params) {
+  float4 blur = tile[center] * params->weights[0];
+  for (uint tap = 1u; tap < params->tap_count; ++tap) {
+    const int distance = (int)tap * tile_stride;
+    blur += (tile[center - distance] + tile[center + distance]) * params->weights[tap];
+  }
+  blur.w = tile[center].w;
+  return blur;
 }
 
 static inline float GradeFilmLerp(float a, float b, float t) { return a + (b - a) * t; }
@@ -261,9 +253,6 @@ static inline float4 GradeFilmApply(float4 source, float4 coverage, float amount
 static inline int GradeVerticalRadius(const GradeNeighborParams* params) {
   if (params->behavior == GRADE_BEHAVIOR_HALATION) {
     return GradeHalationRadius(params->sigma_y);
-  }
-  if (params->behavior == GRADE_BEHAVIOR_FILM_GRAIN) {
-    return 3;
   }
   return (int)params->radius;
 }
@@ -339,7 +328,8 @@ __kernel void primary_grade_neighbor_apply_v_rgba32f(read_only image2d_t  origin
                           GradeAcesccEncode(result.z), source.w));
   } else {
     write_imagef(dst, gid,
-                 GradeFilmApply(source, GradeFilmVertical(vertical_tile, center, tile_width),
+                 GradeFilmApply(source,
+                                GradeFilmVertical(vertical_tile, center, tile_width, &params),
                                 params.amount));
   }
 }

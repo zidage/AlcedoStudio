@@ -159,11 +159,11 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
   }
 
   void UseNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
-                            float center) {
+                            float center, const RenderRequest& request = {}) {
     prepared_ =
         RawInputLoader::FromDirectRgb(MakeNeighborhoodPlane(width, height, surroundings, center),
                                       gpu_dag_test::FullSensor(width, height));
-    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), request);
   }
 
   PreparedRawInput prepared_;
@@ -277,6 +277,39 @@ TEST_F(CudaPrimaryGradeFixture, CudaSharpenUsesSurroundingPixelsForUnsharpMask) 
   EXPECT_GT(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaSharpenDarkRingFollowsPreviewResolution) {
+  // Radius 4 is 12 taps at 1:1 and 6 taps at render_scale 0.5. Offset 10 sits between those
+  // radii, so an unscaled kernel would still darken the half-res probe.
+  constexpr std::uint32_t width   = 128;
+  constexpr std::uint32_t height = 128;
+  auto&                   sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
+  sharpen.SetRadius(4.0f);
+  sharpen.SetThreshold(0.0f);
+
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
+  sharpen.SetAmount(0.0f);
+  const auto full_identity = Download(Render().output);
+  sharpen.SetAmount(100.0f);
+  const auto full_sharpened = Download(Render().output);
+  const auto full_near =
+      static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
+  ASSERT_EQ(full_identity.size(), full_sharpened.size());
+  EXPECT_GT(full_identity[full_near].r - full_sharpened[full_near].r, 1.0e-4f);
+
+  RenderRequest half_request;
+  half_request.resolution.render_scale = 0.5f;
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f, half_request);
+  sharpen.SetAmount(0.0f);
+  const auto half_identity = Download(Render().output);
+  sharpen.SetAmount(100.0f);
+  const auto half_sharpened = Download(Render().output);
+  ASSERT_EQ(half_identity.size(), static_cast<std::size_t>(64) * 64);
+  const auto half_near = static_cast<std::size_t>(32) * 64U + 32U + 1U;
+  const auto half_far  = static_cast<std::size_t>(32) * 64U + 32U + 10U;
+  EXPECT_GT(half_identity[half_near].r - half_sharpened[half_near].r, 1.0e-5f);
+  EXPECT_NEAR(half_sharpened[half_far].r, half_identity[half_far].r, 2.0e-3f);
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaClarityUsesLargeRadiusLocalContrast) {
