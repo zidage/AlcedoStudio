@@ -583,7 +583,7 @@ OpenClMissingRawProgramReturnsItsBuildOrLookupError
 
 **Date:** 2026-08-28
 **Branch:** `feature/gpu-dag-opencl`
-**Commit:** working tree (uncommitted)
+**Commit:** `05a29c4b`
 
 **Primary success call chain:**
 
