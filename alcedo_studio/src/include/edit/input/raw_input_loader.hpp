@@ -21,7 +21,8 @@ namespace alcedo {
 class RawInputLoader {
  public:
   /**
-   * @brief Open encoded bytes, unpack, downsample, then recycle LibRaw.
+   * @brief Open encoded bytes, unpack CFA or already-demosaiced RGB, downsample, then recycle
+   *        LibRaw.
    * @throws std::runtime_error on LibRaw failure or unsupported CFA.
    */
   [[nodiscard]] static auto LoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)

@@ -1183,13 +1183,24 @@ auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t im
     }
   }
 
-  // Capture params under the live executor's render lock. This serializes with any
-  // in-flight editor render on the same executor, so the snapshot is coherent.
-  // ExportPipelineParams is const and reads stages_ only.
+  // Capture params and clone the live DAG document under the executor's render
+  // lock. This serializes with any in-flight editor render on the same executor,
+  // so the snapshot's stages and graph stay coherent with each other.
   nlohmann::json params;
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  std::shared_ptr<PipelineDocument> cloned_live_document;
+  bool                              mirror = true;
+#endif
   try {
     std::unique_lock<std::mutex> rg(live_exec->GetRenderLock());
     params = live_exec->ExportPipelineParams();
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+    if (auto live_doc = live_exec->GpuDagDocument()) {
+      cloned_live_document =
+          std::make_shared<PipelineDocument>(ClonePipelineDocument(*live_doc));
+      mirror = live_exec->MirrorsLegacyStageAdapter();
+    }
+#endif
   } catch (const std::exception& e) {
     if (error) {
       *error = std::format("LoadPipelineSnapshot: export failed for {}: {}", id, e.what());
@@ -1216,6 +1227,17 @@ auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t im
     snap_exec->SetAcceleratorBackendPreference(accelerator_preference_);
     snap_exec->ImportPipelineParams(params);
     ResetTransientPreviewState(*snap_exec);
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+    std::shared_ptr<PipelineDocument> snap_document = std::move(cloned_live_document);
+    if (!snap_document) {
+      auto imported = LegacyPipelineImporter::Import(params);
+      if (!imported.Ok() || !imported.document) {
+        throw std::runtime_error("GPU DAG import failed: " + imported.error);
+      }
+      snap_document = std::make_shared<PipelineDocument>(std::move(*imported.document));
+    }
+    snap_exec->SetPipelineDocument(std::move(snap_document), mirror);
+#endif
   } catch (const std::exception& e) {
     if (error) {
       *error = std::format("LoadPipelineSnapshot: snapshot build failed for {}: {}", id, e.what());

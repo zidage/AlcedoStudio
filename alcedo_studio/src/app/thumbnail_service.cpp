@@ -48,6 +48,12 @@ constexpr DecodeRes ResolutionToDecodeRes(ThumbnailResolution res) {
   return DecodeRes::QUARTER;
 }
 
+void InjectSnapshotRawContext(CPUPipelineExecutor& exec, const std::shared_ptr<Image>& image) {
+  if (image && image->HasRawColorContext()) {
+    exec.InjectRawMetadata(image->GetRawColorContext());
+  }
+}
+
 void DispatchThumbnailResultCallback(const ThumbnailResultCallback& callback,
                                      const CallbackDispatcher&      dispatcher,
                                      ThumbnailRequestResult         result) {
@@ -465,6 +471,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
             false);
       }
 
+      InjectSnapshotRawContext(*executor, img_result);
       task.pipeline_executor_ = std::move(executor);
       task.input_desc_        = std::move(img_result);
       return true;
@@ -784,8 +791,7 @@ void ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, imag
             std::format("analysis rendition: image with ID {} not found in pool.", image_id));
       }
 
-      // No pre-render color-temp read / post-render dirty check: the snapshot
-      // executor is throwaway, so that live-path dirty check is meaningless.
+      InjectSnapshotRawContext(*exec, img_result);
       t.pipeline_executor_ = exec;
       t.input_desc_        = std::move(img_result);
       return true;

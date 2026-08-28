@@ -65,6 +65,11 @@ class PipelineDocument {
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
 
 /**
+ * @brief Deep copy via JSON round-trip. The clone does not share Model pointers.
+ */
+[[nodiscard]] auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument;
+
+/**
  * @brief True when Apply may remirror the legacy stage adapter into this document.
  *
  * Requires the canonical Develop, Primary Color Grade, and DRT nodes. Extra nodes such as

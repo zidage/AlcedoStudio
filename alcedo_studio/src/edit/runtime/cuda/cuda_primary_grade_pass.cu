@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -17,9 +18,11 @@
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -71,6 +74,18 @@ auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector
     compacted.push_back(std::move(op));
   }
   return compacted;
+}
+
+auto LoadLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
+  const auto packed = TryPackGradeLut(grade);
+  if (!packed.has_value()) {
+    return device.Workspace().Device().DummyLut();
+  }
+  ContentHash hash;
+  hash.MixBytes(packed->rgba);
+  hash.MixU32(packed->edge);
+  return device.Workspace().Device().AcquireLut(hash.Key(), packed->rgba, packed->edge,
+                                                device.CommandContext());
 }
 
 auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
@@ -139,7 +154,59 @@ __device__ auto ApplyHls(float3 c, const CudaAdjustmentParams& p) -> float3 {
   return c;
 }
 
-__device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p) -> float3 {
+__device__ auto LutIndex(std::uint32_t edge, std::uint32_t x, std::uint32_t y, std::uint32_t z)
+    -> std::uint32_t {
+  return (z * edge + y) * edge + x;
+}
+
+__device__ auto SampleLut3d(const float4* lut, std::uint32_t edge, float u, float v, float w)
+    -> float3 {
+  u                   = fminf(fmaxf(u, 0.0f), 1.0f);
+  v                   = fminf(fmaxf(v, 0.0f), 1.0f);
+  w                   = fminf(fmaxf(w, 0.0f), 1.0f);
+  const float  tex_x  = u * static_cast<float>(edge) - 0.5f;
+  const float  tex_y  = v * static_cast<float>(edge) - 0.5f;
+  const float  tex_z  = w * static_cast<float>(edge) - 0.5f;
+  const float  max_i  = static_cast<float>(edge - 1U);
+  const float  pos_x  = fminf(fmaxf(tex_x, 0.0f), max_i);
+  const float  pos_y  = fminf(fmaxf(tex_y, 0.0f), max_i);
+  const float  pos_z  = fminf(fmaxf(tex_z, 0.0f), max_i);
+  const auto   lo_x   = static_cast<std::uint32_t>(pos_x);
+  const auto   lo_y   = static_cast<std::uint32_t>(pos_y);
+  const auto   lo_z   = static_cast<std::uint32_t>(pos_z);
+  const auto   hi_x   = lo_x + 1U < edge ? lo_x + 1U : edge - 1U;
+  const auto   hi_y   = lo_y + 1U < edge ? lo_y + 1U : edge - 1U;
+  const auto   hi_z   = lo_z + 1U < edge ? lo_z + 1U : edge - 1U;
+  const float  tx     = pos_x - static_cast<float>(lo_x);
+  const float  ty     = pos_y - static_cast<float>(lo_y);
+  const float  tz     = pos_z - static_cast<float>(lo_z);
+  const float4 c000   = lut[LutIndex(edge, lo_x, lo_y, lo_z)];
+  const float4 c100   = lut[LutIndex(edge, hi_x, lo_y, lo_z)];
+  const float4 c010   = lut[LutIndex(edge, lo_x, hi_y, lo_z)];
+  const float4 c110   = lut[LutIndex(edge, hi_x, hi_y, lo_z)];
+  const float4 c001   = lut[LutIndex(edge, lo_x, lo_y, hi_z)];
+  const float4 c101   = lut[LutIndex(edge, hi_x, lo_y, hi_z)];
+  const float4 c011   = lut[LutIndex(edge, lo_x, hi_y, hi_z)];
+  const float4 c111   = lut[LutIndex(edge, hi_x, hi_y, hi_z)];
+  const float4 c00    = make_float4(c000.x + (c100.x - c000.x) * tx, c000.y + (c100.y - c000.y) * tx,
+                                    c000.z + (c100.z - c000.z) * tx, c000.w + (c100.w - c000.w) * tx);
+  const float4 c10    = make_float4(c010.x + (c110.x - c010.x) * tx, c010.y + (c110.y - c010.y) * tx,
+                                    c010.z + (c110.z - c010.z) * tx, c010.w + (c110.w - c010.w) * tx);
+  const float4 c01    = make_float4(c001.x + (c101.x - c001.x) * tx, c001.y + (c101.y - c001.y) * tx,
+                                    c001.z + (c101.z - c001.z) * tx, c001.w + (c101.w - c001.w) * tx);
+  const float4 c11    = make_float4(c011.x + (c111.x - c011.x) * tx, c011.y + (c111.y - c011.y) * tx,
+                                    c011.z + (c111.z - c011.z) * tx, c011.w + (c111.w - c011.w) * tx);
+  const float4 c0     = make_float4(c00.x + (c10.x - c00.x) * ty, c00.y + (c10.y - c00.y) * ty,
+                                    c00.z + (c10.z - c00.z) * ty, c00.w + (c10.w - c00.w) * ty);
+  const float4 c1     = make_float4(c01.x + (c11.x - c01.x) * ty, c01.y + (c11.y - c01.y) * ty,
+                                    c01.z + (c11.z - c01.z) * ty, c01.w + (c11.w - c01.w) * ty);
+  const float4 sampled = make_float4(c0.x + (c1.x - c0.x) * tz, c0.y + (c1.y - c0.y) * tz,
+                                     c0.z + (c1.z - c0.z) * tz, c0.w + (c1.w - c0.w) * tz);
+  return make_float3(sampled.x, sampled.y, sampled.z);
+}
+
+__device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const float4* lut,
+                                std::uint32_t lut_edge) -> float3 {
   const auto  behavior = static_cast<CudaAdjustmentBehavior>(p.behavior);
   const float value    = p.values[0];
   if (behavior == CudaAdjustmentBehavior::Cat02WhiteBalance && value != 0.0f) {
@@ -196,6 +263,11 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p) -> floa
         copysignf(powf(fabsf(c.y + p.values[1] + p.values[3]), 1.0f / gamma_y), c.y) * p.values[9];
     c.z =
         copysignf(powf(fabsf(c.z + p.values[2] + p.values[3]), 1.0f / gamma_z), c.z) * p.values[10];
+  } else if (behavior == CudaAdjustmentBehavior::Lmt && value != 0.0f && lut_edge > 1U &&
+             lut != nullptr) {
+    const float scale  = static_cast<float>(lut_edge - 1U) / static_cast<float>(lut_edge);
+    const float offset = 1.0f / (2.0f * static_cast<float>(lut_edge));
+    c = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset, c.z * scale + offset);
   }
   return c;
 }
@@ -203,7 +275,8 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p) -> floa
 __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uint32_t pixel_count,
                                    const unsigned char*         parameter_base,
                                    const CudaAdjustmentCommand* commands,
-                                   std::uint32_t                command_count) {
+                                   std::uint32_t command_count, const float4* lut,
+                                   std::uint32_t lut_edge) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   const float4 source = input[index];
@@ -211,7 +284,7 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
   for (std::uint32_t i = 0; i < command_count; ++i) {
     const auto* params = reinterpret_cast<const CudaAdjustmentParams*>(
         parameter_base + commands[i].parameter_offset);
-    c = ApplyAdjustment(c, *params);
+    c = ApplyAdjustment(c, *params, lut, lut_edge);
   }
   output[index] = make_float4(c.x, c.y, c.z, source.w);
 }
@@ -369,6 +442,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer());
   const auto* parameter_base =
       static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer());
+  const auto lut = LoadLut(device, *grade);
 
   CudaLocalToneResult local_tone;
 
@@ -376,7 +450,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     auto& output = EnsureImage(workspace, output_id, input_width, input_height);
     input        = workspace.Images().Find(plan.develop_output);
     workspace.Device().CopyTexture2D(input->Texture(), output.Texture(), context);
-    return {output_id, 0, false, false};
+    return {output_id, lut.resource_id, 0, false, false};
   }
 
   const float        grade_mix        = grade->Enabled() ? grade->Mix() : 0.0f;
@@ -439,7 +513,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
           static_cast<const float4*>(src.DevicePointer()),
           static_cast<float4*>(dest.DevicePointer()), pixels, parameter_base,
-          device_commands + command_starts[index], static_cast<std::uint32_t>(op.offsets.size()));
+          device_commands + command_starts[index], static_cast<std::uint32_t>(op.offsets.size()),
+          static_cast<const float4*>(lut.device_pointer), lut.edge_size);
     }
     current_id = dest_id;
   }
@@ -462,8 +537,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
   }
-  return {output_id, local_tone.reference_resource_id, local_tone.rebuilt_reference,
-          local_tone.sampled_canonical_reference};
+  return {output_id, lut.resource_id, local_tone.reference_resource_id,
+          local_tone.rebuilt_reference, local_tone.sampled_canonical_reference};
 }
 
 }  // namespace alcedo

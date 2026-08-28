@@ -140,6 +140,10 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   return document;
 }
 
+auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
+  return PipelineDocument::FromJson(src.ToJson());
+}
+
 auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool {
   return document.Develop() != nullptr && document.PrimaryGrade() != nullptr &&
          document.Drt() != nullptr;

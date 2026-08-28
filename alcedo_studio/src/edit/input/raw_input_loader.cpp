@@ -253,8 +253,149 @@ auto WrapU16Cfa(const HostImagePlane& plane) -> cv::Mat {
                  CV_16UC1, const_cast<std::byte*>(plane.bytes.get()), plane.stride_bytes);
 }
 
+auto WrapF32Rgba(const HostImagePlane& plane) -> cv::Mat {
+  if (plane.format != HostPixelFormat::F32Rgba || !plane.bytes) {
+    throw std::runtime_error("RawInputLoader: expected F32 RGBA plane");
+  }
+  return cv::Mat(static_cast<int>(plane.extent.height), static_cast<int>(plane.extent.width),
+                 CV_32FC4, const_cast<std::byte*>(plane.bytes.get()), plane.stride_bytes);
+}
+
+auto Rgb32fToRgbaPlane(const cv::Mat& rgb) -> HostImagePlane {
+  if (rgb.type() != CV_32FC3 || rgb.empty()) {
+    throw std::runtime_error("RawInputLoader: expected F32 RGB mat");
+  }
+  HostImagePlane plane;
+  plane.extent =
+      Extent2D{static_cast<std::uint32_t>(rgb.cols), static_cast<std::uint32_t>(rgb.rows)};
+  plane.stride_bytes      = plane.extent.width * 4U * static_cast<std::uint32_t>(sizeof(float));
+  plane.format            = HostPixelFormat::F32Rgba;
+  const std::size_t bytes = plane.ByteCount();
+  auto              storage =
+      std::shared_ptr<std::byte>(new std::byte[bytes], std::default_delete<std::byte[]>());
+  auto* out = reinterpret_cast<float*>(storage.get());
+  for (int y = 0; y < rgb.rows; ++y) {
+    const auto* row = rgb.ptr<float>(y);
+    for (int x = 0; x < rgb.cols; ++x) {
+      const auto pixel = static_cast<std::size_t>(y) * plane.extent.width + static_cast<std::size_t>(x);
+      out[pixel * 4 + 0] = row[static_cast<std::size_t>(x) * 3 + 0];
+      out[pixel * 4 + 1] = row[static_cast<std::size_t>(x) * 3 + 1];
+      out[pixel * 4 + 2] = row[static_cast<std::size_t>(x) * 3 + 2];
+      out[pixel * 4 + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+auto ExtractRgb32f(const cv::Mat& src) -> cv::Mat {
+  if (src.type() == CV_32FC3) {
+    return src;
+  }
+  if (src.type() == CV_32FC4) {
+    cv::Mat rgb(src.rows, src.cols, CV_32FC3);
+    const int from_to[] = {0, 0, 1, 1, 2, 2};
+    cv::mixChannels(&src, 1, &rgb, 1, from_to, 3);
+    return rgb;
+  }
+  throw std::runtime_error("RawInputLoader: expected 3 or 4 channel F32 RGB");
+}
+
+auto CropMatToDecodeArea(const cv::Mat& src, const RawSensorGeometry& sensor) -> cv::Mat {
+  const Extent2D host{static_cast<std::uint32_t>(src.cols), static_cast<std::uint32_t>(src.rows)};
+  const RectI    crop = BuildDecodeCropRect(sensor, host, 1);
+  const cv::Rect rect(crop.x, crop.y, crop.width, crop.height);
+  if (rect.x == 0 && rect.y == 0 && rect.width == src.cols && rect.height == src.rows) {
+    return src.clone();
+  }
+  return src(rect).clone();
+}
+
+auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> HostImagePlane {
+  const auto& raw_data   = raw.imgdata.rawdata;
+  const auto& idata      = raw.imgdata.idata;
+  const auto& sizes      = raw.imgdata.sizes;
+  const int   raw_width  = static_cast<int>(sizes.raw_width);
+  const int   raw_height = static_cast<int>(sizes.raw_height);
+
+  cv::Mat rgb32f;
+  if (raw_data.color3_image != nullptr) {
+    const std::size_t row_step = sizes.raw_pitch != 0
+                                     ? static_cast<std::size_t>(sizes.raw_pitch)
+                                     : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 3;
+    cv::Mat           view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
+    CropMatToDecodeArea(view, sensor).convertTo(rgb32f, CV_32FC3, 1.0 / 65535.0);
+  } else if (raw_data.float3_image != nullptr) {
+    const std::size_t row_step = sizes.raw_pitch != 0
+                                     ? static_cast<std::size_t>(sizes.raw_pitch)
+                                     : static_cast<std::size_t>(raw_width) * sizeof(float) * 3;
+    cv::Mat           view(raw_height, raw_width, CV_32FC3, raw_data.float3_image, row_step);
+    rgb32f = CropMatToDecodeArea(view, sensor);
+  } else if (raw_data.color4_image != nullptr && idata.colors == 3) {
+    const std::size_t row_step = sizes.raw_pitch != 0
+                                     ? static_cast<std::size_t>(sizes.raw_pitch)
+                                     : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 4;
+    cv::Mat           view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
+    cv::Mat           rgb16;
+    CropMatToDecodeArea(view, sensor).convertTo(rgb16, CV_32FC4, 1.0 / 65535.0);
+    rgb32f = ExtractRgb32f(rgb16);
+  } else if (raw_data.float4_image != nullptr && idata.colors == 3) {
+    const std::size_t row_step = sizes.raw_pitch != 0
+                                     ? static_cast<std::size_t>(sizes.raw_pitch)
+                                     : static_cast<std::size_t>(raw_width) * sizeof(float) * 4;
+    cv::Mat           view(raw_height, raw_width, CV_32FC4, raw_data.float4_image, row_step);
+    rgb32f = ExtractRgb32f(CropMatToDecodeArea(view, sensor));
+  } else {
+    throw std::runtime_error("RawInputLoader: direct RGB input is missing a 3-channel source");
+  }
+  return Rgb32fToRgbaPlane(rgb32f);
+}
+
+void CollapseSensorToHost(RawSensorGeometry& sensor, Extent2D host) {
+  const auto width  = static_cast<std::int32_t>(host.width);
+  const auto height = static_cast<std::int32_t>(host.height);
+  sensor.raw_width    = width;
+  sensor.raw_height   = height;
+  sensor.width        = width;
+  sensor.height       = height;
+  sensor.left_margin  = 0;
+  sensor.top_margin   = 0;
+  sensor.default_crop[0] = 0;
+  sensor.default_crop[1] = 0;
+  sensor.default_crop[2] = static_cast<std::uint16_t>(std::min(width, 65535));
+  sensor.default_crop[3] = static_cast<std::uint16_t>(std::min(height, 65535));
+}
+
+auto DownsampleRgba2x(const cv::Mat& src) -> cv::Mat {
+  const int out_rows = src.rows / 2;
+  const int out_cols = src.cols / 2;
+  if (out_rows < 1 || out_cols < 1) {
+    throw std::runtime_error("RawInputLoader: RGB too small to downsample");
+  }
+  cv::Mat dst(out_rows, out_cols, CV_32FC4);
+  for (int y = 0; y < out_rows; ++y) {
+    const auto* row0 = src.ptr<cv::Vec4f>(2 * y);
+    const auto* row1 = src.ptr<cv::Vec4f>(2 * y + 1);
+    auto*       dest = dst.ptr<cv::Vec4f>(y);
+    for (int x = 0; x < out_cols; ++x) {
+      dest[x] = (row0[2 * x] + row0[2 * x + 1] + row1[2 * x] + row1[2 * x + 1]) * 0.25f;
+    }
+  }
+  return dst;
+}
+
 void DownsampleInPlace(PreparedRawInput& input, std::uint8_t passes) {
-  if (passes == 0 || input.input_kind == RawInputKind::DebayeredRgb) {
+  if (passes == 0) {
+    return;
+  }
+  if (input.input_kind == RawInputKind::DebayeredRgb) {
+    cv::Mat current = WrapF32Rgba(input.pixels).clone();
+    for (std::uint8_t i = 0; i < passes; ++i) {
+      current = DownsampleRgba2x(current);
+    }
+    input.pixels            = CopyPlane(current, HostPixelFormat::F32Rgba);
+    input.host_extent       = input.pixels.extent;
+    input.downsample_passes = passes;
     return;
   }
   cv::Mat current = WrapU16Cfa(input.pixels).clone();
@@ -467,10 +608,12 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   }
 
   if (kind == RawInputKind::DebayeredRgb) {
+    input.pixels      = CopyDebayeredRgbPlane(*raw, input.sensor);
+    input.host_extent = input.pixels.extent;
+    input.input_kind  = RawInputKind::DebayeredRgb;
+    CollapseSensorToHost(input.sensor, input.host_extent);
     raw->recycle();
-    throw std::runtime_error(
-        "RawInputLoader::LoadEncoded: encoded direct RGB is not used in G4 tests; "
-        "call FromDirectRgb");
+    return FinishPrepared(std::move(input), decode_res, HashContentBytes(encoded), encoded.size());
   }
 
   const auto& sizes = raw->imgdata.sizes;

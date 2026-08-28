@@ -11,6 +11,7 @@
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "test_camera_profile.hpp"
 
@@ -49,6 +50,8 @@ auto MakeLegacyStageJson() -> nlohmann::json {
       {"type", 2}, {"enable", true}, {"params", {{"exposure", 1.5}}}};
   json["Color Adjustment"]["Color Adjustment"]["saturation"] = {
       {"type", 10}, {"enable", true}, {"params", {{"saturation", 30.0}}}};
+  json["Color Adjustment"]["Color Adjustment"]["ocio_lmt"] = {
+      {"type", 16}, {"enable", true}, {"params", {{"ocio_lmt", "C:/looks/teal.cube"}}}};
   json["Color Adjustment"]["Color Adjustment"]["tint"] = {
       {"type", 11}, {"enable", true}, {"params", {{"tint", 12.0}}}};
   json["Output Transform"]["Output Transform"]["odt"] = {
@@ -102,6 +105,11 @@ TEST(GpuDagModelGraph, LegacyStageJsonMapsRawGradeGeometryAndDrtToNewDocument) {
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
   ASSERT_NE(saturation, nullptr);
   EXPECT_FLOAT_EQ(saturation->Value(), 1.3f);
+
+  const auto* lmt = dynamic_cast<const LmtModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  EXPECT_EQ(lmt->CubePath(), "C:/looks/teal.cube");
 
   EXPECT_EQ(document.Drt()->Params().Params().method, DrtMethod::Aces20);
   EXPECT_FLOAT_EQ(document.Drt()->Params().Params().peak_luminance, 200.0f);

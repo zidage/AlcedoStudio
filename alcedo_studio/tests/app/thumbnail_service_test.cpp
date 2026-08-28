@@ -17,6 +17,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <random>
@@ -32,6 +33,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -1134,6 +1136,36 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExec
   ASSERT_NE(live_guard->pipeline_, nullptr);
   live_guard->dirty_ = true;
   ASSERT_EQ(live_guard->pin_count_, size_t{1});
+  EXPECT_TRUE(live_guard->pipeline_->HasGpuDagDocument());
+
+  std::string snap_err;
+  auto        snap = pipeline_service->LoadPipelineSnapshot(element_id, image_id, &snap_err);
+  ASSERT_NE(snap, nullptr) << snap_err;
+  ASSERT_NE(snap->executor_, nullptr);
+  EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
+
+  auto img = img_pool->Read<std::shared_ptr<Image>>(
+      image_id, [](const std::shared_ptr<Image>& image) { return image; });
+  ASSERT_NE(img, nullptr);
+  ASSERT_TRUE(img->HasRawColorContext());
+  snap->executor_->InjectRawMetadata(img->GetRawColorContext());
+  snap->executor_->SetForceCPUOutput(true);
+  snap->executor_->SetEnableCache(false);
+  snap->executor_->SetDecodeRes(DecodeRes::EIGHTH);
+  snap->executor_->SetRenderRes(false, 256);
+  auto encoded = ByteBufferLoader::LoadByteBufferFromImage(img);
+  auto input   = std::make_shared<ImageBuffer>(std::move(encoded));
+  std::shared_ptr<ImageBuffer> dag_output;
+  try {
+    std::unique_lock<std::mutex> render_lock(snap->executor_->GetRenderLock());
+    dag_output = snap->executor_->Apply(input);
+  } catch (const std::exception& e) {
+    FAIL() << e.what();
+  }
+  ASSERT_NE(dag_output, nullptr);
+  EXPECT_TRUE(dag_output->cpu_data_valid_);
+
+  pipeline_service->ReleasePipelineSnapshot(snap);
 
   auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                         ThumbnailResolution::k256);

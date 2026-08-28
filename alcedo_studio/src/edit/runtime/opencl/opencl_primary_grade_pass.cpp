@@ -17,12 +17,12 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
+#include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_local_tone_pass.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -32,7 +32,6 @@
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
-#include "utils/lut/cube_lut.hpp"
 
 namespace alcedo {
 namespace {
@@ -212,38 +211,16 @@ void DispatchMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& sou
   DispatchKernel(device, kernel, width, height);
 }
 
-auto PackLutRgba(const CubeLut& lut) -> std::vector<std::byte> {
-  const auto             edge   = static_cast<std::size_t>(lut.edge3d_);
-  const auto             voxels = edge * edge * edge;
-  std::vector<std::byte> packed(voxels * 4 * sizeof(float));
-  auto*                  out = reinterpret_cast<float*>(packed.data());
-  for (std::size_t i = 0; i < voxels; ++i) {
-    out[i * 4 + 0] = lut.lut3d_[i * 3 + 0];
-    out[i * 4 + 1] = lut.lut3d_[i * 3 + 1];
-    out[i * 4 + 2] = lut.lut3d_[i * 3 + 2];
-    out[i * 4 + 3] = 1.0f;
-  }
-  return packed;
-}
-
 auto LoadLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
-  auto* model = dynamic_cast<LmtModel*>(grade.FindAdjustmentByType(type_ids::Lmt()));
-  if (model == nullptr || model->CubePath().empty()) {
+  const auto packed = TryPackGradeLut(grade);
+  if (!packed.has_value()) {
     return device.Workspace().Device().DummyLut();
   }
-
-  CubeLut     cube;
-  std::string error;
-  if (!ParseCubeFile(model->CubePath(), cube, &error) || !cube.Has3D()) {
-    throw std::runtime_error("ExecuteOpenClPrimaryGrade: failed to load LMT cube '" +
-                             model->CubePath() + "': " + error);
-  }
-  const auto  packed = PackLutRgba(cube);
   ContentHash hash;
-  hash.MixBytes(packed);
-  hash.MixU32(static_cast<std::uint32_t>(cube.edge3d_));
-  return device.Workspace().Device().AcquireLut(
-      hash.Key(), packed, static_cast<std::uint32_t>(cube.edge3d_), device.CommandContext());
+  hash.MixBytes(packed->rgba);
+  hash.MixU32(packed->edge);
+  return device.Workspace().Device().AcquireLut(hash.Key(), packed->rgba, packed->edge,
+                                                device.CommandContext());
 }
 
 auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector<GradeOp> {

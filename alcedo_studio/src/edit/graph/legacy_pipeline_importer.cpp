@@ -256,6 +256,23 @@ auto ValidateOperators(const std::vector<LegacyOperator>& operators) -> std::str
   return {};
 }
 
+auto LegacyCubePath(const nlohmann::json& params) -> std::string {
+  if (params.contains("ocio_lmt")) {
+    const auto& value = params["ocio_lmt"];
+    if (value.is_string()) {
+      return value.get<std::string>();
+    }
+    if (value.is_object()) {
+      const auto nested = json_util::ReadString(value, "ocio_lmt", {});
+      if (!nested.empty()) {
+        return nested;
+      }
+      return json_util::ReadString(value, "cube_path", {});
+    }
+  }
+  return json_util::ReadString(params, "cube_path", {});
+}
+
 auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator>& operators)
     -> std::string {
   auto* grade = document.PrimaryGrade();
@@ -308,13 +325,7 @@ auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator
   }
   if (const auto* lmt = FindOp(operators, kLegacyLmt)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Lmt())) {
-      nlohmann::json json;
-      if (lmt->params.contains("ocio_lmt") && lmt->params["ocio_lmt"].is_string()) {
-        json["cube_path"] = lmt->params["ocio_lmt"].get<std::string>();
-      } else {
-        json["cube_path"] = json_util::ReadString(lmt->params, "cube_path", {});
-      }
-      LoadJsonIfChanged(model, json);
+      LoadJsonIfChanged(model, nlohmann::json{{"cube_path", LegacyCubePath(lmt->params)}});
     }
   }
   if (const auto* sharpen = FindOp(operators, kLegacySharpen)) {

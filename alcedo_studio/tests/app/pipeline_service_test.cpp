@@ -22,6 +22,8 @@
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -622,6 +624,9 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveG
     EXPECT_NE(&snap->executor_->GetRenderLock(), &g1->pipeline_->GetRenderLock());
     EXPECT_EQ(snap->pipeline_params_, params_v1);                   // captured current params
     EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);  // snapshot holds them
+    EXPECT_TRUE(g1->pipeline_->HasGpuDagDocument());
+    EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
+    EXPECT_NE(snap->executor_->GpuDagDocument(), g1->pipeline_->GpuDagDocument());
 
     // Acceptance: the live guard is untouched by the capture.
     EXPECT_EQ(g1->dirty_, true);                                  // dirty NOT cleared
@@ -677,6 +682,33 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
   ps.SavePipeline(g);
 
   EXPECT_NO_THROW(ps.ReleasePipelineSnapshot(snap));
+}
+
+TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesGpuDagDocumentIndependently) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService ps(project.GetStorage());
+  auto                live = ps.LoadPipeline(1);
+  ASSERT_NE(live, nullptr);
+  ASSERT_NE(live->pipeline_, nullptr);
+  ASSERT_TRUE(live->pipeline_->HasGpuDagDocument());
+  auto* live_lmt = dynamic_cast<LmtModel*>(
+      live->pipeline_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(live_lmt, nullptr);
+  live_lmt->SetCubePath("C:/looks/live.cube");
+
+  std::string err;
+  auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
+  ASSERT_NE(snap, nullptr) << err;
+  ASSERT_NE(snap->executor_, nullptr);
+  ASSERT_TRUE(snap->executor_->HasGpuDagDocument());
+  auto* snap_lmt = dynamic_cast<LmtModel*>(
+      snap->executor_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(snap_lmt, nullptr);
+  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
+  live_lmt->SetCubePath("C:/looks/changed.cube");
+  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
+  ps.ReleasePipelineSnapshot(snap);
+  ps.SavePipeline(live);
 }
 
 TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {

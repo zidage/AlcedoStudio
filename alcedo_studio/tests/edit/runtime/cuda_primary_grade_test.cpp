@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -21,6 +23,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
@@ -111,6 +114,23 @@ auto RenderLocalToneCenter(float surroundings, float center, float shadows_value
                            pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels[static_cast<std::size_t>(height / 2) * width + width / 2].r;
+}
+
+void WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, float b) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path);
+  out << "LUT_3D_SIZE 2\n";
+  for (int i = 0; i < 8; ++i) {
+    out << r << ' ' << g << ' ' << b << '\n';
+  }
+}
+
+void WriteIdentityCube(const std::filesystem::path& path) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path);
+  out << "LUT_3D_SIZE 2\n"
+      << "0 0 0\n1 0 0\n0 1 0\n1 1 0\n"
+      << "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
 }
 
 class CudaPrimaryGradeFixture : public ::testing::Test {
@@ -604,6 +624,40 @@ TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuil
   ASSERT_FALSE(isolated_pixels.empty());
   const float rebuilt = isolated_pixels[static_cast<std::size_t>(roi_y) * roi_w + roi_x].r;
   EXPECT_GT(std::abs(rebuilt - sampled), 1.0e-4f);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaLutRemapChangesGradePixels) {
+  const auto cube_path = std::filesystem::absolute("build/tmp/gpu_dag_cuda_lut/red.cube");
+  WriteConstantRgbCube(cube_path, 1.0f, 0.0f, 0.0f);
+  auto& lmt = ModelByType<LmtModel>(type_ids::Lmt());
+  lmt.SetCubePath(cube_path.string());
+  const auto result = Render();
+  const auto input  = Download(plan_.develop_output);
+  const auto output = Download(result.output);
+  ASSERT_FALSE(output.empty());
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_NE(result.lut_resource_id, 0U);
+  EXPECT_NEAR(output.front().r, 1.0f, 1.0e-4f);
+  EXPECT_NEAR(output.front().g, 0.0f, 1.0e-4f);
+  EXPECT_NEAR(output.front().b, 0.0f, 1.0e-4f);
+  EXPECT_GT(std::abs(output.front().r - input.front().r) + std::abs(output.front().g - input.front().g) +
+                std::abs(output.front().b - input.front().b),
+            1.0e-3f);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaLutResourceIsReusedByContentKey) {
+  const auto cube_path = std::filesystem::absolute("build/tmp/gpu_dag_cuda_lut/identity.cube");
+  WriteIdentityCube(cube_path);
+  auto& lmt = ModelByType<LmtModel>(type_ids::Lmt());
+  lmt.SetCubePath(cube_path.string());
+  const auto first = Render();
+  EXPECT_NE(first.lut_resource_id, 0U);
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.25f);
+  device_.Workspace().Device().ResetCounters();
+  const auto second = Render();
+  EXPECT_EQ(second.lut_resource_id, first.lut_resource_id);
+  EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().LastLutResourceId(), first.lut_resource_id);
 }
 
 TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices) {

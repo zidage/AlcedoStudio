@@ -512,6 +512,15 @@ void WriteIdentityCube(const std::filesystem::path& path) {
       << "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
 }
 
+void WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, float b) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path);
+  out << "LUT_3D_SIZE 2\n";
+  for (int i = 0; i < 8; ++i) {
+    out << r << ' ' << g << ' ' << b << '\n';
+  }
+}
+
 auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
   auto* lease = device.Workspace().Images().Find(id);
   EXPECT_NE(lease, nullptr);
@@ -674,6 +683,26 @@ TEST_F(OpenClGradeFixture, OpenClExposureEditRunsOnlyPrimaryGradeAndDrt) {
   EXPECT_EQ(stats.sensor_develop_skip, 1U);
   EXPECT_EQ(stats.geometry_skip, 1U);
   EXPECT_EQ(stats.camera_color_skip, 1U);
+}
+
+TEST_F(OpenClGradeFixture, OpenClLutRemapChangesGradePixels) {
+  const auto cube_path = std::filesystem::absolute("build/tmp/gpu_dag_opencl_lut/red.cube");
+  WriteConstantRgbCube(cube_path, 1.0f, 0.0f, 0.0f);
+  auto* lmt =
+      dynamic_cast<LmtModel*>(document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  lmt->SetCubePath(cube_path.string());
+  const auto result = RenderGrade();
+  ASSERT_FALSE(last_output_pixels_.empty());
+  ASSERT_FALSE(last_develop_pixels_.empty());
+  EXPECT_NE(result.lut_resource_id, 0U);
+  EXPECT_NEAR(last_output_pixels_.front().r, 1.0f, 1.0e-4f);
+  EXPECT_NEAR(last_output_pixels_.front().g, 0.0f, 1.0e-4f);
+  EXPECT_NEAR(last_output_pixels_.front().b, 0.0f, 1.0e-4f);
+  EXPECT_GT(std::abs(last_output_pixels_.front().r - last_develop_pixels_.front().r) +
+                std::abs(last_output_pixels_.front().g - last_develop_pixels_.front().g) +
+                std::abs(last_output_pixels_.front().b - last_develop_pixels_.front().b),
+            1.0e-3f);
 }
 
 TEST_F(OpenClGradeFixture, OpenClLutResourceIsReusedByContentKey) {

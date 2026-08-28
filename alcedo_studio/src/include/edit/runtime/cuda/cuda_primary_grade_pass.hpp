@@ -15,6 +15,7 @@ namespace alcedo {
 
 struct CudaPrimaryGradeResult {
   GraphValueId  output{NodeId{"grade.primary"}, PortId{"image"}};
+  std::uint64_t lut_resource_id                        = 0;
   std::uint64_t local_tone_reference_resource_id       = 0;
   bool          local_tone_rebuilt_reference           = false;
   bool          local_tone_sampled_canonical_reference = false;

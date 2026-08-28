@@ -89,6 +89,7 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   bool       saw_shadows    = false;
   bool       saw_highlights = false;
   bool       saw_curve      = false;
+  bool       saw_lmt        = false;
   for (const auto& adjustment : plan.primary_grade_adjustments) {
     if (adjustment.type == type_ids::Shadows()) {
       saw_shadows = true;
@@ -99,6 +100,9 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
     } else if (adjustment.type == type_ids::Curve()) {
       saw_curve = true;
       EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
+    } else if (adjustment.type == type_ids::Lmt()) {
+      saw_lmt = true;
+      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
     } else if (adjustment.type == type_ids::Clarity() || adjustment.type == type_ids::Sharpen() ||
                adjustment.type == type_ids::Halation() ||
                adjustment.type == type_ids::FilmGrain()) {
@@ -108,6 +112,7 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   EXPECT_TRUE(saw_shadows);
   EXPECT_TRUE(saw_highlights);
   EXPECT_TRUE(saw_curve);
+  EXPECT_TRUE(saw_lmt);
   ASSERT_GE(plan.primary_grade_stages.size(), 5U);
   EXPECT_EQ(plan.primary_grade_stages.front().kind, CompiledGradeStageKind::Pointwise);
   bool saw_llf_stage = false;

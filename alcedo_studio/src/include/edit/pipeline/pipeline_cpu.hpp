@@ -25,6 +25,7 @@
 #endif
 
 namespace alcedo {
+class PipelineDocument;
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 template <class Backend>
 class Renderer;
@@ -130,6 +131,9 @@ class CPUPipelineExecutor : public PipelineExecutor {
   /** @brief Select the format-version-2 document used by the GPU DAG product path. */
   void SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                            bool                              mirror_legacy_stage_adapter = false);
+  [[nodiscard]] auto HasGpuDagDocument() const -> bool;
+  [[nodiscard]] auto GpuDagDocument() const -> std::shared_ptr<PipelineDocument>;
+  [[nodiscard]] auto MirrorsLegacyStageAdapter() const -> bool;
 
   void SetPreviewMode(bool is_preview);
 

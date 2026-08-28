@@ -182,6 +182,26 @@ TEST(GpuDagRawInput, EncodedDngCarriesOpcodeList3WarpIntoPreparedInput) {
   EXPECT_NE(prepared.source_key.dng_warp_hash, 0U);
 }
 
+#if defined(TEST_IMG_PATH)
+TEST(GpuDagRawInput, LoadEncodedUnpacksLinearDngAsDirectRgbAndHonorsDecodeRes) {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  const auto encoded = ReadBytes(path);
+  if (encoded.empty()) {
+    GTEST_SKIP() << "Sample linear DNG is missing: " << path.string();
+  }
+
+  const auto full    = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  const auto eighth  = RawInputLoader::LoadEncoded(encoded, DecodeRes::EIGHTH);
+  EXPECT_EQ(full.input_kind, RawInputKind::DebayeredRgb);
+  EXPECT_EQ(full.pixels.format, HostPixelFormat::F32Rgba);
+  EXPECT_EQ(full.CompileSource().kind, DevelopInputKind::DirectRgb);
+  EXPECT_EQ(eighth.downsample_passes, 3);
+  EXPECT_EQ(eighth.full_reference_extent, full.full_reference_extent);
+  EXPECT_LT(eighth.host_extent.width, full.host_extent.width);
+  EXPECT_FALSE(eighth.host_extent.Empty());
+}
+#endif
+
 #if defined(__APPLE__)
 TEST(GpuDagRawInput, EncodedRawLoadCompletesOnProductWorkerStack) {
   const auto root = std::filesystem::path{ALCEDO_CI_RAW_FIXTURE_ROOT};

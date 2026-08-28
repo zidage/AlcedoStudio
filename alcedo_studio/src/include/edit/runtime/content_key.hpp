@@ -20,8 +20,8 @@ inline constexpr std::uint32_t kSensorDevelopImplementationVersion = 2;
 inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
 /// Bumped when CameraColorPass math changes. Version 3 encodes its AP1 result as ACEScc.
 inline constexpr std::uint32_t kCameraColorImplementationVersion   = 3;
-/// Bumped when Primary Grade pixel rules change. Version 3 samples canonical LLF on ROI.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 3;
+/// Bumped when Primary Grade pixel rules change. Version 4 samples the LMT cube in fused pointwise.
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 4;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
 inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 1;
 /// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.

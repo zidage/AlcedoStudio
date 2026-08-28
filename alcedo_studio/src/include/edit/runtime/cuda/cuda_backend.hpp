@@ -13,10 +13,17 @@
 
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
+
+struct CudaLutBinding {
+  const void*   device_pointer = nullptr;
+  std::uint64_t resource_id    = 0;
+  std::uint32_t edge_size      = 0;
+};
 
 /**
  * @brief CUDA stream plus a recorded completion event for one in-flight submission.
@@ -167,6 +174,12 @@ class CudaBackend {
    */
   void SynchronizeRecordedWork(CommandContext& command_context);
 
+  [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
+                                std::uint32_t edge, CommandContext& command_context)
+      -> CudaLutBinding;
+  [[nodiscard]] auto DummyLut() -> CudaLutBinding;
+  void               SetLutByteBudget(std::size_t bytes);
+
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }
   [[nodiscard]] auto IsResourceBusy(std::uint64_t submitted_on) const -> bool {
@@ -190,6 +203,8 @@ class CudaBackend {
   [[nodiscard]] auto LastTextureRectangles() const -> const std::vector<RectI>& {
     return last_texture_rectangles_;
   }
+  [[nodiscard]] auto LutUploadBytes() const -> std::uint64_t { return lut_upload_bytes_; }
+  [[nodiscard]] auto LastLutResourceId() const -> std::uint64_t { return last_lut_resource_id_; }
 
   [[nodiscard]] auto QueryDeviceMemory() const -> GpuDeviceMemorySnapshot;
 
@@ -210,6 +225,21 @@ class CudaBackend {
   bool                   fail_next_upload_     = false;
   std::vector<ByteRange> last_h2d_ranges_;
   std::vector<RectI>     last_texture_rectangles_;
+  std::uint64_t          lut_upload_bytes_     = 0;
+  std::uint64_t          last_lut_resource_id_ = 0;
+  std::size_t            lut_byte_budget_      = 64ull << 20;
+  std::size_t            lut_cache_bytes_      = 0;
+  std::uint64_t          lut_lru_clock_        = 0;
+  struct LutCacheEntry {
+    ContentKey    key;
+    Buffer        buffer;
+    std::uint32_t edge_size            = 0;
+    std::size_t   bytes                = 0;
+    std::uint64_t lru_tick             = 0;
+    std::uint64_t last_used_submission = 0;
+  };
+  std::vector<LutCacheEntry> lut_cache_;
+  Buffer                     dummy_lut_;
 };
 
 /**

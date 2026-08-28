@@ -452,6 +452,30 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
 #endif
 }
 
+auto CPUPipelineExecutor::HasGpuDagDocument() const -> bool {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return static_cast<bool>(pipeline_document_);
+#else
+  return false;
+#endif
+}
+
+auto CPUPipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocument> {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return pipeline_document_;
+#else
+  return nullptr;
+#endif
+}
+
+auto CPUPipelineExecutor::MirrorsLegacyStageAdapter() const -> bool {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return mirror_legacy_stage_adapter_;
+#else
+  return false;
+#endif
+}
+
 [[deprecated("SetPreviewMode is deprecated, set from pipeline scheduler instead")]] void
 CPUPipelineExecutor::SetPreviewMode(bool) {
   // is_thumbnail_  = is_thumbnail;
