@@ -1356,6 +1356,49 @@ Remaining work owned by the next named Phase:
 - O6: physically remove the legacy OpenCL pipeline/factory and obsolete fused ABI/program
   wiring, then record the cold/warm/p95 performance matrix and final resource counters.
 
+##### Phase O5 follow-up (2026-08-28)
+
+Status: product-editor `CL_INVALID_BUFFER_SIZE` (-61) on image open — fixed.
+
+Cause:
+
+- `OpenClBackend::CreateBuffer` issued one `clCreateBuffer` for the whole Develop transient
+  slab. OpenCL rejects a single allocation above `CL_DEVICE_MAX_MEM_ALLOC_SIZE`.
+- `ExecuteOpenClDevelop` reserved
+  `peak_transient_bytes + host_pixels * 28 + 16KiB`. That extra was added on top of
+  `max(develop, LLF)`, so a real RAW (HLR on by default) requested a slab larger than the
+  device cap. 32x32 DAG tests never hit the limit.
+
+Fix:
+
+- `TransientBufferArena` splits capacity across slabs each `<= Backend::MaxSlabBytes()`.
+- OpenCL `MaxSlabBytes` is `CL_DEVICE_MAX_MEM_ALLOC_SIZE` from context creation, aligned
+  down to 256 bytes.
+- Develop reserves `max(compiled peak, exclusive HLR working set)` and rewinds demosaic
+  planes before HLR, so HLR does not sit on top of RCD/LLF.
+- `Allocate` walks every reserved slab, then appends a new slab when the remainder
+  cannot hold the next plane. `Reserve` still cannot replace slabs while pointers
+  are live. Slab size is `CL_DEVICE_MAX_MEM_ALLOC_SIZE` from context creation,
+  aligned down to 256 bytes.
+
+Primary call chain:
+
+```text
+EditPipeline::Apply
+  -> Renderer<OpenClBackend>::Render
+  -> ExecuteOpenClDevelop
+  -> TransientBufferArena::Reserve(max(peak, HLR exclusive))
+  -> OpenClBackend::CreateSlab (<= MaxSlabBytes each)
+  -> OpenClBackend::CreateBuffer
+```
+
+Tests: `OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSize`,
+`OpenClTransientReserveAboveMaxSlabUsesSeparateDeviceBuffers`,
+`OpenClTransientAllocateAppendsASlabWhenTheReservedTailIsTooShort`,
+`OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutInvalidBufferSize`,
+`OpenClDevelopHighlightRecoveryFitsWhenSingleAllocCapIsBelowPaddedHostPixelReserve`,
+`WorkspaceCannotReplaceReservedSlabWhileTransientPointersAreLive`.
+
 ## 11. Phase O6 — 旧 OpenCL 管线删除与性能验收
 
 目标：

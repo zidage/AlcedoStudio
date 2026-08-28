@@ -158,6 +158,11 @@ void EncodeWarp(OpenClRenderDevice& device, cl_mem src, cl_mem dst, const dng::W
   DispatchKernel(device, kernel, width, height);
 }
 
+void RewindDevelopScratch(OpenClRenderDevice& device) {
+  device.Workspace().Device().SynchronizeRecordedWork(device.CommandContext());
+  device.Workspace().TransientBuffers().Reset();
+}
+
 void EncodeHighlight(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
                      opencl::OpenClBufferView src, opencl::OpenClBufferView dst,
                      std::uint32_t width, std::uint32_t height, const float* cam_mul) {
@@ -191,6 +196,23 @@ void CopyRgbaToPacked(opencl::OpenClEncodeQueue& stream, opencl::OpenClBufferVie
       apply_cam_mul ? input.linearization.cam_mul : identity, input.sensor.orientation_flip);
 }
 
+void EncodeHighlightFromRgbaImage(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
+                                  const OpenClBackend::Texture2D& src_image, cl_mem packed,
+                                  const PreparedRawInput& input, std::uint32_t width,
+                                  std::uint32_t height) {
+  auto&      backend    = device.Workspace().Device();
+  auto&      transients = device.Workspace().TransientBuffers();
+  RewindDevelopScratch(device);
+  const auto rgba_bytes = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
+  void*      src_ptr    = transients.Allocate(rgba_bytes);
+  backend.CopyImageToDeviceMemory(src_image, src_ptr, rgba_bytes, device.CommandContext());
+  void* dst_ptr = transients.Allocate(rgba_bytes);
+  auto  src     = ViewFromPtr(backend, src_ptr, rgba_bytes);
+  auto  dst     = ViewFromPtr(backend, dst_ptr, rgba_bytes);
+  EncodeHighlight(device, stream, src, dst, width, height, input.linearization.cam_mul);
+  CopyRgbaToPacked(stream, dst, packed, input, width, height, true);
+}
+
 void EncodeLegacyDemosaic(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
                           const PreparedRawInput& input, opencl::OpenClBufferView linear,
                           cl_mem packed, bool hlr) {
@@ -209,10 +231,12 @@ void EncodeLegacyDemosaic(OpenClRenderDevice& device, opencl::OpenClEncodeQueue&
                          input.cfa_pattern.xtrans_pattern, width, height,
                          input.downsample_passes == 0 ? 3 : 1);
     if (hlr) {
-      void* hlr_ptr = transients.Allocate(rgba_bytes);
-      auto  hlr_dst = ViewFromPtr(backend, hlr_ptr, rgba_bytes);
-      EncodeHighlight(device, stream, rgba, hlr_dst, width, height, input.linearization.cam_mul);
-      rgba = hlr_dst;
+      auto rgba_image =
+          device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+      backend.CopyDeviceMemoryToImage(rgba_ptr, rgba_image.Texture(), device.CommandContext());
+      EncodeHighlightFromRgbaImage(device, stream, rgba_image.Texture(), packed, input, width,
+                                   height);
+      return;
     }
     CopyRgbaToPacked(stream, rgba, packed, input, width, height, true);
     return;
@@ -236,14 +260,8 @@ void EncodeLegacyDemosaic(OpenClRenderDevice& device, opencl::OpenClEncodeQueue&
     OpenCL::EncodePackPlanesCropInverseOrient(
         stream, r, g, b, rgba_image.Texture().Native(),
         RectI{0, 0, static_cast<int>(width), static_cast<int>(height)}, width, identity, 0);
-    void* rgba_ptr = transients.Allocate(rgba_bytes);
-    backend.CopyImageToDeviceMemory(rgba_image.Texture(), rgba_ptr, rgba_bytes,
-                                    device.CommandContext());
-    auto  rgba    = ViewFromPtr(backend, rgba_ptr, rgba_bytes);
-    void* hlr_ptr = transients.Allocate(rgba_bytes);
-    auto  hlr_dst = ViewFromPtr(backend, hlr_ptr, rgba_bytes);
-    EncodeHighlight(device, stream, rgba, hlr_dst, width, height, input.linearization.cam_mul);
-    CopyRgbaToPacked(stream, hlr_dst, packed, input, width, height, true);
+    EncodeHighlightFromRgbaImage(device, stream, rgba_image.Texture(), packed, input, width,
+                                 height);
     return;
   }
   OpenCL::EncodePackPlanesCropInverseOrient(stream, r, g, b, packed,
@@ -361,10 +379,11 @@ void EncodeNeural(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
   const auto aligned_w = static_cast<std::uint32_t>(geometry->aligned_width);
   const auto aligned_h = static_cast<std::uint32_t>(geometry->aligned_height);
   if (hlr) {
-    void* hlr_ptr = device.Workspace().TransientBuffers().Allocate(
-        static_cast<std::size_t>(aligned_w) * aligned_h * 4 * sizeof(float));
-    auto hlr_dst = ViewFromPtr(backend, hlr_ptr,
-                               static_cast<std::size_t>(aligned_w) * aligned_h * 4 * sizeof(float));
+    RewindDevelopScratch(device);
+    const auto rgba_bytes =
+        static_cast<std::size_t>(aligned_w) * aligned_h * 4 * sizeof(float);
+    void* hlr_ptr = device.Workspace().TransientBuffers().Allocate(rgba_bytes);
+    auto  hlr_dst = ViewFromPtr(backend, hlr_ptr, rgba_bytes);
     EncodeHighlight(device, stream, rgba, hlr_dst, aligned_w, aligned_h,
                     input.linearization.cam_mul);
     rgba = hlr_dst;
@@ -394,18 +413,26 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (workspace.Textures().ByteBudget() == 0) {
     workspace.Textures().SetByteBudget(OpenClBackend::DefaultTextureBudgetBytes());
   }
-  const auto host_pixels = static_cast<std::size_t>(input.host_extent.width) *
-                           input.host_extent.height;
-  const auto opencl_need =
-      host_pixels == 0
-          ? plan.peak_transient_bytes
-          : plan.peak_transient_bytes + host_pixels * 16 + host_pixels * 12 + (64ull * 256ull);
+  const auto flags = develop->Params().Params();
+  const bool hlr   = flags.highlights_reconstruct;
+  const auto host_pixels =
+      static_cast<std::size_t>(input.host_extent.width) * input.host_extent.height;
+  const bool cfa_input = input.input_kind != RawInputKind::DebayeredRgb &&
+                         plan.source.kind != DevelopInputKind::DirectRgb;
+  std::size_t opencl_need = plan.peak_transient_bytes;
+  if (cfa_input && hlr && host_pixels > 0) {
+    // Exclusive HLR working set after demosaic planes are rewound: RGBA src, RGBA dst,
+    // 6-byte mask + dilated mask, and bump padding. Take the max with the compiled
+    // peak; do not add this on top of LLF, which does not run concurrently.
+    const auto hlr_bytes =
+        host_pixels * 16ull + host_pixels * 16ull + host_pixels * 12ull + (64ull * 256ull);
+    if (hlr_bytes > opencl_need) {
+      opencl_need = hlr_bytes;
+    }
+  }
   if (opencl_need > 0) {
     workspace.TransientBuffers().Reserve(opencl_need);
   }
-
-  const auto         flags       = develop->Params().Params();
-  const bool         hlr         = flags.highlights_reconstruct;
   const auto         out_w       = plan.source.develop_output_extent.width;
   const auto         out_h       = plan.source.develop_output_extent.height;
   const GraphValueId sensor_id   = plan.sensor_linear_output;

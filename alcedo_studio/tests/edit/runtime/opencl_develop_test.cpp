@@ -299,6 +299,36 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopRcdOrderMatchesCudaDemosaicThenHighlig
   EXPECT_TRUE(PixelsDiffer(on_px, off_px));
 }
 
+TEST_F(OpenClDevelopFixture,
+       OpenClDevelopHighlightRecoveryFitsWhenSingleAllocCapIsBelowPaddedHostPixelReserve) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto host_pixels =
+      static_cast<std::size_t>(prepared.host_extent.width) * prepared.host_extent.height;
+  const auto padded =
+      plan.peak_transient_bytes + host_pixels * 16 + host_pixels * 12 + (64ull * 256ull);
+  ASSERT_GT(padded, plan.peak_transient_bytes);
+  const auto cap = (plan.peak_transient_bytes + (padded - plan.peak_transient_bytes) / 2) &
+                   ~std::size_t{255};
+  ASSERT_GT(cap, plan.peak_transient_bytes);
+  ASSERT_LT(cap, padded);
+
+  OpenClRenderDevice device;
+  device.Workspace().Device().SetMaxSlabBytes(cap);
+  device.BeginRender();
+  ExecuteOpenClDevelop(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  const auto pixels = Download(device, plan.sensor_linear_output);
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_GT(MaxChannel(pixels), 1.0f);
+}
+
 TEST_F(OpenClDevelopFixture, OpenClDevelopXTransMatchesCudaReferenceWithinTolerance) {
   const auto pattern  = gpu_dag_test::MakeXTransPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(

@@ -30,6 +30,14 @@ namespace alcedo {
 namespace {
 
 constexpr std::size_t kTextureBudgetFloorBytes = 256ull << 20;
+constexpr std::size_t kSlabAlignBytes          = 256;
+
+auto AlignDownSlabBytes(std::size_t bytes) -> std::size_t {
+  if (bytes >= kSlabAlignBytes) {
+    return bytes & ~(kSlabAlignBytes - 1);
+  }
+  return bytes;
+}
 
 auto                  ImageFormatFor(TextureFormat format) -> cl_image_format {
   switch (format) {
@@ -299,6 +307,8 @@ OpenClBackend::OpenClBackend() {
   device_  = context.Device();
   context_ = context.Context();
   queue_   = context.ProductQueue();
+  max_slab_bytes_device_ =
+      AlignDownSlabBytes(static_cast<std::size_t>(context.Capabilities().max_single_allocation_bytes));
   RegisterOpenClBackendPrograms();
   kernel_create_baseline_ = OpenClKernelCache::Instance().CreateCount();
   kernel_hit_baseline_    = OpenClKernelCache::Instance().HitCount();
@@ -343,9 +353,21 @@ auto OpenClBackend::CreateBuffer(std::size_t bytes) -> Buffer {
   if (bytes == 0) {
     return {};
   }
+  const auto max_slab = MaxSlabBytes();
+  if (bytes > max_slab) {
+    std::ostringstream message;
+    message << "OpenClBackend::CreateBuffer: size " << bytes
+            << " exceeds device max allocation " << max_slab;
+    throw std::runtime_error(message.str());
+  }
   cl_int error  = CL_SUCCESS;
   cl_mem native = clCreateBuffer(context_, CL_MEM_READ_WRITE, bytes, nullptr, &error);
-  CheckOpenCl(error, "OpenClBackend::CreateBuffer");
+  if (error != CL_SUCCESS) {
+    std::ostringstream message;
+    message << "OpenClBackend::CreateBuffer: OpenCL error " << error << " size=" << bytes
+            << " max_alloc=" << max_slab;
+    throw std::runtime_error(message.str());
+  }
   if (native == nullptr) {
     throw std::runtime_error("OpenClBackend::CreateBuffer: clCreateBuffer returned null");
   }
@@ -886,6 +908,15 @@ auto OpenClBackend::DefaultTextureBudgetBytes() -> std::size_t {
   }
   return budget;
 }
+
+auto OpenClBackend::MaxSlabBytes() const -> std::size_t {
+  if (max_slab_bytes_override_ > 0) {
+    return max_slab_bytes_override_;
+  }
+  return max_slab_bytes_device_;
+}
+
+void OpenClBackend::SetMaxSlabBytes(std::size_t bytes) { max_slab_bytes_override_ = bytes; }
 
 auto OpenClBackend::WorkingSetBudgetBytes() const -> std::size_t {
   return DefaultTextureBudgetBytes();

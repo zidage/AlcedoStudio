@@ -6,25 +6,31 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
 /**
- * @brief Grow-only bump allocator over one device slab supplied by @p Backend.
+ * @brief Grow-only bump allocator over device slabs supplied by @p Backend.
  *
  * Backend must provide:
  * - `class Slab` with `DevicePointer()`, `Bytes()`, move-only RAII free
  * - `CreateSlab(std::size_t bytes) -> Slab`
  *
- * Capacity grows only when no bump allocations are live (`used_bytes() == 0`).
- * `Reset()` / `Rewind` do not free the slab; `ReleaseDeviceMemory()` does.
- * SensorDevelop scratch must be released after that pass, not held across
- * Geometry / Grade / DRT. Not thread-safe.
+ * Optional: `MaxSlabBytes()` caps each `CreateSlab`. Backends with a per-buffer
+ * allocation limit report it here. A single `Allocate` must fit in one slab.
+ *
+ * `Reserve` may replace unused slabs. `Allocate` that does not fit the current
+ * remainder appends another slab; live pointers stay valid. Develop scratch is
+ * exclusive and discarded after SensorDevelop (`ReleaseDeviceMemory`), so extra
+ * slabs in that pass are not held across Geometry / Grade / DRT.
+ * `Reset()` / `Rewind` do not free slabs. Not thread-safe.
  *
  * @tparam Backend Slab factory. Must outlive this arena when passed by reference.
  */
@@ -79,9 +85,7 @@ class TransientBufferArena {
           "Reset() first or Reserve peak size before Allocate");
     }
     const auto previous = capacity_;
-    auto       new_slab = backend_->CreateSlab(bytes);
-    slab_               = std::move(new_slab);
-    capacity_           = bytes;
+    EnsureCapacity(bytes);
     if (ShouldTraceGpuPoolAlloc(bytes)) {
       std::fprintf(stderr, "[GPU_POOL] transient reserve %.1f MiB (was %.1f)\n", GpuPoolMiB(bytes),
                    GpuPoolMiB(previous));
@@ -93,7 +97,9 @@ class TransientBufferArena {
 
   /**
    * @brief Bump-allocate @p bytes. Zero returns nullptr.
-   * @throws std::runtime_error on bad alignment, or if capacity is short while live.
+   *
+   * Places into an existing slab when there is room. Otherwise appends a new slab.
+   * @throws std::runtime_error on bad alignment or a request larger than one slab.
    */
   [[nodiscard]] auto Allocate(std::size_t bytes, std::size_t alignment = kDefaultAlignment)
       -> void* {
@@ -103,28 +109,33 @@ class TransientBufferArena {
     if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
       throw std::runtime_error("TransientBufferArena::Allocate: alignment must be a power of two");
     }
-
-    const std::size_t aligned_offset = AlignUp(offset_, alignment);
-    const std::size_t end            = aligned_offset + bytes;
-
-    if (end > capacity_) {
-      if (offset_ != 0) {
-        throw std::runtime_error(
-            "TransientBufferArena::Allocate: insufficient capacity with live allocations; "
-            "call Reserve() with the peak workspace size before forward");
-      }
-      std::size_t new_cap = capacity_ == 0 ? end : capacity_;
-      while (new_cap < end) {
-        const std::size_t doubled = new_cap > (std::size_t{1} << 62) ? end : new_cap * 2;
-        new_cap                   = doubled < end ? end : doubled;
-      }
-      Reserve(new_cap);
-      offset_ = bytes;
-      return base();
+    const auto max_slab = QueryMaxSlabBytes();
+    if (bytes > max_slab) {
+      throw std::runtime_error(
+          "TransientBufferArena::Allocate: request exceeds backend max slab bytes");
     }
 
-    offset_ = end;
-    return static_cast<char*>(base()) + aligned_offset;
+    std::size_t aligned_offset = AlignUp(offset_, alignment);
+    if (void* placed = PlaceFrom(aligned_offset, bytes, alignment)) {
+      return placed;
+    }
+
+    if (offset_ != 0) {
+      return AppendAndPlace(bytes);
+    }
+    const std::size_t end = aligned_offset + bytes;
+    std::size_t new_cap = capacity_ == 0 ? end : capacity_;
+    while (new_cap < end) {
+      const std::size_t doubled = new_cap > (std::size_t{1} << 62) ? end : new_cap * 2;
+      new_cap                   = doubled < end ? end : doubled;
+    }
+    Reserve(new_cap);
+    void* ptr = TryPlace(0, bytes);
+    if (ptr == nullptr) {
+      return AppendAndPlace(bytes);
+    }
+    offset_ = bytes;
+    return ptr;
   }
 
   template <typename T>
@@ -136,7 +147,7 @@ class TransientBufferArena {
   void Reset() noexcept { offset_ = 0; }
 
   /**
-   * @brief Free the device slab. Caller must GPU-synchronize if kernels still read it.
+   * @brief Free device slabs. Caller must GPU-synchronize if kernels still read them.
    *
    * Develop scratch is released after SensorDevelop, not kept for later frames.
    */
@@ -167,17 +178,105 @@ class TransientBufferArena {
     return capacity_ > offset_ ? capacity_ - offset_ : 0;
   }
   [[nodiscard]] auto base() const noexcept -> void* {
-    return slab_.DevicePointer();
+    return slabs_.empty() ? nullptr : slabs_.front().slab.DevicePointer();
   }
   [[nodiscard]] auto empty() const noexcept -> bool { return offset_ == 0; }
 
  private:
+  struct SlabEntry {
+    typename Backend::Slab slab{};
+    std::size_t            size = 0;
+  };
+
   static auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
     return (value + alignment - 1) & ~(alignment - 1);
   }
 
+  auto QueryMaxSlabBytes() const -> std::size_t {
+    if (backend_ == nullptr) {
+      return (std::numeric_limits<std::size_t>::max)();
+    }
+    if constexpr (requires(const Backend& backend) { backend.MaxSlabBytes(); }) {
+      const auto cap = backend_->MaxSlabBytes();
+      if (cap != 0) {
+        return cap;
+      }
+    }
+    return (std::numeric_limits<std::size_t>::max)();
+  }
+
+  auto TryPlace(std::size_t aligned_offset, std::size_t bytes) -> void* {
+    std::size_t origin = 0;
+    for (auto& entry : slabs_) {
+      if (aligned_offset >= origin && aligned_offset + bytes <= origin + entry.size) {
+        return static_cast<char*>(entry.slab.DevicePointer()) + (aligned_offset - origin);
+      }
+      origin += entry.size;
+    }
+    return nullptr;
+  }
+
+  auto NextSlabOrigin(std::size_t aligned_offset) const -> std::size_t {
+    std::size_t origin = 0;
+    for (const auto& entry : slabs_) {
+      const auto end = origin + entry.size;
+      if (aligned_offset < end) {
+        return end;
+      }
+      origin = end;
+    }
+    return origin;
+  }
+
+  auto PlaceFrom(std::size_t aligned_offset, std::size_t bytes, std::size_t alignment) -> void* {
+    while (true) {
+      if (void* placed = TryPlace(aligned_offset, bytes)) {
+        offset_ = aligned_offset + bytes;
+        return placed;
+      }
+      const auto skipped = NextSlabOrigin(aligned_offset);
+      if (skipped == aligned_offset) {
+        return nullptr;
+      }
+      aligned_offset = AlignUp(skipped, alignment);
+    }
+  }
+
+  auto AppendAndPlace(std::size_t bytes) -> void* {
+    const auto origin = capacity_;
+    AppendSlab(bytes);
+    void* placed = TryPlace(origin, bytes);
+    if (placed == nullptr) {
+      throw std::runtime_error("TransientBufferArena::Allocate: appended slab did not fit");
+    }
+    offset_ = origin + bytes;
+    return placed;
+  }
+
+  void AppendSlab(std::size_t bytes) {
+    const auto max_slab = QueryMaxSlabBytes();
+    const auto chunk    = bytes > max_slab ? max_slab : bytes;
+    slabs_.push_back(SlabEntry{backend_->CreateSlab(chunk), chunk});
+    capacity_ += chunk;
+  }
+
+  void EnsureCapacity(std::size_t bytes) {
+    std::vector<SlabEntry> replacement;
+    std::size_t            total     = 0;
+    const auto             max_slab  = QueryMaxSlabBytes();
+    std::size_t            remaining = bytes;
+    while (remaining > 0) {
+      const auto chunk = remaining > max_slab ? max_slab : remaining;
+      replacement.push_back(SlabEntry{backend_->CreateSlab(chunk), chunk});
+      total += chunk;
+      remaining -= chunk;
+    }
+    slabs_    = std::move(replacement);
+    capacity_ = total;
+  }
+
   void ResetSlab() noexcept {
-    slab_     = {};
+    slabs_.clear();
     capacity_ = 0;
     offset_   = 0;
   }
@@ -191,7 +290,7 @@ class TransientBufferArena {
       backend_       = other.backend_;
       other.backend_ = nullptr;
     }
-    slab_           = std::move(other.slab_);
+    slabs_          = std::move(other.slabs_);
     capacity_       = other.capacity_;
     offset_         = other.offset_;
     other.capacity_ = 0;
@@ -200,7 +299,7 @@ class TransientBufferArena {
 
   std::optional<Backend> owned_;
   Backend*               backend_ = nullptr;
-  typename Backend::Slab slab_{};
+  std::vector<SlabEntry> slabs_;
   std::size_t            capacity_ = 0;
   std::size_t            offset_   = 0;
 };

@@ -159,6 +159,19 @@ class OpenClBackend {
 
   [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
   [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
+  /**
+   * @brief Largest legal `clCreateBuffer` size for this device.
+   *
+   * Taken from `CL_DEVICE_MAX_MEM_ALLOC_SIZE` when the OpenCL context is created,
+   * aligned down to 256 bytes for the transient arena. Tests may override with
+   * @ref SetMaxSlabBytes; 0 restores the device-reported value.
+   */
+  [[nodiscard]] auto MaxSlabBytes() const -> std::size_t;
+  /**
+   * @brief Override @ref MaxSlabBytes. Zero restores the device-reported cap.
+   * @param bytes Slab cap in bytes, or 0 for the device default.
+   */
+  void SetMaxSlabBytes(std::size_t bytes);
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
 
@@ -331,6 +344,8 @@ class OpenClBackend {
   };
   std::vector<LutCacheEntry> lut_cache_;
   Buffer                     dummy_lut_;
+  std::size_t                max_slab_bytes_device_   = 0;
+  std::size_t                max_slab_bytes_override_ = 0;
 };
 
 using OpenClRenderDevice    = BasicRenderDevice<OpenClBackend>;

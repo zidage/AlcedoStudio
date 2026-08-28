@@ -33,14 +33,18 @@ TEST_F(CudaWorkspaceFixture, WorkspaceResetRewindsTransientMemoryWithoutFreeingC
   EXPECT_EQ(device.Workspace().Device().FreeCount(), 0U);
 }
 
-TEST_F(CudaWorkspaceFixture, WorkspaceCannotGrowWhileTransientPointersAreLive) {
+TEST_F(CudaWorkspaceFixture, WorkspaceCannotReplaceReservedSlabWhileTransientPointersAreLive) {
   CudaRenderDevice device;
   auto&            transients = device.Workspace().TransientBuffers();
   transients.Reserve(256);
   void* live = transients.Allocate(64);
   ASSERT_NE(live, nullptr);
   EXPECT_THROW(transients.Reserve(1024), std::runtime_error);
-  EXPECT_THROW((void)transients.Allocate(transients.capacity_bytes()), std::runtime_error);
+  device.Workspace().Device().ResetCounters();
+  void* extra = transients.Allocate(transients.capacity_bytes());
+  ASSERT_NE(extra, nullptr);
+  EXPECT_NE(extra, live);
+  EXPECT_GE(device.Workspace().Device().MallocCount(), 1U);
 }
 
 TEST_F(CudaWorkspaceFixture, NodeResultCacheReturnsValueByProducerNodeAndPort) {

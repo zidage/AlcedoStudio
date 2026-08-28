@@ -124,6 +124,22 @@ TEST(GpuDagOpenClWorkspace, RendererTemplateInstantiatesOpenClWithoutCudaOrMetal
   EXPECT_EQ(renderer.OneShotPublishedResultCount(), 0U);
 }
 
+TEST_F(OpenClWorkspaceFixture, OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSize) {
+  auto& ctx = OpenClContext::Instance();
+  ASSERT_TRUE(ctx.IsInitialized());
+  const auto reported = static_cast<std::size_t>(ctx.Capabilities().max_single_allocation_bytes);
+  ASSERT_GT(reported, 0U);
+
+  OpenClRenderDevice device;
+  const auto         slab = device.Workspace().Device().MaxSlabBytes();
+  EXPECT_GT(slab, 0U);
+  EXPECT_LE(slab, reported);
+  if (reported >= 256) {
+    EXPECT_EQ(slab % 256, 0U);
+    EXPECT_GE(slab, reported - 255);
+  }
+}
+
 TEST_F(OpenClWorkspaceFixture, OpenClBackendUsesThePreparedProcessContextAndProductQueue) {
   auto& ctx = OpenClContext::Instance();
   ASSERT_TRUE(ctx.IsInitialized());
@@ -194,6 +210,65 @@ TEST_F(OpenClWorkspaceFixture, OpenClTransientArenaRewindsWithoutAllocatingAnoth
   EXPECT_EQ(device.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device.Workspace().Device().FreeCount(), 0U);
   EXPECT_EQ(device.Workspace().Device().BufferCreateCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTransientReserveAboveMaxSlabUsesSeparateDeviceBuffers) {
+  OpenClRenderDevice device;
+  auto&              backend    = device.Workspace().Device();
+  auto&              transients = device.Workspace().TransientBuffers();
+  constexpr std::size_t kSlab   = 1 << 20;
+  constexpr std::size_t kChunk  = 700 << 10;
+  backend.SetMaxSlabBytes(kSlab);
+  backend.ResetCounters();
+  transients.Reserve(3 << 20);
+  EXPECT_GE(transients.capacity_bytes(), 3U << 20);
+  EXPECT_GE(backend.BufferCreateCount(), 3U);
+
+  void* first  = transients.Allocate(kChunk);
+  void* second = transients.Allocate(kChunk);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  const auto a = backend.ResolveDeviceMemory(first, kChunk);
+  const auto b = backend.ResolveDeviceMemory(second, kChunk);
+  EXPECT_NE(a.first, b.first);
+
+  std::vector<std::byte> ones(kChunk, std::byte{0x5A});
+  std::vector<std::byte> twos(kChunk, std::byte{0xA5});
+  backend.UploadDeviceMemory(first, ones, device.CommandContext());
+  backend.UploadDeviceMemory(second, twos, device.CommandContext());
+  device.WaitIdle();
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClTransientAllocateAppendsASlabWhenTheReservedTailIsTooShort) {
+  OpenClRenderDevice device;
+  auto&              backend    = device.Workspace().Device();
+  auto&              transients = device.Workspace().TransientBuffers();
+  constexpr std::size_t kSlab   = 1 << 20;
+  constexpr std::size_t kLarge  = 700 << 10;
+  backend.SetMaxSlabBytes(kSlab);
+  transients.Reserve(kSlab + (256 << 10));
+  void* first  = transients.Allocate(kLarge);
+  void* second = transients.Allocate(kLarge);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  const auto a = backend.ResolveDeviceMemory(first, kLarge);
+  const auto b = backend.ResolveDeviceMemory(second, kLarge);
+  EXPECT_NE(a.first, b.first);
+  EXPECT_GE(transients.capacity_bytes(), kLarge + kLarge);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutInvalidBufferSize) {
+  OpenClRenderDevice device;
+  auto&              backend = device.Workspace().Device();
+  backend.SetMaxSlabBytes(4096);
+  try {
+    (void)backend.CreateBuffer(4097);
+    FAIL() << "CreateBuffer should reject sizes above MaxSlabBytes";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("exceeds device max allocation"), std::string::npos);
+    EXPECT_EQ(message.find("OpenCL error -61"), std::string::npos);
+  }
 }
 
 TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
