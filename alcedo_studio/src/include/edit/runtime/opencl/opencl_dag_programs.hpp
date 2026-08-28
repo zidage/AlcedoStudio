@@ -20,6 +20,10 @@ inline constexpr const char* kGeometryResampleKernelName     = "geometry_resampl
 inline constexpr const char* kCameraColorKernelName          = "camera_color_acescc";
 inline constexpr const char* kWarpRectilinearKernelName      = "warp_rectilinear_rgba32f";
 inline constexpr const char* kPrimaryGradePointwiseKernelName = "primary_grade_pointwise_rgba32f";
+inline constexpr const char* kPrimaryGradeDetailKernelName   = "primary_grade_detail_rgba32f";
+inline constexpr const char* kPrimaryGradeMixKernelName      = "primary_grade_mix_rgba32f";
+inline constexpr const char* kPrimaryGradeMixMaskedKernelName =
+    "primary_grade_mix_masked_rgba32f";
 inline constexpr const char* kLocalToneKernelName            = "local_tone_llf_rgba32f";
 inline constexpr const char* kMaskEvaluateKernelName         = "mask_evaluate_r8";
 inline constexpr const char* kDrtKernelName                  = "drt_display_rgba32f";

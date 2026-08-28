@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -712,6 +713,15 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
   }
   if (plan.Contains(GpuPassKind::PrimaryColorGrade)) {
     add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradePointwiseKernelName);
+    add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeDetailKernelName);
+    add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeMixKernelName);
+    if (plan.primary_grade_mask.has_value()) {
+      add(OpenCL::GpuDag::kPrimaryGradeProgramName,
+          OpenCL::GpuDag::kPrimaryGradeMixMaskedKernelName);
+    }
+    // The grade shader always receives a valid LUT argument. Keep the identity
+    // resource with the device so a frame does not create one on its encode path.
+    (void)DummyLut();
     for (const auto& stage : plan.primary_grade_stages) {
       if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneKernelName);
@@ -735,14 +745,29 @@ auto OpenClBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed
   }
   for (auto& entry : lut_cache_) {
     if (entry.key == key && entry.edge_size == edge) {
-      last_lut_resource_id_ = entry.buffer.ResourceId();
+      entry.lru_tick             = ++lut_lru_clock_;
+      entry.last_used_submission = command_context.SubmissionId();
+      last_lut_resource_id_      = entry.buffer.ResourceId();
       return OpenClLutBinding{entry.buffer.Native(), entry.buffer.ResourceId(), entry.edge_size};
     }
   }
   if (lut_byte_budget_ > 0 && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
     while (!lut_cache_.empty() && lut_cache_bytes_ + packed_rgba.size() > lut_byte_budget_) {
-      lut_cache_bytes_ -= lut_cache_.front().bytes;
-      lut_cache_.erase(lut_cache_.begin());
+      std::size_t victim_index = lut_cache_.size();
+      auto        oldest       = (std::numeric_limits<std::uint64_t>::max)();
+      for (std::size_t index = 0; index < lut_cache_.size(); ++index) {
+        const auto& entry = lut_cache_[index];
+        if (IsResourceBusy(entry.last_used_submission) || entry.lru_tick >= oldest) {
+          continue;
+        }
+        oldest       = entry.lru_tick;
+        victim_index = index;
+      }
+      if (victim_index == lut_cache_.size()) {
+        break;
+      }
+      lut_cache_bytes_ -= lut_cache_[victim_index].bytes;
+      lut_cache_.erase(lut_cache_.begin() + static_cast<std::ptrdiff_t>(victim_index));
     }
   }
   auto buffer = CreateBuffer(packed_rgba.size());
@@ -750,10 +775,12 @@ auto OpenClBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed
   lut_upload_bytes_ += packed_rgba.size();
   last_lut_resource_id_ = buffer.ResourceId();
   LutCacheEntry entry;
-  entry.key       = key;
-  entry.edge_size = edge;
-  entry.bytes     = packed_rgba.size();
-  entry.buffer    = std::move(buffer);
+  entry.key                  = key;
+  entry.edge_size            = edge;
+  entry.bytes                = packed_rgba.size();
+  entry.lru_tick             = ++lut_lru_clock_;
+  entry.last_used_submission = command_context.SubmissionId();
+  entry.buffer               = std::move(buffer);
   lut_cache_bytes_ += entry.bytes;
   lut_cache_.push_back(std::move(entry));
   return OpenClLutBinding{lut_cache_.back().buffer.Native(), last_lut_resource_id_, edge};
@@ -766,7 +793,37 @@ auto OpenClBackend::DummyLut() -> OpenClLutBinding {
   return OpenClLutBinding{dummy_lut_.Native(), dummy_lut_.ResourceId(), 0};
 }
 
-void OpenClBackend::SetLutByteBudget(std::size_t bytes) { lut_byte_budget_ = bytes; }
+void OpenClBackend::SetLutByteBudget(std::size_t bytes) {
+  lut_byte_budget_ = bytes;
+  if (lut_byte_budget_ == 0) {
+    return;
+  }
+  while (lut_cache_bytes_ > lut_byte_budget_ && !lut_cache_.empty()) {
+    std::size_t victim_index = lut_cache_.size();
+    auto        oldest       = (std::numeric_limits<std::uint64_t>::max)();
+    for (std::size_t index = 0; index < lut_cache_.size(); ++index) {
+      const auto& entry = lut_cache_[index];
+      if (IsResourceBusy(entry.last_used_submission) || entry.lru_tick >= oldest) {
+        continue;
+      }
+      oldest       = entry.lru_tick;
+      victim_index = index;
+    }
+    if (victim_index == lut_cache_.size()) {
+      break;
+    }
+    lut_cache_bytes_ -= lut_cache_[victim_index].bytes;
+    lut_cache_.erase(lut_cache_.begin() + static_cast<std::ptrdiff_t>(victim_index));
+  }
+}
+
+void OpenClBackend::ReleaseUnsubmittedResourceUses() noexcept {
+  for (auto& entry : lut_cache_) {
+    if (entry.last_used_submission > completed_submission_) {
+      entry.last_used_submission = 0;
+    }
+  }
+}
 
 void OpenClBackend::ResetCounters() {
   malloc_count_           = 0;

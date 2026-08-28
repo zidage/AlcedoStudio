@@ -2,7 +2,7 @@
 
 Date: 2026-08-27
 
-Status: O0–O1 complete; O2–O6 planned
+Status: O0–O2 complete; O3–O6 planned
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -724,6 +724,151 @@ OpenClStableGradeCreatesNoDummyLutOrStageParameterBuffer
 - 默认值不改变图结构；
 - fused、detail 和 LUT 失败直接失败；
 - DAG Grade 不引用 `OpenClFusedParams` 或 `OperatorParams`。
+
+##### Phase O2 completion record (2026-08-28)
+
+**Status:** complete — OpenCL Primary Grade now encodes the shared adjustment order through one
+workspace-backed DAG pass with fused pointwise, explicit detail, LUT, mix, and LLF-boundary stages.
+
+**Date:** 2026-08-28
+**Branch:** `feature/gpu-dag-opencl`
+**Commit:** working tree (uncommitted)
+
+**Primary success call chain:**
+
+```text
+Renderer<OpenClBackend>::Execute / PlanExecutor<OpenClBackend>::Execute
+  -> OpenClBackend::WarmUpPlan
+       -> opencl_dag_primary_grade / CL1.2 pointwise, detail, mix, and optional masked-mix kernels
+       -> long-lived OpenClBackend dummy LUT resource
+  -> BeginRender assigns the product-queue submission id
+  -> PassEncoder<OpenClBackend, PrimaryColorGrade>
+       -> ExecuteOpenClPrimaryGrade
+            -> shared GraphCompiler order and AdjustmentBehavior resolution
+            -> MakeGradeRuntimeParams -> ParameterArena slot/binding and dirty-range upload
+            -> compact Fused / Detail / LlfBarrier operations at the compiled order boundaries
+            -> NodeResultCache grade.primary:runtime.order command-offset upload on topology change
+            -> TexturePool / GraphImageCache leases for ping-pong and final RGBA32F images
+            -> primary_grade_pointwise_rgba32f or primary_grade_detail_rgba32f
+            -> explicit local-tone identity barrier until O3
+            -> primary_grade_mix_rgba32f or primary_grade_mix_masked_rgba32f
+  -> PlanExecutor records the primary-grade content key
+  -> existing DRT identity copy
+  -> EndRender marker + clFlush; Wait releases the product-queue events
+```
+
+**Primary failure call chain:**
+
+```text
+Unknown adjustment / unsupported DTO / missing graph image / invalid LUT cube /
+  command or parameter upload / program, kernel, argument, or OpenCL enqueue error
+  -> throw std::runtime_error with the operation and original resource/error context
+  -> BasicRenderDevice::CancelRender waits recorded work
+       -> ReleaseUnsubmittedResourceUses clears cancelled LUT busy markers
+       -> BasicRenderWorkspace discards unpublished image writes
+  -> PlanExecutor reports the error and publishes no new content key
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OpenClPrimaryGradePreservesCompiledAdjustmentOrder` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClPointwiseAdjustmentsUseOneDispatchPerLlfSegment` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClSingleSliderEditUploadsOnlyItsParameterRange` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClExposureEditRunsOnlyPrimaryGradeAndDrt` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClLutResourceIsReusedByContentKey` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClDetailPassesAcquireAllResourcesFromWorkspace` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClUnknownAdjustmentReturnsExplicitBackendError` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClStableGradeCreatesNoDummyLutOrStageParameterBuffer` | `GpuDagOpenClGradeTest` | PASS |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagOpenClGradeTest --target GpuDagOpenClWorkspaceTest --target GpuDagOpenClDevelopTest`
+- `ctest --test-dir build/debug -R "GpuDagOpenCl(Workspace|Develop|Grade)Test" --output-on-failure` → 31/31
+- `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagCudaPrimaryGradeTest`
+- `ctest --test-dir build/debug -R "GpuDagCudaPrimaryGradeTest" --output-on-failure` → 15/15
+
+Suite totals: 9/9 required O2 tests; 31/31 OpenCL O0–O2 tests; 15/15 CUDA Primary Grade
+regression tests.
+
+**Checklist / exit condition:** all O2 exit conditions met. OpenCL and CUDA/Metal use the shared
+adjustment behavior list, runtime parameter layout, compiled order, and ParameterArena slot model.
+Default values retain the existing graph shape. CAT02, Exposure, Contrast, White, Black, Curve,
+HLS, Saturation, Vibrance, Color Wheel, and LMT are traversed by the fused pointwise kernel;
+Clarity, Sharpen, Halation, and Film Grain have explicit workspace-backed detail passes. Shadows
+and Highlights form the explicit LLF boundary and are split into the surrounding fused segments.
+Command offsets stay in the node-result workspace and are uploaded only for a new or changed
+topology. LUT buffers are keyed by packed content and edge size, respect the shared byte budget,
+and do not evict resources used by an incomplete submission. After warm-up, stable grade edits
+create no buffer, image, program, or kernel; the slider test observes only the changed parameter
+range. The DAG Grade path contains no `OpenClFusedParams` or `OperatorParams` references.
+
+**LOC note (grill-code-review):** `opencl_primary_grade_pass.cpp` 510,
+`opencl_primary_grade_pass.hpp` 42, `primary_grade.cl` 275, `opencl_grade_test.cpp` 426,
+`opencl_backend.cpp` 897. No new production file crossed 1000 LOC.
+
+**Implemented:**
+
+- OpenCL Primary Grade encoder and `PassEncoder` specialization using the shared ExecutionPlan,
+  `AdjustmentBehavior`, `GradeAdjustmentParams`, `MakeGradeRuntimeParams`, ParameterArena, and
+  workspace image/value caches.
+- CL1.2 primary-grade compilation unit with one program and pointwise/detail/mix kernel variants;
+  fused pointwise operations preserve compiled order and avoid one program/kernel per adjustment.
+- Explicit detail-pass resource boundaries for Clarity, Sharpen, Halation, and Film Grain, plus
+  the LLF ordering barrier required by the compiled Shadows/Highlights stages.
+- Long-lived dummy LUT warm-up, content-key LUT reuse, byte-budget LRU eviction that preserves
+  busy resources, and cancellation cleanup for resources acquired by an unsubmitted encode.
+- Command-offset topology storage in `NodeResultCache`; slider changes patch only their bound
+  `GradeAdjustmentParams` range and do not compile a new plan.
+- Nine exact O2 behavior/regression tests and CMake registration for `GpuDagOpenClGradeTest`.
+
+**Deleted:** none of the old OpenCL product wrappers. They remain outside the DAG path until O6.
+
+**Program evidence:**
+
+- `opencl_dag_primary_grade` remains one registered manifest program with `-cl-std=CL1.2`.
+- `WarmUpPlan` builds only the Primary Grade kernels required by the compiled plan, including the
+  masked mix variant only when a compiled grade mask exists, and creates the dummy LUT once.
+- The stable edit test observes zero program builds and kernel creates after warm-up; missing or
+  invalid adjustment/LUT resources return explicit errors.
+
+**Resource evidence:**
+
+- ParameterArena owns one aligned grade parameter buffer; a single Exposure edit uploads its
+  complete bound field range and leaves the model clean after commit.
+- `grade.primary:runtime.order` is a workspace node buffer; the stable edit uploads zero command
+  bytes because its topology is unchanged, while a recreated command buffer forces a fresh upload.
+- Ping-pong images and detail intermediates come from `GraphImageCache` and `TexturePool`; the
+  detail test observes four detail passes with zero second-render texture/buffer/program/kernel
+  creation.
+- The backend-owned long-lived LUT store reuses the same resource for unchanged packed content,
+  uploads zero bytes on a hit, applies the byte budget, and skips busy entries during eviction.
+- All Primary Grade kernels enqueue on the product OpenCL queue; `EndRender` adds the final marker
+  and flush, and `Wait` releases retained events. The existing OpenCL workspace event regression
+  remains green.
+
+**Performance evidence:**
+
+- device/driver/OpenCL C/Windows/build: OpenCL GPU selected by `OpenClContext::Initialize`,
+  Windows MSVC `win_debug`, CL1.2 program build, OpenCL runtime execution on the configured GPU;
+  CUDA cross-target check also passed in the same build tree.
+- fixture and render request: direct 16×12 RGBA32F input for the O2 kernel/reference tests and
+  the existing OpenCL workspace/Develop fixtures; normal `Renderer<OpenClBackend>` execution for
+  the cache-boundary test.
+- cold: Primary Grade program/kernel warm-up and first workspace resource acquisition are explicit
+  and counted; the dummy LUT is created during warm-up instead of the encode path.
+- warm median: not measured by the O2 behavior suite; the stable render assertions are zero
+  resource/program/kernel creation after warm-up. Quantified warm median and p95 remain part of
+  the O6 performance gate.
+- warm p95: not measured by the O2 behavior suite; O6 owns the benchmark matrix and threshold.
+
+**Remaining work owned by the next named Phase:** O3 — replace the explicit local-tone identity
+barrier with the real LLF reference, pyramid, workspace-resource, and pixel-application path while
+preserving the O2 fused-before/after ordering. O4 owns production mask/feather evaluation and
+mix integration; O5 owns DRT, scope, device present, and product OpenCL switching; O6 owns old
+OpenCL pipeline deletion and the final performance acceptance matrix.
 
 ## 8. Phase O3 — LLF workspace 化
 

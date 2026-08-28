@@ -8,6 +8,7 @@
 
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -80,9 +81,9 @@ struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
-  static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&, MaskStore*) {
-    CopyOpenClGraphImage(device, plan.develop_output, plan.primary_grade_output);
+  static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& prepared, PipelineDocument& document, MaskStore*) {
+    (void)ExecuteOpenClPrimaryGrade(device, plan, prepared, document);
   }
 };
 

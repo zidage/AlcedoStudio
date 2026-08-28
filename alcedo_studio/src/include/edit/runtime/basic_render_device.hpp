@@ -58,9 +58,16 @@ class BasicRenderDevice {
     if (!workspace_.IsRendering()) {
       return;
     }
+    bool wait_succeeded = false;
     try {
       workspace_.Device().Wait(command_context_);
+      wait_succeeded = true;
     } catch (...) {
+    }
+    if (wait_succeeded) {
+      if constexpr (requires(Backend& backend) { backend.ReleaseUnsubmittedResourceUses(); }) {
+        workspace_.Device().ReleaseUnsubmittedResourceUses();
+      }
     }
     workspace_.CancelRender();
   }

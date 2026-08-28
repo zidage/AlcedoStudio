@@ -161,6 +161,7 @@ if(ALCEDO_OPENCL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
