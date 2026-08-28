@@ -417,7 +417,7 @@ OpenClCommandContextReleasesEveryRetainedEvent
 
 **Date:** 2026-08-27
 **Branch:** `feature/gpu-dag-opencl`
-**Commit:** `d02ec87d`
+**Commit:** `8da2d330`
 
 **Primary success call chain:**
 
