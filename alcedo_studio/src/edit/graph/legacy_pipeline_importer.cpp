@@ -132,6 +132,23 @@ void ApplyScalar(IOperatorModel* model, const nlohmann::json& value, const char*
   LoadJsonIfChanged(model, json);
 }
 
+
+void ApplyLegacyPercentScalar(IOperatorModel* model, const nlohmann::json& value,
+                              const char* new_key) {
+  if (model == nullptr) {
+    return;
+  }
+  float legacy_percent = 0.0f;
+  if (value.is_number()) {
+    legacy_percent = value.get<float>();
+  } else if (value.is_object() && value.contains(new_key) && value[new_key].is_number()) {
+    legacy_percent = value[new_key].get<float>();
+  } else {
+    return;
+  }
+  LoadJsonIfChanged(model,
+                    nlohmann::json{{new_key, std::clamp(legacy_percent / 100.0f, 0.0f, 1.0f)}});
+}
 void ApplyCrop(ImageGeometryModel& geometry, const LegacyOperator& op) {
   const auto crop = NestedOrSelf(op.params, "crop_rotate");
   if (!op.enable || (crop.contains("enabled") && crop["enabled"].is_boolean() && !crop["enabled"].get<bool>())) {
@@ -314,13 +331,13 @@ auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator
   if (const auto* grain = FindOp(operators, kLegacyFilmGrain)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::FilmGrain())) {
       const auto nested = NestedOrSelf(grain->params, "film_grain");
-      ApplyScalar(model, nested, "strength");
+      ApplyLegacyPercentScalar(model, nested, "strength");
     }
   }
   if (const auto* halo = FindOp(operators, kLegacyHalation)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Halation())) {
       const auto nested = NestedOrSelf(halo->params, "halation");
-      ApplyScalar(model, nested, "strength");
+      ApplyLegacyPercentScalar(model, nested, "strength");
     }
   }
   if (const auto* tint = FindOp(operators, kLegacyTint)) {

@@ -123,6 +123,29 @@ TEST(GpuDagModelGraph, LegacyImportFailsOnUnknownOperatorType) {
   EXPECT_FALSE(result.document.has_value());
 }
 
+TEST(GpuDagModelGraph, LegacyPercentStrengthMapsAcrossFullHalationAndFilmGrainRanges) {
+  auto json = MakeLegacyStageJson();
+  json["Output Transform"]["Output Transform"]["film_grain"] = {
+      {"type", 27},
+      {"enable", true},
+      {"params", {{"film_grain", {{"strength", 25.0}}}}}};
+  json["Output Transform"]["Output Transform"]["halation"] = {
+      {"type", 28},
+      {"enable", true},
+      {"params", {{"halation", {{"strength", 75.0}}}}}};
+
+  const auto result = LegacyPipelineImporter::Import(json);
+  ASSERT_TRUE(result.Ok()) << result.error;
+  const auto* grain = dynamic_cast<const FilmGrainModel*>(
+      result.document->PrimaryGrade()->FindAdjustmentByType(type_ids::FilmGrain()));
+  const auto* halo = dynamic_cast<const HalationModel*>(
+      result.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Halation()));
+  ASSERT_NE(grain, nullptr);
+  ASSERT_NE(halo, nullptr);
+  EXPECT_FLOAT_EQ(grain->Value(), 0.25f);
+  EXPECT_FLOAT_EQ(halo->Value(), 0.75f);
+}
+
 TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) {
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);

@@ -10,6 +10,12 @@ This file provides guidance to AI agents (Kimi, Claude, Codex, etc.) when workin
 
 Agents working in this repository must be decisive and implementation-driven. Do not respond to product or engineering direction with passive staged deferrals such as "first avoid this", "later maybe add this", "medium term", "long term", or similar framing that delays the requested capability after the user has made the product goal clear.
 
+## Branch naming
+
+Branch names must describe the feature, fix, refactor, or other engineering purpose of the work.
+Do not include `codex` in a branch name. Use a functional name such as
+`fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
+
 When the user names a concrete integration or capability, treat it as the target and work out the implementation path, constraints, tests, and risks directly. If there are real blockers, state them as concrete engineering facts and propose the closest viable implementation, not a soft retreat to a weaker product.
 
 ## No fallback unless the user explicitly allows it

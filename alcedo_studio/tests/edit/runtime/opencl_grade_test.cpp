@@ -47,6 +47,29 @@ struct Rgba {
   float a = 1.0f;
 };
 
+auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
+                           float center) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  [](std::byte* pointer) { delete[] pointer; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const float value = x == width / 2 && y == height / 2 ? center : surroundings;
+      const auto  index = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = value;
+      pixels[index + 1] = value;
+      pixels[index + 2] = value;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
 auto Download(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<Rgba> {
   auto* lease = device.Workspace().Images().Find(id);
   EXPECT_NE(lease, nullptr);
@@ -124,7 +147,7 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   return c;
 }
 
-auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pixel_index) -> Rgba {
+auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const auto  behavior = static_cast<AdjustmentBehavior>(p.behavior);
   const float value    = p.values[0];
   if (behavior == AdjustmentBehavior::Cat02WhiteBalance && value != 0.0f) {
@@ -153,15 +176,6 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     c.r += offset;
     c.g += offset;
     c.b += offset;
-  } else if (behavior == AdjustmentBehavior::Clarity) {
-    const float l = Luma(c);
-    float       weight =
-        1.0f - std::min(l / std::max(local_tone_mapping::kAcesccMiddleGray, 1.0e-4f), 1.0f);
-    weight           = 0.5f - std::fabs(weight - 0.5f);
-    const float gain = 1.0f + value * 0.01f * weight;
-    c.r *= gain;
-    c.g *= gain;
-    c.b *= gain;
   } else if (behavior == AdjustmentBehavior::Curve) {
     c.r = ApplyCurve(c.r, p);
     c.g = ApplyCurve(c.g, p);
@@ -190,21 +204,6 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
           p.values[9];
     c.b = std::copysign(std::pow(std::fabs(c.b + p.values[2] + p.values[3]), 1.0f / gamma_z), c.b) *
           p.values[10];
-  } else if (behavior == AdjustmentBehavior::Sharpen) {
-    const float l     = Luma(c);
-    const float scale = 1.0f + value * 0.0025f;
-    c.r               = l + (c.r - l) * scale;
-    c.g               = l + (c.g - l) * scale;
-    c.b               = l + (c.b - l) * scale;
-  } else if (behavior == AdjustmentBehavior::Halation) {
-    c.r += std::max(Luma(c) - 0.6f, 0.0f) * value * 0.15f;
-  } else if (behavior == AdjustmentBehavior::FilmGrain && value != 0.0f) {
-    std::uint32_t hash = pixel_index * 747796405u + 2891336453u;
-    hash               = (hash >> ((hash >> 28u) + 4u)) ^ hash;
-    const float noise  = (static_cast<float>(hash & 0xffffu) / 32767.5f - 1.0f) * value * 0.02f;
-    c.r += noise;
-    c.g += noise;
-    c.b += noise;
   }
   return c;
 }
@@ -595,6 +594,14 @@ class OpenClGradeFixture : public ::testing::Test {
     return *model;
   }
 
+  void UseNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
+                            float center) {
+    prepared_ =
+        RawInputLoader::FromDirectRgb(MakeNeighborhoodPlane(width, height, surroundings, center),
+                                      gpu_dag_test::FullSensor(width, height));
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+  }
+
   PreparedRawInput                    prepared_;
   PipelineDocument                    document_;
   ExecutionPlan                       plan_;
@@ -704,6 +711,97 @@ TEST_F(OpenClGradeFixture, OpenClDetailPassesAcquireAllResourcesFromWorkspace) {
   EXPECT_EQ(device_->Workspace().Device().ProgramBuildCount(), 0U);
 }
 
+TEST_F(OpenClGradeFixture, OpenClSharpenUsesSurroundingPixelsForUnsharpMask) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
+  auto& sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
+  sharpen.SetAmount(100.0f);
+  sharpen.SetRadius(3.0f);
+  sharpen.SetThreshold(0.0f);
+
+  const auto  result         = RenderGrade();
+  const auto& input          = last_develop_pixels_;
+  const auto& output         = last_output_pixels_;
+  const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
+  const auto  neighbor_index = center - 1;
+  const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 2;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.detail_pass_count, 1U);
+  EXPECT_GT(output[center].r, input[center].r);
+  EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(OpenClGradeFixture, OpenClClarityUsesLargeRadiusLocalContrast) {
+  constexpr std::uint32_t width  = 96;
+  constexpr std::uint32_t height = 96;
+  UseNeighborhoodPlane(width, height, 0.22f, 0.48f);
+  ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(80.0f);
+
+  const auto  result         = RenderGrade();
+  const auto& input          = last_develop_pixels_;
+  const auto& output         = last_output_pixels_;
+  const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
+  const auto  neighbor_index = center - 1;
+  const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 1;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.detail_pass_count, 1U);
+  EXPECT_GT(output[center].r, input[center].r);
+  EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(OpenClGradeFixture, OpenClHalationSpreadsRedLightIntoDarkNeighbors) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.02f, 1.0f);
+  ModelByType<HalationModel>(type_ids::Halation()).SetValue(1.0f);
+
+  const auto  result         = RenderGrade();
+  const auto& input          = last_develop_pixels_;
+  const auto& output         = last_output_pixels_;
+  const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
+  const auto  neighbor_index = center - 1;
+  const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 2;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.detail_pass_count, 1U);
+  const float red_spill   = output[neighbor_index].r - input[neighbor_index].r;
+  const float green_spill = output[neighbor_index].g - input[neighbor_index].g;
+  EXPECT_GT(red_spill, 1.0e-4f);
+  EXPECT_GT(red_spill, green_spill * 5.0f);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVariation) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+
+  grain.SetValue(0.25f);
+  (void)RenderGrade();
+  const auto low   = last_output_pixels_;
+  const auto input = last_develop_pixels_;
+  grain.SetValue(0.75f);
+  (void)RenderGrade();
+  const auto high = last_output_pixels_;
+  (void)RenderGrade();
+  const auto high_again = last_output_pixels_;
+  ASSERT_EQ(input.size(), high.size());
+
+  double low_energy  = 0.0;
+  double high_energy = 0.0;
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    low_energy += std::pow(static_cast<double>(low[index].r - input[index].r), 2.0);
+    high_energy += std::pow(static_cast<double>(high[index].r - input[index].r), 2.0);
+    EXPECT_FLOAT_EQ(high[index].r, high_again[index].r);
+    EXPECT_FLOAT_EQ(high[index].g, high_again[index].g);
+    EXPECT_FLOAT_EQ(high[index].b, high_again[index].b);
+  }
+  EXPECT_GT(high_energy, low_energy * 6.0);
+}
+
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance) {
   ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperatureOffset(120.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
@@ -736,7 +834,7 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
   for (std::size_t i = 0; i < input.size(); ++i) {
     Rgba cpu = input[i];
     for (const auto& p : params) {
-      cpu = CpuApplyAdjustment(cpu, p, static_cast<std::uint32_t>(i));
+      cpu = CpuApplyAdjustment(cpu, p);
     }
     max_err = std::max(max_err, std::fabs(cpu.r - output[i].r));
     max_err = std::max(max_err, std::fabs(cpu.g - output[i].g));

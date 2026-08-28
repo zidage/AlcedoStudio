@@ -27,7 +27,9 @@ void RegisterOpenClGpuDagPrograms() {
                 },
                 OpenClProgramDescriptor{
                     .name                = OpenCL::GpuDag::kPrimaryGradeProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL},
+                    .source_paths        = {ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL,
+                                            ALCEDO_OPENCL_PRNG_CL,
+                                            ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL},
                     .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },

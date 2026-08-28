@@ -747,7 +747,10 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
   }
   if (plan.Contains(GpuPassKind::PrimaryColorGrade)) {
     add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradePointwiseKernelName);
-    add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeDetailKernelName);
+    add(OpenCL::GpuDag::kPrimaryGradeProgramName,
+        OpenCL::GpuDag::kPrimaryGradeNeighborBlurKernelName);
+    add(OpenCL::GpuDag::kPrimaryGradeProgramName,
+        OpenCL::GpuDag::kPrimaryGradeNeighborApplyKernelName);
     add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeMixKernelName);
     if (plan.primary_grade_mask.has_value()) {
       add(OpenCL::GpuDag::kPrimaryGradeProgramName,

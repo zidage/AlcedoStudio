@@ -53,6 +53,7 @@ enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
 struct GradeOp {
   GradeOpKind                kind = GradeOpKind::Fused;
   std::vector<std::uint32_t> offsets;
+  GradeNeighborParams        neighbor{};
 };
 
 auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
@@ -80,16 +81,29 @@ auto EnsureBuffer(OpenClRenderWorkspace& workspace, const GraphValueId& id, std:
 }
 
 void DispatchKernel(OpenClRenderDevice& device, cl_kernel kernel, std::uint32_t width,
-                    std::uint32_t height) {
-  const std::size_t local[2]  = {16, 16};
-  const std::size_t global[2] = {((static_cast<std::size_t>(width) + 15) / 16) * 16,
-                                 ((static_cast<std::size_t>(height) + 15) / 16) * 16};
-  cl_event          event     = nullptr;
+                    std::uint32_t height, std::size_t local_edge = 16) {
+  const std::size_t local[2]  = {local_edge, local_edge};
+  const std::size_t global[2] = {
+      ((static_cast<std::size_t>(width) + local_edge - 1) / local_edge) * local_edge,
+      ((static_cast<std::size_t>(height) + local_edge - 1) / local_edge) * local_edge};
+  cl_event event = nullptr;
   CheckOpenCl(clEnqueueNDRangeKernel(device.Workspace().Device().NativeQueue(), kernel, 2, nullptr,
                                      global, local, 0, nullptr, &event),
               "OpenCL Primary Grade enqueue");
   NoteOpenClEnqueueNdRange();
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
+}
+
+auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
+  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
+  if (behavior == AdjustmentBehavior::Halation) {
+    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
+                      kGradeNeighborMaxTapCount - 1U);
+  }
+  if (behavior == AdjustmentBehavior::FilmGrain) {
+    return 3U;
+  }
+  return params.radius;
 }
 
 void SetImageKernelArgs(cl_kernel kernel, cl_mem src, cl_mem dst) {
@@ -103,9 +117,8 @@ void DispatchPointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2
                        OpenClBackend::Texture2D& dst, const OpenClBackend::Buffer& params,
                        const OpenClBackend::Buffer& commands, std::uint32_t command_offset,
                        std::uint32_t command_count, const OpenClLutBinding& lut,
-                       std::uint32_t width, std::uint32_t height, bool detail) {
-  const auto kernel_name = detail ? OpenCL::GpuDag::kPrimaryGradeDetailKernelName
-                                  : OpenCL::GpuDag::kPrimaryGradePointwiseKernelName;
+                       std::uint32_t width, std::uint32_t height) {
+  const auto kernel_name = OpenCL::GpuDag::kPrimaryGradePointwiseKernelName;
   auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kPrimaryGradeProgramName,
                                                         kernel_name);
   SetImageKernelArgs(kernel, src.Native(), dst.Native());
@@ -133,6 +146,44 @@ void DispatchPointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2
   CheckOpenCl(clSetKernelArg(kernel, 5, sizeof(cl_mem), &lut_mem),
               "OpenCL Primary Grade LUT argument");
   DispatchKernel(device, kernel, width, height);
+}
+
+void DispatchNeighbor(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
+                      OpenClBackend::Texture2D& blur_horizontal, OpenClBackend::Texture2D& dst,
+                      const GradeNeighborParams& params, std::uint32_t width,
+                      std::uint32_t height) {
+  auto blur_kernel =
+      OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kPrimaryGradeProgramName,
+                                              OpenCL::GpuDag::kPrimaryGradeNeighborBlurKernelName);
+  auto apply_kernel =
+      OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kPrimaryGradeProgramName,
+                                              OpenCL::GpuDag::kPrimaryGradeNeighborApplyKernelName);
+
+  const auto src_mem  = src.Native();
+  const auto blur_mem = blur_horizontal.Native();
+  const auto dst_mem  = dst.Native();
+  CheckOpenCl(clSetKernelArg(blur_kernel, 0, sizeof(cl_mem), &src_mem),
+              "OpenCL Primary Grade neighbor source argument");
+  CheckOpenCl(clSetKernelArg(blur_kernel, 1, sizeof(cl_mem), &blur_mem),
+              "OpenCL Primary Grade neighbor blur argument");
+  CheckOpenCl(clSetKernelArg(blur_kernel, 2, sizeof(params), &params),
+              "OpenCL Primary Grade neighbor parameters");
+  constexpr std::size_t kLocalEdge = 8;
+  DispatchKernel(device, blur_kernel, width, height, kLocalEdge);
+
+  CheckOpenCl(clSetKernelArg(apply_kernel, 0, sizeof(cl_mem), &src_mem),
+              "OpenCL Primary Grade neighbor apply source argument");
+  CheckOpenCl(clSetKernelArg(apply_kernel, 1, sizeof(cl_mem), &blur_mem),
+              "OpenCL Primary Grade neighbor apply blur argument");
+  CheckOpenCl(clSetKernelArg(apply_kernel, 2, sizeof(cl_mem), &dst_mem),
+              "OpenCL Primary Grade neighbor apply destination argument");
+  CheckOpenCl(clSetKernelArg(apply_kernel, 3, sizeof(params), &params),
+              "OpenCL Primary Grade neighbor apply parameters");
+  const auto radius      = NeighborVerticalRadius(params);
+  const auto local_bytes = kLocalEdge * (kLocalEdge + 2U * radius) * 4U * sizeof(float);
+  CheckOpenCl(clSetKernelArg(apply_kernel, 4, local_bytes, nullptr),
+              "OpenCL Primary Grade neighbor local tile argument");
+  DispatchKernel(device, apply_kernel, width, height, kLocalEdge);
 }
 
 void DispatchMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
@@ -261,7 +312,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
 
   auto                        FlushFused = [&]() -> GradeOp* {
     if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}});
+      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
     }
     return &ops.back();
   };
@@ -312,15 +363,16 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
         highlights_slider = runtime_params.values[0];
       }
       if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
-        ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}});
+        ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});
       }
       continue;
     }
 
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
         IsNeighborhoodBehavior(*behavior)) {
-      if (runtime_params.values[0] != 0.0f) {
-        ops.push_back(GradeOp{GradeOpKind::Detail, {arena.Binding(key).offset}});
+      auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
+      if (neighbor.enabled != 0U) {
+        ops.push_back(GradeOp{GradeOpKind::Detail, {}, neighbor});
       }
       continue;
     }
@@ -334,7 +386,6 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
       shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
       -highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f);
   ops           = CompactOps(std::move(ops), local_tone_active);
-
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
   for (auto& patch : pending) {
@@ -451,9 +502,15 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const auto& op = ops[index];
     AllocateDest();
-    auto& src  = Resolve(current_slot, current_scratch);
-    auto& dest = Resolve(dest_slot, dest_scratch);
-    if (op.kind == GradeOpKind::LlfBarrier) {
+    if (op.kind == GradeOpKind::Detail) {
+      auto  blur_horizontal = AcquireScratch(workspace, width, height);
+      auto& src             = Resolve(current_slot, current_scratch);
+      auto& dest            = Resolve(dest_slot, dest_scratch);
+      DispatchNeighbor(device, src, blur_horizontal.Texture(), dest, op.neighbor, width, height);
+      ++result.detail_pass_count;
+    } else if (op.kind == GradeOpKind::LlfBarrier) {
+      auto&      src  = Resolve(current_slot, current_scratch);
+      auto&      dest = Resolve(dest_slot, dest_scratch);
       const auto local_tone =
           ExecuteOpenClLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
                                  plan.geometry, HashLlfSourceKey(plan, prepared, document),
@@ -463,21 +520,16 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
       result.local_tone_sampled_canonical_reference = local_tone.sampled_canonical_reference;
       result.local_tone_transient_bytes             = local_tone.transient_bytes;
       ++result.local_tone_pass_count;
-    } else if (op.kind == GradeOpKind::Fused) {
+    } else {
       if (commands_buffer == nullptr) {
         throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
       }
+      auto& src  = Resolve(current_slot, current_scratch);
+      auto& dest = Resolve(dest_slot, dest_scratch);
       DispatchPointwise(device, src, dest, arena.DeviceBuffer(), *commands_buffer,
                         command_starts[index], static_cast<std::uint32_t>(op.offsets.size()), lut,
-                        width, height, false);
+                        width, height);
       ++result.pointwise_dispatch_count;
-    } else {
-      if (commands_buffer == nullptr) {
-        throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing detail command buffer");
-      }
-      DispatchPointwise(device, src, dest, arena.DeviceBuffer(), *commands_buffer,
-                        command_starts[index], 1, lut, width, height, true);
-      ++result.detail_pass_count;
     }
     current_slot    = dest_slot;
     current_scratch = dest_scratch;

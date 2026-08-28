@@ -5,9 +5,12 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
@@ -21,7 +24,62 @@
 namespace alcedo {
 namespace {
 
-constexpr std::size_t kMaxCurvePoints = 8;
+constexpr std::size_t   kMaxCurvePoints        = 8;
+constexpr float         kHalationSigma         = 7.0f;
+constexpr float         kHalationStrengthScale = 2.0f;
+constexpr float         kHalationRedshift[3]   = {1.0f, 0.05f, 0.02f};
+constexpr std::uint64_t kFilmGrainSeed         = 0x6a09e667f3bcc909ULL;
+
+void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborParams& result) {
+  if (!(sigma > 0.0f)) {
+    return;
+  }
+  const float safe_sigma = std::max(sigma, 1.0e-4f);
+  result.radius =
+      std::clamp<std::uint32_t>(static_cast<std::uint32_t>(std::ceil(3.0f * safe_sigma)), 1U,
+                                std::min(max_radius, kGradeNeighborMaxTapCount - 1U));
+  result.tap_count = result.radius + 1U;
+
+  const double inv_two_sigma_squared =
+      0.5 / (static_cast<double>(safe_sigma) * static_cast<double>(safe_sigma));
+  double full_weight = 1.0;
+  result.weights[0]  = 1.0f;
+  for (std::uint32_t tap = 1; tap <= result.radius; ++tap) {
+    const auto   distance = static_cast<double>(tap);
+    const double weight   = std::exp(-(distance * distance) * inv_two_sigma_squared);
+    result.weights[tap]   = static_cast<float>(weight);
+    full_weight += 2.0 * weight;
+  }
+  for (std::uint32_t tap = 0; tap <= result.radius; ++tap) {
+    result.weights[tap] =
+        static_cast<float>(static_cast<double>(result.weights[tap]) / full_weight);
+  }
+}
+
+auto RenderAxisScale(const ResolvedRenderGeometry& geometry, bool horizontal) -> float {
+  const auto& matrix                            = geometry.render_to_reference.m;
+  const float dx                                = horizontal ? matrix[0] : matrix[1];
+  const float dy                                = horizontal ? matrix[3] : matrix[4];
+  const float reference_pixels_per_render_pixel = std::hypot(dx, dy);
+  if (!(reference_pixels_per_render_pixel > 0.0f) ||
+      !std::isfinite(reference_pixels_per_render_pixel)) {
+    return 1.0f;
+  }
+  return std::clamp(1.0f / reference_pixels_per_render_pixel, 1.0e-4f, 1.0f);
+}
+
+void CopyRenderMapping(const ResolvedRenderGeometry& geometry, GradeNeighborParams& result) {
+  const auto& matrix               = geometry.render_to_reference.m;
+  result.render_to_reference[0]    = matrix[0];
+  result.render_to_reference[1]    = matrix[1];
+  result.render_to_reference[2]    = matrix[2];
+  result.render_to_reference[3]    = matrix[3];
+  result.render_to_reference[4]    = matrix[4];
+  result.render_to_reference[5]    = matrix[5];
+  result.use_reference_coordinates = CoversFullEditSpace(geometry) ? 1U : 0U;
+  result.reference_width  = static_cast<std::int32_t>(geometry.full_reference_extent.width);
+  result.reference_height = static_cast<std::int32_t>(geometry.full_reference_extent.height);
+}
 
 }  // namespace
 
@@ -117,6 +175,57 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
     return result;
   }
   throw std::runtime_error("Primary grade: Model DTO is not supported");
+}
+
+auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,
+                             const ResolvedRenderGeometry& geometry) -> GradeNeighborParams {
+  if (!IsNeighborhoodBehavior(behavior)) {
+    throw std::runtime_error("Primary grade: adjustment is not a neighborhood operator");
+  }
+
+  GradeNeighborParams result;
+  result.behavior = static_cast<std::uint32_t>(behavior);
+  CopyRenderMapping(geometry, result);
+  const auto dto = model.MakeFullDto();
+
+  if (behavior == AdjustmentBehavior::Sharpen) {
+    const auto* sharpen = PayloadAs<SharpenPayload>(dto.payload.get());
+    if (sharpen == nullptr) {
+      throw std::runtime_error("Primary grade: Sharpen payload is invalid");
+    }
+    result.amount    = std::clamp(sharpen->amount / 100.0f, 0.0f, 1.0f);
+    result.threshold = std::clamp(sharpen->threshold, 0.0f, 1.0f);
+    result.enabled   = result.amount > 0.0f ? 1U : 0U;
+    BuildGaussianWeights(sharpen->radius, 15U, result);
+    return result;
+  }
+
+  const auto* scalar = PayloadAs<ScalarFloatPayload>(dto.payload.get());
+  if (scalar == nullptr) {
+    throw std::runtime_error("Primary grade: neighborhood scalar payload is invalid");
+  }
+
+  if (behavior == AdjustmentBehavior::Clarity) {
+    result.amount  = std::clamp(scalar->value / 100.0f, -1.0f, 1.0f);
+    result.enabled = result.amount != 0.0f ? 1U : 0U;
+    BuildGaussianWeights(15.0f, 60U, result);
+    return result;
+  }
+
+  if (behavior == AdjustmentBehavior::Halation) {
+    result.amount  = std::clamp(scalar->value, 0.0f, 1.0f) * kHalationStrengthScale;
+    result.enabled = result.amount > 0.0f ? 1U : 0U;
+    result.sigma_x = kHalationSigma * RenderAxisScale(geometry, true);
+    result.sigma_y = kHalationSigma * RenderAxisScale(geometry, false);
+    std::copy_n(kHalationRedshift, 3, result.redshift);
+    return result;
+  }
+
+  result.amount  = std::clamp(scalar->value, 0.0f, 1.0f) / 3.0f;
+  result.enabled = result.amount > 0.0f ? 1U : 0U;
+  result.seed_lo = static_cast<std::uint32_t>(kFilmGrainSeed & 0xffffffffULL);
+  result.seed_hi = static_cast<std::uint32_t>((kFilmGrainSeed >> 32U) & 0xffffffffULL);
+  return result;
 }
 
 }  // namespace alcedo
