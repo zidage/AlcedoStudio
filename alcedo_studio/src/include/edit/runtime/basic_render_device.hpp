@@ -51,6 +51,13 @@ class BasicRenderDevice {
   void               EndRender() { workspace_.EndRender(command_context_); }
   void               WaitIdle() { workspace_.Device().Wait(command_context_); }
 
+  /** @brief Release backend-owned neural activation workspace after GPU completion. */
+  void ReleaseNeuralDemosaicWorkspace() {
+    if constexpr (requires(Backend& backend) { backend.ReleaseNeuralDemosaicWorkspace(); }) {
+      workspace_.Device().ReleaseNeuralDemosaicWorkspace();
+    }
+  }
+
   /**
    * @brief Drop unpublished writes for a failed encode. Does not publish results.
    */

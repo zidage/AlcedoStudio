@@ -61,6 +61,9 @@ auto CreateOpenClBuffer(size_t byte_size) -> cl_mem {
 
 struct ScopeSlot {
   std::shared_ptr<scope::opencl_detail::OpenClLinearImageResource> input_image     = {};
+  std::shared_ptr<scope::opencl_detail::OpenClImageResource>       input_image_2d  = {};
+  std::shared_ptr<scope::opencl_detail::OpenClEventSignalResource> input_ready     = {};
+  std::shared_ptr<scope::opencl_detail::OpenClEventSignalResource> completion      = {};
   std::shared_ptr<scope::opencl_detail::OpenClBufferResource>      histogram       = {};
   std::shared_ptr<scope::opencl_detail::OpenClLinearImageResource> waveform        = {};
   int                                                              input_width     = 0;
@@ -75,6 +78,9 @@ struct ScopeSlot {
 
   void                                                             ResetResources() {
     input_image.reset();
+    input_image_2d.reset();
+    input_ready.reset();
+    completion.reset();
     histogram.reset();
     waveform.reset();
     input_width     = 0;
@@ -110,16 +116,38 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
       }
     }
 
+    const bool use_image_input = frame.image.resource_type == FrameWriteTargetType::OpenClImage;
     auto input_image = std::shared_ptr<scope::opencl_detail::OpenClLinearImageResource>(
         frame.image.resource,
         static_cast<scope::opencl_detail::OpenClLinearImageResource*>(frame.image.resource.get()));
-    if (!input_image || input_image->buffer == nullptr ||
-        frame.format != FramePixelFormat::RGBA32F) {
+    auto input_image_2d = std::shared_ptr<scope::opencl_detail::OpenClImageResource>(
+        frame.image.resource,
+        static_cast<scope::opencl_detail::OpenClImageResource*>(frame.image.resource.get()));
+    if (frame.format != FramePixelFormat::RGBA32F || frame.image.format != FramePixelFormat::RGBA32F) {
+      return;
+    }
+    if (use_image_input) {
+      if (!input_image_2d || input_image_2d->image == nullptr) {
+        return;
+      }
+    } else if (!input_image || input_image->buffer == nullptr) {
       return;
     }
 
-    const int frame_width  = ClampPositive(frame.width, input_image->width);
-    const int frame_height = ClampPositive(frame.height, input_image->height);
+    auto input_ready = std::shared_ptr<scope::opencl_detail::OpenClEventSignalResource>(
+        frame.ready_signal.resource,
+        static_cast<scope::opencl_detail::OpenClEventSignalResource*>(
+            frame.ready_signal.resource.get()));
+    if (use_image_input &&
+        (frame.ready_signal.backend != GpuBackend::OpenCL || !input_ready ||
+         input_ready->event == nullptr)) {
+      return;
+    }
+
+    const int source_width  = use_image_input ? input_image_2d->width : input_image->width;
+    const int source_height = use_image_input ? input_image_2d->height : input_image->height;
+    const int frame_width   = ClampPositive(frame.width, source_width);
+    const int frame_height  = ClampPositive(frame.height, source_height);
     if (frame_width <= 0 || frame_height <= 0) {
       return;
     }
@@ -131,29 +159,38 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     }
 
     EnsureKernels();
-    EnsureSlotStorage(*slot, frame_width, frame_height, request);
+    EnsureSlotStorage(*slot, frame_width, frame_height, request, use_image_input);
+    slot->input_image_2d = use_image_input ? std::move(input_image_2d) : nullptr;
+    slot->input_ready    = std::move(input_ready);
     slot->image_identity     = frame.image_identity;
     slot->session_epoch   = frame.session_epoch;
     slot->display_generation = frame.display_generation;
 
     auto&        context   = OpenClContext::Instance();
-    const size_t src_bytes = static_cast<size_t>(frame_height) * input_image->row_bytes;
-    const size_t dst_bytes = static_cast<size_t>(slot->input_height) * slot->input_image->row_bytes;
-    CheckOpenCl(clEnqueueCopyBuffer(context.Queue(), input_image->buffer, slot->input_image->buffer,
-                                    0, 0, std::min(src_bytes, dst_bytes), 0, nullptr, nullptr),
-                "clEnqueueCopyBuffer(input)");
+    const cl_uint wait_count =
+        slot->input_ready && slot->input_ready->event != nullptr ? 1U : 0U;
+    const cl_event* wait_list = wait_count == 0U ? nullptr : &slot->input_ready->event;
+    if (!use_image_input) {
+      const size_t src_bytes = static_cast<size_t>(frame_height) * input_image->row_bytes;
+      const size_t dst_bytes = static_cast<size_t>(slot->input_height) * slot->input_image->row_bytes;
+      CheckOpenCl(clEnqueueCopyBuffer(context.ProductQueue(), input_image->buffer,
+                                      slot->input_image->buffer, 0, 0,
+                                      std::min(src_bytes, dst_bytes), wait_count, wait_list, nullptr),
+                  "clEnqueueCopyBuffer(input)");
+    }
 
     const uint32_t zero = 0U;
     if (slot->histogram && histogram_enabled) {
-      CheckOpenCl(clEnqueueFillBuffer(context.Queue(), slot->histogram->buffer, &zero, sizeof(zero),
-                                      0, slot->histogram->size_bytes, 0, nullptr, nullptr),
+      CheckOpenCl(clEnqueueFillBuffer(context.ProductQueue(), slot->histogram->buffer, &zero,
+                                      sizeof(zero), 0, slot->histogram->size_bytes, wait_count,
+                                      wait_list, nullptr),
                   "clEnqueueFillBuffer(histogram)");
     }
     if (slot->waveform && waveform_enabled) {
       CheckOpenCl(clEnqueueFillBuffer(
-                      context.Queue(), slot->waveform->buffer, &zero, sizeof(zero), 0,
-                      static_cast<size_t>(slot->waveform_height) * slot->waveform->row_bytes, 0,
-                      nullptr, nullptr),
+                      context.ProductQueue(), slot->waveform->buffer, &zero, sizeof(zero), 0,
+                      static_cast<size_t>(slot->waveform_height) * slot->waveform->row_bytes,
+                      wait_count, wait_list, nullptr),
                   "clEnqueueFillBuffer(waveform)");
     }
 
@@ -170,7 +207,11 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
       EnqueueWaveformKernel(*slot, frame_width, frame_height, sample_step, global_size);
     }
 
-    CheckOpenCl(clFinish(context.Queue()), "clFinish");
+    cl_event completion_event = nullptr;
+    CheckOpenCl(clEnqueueMarkerWithWaitList(context.ProductQueue(), 0, nullptr, &completion_event),
+                "clEnqueueMarkerWithWaitList(scope completion)");
+    slot->completion = std::make_shared<scope::opencl_detail::OpenClEventSignalResource>();
+    slot->completion->event = completion_event;
     slot->generation  = next_generation_++;
     last_submit_time_ = now;
   }
@@ -226,7 +267,7 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
   void ResizeResources(const ScopeRequest&) override {
     std::lock_guard<std::mutex> lock(mutex_);
     if (OpenClContext::Instance().IsInitialized()) {
-      clFinish(OpenClContext::Instance().Queue());
+      clFinish(OpenClContext::Instance().ProductQueue());
     }
     for (auto& slot : slots_) {
       slot.ResetResources();
@@ -236,7 +277,7 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
   void ReleaseResources() override {
     std::lock_guard<std::mutex> lock(mutex_);
     if (OpenClContext::Instance().IsInitialized()) {
-      clFinish(OpenClContext::Instance().Queue());
+      clFinish(OpenClContext::Instance().ProductQueue());
     }
     for (auto& slot : slots_) {
       slot.ResetResources();
@@ -249,24 +290,46 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
       clReleaseKernel(waveform_kernel_);
       waveform_kernel_ = nullptr;
     }
+    if (histogram_image_kernel_ != nullptr) {
+      clReleaseKernel(histogram_image_kernel_);
+      histogram_image_kernel_ = nullptr;
+    }
+    if (waveform_image_kernel_ != nullptr) {
+      clReleaseKernel(waveform_image_kernel_);
+      waveform_image_kernel_ = nullptr;
+    }
   }
 
  private:
+  auto CompletionFinished(ScopeSlot& slot) -> bool {
+    if (!slot.completion || slot.completion->event == nullptr) {
+      return true;
+    }
+    cl_int status = CL_QUEUED;
+    if (clGetEventInfo(slot.completion->event, CL_EVENT_COMMAND_EXECUTION_STATUS,
+                       sizeof(status), &status, nullptr) != CL_SUCCESS) {
+      slot.completion.reset();
+      return true;
+    }
+    if (status > CL_COMPLETE) {
+      return false;
+    }
+    slot.completion.reset();
+    return true;
+  }
+
   auto AcquireAvailableSlot() -> ScopeSlot* {
-    ScopeSlot* reusable = nullptr;
     for (auto& slot : slots_) {
-      if (slot.generation == 0) {
+      if (slot.generation == 0 || CompletionFinished(slot)) {
         return &slot;
       }
-      if (reusable == nullptr || slot.generation < reusable->generation) {
-        reusable = &slot;
-      }
     }
-    return reusable;
+    return nullptr;
   }
 
   void EnsureKernels() {
-    if (histogram_kernel_ != nullptr && waveform_kernel_ != nullptr) {
+    if (histogram_kernel_ != nullptr && waveform_kernel_ != nullptr &&
+        histogram_image_kernel_ != nullptr && waveform_image_kernel_ != nullptr) {
       return;
     }
 
@@ -286,17 +349,31 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
       waveform_kernel_ = clCreateKernel(program, OpenCL::Scope::kWaveformKernelName, &error);
       CheckOpenCl(error, "clCreateKernel(waveform)");
     }
+    if (histogram_image_kernel_ == nullptr) {
+      cl_int error            = CL_SUCCESS;
+      histogram_image_kernel_ =
+          clCreateKernel(program, OpenCL::Scope::kHistogramImageKernelName, &error);
+      CheckOpenCl(error, "clCreateKernel(histogram image)");
+    }
+    if (waveform_image_kernel_ == nullptr) {
+      cl_int error           = CL_SUCCESS;
+      waveform_image_kernel_ =
+          clCreateKernel(program, OpenCL::Scope::kWaveformImageKernelName, &error);
+      CheckOpenCl(error, "clCreateKernel(waveform image)");
+    }
   }
 
   void EnsureSlotStorage(ScopeSlot& slot, int frame_width, int frame_height,
-                         const ScopeRequest& request) {
+                         const ScopeRequest& request, bool image_input) {
     const int    histogram_bins  = ClampPositive(request.histogram_bins, 256);
     const int    waveform_width  = ClampPositive(request.waveform_width, 384);
     const int    waveform_height = ClampPositive(request.waveform_height, 192);
 
     const size_t input_row_bytes = static_cast<size_t>(frame_width) * kRgba32fPixelBytes;
-    if (!slot.input_image || slot.input_width != frame_width || slot.input_height != frame_height ||
-        slot.input_image->row_bytes != input_row_bytes) {
+    if (image_input) {
+      slot.input_image.reset();
+    } else if (!slot.input_image || slot.input_width != frame_width ||
+               slot.input_height != frame_height || slot.input_image->row_bytes != input_row_bytes) {
       slot.input_image = std::make_shared<scope::opencl_detail::OpenClLinearImageResource>();
       slot.input_image->buffer =
           CreateOpenClBuffer(static_cast<size_t>(frame_height) * input_row_bytes);
@@ -305,9 +382,9 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
       slot.input_image->height      = frame_height;
       slot.input_image->format      = FramePixelFormat::RGBA32F;
       slot.input_image->owns_memory = true;
-      slot.input_width              = frame_width;
-      slot.input_height             = frame_height;
     }
+    slot.input_width  = frame_width;
+    slot.input_height = frame_height;
 
     if (HasScopeEnabled(request, ScopeType::Histogram)) {
       const size_t histogram_bytes = static_cast<size_t>(histogram_bins) * 3U * sizeof(uint32_t);
@@ -350,6 +427,10 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
 
   void EnqueueHistogramKernel(const ScopeSlot& slot, int frame_width, int frame_height,
                               int sample_step, const size_t global_size[2]) {
+    if (slot.input_image_2d) {
+      EnqueueHistogramImageKernel(slot, frame_width, frame_height, sample_step, global_size);
+      return;
+    }
     cl_int  error        = CL_SUCCESS;
     cl_uint arg_index    = 0;
     cl_mem  input_buffer = slot.input_image->buffer;
@@ -366,13 +447,45 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     error |= clSetKernelArg(histogram_kernel_, arg_index++, sizeof(cl_mem), &histogram_buffer);
     CheckOpenCl(error, "clSetKernelArg(histogram)");
 
-    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().Queue(), histogram_kernel_, 2,
-                                       nullptr, global_size, nullptr, 0, nullptr, nullptr),
+    const cl_uint wait_count =
+        slot.input_ready && slot.input_ready->event != nullptr ? 1U : 0U;
+    const cl_event* wait_list = wait_count == 0U ? nullptr : &slot.input_ready->event;
+    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().ProductQueue(), histogram_kernel_,
+                                       2, nullptr, global_size, nullptr, wait_count, wait_list,
+                                       nullptr),
                 "clEnqueueNDRangeKernel(histogram)");
+  }
+
+  void EnqueueHistogramImageKernel(const ScopeSlot& slot, int frame_width, int frame_height,
+                                   int sample_step, const size_t global_size[2]) {
+    cl_int error          = CL_SUCCESS;
+    cl_uint arg_index     = 0;
+    cl_mem  input_image   = slot.input_image_2d->image;
+    cl_mem  histogram     = slot.histogram->buffer;
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_mem), &input_image);
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_int), &frame_width);
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_int), &frame_height);
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_int), &sample_step);
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_int),
+                            &slot.histogram_bins);
+    error |= clSetKernelArg(histogram_image_kernel_, arg_index++, sizeof(cl_mem), &histogram);
+    CheckOpenCl(error, "clSetKernelArg(histogram image)");
+
+    const cl_uint wait_count =
+        slot.input_ready && slot.input_ready->event != nullptr ? 1U : 0U;
+    const cl_event* wait_list = wait_count == 0U ? nullptr : &slot.input_ready->event;
+    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().ProductQueue(),
+                                       histogram_image_kernel_, 2, nullptr, global_size, nullptr,
+                                       wait_count, wait_list, nullptr),
+                "clEnqueueNDRangeKernel(histogram image)");
   }
 
   void EnqueueWaveformKernel(const ScopeSlot& slot, int frame_width, int frame_height,
                              int sample_step, const size_t global_size[2]) {
+    if (slot.input_image_2d) {
+      EnqueueWaveformImageKernel(slot, frame_width, frame_height, sample_step, global_size);
+      return;
+    }
     cl_int  error        = CL_SUCCESS;
     cl_uint arg_index    = 0;
     cl_mem  input_buffer = slot.input_image->buffer;
@@ -393,14 +506,50 @@ class OpenClScopeAnalyzerImpl final : public IScopeAnalyzer {
     error |= clSetKernelArg(waveform_kernel_, arg_index++, sizeof(cl_int), &slot.waveform_height);
     CheckOpenCl(error, "clSetKernelArg(waveform)");
 
-    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().Queue(), waveform_kernel_, 2,
-                                       nullptr, global_size, nullptr, 0, nullptr, nullptr),
+    const cl_uint wait_count =
+        slot.input_ready && slot.input_ready->event != nullptr ? 1U : 0U;
+    const cl_event* wait_list = wait_count == 0U ? nullptr : &slot.input_ready->event;
+    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().ProductQueue(), waveform_kernel_,
+                                       2, nullptr, global_size, nullptr, wait_count, wait_list,
+                                       nullptr),
                 "clEnqueueNDRangeKernel(waveform)");
+  }
+
+  void EnqueueWaveformImageKernel(const ScopeSlot& slot, int frame_width, int frame_height,
+                                  int sample_step, const size_t global_size[2]) {
+    cl_int  error                  = CL_SUCCESS;
+    cl_uint arg_index              = 0;
+    cl_mem  input_image            = slot.input_image_2d->image;
+    cl_mem  waveform               = slot.waveform->buffer;
+    const cl_uint waveform_pitch_pixels =
+        static_cast<cl_uint>(slot.waveform->row_bytes / kRgba32uPixelBytes);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_mem), &input_image);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_int), &frame_width);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_int), &frame_height);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_int), &sample_step);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_mem), &waveform);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_uint),
+                            &waveform_pitch_pixels);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_int),
+                            &slot.waveform_width);
+    error |= clSetKernelArg(waveform_image_kernel_, arg_index++, sizeof(cl_int),
+                            &slot.waveform_height);
+    CheckOpenCl(error, "clSetKernelArg(waveform image)");
+
+    const cl_uint wait_count =
+        slot.input_ready && slot.input_ready->event != nullptr ? 1U : 0U;
+    const cl_event* wait_list = wait_count == 0U ? nullptr : &slot.input_ready->event;
+    CheckOpenCl(clEnqueueNDRangeKernel(OpenClContext::Instance().ProductQueue(),
+                                       waveform_image_kernel_, 2, nullptr, global_size, nullptr,
+                                       wait_count, wait_list, nullptr),
+                "clEnqueueNDRangeKernel(waveform image)");
   }
 
   std::array<ScopeSlot, kScopeSlotCount> slots_{};
   cl_kernel                              histogram_kernel_ = nullptr;
   cl_kernel                              waveform_kernel_  = nullptr;
+  cl_kernel                              histogram_image_kernel_ = nullptr;
+  cl_kernel                              waveform_image_kernel_  = nullptr;
   std::chrono::steady_clock::time_point  last_submit_time_{};
   uint64_t                               next_generation_ = 1;
   std::mutex                             mutex_{};

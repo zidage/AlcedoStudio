@@ -197,6 +197,10 @@ class OpenClBackend {
   void TrackKernelEvent(CommandContext& command_context, cl_event event);
 
   void Submit(CommandContext& command_context);
+  /** @brief Append and flush presentation work to the current product submission. */
+  void FinalizePresentation(CommandContext& command_context);
+  /** @brief Release backend-owned neural activation workspace after queue completion. */
+  void ReleaseNeuralDemosaicWorkspace();
   void Wait(CommandContext& command_context);
   /**
    * @brief Wait for commands already on the product queue. Used to free Develop scratch.

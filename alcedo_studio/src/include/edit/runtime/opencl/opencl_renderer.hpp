@@ -7,6 +7,7 @@
 #ifdef HAVE_OPENCL
 
 #include "edit/runtime/opencl/opencl_backend.hpp"
+#include "edit/runtime/opencl/opencl_frame_presenter.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/detail/renderer.inl.hpp"

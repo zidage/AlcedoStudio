@@ -401,9 +401,9 @@ void OpenClOpenGlLeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
   auto& target = *it;
   if (target->acquired && target->image) {
     cl_mem image = target->image;
-    (void)clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+    (void)clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
                                     nullptr);
-    (void)clFinish(OpenClContext::Instance().Queue());
+    (void)clFinish(OpenClContext::Instance().ProductQueue());
     target->acquired = false;
   }
   if (target->image) {
@@ -433,7 +433,8 @@ auto OpenClOpenGlLeaseAdapter::AcquireForProducerWrite(const WritableTargetLease
   }
   auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
   const cl_int error =
-      clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+      clEnqueueAcquireGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                nullptr);
   if (error != CL_SUCCESS) {
     last_error_ = "clEnqueueAcquireGLObjects failed: " + std::to_string(error);
     return false;
@@ -463,7 +464,8 @@ auto OpenClOpenGlLeaseAdapter::ReleaseAfterProducerWrite(const WritableTargetLea
   }
   auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
   const cl_int error =
-      clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+      clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                nullptr);
   if (error != CL_SUCCESS) {
     last_error_ = "clEnqueueReleaseGLObjects failed: " + std::to_string(error);
     return false;
@@ -487,7 +489,7 @@ auto OpenClOpenGlLeaseAdapter::WaitProducerWriteComplete(const WritableTargetLea
     -> bool {
 #if defined(HAVE_OPENCL)
   (void)lease;
-  const cl_int error = clFinish(OpenClContext::Instance().Queue());
+  const cl_int error = clFinish(OpenClContext::Instance().ProductQueue());
   if (error != CL_SUCCESS) {
     last_error_ = "clFinish failed after OpenCL producer write: " + std::to_string(error);
     return false;
@@ -522,7 +524,8 @@ auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool {
     }
     auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
     const cl_int error =
-        clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+        clEnqueueAcquireGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
+                                  nullptr);
     if (error != CL_SUCCESS) {
       qWarning("ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
                "(OpenCL/GL share group mismatch?)",
@@ -544,7 +547,7 @@ auto ProducerReleaseWritable(const WritableTargetLease& lease) -> bool {
       return false;
     }
     auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
-    return clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+    return clEnqueueReleaseGLObjects(OpenClContext::Instance().ProductQueue(), 1, &image, 0, nullptr,
                                      nullptr) == CL_SUCCESS;
 #else
     return false;
@@ -563,7 +566,7 @@ auto ProducerWaitWritableComplete(const WritableTargetLease& lease) -> bool {
   }
   if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
 #if defined(HAVE_OPENCL)
-    return clFinish(OpenClContext::Instance().Queue()) == CL_SUCCESS;
+    return clFinish(OpenClContext::Instance().ProductQueue()) == CL_SUCCESS;
 #else
     return false;
 #endif

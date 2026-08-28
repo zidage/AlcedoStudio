@@ -20,12 +20,12 @@
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 #include "edit/graph/pipeline_document.hpp"
 #endif
 
 namespace alcedo {
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 template <class Backend>
 class Renderer;
 #endif
@@ -38,6 +38,11 @@ using CudaProductRenderer = CudaRenderer;
 class MetalBackend;
 using MetalRenderer        = Renderer<MetalBackend>;
 using MetalProductRenderer = MetalRenderer;
+#endif
+#ifdef HAVE_OPENCL
+class OpenClBackend;
+using OpenClRenderer        = Renderer<OpenClBackend>;
+using OpenClProductRenderer = OpenClRenderer;
 #endif
 class CPUPipelineExecutor : public PipelineExecutor {
  private:
@@ -71,7 +76,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::unique_ptr<PipelineStage>      merged_stages_;
   IFrameSink*                         frame_sink_ = nullptr;
   FrameCompletionSubmission           bound_frame_submission_{};
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   std::shared_ptr<PipelineDocument> pipeline_document_;
   nlohmann::json                    gpu_dag_legacy_snapshot_;
   bool                              mirror_legacy_stage_adapter_ = false;
@@ -81,6 +86,9 @@ class CPUPipelineExecutor : public PipelineExecutor {
 #endif
 #ifdef HAVE_METAL
   std::shared_ptr<MetalRenderer> metal_product_renderer_;
+#endif
+#ifdef HAVE_OPENCL
+  std::shared_ptr<OpenClRenderer> opencl_product_renderer_;
 #endif
 
   void ResetStages();
@@ -231,6 +239,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
 #endif
 #ifdef HAVE_METAL
   [[nodiscard]] auto DebugMetalRenderer() -> MetalRenderer* { return metal_product_renderer_.get(); }
+#endif
+#ifdef HAVE_OPENCL
+  [[nodiscard]] auto DebugOpenClRenderer() -> OpenClRenderer* {
+    return opencl_product_renderer_.get();
+  }
 #endif
 };
 };  // namespace alcedo

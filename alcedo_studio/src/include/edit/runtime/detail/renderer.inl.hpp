@@ -105,6 +105,7 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
     render_device->Workspace().Images().DiscardUnpublished();
     render_device->WaitIdle();
     render_device->Workspace().ReleaseSessionResources();
+    render_device->ReleaseNeuralDemosaicWorkspace();
   };
 
   ViewerDisplayConfig display_config{};
@@ -132,7 +133,22 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
       release_one_shot_resources();
     }
   } catch (const std::exception& ex) {
-    render_device->Workspace().Images().DiscardUnpublished();
+    try {
+      if (render_device->Workspace().IsRendering()) {
+        render_device->CancelRender();
+      } else {
+        render_device->WaitIdle();
+      }
+      render_device->Workspace().Images().DiscardUnpublished();
+      if (!use_session_cache) {
+        render_device->WaitIdle();
+        render_device->Workspace().ReleaseSessionResources();
+        render_device->ReleaseNeuralDemosaicWorkspace();
+      }
+    } catch (...) {
+      // Preserve the original presentation/download error. The device destructor or
+      // session teardown still owns the last-resort wait and resource release.
+    }
     render_device->ReportError(ex.what());
     throw;
   }

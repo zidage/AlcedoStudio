@@ -1,8 +1,8 @@
 # GPU DAG OpenCL 移植逐 Phase 计划
 
-Date: 2026-08-27
+Date: 2026-08-28
 
-Status: O0–O4 complete; O5–O6 planned
+Status: O0–O5 complete; O6 planned
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -1272,6 +1272,89 @@ OpenClPresentRejectsAnIncompatibleSinkWithoutHostSubmission
 - explicit download 只由请求触发；
 - 产品入口不创建 `GPUPipelineWrapper` 或旧 `OpenCLGPUPipeline`；
 - 失败帧不发布内容 key 或通知成功。
+
+##### Phase O5 completion record (2026-08-28)
+
+Status: complete
+Date: 2026-08-28
+Branch: `feature/gpu-dag-opencl`
+Commit: `7523ae7a` base; O5 implementation remains uncommitted in the working tree.
+
+Implemented:
+
+- Added OpenCL DRT parameter resolution and the DAG DRT pass. ACES 2.0 and OpenDRT
+  consume ACEScc/AP1 input and write display-encoded RGBA32F workspace images.
+- Added `OpenClRenderer` presentation: product-queue image copy, final marker/event,
+  retained final image/event for the scope tap, and explicit download only for host-output
+  requests.
+- Added OpenCL image2d histogram/waveform kernels with event-aware three-slot scope
+  lifetime. OpenCL/GL lease acquire/release/finish now use `ProductQueue`.
+- Routed the Windows OpenCL selection through `Renderer<OpenClBackend>`, with one-shot and
+  session cleanup, Neural activation workspace release, and failure discard before publication.
+
+Primary call chains:
+
+- `EditPipeline::Apply` -> `ApplyGpuDagProduct(opencl_product_renderer_)` ->
+  `Renderer<OpenClBackend>::Render` -> `PlanExecutor` -> `ExecuteOpenClDrt` ->
+  `OpenClFramePresenter::Present` -> `OpenClBackend::FinalizePresentation`.
+- `OpenClFramePresenter::Present` -> `FinalDisplayFrameView` carrying the final OpenCL
+  image and event -> `OpenClScopeAnalyzer::SubmitFrame` -> image2d histogram/waveform.
+- `Renderer::Render` completion/failure -> final-event wait or discard -> session/one-shot
+  resource release -> Neural activation workspace release.
+
+Deleted:
+
+- No physical legacy files. The product entry no longer calls
+  `CreateOpenCLGPUPipeline`; the old implementation remains intentionally for O6.
+
+Tests:
+
+- command: `cmd /c scripts\msvc_env.cmd --build build\debug --target EditRuntimeOpenCl --parallel 4`
+- command: `cmd /c scripts\msvc_env.cmd --build build\debug --target EditPipeline --target GpuDagOpenClDrtProductTest --parallel 4`
+- command: `cmd /c scripts\msvc_env.cmd --build build\debug --target EditorRhiViewport --parallel 4`
+- command: `ctest --test-dir build\debug -R "GpuDagOpenClDrtProductTest" --output-on-failure`
+- result: 10/10 passed; ACES/OpenDRT CUDA parity, DRT-only dirty edit, zero present D2H,
+  final image/event scope identity, one-shot isolation, session cleanup, failure isolation,
+  three-node RAW graph, and incompatible sink.
+- command: `ctest --test-dir build\debug -R "GpuDagOpenCl(Workspace|Develop|Grade)Test" --output-on-failure`
+- result: 51/51 passed on the NVIDIA GeForce RTX 3080 Laptop GPU (driver 610.622, OpenCL C 1.2).
+
+Program evidence:
+
+- manifests/programs: DRT manifest includes fused parameter/common/CST/DRT sources; scope
+  manifest contains linear and image2d histogram/waveform kernels.
+- build/create/hit: DRT program and kernel compiled/created on the real OpenCL device;
+  repeated DRT render verified no new image/buffer allocations.
+- missing source/build/kernel errors: existing program-library installed-resource and
+  missing-kernel tests remain green; DRT runtime build errors use the shared diagnostic path.
+
+Resource evidence:
+
+- buffer create/release: DRT parameters use the shared `ParameterArena`; session/one-shot
+  teardown releases workspace images, transients, and parameter slots after `WaitIdle`.
+- image create/release: final workspace image and retained sink/scope image use shared
+  RAII/lease ownership; scope slots release only after the completion event.
+- event retain/release: presenter retains the final marker for the scope view; renderer
+  command context and scope resources release their own references after completion.
+- upload/download ranges and bytes: present and scope input consume device images; the
+  final O5 present test recorded `d2h_bytes == 0`; host download is explicit.
+- waits/flushes: product queue carries DAG, present, interop, and scope work; final marker
+  is flushed before publication; session return waits the final event.
+
+Performance evidence:
+
+- device/driver/OpenCL C/Windows/build: NVIDIA GeForce RTX 3080 Laptop GPU; driver 610.622;
+  OpenCL C 1.2; Windows/MSVC Debug build.
+- fixture and render request: 32x32 RGBA/RAW fixtures, `DecodeRes::FULL`, OpenCL DRT/product
+  test request.
+- cold: not measured in O5.
+- warm median: not measured in O5.
+- warm p95: not measured in O5.
+
+Remaining work owned by the next named Phase:
+
+- O6: physically remove the legacy OpenCL pipeline/factory and obsolete fused ABI/program
+  wiring, then record the cold/warm/p95 performance matrix and final resource counters.
 
 ## 11. Phase O6 — 旧 OpenCL 管线删除与性能验收
 

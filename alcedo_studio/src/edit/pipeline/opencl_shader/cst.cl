@@ -365,7 +365,8 @@ static inline float3 opencl_chroma_compress_fwd(float3 JMh, float tonemapped_J,
   return (float3)(tonemapped_J, M_compr, h);
 }
 
-static inline float3 opencl_tonemap_and_compress_fwd(float3 JMh, __global OpenClODTParams* p) {
+static inline float3 opencl_tonemap_and_compress_fwd(float3 JMh,
+                                                     __global const OpenClODTParams* p) {
   float linear = opencl_J_to_Y(JMh.x, &p->input_params_) / ALCEDO_OPENCL_REF_LUMINANCE;
   float tonemapped_Y = opencl_tonescale_fwd(linear, &p->ts_);
   float J_ts = opencl_Y_to_J(tonemapped_Y, &p->input_params_);
@@ -545,12 +546,12 @@ static inline float3 opencl_gamut_compress_fwd(float3 JMh, __global const OpenCl
   return opencl_compress_gamut(JMh, JMh.x, p, hdp);
 }
 
-static inline float3 opencl_clamp_ap1(float3 ap1, float lower, float upper) {
-  const float AP1_TO_AP0[9] = {
-      0.695452213f, 0.0447945632f, -0.00552588236f,
-      0.140678704f, 0.859671116f, 0.00402521016f,
-      0.163869068f, 0.0955343172f, 1.00150073f};
-  return opencl_mat3_mul_private(AP1_TO_AP0, clamp(ap1, (float3)(lower), (float3)(upper)));
+static inline float3 opencl_ap1_to_ap0(float3 ap1) {
+    const float AP1_TO_AP0[9] = {
+        0.695452213f, 0.0447945632f, -0.00552588236f,
+        0.140678704f, 0.859671116f, 0.00402521016f,
+        0.163869068f, 0.0955343172f, 1.00150073f};
+  return opencl_mat3_mul_private(AP1_TO_AP0, ap1);
 }
 
 static inline float3 opencl_limit_rgb_preserve_chroma(float3 rgb, float lower, float upper) {
@@ -562,12 +563,12 @@ static inline float3 opencl_limit_rgb_preserve_chroma(float3 rgb, float lower, f
 }
 
 static inline float3 opencl_aces_output_transform_fwd(float3 in_color,
-                                                      __global OpenClODTParams* p) {
+                                                      __global const OpenClODTParams* p) {
   if (!isfinite(in_color.x) || !isfinite(in_color.y) || !isfinite(in_color.z)) {
     return (float3)(0.0f);
   }
-  float3 ap0_clamped = opencl_clamp_ap1(in_color, 0.0f, p->ts_.forward_limit_);
-  float3 JMh = opencl_rgb_to_jmh(ap0_clamped, &p->input_params_);
+  float3 ap0 = opencl_ap1_to_ap0(in_color);
+  float3 JMh = opencl_rgb_to_jmh(ap0, &p->input_params_);
   float3 tonemapped_JMh = opencl_tonemap_and_compress_fwd(JMh, p);
   float3 compressed_JMh = opencl_gamut_compress_fwd(tonemapped_JMh, p);
   float3 out_rgb = opencl_jmh_to_rgb(compressed_JMh, &p->limit_params_);

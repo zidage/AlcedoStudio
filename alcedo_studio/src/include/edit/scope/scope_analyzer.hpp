@@ -32,6 +32,7 @@ struct SharedGpuImageHandle {
   int                   height    = 0;
   size_t                row_bytes = 0;
   FramePixelFormat      format    = FramePixelFormat::RGBA32F;
+  FrameWriteTargetType  resource_type = FrameWriteTargetType::LinearBuffer;
 
   explicit operator bool() const { return resource != nullptr && width > 0 && height > 0; }
 };

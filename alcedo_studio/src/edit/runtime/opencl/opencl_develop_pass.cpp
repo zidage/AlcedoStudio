@@ -77,6 +77,16 @@ struct OpenClNeuralSessionWorkspace {
   opencl::nn::DeviceBuffer       rgb_hwc;
   opencl::nn::DeviceBuffer       rgba;
   opencl::nn::DeviceBuffer       cfa_table;
+
+  void Reset() {
+    executor  = {};
+    slots     = {};
+    linear_cfa.Reset();
+    mosaic_hwc.Reset();
+    rgb_hwc.Reset();
+    rgba.Reset();
+    cfa_table.Reset();
+  }
 };
 
 auto NeuralWorkspace() -> OpenClNeuralSessionWorkspace& {
@@ -367,6 +377,8 @@ void EncodeNeural(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
 void SetOpenClDevelopNeuralModelCacheForTesting(OpenClDemosaicNetModelCache* cache) {
   g_opencl_neural_cache_for_test = cache;
 }
+
+void ReleaseOpenClDevelopNeuralWorkspace() { NeuralWorkspace().Reset(); }
 
 void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
                           const PreparedRawInput& input, PipelineDocument& document) {

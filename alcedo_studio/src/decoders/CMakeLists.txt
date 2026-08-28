@@ -237,7 +237,7 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(EditPipeline PUBLIC HAVE_OPENCL)
-    target_link_libraries(EditPipeline PRIVATE OpenClProgramLibrary)
+    target_link_libraries(EditPipeline PRIVATE OpenClProgramLibrary EditRuntimeOpenCl)
 endif()
 
 set(RENDERER_SRCS ${ALCEDO_SRC_ROOT}/renderer/pipeline_scheduler.cpp)

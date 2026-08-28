@@ -23,7 +23,7 @@
 #include "edit/pipeline/pipeline.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
@@ -35,13 +35,16 @@
 #ifdef HAVE_METAL
 #include "edit/runtime/metal/metal_renderer.hpp"
 #endif
+#ifdef HAVE_OPENCL
+#include "edit/runtime/opencl/opencl_renderer.hpp"
+#endif
 
 namespace alcedo {
 
 namespace {
 using ProfileClock = std::chrono::steady_clock;
 
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 void ApplyImportedCameraProfile(PipelineDocument&             document,
                                 const RawRuntimeColorContext& imported) {
   auto* develop = document.Develop();
@@ -262,13 +265,16 @@ auto CPUPipelineExecutor::GetStage(PipelineStageName stage) -> PipelineStage& {
 auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     -> std::shared_ptr<ImageBuffer> {
   const auto apply_start = ProfileClock::now();
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   const bool use_gpu_dag =
 #ifdef HAVE_CUDA
       resolved_accelerator_backend_ == GpuBackendKind::CUDA ||
 #endif
 #ifdef HAVE_METAL
       resolved_accelerator_backend_ == GpuBackendKind::Metal ||
+#endif
+#ifdef HAVE_OPENCL
+      resolved_accelerator_backend_ == GpuBackendKind::OpenCL ||
 #endif
       false;
   if (pipeline_document_ && use_gpu_dag) {
@@ -288,6 +294,15 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 #ifdef HAVE_METAL
     if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
       return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
+    }
+#endif
+#ifdef HAVE_OPENCL
+    if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
+      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_,
                                 gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
                                 injected_raw_color_context_, ExportPipelineParams(), input,
                                 decode_res_, request, frame_sink_, bound_frame_submission_,
@@ -409,7 +424,7 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 
 void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                                               bool mirror_legacy_stage_adapter) {
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   pipeline_document_           = std::move(document);
   mirror_legacy_stage_adapter_ = mirror_legacy_stage_adapter;
   gpu_dag_legacy_snapshot_     = nullptr;
@@ -424,6 +439,11 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
 #ifdef HAVE_METAL
   if (metal_product_renderer_) {
     metal_product_renderer_->SetDocument(pipeline_document_);
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->SetDocument(pipeline_document_);
   }
 #endif
 #else
@@ -860,7 +880,7 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
   injected_raw_color_context_ = ctx;
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   if (pipeline_document_) {
     ApplyImportedCameraProfile(*pipeline_document_, ctx);
   }
@@ -873,7 +893,7 @@ void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
       color_temp_entry.has_value() && color_temp_entry.value() && color_temp_entry.value()->op_) {
     color_temp_entry.value()->op_->SetGlobalParams(global_params_);
     auto color_temp_params = color_temp_entry.value()->op_->GetParams();
-#if defined(HAVE_CUDA) || defined(HAVE_METAL)
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
     if (pipeline_document_ != nullptr && pipeline_document_->Develop() != nullptr) {
       const auto& develop = pipeline_document_->Develop()->Params().Params();
       if (!color_temp_params.contains("color_temp") ||
@@ -922,6 +942,11 @@ void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
     metal_product_renderer_->ReleaseSessionCaches();
   }
 #endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 void CPUPipelineExecutor::ReleasePreviewGpuScratch() {
@@ -946,6 +971,11 @@ void CPUPipelineExecutor::ReleaseAllGPUResources() {
 #ifdef HAVE_METAL
   if (metal_product_renderer_) {
     metal_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->ReleaseSessionCaches();
   }
 #endif
 }

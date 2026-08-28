@@ -17,6 +17,7 @@
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
@@ -640,6 +641,21 @@ void OpenClBackend::Submit(CommandContext& command_context) {
   NoteOpenClFlush();
   ++flush_count_;
   in_flight_submission_ = command_context.SubmissionId();
+}
+
+void OpenClBackend::FinalizePresentation(CommandContext& command_context) {
+  if (command_context.SubmissionId() == 0) {
+    throw std::runtime_error("OpenClBackend::FinalizePresentation: missing submission id");
+  }
+  EnqueueMarker(command_context);
+  CheckOpenCl(clFlush(queue_), "OpenClBackend::FinalizePresentation clFlush");
+  NoteOpenClFlush();
+  ++flush_count_;
+  in_flight_submission_ = command_context.SubmissionId();
+}
+
+void OpenClBackend::ReleaseNeuralDemosaicWorkspace() {
+  ReleaseOpenClDevelopNeuralWorkspace();
 }
 
 void OpenClBackend::Wait(CommandContext& command_context) {
