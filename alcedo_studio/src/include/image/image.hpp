@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <exiv2/exif.hpp>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>

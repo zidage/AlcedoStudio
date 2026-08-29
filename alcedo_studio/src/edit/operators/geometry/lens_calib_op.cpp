@@ -38,6 +38,12 @@
 #endif
 #include "utils/string/convert.hpp"
 
+#if defined(LF_VERSION) && LF_VERSION >= 0x00030400
+#define ALCEDO_LENSFUN_MODERN_C_API 1
+#else
+#define ALCEDO_LENSFUN_MODERN_C_API 0
+#endif
+
 namespace alcedo {
 namespace {
 
@@ -67,6 +73,14 @@ struct LensfunDbState {
   std::filesystem::path                         root_  = {};
   bool                                          valid_ = false;
 };
+
+auto CreateLensfunDatabase() -> lfDatabase* {
+#if ALCEDO_LENSFUN_MODERN_C_API
+  return lf_db_new();
+#else
+  return lf_db_create();
+#endif
+}
 
 auto GlobalDbState() -> LensfunDbState& {
   static LensfunDbState state;
@@ -200,7 +214,11 @@ auto LoadPortableDbXmls(lfDatabase* db, const std::filesystem::path& root) -> bo
       !std::filesystem::is_directory(root)) {
     return false;
   }
+#if ALCEDO_LENSFUN_MODERN_C_API
+  return lf_db_load_directory(db, root.string().c_str()) != 0;
+#else
   return lf_db_load_path(db, root.string().c_str()) == LF_NO_ERROR;
+#endif
 }
 
 auto GetLensfunDb(const std::filesystem::path& preferred_root) -> lfDatabase* {
@@ -218,7 +236,7 @@ auto GetLensfunDb(const std::filesystem::path& preferred_root) -> lfDatabase* {
     return state.db_.get();
   }
 
-  auto db = std::unique_ptr<lfDatabase, LensfunDbDeleter>(lf_db_create());
+  auto db = std::unique_ptr<lfDatabase, LensfunDbDeleter>(CreateLensfunDatabase());
   if (!db) {
     state.db_.reset();
     state.root_.clear();
@@ -268,6 +286,66 @@ auto HuginScaleInMillimeters(float crop_factor, float aspect_ratio) -> float {
   return kFullFrameDiagonalMm / crop_factor / std::hypot(aspect_ratio, 1.0f) * 0.5f;
 }
 
+#if ALCEDO_LENSFUN_MODERN_C_API
+void RescaleDistortionTerms(lfLensCalibDistortion* distortion, float real_focal_mm,
+                            const lfLens* lens) {
+  if (!distortion || !lens || !IsFinitePositive(real_focal_mm)) {
+    return;
+  }
+  const float hugin_scale_in_mm =
+      HuginScaleInMillimeters(lens->CropFactor, lens->AspectRatio);
+  if (!IsFinitePositive(hugin_scale_in_mm)) {
+    return;
+  }
+
+  const float hugin_scaling = real_focal_mm / hugin_scale_in_mm;
+  switch (distortion->Model) {
+    case LF_DIST_MODEL_POLY3: {
+      const float d = 1.0f - distortion->Terms[0];
+      if (std::fabs(d) <= kEpsilon) {
+        return;
+      }
+      distortion->Terms[0] *= std::pow(hugin_scaling, 2.0f) / std::pow(d, 3.0f);
+      break;
+    }
+    case LF_DIST_MODEL_POLY5:
+      distortion->Terms[0] *= std::pow(hugin_scaling, 2.0f);
+      distortion->Terms[1] *= std::pow(hugin_scaling, 4.0f);
+      break;
+    case LF_DIST_MODEL_PTLENS: {
+      const float d = 1.0f - distortion->Terms[0] - distortion->Terms[1] - distortion->Terms[2];
+      if (std::fabs(d) <= kEpsilon) {
+        return;
+      }
+      distortion->Terms[0] *= std::pow(hugin_scaling, 3.0f) / std::pow(d, 4.0f);
+      distortion->Terms[1] *= std::pow(hugin_scaling, 2.0f) / std::pow(d, 3.0f);
+      distortion->Terms[2] *= hugin_scaling / std::pow(d, 2.0f);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void RescaleTcaTerms(lfLensCalibTCA* tca, float real_focal_mm, const lfLens* lens) {
+  if (!tca || !lens || !IsFinitePositive(real_focal_mm)) {
+    return;
+  }
+  const float hugin_scale_in_mm =
+      HuginScaleInMillimeters(lens->CropFactor, lens->AspectRatio);
+  if (!IsFinitePositive(hugin_scale_in_mm)) {
+    return;
+  }
+
+  const float hugin_scaling = real_focal_mm / hugin_scale_in_mm;
+  if (tca->Model == LF_TCA_MODEL_POLY3) {
+    tca->Terms[2] *= hugin_scaling;
+    tca->Terms[3] *= hugin_scaling;
+    tca->Terms[4] *= hugin_scaling * hugin_scaling;
+    tca->Terms[5] *= hugin_scaling * hugin_scaling;
+  }
+}
+#else
 void RescaleDistortionTerms(lfLensCalibDistortion* distortion, float real_focal_mm) {
   if (!distortion || !IsFinitePositive(real_focal_mm)) {
     return;
@@ -325,6 +403,7 @@ void RescaleTcaTerms(lfLensCalibTCA* tca, float real_focal_mm) {
     tca->Terms[5] *= hugin_scaling * hugin_scaling;
   }
 }
+#endif
 
 auto CanonicalizeProjectionToken(std::string text) -> std::string {
   std::transform(text.begin(), text.end(), text.begin(),
@@ -399,6 +478,15 @@ auto FindBestCamera(const lfDatabase* db, const std::string& maker, const std::s
   return best;
 }
 
+auto FindLensCandidates(const lfDatabase* db, const lfCamera* camera, const char* lens_maker,
+                        const char* lens_model, int flags) -> const lfLens** {
+#if ALCEDO_LENSFUN_MODERN_C_API
+  return lf_db_find_lenses_hd(db, camera, lens_maker, lens_model, flags);
+#else
+  return lf_db_find_lenses(db, camera, lens_maker, lens_model, flags);
+#endif
+}
+
 auto ScoreLensCandidate(const lfLens* lens, const InputMeta& input) -> int {
   if (!lens) {
     return std::numeric_limits<int>::min();
@@ -434,7 +522,7 @@ auto FindBestLens(const lfDatabase* db, const lfCamera* camera, const InputMeta&
   const char*    lens_maker = input.lens_maker_.empty() ? nullptr : input.lens_maker_.c_str();
   constexpr int  flags      = LF_SEARCH_SORT_AND_UNIQUIFY | LF_SEARCH_LOOSE;
   const lfLens** lenses =
-      lf_db_find_lenses(db, camera, lens_maker, input.lens_model_.c_str(), flags);
+      FindLensCandidates(db, camera, lens_maker, input.lens_model_.c_str(), flags);
   if (!lenses) {
     return nullptr;
   }
@@ -460,12 +548,6 @@ auto ResolveScaleFromModifier(const lfLens* lens, float focal_mm, float crop_fac
     return 1.0f;
   }
 
-  auto modifier = std::unique_ptr<lfModifier, LensfunModifierDeleter>(
-      lf_modifier_create(lens, focal_mm, crop_factor, width, height, LF_PF_F32, false));
-  if (!modifier) {
-    return 1.0f;
-  }
-
   int flags = 0;
   if (apply_distortion) {
     flags |= LF_MODIFY_DISTORTION;
@@ -482,6 +564,20 @@ auto ResolveScaleFromModifier(const lfLens* lens, float focal_mm, float crop_fac
 
   const lfLensType source_projection = lens->Type;
   const lfLensType resolved_target   = apply_projection ? target_projection : source_projection;
+#if ALCEDO_LENSFUN_MODERN_C_API
+  auto modifier = std::unique_ptr<lfModifier, LensfunModifierDeleter>(
+      lf_modifier_new(lens, crop_factor, width, height));
+  if (!modifier) {
+    return 1.0f;
+  }
+  (void)lf_modifier_initialize(modifier.get(), lens, LF_PF_F32, focal_mm, 1.0f,
+                               kDefaultFarDistanceM, 0.0f, resolved_target, flags, false);
+#else
+  auto modifier = std::unique_ptr<lfModifier, LensfunModifierDeleter>(
+      lf_modifier_create(lens, focal_mm, crop_factor, width, height, LF_PF_F32, false));
+  if (!modifier) {
+    return 1.0f;
+  }
   if (apply_distortion) {
     (void)lf_modifier_enable_distortion_correction(modifier.get());
   }
@@ -491,6 +587,7 @@ auto ResolveScaleFromModifier(const lfLens* lens, float focal_mm, float crop_fac
   if (apply_projection) {
     (void)lf_modifier_enable_projection_transform(modifier.get(), resolved_target);
   }
+#endif
 
   const float scale = lf_modifier_get_auto_scale(modifier.get(), false);
   if (!IsFinitePositive(scale)) {
@@ -1012,6 +1109,25 @@ void LensCalibOp::ResolveRuntime(OperatorParams& params) const {
   }
 
   lfLensCalibDistortion distortion{};
+#if ALCEDO_LENSFUN_MODERN_C_API
+  const bool distortion_ok =
+      lf_lens_interpolate_distortion(lens, meta.focal_length_mm_, &distortion) != 0;
+  float real_focal_mm = meta.focal_length_mm_;
+  lfLensCalibRealFocal real_focal{};
+  if (lf_lens_interpolate_real_focal(lens, meta.focal_length_mm_, &real_focal) != 0 &&
+      IsFinitePositive(real_focal.RealFocal)) {
+    real_focal_mm = real_focal.RealFocal;
+  }
+  if (distortion_ok) {
+    RescaleDistortionTerms(&distortion, real_focal_mm, lens);
+  }
+
+  lfLensCalibTCA tca{};
+  const bool tca_ok = lf_lens_interpolate_tca(lens, meta.focal_length_mm_, &tca) != 0;
+  if (tca_ok) {
+    RescaleTcaTerms(&tca, real_focal_mm, lens);
+  }
+#else
   const bool            distortion_ok =
       lf_lens_interpolate_distortion(lens, crop_factor, meta.focal_length_mm_, &distortion) != 0;
   float real_focal_mm = meta.focal_length_mm_;
@@ -1027,23 +1143,35 @@ void LensCalibOp::ResolveRuntime(OperatorParams& params) const {
   if (tca_ok) {
     RescaleTcaTerms(&tca, real_focal_mm);
   }
+#endif
 
   lfLensCalibVignetting vignette{};
   const float           safe_aperture =
       IsFinitePositive(meta.aperture_f_number_) ? meta.aperture_f_number_ : 0.0f;
   const float safe_distance =
       IsFinitePositive(meta.distance_m_) ? meta.distance_m_ : kDefaultFarDistanceM;
+#if ALCEDO_LENSFUN_MODERN_C_API
+  const bool vignette_ok =
+      IsFinitePositive(safe_aperture) &&
+      lf_lens_interpolate_vignetting(lens, meta.focal_length_mm_, safe_aperture, safe_distance,
+                                      &vignette) != 0;
+#else
   const bool vignette_ok =
       IsFinitePositive(safe_aperture) &&
       lf_lens_interpolate_vignetting(lens, crop_factor, meta.focal_length_mm_, safe_aperture,
                                      safe_distance, &vignette) != 0;
+#endif
   if (vignette_ok) {
     RescalePaVignettingTerms(&vignette, real_focal_mm, crop_factor);
   }
 
   lfLensCalibCrop crop{};
+#if ALCEDO_LENSFUN_MODERN_C_API
+  const bool crop_ok = lf_lens_interpolate_crop(lens, meta.focal_length_mm_, &crop) != 0;
+#else
   const bool      crop_ok =
       lf_lens_interpolate_crop(lens, crop_factor, meta.focal_length_mm_, &crop) != 0;
+#endif
   const bool         dng_geometry_wins = params.raw_dng_warp_rectilinear_present_;
 
   LensCalibGpuParams runtime{};

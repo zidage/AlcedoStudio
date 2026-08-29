@@ -15,6 +15,9 @@
 #include <opencv2/opencv.hpp>
 #include <sstream>
 #include <stdexcept>
+#if defined(__linux__)
+#include <cstring>
+#endif
 #include <vector>
 
 #include "edit/operators/op_base.hpp"
@@ -196,6 +199,50 @@ auto ToResizeAlgorithmParam(ResizeDownsampleAlgorithm algorithm) -> const char* 
 
   throw std::runtime_error("CPUPipelineExecutor: unsupported resize downsample algorithm");
 }
+
+#if defined(__linux__)
+auto SubmitCpuFrameToSink(const std::shared_ptr<ImageBuffer>& output, IFrameSink* frame_sink,
+                          const FrameCompletionSubmission& submission,
+                          const OperatorParams& params) -> void {
+  if (!output || !frame_sink) {
+    return;
+  }
+
+  try {
+    if (!output->cpu_data_valid_ && output->gpu_data_valid_) {
+      output->SyncToCPU();
+    }
+    const cv::Mat& image = output->GetCPUData();
+    if (image.empty() || image.type() != CV_32FC4) {
+      std::cerr << "[PipelineCPU] host present requires a non-empty CV_32FC4 output; got type="
+                << image.type() << " size=" << image.cols << "x" << image.rows << '\n';
+      return;
+    }
+
+    const std::size_t row_bytes = static_cast<std::size_t>(image.cols) * sizeof(cv::Vec4f);
+    auto pixels = std::make_shared<std::vector<std::uint8_t>>(
+        row_bytes * static_cast<std::size_t>(image.rows));
+    for (int row = 0; row < image.rows; ++row) {
+      std::memcpy(pixels->data() + row_bytes * static_cast<std::size_t>(row), image.ptr(row),
+                  row_bytes);
+    }
+
+    const ViewerDisplayConfig display_config{params.to_output_params_.encoding_space_,
+                                             params.to_output_params_.eotf_,
+                                             params.to_output_params_.peak_luminance_};
+    frame_sink->SubmitHostFrame(
+        ViewerFrame{image.cols,
+                    image.rows,
+                    row_bytes,
+                    std::shared_ptr<const void>(pixels, pixels->data()),
+                    display_config,
+                    submission.mode,
+                    submission.metadata});
+  } catch (const std::exception& error) {
+    std::cerr << "[PipelineCPU] host present failed: " << error.what() << '\n';
+  }
+}
+#endif
 
 }  // namespace
 
@@ -419,6 +466,12 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
   }
 
   PrintPipelineProfile(apply_start, executor_steps, stage_profiles);
+  // CPU output is the portability fallback for Linux. Keep presentation at
+  // the IFrameSink boundary so the scene-graph host-upload path is shared by
+  // CPU processing and OpenCL readback fallback.
+#if defined(__linux__)
+  SubmitCpuFrameToSink(output, frame_sink_, bound_frame_submission_, global_params_);
+#endif
   return output;
 }
 

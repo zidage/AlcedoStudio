@@ -22,13 +22,18 @@
 #include <memory>
 #include <sstream>
 
-#if defined(Q_OS_WIN) && defined(HAVE_OPENCL)
+#if (defined(Q_OS_WIN) || defined(Q_OS_LINUX)) && defined(HAVE_OPENCL)
 #include <QtGui/qopenglcontext_platform.h>
+#if defined(Q_OS_LINUX) && defined(ALCEDO_HAS_OPENGL_GLX)
+#include <GL/glx.h>
+#endif
+#if defined(Q_OS_WIN)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <GL/gl.h>
 #include <windows.h>
+#endif
 
 #include "opencl/opencl_runtime.hpp"
 #endif
@@ -36,7 +41,7 @@
 namespace alcedo::editor_rhi {
 namespace {
 
-#if defined(Q_OS_WIN) && defined(HAVE_OPENCL)
+#if (defined(Q_OS_WIN) || defined(Q_OS_LINUX)) && defined(HAVE_OPENCL)
 class OpenClGlSharingBootstrap {
  public:
   auto Initialize() -> bool {
@@ -65,6 +70,8 @@ class OpenClGlSharingBootstrap {
       return false;
     }
 
+    alcedo::OpenClInitializationOptions options;
+#if defined(Q_OS_WIN)
     auto* native_context = context_->nativeInterface<QNativeInterface::QWGLContext>();
     HGLRC hglrc          = native_context ? native_context->nativeContext() : nullptr;
     HDC   hdc            = wglGetCurrentDC();
@@ -75,10 +82,44 @@ class OpenClGlSharingBootstrap {
       context_.reset();
       return false;
     }
-
-    alcedo::OpenClInitializationOptions options;
+    options.gl_context_api  = alcedo::OpenClGlContextApi::Wgl;
     options.gl_context        = hglrc;
     options.gl_device_context = hdc;
+#elif defined(Q_OS_LINUX)
+    bool native_handles_resolved = false;
+#if QT_CONFIG(egl)
+    if (auto* native_context = context_->nativeInterface<QNativeInterface::QEGLContext>()) {
+      const auto egl_context = native_context->nativeContext();
+      const auto egl_display = native_context->display();
+      if (egl_context != nullptr && egl_display != nullptr) {
+        options.gl_context_api  = alcedo::OpenClGlContextApi::Egl;
+        options.gl_context      = egl_context;
+        options.gl_device_context = egl_display;
+        native_handles_resolved = true;
+      }
+    }
+#endif
+#if defined(ALCEDO_HAS_OPENGL_GLX) && QT_CONFIG(xcb_glx_plugin)
+    if (!native_handles_resolved) {
+      auto* native_context = context_->nativeInterface<QNativeInterface::QGLXContext>();
+      const auto glx_context = native_context ? native_context->nativeContext() : nullptr;
+      const auto glx_display = glXGetCurrentDisplay();
+      if (glx_context != nullptr && glx_display != nullptr) {
+        options.gl_context_api    = alcedo::OpenClGlContextApi::Glx;
+        options.gl_context        = reinterpret_cast<void*>(glx_context);
+        options.gl_device_context = reinterpret_cast<void*>(glx_display);
+        native_handles_resolved   = true;
+      }
+    }
+#endif
+    if (!native_handles_resolved) {
+      error_ = "failed to resolve GLX/EGL context handles for OpenCL sharing";
+      context_->doneCurrent();
+      surface_.reset();
+      context_.reset();
+      return false;
+    }
+#endif
     initialized_              = alcedo::TryInitializeOpenClRuntime(options);
     context_->doneCurrent();
 
@@ -160,7 +201,7 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
 #endif
     }
     case EditorBackend::OpenCl: {
-#if defined(Q_OS_WIN) && defined(HAVE_OPENCL)
+#if (defined(Q_OS_WIN) || defined(Q_OS_LINUX)) && defined(HAVE_OPENCL)
       // The composition root must enable sharing before constructing the
       // application. Reapplying this attribute here is too late and produces a
       // misleading Qt warning even when the pre-application setup was correct.
@@ -171,19 +212,43 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 
       auto& bootstrap = SharedOpenClGlBootstrap();
-      if (!bootstrap.Initialize()) {
-        result.error = bootstrap.error().empty() ? "OpenCL/OpenGL sharing bootstrap failed"
-                                                 : bootstrap.error();
+      if (bootstrap.Initialize()) {
+        result.diagnostics.opencl_gl_sharing = true;
+        result.diagnostics.notes =
+            "OpenCL initialized with OpenGL sharing; Qt Quick uses OpenGL render loop";
+        result.ok = true;
+        SetActiveEditorBackend(backend);
         return result;
       }
-      result.diagnostics.opencl_gl_sharing = true;
-      result.diagnostics.notes =
-          "OpenCL initialized with OpenGL sharing; Qt Quick uses OpenGL render loop";
-      result.ok = true;
-      SetActiveEditorBackend(backend);
+
+#if defined(Q_OS_LINUX)
+      // A Linux device may expose OpenCL but not the platform-specific
+      // GL-sharing extension (or the current Qt session may not expose native
+      // handles). Keep the OpenCL compute pipeline usable in that case: it
+      // downloads the final image and submits a host frame for the Qt Quick
+      // upload path.
+      if (alcedo::TryInitializeOpenClRuntime()) {
+        result.diagnostics.notes =
+            "OpenCL initialized without GL sharing; final frames use OpenCL readback to "
+            "Qt Quick OpenGL host upload";
+        result.ok = true;
+        SetActiveEditorBackend(backend);
+        return result;
+      }
+#endif
+
+#if defined(Q_OS_LINUX)
+      result.error = bootstrap.error().empty()
+                         ? "OpenCL/OpenGL sharing bootstrap failed; plain OpenCL fallback also failed"
+                         : bootstrap.error() + "; plain OpenCL fallback also failed";
+#else
+      result.error = bootstrap.error().empty()
+                         ? "OpenCL/OpenGL sharing bootstrap failed"
+                         : bootstrap.error();
+#endif
       return result;
 #else
-      result.error = "OpenCL backend requires Windows + HAVE_OPENCL";
+      result.error = "OpenCL backend requires Windows/Linux + HAVE_OPENCL";
       return result;
 #endif
     }
@@ -201,6 +266,16 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       return result;
 #endif
     }
+    case EditorBackend::Cpu:
+      // CPU frames arrive through IFrameSink::SubmitHostFrame and are uploaded
+      // to a sampled QRhi texture on the scene-graph thread. OpenGL keeps the
+      // host-upload path identical across X11 and Wayland Qt Quick sessions.
+      QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+      result.diagnostics.notes =
+          "CPU pipeline selected; final frames use host RAM to Qt Quick OpenGL upload";
+      result.ok = true;
+      SetActiveEditorBackend(backend);
+      return result;
   }
 
   result.error = "unknown editor backend";

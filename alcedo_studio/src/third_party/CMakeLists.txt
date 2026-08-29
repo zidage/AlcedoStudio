@@ -111,16 +111,83 @@ set(PUERHLAB_LENSFUN_INSTALL_DIR
     CACHE PATH
     "Install prefix for the bundled Lensfun build.")
 
-file(MAKE_DIRECTORY
-    "${PUERHLAB_LENSFUN_INSTALL_DIR}/bin"
-    "${PUERHLAB_LENSFUN_INSTALL_DIR}/include"
-    "${PUERHLAB_LENSFUN_INSTALL_DIR}/lib")
+set(_puerhlab_lensfun_use_system OFF)
+if(UNIX AND NOT APPLE AND NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALCEDO_LENSFUN_SYSTEM QUIET IMPORTED_TARGET lensfun)
+    endif()
 
-if(NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}. "
-        "Run `git submodule update --init --recursive pu-erh_lab/src/third_party/lensfun` and re-configure.")
+    find_path(_puerhlab_lensfun_system_include_dir
+        NAMES lensfun/lensfun.h)
+    find_library(_puerhlab_lensfun_system_library
+        NAMES lensfun)
+
+    if(_puerhlab_lensfun_system_include_dir AND _puerhlab_lensfun_system_library)
+        add_library(puerhlab_lensfun INTERFACE)
+        target_include_directories(puerhlab_lensfun INTERFACE
+            "${_puerhlab_lensfun_system_include_dir}")
+        target_link_libraries(puerhlab_lensfun INTERFACE
+            "${_puerhlab_lensfun_system_library}")
+        get_filename_component(_puerhlab_lensfun_system_library_dir
+            "${_puerhlab_lensfun_system_library}" DIRECTORY)
+        set(_puerhlab_lensfun_use_system ON)
+    elseif(TARGET PkgConfig::ALCEDO_LENSFUN_SYSTEM)
+        add_library(puerhlab_lensfun INTERFACE)
+        target_link_libraries(puerhlab_lensfun
+            INTERFACE PkgConfig::ALCEDO_LENSFUN_SYSTEM)
+        if(ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR)
+            target_include_directories(puerhlab_lensfun INTERFACE
+                "${ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR}")
+            set(_puerhlab_lensfun_system_include_dir
+                "${ALCEDO_LENSFUN_SYSTEM_INCLUDEDIR}")
+        elseif(ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS)
+            target_include_directories(puerhlab_lensfun
+                INTERFACE ${ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS})
+            list(GET ALCEDO_LENSFUN_SYSTEM_INCLUDE_DIRS 0
+                _puerhlab_lensfun_system_include_dir)
+        endif()
+        if(ALCEDO_LENSFUN_SYSTEM_LIBDIR)
+            set(_puerhlab_lensfun_system_library_dir
+                "${ALCEDO_LENSFUN_SYSTEM_LIBDIR}")
+        elseif(ALCEDO_LENSFUN_SYSTEM_LIBRARY_DIRS)
+            list(GET ALCEDO_LENSFUN_SYSTEM_LIBRARY_DIRS 0
+                _puerhlab_lensfun_system_library_dir)
+        endif()
+        set(_puerhlab_lensfun_use_system ON)
+    endif()
+
+    if(NOT _puerhlab_lensfun_use_system)
+        message(FATAL_ERROR
+            "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}, "
+            "and a usable system Lensfun installation was not detected. "
+            "Install Lensfun or provide its headers and library via CMAKE_PREFIX_PATH.")
+    endif()
 endif()
+
+if(_puerhlab_lensfun_use_system)
+    message(STATUS "Using system Lensfun on Linux")
+    set(PUERHLAB_LENSFUN_INCLUDE_DIR
+        "${_puerhlab_lensfun_system_include_dir}" CACHE INTERNAL
+        "Header directory for the system Lensfun installation.")
+    set(PUERHLAB_LENSFUN_LIBRARY_DIR
+        "${_puerhlab_lensfun_system_library_dir}" CACHE INTERNAL
+        "Runtime library directory for the system Lensfun installation.")
+    set(ALCEDO_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INCLUDE_DIR}" CACHE INTERNAL
+        "Header directory for the system Lensfun installation.")
+    set(ALCEDO_LENSFUN_LIBRARY_DIR "${PUERHLAB_LENSFUN_LIBRARY_DIR}" CACHE INTERNAL
+        "Runtime library directory for the system Lensfun installation.")
+else()
+    file(MAKE_DIRECTORY
+        "${PUERHLAB_LENSFUN_INSTALL_DIR}/bin"
+        "${PUERHLAB_LENSFUN_INSTALL_DIR}/include"
+        "${PUERHLAB_LENSFUN_INSTALL_DIR}/lib")
+
+    if(NOT EXISTS "${PUERHLAB_LENSFUN_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Bundled Lensfun source was not found at ${PUERHLAB_LENSFUN_SOURCE_DIR}. "
+            "Run `git submodule update --init --recursive alcedo_studio/src/third_party/lensfun` and re-configure.")
+    endif()
 
 set(_puerhlab_lensfun_cmake_args
     "-DCMAKE_INSTALL_PREFIX:PATH=${PUERHLAB_LENSFUN_INSTALL_DIR}"
@@ -282,6 +349,15 @@ set(ALCEDO_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INCLUDE_DIR}" CACHE INTERNAL
     "Header directory for the bundled Lensfun build.")
 set(ALCEDO_LENSFUN_LIBRARY_DIR "${PUERHLAB_LENSFUN_LIBRARY_DIR}" CACHE INTERNAL
     "Runtime library directory for the bundled Lensfun build.")
+endif()
+
+if(NOT TARGET alcedo_lensfun)
+    add_library(alcedo_lensfun ALIAS puerhlab_lensfun)
+endif()
+
+if(NOT TARGET lensfun::lensfun)
+    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
+endif()
 
 set(PUERHLAB_ULTRAHDR_SOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/libultrahdr"
@@ -541,10 +617,10 @@ set(PUERHLAB_METALCPP_HELPER_INCLUDE_DIR
     CACHE INTERNAL
     "Header directory for project-local metal-cpp wrapper headers.")
 
-if(NOT EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
+if(ALCEDO_METAL_ENABLED AND NOT EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
     message(FATAL_ERROR
         "Bundled metal-cpp source was not found at ${PUERHLAB_METALCPP_SOURCE_DIR}. "
-        "Run `git submodule update --init --recursive pu-erh_lab/src/third_party/metal-cpp` and re-configure.")
+        "Run `git submodule update --init --recursive alcedo_studio/src/third_party/metal-cpp` and re-configure.")
 endif()
 
 add_library(puerhlab_metal_cpp INTERFACE)
@@ -552,11 +628,13 @@ target_include_directories(puerhlab_metal_cpp
     INTERFACE
         "${PUERHLAB_METALCPP_HELPER_INCLUDE_DIR}"
 )
-target_include_directories(puerhlab_metal_cpp
-    SYSTEM INTERFACE
-        "${PUERHLAB_METALCPP_SOURCE_DIR}"
-)
-target_compile_features(puerhlab_metal_cpp INTERFACE cxx_std_20)
+if(EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
+    target_include_directories(puerhlab_metal_cpp
+        SYSTEM INTERFACE
+            "${PUERHLAB_METALCPP_SOURCE_DIR}"
+    )
+    target_compile_features(puerhlab_metal_cpp INTERFACE cxx_std_20)
+endif()
 
 if(APPLE)
     find_library(PUERHLAB_FOUNDATION_FRAMEWORK Foundation REQUIRED)

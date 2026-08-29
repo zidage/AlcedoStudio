@@ -200,6 +200,8 @@ struct MetalSharedTextureLeasePayload {
       return LeaseNativeHandleKind::OpenGLTexture2D;
     case EditorBackend::Metal:
       return LeaseNativeHandleKind::MetalTexture;
+    case EditorBackend::Cpu:
+      return LeaseNativeHandleKind::None;
   }
   return LeaseNativeHandleKind::None;
 }
@@ -213,6 +215,8 @@ struct MetalSharedTextureLeasePayload {
       return LeaseWritableResourceKind::OpenClImage;
     case EditorBackend::Metal:
       return LeaseWritableResourceKind::MetalTexture;
+    case EditorBackend::Cpu:
+      return LeaseWritableResourceKind::None;
   }
   return LeaseWritableResourceKind::None;
 }

@@ -48,7 +48,8 @@ struct EditorStartupResult {
 // On CUDA: discovers CUDA LUID, finds matching DXGI adapter, records adapter for
 // QQuickGraphicsDevice::fromAdapter on the first QQuickWindow.
 // On OpenCL: bootstraps a shareable OpenGL context topology and initializes OpenCL
-// with GL sharing when available.
+// with GL sharing when available. On CPU: selects the Qt Quick OpenGL host-upload
+// presentation path and does not require GPU interop.
 // On Metal: selects the Phase 9-qualified Metal API and shared-texture path.
 [[nodiscard]] auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResult;
 

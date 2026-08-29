@@ -11,10 +11,13 @@
 #include <QtQml>
 
 #include <cstdarg>
+#include <cstring>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
@@ -170,7 +173,11 @@ auto IsProductionCase(HarnessCase c) -> bool {
 }
 
 void PrintUsage() {
+#if defined(Q_OS_LINUX)
+  Log("EditorRhiHarness --editor-backend=cuda|opencl|metal|cpu "
+#else
   Log("EditorRhiHarness --editor-backend=cuda|opencl|metal "
+#endif
       "[--case=direct-presentation|resize-churn|hide-show|minimize-restore|"
       "renderer-recreation|hdr-format-query|shutdown-queued|"
       "production-lease-presentation|production-continuous-submit|"
@@ -306,6 +313,35 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
   return true;
 }
 
+auto SubmitHostFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fixture,
+                            LeaseFrameLayer layer, std::uint64_t preview) -> bool {
+  if (!item || !item->frameSink() || fixture.width <= 0 || fixture.height <= 0 ||
+      fixture.data() == nullptr) {
+    return false;
+  }
+
+  auto pixels = std::make_shared<std::vector<std::uint8_t>>(fixture.byte_size());
+  std::memcpy(pixels->data(), fixture.data(), fixture.byte_size());
+
+  alcedo::FramePreviewMetadata metadata;
+  metadata.frame_role              = FrameRoleForLeaseLayer(layer);
+  metadata.preview_generation      = preview;
+  metadata.presentation_request_id = preview;
+  metadata.session_epoch          = item->sessionEpoch();
+  metadata.image_identity         = item->imageIdentity();
+  item->frameSink()->BindFrameSubmission(
+      {metadata, alcedo::FramePresentationMode::FullFrame});
+  item->frameSink()->SubmitHostFrame(
+      alcedo::ViewerFrame{fixture.width,
+                          fixture.height,
+                          fixture.row_bytes(),
+                          std::shared_ptr<const void>(pixels, pixels->data()),
+                          {},
+                          alcedo::FramePresentationMode::FullFrame,
+                          metadata});
+  return true;
+}
+
 auto CompareReadback(HarnessViewportItem* viewport) -> int {
   if (!viewport) {
     return 2;
@@ -394,7 +430,7 @@ int main(int argc, char* argv[]) {
   Log("EditorRhiHarness: backend=%s case=%s fixture=%s raw_fixture=%s", ToString(backend),
       CaseName(harness_case), ToString(fixture), SmallRealRawFixtureRelativePath().c_str());
 
-#if defined(Q_OS_WIN)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
   if (backend == EditorBackend::OpenCl) {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
   }
@@ -438,9 +474,15 @@ int main(int argc, char* argv[]) {
                    [root, &window]() { root->setHeight(window.height()); });
 
   const bool production = IsProductionCase(harness_case);
+  if (backend == EditorBackend::Cpu && harness_case != HarnessCase::DirectPresentation) {
+    Log("EditorRhiHarness: CPU host-upload verification supports only direct-presentation");
+    return 1;
+  }
+  const bool cpu_host_upload = backend == EditorBackend::Cpu;
+  const bool use_production_viewport = production || cpu_host_upload;
   HarnessViewportItem* viewport = nullptr;
   EditorViewportItem* production_viewport = nullptr;
-  if (production) {
+  if (use_production_viewport) {
     production_viewport = new EditorViewportItem(root);
     production_viewport->setParentItem(root);
     // Match the production fixture size so the default target pool is
@@ -519,7 +561,7 @@ int main(int argc, char* argv[]) {
     });
   };
 
-  if (!production) {
+  if (!use_production_viewport) {
     QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
       if (state.stage != 0 || !state.viewport) {
         return;
@@ -608,7 +650,7 @@ int main(int argc, char* argv[]) {
   });
 
   // Renderer recreation completion (harness viewport).
-  if (!production) {
+  if (!use_production_viewport) {
     QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
       if (state.stage != 3 || !state.viewport) {
         return;
@@ -623,7 +665,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Production EditorViewportItem cases: drive direct EnsureSize/Map/Notify path.
-  if (production && production_viewport) {
+  if (use_production_viewport && production_viewport) {
     auto* prod = production_viewport;
     QTimer::singleShot(400, &app, [&, prod]() {
       // Kick a present pass so the scene-graph thread can create the first slot.
@@ -639,14 +681,29 @@ int main(int argc, char* argv[]) {
         return;
       }
       ++submit_attempts;
-      const bool submitted = SubmitFixtureFrame(
-          prod, production_fixture, LeaseFrameLayer::InteractivePrimary,
-          static_cast<std::uint64_t>(submit_attempts));
+      const auto preview = static_cast<std::uint64_t>(submit_attempts);
+      const bool submitted = cpu_host_upload
+                                 ? SubmitHostFixtureFrame(
+                                       prod, production_fixture,
+                                       LeaseFrameLayer::InteractivePrimary, preview)
+                                 : SubmitFixtureFrame(prod, production_fixture,
+                                                      LeaseFrameLayer::InteractivePrimary, preview);
       if (submitted) {
         ++continuous_ok;
         Log("EditorRhiHarness: production submit ok attempt=%d live=%d status=%s gen=%llu",
             submit_attempts, prod->liveTargetCount(), qPrintable(prod->statusText()),
             static_cast<unsigned long long>(prod->lastPresentedSessionEpoch()));
+      }
+      if (cpu_host_upload && continuous_ok >= 1) {
+        submit_timer->stop();
+        prod->requestPresentUpdate();
+        QTimer::singleShot(800, &app, [&, prod]() {
+          const auto presented = prod->presentedFrameCount();
+          Log("EditorRhiHarness: CPU host upload presented=%llu status=%s",
+              static_cast<unsigned long long>(presented), qPrintable(prod->statusText()));
+          finish(presented > 0 ? 0 : 20);
+        });
+        return;
       }
       if (state.harness_case == HarnessCase::ProductionLeasePresentation && continuous_ok >= 1) {
         submit_timer->stop();
@@ -775,7 +832,7 @@ int main(int argc, char* argv[]) {
 
   // Presentation failure path.
   QTimer::singleShot(20000, &app, [&]() {
-    if (state.stage == 0 && !production) {
+    if (state.stage == 0 && !use_production_viewport) {
       if (state.viewport && !state.viewport->LastError().isEmpty()) {
         Log("EditorRhiHarness: viewport error: %s", qPrintable(state.viewport->LastError()));
       }

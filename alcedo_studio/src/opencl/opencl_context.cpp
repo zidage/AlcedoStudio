@@ -22,6 +22,8 @@
 #include <d3d11.h>
 #include <CL/cl_d3d11.h>
 #include <CL/cl_gl.h>
+#elif defined(__linux__)
+#include <CL/cl_gl.h>
 #endif
 
 namespace alcedo {
@@ -282,9 +284,15 @@ auto SupportsD3D11Sharing(const OpenClDeviceCandidate& candidate, void* d3d11_de
   return std::find(devices.begin(), devices.end(), candidate.device) != devices.end();
 }
 
-auto MakeGLContextProperties(cl_platform_id platform, void* gl_context, void* gl_device_context)
+auto MakeGLContextProperties(cl_platform_id platform, void* gl_context, void* gl_device_context,
+                             OpenClGlContextApi gl_context_api)
     -> std::vector<cl_context_properties> {
   if (platform == nullptr || gl_context == nullptr || gl_device_context == nullptr) {
+    return {};
+  }
+#if defined(_WIN32)
+  if (gl_context_api != OpenClGlContextApi::Auto &&
+      gl_context_api != OpenClGlContextApi::Wgl) {
     return {};
   }
   return {
@@ -296,10 +304,38 @@ auto MakeGLContextProperties(cl_platform_id platform, void* gl_context, void* gl
       reinterpret_cast<cl_context_properties>(gl_device_context),
       0,
   };
+#elif defined(__linux__)
+  switch (gl_context_api) {
+    case OpenClGlContextApi::Glx:
+      return {
+          CL_CONTEXT_PLATFORM,
+          reinterpret_cast<cl_context_properties>(platform),
+          CL_GL_CONTEXT_KHR,
+          reinterpret_cast<cl_context_properties>(gl_context),
+          CL_GLX_DISPLAY_KHR,
+          reinterpret_cast<cl_context_properties>(gl_device_context),
+          0,
+      };
+    case OpenClGlContextApi::Egl:
+      return {
+          CL_CONTEXT_PLATFORM,
+          reinterpret_cast<cl_context_properties>(platform),
+          CL_GL_CONTEXT_KHR,
+          reinterpret_cast<cl_context_properties>(gl_context),
+          CL_EGL_DISPLAY_KHR,
+          reinterpret_cast<cl_context_properties>(gl_device_context),
+          0,
+      };
+    case OpenClGlContextApi::Auto:
+    case OpenClGlContextApi::Wgl:
+      return {};
+  }
+#endif
+  return {};
 }
 
 auto SupportsGLSharing(const OpenClDeviceCandidate& candidate, void* gl_context,
-                       void* gl_device_context) -> bool {
+                       void* gl_device_context, OpenClGlContextApi gl_context_api) -> bool {
   if (gl_context == nullptr && gl_device_context == nullptr) {
     return true;
   }
@@ -315,7 +351,7 @@ auto SupportsGLSharing(const OpenClDeviceCandidate& candidate, void* gl_context,
   }
 
   const auto properties =
-      MakeGLContextProperties(candidate.platform, gl_context, gl_device_context);
+      MakeGLContextProperties(candidate.platform, gl_context, gl_device_context, gl_context_api);
   if (properties.empty()) {
     return false;
   }
@@ -341,12 +377,13 @@ auto SupportsD3D11Sharing(const OpenClDeviceCandidate&, void* d3d11_device) -> b
   return d3d11_device == nullptr;
 }
 
-auto MakeGLContextProperties(cl_platform_id, void*, void*) -> std::vector<cl_context_properties> {
+auto MakeGLContextProperties(cl_platform_id, void*, void*, OpenClGlContextApi)
+    -> std::vector<cl_context_properties> {
   return {};
 }
 
-auto SupportsGLSharing(const OpenClDeviceCandidate&, void* gl_context, void* gl_device_context)
-    -> bool {
+auto SupportsGLSharing(const OpenClDeviceCandidate&, void* gl_context, void* gl_device_context,
+                       OpenClGlContextApi) -> bool {
   return gl_context == nullptr && gl_device_context == nullptr;
 }
 #endif
@@ -359,7 +396,8 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
   usable_gpu_candidates.reserve(candidates.size());
   for (const auto& candidate : candidates) {
     if (IsUsable(candidate) && SupportsD3D11Sharing(candidate, options.d3d11_device) &&
-        SupportsGLSharing(candidate, options.gl_context, options.gl_device_context)) {
+        SupportsGLSharing(candidate, options.gl_context, options.gl_device_context,
+                          options.gl_context_api)) {
       usable_candidates.push_back(&candidate);
       if (IsGpu(candidate)) {
         usable_gpu_candidates.push_back(&candidate);
@@ -478,18 +516,17 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
       reinterpret_cast<cl_context_properties>(options.d3d11_device),
       0};
 #endif
-  const auto gl_context_properties =
-      MakeGLContextProperties(selected.platform, options.gl_context, options.gl_device_context);
+  const auto gl_context_properties = MakeGLContextProperties(
+      selected.platform, options.gl_context, options.gl_device_context, options.gl_context_api);
   const cl_context_properties default_context_properties[] = {
       CL_CONTEXT_PLATFORM, reinterpret_cast<cl_context_properties>(selected.platform), 0};
   const cl_context_properties* context_properties =
-#if defined(_WIN32)
       !gl_context_properties.empty()
           ? gl_context_properties.data()
-          : options.d3d11_device != nullptr ? d3d11_context_properties : default_context_properties;
-#else
-      default_context_properties;
+#if defined(_WIN32)
+          : options.d3d11_device != nullptr ? d3d11_context_properties
 #endif
+                                             : default_context_properties;
   cl_int error = CL_SUCCESS;
   context_     = clCreateContext(context_properties, 1, &selected.device, nullptr, nullptr, &error);
   if (error != CL_SUCCESS || context_ == nullptr) {
@@ -512,12 +549,7 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
 #else
       false;
 #endif
-  gl_sharing_enabled_ =
-#if defined(_WIN32)
-      options.gl_context != nullptr && options.gl_device_context != nullptr;
-#else
-      false;
-#endif
+  gl_sharing_enabled_   = !gl_context_properties.empty();
   initialized_  = true;
   last_initialization_error_.clear();
 }

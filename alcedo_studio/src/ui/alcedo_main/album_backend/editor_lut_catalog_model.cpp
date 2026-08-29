@@ -198,7 +198,8 @@ void EditorLutCatalogModel::rebuildEntriesView() {
     map.insert(QStringLiteral("fileSize"), static_cast<qlonglong>(entry.file_size_bytes_));
     map.insert(QStringLiteral("lutEdge"), entry.edge3d_);
     map.insert(QStringLiteral("lutSize1d"), entry.size1d_);
-    map.insert(QStringLiteral("modifiedTimeSortKey"), entry.modified_time_sort_key_);
+    map.insert(QStringLiteral("modifiedTimeSortKey"),
+               static_cast<qlonglong>(entry.modified_time_sort_key_));
     {
       QString typeText;
       if (entry.edge3d_ > 0) {

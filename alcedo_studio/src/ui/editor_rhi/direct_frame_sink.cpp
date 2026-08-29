@@ -472,8 +472,59 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   diag::NoteRenderE2ePresentWake(metadata.presentation_request_id);
 }
 
-void DirectFrameSink::SubmitHostFrame(const ViewerFrame&) {
-  // Intentionally empty: production presentation has no CPU-upload fallback.
+void DirectFrameSink::SubmitHostFrame(const ViewerFrame& frame) {
+#if defined(__linux__)
+  if (!frame || !item_) {
+    qCWarning(editorPresentLog, "[EditorPresent] SubmitHostFrame rejected: invalid frame or item");
+    return;
+  }
+
+  ViewerFrame stamped = frame;
+  std::uint64_t request_id = stamped.preview_metadata.presentation_request_id;
+  {
+    std::lock_guard lock(mutex_);
+    // The OpenCL readback path historically supplied only pixels and display
+    // config. Reuse the in-flight submission stamp so host fallback obeys the
+    // same session/role/request ordering as zero-copy frames.
+    if (request_id == 0 && bound_submission_valid_) {
+      stamped.presentation_mode = bound_submission_.mode;
+      stamped.preview_metadata = bound_submission_.metadata;
+      request_id = stamped.preview_metadata.presentation_request_id;
+    }
+    if (stamped.preview_metadata.session_epoch == 0) {
+      stamped.preview_metadata.session_epoch = item_->sessionEpoch();
+    }
+    if (stamped.preview_metadata.image_identity == 0) {
+      stamped.preview_metadata.image_identity = item_->imageIdentity();
+    }
+    if (!AcceptSubmissionRequestId(request_id)) {
+      diag::NoteRenderE2eTerminal(request_id, "stale-host-request");
+      return;
+    }
+    const auto layer = LayerIndexForRole(stamped.preview_metadata.frame_role);
+    if (pending_host_[layer].has_value()) {
+      const auto superseded = pending_host_[layer]->preview_metadata.presentation_request_id;
+      diag::NoteRenderE2eTerminal(superseded, "superseded-host-frame");
+    }
+    pending_host_[layer] = std::move(stamped);
+    ++submitted_frame_count_;
+  }
+
+  item_->setDisplayConfig(frame.display_config);
+  diag::NoteRenderE2eProducerReady(request_id);
+  qCDebug(editorPresentLog,
+          "[EditorPresent] queued host frame request=%llu image=%llu epoch=%llu size=%dx%d",
+          static_cast<unsigned long long>(request_id),
+          static_cast<unsigned long long>(item_->imageIdentity()),
+          static_cast<unsigned long long>(item_->sessionEpoch()), frame.width, frame.height);
+  item_->requestPresentUpdate();
+  diag::NoteRenderE2ePresentWake(request_id);
+#else
+  // CPU host-upload presentation is a Linux bring-up path. Preserve the
+  // existing Windows/macOS direct-GPU behavior when a producer falls back to
+  // this optional callback.
+  (void)frame;
+#endif
 }
 
 #ifdef HAVE_METAL
@@ -603,6 +654,40 @@ auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t session_epoch,
 void DirectFrameSink::ClearPendingImportedFrames() {
   std::lock_guard lock(mutex_);
   for (auto& slot : pending_imported_) {
+    slot.reset();
+  }
+}
+
+auto DirectFrameSink::DrainPendingHostFrames(std::uint64_t session_epoch,
+                                             std::uint64_t image_identity)
+    -> std::vector<ViewerFrame> {
+  std::lock_guard      lock(mutex_);
+  std::vector<ViewerFrame> out;
+  out.reserve(pending_host_.size());
+  for (auto& slot : pending_host_) {
+    if (!slot.has_value() || !slot->operator bool()) {
+      slot.reset();
+      continue;
+    }
+    if (session_epoch != 0 && slot->preview_metadata.session_epoch != 0 &&
+        slot->preview_metadata.session_epoch != session_epoch) {
+      slot.reset();
+      continue;
+    }
+    if (image_identity != 0 && slot->preview_metadata.image_identity != 0 &&
+        slot->preview_metadata.image_identity != image_identity) {
+      slot.reset();
+      continue;
+    }
+    out.push_back(std::move(*slot));
+    slot.reset();
+  }
+  return out;
+}
+
+void DirectFrameSink::ClearPendingHostFrames() {
+  std::lock_guard lock(mutex_);
+  for (auto& slot : pending_host_) {
     slot.reset();
   }
 }
