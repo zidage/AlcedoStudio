@@ -32,3 +32,6 @@
 [submodule "alcedo_studio/src/third_party/cutlass"]
 	path = alcedo_studio/src/third_party/cutlass
 	url = https://github.com/NVIDIA/cutlass.git
+[submodule "alcedo_studio/src/third_party/QuickQanava"]
+	path = alcedo_studio/src/third_party/QuickQanava
+	url = https://github.com/cneben/QuickQanava.git
