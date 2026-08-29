@@ -22,6 +22,7 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
+#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -113,9 +114,6 @@ auto RenderDevelop(PipelineDocument& document, const PreparedRawInput& prepared)
     -> std::vector<Rgba> {
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   CudaRenderDevice device;
-  if (plan.peak_transient_bytes > 0) {
-    device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
-  }
   device.BeginRender();
   ExecuteCudaDevelop(device, plan, prepared, document);
   device.EndRender();
@@ -188,7 +186,6 @@ TEST_F(CudaDevelopFixture, CudaDevelopUsesWorkspaceForAllTemporaryBuffers) {
   const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
-  device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
   device.BeginRender();
   ExecuteCudaDevelop(device, plan, prepared, document);
   EXPECT_GT(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
@@ -206,7 +203,6 @@ TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {
   const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
-  device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
   device.BeginRender();
   ExecuteCudaDevelop(device, plan, prepared, document);
   device.EndRender();
@@ -443,6 +439,34 @@ TEST_F(CudaDevelopFixture, PlanExecuteFreesDevelopScratchAfterSensorDevelop) {
   EXPECT_NE(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
 }
 
+TEST_F(CudaDevelopFixture, PlanExecuteCachesObservedDevelopTransientCapacityForTheNextLayout) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  CudaRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+  const auto observed = device.Workspace().DevelopTransientHighWater().ObservedCapacity(
+      plan.source, CudaBackend::kCapabilityVersion);
+  EXPECT_GT(observed, ConservativeDevelopInitialBytes(plan.source));
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+
+  device.WaitIdle();
+  device.Workspace().ReleaseSessionResources();
+  EXPECT_EQ(device.Workspace().DevelopTransientHighWater().SuggestInitial(
+                plan.source, CudaBackend::kCapabilityVersion),
+            ApplyDevelopTransientSafetyMargin(observed));
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+}
+
 TEST_F(CudaDevelopFixture, ViewportGeometryResampleAllocatesADistinctDisplaySizedTexture) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
@@ -484,7 +508,6 @@ TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallba
   const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   CudaRenderDevice device;
-  device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
   device.Workspace().Device().FailNextUpload();
   device.BeginRender();
   EXPECT_THROW(ExecuteCudaDevelop(device, plan, prepared, document), std::runtime_error);

@@ -50,7 +50,7 @@ inline constexpr std::uint32_t kGradeNeighborMaxTapCount = 64;
 /**
  * @brief Per-dispatch parameters for a separable neighborhood adjustment.
  *
- * This layout is shared verbatim with CUDA and OpenCL kernels. The horizontal pass writes the
+ * This layout is shared verbatim with GPU neighborhood kernels. The horizontal pass writes the
  * filtered neighborhood to a scratch image. The vertical pass reads that scratch image while
  * retaining the unfiltered source image for the final operator formula.
  */

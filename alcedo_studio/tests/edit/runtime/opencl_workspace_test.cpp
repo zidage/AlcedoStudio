@@ -329,11 +329,13 @@ TEST(TransientBufferArena, UnalignedFirstAllocationAppendsAnotherSlabWithoutLoop
     };
 
     std::vector<std::size_t> create_sizes;
+    std::size_t               max_slab_bytes = 512;
 
     auto CreateSlab(std::size_t bytes) -> Slab {
       create_sizes.push_back(bytes);
       return Slab(bytes);
     }
+    [[nodiscard]] auto MaxSlabBytes() const -> std::size_t { return max_slab_bytes; }
   };
 
   AppendRecordingBackend                       backend;
@@ -344,9 +346,11 @@ TEST(TransientBufferArena, UnalignedFirstAllocationAppendsAnotherSlabWithoutLoop
 
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
-  EXPECT_EQ(backend.create_sizes, (std::vector<std::size_t>{257, 512}));
-  EXPECT_EQ(arena.capacity_bytes(), 769U);
-  EXPECT_EQ(arena.used_bytes(), 769U);
+  EXPECT_NE(first, second);
+  EXPECT_EQ(backend.create_sizes, (std::vector<std::size_t>{512, 512}));
+  EXPECT_EQ(arena.capacity_bytes(), 1024U);
+  EXPECT_EQ(arena.used_bytes(), 257U + 512U);
+  EXPECT_EQ(arena.slab_count(), 2U);
 }
 
 TEST_F(OpenClWorkspaceFixture, OpenClSynchronizeRecordedWorkFlushesTheProductQueueBeforeWait) {

@@ -66,6 +66,8 @@ class CudaBackend {
 
   /** @brief Session texture budget from device memory, floored at 256 MiB. */
   static auto DefaultTextureBudgetBytes() -> std::size_t;
+  /** @brief Exclusive-stage transient cap from device memory, floored at 256 MiB. */
+  [[nodiscard]] auto MaxTransientBytes() const -> std::size_t;
 
   class Buffer {
    public:

@@ -167,6 +167,7 @@ class OpenClBackend {
    * @ref SetMaxSlabBytes; 0 restores the device-reported value.
    */
   [[nodiscard]] auto MaxSlabBytes() const -> std::size_t;
+  [[nodiscard]] auto MaxTransientBytes() const -> std::size_t;
   /**
    * @brief Override @ref MaxSlabBytes. Zero restores the device-reported cap.
    * @param bytes Slab cap in bytes, or 0 for the device default.

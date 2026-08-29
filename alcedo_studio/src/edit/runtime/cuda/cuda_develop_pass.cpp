@@ -67,9 +67,6 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (workspace.Textures().ByteBudget() == 0) {
     workspace.Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
   }
-  if (plan.peak_transient_bytes > 0) {
-    workspace.TransientBuffers().Reserve(plan.peak_transient_bytes);
-  }
 
   auto&              ctx           = device.CommandContext();
   auto               stream        = WrapStream(ctx.Stream());

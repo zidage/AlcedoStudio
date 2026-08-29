@@ -6,9 +6,12 @@
 
 #include <exception>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
@@ -65,18 +68,34 @@ class PlanExecutor {
                      completed)) {
         ++stats.sensor_develop_skip;
       } else {
+        workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion);
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
-        if (plan.Contains(GpuPassKind::UploadRgb)) {
-          PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
-                                                               mask_store);
-        } else {
-          PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document,
-                                                               mask_store);
+        try {
+          if (plan.Contains(GpuPassKind::UploadRgb)) {
+            PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
+                                                                 mask_store);
+          } else {
+            PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document,
+                                                                 mask_store);
+          }
+        } catch (const std::exception& ex) {
+          const std::string_view what = ex.what();
+          if (what.find("TransientBufferArena") == std::string_view::npos) {
+            throw;
+          }
+          const auto* develop = document.Develop();
+          const auto  method =
+              develop == nullptr ? std::string_view{} : develop->Params().Params().demosaic_method;
+          const bool hlr =
+              develop != nullptr && develop->Params().Params().highlights_reconstruct;
+          throw std::runtime_error(
+              DescribeDevelopTransientFailure(plan.source, method, hlr, ex.what()));
         }
         stats.source_h2d_bytes += workspace.Device().HostToDeviceBytes() - h2d_before;
         ++stats.source_h2d_count;
         Record(device, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent);
         ++stats.sensor_develop_execute;
+        workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion);
         // RCD planes are not a cache. Wait this stream so pack has finished, then
         // cudaFree / Metal free the slab before Geometry allocates display textures.
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());

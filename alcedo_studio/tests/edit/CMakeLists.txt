@@ -341,6 +341,7 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaWorkspaceTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/transient_buffer_arena_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/texture_lease_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/header_hygiene_test.cpp)

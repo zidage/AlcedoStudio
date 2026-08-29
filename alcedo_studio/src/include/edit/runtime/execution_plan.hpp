@@ -129,8 +129,9 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
  * encoder aliases `geometry.scene_source` onto `develop.sensor_linear` instead of
  * copying a second full-resolution texture.
  *
- * @ref peak_transient_bytes is the bump-allocator high-water for one exclusive
- * stage (Develop demosaic, mask SDF, or LLF), not the sum of those stages.
+ * @ref peak_transient_bytes is a compiler exclusive-stage upper bound for tests.
+ * SensorDevelop allocation uses a conservative initial slab plus observed high-water,
+ * not this field as a Reserve argument.
  */
 struct ExecutionPlan {
   StaticPlanKey                   static_key{};

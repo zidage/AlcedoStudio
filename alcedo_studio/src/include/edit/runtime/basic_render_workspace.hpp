@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <stdexcept>
 
+#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
@@ -52,6 +53,32 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto DevelopTransientHighWater() -> DevelopTransientHighWaterCache& {
+    return develop_high_water_;
+  }
+  [[nodiscard]] auto DevelopTransientHighWater() const -> const DevelopTransientHighWaterCache& {
+    return develop_high_water_;
+  }
+
+  /**
+   * @brief Reserve a conservative exclusive-stage slab from last observed capacity.
+   *
+   * First use of a layout uses @ref ConservativeDevelopInitialBytes. Does not use
+   * compiled peak_transient_bytes.
+   */
+  void PrepareDevelopTransients(const DevelopCompileSource& source,
+                                 std::uint32_t backend_capability_version) {
+    const auto bytes = develop_high_water_.SuggestInitial(source, backend_capability_version);
+    if (bytes == 0) {
+      return;
+    }
+    transients_.Reserve(bytes);
+  }
+
+  void RecordDevelopTransients(const DevelopCompileSource& source,
+                                std::uint32_t backend_capability_version) {
+    develop_high_water_.Record(source, backend_capability_version, transients_.capacity_bytes());
+  }
 
   /**
    * @brief Allocate an unpublished write texture for @p id. See GraphImageCache.
@@ -173,9 +200,10 @@ class BasicRenderWorkspace {
   TransientBufferArena<Backend> transients_;
   TexturePool<Backend>          textures_;
   MaskTextureCache<Backend>     mask_textures_;
-  NodeResultCache<Backend>      values_{};
-  GraphImageCache<Backend>      images_{};
-  bool                          rendering_ = false;
+  NodeResultCache<Backend>       values_{};
+  GraphImageCache<Backend>       images_{};
+  DevelopTransientHighWaterCache develop_high_water_{};
+  bool                           rendering_ = false;
 };
 
 }  // namespace alcedo

@@ -441,6 +441,16 @@ auto CudaBackend::DefaultTextureBudgetBytes() -> std::size_t {
   return DefaultProductTextureBudgetBytes();
 }
 
+auto CudaBackend::MaxTransientBytes() const -> std::size_t {
+  constexpr std::size_t kFloorBytes = 256ull << 20;
+  const auto            memory      = QueryDeviceMemory();
+  if (!memory.valid || memory.total_bytes == 0) {
+    return kFloorBytes;
+  }
+  const auto three_quarters = memory.total_bytes - memory.total_bytes / 4;
+  return three_quarters > kFloorBytes ? three_quarters : kFloorBytes;
+}
+
 auto DefaultProductTextureBudgetBytes() -> std::size_t {
   constexpr std::size_t kFloorBytes = 256ull << 20;
   std::size_t           free_bytes  = 0;

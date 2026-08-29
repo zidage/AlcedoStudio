@@ -943,6 +943,17 @@ auto OpenClBackend::MaxSlabBytes() const -> std::size_t {
   return max_slab_bytes_device_;
 }
 
+auto OpenClBackend::MaxTransientBytes() const -> std::size_t {
+  auto& context = OpenClContext::Instance();
+  if (!context.IsInitialized()) {
+    return kTextureBudgetFloorBytes;
+  }
+  const auto& cap            = context.Capabilities();
+  const auto  total          = static_cast<std::size_t>(cap.global_memory_bytes);
+  const auto  three_quarters = total - total / 4;
+  return three_quarters > kTextureBudgetFloorBytes ? three_quarters : kTextureBudgetFloorBytes;
+}
+
 void OpenClBackend::SetMaxSlabBytes(std::size_t bytes) { max_slab_bytes_override_ = bytes; }
 
 auto OpenClBackend::WorkingSetBudgetBytes() const -> std::size_t {
