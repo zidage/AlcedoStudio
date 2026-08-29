@@ -19,7 +19,8 @@ namespace alcedo {
 // Product CUDA alignment: pack each student tile from the original mono CFA
 // (reflect-101 in the aligned lattice). Tests may still pass a dense HWC3
 // frame via input_aligned_hwc. Tile activations stay tile-sized; RGB is
-// assembled into aligned_rgb_hwc.
+// assembled into output_aligned_hwc as 3-channel HWC (RAW processor) or
+// 4-channel RGBA (DAG SensorDevelop).
 // All commands are queued on one in-order queue; this class intentionally does
 // not wait, finish, or read back inside (or after) its tile loop. Keep this
 // executor and the activation slots alive until the owner performs the final
@@ -33,6 +34,8 @@ struct OpenClDemosaicNetTiledDispatch {
   int              crop_y               = 0;
   int              mono_offset_floats   = 0;
   cl_mem           output_aligned_hwc   = nullptr;
+  int              output_offset_floats = 0;
+  int              output_channels      = 3;
   int              aligned_width         = 0;
   int              aligned_height      = 0;
   cl_mem           rgb_fc                = nullptr;

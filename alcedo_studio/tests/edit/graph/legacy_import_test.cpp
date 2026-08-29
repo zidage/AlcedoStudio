@@ -183,6 +183,15 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) 
   EXPECT_FLOAT_EQ(contrast->Value(), 0.0f);
 }
 
+TEST(GpuDagModelGraph, ApplyOntoMapsNeuralEngineDemosaicMethod) {
+  auto document = CreateDefaultPipelineDocument();
+  auto json     = MakeLegacyStageJson();
+  json["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]["method"] =
+      "neural_engine";
+  EXPECT_TRUE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
+  EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, "neural_engine");
+}
+
 TEST(GpuDagModelGraph, ApplyOntoRejectsUnknownTypeWithoutMutatingDocument) {
   auto document = CreateDefaultPipelineDocument();
   document.ClearTopologyDirty();

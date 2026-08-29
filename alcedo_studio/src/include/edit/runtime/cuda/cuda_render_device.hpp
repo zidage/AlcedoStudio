@@ -74,11 +74,13 @@ class CudaRenderDevice {
   [[nodiscard]] auto DrtRuntime() -> CudaDrtRuntimeState&;
 
   /**
-   * @brief Session-owned Neural Engine activation workspace. Created on first use.
+   * @brief Neural Engine tile activation workspace. Created on first Neural develop
+   *        in this render; released with develop scratch after SensorDevelop.
+   *        Weights stay in the process cache.
    */
   [[nodiscard]] auto NeuralDemosaicWorkspace() -> CUDA::NeuralDemosaicWorkspace&;
 
-  /** @brief Drop the session Neural Engine workspace. Weights stay in the process cache. */
+/** @brief Drop Neural Engine tile activations. Weights stay in the process cache. */
   void ReleaseNeuralDemosaicWorkspace();
 
   /**

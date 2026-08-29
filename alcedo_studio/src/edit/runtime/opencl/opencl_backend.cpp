@@ -17,7 +17,7 @@
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
-#include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
@@ -322,6 +322,7 @@ OpenClBackend::OpenClBackend() {
 }
 
 OpenClBackend::~OpenClBackend() {
+  neural_workspace_.reset();
   dummy_lut_.Reset();
   lut_cache_.clear();
 }
@@ -697,8 +698,15 @@ void OpenClBackend::FinalizePresentation(CommandContext& command_context) {
   in_flight_submission_ = command_context.SubmissionId();
 }
 
+auto OpenClBackend::NeuralDemosaicWorkspace() -> OpenClNeuralSessionWorkspace& {
+  if (!neural_workspace_) {
+    neural_workspace_ = std::make_unique<OpenClNeuralSessionWorkspace>();
+  }
+  return *neural_workspace_;
+}
+
 void OpenClBackend::ReleaseNeuralDemosaicWorkspace() {
-  ReleaseOpenClDevelopNeuralWorkspace();
+  neural_workspace_.reset();
 }
 
 void OpenClBackend::Wait(CommandContext& command_context) {

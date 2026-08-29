@@ -21,6 +21,7 @@
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/render_backend.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -141,6 +142,19 @@ TEST_F(OpenClWorkspaceFixture, OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSi
   }
 }
 
+TEST_F(OpenClWorkspaceFixture, OpenClNeuralTileWorkspaceIsOwnedByTheRenderBackend) {
+  OpenClRenderDevice first;
+  OpenClRenderDevice second;
+  auto*              a = &first.Workspace().Device().NeuralDemosaicWorkspace();
+  auto*              b = &second.Workspace().Device().NeuralDemosaicWorkspace();
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_NE(a, b);
+  first.ReleaseNeuralDemosaicWorkspace();
+  EXPECT_EQ(&second.Workspace().Device().NeuralDemosaicWorkspace(), b);
+  EXPECT_NE(&first.Workspace().Device().NeuralDemosaicWorkspace(), b);
+}
+
 TEST_F(OpenClWorkspaceFixture, OpenClBackendUsesThePreparedProcessContextAndProductQueue) {
   auto& ctx = OpenClContext::Instance();
   ASSERT_TRUE(ctx.IsInitialized());
@@ -222,13 +236,14 @@ TEST_F(OpenClWorkspaceFixture, OpenClTransientReserveAboveMaxSlabUsesSeparateDev
   backend.SetMaxSlabBytes(kSlab);
   backend.ResetCounters();
   transients.Reserve(3 << 20);
-  EXPECT_GE(transients.capacity_bytes(), 3U << 20);
-  EXPECT_GE(backend.BufferCreateCount(), 3U);
+  EXPECT_EQ(transients.capacity_bytes(), 0U);
+  EXPECT_EQ(backend.BufferCreateCount(), 0U);
 
   void* first  = transients.Allocate(kChunk);
   void* second = transients.Allocate(kChunk);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
+  EXPECT_GE(backend.BufferCreateCount(), 2U);
   const auto a = backend.ResolveDeviceMemory(first, kChunk);
   const auto b = backend.ResolveDeviceMemory(second, kChunk);
   EXPECT_NE(a.first, b.first);

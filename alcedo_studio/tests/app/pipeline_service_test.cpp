@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -709,6 +710,47 @@ TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesGpuDagDocumentIndependentl
   EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
   ps.ReleasePipelineSnapshot(snap);
   ps.SavePipeline(live);
+}
+
+TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuNeuralEngine) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorage());
+
+  auto initial = first.LoadEditorPipeline(9102);
+  ASSERT_NE(initial, nullptr);
+  ASSERT_NE(initial->pipeline_, nullptr);
+  ASSERT_NE(initial->document_, nullptr);
+  EXPECT_TRUE(initial->pipeline_->MirrorsLegacyStageAdapter());
+
+  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
+  raw_params["raw"]["method"] = "neural_engine";
+  {
+    std::unique_lock<std::mutex> render_lock(initial->pipeline_->GetRenderLock());
+    initial->pipeline_->GetStage(PipelineStageName::Image_Loading)
+        .SetOperator(OperatorType::RAW_DECODE, raw_params);
+    initial->pipeline_->SetExecutionStages();
+  }
+  EXPECT_EQ(initial->document_->Develop()->Params().Params().demosaic_method, "default");
+
+  first.SyncPipelineDocument(initial);
+  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9102);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->at("format_version"), 2);
+  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
+
+  initial->serialized_state_needs_writeback_ = true;
+  first.SavePipeline(initial);
+
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                loaded = reopened.LoadEditorPipeline(9102);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->document_, nullptr);
+  EXPECT_TRUE(loaded->pipeline_->MirrorsLegacyStageAdapter());
+  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "neural_engine");
+  const auto exported = loaded->pipeline_->ExportPipelineParams();
+  EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]["method"],
+            "neural_engine");
+  reopened.SavePipeline(loaded);
 }
 
 TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {

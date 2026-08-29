@@ -10,8 +10,11 @@
 
 #include <opencv2/core/cuda_stream_accessor.hpp>
 
+#include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
+#include "decoders/processor/nn/demosaicnet_specs.hpp"
+#include "decoders/processor/nn/demosaicnet_xtrans.hpp"
 #include "decoders/processor/neural_tile_jobs.hpp"
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
@@ -160,16 +163,35 @@ void DemosaicXTransInterpolator(CudaRenderWorkspace& workspace, const PreparedRa
 void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& input,
                           cv::cuda::GpuMat linear, cv::cuda::GpuMat packed, bool hlr,
                           cv::cuda::Stream& stream) {
-  cv::cuda::GpuMat neural_cfa;
-  const auto       prep = PrepareNeuralEngineCfa(linear, input.cfa_pattern, neural_cfa, &stream);
+  std::string error;
+  const bool  is_bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
+  const int   min_spatial =
+      is_bayer ? DemosaicNetBayerSpec::kMinSpatial : DemosaicNetXTransSpec::kMinSpatial;
+  const auto geometry =
+      ComputeNeuralAlignedGeometry(input.cfa_pattern, linear.cols, linear.rows, min_spatial,
+                                   &error);
+  if (!geometry.has_value()) {
+    throw std::runtime_error("ExecuteCudaDevelop: Neural Engine preprocess failed: " + error);
+  }
+
+  auto& workspace = device.Workspace();
+  void* aligned_ptr =
+      AllocateTransient(workspace, static_cast<std::size_t>(geometry->aligned_width) *
+                                       static_cast<std::size_t>(geometry->aligned_height) *
+                                       sizeof(float));
+  cv::cuda::GpuMat neural_cfa =
+      WrapF32C1(aligned_ptr, geometry->aligned_width, geometry->aligned_height);
+  const auto prep = PrepareNeuralEngineCfa(linear, input.cfa_pattern, neural_cfa, &stream);
   if (!prep.succeeded) {
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine preprocess failed: " + prep.error);
   }
 
-  const bool is_bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
   const auto policy =
       is_bayer ? detail::MakeBayerStudentTilePolicy() : detail::MakeXTransStudentTilePolicy();
-  cv::cuda::GpuMat output_rgb(neural_cfa.size(), CV_32FC3);
+  void* rgb_ptr = AllocateTransient(
+      workspace, static_cast<std::size_t>(neural_cfa.cols) * static_cast<std::size_t>(neural_cfa.rows) *
+                     sizeof(float) * 3);
+  cv::cuda::GpuMat output_rgb = WrapF32C3(rgb_ptr, neural_cfa.cols, neural_cfa.rows);
 
   auto&                         neural_workspace = device.NeuralDemosaicWorkspace();
   CUDA::NeuralDemosaicOptions   neural_options;
@@ -188,11 +210,24 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine unavailable: " + cache.LastError());
   }
 
-  const int tile_h = policy.input_tile.height;
-  const int tile_w = policy.input_tile.width;
-  neural_workspace.EnsureCapacity(variant, tile_h, tile_w,
-                                  static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
-                                      static_cast<std::size_t>(tile_w));
+  const int tile_h      = policy.input_tile.height;
+  const int tile_w      = policy.input_tile.width;
+  const int tile_out_h  = policy.output_tile.height;
+  const int tile_out_w  = policy.output_tile.width;
+  const std::size_t input_numel =
+      static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
+      static_cast<std::size_t>(tile_w);
+  const std::size_t activation_bytes =
+      is_bayer ? BayerDemosaicNet::EstimateWorkspaceBytes(tile_h, tile_w, 1)
+               : XTransDemosaicNet::EstimateWorkspaceBytes(tile_h, tile_w, 1);
+  void* input_ptr = AllocateTransient(workspace, input_numel * sizeof(float));
+  void* act_ptr   = AllocateTransient(workspace, activation_bytes);
+  void* tile_rgb_ptr =
+      AllocateTransient(workspace, static_cast<std::size_t>(tile_out_h) *
+                                       static_cast<std::size_t>(tile_out_w) * sizeof(float) * 3);
+  neural_workspace.BindExternal(static_cast<float*>(input_ptr), input_numel, act_ptr,
+                                activation_bytes, tile_rgb_ptr, tile_out_h, tile_out_w);
+  neural_workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel);
 
   const auto jobs =
       detail::BuildTileJobs(cv::Rect(0, 0, neural_cfa.cols, neural_cfa.rows), neural_cfa.size(),

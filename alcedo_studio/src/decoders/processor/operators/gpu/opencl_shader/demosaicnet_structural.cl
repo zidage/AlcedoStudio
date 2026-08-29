@@ -599,7 +599,8 @@ __kernel void demosaicnet_assemble_rgb_tile(__global const float* restrict tile,
                                             const int tile_h, const int canvas_w,
                                             const int canvas_h, const int dst_x, const int dst_y,
                                             const int owned_w, const int owned_h, const int src_x0,
-                                            const int src_y0) {
+                                            const int src_y0, const int canvas_offset,
+                                            const int dst_channels) {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
   if (x >= owned_w || y >= owned_h) {
@@ -616,10 +617,13 @@ __kernel void demosaicnet_assemble_rgb_tile(__global const float* restrict tile,
     return;
   }
   const int src_index = (src_y * tile_w + src_x) * 3;
-  const int dst_index = (dst_yy * canvas_w + dst_xx) * 3;
+  const int dst_index = canvas_offset + (dst_yy * canvas_w + dst_xx) * dst_channels;
   canvas[dst_index + 0] = tile[src_index + 0];
   canvas[dst_index + 1] = tile[src_index + 1];
   canvas[dst_index + 2] = tile[src_index + 2];
+  if (dst_channels == 4) {
+    canvas[dst_index + 3] = 1.0f;
+  }
 }
 
 // Product boundary: clamp linear CFA samples to [0,1] when highlight reconstruction is off.

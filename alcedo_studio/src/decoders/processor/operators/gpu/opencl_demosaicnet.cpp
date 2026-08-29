@@ -33,11 +33,6 @@
 namespace alcedo::OpenCL {
 namespace {
 
-// One active Neural decode: mutable cl_kernel arguments and resident scratch are
-// shared on the single in-order queue. Product RAW processing is already serialized;
-// this mutex covers harness/test re-entry as well.
-std::mutex g_neural_decode_mutex;
-
 std::uint64_t g_success_count         = 0;
 std::uint64_t g_fallback_ready_count  = 0;
 std::uint64_t g_host_wait_count       = 0;
@@ -93,7 +88,7 @@ auto StructuralProgram() -> cl_program {
 }
 
 // Context-keyed resident execution state for the product Neural path.
-// Retained across hot decodes under g_neural_decode_mutex:
+// Retained across hot decodes under OpenClNeuralDecodeMutex():
 //   clamp/rgba kernels, CFA lookup, aligned RGB canvas, tiled executor
 //   (tile buffers + pack/assemble kernels), and two activation slots.
 struct ResidentExecutionState {
@@ -223,7 +218,7 @@ void Clamp01(opencl::OpenClImage& image) {
   if (!context.IsInitialized()) {
     context.Initialize();
   }
-  std::lock_guard<std::mutex> lock(g_neural_decode_mutex);
+  std::lock_guard<std::mutex> lock(OpenClNeuralDecodeMutex());
   auto&                       state = ResidentState();
   state.EnsureForContext(context);
   const int channels = CV_MAT_CN(image.Type());
@@ -259,7 +254,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
   OpenClNeuralDemosaicResult result;
   result.variant = VariantName(camera_pattern.kind);
 
-  std::lock_guard<std::mutex> lock(g_neural_decode_mutex);
+  std::lock_guard<std::mutex> lock(OpenClNeuralDecodeMutex());
 
   try {
     if (linear_cfa.Empty() || linear_cfa.Type() != CV_32FC1) {

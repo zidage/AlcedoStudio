@@ -64,11 +64,14 @@ class BasicRenderWorkspace {
    * @brief Reserve a conservative exclusive-stage slab from last observed capacity.
    *
    * First use of a layout uses @ref ConservativeDevelopInitialBytes. Does not use
-   * compiled peak_transient_bytes.
+   * compiled peak_transient_bytes. @p demosaic_method is part of the high-water
+   * key so Neural Engine and Legacy (RCD) do not share a working-set size.
    */
   void PrepareDevelopTransients(const DevelopCompileSource& source,
-                                 std::uint32_t backend_capability_version) {
-    const auto bytes = develop_high_water_.SuggestInitial(source, backend_capability_version);
+                                 std::uint32_t backend_capability_version,
+                                 RawDemosaicMethod demosaic_method) {
+    const auto bytes =
+        develop_high_water_.SuggestInitial(source, backend_capability_version, demosaic_method);
     if (bytes == 0) {
       return;
     }
@@ -76,8 +79,10 @@ class BasicRenderWorkspace {
   }
 
   void RecordDevelopTransients(const DevelopCompileSource& source,
-                                std::uint32_t backend_capability_version) {
-    develop_high_water_.Record(source, backend_capability_version, transients_.capacity_bytes());
+                                std::uint32_t backend_capability_version,
+                                RawDemosaicMethod demosaic_method) {
+    develop_high_water_.Record(source, backend_capability_version, demosaic_method,
+                               transients_.capacity_bytes());
   }
 
   /**

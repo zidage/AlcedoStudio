@@ -153,6 +153,9 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     throw std::runtime_error(
         "OpenClDemosaicNetTiledExecutor: aligned dimensions violate CFA period");
   }
+  if (dispatch.output_channels != 3 && dispatch.output_channels != 4) {
+    throw std::runtime_error("OpenClDemosaicNetTiledExecutor: output_channels must be 3 or 4");
+  }
 
   const cl_command_queue queue = ResolveQueue(dispatch.queue);
   state.EnsureKernels();
@@ -210,8 +213,12 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     SetArg(state.assemble.get(), 7, dst_y, "tile assemble arg7");
     SetArg(state.assemble.get(), 8, owned_w, "tile assemble arg8");
     SetArg(state.assemble.get(), 9, owned_h, "tile assemble arg9");
+    const cl_int canvas_off = dispatch.output_offset_floats;
+    const cl_int dst_ch     = dispatch.output_channels;
     SetArg(state.assemble.get(), 10, src_x, "tile assemble arg10");
     SetArg(state.assemble.get(), 11, src_y, "tile assemble arg11");
+    SetArg(state.assemble.get(), 12, canvas_off, "tile assemble arg12");
+    SetArg(state.assemble.get(), 13, dst_ch, "tile assemble arg13");
     Enqueue2D(state.assemble.get(), owned_w, owned_h, queue, "tile assembly enqueue");
     opencl::nn::FinishDemosaicNetStage("tile_assembly", queue);
   }

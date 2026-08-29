@@ -331,7 +331,7 @@ TEST_F(MetalDevelopFixture, MetalPlanExecutorDoesNotReserveDevelopTransientArena
   device.WaitIdle();
 
   EXPECT_EQ(device.Workspace().DevelopTransientHighWater().ObservedCapacity(
-                plan.source, MetalBackend::kCapabilityVersion),
+                plan.source, MetalBackend::kCapabilityVersion, RawDemosaicMethod::Legacy),
             0U);
   EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);

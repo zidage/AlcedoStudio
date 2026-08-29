@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "decoders/processor/raw_demosaic_method.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "gpu/transient_buffer_arena.hpp"
@@ -147,14 +148,96 @@ TEST(TransientBufferArena, ScopeRewindsLocalSlabOffsetsWithoutFreeing) {
   EXPECT_NE(reused, nullptr);
 }
 
+TEST(TransientBufferArena, ReserveClampsToMaxTransientInsteadOfThrowingOnTheRemainderSlab) {
+  RecordingBackend backend;
+  backend.max_slab_bytes      = 400;
+  backend.max_transient_bytes = 800;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.Reserve(1000);
+  EXPECT_EQ(arena.capacity_bytes(), 0U);
+  EXPECT_TRUE(backend.create_sizes.empty());
+  void* first  = arena.Allocate(400);
+  void* second = arena.Allocate(400);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(arena.capacity_bytes(), 800U);
+  EXPECT_EQ(arena.slab_count(), 2U);
+}
+
+TEST(TransientBufferArena, ReserveLargerThanMaxSlabDoesNotPreSplitIntoUnusableRemainder) {
+  RecordingBackend backend;
+  backend.max_slab_bytes      = 400;
+  backend.max_transient_bytes = 800;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.Reserve(700);
+  EXPECT_EQ(arena.capacity_bytes(), 0U);
+  void* first  = arena.Allocate(350);
+  void* second = arena.Allocate(350);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(arena.slab_count(), 2U);
+  EXPECT_EQ(arena.capacity_bytes(), 800U);
+}
+
+TEST(TransientBufferArena, ReserveWithinOneSlabStillCreatesCapacityUpFront) {
+  RecordingBackend backend;
+  backend.max_slab_bytes      = 400;
+  backend.max_transient_bytes = 800;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.Reserve(300);
+  EXPECT_EQ(arena.capacity_bytes(), 300U);
+  EXPECT_EQ(arena.slab_count(), 1U);
+}
+
+TEST(DevelopTransientFailure, DescribesResolvedDemosaicMethodNotEmptyPayloadString) {
+  DevelopCompileSource source;
+  source.kind        = DevelopInputKind::BayerCfa;
+  source.host_extent = Extent2D{11808, 8754};
+  const auto message = DescribeDevelopTransientFailure(
+      source, RawDemosaicMethodToString(RawDemosaicMethod::NeuralEngine), true,
+      "TransientBufferArena: allocation would exceed transient budget");
+  EXPECT_NE(message.find("extent=11808x8754"), std::string::npos);
+  EXPECT_NE(message.find("kind=0"), std::string::npos);
+  EXPECT_NE(message.find("method=neural_engine"), std::string::npos);
+  EXPECT_NE(message.find("hlr=1"), std::string::npos);
+}
+
+TEST(DevelopTransientHighWater, NeuralAndLegacyLayoutsKeepSeparateObservedCapacity) {
+  DevelopCompileSource source;
+  source.kind        = DevelopInputKind::BayerCfa;
+  source.host_extent = Extent2D{64, 64};
+  DevelopTransientHighWaterCache cache;
+  cache.Record(source, 1, RawDemosaicMethod::Legacy, 400000);
+  cache.Record(source, 1, RawDemosaicMethod::NeuralEngine, 120000);
+  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
+            ApplyDevelopTransientSafetyMargin(400000));
+  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
+            ApplyDevelopTransientSafetyMargin(120000));
+  EXPECT_EQ(cache.ObservedCapacity(source, 1, RawDemosaicMethod::Legacy), 400000U);
+  EXPECT_EQ(cache.ObservedCapacity(source, 1, RawDemosaicMethod::NeuralEngine), 120000U);
+}
+
+TEST(DevelopTransientHighWater, NeuralConservativeReserveIncludesTileScratch) {
+  DevelopCompileSource source;
+  source.kind        = DevelopInputKind::BayerCfa;
+  source.host_extent = Extent2D{64, 64};
+  DevelopTransientHighWaterCache cache;
+  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
+            ConservativeDevelopInitialBytes(source, RawDemosaicMethod::NeuralEngine));
+  EXPECT_GT(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
+            cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy));
+}
+
 TEST(DevelopTransientHighWater, SuggestsConservativeBytesThenObservedCapacityWithMargin) {
   DevelopCompileSource source;
   source.kind             = DevelopInputKind::BayerCfa;
   source.host_extent      = Extent2D{64, 64};
   DevelopTransientHighWaterCache cache;
-  EXPECT_EQ(cache.SuggestInitial(source, 1), 64U * 64U * kConservativeDevelopBytesPerPixel);
-  cache.Record(source, 1, 200000);
-  EXPECT_EQ(cache.SuggestInitial(source, 1), ApplyDevelopTransientSafetyMargin(200000));
+  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
+            64U * 64U * kConservativeDevelopBytesPerPixel);
+  cache.Record(source, 1, RawDemosaicMethod::Legacy, 200000);
+  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
+            ApplyDevelopTransientSafetyMargin(200000));
   EXPECT_EQ(ConservativeDevelopInitialBytes(DevelopCompileSource{.kind = DevelopInputKind::DirectRgb}),
             0U);
 }

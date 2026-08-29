@@ -40,9 +40,12 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
     -> LoadedPipelineDocument {
   const auto stored = store.GetPipelineJsonByElementId(id);
   if (stored && stored->is_object() && stored->value("format_version", 0) == 2) {
+    // Live CPU stages (history + QML patches) remain the editor source of truth.
+    // Remirror onto the format-2 graph even when the saved JSON omitted the nested
+    // adapter blob (SyncPipelineDocument writes document ToJson only).
     return FinishLoadedDocument(
         std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored)),
-        stored->contains("legacy_stage_adapter"));
+        legacy != nullptr);
   }
   if (legacy) {
     auto imported = LegacyPipelineImporter::Import(legacy->ExportPipelineParams());
@@ -55,6 +58,18 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
   }
   return FinishLoadedDocument(
       std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()), true);
+}
+
+void RemirrorGpuDagDocument(PipelineGuard& pipeline) {
+  if (!pipeline.document_ || !pipeline.pipeline_ ||
+      !pipeline.pipeline_->MirrorsLegacyStageAdapter()) {
+    return;
+  }
+  const auto error = LegacyPipelineImporter::ApplyOnto(*pipeline.document_,
+                                                       pipeline.pipeline_->ExportPipelineParams());
+  if (!error.empty()) {
+    throw std::runtime_error("PipelineMgmtService: GPU DAG remirror failed: " + error);
+  }
 }
 
 void ResetToDefaults(OperatorParams& params) {
@@ -487,6 +502,10 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   pipeline_guard->document_ = std::move(loaded_document.document);
   pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_,
                                                  loaded_document.mirror_legacy_stage_adapter);
+  {
+    std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
+    RemirrorGpuDagDocument(*pipeline_guard);
+  }
   pipeline_guard->id_        = id;
   pipeline_guard->pinned_    = true;
   pipeline_guard->pin_count_ = 1;
@@ -625,6 +644,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
           ImportSerializedPipelineState(*pipeline->pipeline_, stored->pipeline_params,
                                         root_state->raw_color_context, accelerator_preference_);
           pipeline->pipeline_->SetExecutionStages();
+          RemirrorGpuDagDocument(*pipeline);
           accepted_serialized_state = true;
         } catch (...) {
           // Checkpoint params cannot build an executor. Rebuild from history; write back later.
@@ -637,6 +657,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
       ++editor_pipeline_history_rebuild_count_;
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
       RebuildPipelineFromRoot(*pipeline->pipeline_, *graph, *root_state, accelerator_preference_);
+      RemirrorGpuDagDocument(*pipeline);
       pipeline->serialized_state_needs_writeback_ = true;
     }
     return pipeline;

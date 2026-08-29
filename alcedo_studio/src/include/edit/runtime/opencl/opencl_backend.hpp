@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -28,6 +29,7 @@
 namespace alcedo {
 
 struct ExecutionPlan;
+struct OpenClNeuralSessionWorkspace;
 
 inline constexpr std::uint32_t kOpenClDagBackendCapabilityVersion = 1;
 
@@ -213,7 +215,9 @@ class OpenClBackend {
   void Submit(CommandContext& command_context);
   /** @brief Append and flush presentation work to the current product submission. */
   void FinalizePresentation(CommandContext& command_context);
-  /** @brief Release backend-owned neural activation workspace after queue completion. */
+  /** @brief Neural Engine tile executor for this backend. Created on first Neural develop. */
+  [[nodiscard]] auto NeuralDemosaicWorkspace() -> OpenClNeuralSessionWorkspace&;
+  /** @brief Release Neural Engine tile activations after develop scratch is discarded. */
   void ReleaseNeuralDemosaicWorkspace();
   void Wait(CommandContext& command_context);
   /**
@@ -348,6 +352,7 @@ class OpenClBackend {
   };
   std::vector<LutCacheEntry> lut_cache_;
   Buffer                     dummy_lut_;
+  std::unique_ptr<OpenClNeuralSessionWorkspace> neural_workspace_;
   std::size_t                max_slab_bytes_device_   = 0;
   std::size_t                max_slab_bytes_override_ = 0;
   std::size_t                max_image_width_         = 0;

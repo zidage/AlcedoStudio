@@ -39,10 +39,13 @@ struct TransientArenaSnapshot {
  * fit in one slab; allocations never span slab boundaries and never relocate
  * live device pointers. Optional `MaxTransientBytes()` caps the sum of slabs.
  *
- * `Reserve` may replace unused slabs. `Allocate` that does not fit any current
- * remainder appends another slab. Develop scratch is exclusive and discarded
- * after SensorDevelop (`ReleaseDeviceMemory`). `Reset()` rewinds every local
- * bump without freeing slabs. Not thread-safe.
+ * `Reserve` may replace unused slabs when the request fits in one slab. Requests
+ * larger than `MaxSlabBytes()` leave the arena empty so `Allocate` can create
+ * request-sized slabs (pre-splitting into a max-slab plus leftover cannot satisfy
+ * a later near-max-slab allocation, then exceeds `MaxTransientBytes`). `Allocate`
+ * that does not fit any current remainder appends another slab. Develop scratch
+ * is exclusive and discarded after SensorDevelop (`ReleaseDeviceMemory`).
+ * `Reset()` rewinds every local bump without freeing slabs. Not thread-safe.
  *
  * @tparam Backend Slab factory. Must outlive this arena when passed by reference.
  */
@@ -162,6 +165,35 @@ class TransientBufferArena {
       entry.offset = 0;
     }
     ClearStageStats();
+  }
+
+  /**
+   * @brief Use caller-owned memory as the only slab. Does not cudaMalloc.
+   *
+   * Develop DemosaicNet tile activations bind a bump region carved from the
+   * exclusive-stage arena so that scratch dies with @ref ReleaseDeviceMemory.
+   */
+  void BindExternalMemory(void* ptr, std::size_t bytes) {
+    if (HasLiveAllocations()) {
+      throw std::runtime_error(
+          "TransientBufferArena::BindExternalMemory: cannot replace slabs while "
+          "allocations are live");
+    }
+    ResetSlab();
+    if (ptr == nullptr || bytes == 0) {
+      return;
+    }
+    if constexpr (requires(Backend& backend, void* p, std::size_t n) {
+                    backend.BorrowSlab(p, n);
+                  }) {
+      if (backend_ == nullptr) {
+        throw std::runtime_error("TransientBufferArena::BindExternalMemory: backend is missing");
+      }
+      slabs_.push_back(SlabEntry{backend_->BorrowSlab(ptr, bytes), bytes, 0});
+      return;
+    }
+    throw std::runtime_error(
+        "TransientBufferArena::BindExternalMemory: backend cannot borrow external memory");
   }
 
   /**
@@ -337,13 +369,19 @@ class TransientBufferArena {
     if (bytes == 0) {
       return;
     }
-    const auto max_slab  = QueryMaxSlabBytes();
-    std::size_t remaining = bytes;
-    while (remaining > 0) {
-      const auto chunk = remaining > max_slab ? max_slab : remaining;
-      AppendSlab(chunk);
-      remaining -= chunk;
+    const auto max_transient = QueryMaxTransientBytes();
+    if (bytes > max_transient) {
+      bytes = max_transient;
     }
+    const auto max_slab = QueryMaxSlabBytes();
+    if (bytes <= max_slab) {
+      AppendSlab(bytes);
+      return;
+    }
+    // Larger than one slab: do not pre-split into max-slab chunks. A remainder
+    // slab cannot satisfy a later near-max-slab Allocate, and appending that
+    // request then exceeds MaxTransientBytes (OpenCL 100MP Neural + HLR).
+    // Allocate() appends request-sized slabs instead.
   }
 
   void ClearStageStats() noexcept {

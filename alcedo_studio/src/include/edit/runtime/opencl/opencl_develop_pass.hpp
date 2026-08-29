@@ -37,9 +37,6 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
  */
 void SetOpenClDevelopNeuralModelCacheForTesting(OpenClDemosaicNetModelCache* cache);
 
-/** @brief Release the product-path Neural activation workspace after queue completion. */
-void ReleaseOpenClDevelopNeuralWorkspace();
-
 }  // namespace alcedo
 
 #endif

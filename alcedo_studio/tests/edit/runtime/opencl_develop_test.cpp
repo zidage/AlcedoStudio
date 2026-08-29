@@ -491,6 +491,23 @@ TEST_F(OpenClDevelopFixture,
 }
 
 TEST_F(OpenClDevelopFixture,
+       OpenClDevelopNeuralEngineHighlightRecoveryWritesFiniteRgbFromRgbaTiles) {
+  if (!NeuralEngineAvailable(OpenClDemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer Neural Engine weights are not available.";
+  }
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "neural_engine", true);
+  const auto pixels = RenderDevelop(document, prepared);
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_TRUE(AllFiniteNonZero(pixels));
+  EXPECT_GT(MaxChannel(pixels), 1.0f);
+}
+
+TEST_F(OpenClDevelopFixture,
        OpenClHundredMegapixelBayerFixturesCompleteAndProduceFinitePixels) {
   if (std::getenv("ALCEDO_RUN_100MP_OPENCL_TEST") == nullptr) {
     GTEST_SKIP() << "Set ALCEDO_RUN_100MP_OPENCL_TEST=1 for the bounded real-RAW GPU test.";

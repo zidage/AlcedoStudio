@@ -11,6 +11,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/pass_encoder.hpp"
@@ -68,11 +69,19 @@ class PlanExecutor {
                      completed)) {
         ++stats.sensor_develop_skip;
       } else {
-        if constexpr (UsesDevelopTransientArena()) {
-          workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion);
-        }
+        const auto* develop_node = document.Develop();
+        const auto  develop_method =
+            develop_node == nullptr
+                ? RawDemosaicMethod::Legacy
+                : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), plan.source);
+        const bool highlights_reconstruct =
+            develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
         try {
+          if constexpr (UsesDevelopTransientArena()) {
+            workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion,
+                                               develop_method);
+          }
           if (plan.Contains(GpuPassKind::UploadRgb)) {
             PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
                                                                  mask_store);
@@ -85,24 +94,24 @@ class PlanExecutor {
           if (what.find("TransientBufferArena") == std::string_view::npos) {
             throw;
           }
-          const auto* develop = document.Develop();
-          const auto  method =
-              develop == nullptr ? std::string_view{} : develop->Params().Params().demosaic_method;
-          const bool hlr =
-              develop != nullptr && develop->Params().Params().highlights_reconstruct;
-          throw std::runtime_error(
-              DescribeDevelopTransientFailure(plan.source, method, hlr, ex.what()));
+          throw std::runtime_error(DescribeDevelopTransientFailure(
+              plan.source, RawDemosaicMethodToString(develop_method), highlights_reconstruct,
+              ex.what()));
         }
         stats.source_h2d_bytes += workspace.Device().HostToDeviceBytes() - h2d_before;
         ++stats.source_h2d_count;
         Record(device, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent);
         ++stats.sensor_develop_execute;
         if constexpr (UsesDevelopTransientArena()) {
-          workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion);
+          workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion,
+                                            develop_method);
         }
         // Develop intermediates are not a cache. Finish the recorded work so backend-owned
         // scratch can be destroyed before Geometry allocates display textures.
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+      }
+      if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
+        device.ReleaseNeuralDemosaicWorkspace();
       }
       workspace.TransientBuffers().Reset();
       workspace.TransientBuffers().ReleaseDeviceMemory();
@@ -168,10 +177,16 @@ class PlanExecutor {
       return plan.display_output;
     } catch (const std::exception& ex) {
       device.CancelRender();
+      if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
+        device.ReleaseNeuralDemosaicWorkspace();
+      }
       device.ReportError(ex.what());
       throw;
     } catch (...) {
       device.CancelRender();
+      if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
+        device.ReleaseNeuralDemosaicWorkspace();
+      }
       device.ReportError("DAG execution failed with an unknown error");
       throw;
     }

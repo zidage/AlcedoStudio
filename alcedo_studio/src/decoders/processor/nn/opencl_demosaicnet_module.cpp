@@ -510,8 +510,11 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
   if (!s.loaded) {
     throw std::runtime_error(std::string(module) + ": weights not loaded");
   }
-  if (input == nullptr || output_rgb_hwc == nullptr) {
-    throw std::runtime_error(std::string(module) + ": null input/output buffer");
+  if (input == nullptr) {
+    throw std::runtime_error(std::string(module) + ": null input buffer");
+  }
+  if (output_rgb_hwc == nullptr) {
+    throw std::runtime_error(std::string(module) + ": null output buffer");
   }
   if (batch != 1 || (height % s.pack_factor) != 0 || (width % s.pack_factor) != 0 ||
       height < min_spatial || width < min_spatial) {

@@ -9,6 +9,7 @@
 #include "decoders/processor/raw_demosaic_method.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/runtime/develop_compile_source.hpp"
 
 namespace alcedo {
 
@@ -31,6 +32,17 @@ namespace alcedo {
   }
   return cfa_kind == RawCfaKind::XTrans6x6 ? RawDemosaicMethod::NeuralEngine
                                            : RawDemosaicMethod::Legacy;
+}
+
+[[nodiscard]] inline auto ResolveDevelopDemosaicMethod(const DevelopPayload& params,
+                                                       const DevelopCompileSource& source)
+    -> RawDemosaicMethod {
+  if (source.kind == DevelopInputKind::DirectRgb) {
+    return RawDemosaicMethod::Legacy;
+  }
+  const auto cfa_kind = source.kind == DevelopInputKind::XTransCfa ? RawCfaKind::XTrans6x6
+                                                                   : RawCfaKind::Bayer2x2;
+  return ResolveDevelopDemosaicMethod(params, cfa_kind, source.downsample_passes);
 }
 
 }  // namespace alcedo

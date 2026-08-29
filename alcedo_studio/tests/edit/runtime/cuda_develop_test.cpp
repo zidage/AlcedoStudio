@@ -453,14 +453,14 @@ TEST_F(CudaDevelopFixture, PlanExecuteCachesObservedDevelopTransientCapacityForT
   (void)device.Execute(plan, prepared, document);
   device.WaitIdle();
   const auto observed = device.Workspace().DevelopTransientHighWater().ObservedCapacity(
-      plan.source, CudaBackend::kCapabilityVersion);
+      plan.source, CudaBackend::kCapabilityVersion, RawDemosaicMethod::Legacy);
   EXPECT_GT(observed, ConservativeDevelopInitialBytes(plan.source));
   EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
 
   device.WaitIdle();
   device.Workspace().ReleaseSessionResources();
   EXPECT_EQ(device.Workspace().DevelopTransientHighWater().SuggestInitial(
-                plan.source, CudaBackend::kCapabilityVersion),
+                plan.source, CudaBackend::kCapabilityVersion, RawDemosaicMethod::Legacy),
             ApplyDevelopTransientSafetyMargin(observed));
   (void)device.Execute(plan, prepared, document);
   device.WaitIdle();
