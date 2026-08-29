@@ -4,6 +4,10 @@ Date: 2026-08-22
 
 Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离、canonical LLF ROI 采样，以及 CUDA 产品 present 示波器 tap）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
+后续用户可编辑节点、多蒙版、节点感知参数面板、历史和 Version 语义见
+[Node-aware Pipeline Editing and Mask Authoring 总体方案](node_mask_editor_master_plan.md)。该方案
+承接本文建立的 `PipelineDocument` 和 GPU runtime，不把 UI 工作回填到本文各 GPU Phase。
+
 Delivery: Stacked PR。当前文档分支 `feature/gpu-pipeline-dag-redesign` 是整个堆栈的根。
 
 Primary owner: Alcedo Studio 编辑管线。
