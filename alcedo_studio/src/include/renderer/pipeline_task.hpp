@@ -9,6 +9,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "edit/operators/op_kernel.hpp"
 #include "edit/pipeline/pipeline.hpp"
@@ -69,7 +70,7 @@ struct PipelineTask {
   std::function<bool()>                             cancel_requested_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.
-  std::function<void(bool success)>                 on_complete_;
+  std::function<void(bool success, std::string message)> on_complete_;
 
   TaskOptions                                       options_;
 

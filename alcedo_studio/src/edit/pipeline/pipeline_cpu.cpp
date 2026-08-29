@@ -10,26 +10,110 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <opencv2/core.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/opencv.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
-#include <opencv2/core.hpp>
-#include <opencv2/core/mat.hpp>
-
-#include "edit/pipeline/pipeline.hpp"
-
-#include <opencv2/opencv.hpp>
 
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/raw/raw_decode_op.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/pipeline/pipeline.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+#include "edit/geometry/render_request.hpp"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#endif
+#ifdef HAVE_CUDA
+#include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#endif
+#ifdef HAVE_METAL
+#include "edit/runtime/metal/metal_renderer.hpp"
+#endif
+#ifdef HAVE_OPENCL
+#include "edit/runtime/opencl/opencl_renderer.hpp"
+#endif
 
 namespace alcedo {
 
 namespace {
 using ProfileClock = std::chrono::steady_clock;
+
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+void ApplyImportedCameraProfile(PipelineDocument&             document,
+                                const RawRuntimeColorContext& imported) {
+  auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return;
+  }
+  auto payload = develop->Params().Params();
+  auto next    = payload;
+  BindDevelopCameraProfile(next, imported);
+  if (next != payload) {
+    develop->Params().ReplaceParams(std::move(next));
+  }
+}
+
+auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewport,
+                              const nlohmann::json& render_params, bool force_cpu_output)
+    -> RenderRequest {
+  RenderRequest request;
+  if (viewport.has_value() && viewport->reference_width_ > 0 && viewport->reference_height_ > 0) {
+    request.view.visible_rect_in_edit_space = {
+        static_cast<float>(viewport->x_) / viewport->reference_width_,
+        static_cast<float>(viewport->y_) / viewport->reference_height_, viewport->scale_x_,
+        viewport->scale_y_};
+    if (viewport->target_width_ > 0 && viewport->target_height_ > 0) {
+      request.view.viewport_extent = {static_cast<std::uint32_t>(viewport->target_width_),
+                                      static_cast<std::uint32_t>(viewport->target_height_)};
+    }
+  }
+  if (render_params.contains("resize") && render_params["resize"].is_object()) {
+    const auto& resize = render_params["resize"];
+    if (resize.value("enable_scale", false)) {
+      request.resolution.max_edge =
+          static_cast<std::uint32_t>(std::max(0, resize.value("maximum_edge", 0)));
+    }
+  }
+  request.resolution.quality = force_cpu_output ? RenderQuality::Export : RenderQuality::Preview;
+  return request;
+}
+
+template <class ProductRenderer>
+auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
+                        const std::shared_ptr<PipelineDocument>&     document,
+                        nlohmann::json&                              legacy_snapshot,
+                        bool                                         mirror_legacy,
+                        const std::optional<RawRuntimeColorContext>& injected,
+                        const nlohmann::json&                        legacy_params,
+                        const std::shared_ptr<ImageBuffer>&          input, DecodeRes decode_res,
+                        const RenderRequest& request, IFrameSink* sink,
+                        const FrameCompletionSubmission& submission, bool require_host_output,
+                        RenderCachePolicy cache_policy) -> std::shared_ptr<ImageBuffer> {
+  if (!renderer) {
+    renderer = std::make_shared<ProductRenderer>(document);
+  }
+  if (mirror_legacy && AllowsLegacyStageAdapterRemirror(*document)) {
+    if (legacy_params != legacy_snapshot) {
+      const auto error = LegacyPipelineImporter::ApplyOnto(*document, legacy_params);
+      if (!error.empty()) {
+        throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " + error);
+      }
+      legacy_snapshot = legacy_params;
+      if (injected.has_value()) {
+        ApplyImportedCameraProfile(*document, *injected);
+      }
+    }
+  }
+  return renderer->Render(input, decode_res, request, sink, submission, require_host_output,
+                          cache_policy);
+}
+#endif
 
 auto DurationToMs(const ProfileClock::duration duration) -> double {
   return std::chrono::duration<double, std::milli>(duration).count();
@@ -43,10 +127,10 @@ auto FormatDurationMs(const double duration_ms) -> std::string {
 
 void SetCleanBaselineAdjustableOperators(
     std::array<PipelineStage, static_cast<int>(PipelineStageName::Stage_Count)>& stages,
-    OperatorParams& global_params) {
-  const nlohmann::json baseline = pipeline_defaults::MakeCleanBaselineAdjustableParams();
+    OperatorParams&                                                              global_params) {
+  const nlohmann::json baseline    = pipeline_defaults::MakeCleanBaselineAdjustableParams();
 
-  auto set_enabled = [&](PipelineStageName stage_name, OperatorType op_type,
+  auto                 set_enabled = [&](PipelineStageName stage_name, OperatorType op_type,
                          const nlohmann::json& params, bool enabled = true) {
     auto& stage = stages[static_cast<int>(stage_name)];
     stage.SetOperator(op_type, params, global_params);
@@ -81,11 +165,10 @@ void SetCleanBaselineAdjustableOperators(
   set_enabled(PipelineStageName::Output_Transform, OperatorType::ODT, baseline.at("odt"));
   set_enabled(PipelineStageName::Output_Transform, OperatorType::FILM_GRAIN,
               baseline.at("film_grain"));
-  set_enabled(PipelineStageName::Output_Transform, OperatorType::HALATION,
-              baseline.at("halation"));
+  set_enabled(PipelineStageName::Output_Transform, OperatorType::HALATION, baseline.at("halation"));
 }
 
-void PrintPipelineProfile(const ProfileClock::time_point apply_start,
+void PrintPipelineProfile(const ProfileClock::time_point  apply_start,
                           const std::vector<std::string>& executor_steps,
                           const std::vector<std::string>& stage_profiles) {
   std::ostringstream summary;
@@ -125,9 +208,9 @@ CPUPipelineExecutor::CPUPipelineExecutor()
                {PipelineStageName::Color_Adjustment, enable_cache_, true},
                {PipelineStageName::Detail_Adjustment, enable_cache_, true},
                {PipelineStageName::Output_Transform, enable_cache_, true}}) {
-  render_params_["resize"]                         = {};
-  render_params_["resize"]["downsample_algorithm"] = ToResizeAlgorithmParam(
-      ResizeDownsampleAlgorithm::Area);
+  render_params_["resize"] = {};
+  render_params_["resize"]["downsample_algorithm"] =
+      ToResizeAlgorithmParam(ResizeDownsampleAlgorithm::Area);
 
   // Initialize default pipeline
   InitDefaultPipeline();
@@ -151,9 +234,8 @@ void CPUPipelineExecutor::SetEnableCache(bool enable_cache) {
   // Reinitialize stages with the new cache setting
   ResetExecutionStagesCache();
   for (auto* stage : exec_stages_) {
-    const bool stage_cache_enabled = (stage->stage_ == PipelineStageName::Merged_Stage)
-                                         ? false
-                                         : enable_cache_;
+    const bool stage_cache_enabled =
+        (stage->stage_ == PipelineStageName::Merged_Stage) ? false : enable_cache_;
     stage->SetEnableCache(stage_cache_enabled);
   }
 }
@@ -167,9 +249,9 @@ CPUPipelineExecutor::CPUPipelineExecutor(bool enable_cache)
                {PipelineStageName::Color_Adjustment, enable_cache_, true},
                {PipelineStageName::Detail_Adjustment, enable_cache_, true},
                {PipelineStageName::Output_Transform, enable_cache_, true}}) {
-  render_params_["resize"]                         = {};
-  render_params_["resize"]["downsample_algorithm"] = ToResizeAlgorithmParam(
-      ResizeDownsampleAlgorithm::Area);
+  render_params_["resize"] = {};
+  render_params_["resize"]["downsample_algorithm"] =
+      ToResizeAlgorithmParam(ResizeDownsampleAlgorithm::Area);
   // Initialize default pipeline
   InitDefaultPipeline();
 }
@@ -183,6 +265,52 @@ auto CPUPipelineExecutor::GetStage(PipelineStageName stage) -> PipelineStage& {
 auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     -> std::shared_ptr<ImageBuffer> {
   const auto apply_start = ProfileClock::now();
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  const bool use_gpu_dag =
+#ifdef HAVE_CUDA
+      resolved_accelerator_backend_ == GpuBackendKind::CUDA ||
+#endif
+#ifdef HAVE_METAL
+      resolved_accelerator_backend_ == GpuBackendKind::Metal ||
+#endif
+#ifdef HAVE_OPENCL
+      resolved_accelerator_backend_ == GpuBackendKind::OpenCL ||
+#endif
+      false;
+  if (pipeline_document_ && use_gpu_dag) {
+    const auto request = BuildGpuDagRenderRequest(render_request_viewport_, render_params_,
+                                                  force_cpu_output_);
+    const auto cache_policy = enable_cache_ ? RenderCachePolicy::UseSessionCache
+                                            : RenderCachePolicy::BypassSessionCache;
+#ifdef HAVE_CUDA
+    if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
+      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
+    }
+#endif
+#ifdef HAVE_METAL
+    if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
+      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
+    }
+#endif
+#ifdef HAVE_OPENCL
+    if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
+      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_,
+                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
+                                injected_raw_color_context_, ExportPipelineParams(), input,
+                                decode_res_, request, frame_sink_, bound_frame_submission_,
+                                force_cpu_output_, cache_policy);
+    }
+#endif
+  }
+#endif
   if (exec_stages_.empty()) {
     return input;
   }
@@ -203,10 +331,10 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
   // Before the merged GPU stream, re-trigger SetGlobalParams for operators
   // in stages that feed into it, so they pick up runtime data (e.g. raw decode
   // context) written by earlier non-merged stages.
-  auto refresh_before_merged = [&](PipelineStage* stage) {
+  auto                         refresh_before_merged = [&](PipelineStage* stage) {
     if (stage->stage_ == PipelineStageName::Merged_Stage) {
-      for (size_t i = static_cast<size_t>(PipelineStageName::To_WorkingSpace);
-           i < stages_.size(); ++i) {
+      for (size_t i = static_cast<size_t>(PipelineStageName::To_WorkingSpace); i < stages_.size();
+           ++i) {
         stages_[i].RefreshGlobalParams(global_params_);
       }
     }
@@ -217,10 +345,10 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     refresh_before_merged(stage);
     const auto refresh_elapsed = ProfileClock::now() - refresh_start;
 
-    const auto stage_start = ProfileClock::now();
+    const auto stage_start     = ProfileClock::now();
     stage->SetInputImage(output);
     stage->SetForceCPUOutput(force_cpu_output_);
-    output = stage->ApplyStage(global_params_);
+    output                    = stage->ApplyStage(global_params_);
 
     std::string stage_profile = stage->GetLastProfileSummary();
     if (stage_profile.empty()) {
@@ -234,8 +362,8 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     }
 
     if (stage->stage_ == PipelineStageName::Merged_Stage) {
-      stage_profile += " | refresh_global_params=" +
-                       FormatDurationMs(DurationToMs(refresh_elapsed));
+      stage_profile +=
+          " | refresh_global_params=" + FormatDurationMs(DurationToMs(refresh_elapsed));
     }
     stage_profiles.push_back(std::move(stage_profile));
   };
@@ -248,13 +376,15 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     const auto materialize_start = ProfileClock::now();
     if (input && input->buffer_valid_ && !input->cpu_data_valid_ && !input->gpu_data_valid_) {
       output = input->ShareEncodedBuffer();
-      executor_steps.push_back(std::string(step_name) + "_share_encoded=" +
-                               FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
+      executor_steps.push_back(
+          std::string(step_name) + "_share_encoded=" +
+          FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
       return;
     }
     output = std::make_shared<ImageBuffer>(input->Clone());
-    executor_steps.push_back(std::string(step_name) + "_clone=" +
-                             FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
+    executor_steps.push_back(
+        std::string(step_name) +
+        "_clone=" + FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
   };
 
   if (enable_cache_) {
@@ -265,16 +395,15 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
       }
     } else {
       // If cache is valid, use cached output
-      const auto cache_fetch_start = ProfileClock::now();
-      output = first_stage->GetOutputCache();
+      const auto cache_fetch_start   = ProfileClock::now();
+      output                         = first_stage->GetOutputCache();
       const auto cache_fetch_elapsed = ProfileClock::now() - cache_fetch_start;
       executor_steps.push_back("first_stage_cache_fetch=" +
                                FormatDurationMs(DurationToMs(cache_fetch_elapsed)));
-      stage_profiles.push_back("stage=" + first_stage->GetStageNameString() +
-                               " mode=executor_cache cache=hit total=" +
-                               FormatDurationMs(DurationToMs(cache_fetch_elapsed)) +
-                               " | get_output_cache=" +
-                               FormatDurationMs(DurationToMs(cache_fetch_elapsed)));
+      stage_profiles.push_back(
+          "stage=" + first_stage->GetStageNameString() + " mode=executor_cache cache=hit total=" +
+          FormatDurationMs(DurationToMs(cache_fetch_elapsed)) +
+          " | get_output_cache=" + FormatDurationMs(DurationToMs(cache_fetch_elapsed)));
       for (auto* stage : exec_stages_) {
         if (stage != first_stage) {
           apply_stage(stage);
@@ -291,6 +420,60 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
 
   PrintPipelineProfile(apply_start, executor_steps, stage_profiles);
   return output;
+}
+
+void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
+                                              bool mirror_legacy_stage_adapter) {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  pipeline_document_           = std::move(document);
+  mirror_legacy_stage_adapter_ = mirror_legacy_stage_adapter;
+  gpu_dag_legacy_snapshot_     = nullptr;
+  if (pipeline_document_ && injected_raw_color_context_.has_value()) {
+    ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
+  }
+#ifdef HAVE_CUDA
+  if (cuda_product_renderer_) {
+    cuda_product_renderer_->SetDocument(pipeline_document_);
+  }
+#endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->SetDocument(pipeline_document_);
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->SetDocument(pipeline_document_);
+  }
+#endif
+#else
+  (void)document;
+  (void)mirror_legacy_stage_adapter;
+#endif
+}
+
+auto CPUPipelineExecutor::HasGpuDagDocument() const -> bool {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return static_cast<bool>(pipeline_document_);
+#else
+  return false;
+#endif
+}
+
+auto CPUPipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocument> {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return pipeline_document_;
+#else
+  return nullptr;
+#endif
+}
+
+auto CPUPipelineExecutor::MirrorsLegacyStageAdapter() const -> bool {
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  return mirror_legacy_stage_adapter_;
+#else
+  return false;
+#endif
 }
 
 [[deprecated("SetPreviewMode is deprecated, set from pipeline scheduler instead")]] void
@@ -342,9 +525,8 @@ void CPUPipelineExecutor::SetExecutionStages() {
   }
 
   for (auto* stage : exec_stages_) {
-    const bool stage_cache_enabled = (stage->stage_ == PipelineStageName::Merged_Stage)
-                                         ? false
-                                         : enable_cache_;
+    const bool stage_cache_enabled =
+        (stage->stage_ == PipelineStageName::Merged_Stage) ? false : enable_cache_;
     stage->SetEnableCache(stage_cache_enabled);
   }
 }
@@ -403,8 +585,7 @@ void CPUPipelineExecutor::SetCancelRequested(std::function<bool()> cancel_reques
 void CPUPipelineExecutor::SetAcceleratorBackendPreference(
     const AcceleratorBackendPreference preference) {
   const auto resolved_backend = alcedo::ResolveAcceleratorBackend(preference);
-  if (accelerator_preference_ == preference &&
-      resolved_accelerator_backend_ == resolved_backend) {
+  if (accelerator_preference_ == preference && resolved_accelerator_backend_ == resolved_backend) {
     // A replaced RAW decode op (e.g. after direct stage writes) must still
     // follow the active runtime backend; re-apply even when nothing else
     // changed.
@@ -412,8 +593,8 @@ void CPUPipelineExecutor::SetAcceleratorBackendPreference(
     return;
   }
 
-  accelerator_preference_          = preference;
-  resolved_accelerator_backend_    = resolved_backend;
+  accelerator_preference_       = preference;
+  resolved_accelerator_backend_ = resolved_backend;
   ApplyRuntimeRawDecodeBackend();
 
   const auto previous_frame_sink = frame_sink_;
@@ -498,32 +679,31 @@ void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
   SetExecutionStages();
 }
 
-void CPUPipelineExecutor::SetRenderRegion(int x, int y, float scale_factor_x,
-                                          float scale_factor_y, int reference_width,
-                                          int reference_height) {
+void CPUPipelineExecutor::SetRenderRegion(int x, int y, float scale_factor_x, float scale_factor_y,
+                                          int reference_width, int reference_height) {
   const nlohmann::json prev_resize_params =
       render_params_.contains("resize") ? render_params_["resize"] : nlohmann::json::object();
-  auto& resize_params = render_params_["resize"];
+  auto&       resize_params   = render_params_["resize"];
 
   const float clamped_scale_x = std::clamp(scale_factor_x, 1e-4f, 1.0f);
   const float clamped_scale_y =
       std::clamp((scale_factor_y > 0.0f) ? scale_factor_y : scale_factor_x, 1e-4f, 1.0f);
-  resize_params["enable_roi"] = (clamped_scale_x < (1.0f - 1e-4f)) ||
-                                (clamped_scale_y < (1.0f - 1e-4f));
-  resize_params["roi"]        = {{"x", std::max(0, x)},
-                                 {"y", std::max(0, y)},
-                                 {"resize_factor_x", clamped_scale_x},
-                                 {"resize_factor_y", clamped_scale_y},
-                                 {"resize_factor", std::max(clamped_scale_x, clamped_scale_y)},
-                                 {"reference_width", std::max(0, reference_width)},
-                                 {"reference_height", std::max(0, reference_height)}};
+  resize_params["enable_roi"] =
+      (clamped_scale_x < (1.0f - 1e-4f)) || (clamped_scale_y < (1.0f - 1e-4f));
+  resize_params["roi"]                        = {{"x", std::max(0, x)},
+                                                 {"y", std::max(0, y)},
+                                                 {"resize_factor_x", clamped_scale_x},
+                                                 {"resize_factor_y", clamped_scale_y},
+                                                 {"resize_factor", std::max(clamped_scale_x, clamped_scale_y)},
+                                                 {"reference_width", std::max(0, reference_width)},
+                                                 {"reference_height", std::max(0, reference_height)}};
 
-  global_params_.render_roi_enabled_ = resize_params["enable_roi"].get<bool>();
-  global_params_.render_roi_x_ = std::max(0, x);
-  global_params_.render_roi_y_ = std::max(0, y);
-  global_params_.render_roi_scale_x_ = clamped_scale_x;
-  global_params_.render_roi_scale_y_ = clamped_scale_y;
-  global_params_.render_roi_reference_width_ = std::max(0, reference_width);
+  global_params_.render_roi_enabled_          = resize_params["enable_roi"].get<bool>();
+  global_params_.render_roi_x_                = std::max(0, x);
+  global_params_.render_roi_y_                = std::max(0, y);
+  global_params_.render_roi_scale_x_          = clamped_scale_x;
+  global_params_.render_roi_scale_y_          = clamped_scale_y;
+  global_params_.render_roi_reference_width_  = std::max(0, reference_width);
   global_params_.render_roi_reference_height_ = std::max(0, reference_height);
 
   if (resize_params != prev_resize_params) {
@@ -552,7 +732,7 @@ void CPUPipelineExecutor::SetRenderRes(bool full_res, int max_side_length) {
 void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) {
   const nlohmann::json prev_resize_params =
       render_params_.contains("resize") ? render_params_["resize"] : nlohmann::json::object();
-  auto& resize_params = render_params_["resize"];
+  auto& resize_params                   = render_params_["resize"];
 
   resize_params["downsample_algorithm"] = ToResizeAlgorithmParam(algorithm);
 
@@ -563,7 +743,7 @@ void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm
 }
 
 void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
-  decode_res_ = res;
+  decode_res_     = res;
 
   // decode_res is a one-shot render parameter. Install it on the live op for this
   // Apply only; RawDecodeOp::GetParams deliberately omits it from durable export.
@@ -590,10 +770,11 @@ void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
 
 auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
   OneShotRenderParamsSnapshot snapshot;
-  snapshot.decode_res_       = decode_res_;
-  snapshot.render_params_    = render_params_;
-  snapshot.force_cpu_output_ = force_cpu_output_;
-  snapshot.enable_cache_     = enable_cache_;
+  snapshot.decode_res_              = decode_res_;
+  snapshot.render_params_           = render_params_;
+  snapshot.force_cpu_output_        = force_cpu_output_;
+  snapshot.enable_cache_            = enable_cache_;
+  snapshot.render_request_viewport_ = render_request_viewport_;
   return snapshot;
 }
 
@@ -603,29 +784,28 @@ void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSn
     // SetEnableCache rebuilds stage cache flags; only call when the value changes.
     SetEnableCache(snapshot.enable_cache_);
   }
-  render_params_ = snapshot.render_params_;
+  render_params_           = snapshot.render_params_;
+  render_request_viewport_ = snapshot.render_request_viewport_;
   stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
       OperatorType::RESIZE, render_params_);
 
   if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
-    const auto& resize_params              = render_params_["resize"];
-    global_params_.render_roi_enabled_     = resize_params.value("enable_roi", false);
+    const auto& resize_params          = render_params_["resize"];
+    global_params_.render_roi_enabled_ = resize_params.value("enable_roi", false);
     if (resize_params.contains("roi") && resize_params["roi"].is_object()) {
-      const auto& roi                          = resize_params["roi"];
-      global_params_.render_roi_x_             = roi.value("x", 0);
-      global_params_.render_roi_y_             = roi.value("y", 0);
-      global_params_.render_roi_scale_x_       = roi.value("resize_factor_x", 1.0f);
-      global_params_.render_roi_scale_y_       = roi.value("resize_factor_y", 1.0f);
-      global_params_.render_roi_reference_width_ =
-          roi.value("reference_width", 0);
-      global_params_.render_roi_reference_height_ =
-          roi.value("reference_height", 0);
+      const auto& roi                             = resize_params["roi"];
+      global_params_.render_roi_x_                = roi.value("x", 0);
+      global_params_.render_roi_y_                = roi.value("y", 0);
+      global_params_.render_roi_scale_x_          = roi.value("resize_factor_x", 1.0f);
+      global_params_.render_roi_scale_y_          = roi.value("resize_factor_y", 1.0f);
+      global_params_.render_roi_reference_width_  = roi.value("reference_width", 0);
+      global_params_.render_roi_reference_height_ = roi.value("reference_height", 0);
     } else {
-      global_params_.render_roi_x_               = 0;
-      global_params_.render_roi_y_               = 0;
-      global_params_.render_roi_scale_x_         = 1.0f;
-      global_params_.render_roi_scale_y_         = 1.0f;
-      global_params_.render_roi_reference_width_ = 0;
+      global_params_.render_roi_x_                = 0;
+      global_params_.render_roi_y_                = 0;
+      global_params_.render_roi_scale_x_          = 1.0f;
+      global_params_.render_roi_scale_y_          = 1.0f;
+      global_params_.render_roi_reference_width_  = 0;
       global_params_.render_roi_reference_height_ = 0;
     }
   }
@@ -697,7 +877,7 @@ void CPUPipelineExecutor::SetTemplateParams() {
                            lens_params["lens_calib"].value("enabled", true), global_params);
 
   nlohmann::json color_temp_params;
-  auto&          to_ws_stage = GetStage(PipelineStageName::To_WorkingSpace);
+  auto&          to_ws_stage      = GetStage(PipelineStageName::To_WorkingSpace);
   color_temp_params["color_temp"] = {{"mode", "as_shot"},
                                      {"custom_cct", 6500.0f},
                                      {"custom_tint", 0.0f},
@@ -709,8 +889,8 @@ void CPUPipelineExecutor::SetTemplateParams() {
   auto&          output_stage = GetStage(PipelineStageName::Output_Transform);
   output_params               = pipeline_defaults::MakeDefaultODTParams();
   output_stage.SetOperator(OperatorType::ODT, output_params, global_params);
-  output_stage.SetOperator(OperatorType::FILM_GRAIN, pipeline_defaults::MakeDefaultFilmGrainParams(),
-                           global_params);
+  output_stage.SetOperator(OperatorType::FILM_GRAIN,
+                           pipeline_defaults::MakeDefaultFilmGrainParams(), global_params);
   output_stage.SetOperator(OperatorType::HALATION, pipeline_defaults::MakeDefaultHalationParams(),
                            global_params);
 }
@@ -723,6 +903,33 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
+  injected_raw_color_context_ = ctx;
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+  if (pipeline_document_) {
+    ApplyImportedCameraProfile(*pipeline_document_, ctx);
+  }
+#endif
+
+  // EditorColorTempModel loads as_shot_cct from ColorTempOp JSON. Persist the
+  // import-time solve so the panel does not re-parse RAW.
+  auto& to_ws_stage = GetStage(PipelineStageName::To_WorkingSpace);
+  if (const auto color_temp_entry = to_ws_stage.GetOperator(OperatorType::COLOR_TEMP);
+      color_temp_entry.has_value() && color_temp_entry.value() && color_temp_entry.value()->op_) {
+    color_temp_entry.value()->op_->SetGlobalParams(global_params_);
+    auto color_temp_params = color_temp_entry.value()->op_->GetParams();
+#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+    if (pipeline_document_ != nullptr && pipeline_document_->Develop() != nullptr) {
+      const auto& develop = pipeline_document_->Develop()->Params().Params();
+      if (!color_temp_params.contains("color_temp") ||
+          !color_temp_params["color_temp"].is_object()) {
+        color_temp_params["color_temp"] = nlohmann::json::object();
+      }
+      color_temp_params["color_temp"]["as_shot_cct"]  = develop.as_shot_cct;
+      color_temp_params["color_temp"]["as_shot_tint"] = develop.as_shot_tint;
+    }
+#endif
+    to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params_);
+  }
 
   // Install image-local inherent RAW context on the decode operator so later
   // GetParams/SetGlobalParams/Apply use the same durable state without a
@@ -746,8 +953,24 @@ void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
   }
 
   if (merged_stages_) {
-    merged_stages_->ResetRuntimeResources(PipelineStage::RuntimeResetMode::ClearIntermediateBuffers);
+    merged_stages_->ResetRuntimeResources(
+        PipelineStage::RuntimeResetMode::ClearIntermediateBuffers);
   }
+#ifdef HAVE_CUDA
+  if (cuda_product_renderer_) {
+    cuda_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 void CPUPipelineExecutor::ReleasePreviewGpuScratch() {
@@ -764,6 +987,21 @@ void CPUPipelineExecutor::ReleaseAllGPUResources() {
   if (merged_stages_) {
     merged_stages_->ResetRuntimeResources(PipelineStage::RuntimeResetMode::ReleaseGpuResources);
   }
+#ifdef HAVE_CUDA
+  if (cuda_product_renderer_) {
+    cuda_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_METAL
+  if (metal_product_renderer_) {
+    metal_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (opencl_product_renderer_) {
+    opencl_product_renderer_->ReleaseSessionCaches();
+  }
+#endif
 }
 
 auto CPUPipelineExecutor::DebugGetMergedStageScratchBytes() const -> size_t {

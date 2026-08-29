@@ -31,6 +31,33 @@ struct OpenClLinearImageResource {
   }
 };
 
+struct OpenClImageResource {
+  cl_mem           image         = nullptr;
+  int              width         = 0;
+  int              height        = 0;
+  FramePixelFormat format        = FramePixelFormat::RGBA32F;
+  bool             owns_memory   = false;
+  std::uintptr_t   native_object = 0;
+
+  ~OpenClImageResource() {
+    if (owns_memory && image != nullptr) {
+      clReleaseMemObject(image);
+      image = nullptr;
+    }
+  }
+};
+
+struct OpenClEventSignalResource {
+  cl_event event = nullptr;
+
+  ~OpenClEventSignalResource() {
+    if (event != nullptr) {
+      clReleaseEvent(event);
+      event = nullptr;
+    }
+  }
+};
+
 struct OpenClBufferResource {
   cl_mem buffer      = nullptr;
   size_t size_bytes  = 0;

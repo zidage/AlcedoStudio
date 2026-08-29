@@ -154,29 +154,31 @@ static inline void AtomicAddFloat(global float* addr, float val) {
 __kernel void hlr_build_mask(global const float4* input,
                              global uchar*        mask_buf,
                              global int*          anyclipped,
-                             HighlightParams      params) {
+                             HighlightParams      params,
+                             uint in_off, uint mask_off, uint anyclipped_off) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   if (x >= params.width || y >= params.height) {
     return;
   }
   const uint   size  = params.width * params.height;
-  const uint   index = y * params.stride + x;
+  const uint   index = in_off + y * params.stride + x;
   const uint   idx   = y * params.width + x;
   const float4 pixel = MaxRgb(input[index]);
 
-  mask_buf[kPlaneBaseR * size + idx] = pixel.x >= params.clips[0] ? 1 : 0;
-  mask_buf[kPlaneBaseG * size + idx] = pixel.y >= params.clips[1] ? 1 : 0;
-  mask_buf[kPlaneBaseB * size + idx] = pixel.z >= params.clips[2] ? 1 : 0;
+  mask_buf[mask_off + kPlaneBaseR * size + idx] = pixel.x >= params.clips[0] ? 1 : 0;
+  mask_buf[mask_off + kPlaneBaseG * size + idx] = pixel.y >= params.clips[1] ? 1 : 0;
+  mask_buf[mask_off + kPlaneBaseB * size + idx] = pixel.z >= params.clips[2] ? 1 : 0;
 
   if (pixel.x >= params.clips[0] || pixel.y >= params.clips[1] || pixel.z >= params.clips[2]) {
-    atomic_add(anyclipped, 1);
+    atomic_add(anyclipped + anyclipped_off, 1);
   }
 }
 
 __kernel void hlr_dilate_mask(global const uchar* mask_buf,
                               global uchar*       dilated_mask_buf,
-                              HighlightParams     params) {
+                              HighlightParams     params,
+                              uint mask_off, uint dilated_off) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   if (x >= params.width || y >= params.height) {
@@ -185,14 +187,14 @@ __kernel void hlr_dilate_mask(global const uchar* mask_buf,
   const uint size = params.width * params.height;
   const uint idx  = y * params.width + x;
 
-  dilated_mask_buf[kPlaneDilatedR * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseR * size, params.width, params.height,
+  dilated_mask_buf[dilated_off + kPlaneDilatedR * size + idx] =
+      DilateMaskAt(mask_buf + mask_off + kPlaneBaseR * size, params.width, params.height,
                    (int)y, (int)x, (int)kDilateRadius);
-  dilated_mask_buf[kPlaneDilatedG * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseG * size, params.width, params.height,
+  dilated_mask_buf[dilated_off + kPlaneDilatedG * size + idx] =
+      DilateMaskAt(mask_buf + mask_off + kPlaneBaseG * size, params.width, params.height,
                    (int)y, (int)x, (int)kDilateRadius);
-  dilated_mask_buf[kPlaneDilatedB * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseB * size, params.width, params.height,
+  dilated_mask_buf[dilated_off + kPlaneDilatedB * size + idx] =
+      DilateMaskAt(mask_buf + mask_off + kPlaneBaseB * size, params.width, params.height,
                    (int)y, (int)x, (int)kDilateRadius);
 }
 
@@ -200,7 +202,8 @@ __kernel void hlr_chrominance_contrib(global const float4* input,
                                       global const uchar*  mask_buf,
                                       global float*        global_sums,
                                       global float*        global_cnts,
-                                      HighlightParams      params) {
+                                      HighlightParams      params,
+                                      uint in_off, uint mask_off, uint sums_off, uint cnts_off) {
   uint x = get_global_id(0);
   uint y = get_global_id(1);
   bool in_bounds = x < params.width && y < params.height;
@@ -210,20 +213,20 @@ __kernel void hlr_chrominance_contrib(global const float4* input,
 
   if (in_bounds) {
     const uint   size  = params.width * params.height;
-    const uint   index = y * params.stride + x;
+    const uint   index = in_off + y * params.stride + x;
     const uint   idx   = y * params.width + x;
     const float4 pixel = MaxRgb(input[index]);
 
-    const bool use_r = mask_buf[kPlaneDilatedR * size + idx] && pixel.x > params.clipdark[0] &&
-                       pixel.x < params.clips[0];
-    const bool use_g = mask_buf[kPlaneDilatedG * size + idx] && pixel.y > params.clipdark[1] &&
-                       pixel.y < params.clips[1];
-    const bool use_b = mask_buf[kPlaneDilatedB * size + idx] && pixel.z > params.clipdark[2] &&
-                       pixel.z < params.clips[2];
+    const bool use_r = mask_buf[mask_off + kPlaneDilatedR * size + idx] &&
+                       pixel.x > params.clipdark[0] && pixel.x < params.clips[0];
+    const bool use_g = mask_buf[mask_off + kPlaneDilatedG * size + idx] &&
+                       pixel.y > params.clipdark[1] && pixel.y < params.clips[1];
+    const bool use_b = mask_buf[mask_off + kPlaneDilatedB * size + idx] &&
+                       pixel.z > params.clipdark[2] && pixel.z < params.clips[2];
 
     // refavg costs nine reads; only pay for it inside the chrominance ring.
     if (use_r || use_g || use_b) {
-      const float4 ref = CalcRefavg(input, (int)y, (int)x, params);
+      const float4 ref = CalcRefavg(input + in_off, (int)y, (int)x, params);
       if (use_r) {
         contrib_value.x = pixel.x - ref.x;
         count_value.x   = 1.0f;
@@ -271,12 +274,12 @@ __kernel void hlr_chrominance_contrib(global const float4* input,
   }
 
   if (lid == 0) {
-    AtomicAddFloat(global_sums + 0, l_contrib_r[0]);
-    AtomicAddFloat(global_sums + 1, l_contrib_g[0]);
-    AtomicAddFloat(global_sums + 2, l_contrib_b[0]);
-    AtomicAddFloat(global_cnts + 0, l_cnt_r[0]);
-    AtomicAddFloat(global_cnts + 1, l_cnt_g[0]);
-    AtomicAddFloat(global_cnts + 2, l_cnt_b[0]);
+    AtomicAddFloat(global_sums + sums_off + 0, l_contrib_r[0]);
+    AtomicAddFloat(global_sums + sums_off + 1, l_contrib_g[0]);
+    AtomicAddFloat(global_sums + sums_off + 2, l_contrib_b[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 0, l_cnt_r[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 1, l_cnt_g[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 2, l_cnt_b[0]);
   }
 }
 
@@ -306,4 +309,259 @@ __kernel void hlr_reconstruct(global const float4* input,
   }
 
   output[index] = (float4)(result.x, result.y, result.z, input_pixel.w);
+}
+
+__kernel void hlr_reconstruct_from_stats(global const float4* input,
+                                         global float4*       output,
+                                         global const float*  sums,
+                                         global const float*  cnts,
+                                         HighlightParams      params,
+                                         uint in_off, uint out_off, uint sums_off, uint cnts_off) {
+  uint x = get_global_id(0);
+  uint y = get_global_id(1);
+  if (x >= params.width || y >= params.height) {
+    return;
+  }
+
+  const uint   index       = in_off + y * params.stride + x;
+  const uint   out_index   = out_off + y * params.stride + x;
+  const float4 input_pixel = input[index];
+  const float4 pixel       = MaxRgb(input_pixel);
+  const float3 weight      = (float3)(SoftClipWeight(pixel.x, params.clips[0]),
+                                      SoftClipWeight(pixel.y, params.clips[1]),
+                                      SoftClipWeight(pixel.z, params.clips[2]));
+
+  float chrominance[3];
+  chrominance[0] = (cnts[cnts_off + 0] > 30.0f) ? (sums[sums_off + 0] / cnts[cnts_off + 0]) : 0.0f;
+  chrominance[1] = (cnts[cnts_off + 1] > 30.0f) ? (sums[sums_off + 1] / cnts[cnts_off + 1]) : 0.0f;
+  chrominance[2] = (cnts[cnts_off + 2] > 30.0f) ? (sums[sums_off + 2] / cnts[cnts_off + 2]) : 0.0f;
+
+  float4 result = pixel;
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float4 ref = CalcRefavg(input + in_off, (int)y, (int)x, params);
+    result.x = ReconstructChannel(pixel.x, ref.x, chrominance[0], weight.x);
+    result.y = ReconstructChannel(pixel.y, ref.y, chrominance[1], weight.y);
+    result.z = ReconstructChannel(pixel.z, ref.z, chrominance[2], weight.z);
+  }
+
+  output[out_index] = (float4)(result.x, result.y, result.z, input_pixel.w);
+}
+
+typedef struct {
+  uint  src_x;
+  uint  src_y;
+  uint  src_width;
+  uint  src_height;
+  uint  dst_width;
+  uint  dst_height;
+  uint  flip;
+  float scale_r;
+  float scale_g;
+  float scale_b;
+  uint  plane_stride;
+  uint  src_stride;
+} PackOrientParams;
+
+static inline int2 OrientedCoord(uint x, uint y, PackOrientParams params) {
+  if (params.flip == 3u) {
+    return (int2)((int)(params.src_width - 1u - x), (int)(params.src_height - 1u - y));
+  }
+  if (params.flip == 5u) {
+    return (int2)((int)y, (int)(params.src_width - 1u - x));
+  }
+  if (params.flip == 6u) {
+    return (int2)((int)(params.src_height - 1u - y), (int)x);
+  }
+  return (int2)((int)x, (int)y);
+}
+
+static inline float4 LoadPlanarRgb(global const float* r, global const float* g,
+                                   global const float* b, uint r_off, uint g_off, uint b_off,
+                                   int row, int col, uint plane_stride) {
+  const uint src = (uint)row * plane_stride + (uint)col;
+  return (float4)(r[r_off + src], g[g_off + src], b[b_off + src], 1.0f);
+}
+
+static inline float4 CalcRefavgPlanar(global const float* r, global const float* g,
+                                       global const float* b, uint r_off, uint g_off, uint b_off,
+                                       int local_row, int local_col, HighlightParams params,
+                                       uint crop_x, uint crop_y) {
+  float valid_sum[3] = {0.0f, 0.0f, 0.0f};
+  float valid_cnt[3] = {0.0f, 0.0f, 0.0f};
+  float all_sum[3]   = {0.0f, 0.0f, 0.0f};
+  float all_cnt[3]   = {0.0f, 0.0f, 0.0f};
+
+  const int dymin = max(0, local_row - 1);
+  const int dxmin = max(0, local_col - 1);
+  const int dymax = min((int)params.height - 1, local_row + 1);
+  const int dxmax = min((int)params.width - 1, local_col + 1);
+
+  for (int dy = dymin; dy <= dymax; ++dy) {
+    for (int dx = dxmin; dx <= dxmax; ++dx) {
+      RefavgAccumulate(valid_sum, valid_cnt, all_sum, all_cnt,
+                       LoadPlanarRgb(r, g, b, r_off, g_off, b_off, (int)crop_y + dy,
+                                     (int)crop_x + dx, params.stride),
+                       params);
+    }
+  }
+
+  float mean[3];
+  for (uint c = 0; c < 3u; ++c) {
+    const float m = (valid_cnt[c] > 0.0f) ? valid_sum[c] / valid_cnt[c]
+                    : (all_cnt[c] > 0.0f)   ? all_sum[c] / all_cnt[c]
+                                            : 0.0f;
+    mean[c] = pow(m, 1.0f / 3.0f);
+  }
+
+  return (float4)(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
+                  Cube(0.5f * (mean[0] + mean[1])), 0.0f);
+}
+
+__kernel void hlr_build_mask_planar(global const float* r, global const float* g,
+                                      global const float* b, global uchar* mask_buf,
+                                      global int* anyclipped, HighlightParams params, uint r_off,
+                                      uint g_off, uint b_off, uint mask_off, uint anyclipped_off,
+                                      uint crop_x, uint crop_y) {
+  uint x = get_global_id(0);
+  uint y = get_global_id(1);
+  if (x >= params.width || y >= params.height) {
+    return;
+  }
+  const uint   size  = params.width * params.height;
+  const uint   idx   = y * params.width + x;
+  const float4 pixel = MaxRgb(LoadPlanarRgb(r, g, b, r_off, g_off, b_off, (int)crop_y + (int)y,
+                                             (int)crop_x + (int)x, params.stride));
+
+  mask_buf[mask_off + kPlaneBaseR * size + idx] = pixel.x >= params.clips[0] ? 1 : 0;
+  mask_buf[mask_off + kPlaneBaseG * size + idx] = pixel.y >= params.clips[1] ? 1 : 0;
+  mask_buf[mask_off + kPlaneBaseB * size + idx] = pixel.z >= params.clips[2] ? 1 : 0;
+
+  if (pixel.x >= params.clips[0] || pixel.y >= params.clips[1] || pixel.z >= params.clips[2]) {
+    atomic_add(anyclipped + anyclipped_off, 1);
+  }
+}
+
+__kernel void hlr_chrominance_contrib_planar(global const float* r, global const float* g,
+                                              global const float* b, global const uchar* mask_buf,
+                                              global float* global_sums, global float* global_cnts,
+                                              HighlightParams params, uint r_off, uint g_off,
+                                              uint b_off, uint mask_off, uint sums_off,
+                                              uint cnts_off, uint crop_x, uint crop_y) {
+  uint x         = get_global_id(0);
+  uint y         = get_global_id(1);
+  bool in_bounds = x < params.width && y < params.height;
+
+  float4 contrib_value = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+  float4 count_value   = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+
+  if (in_bounds) {
+    const uint   size  = params.width * params.height;
+    const uint   idx   = y * params.width + x;
+    const float4 pixel = MaxRgb(LoadPlanarRgb(r, g, b, r_off, g_off, b_off, (int)crop_y + (int)y,
+                                               (int)crop_x + (int)x, params.stride));
+
+    const bool use_r = mask_buf[mask_off + kPlaneDilatedR * size + idx] &&
+                       pixel.x > params.clipdark[0] && pixel.x < params.clips[0];
+    const bool use_g = mask_buf[mask_off + kPlaneDilatedG * size + idx] &&
+                       pixel.y > params.clipdark[1] && pixel.y < params.clips[1];
+    const bool use_b = mask_buf[mask_off + kPlaneDilatedB * size + idx] &&
+                       pixel.z > params.clipdark[2] && pixel.z < params.clips[2];
+
+    if (use_r || use_g || use_b) {
+      const float4 ref =
+          CalcRefavgPlanar(r, g, b, r_off, g_off, b_off, (int)y, (int)x, params, crop_x, crop_y);
+      if (use_r) {
+        contrib_value.x = pixel.x - ref.x;
+        count_value.x   = 1.0f;
+      }
+      if (use_g) {
+        contrib_value.y = pixel.y - ref.y;
+        count_value.y   = 1.0f;
+      }
+      if (use_b) {
+        contrib_value.z = pixel.z - ref.z;
+        count_value.z   = 1.0f;
+      }
+    }
+  }
+
+  const uint lid = get_local_id(1) * get_local_size(0) + get_local_id(0);
+  const uint lsz = get_local_size(0) * get_local_size(1);
+
+  local float l_contrib_r[256];
+  local float l_contrib_g[256];
+  local float l_contrib_b[256];
+  local float l_cnt_r[256];
+  local float l_cnt_g[256];
+  local float l_cnt_b[256];
+
+  l_contrib_r[lid] = contrib_value.x;
+  l_contrib_g[lid] = contrib_value.y;
+  l_contrib_b[lid] = contrib_value.z;
+  l_cnt_r[lid]     = count_value.x;
+  l_cnt_g[lid]     = count_value.y;
+  l_cnt_b[lid]     = count_value.z;
+
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  for (uint stride = lsz / 2; stride > 0; stride >>= 1) {
+    if (lid < stride) {
+      l_contrib_r[lid] += l_contrib_r[lid + stride];
+      l_contrib_g[lid] += l_contrib_g[lid + stride];
+      l_contrib_b[lid] += l_contrib_b[lid + stride];
+      l_cnt_r[lid] += l_cnt_r[lid + stride];
+      l_cnt_g[lid] += l_cnt_g[lid + stride];
+      l_cnt_b[lid] += l_cnt_b[lid + stride];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+
+  if (lid == 0) {
+    AtomicAddFloat(global_sums + sums_off + 0, l_contrib_r[0]);
+    AtomicAddFloat(global_sums + sums_off + 1, l_contrib_g[0]);
+    AtomicAddFloat(global_sums + sums_off + 2, l_contrib_b[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 0, l_cnt_r[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 1, l_cnt_g[0]);
+    AtomicAddFloat(global_cnts + cnts_off + 2, l_cnt_b[0]);
+  }
+}
+
+__kernel void hlr_reconstruct_from_stats_planar_pack(global const float* r, global const float* g,
+                                                      global const float* b,
+                                                      __write_only image2d_t dst,
+                                                      global const float* sums,
+                                                      global const float* cnts,
+                                                      HighlightParams params, PackOrientParams pack,
+                                                      uint r_off, uint g_off, uint b_off,
+                                                      uint sums_off, uint cnts_off) {
+  uint x = get_global_id(0);
+  uint y = get_global_id(1);
+  if (x >= pack.src_width || y >= pack.src_height) {
+    return;
+  }
+
+  const float4 input_pixel = LoadPlanarRgb(r, g, b, r_off, g_off, b_off, (int)pack.src_y + (int)y,
+                                            (int)pack.src_x + (int)x, pack.plane_stride);
+  const float4 pixel        = MaxRgb(input_pixel);
+  const float3 weight        = (float3)(SoftClipWeight(pixel.x, params.clips[0]),
+                                          SoftClipWeight(pixel.y, params.clips[1]),
+                                          SoftClipWeight(pixel.z, params.clips[2]));
+
+  float chrominance[3];
+  chrominance[0] = (cnts[cnts_off + 0] > 30.0f) ? (sums[sums_off + 0] / cnts[cnts_off + 0]) : 0.0f;
+  chrominance[1] = (cnts[cnts_off + 1] > 30.0f) ? (sums[sums_off + 1] / cnts[cnts_off + 1]) : 0.0f;
+  chrominance[2] = (cnts[cnts_off + 2] > 30.0f) ? (sums[sums_off + 2] / cnts[cnts_off + 2]) : 0.0f;
+
+  float4 result = pixel;
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float4 ref = CalcRefavgPlanar(r, g, b, r_off, g_off, b_off, (int)y, (int)x, params,
+                                        pack.src_x, pack.src_y);
+    result.x        = ReconstructChannel(pixel.x, ref.x, chrominance[0], weight.x);
+    result.y        = ReconstructChannel(pixel.y, ref.y, chrominance[1], weight.y);
+    result.z        = ReconstructChannel(pixel.z, ref.z, chrominance[2], weight.z);
+  }
+
+  write_imagef(dst, OrientedCoord(x, y, pack),
+               (float4)(result.x * pack.scale_r, result.y * pack.scale_g, result.z * pack.scale_b,
+                        1.0f));
 }

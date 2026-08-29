@@ -11,27 +11,29 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
-#include <fstream>
-#include <thread>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <opencv2/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <random>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
-#include "app/import_service.hpp"
 #include "app/history_mgmt_service.hpp"
+#include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -104,11 +106,9 @@ static uint64_t HashImageBufferCpuBytes(ImageBuffer& buffer) {
   return HashMatBytes(mat);
 }
 
-static std::shared_ptr<ThumbnailGuard> GetThumbnailBlocking(ThumbnailService& service,
-                                                            sl_element_id_t id, image_id_t image_id,
-                                                            bool pin_if_found = true,
-                                                            ThumbnailResolution resolution =
-                                                                ThumbnailResolution::k1024) {
+static std::shared_ptr<ThumbnailGuard> GetThumbnailBlocking(
+    ThumbnailService& service, sl_element_id_t id, image_id_t image_id, bool pin_if_found = true,
+    ThumbnailResolution resolution = ThumbnailResolution::k1024) {
   std::promise<std::shared_ptr<ThumbnailGuard>> done;
   auto                                          fut = done.get_future();
   service.GetThumbnail(
@@ -621,7 +621,8 @@ class ThumbnailServiceTests : public ::testing::Test {
     static int db_seq = 0;
     const auto suffix = "_" + std::to_string(db_seq++);
     db_path_ = std::filesystem::temp_directory_path() / ("thumbnail_service_test" + suffix + ".db");
-    meta_path_ = std::filesystem::temp_directory_path() / ("thumbnail_service_test" + suffix + ".json");
+    meta_path_ =
+        std::filesystem::temp_directory_path() / ("thumbnail_service_test" + suffix + ".json");
     try {
       if (std::filesystem::exists(db_path_)) {
         std::filesystem::remove(db_path_);
@@ -682,18 +683,18 @@ TEST(ThumbnailCacheUtilityTest, ResizeWithEvictDropsLruRecordsImmediately) {
 }
 
 TEST_F(ThumbnailServiceTests, ThumbnailTaskPropagatesDecodeResolutionToRawOperator) {
-  auto exec = std::make_shared<CPUPipelineExecutor>(false);
+  auto         exec = std::make_shared<CPUPipelineExecutor>(false);
 
   PipelineTask task;
-  task.pipeline_executor_ = exec;
+  task.pipeline_executor_                 = exec;
   task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
-  task.options_.render_desc_.max_edge_ = 256;
-  task.options_.render_desc_.decode_res_ = DecodeRes::EIGHTH;
+  task.options_.render_desc_.max_edge_    = 256;
+  task.options_.render_desc_.decode_res_  = DecodeRes::EIGHTH;
 
   task.SetExecutorRenderParams();
 
   auto& raw_stage = exec->GetStage(PipelineStageName::Image_Loading);
-  auto raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
+  auto  raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
   ASSERT_TRUE(raw_entry.has_value());
   ASSERT_NE(raw_entry.value(), nullptr);
   ASSERT_NE(raw_entry.value()->op_, nullptr);
@@ -701,7 +702,7 @@ TEST_F(ThumbnailServiceTests, ThumbnailTaskPropagatesDecodeResolutionToRawOperat
   ASSERT_TRUE(params.contains("raw"));
   EXPECT_EQ(params["raw"].value("decode_res", -1), static_cast<int>(DecodeRes::EIGHTH));
 
-  task.options_.render_desc_.max_edge_ = 512;
+  task.options_.render_desc_.max_edge_   = 512;
   task.options_.render_desc_.decode_res_ = DecodeRes::QUARTER;
   task.SetExecutorRenderParams();
   raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
@@ -709,8 +710,7 @@ TEST_F(ThumbnailServiceTests, ThumbnailTaskPropagatesDecodeResolutionToRawOperat
   ASSERT_NE(raw_entry.value(), nullptr);
   ASSERT_NE(raw_entry.value()->op_, nullptr);
   const auto updated_params = raw_entry.value()->op_->GetParams();
-  EXPECT_EQ(updated_params["raw"].value("decode_res", -1),
-            static_cast<int>(DecodeRes::QUARTER));
+  EXPECT_EQ(updated_params["raw"].value("decode_res", -1), static_cast<int>(DecodeRes::QUARTER));
 
   task.ResetThumbnailRenderParams();
 }
@@ -753,10 +753,10 @@ TEST_F(ThumbnailServiceTests, DISABLED_GenerateThumbnailAndCallbacks) {
   ASSERT_EQ(snapshot.metadata_ok_.size(), paths.size());
 
   // Get the first file's thumbnail
-  const auto file_id          = snapshot.created_.front().element_id_;
-  const auto image_id         = snapshot.created_.front().image_id_;
+  const auto       file_id          = snapshot.created_.front().element_id_;
+  const auto       image_id         = snapshot.created_.front().image_id_;
 
-  auto       pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
@@ -861,15 +861,15 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
     GTEST_SKIP() << "Sample RAW file is missing: " << raw_path.string();
   }
 
-  ProjectService    project(db_path_, meta_path_);
-  auto              fs_service = project.GetSleeveService();
-  auto              img_pool   = project.GetImagePoolService();
-  ImportServiceImpl import_service(fs_service, img_pool);
+  ProjectService             project(db_path_, meta_path_);
+  auto                       fs_service = project.GetSleeveService();
+  auto                       img_pool   = project.GetImagePoolService();
+  ImportServiceImpl          import_service(fs_service, img_pool);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
   auto                       final_result_future = final_result.get_future();
-  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
 
@@ -890,26 +890,26 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
   project.GetImagePoolService()->SyncWithStorage();
   project.SaveProject(meta_path_);
 
-  const auto element_id = snapshot.created_.front().element_id_;
-  const auto image_id   = snapshot.created_.front().image_id_;
+  const auto element_id       = snapshot.created_.front().element_id_;
+  const auto image_id         = snapshot.created_.front().image_id_;
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto pipeline_guard   = pipeline_service->LoadPipeline(element_id);
+  auto       pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto       pipeline_guard   = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(pipeline_guard, nullptr);
   ASSERT_NE(pipeline_guard->pipeline_, nullptr);
 
-  auto exec = pipeline_guard->pipeline_;
-  auto& global_params  = exec->GetGlobalParams();
-  auto& loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
-  auto& geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
+  auto           exec           = pipeline_guard->pipeline_;
+  auto&          global_params  = exec->GetGlobalParams();
+  auto&          loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
+  auto&          geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
 
   // The decode backend is a runtime property of the pipeline (resolved from
   // the accelerator preference); the params must not carry it.
-  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["backend"] = "alcedo";
+  nlohmann::json raw_params     = pipeline_defaults::MakeDefaultRawDecodeParams();
+  raw_params["raw"]["backend"]  = "alcedo";
   loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
 
-  nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
+  nlohmann::json crop_params                  = pipeline_defaults::MakeDefaultCropRotateParams();
   crop_params["crop_rotate"]["enabled"]       = true;
   crop_params["crop_rotate"]["enable_crop"]   = true;
   crop_params["crop_rotate"]["angle_degrees"] = 0.0f;
@@ -944,21 +944,20 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
 }
 
 TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
-  const auto raw_path =
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
   }
 
-  ProjectService    project(db_path_, meta_path_);
-  auto              fs_service = project.GetSleeveService();
-  auto              img_pool   = project.GetImagePoolService();
-  ImportServiceImpl import_service(fs_service, img_pool);
+  ProjectService             project(db_path_, meta_path_);
+  auto                       fs_service = project.GetSleeveService();
+  auto                       img_pool   = project.GetImagePoolService();
+  ImportServiceImpl          import_service(fs_service, img_pool);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
   auto                       final_result_future = final_result.get_future();
-  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
 
@@ -979,10 +978,10 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   project.GetImagePoolService()->SyncWithStorage();
   project.SaveProject(meta_path_);
 
-  const auto element_id = snapshot.created_.front().element_id_;
-  const auto image_id   = snapshot.created_.front().image_id_;
+  const auto       element_id       = snapshot.created_.front().element_id_;
+  const auto       image_id         = snapshot.created_.front().image_id_;
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
   const uint64_t thumbnail_hash = GetThumbnailHashBlocking(thumbnail_service, element_id, image_id);
@@ -1031,21 +1030,20 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
 // state. Verified by pinning + dirtying the live guard across the render and
 // asserting pin_count_/dirty_ are unchanged afterward.
 TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard) {
-  const auto raw_path =
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
   }
 
-  ProjectService    project(db_path_, meta_path_);
-  auto              fs_service = project.GetSleeveService();
-  auto              img_pool   = project.GetImagePoolService();
-  ImportServiceImpl import_service(fs_service, img_pool);
+  ProjectService             project(db_path_, meta_path_);
+  auto                       fs_service = project.GetSleeveService();
+  auto                       img_pool   = project.GetImagePoolService();
+  ImportServiceImpl          import_service(fs_service, img_pool);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
   auto                       final_result_future = final_result.get_future();
-  import_job->on_finished_                        = [&final_result](const ImportResult& result) {
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
 
@@ -1066,16 +1064,16 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   project.GetImagePoolService()->SyncWithStorage();
   project.SaveProject(meta_path_);
 
-  const auto element_id = snapshot.created_.front().element_id_;
-  const auto image_id   = snapshot.created_.front().image_id_;
+  const auto       element_id       = snapshot.created_.front().element_id_;
+  const auto       image_id         = snapshot.created_.front().image_id_;
 
-  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
   // Pin the live guard and mark it dirty. A correct snapshot render must leave
   // both untouched: it never calls SavePipeline on this guard, so the pin is not
   // decremented and dirty state is not cleared.
-  auto live_guard = pipeline_service->LoadPipeline(element_id);
+  auto             live_guard = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(live_guard, nullptr);
   ASSERT_NE(live_guard->pipeline_, nullptr);
   live_guard->dirty_ = true;
@@ -1095,39 +1093,113 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
 
   // Acceptance: the live guard was not released or reset by the analysis render.
   EXPECT_EQ(live_guard->pin_count_, size_t{1});  // no SavePipeline on the live guard
-  EXPECT_EQ(live_guard->dirty_, true);          // dirty not cleared
-  ASSERT_NE(live_guard->pipeline_, nullptr);   // executor still valid
+  EXPECT_EQ(live_guard->dirty_, true);           // dirty not cleared
+  ASSERT_NE(live_guard->pipeline_, nullptr);     // executor still valid
 
   thumbnail_service.ReleaseAnalysisRendition(result.key);
   pipeline_service->SavePipeline(live_guard);  // release the test's pin
 }
 
-TEST_F(ThumbnailServiceTests,
-       DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
-  const auto raw_path =
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExecutor) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  if (!std::filesystem::exists(raw_path)) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
+  }
+
+  ProjectService             project(db_path_, meta_path_);
+  auto                       fs_service = project.GetSleeveService();
+  auto                       img_pool   = project.GetImagePoolService();
+  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto                       import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> imported;
+  auto                       imported_future = imported.get_future();
+  import_job->on_finished_                   = [&imported](const ImportResult& result) {
+    imported.set_value(result);
+  };
+  import_job = import_service.ImportToFolder({raw_path}, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(imported_future.wait_for(60s), std::future_status::ready);
+  ASSERT_EQ(imported_future.get().imported_, 1u);
+  ASSERT_NE(import_job->import_log_, nullptr);
+  const auto import_snapshot = import_job->import_log_->Snapshot();
+  ASSERT_EQ(import_snapshot.created_.size(), 1u);
+  import_service.SyncImports(import_snapshot, L"");
+  project.GetSleeveService()->Sync();
+  project.GetImagePoolService()->SyncWithStorage();
+
+  const auto       element_id       = import_snapshot.created_.front().element_id_;
+  const auto       image_id         = import_snapshot.created_.front().image_id_;
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
+  auto             live_guard = pipeline_service->LoadPipeline(element_id);
+  ASSERT_NE(live_guard, nullptr);
+  ASSERT_NE(live_guard->pipeline_, nullptr);
+  live_guard->dirty_ = true;
+  ASSERT_EQ(live_guard->pin_count_, size_t{1});
+  EXPECT_TRUE(live_guard->pipeline_->HasGpuDagDocument());
+
+  std::string snap_err;
+  auto        snap = pipeline_service->LoadPipelineSnapshot(element_id, image_id, &snap_err);
+  ASSERT_NE(snap, nullptr) << snap_err;
+  ASSERT_NE(snap->executor_, nullptr);
+  EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
+
+  auto img = img_pool->Read<std::shared_ptr<Image>>(
+      image_id, [](const std::shared_ptr<Image>& image) { return image; });
+  ASSERT_NE(img, nullptr);
+  ASSERT_TRUE(img->HasRawColorContext());
+  snap->executor_->InjectRawMetadata(img->GetRawColorContext());
+  snap->executor_->SetForceCPUOutput(true);
+  snap->executor_->SetEnableCache(false);
+  snap->executor_->SetDecodeRes(DecodeRes::EIGHTH);
+  snap->executor_->SetRenderRes(false, 256);
+  auto encoded = ByteBufferLoader::LoadByteBufferFromImage(img);
+  auto input   = std::make_shared<ImageBuffer>(std::move(encoded));
+  std::shared_ptr<ImageBuffer> dag_output;
+  try {
+    std::unique_lock<std::mutex> render_lock(snap->executor_->GetRenderLock());
+    dag_output = snap->executor_->Apply(input);
+  } catch (const std::exception& e) {
+    FAIL() << e.what();
+  }
+  ASSERT_NE(dag_output, nullptr);
+  EXPECT_TRUE(dag_output->cpu_data_valid_);
+
+  pipeline_service->ReleasePipelineSnapshot(snap);
+
+  auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                        ThumbnailResolution::k256);
+  ASSERT_NE(thumbnail, nullptr);
+  ASSERT_NE(thumbnail->thumbnail_buffer_, nullptr);
+  EXPECT_EQ(live_guard->pin_count_, size_t{1});
+  EXPECT_TRUE(live_guard->dirty_);
+
+  thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
+  pipeline_service->SavePipeline(live_guard);
+}
+
+TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample RAW file is missing: " << raw_path.string();
   }
 
   const auto cache_root =
       std::filesystem::temp_directory_path() /
-      ("thumbnail_disk_cache_e2e_" + std::to_string(
-                                      std::chrono::steady_clock::now()
-                                          .time_since_epoch()
-                                          .count()));
+      ("thumbnail_disk_cache_e2e_" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   std::error_code cleanup_ec;
   std::filesystem::remove_all(cache_root, cleanup_ec);
 
-  ProjectService    project(db_path_, meta_path_);
-  auto              fs_service = project.GetSleeveService();
-  auto              img_pool   = project.GetImagePoolService();
-  ImportServiceImpl import_service(fs_service, img_pool);
+  ProjectService             project(db_path_, meta_path_);
+  auto                       fs_service = project.GetSleeveService();
+  auto                       img_pool   = project.GetImagePoolService();
+  ImportServiceImpl          import_service(fs_service, img_pool);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
   auto                       final_result_future = final_result.get_future();
-  import_job->on_finished_ = [&final_result](const ImportResult& result) {
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
 
@@ -1148,32 +1220,32 @@ TEST_F(ThumbnailServiceTests,
   project.GetImagePoolService()->SyncWithStorage();
   project.SaveProject(meta_path_);
 
-  const auto element_id = snapshot.created_.front().element_id_;
-  const auto image_id   = snapshot.created_.front().image_id_;
+  const auto element_id            = snapshot.created_.front().element_id_;
+  const auto image_id              = snapshot.created_.front().image_id_;
 
-  auto root_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto root_guard = root_pipeline_service->LoadEditorPipeline(element_id);
+  auto       root_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto       root_guard            = root_pipeline_service->LoadEditorPipeline(element_id);
   ASSERT_NE(root_guard, nullptr);
   root_pipeline_service->SavePipeline(root_guard);
 
   root_id_t root_id{};
   {
-    auto               db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto               graph = graph_service.LoadGraph(element_id);
+    auto             graph = graph_service.LoadGraph(element_id);
     ASSERT_TRUE(graph.has_value());
     root_id = graph->GetRootId();
   }
 
   uint64_t first_hash = 0;
   {
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
                                        project.GetStorage(), project.GetProjectUUID(), cache_root);
 
-    auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
-                                      ThumbnailResolution::k256);
+    auto             guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                                  ThumbnailResolution::k256);
     ASSERT_NE(guard, nullptr);
     ASSERT_NE(guard->thumbnail_buffer_, nullptr);
     first_hash = HashImageBufferCpuBytes(*guard->thumbnail_buffer_);
@@ -1188,16 +1260,15 @@ TEST_F(ThumbnailServiceTests,
     nlohmann::json metadata;
     metadata_file >> metadata;
     ASSERT_EQ(metadata["entries"].size(), 1u);
-    EXPECT_EQ(metadata["entries"][0]["edit_version_hash"].get<std::string>(),
-              root_id.ToString());
+    EXPECT_EQ(metadata["entries"][0]["edit_version_hash"].get<std::string>(), root_id.ToString());
   }
 
   commit_hash_t active_head{};
   {
-    auto               db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
-    auto               db_lock  = db_guard.Lock();
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    auto               graph = graph_service.LoadGraph(element_id);
+    auto             graph = graph_service.LoadGraph(element_id);
     ASSERT_TRUE(graph.has_value());
 
     OrdinaryEditPayload payload;
@@ -1217,11 +1288,11 @@ TEST_F(ThumbnailServiceTests,
   }
 
   {
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
                                        project.GetStorage(), project.GetProjectUUID(), cache_root);
-    auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
-                                      ThumbnailResolution::k256);
+    auto             guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                                  ThumbnailResolution::k256);
     ASSERT_NE(guard, nullptr);
     ASSERT_NE(guard->thumbnail_buffer_, nullptr);
     thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
@@ -1246,12 +1317,12 @@ TEST_F(ThumbnailServiceTests,
   deleting_pipeline_service->Sync();
 
   {
-    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
                                        project.GetStorage(), project.GetProjectUUID(), cache_root);
 
-    auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
-                                      ThumbnailResolution::k256);
+    auto             guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                                  ThumbnailResolution::k256);
     ASSERT_NE(guard, nullptr);
     ASSERT_NE(guard->thumbnail_buffer_, nullptr);
     auto* buffer = guard->thumbnail_buffer_.get();
@@ -1325,10 +1396,10 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
   // changes.
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-    std::string pipline_before;
+    std::string    pipline_before;
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
       default_hash = GetThumbnailHashBlocking(thumbnail_service, file_id, image_id);
@@ -1376,9 +1447,9 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
   // Phase 3: reopen project (pipeline restored from DB) and ensure thumbnail matches the modified
   // one.
   {
-    ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ProjectService   project(db_path_, meta_path_);
+    auto             img_pool         = project.GetImagePoolService();
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
     const auto       restored_hash = GetThumbnailHashBlocking(thumbnail_service, file_id, image_id);
@@ -1446,8 +1517,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzScrollBrowsingNoThrowReloadService) {
   // Phase 1: browse/fuzz.
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
@@ -1463,8 +1534,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzScrollBrowsingNoThrowReloadService) {
   // Phase 2: simulate reloading the service and browsing again.
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
@@ -1547,8 +1618,8 @@ TEST_F(ThumbnailServiceTests, FuzzScrollBrowsingSharedPtrLifetimeStress) {
   std::cout << "[ThumbnailFuzz] Starting phase 1 browsing fuzz..." << std::endl;
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
@@ -1589,8 +1660,8 @@ TEST_F(ThumbnailServiceTests, FuzzScrollBrowsingSharedPtrLifetimeStress) {
   // Phase 2: reload service and stress again.
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
@@ -1654,8 +1725,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_Generate16ThumbnailsAndValidateAll) {
   ASSERT_GE(snapshot.created_.size(), paths.size());
   ASSERT_GE(snapshot.metadata_ok_.size(), paths.size());
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto scheduler        = std::make_shared<PipelineScheduler>(8);
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto             scheduler        = std::make_shared<PipelineScheduler>(8);
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
   std::vector<std::pair<sl_element_id_t, image_id_t>> ids;
@@ -1724,13 +1795,13 @@ TEST_F(ThumbnailServiceTests, DISABLED_Generate16ThumbnailsAndValidateAll) {
 }
 
 TEST_F(ThumbnailServiceTests, MissingPipelineThrows) {
-  ProjectService project(db_path_, meta_path_);
-  auto           img_pool        = project.GetImagePoolService();
+  ProjectService   project(db_path_, meta_path_);
+  auto             img_pool         = project.GetImagePoolService();
 
-  auto           storage_service = project.GetStorage();
-  auto           conn_guard      = storage_service->GetDatabase().GetConnectionGuard();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto scheduler        = std::make_shared<PipelineScheduler>();
+  auto             storage_service  = project.GetStorage();
+  auto             conn_guard       = storage_service->GetDatabase().GetConnectionGuard();
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto             scheduler        = std::make_shared<PipelineScheduler>();
 
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
@@ -1740,12 +1811,12 @@ TEST_F(ThumbnailServiceTests, MissingPipelineThrows) {
 
 TEST_F(ThumbnailServiceTests, MissingImageThrows) {
   ProjectService project(db_path_, meta_path_);
-  auto           img_pool        = project.GetImagePoolService();
+  auto           img_pool         = project.GetImagePoolService();
 
-  auto           storage_service = project.GetStorage();
-  auto           conn_guard      = storage_service->GetDatabase().GetConnectionGuard();
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto scheduler        = std::make_shared<PipelineScheduler>();
+  auto           storage_service  = project.GetStorage();
+  auto           conn_guard       = storage_service->GetDatabase().GetConnectionGuard();
+  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto           scheduler        = std::make_shared<PipelineScheduler>();
 
   constexpr sl_element_id_t kMissingImageId = 7777;
 
@@ -1800,18 +1871,16 @@ TEST_F(ThumbnailServiceTests, CacheKeySeparatesResolutions) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto       eid = snapshot.created_[0].element_id_;
+    const auto       iid = snapshot.created_[0].image_id_;
 
     ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
-    auto guard_256 = GetThumbnailBlocking(svc, eid, iid, true,
-                                          ThumbnailResolution::k256);
+    auto guard_256 = GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k256);
     ASSERT_NE(guard_256, nullptr);
     ASSERT_NE(guard_256->thumbnail_buffer_, nullptr);
 
-    auto guard_1024 = GetThumbnailBlocking(svc, eid, iid, true,
-                                           ThumbnailResolution::k1024);
+    auto guard_1024 = GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k1024);
     ASSERT_NE(guard_1024, nullptr);
     ASSERT_NE(guard_1024->thumbnail_buffer_, nullptr);
 
@@ -1820,8 +1889,8 @@ TEST_F(ThumbnailServiceTests, CacheKeySeparatesResolutions) {
 
     // Releasing one request key must not release the other tier for the same element.
     svc.ReleaseThumbnail(ThumbnailCacheKey{eid, ThumbnailResolution::k256});
-    auto guard_1024_still_cached = GetThumbnailBlocking(svc, eid, iid, true,
-                                                        ThumbnailResolution::k1024);
+    auto guard_1024_still_cached =
+        GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k1024);
     ASSERT_NE(guard_1024_still_cached, nullptr);
     EXPECT_EQ(guard_1024_still_cached.get(), guard_1024.get());
     svc.ReleaseThumbnail(ThumbnailCacheKey{eid, ThumbnailResolution::k1024});
@@ -1848,13 +1917,11 @@ TEST_F(ThumbnailServiceTests, CacheKeySeparatesResolutions) {
     // Release via ReleaseThumbnail (clears all tiers), then re-request.
     // Both tiers should be independently recoverable.
     svc.ReleaseThumbnail(eid);
-    auto guard_256_after = GetThumbnailBlocking(svc, eid, iid, false,
-                                                ThumbnailResolution::k256);
+    auto guard_256_after = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k256);
     ASSERT_NE(guard_256_after, nullptr);
     ASSERT_NE(guard_256_after->thumbnail_buffer_, nullptr);
 
-    auto guard_1024_after = GetThumbnailBlocking(svc, eid, iid, false,
-                                                 ThumbnailResolution::k1024);
+    auto guard_1024_after = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
     ASSERT_NE(guard_1024_after, nullptr);
     ASSERT_NE(guard_1024_after->thumbnail_buffer_, nullptr);
 
@@ -1898,8 +1965,8 @@ TEST_F(ThumbnailServiceTests, MultiResolutionPinIndependence) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto       eid = snapshot.created_[0].element_id_;
+    const auto       iid = snapshot.created_[0].image_id_;
 
     ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
@@ -1917,8 +1984,7 @@ TEST_F(ThumbnailServiceTests, MultiResolutionPinIndependence) {
     }
 
     // After all releases, unpinned request should succeed and get a fresh entry.
-    auto fresh = GetThumbnailBlocking(svc, eid, iid, false,
-                                      ThumbnailResolution::k1024);
+    auto fresh = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
     ASSERT_NE(fresh, nullptr);
     ASSERT_NE(fresh->thumbnail_buffer_, nullptr);
     // Newly-created guard always starts at pin_count_=1 (the request itself
@@ -1965,17 +2031,17 @@ TEST_F(ThumbnailServiceTests, DISABLED_CancelPendingDoesNotCrash) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto                                    eid = snapshot.created_[0].element_id_;
+    const auto                                    iid = snapshot.created_[0].image_id_;
 
-    ThumbnailService svc(fs_service, img_pool, pipeline_service);
+    ThumbnailService                              svc(fs_service, img_pool, pipeline_service);
 
     // Issue non-pinned request at slowest resolution.
     std::promise<std::shared_ptr<ThumbnailGuard>> promise;
-    auto fut2 = promise.get_future();
-    svc.GetThumbnail(eid, iid,
-                     [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); },
-                     false, nullptr, ThumbnailResolution::k2048);
+    auto                                          fut2 = promise.get_future();
+    svc.GetThumbnail(
+        eid, iid, [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); }, false,
+        nullptr, ThumbnailResolution::k2048);
 
     // Cancel immediately.
     EXPECT_NO_THROW(svc.CancelPending(eid));
@@ -2027,29 +2093,26 @@ TEST_F(ThumbnailServiceTests, DISABLED_CancelPendingStressMultiple) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto                eid = snapshot.created_[0].element_id_;
+    const auto                iid = snapshot.created_[0].image_id_;
 
-    ThumbnailService svc(fs_service, img_pool, pipeline_service);
+    ThumbnailService          svc(fs_service, img_pool, pipeline_service);
 
     // 50 rapid cancel+request cycles at various resolutions.
-    const ThumbnailResolution tiers[] = {
-        ThumbnailResolution::k256, ThumbnailResolution::k512,
-        ThumbnailResolution::k1024, ThumbnailResolution::k2048};
+    const ThumbnailResolution tiers[] = {ThumbnailResolution::k256, ThumbnailResolution::k512,
+                                         ThumbnailResolution::k1024, ThumbnailResolution::k2048};
 
     for (int cycle = 0; cycle < 50; ++cycle) {
-      auto res = tiers[cycle % 4];
+      auto                                                      res = tiers[cycle % 4];
       std::vector<std::future<std::shared_ptr<ThumbnailGuard>>> futures;
 
       // Fire several requests.
       for (int r = 0; r < 4; ++r) {
         auto promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
         futures.push_back(promise->get_future());
-        svc.GetThumbnail(eid, iid,
-                         [promise](std::shared_ptr<ThumbnailGuard> g) {
-                           promise->set_value(g);
-                         },
-                         false, nullptr, res);
+        svc.GetThumbnail(
+            eid, iid, [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); },
+            false, nullptr, res);
       }
 
       // Cancel immediately.
@@ -2063,8 +2126,7 @@ TEST_F(ThumbnailServiceTests, DISABLED_CancelPendingStressMultiple) {
     }
 
     // Final request should still succeed.
-    auto final_guard = GetThumbnailBlocking(svc, eid, iid, false,
-                                            ThumbnailResolution::k1024);
+    auto final_guard = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
     ASSERT_NE(final_guard, nullptr);
     ASSERT_NE(final_guard->thumbnail_buffer_, nullptr);
   }
@@ -2105,22 +2167,20 @@ TEST_F(ThumbnailServiceTests, ResizeCachePreservesPinnedEntries) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto       eid = snapshot.created_[0].element_id_;
+    const auto       iid = snapshot.created_[0].image_id_;
 
     ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
     // Pin k1024.
-    auto guard = GetThumbnailBlocking(svc, eid, iid, true,
-                                      ThumbnailResolution::k1024);
+    auto             guard = GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k1024);
     ASSERT_NE(guard, nullptr);
     ASSERT_GT(guard->pin_count_, 0);
 
     // Resize to 1 — pinned entry survives.
     EXPECT_NO_THROW(svc.ResizeCache(1));
 
-    auto still_there = GetThumbnailBlocking(svc, eid, iid, false,
-                                            ThumbnailResolution::k1024);
+    auto still_there = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
     ASSERT_NE(still_there, nullptr);
     EXPECT_EQ(still_there.get(), guard.get());
 
@@ -2165,8 +2225,8 @@ TEST_F(ThumbnailServiceTests, ResizeCacheClampsToBounds) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto       eid = snapshot.created_[0].element_id_;
+    const auto       iid = snapshot.created_[0].image_id_;
 
     ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
@@ -2175,8 +2235,7 @@ TEST_F(ThumbnailServiceTests, ResizeCacheClampsToBounds) {
     EXPECT_NO_THROW(svc.ResizeCache(1000000));
 
     // Normal operation after extreme resizes should work.
-    auto guard = GetThumbnailBlocking(svc, eid, iid, false,
-                                      ThumbnailResolution::k1024);
+    auto guard = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
     ASSERT_NE(guard, nullptr);
     ASSERT_NE(guard->thumbnail_buffer_, nullptr);
   }
@@ -2217,10 +2276,10 @@ TEST_F(ThumbnailServiceTests, InvalidateClearsAllResolutionTiers) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto                                   eid = snapshot.created_[0].element_id_;
+    const auto                                   iid = snapshot.created_[0].image_id_;
 
-    ThumbnailService svc(fs_service, img_pool, pipeline_service);
+    ThumbnailService                             svc(fs_service, img_pool, pipeline_service);
 
     // Build cache for all 4 tiers (unpinned).
     std::vector<std::shared_ptr<ThumbnailGuard>> guards;
@@ -2280,14 +2339,14 @@ TEST_F(ThumbnailServiceTests, BackwardCompatibleDefaultResolution) {
     img_pool->SyncWithStorage();
     project.SaveProject(meta_path_);
 
-    const auto eid = snapshot.created_[0].element_id_;
-    const auto iid = snapshot.created_[0].image_id_;
+    const auto                                    eid = snapshot.created_[0].element_id_;
+    const auto                                    iid = snapshot.created_[0].image_id_;
 
-    ThumbnailService svc(fs_service, img_pool, pipeline_service);
+    ThumbnailService                              svc(fs_service, img_pool, pipeline_service);
 
     // Old-style call (no resolution param) defaults to k1024.
     std::promise<std::shared_ptr<ThumbnailGuard>> done;
-    auto fut2 = done.get_future();
+    auto                                          fut2 = done.get_future();
     svc.GetThumbnail(eid, iid,
                      [&done](std::shared_ptr<ThumbnailGuard> guard) { done.set_value(guard); });
     ASSERT_EQ(fut2.wait_for(120s), std::future_status::ready);
@@ -2335,8 +2394,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
     ASSERT_EQ(fut.wait_for(120s), std::future_status::ready);
     ASSERT_EQ(fut.get().failed_, 0u);
 
-    auto snapshot = import_job->import_log_->Snapshot();
-    const size_t count = std::min<size_t>(8, snapshot.created_.size());
+    auto         snapshot = import_job->import_log_->Snapshot();
+    const size_t count    = std::min<size_t>(8, snapshot.created_.size());
     for (size_t i = 0; i < count; ++i) {
       ids.push_back({snapshot.created_[i].element_id_, snapshot.created_[i].image_id_});
     }
@@ -2351,17 +2410,17 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
   // Phase 1: fuzz with zoom-like resolution switching.
   {
     ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    auto           img_pool         = project.GetImagePoolService();
+    auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     {
-      ThumbnailService svc(project.GetSleeveService(), img_pool, pipeline_service);
+      ThumbnailService          svc(project.GetSleeveService(), img_pool, pipeline_service);
 
-      const ThumbnailResolution all_res[] = {
-          ThumbnailResolution::k256, ThumbnailResolution::k512,
-          ThumbnailResolution::k1024, ThumbnailResolution::k2048};
+      const ThumbnailResolution all_res[] = {ThumbnailResolution::k256, ThumbnailResolution::k512,
+                                             ThumbnailResolution::k1024,
+                                             ThumbnailResolution::k2048};
 
-      std::mt19937                    rng(0xDECAFBADu);
+      std::mt19937              rng(0xDECAFBADu);
       std::uniform_int_distribution<size_t> idx_dist(0, ids.size() - 1);
       std::uniform_int_distribution<int>    res_dist(0, 3);
 
@@ -2373,7 +2432,7 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
         const auto res        = all_res[res_dist(rng)];
 
         // Request with pin.
-        auto guard = GetThumbnailBlocking(svc, element_id, image_id, true, res);
+        auto       guard      = GetThumbnailBlocking(svc, element_id, image_id, true, res);
         ASSERT_NE(guard, nullptr);
         ASSERT_NE(guard->thumbnail_buffer_, nullptr);
         ASSERT_GT(guard->pin_count_, 0) << "iter=" << iter;
@@ -2398,8 +2457,7 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
 
       // Verify every element still renderable.
       for (const auto& [eid, iid] : ids) {
-        auto guard = GetThumbnailBlocking(svc, eid, iid, false,
-                                          ThumbnailResolution::k1024);
+        auto guard = GetThumbnailBlocking(svc, eid, iid, false, ThumbnailResolution::k1024);
         ASSERT_NE(guard, nullptr);
         ASSERT_NE(guard->thumbnail_buffer_, nullptr);
       }
@@ -2437,11 +2495,11 @@ TEST_F(ThumbnailServiceTests, CancelPendingReturnsNull) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   // Import.
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2467,13 +2525,13 @@ TEST_F(ThumbnailServiceTests, CancelPendingReturnsNull) {
 
   // Issue requests at 3 resolutions, then cancel.
   std::vector<std::future<std::shared_ptr<ThumbnailGuard>>> futures;
-  for (auto res : {ThumbnailResolution::k256, ThumbnailResolution::k512,
-                   ThumbnailResolution::k1024}) {
+  for (auto res :
+       {ThumbnailResolution::k256, ThumbnailResolution::k512, ThumbnailResolution::k1024}) {
     auto promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
     futures.push_back(promise->get_future());
-    svc.GetThumbnail(eid, iid,
-                     [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); },
-                     false, nullptr, res);
+    svc.GetThumbnail(
+        eid, iid, [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); }, false,
+        nullptr, res);
   }
 
   // Cancel — pending callbacks fire with nullptr (Strategy C).
@@ -2510,10 +2568,10 @@ TEST_F(ThumbnailServiceTests, CancelPendingDrainsAllResolutions) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2535,28 +2593,27 @@ TEST_F(ThumbnailServiceTests, CancelPendingDrainsAllResolutions) {
     iid = snapshot.created_[0].image_id_;
   }
 
-  ThumbnailService svc(fs_service, img_pool, pipeline_service);
+  ThumbnailService          svc(fs_service, img_pool, pipeline_service);
 
   // Fire one request per resolution tier — all land in pending_.
-  std::atomic<int> callback_count{0};
-  std::atomic<int> null_count{0};
-  std::promise<void> all_done;
-  auto               all_fut = all_done.get_future();
+  std::atomic<int>          callback_count{0};
+  std::atomic<int>          null_count{0};
+  std::promise<void>        all_done;
+  auto                      all_fut = all_done.get_future();
 
-  const ThumbnailResolution tiers[] = {
-      ThumbnailResolution::k256, ThumbnailResolution::k512,
-      ThumbnailResolution::k1024, ThumbnailResolution::k2048};
+  const ThumbnailResolution tiers[] = {ThumbnailResolution::k256, ThumbnailResolution::k512,
+                                       ThumbnailResolution::k1024, ThumbnailResolution::k2048};
 
   for (auto res : tiers) {
-    svc.GetThumbnail(eid, iid,
-                     [&callback_count, &null_count, &all_done,
-                      expected = 4](std::shared_ptr<ThumbnailGuard> g) {
-                       if (g == nullptr) null_count++;
-                       if (callback_count.fetch_add(1) + 1 == expected) {
-                         all_done.set_value();
-                       }
-                     },
-                     false, nullptr, res);
+    svc.GetThumbnail(
+        eid, iid,
+        [&callback_count, &null_count, &all_done, expected = 4](std::shared_ptr<ThumbnailGuard> g) {
+          if (g == nullptr) null_count++;
+          if (callback_count.fetch_add(1) + 1 == expected) {
+            all_done.set_value();
+          }
+        },
+        false, nullptr, res);
   }
 
   // Cancel — all 4 pending callbacks fire with nullptr.
@@ -2586,10 +2643,10 @@ TEST_F(ThumbnailServiceTests, ReleaseThumbnailTriggersCancel) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2614,16 +2671,16 @@ TEST_F(ThumbnailServiceTests, ReleaseThumbnailTriggersCancel) {
   ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
   // Pin a thumbnail at k256 (fast) so it's in cache.
-  auto guard = GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k256);
+  auto             guard = GetThumbnailBlocking(svc, eid, iid, true, ThumbnailResolution::k256);
   ASSERT_NE(guard, nullptr);
   ASSERT_GT(guard->pin_count_, 0);
 
   // Queue a second request at a different resolution → lands in pending_.
   std::promise<std::shared_ptr<ThumbnailGuard>> promise;
-  auto fut2 = promise.get_future();
-  svc.GetThumbnail(eid, iid,
-                   [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); },
-                   false, nullptr, ThumbnailResolution::k512);
+  auto                                          fut2 = promise.get_future();
+  svc.GetThumbnail(
+      eid, iid, [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); }, false,
+      nullptr, ThumbnailResolution::k512);
 
   // ReleaseThumbnail → CancelPending → pending callback drained.
   EXPECT_NO_THROW(svc.ReleaseThumbnail(eid));
@@ -2651,10 +2708,10 @@ TEST_F(ThumbnailServiceTests, RapidCancelRequestCycle) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2676,27 +2733,26 @@ TEST_F(ThumbnailServiceTests, RapidCancelRequestCycle) {
     iid = snapshot.created_[0].image_id_;
   }
 
-  ThumbnailService svc(fs_service, img_pool, pipeline_service);
+  ThumbnailService          svc(fs_service, img_pool, pipeline_service);
 
-  const ThumbnailResolution tiers[] = {
-      ThumbnailResolution::k256, ThumbnailResolution::k512,
-      ThumbnailResolution::k1024, ThumbnailResolution::k2048};
+  const ThumbnailResolution tiers[] = {ThumbnailResolution::k256, ThumbnailResolution::k512,
+                                       ThumbnailResolution::k1024, ThumbnailResolution::k2048};
 
-  std::mt19937                    rng(0xBEEFCAFEu);
+  std::mt19937              rng(0xBEEFCAFEu);
   std::uniform_int_distribution<int> res_dist(0, 3);
   std::uniform_int_distribution<int> count_dist(1, 4);
 
   for (int cycle = 0; cycle < 30; ++cycle) {
-    const auto res   = tiers[res_dist(rng)];
-    const int  n_req = count_dist(rng);
+    const auto                                                res   = tiers[res_dist(rng)];
+    const int                                                 n_req = count_dist(rng);
 
     std::vector<std::future<std::shared_ptr<ThumbnailGuard>>> futures;
     for (int r = 0; r < n_req; ++r) {
       auto promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
       futures.push_back(promise->get_future());
-      EXPECT_NO_THROW(svc.GetThumbnail(eid, iid,
-                        [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); },
-                        false, nullptr, res));
+      EXPECT_NO_THROW(svc.GetThumbnail(
+          eid, iid, [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); }, false,
+          nullptr, res));
     }
 
     EXPECT_NO_THROW(svc.CancelPending(eid));
@@ -2759,14 +2815,15 @@ TEST_F(ThumbnailServiceTests, CancelIsolationMultipleElements) {
   ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
   // Request thumbnails for all elements concurrently.
-  const size_t n = ids.size();
+  const size_t     n = ids.size();
   std::vector<std::future<std::shared_ptr<ThumbnailGuard>>> futures(n);
   for (size_t i = 0; i < n; ++i) {
     auto promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
     futures[i]   = promise->get_future();
-    svc.GetThumbnail(ids[i].first, ids[i].second,
-                     [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); },
-                     false, nullptr, ThumbnailResolution::k256);
+    svc.GetThumbnail(
+        ids[i].first, ids[i].second,
+        [promise](std::shared_ptr<ThumbnailGuard> g) { promise->set_value(g); }, false, nullptr,
+        ThumbnailResolution::k256);
   }
 
   // Cancel only element 0.
@@ -2806,10 +2863,10 @@ TEST_F(ThumbnailServiceTests, GenerationTokenSurvivesConcurrentCancel) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2831,14 +2888,14 @@ TEST_F(ThumbnailServiceTests, GenerationTokenSurvivesConcurrentCancel) {
     iid = snapshot.created_[0].image_id_;
   }
 
-  ThumbnailService svc(fs_service, img_pool, pipeline_service);
+  ThumbnailService  svc(fs_service, img_pool, pipeline_service);
 
   std::atomic<bool> stop{false};
   std::atomic<int>  cancel_count{0};
   std::atomic<int>  request_count{0};
   std::atomic<int>  error_count{0};
 
-  auto cancel_thread = [&]() {
+  auto              cancel_thread = [&]() {
     while (!stop.load()) {
       try {
         svc.CancelPending(eid);
@@ -2855,11 +2912,15 @@ TEST_F(ThumbnailServiceTests, GenerationTokenSurvivesConcurrentCancel) {
       try {
         auto p = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
         auto f = p->get_future();
-        svc.GetThumbnail(eid, iid,
-                         [p](std::shared_ptr<ThumbnailGuard> g) {
-                           try { p->set_value(g); } catch (...) {}
-                         },
-                         false, nullptr, ThumbnailResolution::k256);
+        svc.GetThumbnail(
+            eid, iid,
+            [p](std::shared_ptr<ThumbnailGuard> g) {
+              try {
+                p->set_value(g);
+              } catch (...) {
+              }
+            },
+            false, nullptr, ThumbnailResolution::k256);
         f.wait_for(5s);
         request_count++;
       } catch (...) {
@@ -2905,10 +2966,10 @@ TEST_F(ThumbnailServiceTests, CancelWhileRenderInProgress) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2930,14 +2991,14 @@ TEST_F(ThumbnailServiceTests, CancelWhileRenderInProgress) {
     iid = snapshot.created_[0].image_id_;
   }
 
-  ThumbnailService svc(fs_service, img_pool, pipeline_service);
+  ThumbnailService                              svc(fs_service, img_pool, pipeline_service);
 
   // k2048 = highest decode resolution, slowest render.
   std::promise<std::shared_ptr<ThumbnailGuard>> promise;
-  auto thumb_fut = promise.get_future();
-  svc.GetThumbnail(eid, iid,
-                   [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); },
-                   false, nullptr, ThumbnailResolution::k2048);
+  auto                                          thumb_fut = promise.get_future();
+  svc.GetThumbnail(
+      eid, iid, [&promise](std::shared_ptr<ThumbnailGuard> g) { promise.set_value(g); }, false,
+      nullptr, ThumbnailResolution::k2048);
 
   // Let the render start, then cancel.
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -2969,10 +3030,10 @@ TEST_F(ThumbnailServiceTests, CancelThenImmediateRerequestSameTierCompletes) {
   }
   ASSERT_GE(paths.size(), 1u);
 
-  auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  sl_element_id_t eid = 0;
-  image_id_t      iid = 0;
+  sl_element_id_t eid              = 0;
+  image_id_t      iid              = 0;
   {
     std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> final_result;
@@ -2996,23 +3057,31 @@ TEST_F(ThumbnailServiceTests, CancelThenImmediateRerequestSameTierCompletes) {
 
   ThumbnailService svc(fs_service, img_pool, pipeline_service);
 
-  auto old_promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
-  auto old_fut = old_promise->get_future();
-  svc.GetThumbnail(eid, iid,
-                   [old_promise](std::shared_ptr<ThumbnailGuard> g) {
-                     try { old_promise->set_value(g); } catch (...) {}
-                   },
-                   false, nullptr, ThumbnailResolution::k2048);
+  auto             old_promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
+  auto             old_fut     = old_promise->get_future();
+  svc.GetThumbnail(
+      eid, iid,
+      [old_promise](std::shared_ptr<ThumbnailGuard> g) {
+        try {
+          old_promise->set_value(g);
+        } catch (...) {
+        }
+      },
+      false, nullptr, ThumbnailResolution::k2048);
 
   svc.CancelPending(eid);
 
   auto new_promise = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
-  auto new_fut = new_promise->get_future();
-  svc.GetThumbnail(eid, iid,
-                   [new_promise](std::shared_ptr<ThumbnailGuard> g) {
-                     try { new_promise->set_value(g); } catch (...) {}
-                   },
-                   false, nullptr, ThumbnailResolution::k2048);
+  auto new_fut     = new_promise->get_future();
+  svc.GetThumbnail(
+      eid, iid,
+      [new_promise](std::shared_ptr<ThumbnailGuard> g) {
+        try {
+          new_promise->set_value(g);
+        } catch (...) {
+        }
+      },
+      false, nullptr, ThumbnailResolution::k2048);
 
   ASSERT_EQ(old_fut.wait_for(120s), std::future_status::ready);
   (void)old_fut.get();
@@ -3058,8 +3127,8 @@ TEST_F(ThumbnailServiceTests, FuzzCancelRequestRace) {
     ASSERT_EQ(fut.wait_for(120s), std::future_status::ready);
     ASSERT_EQ(fut.get().failed_, 0u);
 
-    auto snapshot = import_job->import_log_->Snapshot();
-    const size_t count = std::min<size_t>(16, snapshot.created_.size());
+    auto         snapshot = import_job->import_log_->Snapshot();
+    const size_t count    = std::min<size_t>(16, snapshot.created_.size());
     ids.reserve(count);
     for (size_t i = 0; i < count; ++i) {
       ids.push_back({snapshot.created_[i].element_id_, snapshot.created_[i].image_id_});
@@ -3074,22 +3143,21 @@ TEST_F(ThumbnailServiceTests, FuzzCancelRequestRace) {
 
   // Phase 1: fuzz.
   {
-    ProjectService project(db_path_, meta_path_);
-    auto           img_pool = project.GetImagePoolService();
-    auto pipeline_service   = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ProjectService   project(db_path_, meta_path_);
+    auto             img_pool         = project.GetImagePoolService();
+    auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
     ThumbnailService svc(project.GetSleeveService(), img_pool, pipeline_service);
 
-    const ThumbnailResolution all_res[] = {
-        ThumbnailResolution::k256, ThumbnailResolution::k512,
-        ThumbnailResolution::k1024, ThumbnailResolution::k2048};
+    const ThumbnailResolution all_res[] = {ThumbnailResolution::k256, ThumbnailResolution::k512,
+                                           ThumbnailResolution::k1024, ThumbnailResolution::k2048};
 
-    std::atomic<bool> stop{false};
-    std::atomic<int>  ops_completed{0};
-    std::atomic<int>  errors{0};
+    std::atomic<bool>         stop{false};
+    std::atomic<int>          ops_completed{0};
+    std::atomic<int>          errors{0};
 
-    auto worker = [&](uint32_t seed) {
-      std::mt19937                    rng(seed);
+    auto                      worker = [&](uint32_t seed) {
+      std::mt19937                          rng(seed);
       std::uniform_int_distribution<size_t> idx_dist(0, ids.size() - 1);
       std::uniform_int_distribution<int>    res_dist(0, 3);
       std::uniform_int_distribution<int>    op_dist(0, 99);
@@ -3107,11 +3175,15 @@ TEST_F(ThumbnailServiceTests, FuzzCancelRequestRace) {
           } else if (op < 55) {
             auto p = std::make_shared<std::promise<std::shared_ptr<ThumbnailGuard>>>();
             auto f = p->get_future();
-            svc.GetThumbnail(element_id, image_id,
-                             [p](std::shared_ptr<ThumbnailGuard> g) {
-                               try { p->set_value(g); } catch (...) {}
-                             },
-                             false, nullptr, res);
+            svc.GetThumbnail(
+                element_id, image_id,
+                [p](std::shared_ptr<ThumbnailGuard> g) {
+                  try {
+                    p->set_value(g);
+                  } catch (...) {
+                  }
+                },
+                false, nullptr, res);
             svc.CancelPending(element_id);
             f.wait_for(10s);
           } else if (op < 70) {

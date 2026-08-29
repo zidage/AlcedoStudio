@@ -629,24 +629,51 @@ HighlightWorkspace::HighlightWorkspace(HighlightWorkspace&& other) noexcept
       sums_(std::exchange(other.sums_, nullptr)),
       cnts_(std::exchange(other.cnts_, nullptr)),
       mask_capacity_(std::exchange(other.mask_capacity_, 0)),
-      result_(std::move(other.result_)) {}
+      result_(std::move(other.result_)),
+      owns_device_(std::exchange(other.owns_device_, true)) {}
 
 auto HighlightWorkspace::operator=(HighlightWorkspace&& other) noexcept -> HighlightWorkspace& {
   if (this != &other) {
     Release();
-    anyclipped_ = std::exchange(other.anyclipped_, nullptr);
-    sums_       = std::exchange(other.sums_, nullptr);
-    cnts_       = std::exchange(other.cnts_, nullptr);
+    anyclipped_    = std::exchange(other.anyclipped_, nullptr);
+    sums_          = std::exchange(other.sums_, nullptr);
+    cnts_          = std::exchange(other.cnts_, nullptr);
     mask_capacity_ = std::exchange(other.mask_capacity_, 0);
-    result_      = std::move(other.result_);
+    result_        = std::move(other.result_);
+    owns_device_   = std::exchange(other.owns_device_, true);
   }
   return *this;
+}
+
+void HighlightWorkspace::BindExternal(int* anyclipped, float* sums, float* cnts, void* result_rgb,
+                                      int width, int height) {
+  Release();
+  owns_device_    = false;
+  anyclipped_     = anyclipped;
+  sums_           = sums;
+  cnts_           = cnts;
+  const int w     = std::max(width, 0);
+  const int h     = std::max(height, 0);
+  mask_capacity_  = static_cast<size_t>(w) * static_cast<size_t>(h);
+  if (result_rgb != nullptr && w > 0 && h > 0) {
+    const std::size_t step = static_cast<std::size_t>(w) * sizeof(float) * 3;
+    result_                = cv::cuda::GpuMat(h, w, CV_32FC3, result_rgb, step);
+  }
 }
 
 void HighlightWorkspace::Reserve(int width, int height) {
   const size_t pixels = static_cast<size_t>(std::max(width, 0)) * static_cast<size_t>(std::max(height, 0));
   if (pixels == 0) {
-    result_.release();
+    if (owns_device_) {
+      result_.release();
+    }
+    return;
+  }
+
+  if (!owns_device_) {
+    if (mask_capacity_ < pixels || anyclipped_ == nullptr || sums_ == nullptr || cnts_ == nullptr) {
+      throw std::runtime_error("HighlightWorkspace::Reserve: external buffers are too small");
+    }
     return;
   }
 
@@ -656,26 +683,30 @@ void HighlightWorkspace::Reserve(int width, int height) {
     CUDA_CHECK(cudaMalloc(&sums_, sizeof(float) * 4));
     CUDA_CHECK(cudaMalloc(&cnts_, sizeof(float) * 4));
     mask_capacity_ = pixels;
+    owns_device_   = true;
   }
 
   result_.create(height, width, CV_32FC3);
 }
 
 void HighlightWorkspace::Release() {
-  if (cnts_ != nullptr) {
-    CUDA_CHECK(cudaFree(cnts_));
-    cnts_ = nullptr;
+  if (owns_device_) {
+    if (cnts_ != nullptr) {
+      CUDA_CHECK(cudaFree(cnts_));
+    }
+    if (sums_ != nullptr) {
+      CUDA_CHECK(cudaFree(sums_));
+    }
+    if (anyclipped_ != nullptr) {
+      CUDA_CHECK(cudaFree(anyclipped_));
+    }
   }
-  if (sums_ != nullptr) {
-    CUDA_CHECK(cudaFree(sums_));
-    sums_ = nullptr;
-  }
-  if (anyclipped_ != nullptr) {
-    CUDA_CHECK(cudaFree(anyclipped_));
-    anyclipped_ = nullptr;
-  }
+  cnts_          = nullptr;
+  sums_          = nullptr;
+  anyclipped_    = nullptr;
   mask_capacity_ = 0;
   result_.release();
+  owns_device_ = true;
 }
 
 // WB multipliers come from file metadata or the camera's as-shot estimate and can be zero,
@@ -689,9 +720,8 @@ auto ChannelRatio(const float value, const float green) -> float {
   return std::clamp(value / green, 0.25f, 4.0f);
 }
 
-auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection {
-  const float* cam_mul = raw_processor.imgdata.color.cam_mul;
-  const float  green   = std::isfinite(cam_mul[1]) && cam_mul[1] > 0.0f ? cam_mul[1] : 1.0f;
+auto BuildHighlightCorrection(const float* cam_mul) -> HighlightCorrection {
+  const float green = std::isfinite(cam_mul[1]) && cam_mul[1] > 0.0f ? cam_mul[1] : 1.0f;
 
   HighlightCorrection correction;
   correction.clips[0]    = kHilightMagic * ChannelRatio(cam_mul[0], green);
@@ -701,6 +731,10 @@ auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection {
   correction.clipdark[1] = kChromaRingLo * correction.clips[1];
   correction.clipdark[2] = kChromaRingLo * correction.clips[2];
   return correction;
+}
+
+auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection {
+  return BuildHighlightCorrection(raw_processor.imgdata.color.cam_mul);
 }
 
 void FinalizeHighlightCorrection(const HighlightAccumulation& accumulation,

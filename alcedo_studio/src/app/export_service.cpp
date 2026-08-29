@@ -105,9 +105,17 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
   auto         final_path = recipe.codec_.export_path_;
   std::filesystem::path temporary_path;
   result.output_path_ = final_path;
-  std::error_code cleanup_error;
+  std::error_code                   cleanup_error;
+  std::shared_ptr<PipelineSnapshot> pipeline_snapshot;
+  auto                              release_pipeline_snapshot = [&]() {
+    if (!pipeline_snapshot) {
+      return;
+    }
+    pipeline_service_->ReleasePipelineSnapshot(pipeline_snapshot);
+    pipeline_snapshot.reset();
+  };
 
-  std::string     stage = "prepare-name";
+  std::string stage = "prepare-name";
   try {
     if (final_path.empty() || final_path.filename().empty()) {
       throw std::runtime_error("ExportService: output path must contain a file name");
@@ -128,12 +136,16 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     temporary_path = TemporaryExportPath(final_path, task.image_id_);
     std::filesystem::remove(temporary_path, cleanup_error);
 
-    stage               = "load-pipeline";
-    // Get the pipeline executor from sleeve service
-    auto pipeline_guard = pipeline_service_->LoadPipeline(task.sleeve_id_);
-    if (!pipeline_guard || !pipeline_guard->pipeline_) {
-      throw std::runtime_error("[ERROR] ExportService: Failed to load pipeline for sleeve id " +
-                               std::to_string(task.sleeve_id_));
+    stage = "load-pipeline";
+    std::string snapshot_error;
+    pipeline_snapshot =
+        pipeline_service_->LoadPipelineSnapshot(task.sleeve_id_, task.image_id_, &snapshot_error);
+    if (!pipeline_snapshot || !pipeline_snapshot->executor_) {
+      throw std::runtime_error(
+          snapshot_error.empty()
+              ? "[ERROR] ExportService: Failed to snapshot pipeline for sleeve id " +
+                    std::to_string(task.sleeve_id_)
+              : snapshot_error);
     }
     stage           = "load-source";
     // Get the image from image pool service
@@ -152,18 +164,14 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // To avoid reading too many images into memory at once, we let the pipeline load the image
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
-    render_task.pipeline_executor_    = pipeline_guard->pipeline_;
+    render_task.pipeline_executor_    = pipeline_snapshot->executor_;
     render_task.options_.is_blocking_ = true;
     render_task.options_.is_callback_ = false;
 
     // Inject pre-extracted raw metadata from the real Image into the pipeline
     // so downstream operators resolve eagerly.
-    try {
-      if (source_img->HasRawColorContext()) {
-        pipeline_guard->pipeline_->InjectRawMetadata(source_img->GetRawColorContext());
-      }
-    } catch (...) {
-      // Non-fatal: metadata injection is best-effort.
+    if (source_img->HasRawColorContext()) {
+      pipeline_snapshot->executor_->InjectRawMetadata(source_img->GetRawColorContext());
     }
 
     // Use full res export, even though the task requires resizing,
@@ -181,19 +189,18 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
       // Wait for the render to complete
       rendered_image = render_future.get();
     } catch (...) {
-      pipeline_service_->SavePipeline(pipeline_guard);
       throw;
     }
 
     stage = "prepare-output";
     // Save pipeline back to storage
     const auto export_profile =
-        ResolveExportColorProfileConfig(pipeline_guard->pipeline_->GetGlobalParams());
+        ResolveExportColorProfileConfig(pipeline_snapshot->executor_->GetGlobalParams());
     const auto effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
                                        ? std::optional<ExportColorProfileConfig>{}
                                        : export_profile;
     const bool wrote_ultra_hdr   = ImageWriter::ShouldWriteUltraHdr(recipe.codec_, export_profile);
-    pipeline_service_->SavePipeline(pipeline_guard);
+    release_pipeline_snapshot();
     stage                      = "encode";
     recipe.codec_.export_path_ = temporary_path;
     ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, export_profile,
@@ -218,12 +225,14 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     result.resolution_tags_written_ = recipe.resize_.dpi_ > 0.0;
     return result;
   } catch (const std::exception& error) {
+    release_pipeline_snapshot();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);
     result.message_      = error.what();
     return result;
   } catch (...) {
+    release_pipeline_snapshot();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);

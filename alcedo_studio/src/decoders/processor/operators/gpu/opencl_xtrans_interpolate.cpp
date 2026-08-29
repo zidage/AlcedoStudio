@@ -105,6 +105,11 @@ void XTransToRGB_Ref(opencl::OpenClImage& image, const XTransPattern6x6& pattern
   CheckOpenCl(err, "clSetKernelArg(green,1)");
   err = clSetKernelArg(green_kernel, 2, sizeof(XTransParams), &params);
   CheckOpenCl(err, "clSetKernelArg(green,2)");
+  const cl_uint zero = 0;
+  err = clSetKernelArg(green_kernel, 3, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(green,3)");
+  err = clSetKernelArg(green_kernel, 4, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(green,4)");
   DispatchKernel(green_kernel, width, height);
   clReleaseKernel(green_kernel);
 
@@ -118,6 +123,12 @@ void XTransToRGB_Ref(opencl::OpenClImage& image, const XTransPattern6x6& pattern
   CheckOpenCl(err, "clSetKernelArg(rgba,2)");
   err = clSetKernelArg(rgba_kernel, 3, sizeof(XTransParams), &params);
   CheckOpenCl(err, "clSetKernelArg(rgba,3)");
+  err = clSetKernelArg(rgba_kernel, 4, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(rgba,4)");
+  err = clSetKernelArg(rgba_kernel, 5, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(rgba,5)");
+  err = clSetKernelArg(rgba_kernel, 6, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(rgba,6)");
   DispatchKernel(rgba_kernel, width, height);
   clReleaseKernel(rgba_kernel);
 

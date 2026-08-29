@@ -25,6 +25,12 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_GEOMETRY_UTILS_CL "${ALCEDO_SRC_ROOT}/opencl/opencl_shader/geometry_utils.cl")
     set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${ALCEDO_SRC_ROOT}/edit/operators/geometry/opencl_shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${ALCEDO_SRC_ROOT}/edit/scope/opencl_shader/scope_analyzer.cl")
+    set(OPENCL_DAG_GEOMETRY_CAMERA_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/geometry_camera.cl")
+    set(OPENCL_DAG_PRIMARY_GRADE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade.cl")
+    set(OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade_neighbor.cl")
+    set(OPENCL_DAG_LOCAL_TONE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/local_tone.cl")
+    set(OPENCL_DAG_MASK_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/mask.cl")
+    set(OPENCL_DAG_DRT_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt.cl")
 
     # On Windows, first-party CUDA pipeline targets (RawProcessorOp, Operators,
     # EditPipeline, …) are SHARED by default. If OpenCL context/program runtime
@@ -51,6 +57,8 @@ if(ALCEDO_OPENCL_ENABLED)
         "${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_pipeline_programs.cpp"
         "${ALCEDO_SRC_ROOT}/edit/scope/opencl_scope_programs.cpp"
         "${ALCEDO_SRC_ROOT}/opencl/opencl_geometry_programs.cpp"
+        "${ALCEDO_SRC_ROOT}/opencl/opencl_kernel_cache.cpp"
+        "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_gpu_dag_programs.cpp"
     )
 
     if(_alcedo_opencl_shared)
@@ -120,6 +128,12 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
         ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL="${OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"
+        ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL="${OPENCL_DAG_GEOMETRY_CAMERA_CL}"
+        ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL="${OPENCL_DAG_PRIMARY_GRADE_CL}"
+        ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL="${OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL}"
+        ALCEDO_OPENCL_DAG_LOCAL_TONE_CL="${OPENCL_DAG_LOCAL_TONE_CL}"
+        ALCEDO_OPENCL_DAG_MASK_CL="${OPENCL_DAG_MASK_CL}"
+        ALCEDO_OPENCL_DAG_DRT_CL="${OPENCL_DAG_DRT_CL}"
         ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_OPENCL_SHADER_SOURCE_ROOT}"
     )
 endif()

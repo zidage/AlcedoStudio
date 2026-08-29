@@ -32,6 +32,7 @@ if(ALCEDO_METAL_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_cvt_ref_space.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_debayer_rcd.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_encode.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_highlight_reconstruct.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_to_linear_ref.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_xtrans_interpolate.cpp
@@ -44,6 +45,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_xtrans_interpolate.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_highlight_reconstruct.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_cvt_ref_space.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_encode.cpp
     )
 endif()
 
@@ -60,13 +62,15 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(RawProcessorOp PUBLIC HAVE_CUDA)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    add_dependencies(RawProcessorOp RawProcessorOpMetalShaders)
+    add_dependencies(RawProcessorOp RawProcessorOpMetalShaders MetalGeometryUtilsShaders)
+    target_link_libraries(RawProcessorOp PRIVATE MetalGeometryUtils MetalImage MetalContext)
     target_compile_definitions(RawProcessorOp PRIVATE
         ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
         ALCEDO_METAL_DEBAYER_RCD_METALLIB_PATH="${METAL_DEBAYER_RCD_METALLIB}"
         ALCEDO_METAL_HIGHLIGHT_RECONSTRUCT_METALLIB_PATH="${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         ALCEDO_METAL_XTRANS_INTERPOLATE_METALLIB_PATH="${METAL_XTRANS_INTERPOLATE_METALLIB}"
         ALCEDO_METAL_CVT_REF_SPACE_METALLIB_PATH="${METAL_CVT_REF_SPACE_METALLIB}"
+        ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}"
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)
@@ -131,7 +135,7 @@ def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
     PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy lensfun::lensfun
     # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
-    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image
+    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph
 )
 if(ALCEDO_CUDA_ENABLED)
     set_target_properties(Operators PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
@@ -233,7 +237,7 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(EditPipeline PUBLIC HAVE_OPENCL)
-    target_link_libraries(EditPipeline PRIVATE OpenClProgramLibrary)
+    target_link_libraries(EditPipeline PRIVATE OpenClProgramLibrary EditRuntimeOpenCl)
 endif()
 
 set(RENDERER_SRCS ${ALCEDO_SRC_ROOT}/renderer/pipeline_scheduler.cpp)

@@ -11,7 +11,9 @@
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
@@ -194,7 +196,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   auto lock_released = std::make_shared<std::promise<bool>>();
   auto completed     = lock_released->get_future();
-  task.on_complete_  = [exec, lock_released](bool) {
+  task.on_complete_  = [exec, lock_released](bool, std::string) {
     const bool acquired = exec->GetRenderLock().try_lock();
     if (acquired) {
       exec->GetRenderLock().unlock();
@@ -283,6 +285,33 @@ TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) 
   const auto frame = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 10);
   ASSERT_TRUE(frame.has_value());
   EXPECT_EQ(frame->slot.preview_metadata.presentation_request_id, 2u);
+}
+
+TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
+  RegisterAllOperators();
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
+  exec->SetExecutionStages();
+
+  PipelineScheduler scheduler(1);
+  PipelineTask      task;
+  task.input_                             = MakeSolidImage(8, 8);
+  task.pipeline_executor_                 = exec;
+  task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+  auto done                               = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+  auto future                             = done->get_future();
+  task.configure_under_render_lock_       = [](PipelineTask&) -> bool {
+    throw std::runtime_error("Neural Engine unavailable: missing weights");
+  };
+  task.on_complete_ = [done](bool success, std::string message) {
+    done->set_value({success, std::move(message)});
+  };
+
+  scheduler.ScheduleTask(std::move(task));
+  ASSERT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+  const auto result = future.get();
+  EXPECT_FALSE(result.first);
+  EXPECT_EQ(result.second, "Neural Engine unavailable: missing weights");
 }
 
 }  // namespace

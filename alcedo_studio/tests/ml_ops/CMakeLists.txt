@@ -17,3 +17,26 @@ target_compile_definitions(NnSharedUtilsTest PRIVATE
 )
 gtest_discover_tests(NnSharedUtilsTest TEST_PREFIX "NnSharedUtilsTest.")
 alcedo_register_test_target(NnSharedUtilsTest core)
+
+if(ALCEDO_OPENCL_ENABLED)
+  add_executable(OpenClRuntimeTest ${ALCEDO_TEST_ROOT}/opencl/opencl_runtime_test.cpp)
+  target_include_directories(OpenClRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClRuntimeTest PRIVATE GTest::gtest_main OpenClProgramLibrary)
+  target_compile_definitions(OpenClRuntimeTest PRIVATE HAVE_OPENCL)
+  gtest_discover_tests(OpenClRuntimeTest TEST_PREFIX "OpenClRuntimeTest.")
+  alcedo_register_test_target(OpenClRuntimeTest gpu)
+
+  add_executable(OpenClDemosaicNetTest ${ALCEDO_TEST_ROOT}/opencl/opencl_demosaicnet_test.cpp)
+  target_include_directories(OpenClDemosaicNetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClDemosaicNetTest PRIVATE
+    GTest::gtest_main
+    OpenClDemosaicNet
+    OpenClProgramLibrary
+    NnSafetensors
+  )
+  target_compile_definitions(OpenClDemosaicNetTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
+  alcedo_register_test_target(OpenClDemosaicNetTest gpu)
+endif()

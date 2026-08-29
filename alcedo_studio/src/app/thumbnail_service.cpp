@@ -21,10 +21,9 @@
 #include "app/pipeline_service.hpp"
 #include "app/render_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
-#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "concurrency/thread_pool.hpp"
-#include "json.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo {
 namespace {
@@ -47,6 +46,12 @@ constexpr DecodeRes ResolutionToDecodeRes(ThumbnailResolution res) {
       return DecodeRes::HALF;
   }
   return DecodeRes::QUARTER;
+}
+
+void InjectSnapshotRawContext(CPUPipelineExecutor& exec, const std::shared_ptr<Image>& image) {
+  if (image && image->HasRawColorContext()) {
+    exec.InjectRawMetadata(image->GetRawColorContext());
+  }
 }
 
 void DispatchThumbnailResultCallback(const ThumbnailResultCallback& callback,
@@ -123,22 +128,6 @@ auto MakeDisplayCacheThumbnailBuffer(ImageBuffer& source) -> std::unique_ptr<Ima
   return std::make_unique<ImageBuffer>(std::move(rgba8));
 }
 
-auto ReadColorTempOperatorParams(const std::shared_ptr<PipelineGuard>& pipeline)
-    -> std::optional<nlohmann::json> {
-  if (!pipeline || !pipeline->pipeline_) {
-    return std::nullopt;
-  }
-
-  auto& to_ws_stage      = pipeline->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-  auto  color_temp_entry = to_ws_stage.GetOperator(OperatorType::COLOR_TEMP);
-  if (!color_temp_entry.has_value() || !color_temp_entry.value() ||
-      !color_temp_entry.value()->op_) {
-    return std::nullopt;
-  }
-
-  return color_temp_entry.value()->op_->GetParams();
-}
-
 constexpr ThumbnailResolution kAllThumbnailResolutions[] = {
     ThumbnailResolution::k256,
     ThumbnailResolution::k512,
@@ -159,7 +148,7 @@ struct ThumbnailService::State {
   std::shared_ptr<SleeveServiceImpl>             sleeve_service_     = nullptr;
   std::shared_ptr<ImagePoolService>              image_pool_service_ = nullptr;
   std::shared_ptr<PipelineMgmtService>           pipeline_service_   = nullptr;
-  std::shared_ptr<Storage>                 storage_    = nullptr;
+  std::shared_ptr<Storage>                       storage_            = nullptr;
   std::string                                    project_uuid_;
   std::unique_ptr<ThumbnailDiskCacheService>     disk_cache_service_;
   ThreadPool                                     disk_read_thread_pool_;
@@ -185,10 +174,10 @@ struct ThumbnailService::State {
   // Pipeline scheduler (global/shared), must outlive tasks.
   std::shared_ptr<PipelineScheduler> pipeline_scheduler_ = nullptr;
 
-  State(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-        std::shared_ptr<ImagePoolService>       image_pool_service,
-        std::shared_ptr<PipelineMgmtService>    pipeline_service,
-        std::shared_ptr<Storage>          storage_service, std::string project_uuid,
+  State(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+        std::shared_ptr<ImagePoolService>    image_pool_service,
+        std::shared_ptr<PipelineMgmtService> pipeline_service,
+        std::shared_ptr<Storage> storage_service, std::string project_uuid,
         std::filesystem::path thumbnail_cache_root)
       : sleeve_service_(std::move(sleeve_service)),
         image_pool_service_(std::move(image_pool_service)),
@@ -248,10 +237,10 @@ struct ThumbnailService::State {
   auto ReadCurrentVersionHash(sl_element_id_t id) -> std::string {
     if (storage_) {
       try {
-        auto               db_guard = storage_->GetDatabase().GetConnectionGuard();
-        auto               db_lock  = db_guard.Lock();
+        auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+        auto             db_lock  = db_guard.Lock();
         CommitGraphStore graph_service(db_guard.conn_);
-        const auto         graph = graph_service.LoadGraph(id);
+        const auto       graph = graph_service.LoadGraph(id);
         if (graph.has_value()) {
           const auto head = graph->GetActiveVersionRef().head_commit_hash;
           return head.has_value() ? head->ToString() : graph->GetRootId().ToString();
@@ -292,12 +281,12 @@ struct ThumbnailService::State {
   ~State() { disk_read_thread_pool_.Shutdown(); }
 };
 
-ThumbnailService::ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-                                   std::shared_ptr<ImagePoolService>       image_pool_service,
-                                   std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                                   std::shared_ptr<Storage>          storage_service,
-                                   const std::string&                      project_uuid,
-                                   const std::filesystem::path&            thumbnail_cache_root)
+ThumbnailService::ThumbnailService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                                   std::shared_ptr<ImagePoolService>    image_pool_service,
+                                   std::shared_ptr<PipelineMgmtService> pipeline_service,
+                                   std::shared_ptr<Storage>             storage_service,
+                                   const std::string&                   project_uuid,
+                                   const std::filesystem::path&         thumbnail_cache_root)
     : state_(std::make_shared<State>(std::move(sleeve_service), std::move(image_pool_service),
                                      std::move(pipeline_service), std::move(storage_service),
                                      project_uuid, thumbnail_cache_root)) {}
@@ -382,28 +371,25 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
   auto schedule_pipeline_render = [st, id, image_id, cache_key, resolution, gen_token,
                                    expected_gen]() {
     struct ThumbnailTaskContext {
-      std::shared_ptr<PipelineGuard> pipeline{};
-      std::optional<nlohmann::json>  pre_render_color_temp_params{};
-      std::atomic<bool>              pipeline_released{false};
+      std::shared_ptr<PipelineSnapshot> snapshot{};
+      std::atomic<bool>                 snapshot_released{false};
     };
 
     auto task_context          = std::make_shared<ThumbnailTaskContext>();
 
-    auto release_task_pipeline = [st, task_context]() {
-      auto pipeline = task_context->pipeline;
-      if (!pipeline || task_context->pipeline_released.exchange(true)) {
+    auto release_task_snapshot = [st, task_context]() {
+      auto snapshot = task_context->snapshot;
+      if (!snapshot || task_context->snapshot_released.exchange(true)) {
         return;
       }
       try {
-        st->pipeline_service_->SavePipeline(pipeline);
+        st->pipeline_service_->ReleasePipelineSnapshot(snapshot);
       } catch (...) {
       }
     };
 
-    auto fail_pending_request = [st, cache_key, task_context, release_task_pipeline](
-                                    const std::string&                    message,
-                                    const std::shared_ptr<PipelineGuard>& pipeline,
-                                    bool                                  throw_after) -> bool {
+    auto fail_pending_request = [st, cache_key, release_task_snapshot](const std::string& message,
+                                                                       bool throw_after) -> bool {
       std::vector<State::PendingCallback> callbacks;
       {
         std::unique_lock lock(st->cache_lock_);
@@ -416,16 +402,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
         st->thumbnail_cache_data_.erase(cache_key);
       }
 
-      if (pipeline) {
-        if (task_context->pipeline == pipeline) {
-          release_task_pipeline();
-        } else {
-          try {
-            st->pipeline_service_->SavePipeline(pipeline);
-          } catch (...) {
-          }
-        }
-      }
+      release_task_snapshot();
 
       for (const auto& pending_cb : callbacks) {
         DispatchThumbnailResultCallback(
@@ -458,30 +435,19 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
 
     thumb_task.prepare_ = [st, id, image_id, task_context,
                            fail_pending_request](PipelineTask& task) mutable -> bool {
-      std::shared_ptr<PipelineGuard> pipeline;
-      try {
-        pipeline = st->pipeline_service_->LoadPipeline(id);
-      } catch (const std::exception& e) {
+      std::string error;
+      task_context->snapshot = st->pipeline_service_->LoadPipelineSnapshot(id, image_id, &error);
+      if (!task_context->snapshot || !task_context->snapshot->executor_) {
         return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Failed to load pipeline for file ID {}: {}", id,
-                        e.what()),
-            nullptr, false);
-      } catch (...) {
-        return fail_pending_request(
-            std::format(
-                "[ERROR] ThumbnailService: Failed to load pipeline for file ID {}: unknown error.",
-                id),
-            nullptr, false);
+            error.empty()
+                ? std::format("[ERROR] ThumbnailService: Pipeline for file ID {} not available.",
+                              id)
+                : error,
+            false);
       }
 
-      task_context->pipeline = pipeline;
-      if (!pipeline || !pipeline->pipeline_) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: Pipeline for file ID {} not available.", id),
-            pipeline, false);
-      }
-
-      pipeline->pipeline_->SetForceCPUOutput(true);
+      auto executor = task_context->snapshot->executor_;
+      executor->SetForceCPUOutput(true);
 
       std::shared_ptr<Image> img_result;
       try {
@@ -491,32 +457,32 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
         return fail_pending_request(
             std::format("[ERROR] ThumbnailService: Failed to load image ID {} for element {}: {}",
                         image_id, id, e.what()),
-            pipeline, false);
+            false);
       } catch (...) {
         return fail_pending_request(std::format("[ERROR] ThumbnailService: Failed to load image ID "
                                                 "{} for element {}: unknown error.",
                                                 image_id, id),
-                                    pipeline, false);
+                                    false);
       }
 
       if (!img_result) {
         return fail_pending_request(
             std::format("[ERROR] ThumbnailService: Image with ID {} not found in pool.", image_id),
-            pipeline, false);
+            false);
       }
 
-      task_context->pre_render_color_temp_params = ReadColorTempOperatorParams(pipeline);
-      task.pipeline_executor_                    = pipeline->pipeline_;
-      task.input_desc_                           = std::move(img_result);
+      InjectSnapshotRawContext(*executor, img_result);
+      task.pipeline_executor_ = std::move(executor);
+      task.input_desc_        = std::move(img_result);
       return true;
     };
 
-    thumb_task.callback_ = [st, id, cache_key, task_context, release_task_pipeline, gen_token,
+    thumb_task.callback_ = [st, id, cache_key, release_task_snapshot, gen_token,
                             expected_gen](ImageBuffer& result_buffer) {
       // Strategy A: stale tasks must not touch pending_ because a newer request
       // for the same element/resolution may already have claimed that slot.
       if (gen_token && gen_token->load() != expected_gen) {
-        release_task_pipeline();
+        release_task_snapshot();
         return;
       }
 
@@ -535,7 +501,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
         std::unique_lock lock(st->cache_lock_);
 
         if (gen_token && gen_token->load() != expected_gen) {
-          release_task_pipeline();
+          release_task_snapshot();
           return;
         }
 
@@ -586,7 +552,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
             st->thumbnail_cache_data_.erase(guard_it);
           }
         }
-        release_task_pipeline();
+        release_task_snapshot();
         for (const auto& pending_cb : callbacks) {
           DispatchThumbnailResultCallback(
               pending_cb.callback_, pending_cb.dispatcher_,
@@ -598,15 +564,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
         return;
       }
 
-      const auto pipeline = task_context->pipeline;
-      if (pipeline) {
-        const auto post_render_color_temp_params = ReadColorTempOperatorParams(pipeline);
-        if (post_render_color_temp_params != task_context->pre_render_color_temp_params) {
-          pipeline->dirty_ = true;
-        }
-      }
-
-      release_task_pipeline();
+      release_task_snapshot();
 
       const auto status = guard ? ThumbnailRequestStatus::kReady : ThumbnailRequestStatus::kError;
       const std::string message =
@@ -629,12 +587,12 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
       fail_pending_request(
           std::format("[ERROR] ThumbnailService: Failed to schedule thumbnail for element {}: {}",
                       id, e.what()),
-          task_context->pipeline, true);
+          true);
     } catch (...) {
       fail_pending_request(std::format("[ERROR] ThumbnailService: Failed to schedule thumbnail for "
                                        "element {}: unknown error.",
                                        id),
-                           task_context->pipeline, true);
+                           true);
     }
   };
 
@@ -833,8 +791,7 @@ void ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, imag
             std::format("analysis rendition: image with ID {} not found in pool.", image_id));
       }
 
-      // No pre-render color-temp read / post-render dirty check: the snapshot
-      // executor is throwaway, so that live-path dirty check is meaningless.
+      InjectSnapshotRawContext(*exec, img_result);
       t.pipeline_executor_ = exec;
       t.input_desc_        = std::move(img_result);
       return true;

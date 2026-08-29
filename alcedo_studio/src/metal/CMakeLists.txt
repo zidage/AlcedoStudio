@@ -63,6 +63,30 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_DEMOSAICNET_IO_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
     set(METAL_DEMOSAICNET_IO_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib"
         CACHE INTERNAL "Metal DemosaicNet IO metallib path" FORCE)
+    set(METAL_GEOMETRY_RESAMPLE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/geometry_resample.metal")
+    set(METAL_GEOMETRY_RESAMPLE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.air")
+    set(METAL_GEOMETRY_RESAMPLE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/geometry_resample.metallib"
+        CACHE INTERNAL "Metal DAG geometry resample metallib path" FORCE)
+    set(METAL_CAMERA_COLOR_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/camera_color.metal")
+    set(METAL_CAMERA_COLOR_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.air")
+    set(METAL_CAMERA_COLOR_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/camera_color.metallib"
+        CACHE INTERNAL "Metal DAG camera color metallib path" FORCE)
+    set(METAL_PRIMARY_GRADE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/primary_grade.metal")
+    set(METAL_PRIMARY_GRADE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.air")
+    set(METAL_PRIMARY_GRADE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/primary_grade.metallib"
+        CACHE INTERNAL "Metal DAG primary grade metallib path" FORCE)
+    set(METAL_LOCAL_TONE_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/local_tone.metal")
+    set(METAL_LOCAL_TONE_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.air")
+    set(METAL_LOCAL_TONE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/local_tone.metallib"
+        CACHE INTERNAL "Metal DAG local tone metallib path" FORCE)
+    set(METAL_MASK_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/mask.metal")
+    set(METAL_MASK_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.air")
+    set(METAL_MASK_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.metallib"
+        CACHE INTERNAL "Metal DAG mask metallib path" FORCE)
+    set(METAL_DRT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt.metal")
+    set(METAL_DRT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.air")
+    set(METAL_DRT_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.metallib"
+        CACHE INTERNAL "Metal DAG DRT metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -266,6 +290,72 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal DemosaicNet IO library"
     )
 
+    alcedo_add_metal_library(
+        GpuDagGeometryResampleShaders
+        "${METAL_GEOMETRY_RESAMPLE_SRC}"
+        "${METAL_GEOMETRY_RESAMPLE_AIR}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "Compiling Metal DAG geometry resample shader"
+        "Linking Metal DAG geometry resample library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagCameraColorShaders
+        "${METAL_CAMERA_COLOR_SRC}"
+        "${METAL_CAMERA_COLOR_AIR}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "Compiling Metal DAG camera color shader"
+        "Linking Metal DAG camera color library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagPrimaryGradeShaders
+        "${METAL_PRIMARY_GRADE_SRC}"
+        "${METAL_PRIMARY_GRADE_AIR}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "Compiling Metal DAG primary grade shader"
+        "Linking Metal DAG primary grade library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagLocalToneShaders
+        "${METAL_LOCAL_TONE_SRC}"
+        "${METAL_LOCAL_TONE_AIR}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "Compiling Metal DAG local tone shader"
+        "Linking Metal DAG local tone library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagMaskShaders
+        "${METAL_MASK_SRC}"
+        "${METAL_MASK_AIR}"
+        "${METAL_MASK_METALLIB}"
+        "Compiling Metal DAG mask shader"
+        "Linking Metal DAG mask library"
+    )
+
+    alcedo_add_metal_library(
+        GpuDagDrtShaders
+        "${METAL_DRT_SRC}"
+        "${METAL_DRT_AIR}"
+        "${METAL_DRT_METALLIB}"
+        "Compiling Metal DAG DRT shader"
+        "Linking Metal DAG DRT library"
+        DEPENDS
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
+    )
+
+    add_custom_target(GpuDagMetalShaders DEPENDS
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "${METAL_MASK_METALLIB}"
+        "${METAL_DRT_METALLIB}"
+    )
+
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
@@ -286,6 +376,12 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
         "${METAL_DEMOSAICNET_IO_METALLIB}"
+        "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+        "${METAL_CAMERA_COLOR_METALLIB}"
+        "${METAL_PRIMARY_GRADE_METALLIB}"
+        "${METAL_LOCAL_TONE_METALLIB}"
+        "${METAL_MASK_METALLIB}"
+        "${METAL_DRT_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime." FORCE

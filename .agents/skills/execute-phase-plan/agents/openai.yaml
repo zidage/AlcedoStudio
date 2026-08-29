@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execute Phase Plan"
+  short_description: "Implement a roadmap phase and write back verified call chains"
+  default_prompt: "Use $execute-phase-plan to implement the named phase from the plan document, build to grill-code-review standards, and write completion status plus call chains back into that phase section."

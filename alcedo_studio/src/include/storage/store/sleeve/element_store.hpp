@@ -18,14 +18,14 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
-#include "storage/store/store_types.hpp"
-#include "storage/mapper/sleeve/edit_history/recovery_metadata_mapper.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/history_mapper.hpp"
+#include "storage/mapper/sleeve/edit_history/recovery_metadata_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_id_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 #include "storage/mapper/sleeve/element/folder_mapper.hpp"
+#include "storage/store/store_types.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -51,16 +51,16 @@ struct FolderStatsView {
  * (extra filter predicates only; folder scope ids stay embedded as trusted integers).
  */
 struct ScopedFileQuery {
-  std::string                 from_where_;
-  duckorm::SqlFragment        binds_{};
+  std::string          from_where_;
+  duckorm::SqlFragment binds_{};
 };
 
 /// Build the shared scope query fragment (FROM ... JOIN ... WHERE) for file-in-folder queries.
 /// All folder-scoped file lookups (search, stats, listing, pagination) must use this builder so
 /// the scope definition stays consistent across the application.
-auto BuildScopedFileQuery(
-    sl_element_id_t                           folder_id,
-    const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) -> ScopedFileQuery;
+auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
+                          const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt)
+    -> ScopedFileQuery;
 
 struct FileListEntry {
   sl_element_id_t file_id_  = 0;
@@ -70,26 +70,26 @@ struct FileListEntry {
 
 class ElementStore {
  private:
-  ConnectionGuard    guard_;
+  ConnectionGuard       guard_;
 
-  ElementMapper     element_mapper_;
-  ElementIdMapper   element_id_mapper_;
+  ElementMapper         element_mapper_;
+  ElementIdMapper       element_id_mapper_;
 
-  FileMapper        file_mapper_;
-  FolderMapper      folder_mapper_;
-  EditHistoryMapper history_mapper_;
-  PipelineMapper    pipeline_mapper_;
-  EditHistoryMapper edit_history_mapper_;
+  FileMapper            file_mapper_;
+  FolderMapper          folder_mapper_;
+  EditHistoryMapper     history_mapper_;
+  PipelineMapper        pipeline_mapper_;
+  EditHistoryMapper     edit_history_mapper_;
   std::function<void()> materialize_pre_commit_hook_{};
 
   // Insert the element row plus its child rows (file binding / folder content /
   // edit history). Does not touch sync_flag_ and does not manage a transaction, so
   // it can run either autocommit (AddElement) or inside a shared transaction
   // (AddElements).
-  void InsertElementRows(const std::shared_ptr<SleeveElement>& element);
+  void                  InsertElementRows(const std::shared_ptr<SleeveElement>& element);
   // Update the element row plus its child rows. Same transaction-neutrality contract
   // as InsertElementRows.
-  void UpdateElementRows(const std::shared_ptr<SleeveElement>& element);
+  void                  UpdateElementRows(const std::shared_ptr<SleeveElement>& element);
 
  public:
   ElementStore(ConnectionGuard&& guard);
@@ -120,35 +120,35 @@ class ElementStore {
   auto GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                      const sl_element_id_t              folder_id)
       -> std::vector<sl_element_id_t>;
-  auto BuildFolderStats(
-      sl_element_id_t                            folder_id,
-      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
-      const std::string&                         active_semantic_model_key = {}) -> FolderStatsView;
+  auto BuildFolderStats(sl_element_id_t                            folder_id,
+                        const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
+                        const std::string& active_semantic_model_key = {}) -> FolderStatsView;
 
   /// Return lightweight file metadata for every live File in a folder, queried directly from DB
   /// without materializing full SleeveElement objects.
   auto ListFilesInFolder(sl_element_id_t folder_id) const -> std::vector<FileListEntry>;
-  auto ListFilesInFolderPage(
-      sl_element_id_t folder_id, size_t offset, size_t limit,
-      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
-      -> std::vector<FileListEntry>;
+  auto ListFilesInFolderPage(sl_element_id_t folder_id, size_t offset, size_t limit,
+                             const std::optional<duckorm::SqlFragment>& extra_filter =
+                                 std::nullopt) const -> std::vector<FileListEntry>;
   auto CountFilesInFolder(
       sl_element_id_t                            folder_id,
       const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
 
   /// Return element IDs for files in a folder matching an extra SqlFragment predicate.
   /// Uses the same BuildScopedFileQuery infrastructure for consistency with stats queries.
-  auto ListFilteredFileIds(
-      sl_element_id_t                            folder_id,
-      const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const
-      -> std::vector<sl_element_id_t>;
+  auto ListFilteredFileIds(sl_element_id_t                            folder_id,
+                           const std::optional<duckorm::SqlFragment>& extra_filter =
+                               std::nullopt) const -> std::vector<sl_element_id_t>;
 
   void EnsureChildrenLoaded(sl_element_id_t folder_id);
 
   auto GetPipelineByElementId(const sl_element_id_t element_id)
       -> std::shared_ptr<CPUPipelineExecutor>;
-  auto UpdatePipelineByElementId(const sl_element_id_t                      element_id,
-                                 const std::shared_ptr<CPUPipelineExecutor> pipeline) -> void;
+  auto               UpdatePipelineByElementId(const sl_element_id_t                      element_id,
+                                               const std::shared_ptr<CPUPipelineExecutor> pipeline) -> void;
+  [[nodiscard]] auto GetPipelineJsonByElementId(sl_element_id_t element_id)
+      -> std::optional<nlohmann::json>;
+  void UpdatePipelineJsonByElementId(sl_element_id_t element_id, const nlohmann::json& document);
   auto RemovePipelineByElementId(const sl_element_id_t element_id) -> void;
   auto RemovePipelinesByElementIds(std::span<const sl_element_id_t> element_ids) -> void;
 
@@ -162,10 +162,10 @@ class ElementStore {
   /// recovery metadata on this controller's connection. Editor materialization
   /// and Version publication must use this path instead of separate
   /// SaveHistory()/SavePipeline() calls.
-  auto MaterializeEditorState(const std::shared_ptr<EditHistory>& history,
+  auto MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
                               const std::shared_ptr<CPUPipelineExecutor>& pipeline,
-                              const EditorRecoveryMetadata& recovery_metadata,
-                              std::string* error = nullptr) -> bool;
+                              const EditorRecoveryMetadata&               recovery_metadata,
+                              std::string*                                error = nullptr) -> bool;
 
   auto GetEditorRecoveryMetadata(sl_element_id_t file_id) -> std::optional<EditorRecoveryMetadata>;
 

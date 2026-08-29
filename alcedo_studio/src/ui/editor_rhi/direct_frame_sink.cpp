@@ -201,10 +201,11 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     // snaps / ROI thrash when a real frame arrives. Publish render-reference
     // geometry from SubmitMetalFrame with the real texture size instead.
     emit_target_size = geometry_changed && is_render_reference && !metal_present;
-    // CUDA/OpenCL always track the requested write size. On Metal, only track
-    // full-frame requests so Detail/Roi sizes cannot poison later change
-    // detection (actual ref size is set when the MTLTexture is submitted).
-    if (!metal_present || is_render_reference) {
+    // CUDA/OpenCL track the requested write size here. Metal must wait for
+    // SubmitMetalFrame: updating width_/height_ before the actual MTLTexture arrives makes that
+    // submission look unchanged and suppresses the render-reference notification needed by
+    // zoom, pan, and ROI routing.
+    if (!metal_present) {
       width_  = width;
       height_ = height;
     }
@@ -543,11 +544,16 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
 
   diag::NoteRenderE2eProducerReady(request_id);
   qCDebug(editorPresentLog,
-          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu size=%dx%d "
-          "handle=%llu (zero-copy)",
+          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu role=%d mode=%d "
+          "size=%dx%d roi=%.6f,%.6f,%.6f,%.6f handle=%llu (zero-copy)",
           static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
-          static_cast<unsigned long long>(item_->sessionEpoch()), frame.width, frame.height,
+          static_cast<unsigned long long>(item_->sessionEpoch()),
+          static_cast<int>(frame.preview_metadata.frame_role),
+          static_cast<int>(frame.presentation_mode), frame.width, frame.height,
+          frame.preview_metadata.source_roi_norm.x, frame.preview_metadata.source_roi_norm.y,
+          frame.preview_metadata.source_roi_norm.width,
+          frame.preview_metadata.source_roi_norm.height,
           static_cast<unsigned long long>(frame.texture_handle));
 
   if (emit_render_reference) {

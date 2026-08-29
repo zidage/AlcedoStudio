@@ -127,8 +127,45 @@ __global__ void PackReflectPaddedCfaTileKernel(const cv::cuda::PtrStepSz<float> 
 
 }  // namespace
 
+void NeuralDemosaicWorkspace::BindExternal(float* input, const std::size_t input_numel,
+                                           void* activation, const std::size_t activation_bytes,
+                                           void* rgb, const int rgb_height, const int rgb_width) {
+  if (input == nullptr || activation == nullptr || rgb == nullptr || input_numel == 0 ||
+      activation_bytes == 0 || rgb_height <= 0 || rgb_width <= 0) {
+    throw std::runtime_error("NeuralDemosaicWorkspace::BindExternal: null or empty region");
+  }
+  input_buffer_ = cuda::nn::DeviceBufferF32::Wrap(input, input_numel);
+  activation_workspace_.BindExternalMemory(activation, activation_bytes);
+  rgb_buffer_ = cv::cuda::GpuMat(rgb_height, rgb_width, CV_32FC3, rgb,
+                                 static_cast<std::size_t>(rgb_width) * sizeof(float) * 3);
+  borrowed_ = true;
+  ++allocation_generation_;
+}
+
 void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, const int height,
                                              const int width, const std::size_t input_numel) {
+  const std::size_t activation_bytes =
+      variant == DemosaicNetVariant::Bayer
+          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1)
+          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1);
+  const int output_height = variant == DemosaicNetVariant::Bayer
+                                ? BayerDemosaicNet::OutputHeight(height, width)
+                                : XTransDemosaicNet::OutputHeight(height, width);
+  const int output_width = variant == DemosaicNetVariant::Bayer
+                               ? BayerDemosaicNet::OutputWidth(width, height)
+                               : XTransDemosaicNet::OutputWidth(width, height);
+
+  if (borrowed_) {
+    if (input_buffer_.size() < input_numel ||
+        activation_workspace_.capacity_bytes() < activation_bytes || rgb_buffer_.empty() ||
+        rgb_buffer_.type() != CV_32FC3 || rgb_buffer_.rows < output_height ||
+        rgb_buffer_.cols < output_width) {
+      throw std::runtime_error(
+          "NeuralDemosaicWorkspace::EnsureCapacity: borrowed develop scratch is too small");
+    }
+    return;
+  }
+
   bool grew = false;
 
   if (input_buffer_.size() < input_numel) {
@@ -136,22 +173,12 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
     grew          = true;
   }
 
-  const std::size_t activation_bytes =
-      variant == DemosaicNetVariant::Bayer
-          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1)
-          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1);
   const std::size_t prev_activation = activation_workspace_.capacity_bytes();
   activation_workspace_.Reserve(activation_bytes);
   if (activation_workspace_.capacity_bytes() > prev_activation) {
     grew = true;
   }
 
-  const int output_height = variant == DemosaicNetVariant::Bayer
-                                ? BayerDemosaicNet::OutputHeight(height, width)
-                                : XTransDemosaicNet::OutputHeight(height, width);
-  const int output_width = variant == DemosaicNetVariant::Bayer
-                               ? BayerDemosaicNet::OutputWidth(width, height)
-                               : XTransDemosaicNet::OutputWidth(width, height);
   // Grow-only RGB capacity (ragged edges reuse the max 1K workspace without
   // shrinking/reallocating when a boundary job is smaller than an interior job).
   const int prev_rows = rgb_buffer_.rows;

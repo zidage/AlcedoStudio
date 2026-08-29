@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Do not put temporary directories, build logs, harness dumps, one-off scripts, or review
 evidence at the repository root. Use **`build/tmp/`** only (create if needed). See
 `AGENTS.md` for the full rule. Agent tool caches (`.uv-cache/`, `.uv-python/`,
-`.scratch/`, `skills-lock.json`) are gitignored; skills under `.claude/skills/`,
-`.codex/skills/`, and `.agents/skills/` remain trackable.
+`.scratch/`, `skills-lock.json`) are gitignored. Shared repository skills are canonical and
+trackable under `.agents/skills/`; do not copy them into `.claude/skills/` or `.codex/skills/`.
 
 ## Build Commands
 

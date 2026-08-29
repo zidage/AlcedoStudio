@@ -10,7 +10,27 @@ This file provides guidance to AI agents (Kimi, Claude, Codex, etc.) when workin
 
 Agents working in this repository must be decisive and implementation-driven. Do not respond to product or engineering direction with passive staged deferrals such as "first avoid this", "later maybe add this", "medium term", "long term", or similar framing that delays the requested capability after the user has made the product goal clear.
 
+## Branch naming
+
+Branch names must describe the feature, fix, refactor, or other engineering purpose of the work.
+Do not include `codex` in a branch name. Use a functional name such as
+`fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
+
 When the user names a concrete integration or capability, treat it as the target and work out the implementation path, constraints, tests, and risks directly. If there are real blockers, state them as concrete engineering facts and propose the closest viable implementation, not a soft retreat to a weaker product.
+
+## No fallback unless the user explicitly allows it
+
+Do **not** add, restore, or "temporarily" use any fallback, degraded path, silent substitute, or weaker stand-in unless the user has **explicitly** allowed that specific fallback in this conversation (or in an existing, already-landed product rule they pointed at).
+
+This includes, and is not limited to:
+
+- Lowering decode / render / quality settings to hide slowness (for example changing Interactive `DecodeRes::FULL` to `HALF` so Neural Engine or a slow GPU path does not run)
+- Falling back from Neural Engine / GPU / CUDA to Legacy, CPU, another backend, or a cheaper operator when the requested path fails or looks expensive
+- Catch-and-continue that swallows the real error and proceeds on a substitute implementation
+- Preview-only, downsample-only, or "good enough for now" substitutes for a requested full-quality path
+- Retrying a different algorithm, resolution, or backend after a failure without being told to
+
+If the requested path cannot be implemented, **fail with the real error** and state the engineering blocker. Do not ship a weaker product and call it a fix. Performance of a CUDA **debug** build is not a reason to change product decode or quality policy.
 
 ## Temporary files and local workspace
 
@@ -29,9 +49,9 @@ phase review JSON/CSV dumps).
 do not overwrite each other. Do not commit contents of `build/tmp/`.
 
 Agent tool local state (`.uv-cache/`, `.uv-python/`, `.scratch/`, `skills-lock.json`)
-is also gitignored. Skills under `.claude/skills/`, `.codex/skills/`, and
-`.agents/skills/` remain trackable; other files in those tool directories stay local
-via nested `.gitignore` files.
+is also gitignored. Shared repository skills are canonical under `.agents/skills/` and remain
+trackable. Do not copy them into `.claude/skills/` or `.codex/skills/`; those tool directories are
+reserved for local state and ignored through their nested `.gitignore` files.
 
 ## Build Commands
 
@@ -108,6 +128,13 @@ QML properties, are the only exception. Keep the exception at the call site and 
 external wording in Alcedo-owned API names or surrounding prose. Before completing relevant edits,
 search first-party source, tests, docs, and plans for violations.
 
+**`Seed` verb ban in code.** Project-authored code identifiers, tests, and comments must not use
+`Seed` / `seed` as a verb for populate, insert, initialize, restore, copy, or apply operations. Name
+the concrete operation instead. Conventional seed usage remains allowed when it means an input to
+a random-number generator, cryptographic primitive, deterministic fuzz run, or an exact external
+API/model identifier. When touching code that contains a non-conventional `Seed` verb, replace it
+with the precise operation name in the same change.
+
 WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
 LibRaw test paths have hit stack overflows in this repository.
@@ -156,6 +183,8 @@ These façade services are the **only** API surface the UI layer may call. They 
 ## Skills
 
 Skills are reusable, composable capabilities that enhance agent abilities. Each skill is a self-contained directory with a `SKILL.md` file.
+The canonical, complete catalog is `.agents/skills/`; the summaries below are highlights and are not
+an exhaustive list. Agents should read the matching canonical `SKILL.md` before using a skill.
 
 ### alcedo-msvc-cmake
 Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or `scripts/msvc_env.cmd`, or when an agent would otherwise run bare cmake commands in this repository.
@@ -179,7 +208,7 @@ Use when working on alcedo with CMake on Windows/MSVC, especially when the user 
 - If the user asks for a `cmake --build build/...` style command, translate it to the wrapper form instead of changing the build intent.
 
 ### alcedo-qml-ui
-Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md` (junctions under `.claude/skills/` and `.codex/skills/`).
+Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md`.
 
 **Rules (summary — full skill is authoritative):**
 - Production style is **Basic**, never Material for dense editor chrome.
@@ -194,11 +223,11 @@ Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adj
 Use when modifying the RAW Processor module in alcedo, shared Metal GPU utilities, or Metal RAW shaders and their CMake wiring.
 
 **Workflow:**
-- Keep RAW pipeline entrypoint changes in `alcedo/src/decoders/processor/raw_processor.cpp`.
-- Keep RAW GPU operator code under `alcedo/src/decoders/processor/operators/gpu/`.
-- For Metal implementations in the RAW Processor module, place shader sources in `alcedo/src/decoders/processor/operators/gpu/metal_shader/`.
-- When adding or renaming a RAW Processor Metal shader, update `alcedo/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
-- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
+- Keep RAW pipeline entrypoint changes in `alcedo_studio/src/decoders/processor/raw_processor.cpp`.
+- Keep RAW GPU operator code under `alcedo_studio/src/decoders/processor/operators/gpu/`.
+- For Metal implementations in the RAW Processor module, place shader sources in `alcedo_studio/src/decoders/processor/operators/gpu/metal_shader/`.
+- When adding or renaming a RAW Processor Metal shader, update `alcedo_studio/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
+- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo_studio/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
 
 **Rules:**
 - Match RAW Metal operator behavior to the corresponding CPU or CUDA implementation before changing pipeline flow.

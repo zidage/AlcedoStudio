@@ -51,6 +51,12 @@ struct MetalDemosaicNetTiledDispatch {
   // When true (default), commit and wait once after all tiles. Tests may set
   // false only when they intentionally keep the command buffer live.
   bool commit_and_wait = true;
+
+  // When non-null, wrap this existing MTLCommandBuffer. MPSGraph may
+  // commitAndContinue, so the caller must not keep encoding onto this pointer
+  // after Enqueue*. The product Develop path leaves this null and uses a dedicated
+  // MPSCommandBuffer from the process queue.
+  void* command_buffer = nullptr;
 };
 
 struct MetalDemosaicNetTiledResult {

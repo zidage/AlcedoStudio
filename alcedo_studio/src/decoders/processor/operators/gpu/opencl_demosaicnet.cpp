@@ -33,11 +33,6 @@
 namespace alcedo::OpenCL {
 namespace {
 
-// One active Neural decode: mutable cl_kernel arguments and resident scratch are
-// shared on the single in-order queue. Product RAW processing is already serialized;
-// this mutex covers harness/test re-entry as well.
-std::mutex g_neural_decode_mutex;
-
 std::uint64_t g_success_count         = 0;
 std::uint64_t g_fallback_ready_count  = 0;
 std::uint64_t g_host_wait_count       = 0;
@@ -93,13 +88,12 @@ auto StructuralProgram() -> cl_program {
 }
 
 // Context-keyed resident execution state for the product Neural path.
-// Retained across hot decodes under g_neural_decode_mutex:
-//   structural kernels, CFA lookup, full-frame HWC staging, tiled executor
+// Retained across hot decodes under OpenClNeuralDecodeMutex():
+//   clamp/rgba kernels, CFA lookup, aligned RGB canvas, tiled executor
 //   (tile buffers + pack/assemble kernels), and two activation slots.
 struct ResidentExecutionState {
   cl_context context = nullptr;
 
-  KernelHolder pack_cfa;
   KernelHolder clamp01;
   KernelHolder rgb_to_rgba;
 
@@ -107,20 +101,17 @@ struct ResidentExecutionState {
   int                      cfa_period = -1;
   std::vector<int>         cfa_host;
 
-  opencl::nn::DeviceBuffer mosaic_hwc;
   opencl::nn::DeviceBuffer rgb_hwc;
 
   OpenClDemosaicNetTiledExecutor executor;
   opencl::nn::ActivationSlots    activation_slots;
 
   void Reset() {
-    pack_cfa.Reset();
     clamp01.Reset();
     rgb_to_rgba.Reset();
     cfa_table.Reset();
     cfa_period = -1;
     cfa_host.clear();
-    mosaic_hwc.Reset();
     rgb_hwc.Reset();
     executor         = OpenClDemosaicNetTiledExecutor{};
     activation_slots = opencl::nn::ActivationSlots{};
@@ -133,9 +124,8 @@ struct ResidentExecutionState {
       Reset();
     }
     context = current;
-    if (pack_cfa.empty()) {
+    if (clamp01.empty()) {
       const cl_program program = StructuralProgram();
-      pack_cfa.Create(program, DemosaicNet::kPackCfaMonoToHwc3KernelName);
       clamp01.Create(program, DemosaicNet::kClamp01KernelName);
       rgb_to_rgba.Create(program, DemosaicNet::kRgb3ToRgba4KernelName);
     }
@@ -160,8 +150,7 @@ struct ResidentExecutionState {
     cfa_host   = rgb_fc;
   }
 
-  void EnsureStagingFloats(const std::size_t hwc3_floats) {
-    mosaic_hwc.EnsureBytes(hwc3_floats * sizeof(float));
+  void EnsureRgbStaging(const std::size_t hwc3_floats) {
     rgb_hwc.EnsureBytes(hwc3_floats * sizeof(float));
   }
 };
@@ -187,35 +176,15 @@ void EnqueueClamp01(ResidentExecutionState& state, cl_mem buffer, const int coun
   NoteOpenClEnqueueNdRange();
 }
 
-void EnqueuePackMonoRoiToHwc3(ResidentExecutionState& state, cl_mem mono, cl_mem hwc3,
-                              int src_width, int src_height, int crop_x, int crop_y, int width,
-                              int height, int period, cl_command_queue queue) {
-  SetArg(state.pack_cfa.get(), 0, mono, "pack mono arg0");
-  SetArg(state.pack_cfa.get(), 1, hwc3, "pack mono arg1");
-  SetArg(state.pack_cfa.get(), 2, src_width, "pack mono arg2");
-  SetArg(state.pack_cfa.get(), 3, src_height, "pack mono arg3");
-  SetArg(state.pack_cfa.get(), 4, crop_x, "pack mono arg4");
-  SetArg(state.pack_cfa.get(), 5, crop_y, "pack mono arg5");
-  SetArg(state.pack_cfa.get(), 6, width, "pack mono arg6");
-  SetArg(state.pack_cfa.get(), 7, height, "pack mono arg7");
-  SetArg(state.pack_cfa.get(), 8, period, "pack mono arg8");
-  cl_mem table = state.cfa_table.get();
-  SetArg(state.pack_cfa.get(), 9, table, "pack mono arg9");
-  const size_t                 global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
-  opencl::nn::ScopedStageEvent stage_event;
-  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, state.pack_cfa.get(), 2, nullptr, global,
-                                                 nullptr, 0, nullptr, stage_event.out()),
-                          "pack mono enqueue");
-  ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
-  NoteOpenClEnqueueNdRange();
-}
-
 void EnqueueRgb3ToRgba4(ResidentExecutionState& state, cl_mem rgb, cl_mem rgba, int width,
                         int height, cl_command_queue queue) {
+  const int zero = 0;
   SetArg(state.rgb_to_rgba.get(), 0, rgb, "rgb2rgba arg0");
   SetArg(state.rgb_to_rgba.get(), 1, rgba, "rgb2rgba arg1");
   SetArg(state.rgb_to_rgba.get(), 2, width, "rgb2rgba arg2");
   SetArg(state.rgb_to_rgba.get(), 3, height, "rgb2rgba arg3");
+  SetArg(state.rgb_to_rgba.get(), 4, zero, "rgb2rgba arg4");
+  SetArg(state.rgb_to_rgba.get(), 5, zero, "rgb2rgba arg5");
   const size_t                 global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
   opencl::nn::ScopedStageEvent stage_event;
   opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, state.rgb_to_rgba.get(), 2, nullptr, global,
@@ -249,7 +218,7 @@ void Clamp01(opencl::OpenClImage& image) {
   if (!context.IsInitialized()) {
     context.Initialize();
   }
-  std::lock_guard<std::mutex> lock(g_neural_decode_mutex);
+  std::lock_guard<std::mutex> lock(OpenClNeuralDecodeMutex());
   auto&                       state = ResidentState();
   state.EnsureForContext(context);
   const int channels = CV_MAT_CN(image.Type());
@@ -285,7 +254,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
   OpenClNeuralDemosaicResult result;
   result.variant = VariantName(camera_pattern.kind);
 
-  std::lock_guard<std::mutex> lock(g_neural_decode_mutex);
+  std::lock_guard<std::mutex> lock(OpenClNeuralDecodeMutex());
 
   try {
     if (linear_cfa.Empty() || linear_cfa.Type() != CV_32FC1) {
@@ -329,7 +298,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
     result.aligned_width  = geo->aligned_width;
     result.aligned_height = geo->aligned_height;
 
-    // Fused phase crop + HWC pack: no materialised aligned_mono temporary.
+    // Pack each student tile from the original mono CFA (CUDA PackReflectPaddedCfaTile).
     opencl::nn::BeginDemosaicNetStage("phase_crop_and_hwc_pack");
     const RawCfaPattern training = DemosaicNetTrainingPattern(camera_pattern.kind);
     std::vector<int>    rgb_fc;
@@ -339,10 +308,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
 
     const std::size_t hwc3_floats =
         static_cast<std::size_t>(geo->aligned_width) * geo->aligned_height * 3;
-    state.EnsureStagingFloats(hwc3_floats);
-    EnqueuePackMonoRoiToHwc3(state, linear_cfa.Buffer(), state.mosaic_hwc.get(), linear_cfa.Width(),
-                             linear_cfa.Height(), geo->shift_sx, geo->shift_sy, geo->aligned_width,
-                             geo->aligned_height, period, queue);
+    state.EnsureRgbStaging(hwc3_floats);
     opencl::nn::FinishDemosaicNetStage("phase_crop_and_hwc_pack", queue);
 
     if (options.injected_failure == OpenClNeuralInjectedFailure::ModelLoad) {
@@ -381,10 +347,16 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
     }
 
     OpenClDemosaicNetTiledDispatch dispatch;
-    dispatch.input_aligned_hwc  = state.mosaic_hwc.get();
+    dispatch.input_mono_cfa     = linear_cfa.Buffer();
+    dispatch.src_width          = linear_cfa.Width();
+    dispatch.src_height         = linear_cfa.Height();
+    dispatch.crop_x             = geo->shift_sx;
+    dispatch.crop_y             = geo->shift_sy;
     dispatch.output_aligned_hwc = state.rgb_hwc.get();
     dispatch.aligned_width      = geo->aligned_width;
     dispatch.aligned_height     = geo->aligned_height;
+    dispatch.rgb_fc             = state.cfa_table.get();
+    dispatch.period             = period;
     dispatch.queue              = queue;
 
     OpenClDemosaicNetTiledResult tiled;

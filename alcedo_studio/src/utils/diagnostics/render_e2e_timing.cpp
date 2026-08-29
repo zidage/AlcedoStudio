@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -85,6 +86,14 @@ void EnsurePresentChainPrefix(Sample* sample, const Clock::time_point now) {
   if (!sample->present_wake_at.has_value()) {
     sample->present_wake_at = sample->producer_ready_at;
   }
+}
+
+auto RenderE2ePrintEnabled() -> bool {
+  const char* value = std::getenv("ALCEDO_RENDER_E2E");
+  if (value == nullptr || value[0] == '\0') {
+    return true;
+  }
+  return value[0] != '0';
 }
 
 }  // namespace
@@ -249,6 +258,11 @@ void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
   // Render-thread work after the frame starts: target fulfill + createFrom.
   // consume_begin is retained for diagnostics if fulfill ever grows.
   const double import_ms = MsBetween(render_enter, now);
+
+  if (!RenderE2ePrintEnabled()) {
+    (void)consume_begin;
+    return;
+  }
 
   std::cout << std::fixed << std::setprecision(2) << "[RENDER_E2E] request=" << request_id
             << " reason=" << (sample.reason.empty() ? "?" : sample.reason)

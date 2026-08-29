@@ -10,6 +10,7 @@
 #include <QThread>
 #include <chrono>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
@@ -479,13 +480,18 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       };
     }
     const auto request_for_trace = job.request;
-    task.on_complete_            = [this, job, request_for_trace](bool success) mutable {
+    task.on_complete_            = [this, job, request_for_trace](bool success,
+                                                       std::string message) mutable {
       TraceDetailRequest("pipeline-return", request_for_trace, success ? "success" : "failed");
       if (JobIsCancelled(job)) {
         FinishJob(job, false, "Cancelled during execution");
         return;
       }
-      FinishJob(job, success, success ? "Frame ready" : "Pipeline returned an empty result");
+      if (success) {
+        FinishJob(job, true, "Frame ready");
+        return;
+      }
+      FinishJob(job, false, message.empty() ? "Pipeline returned an empty result" : std::move(message));
     };
     scheduler->ScheduleTask(std::move(task));
   } catch (const std::exception& ex) {

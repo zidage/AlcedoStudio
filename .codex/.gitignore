@@ -1,5 +1,3 @@
-# Local Codex state — keep skills shareable with the repo.
+# Local Codex state. Shared skills are canonical under .agents/skills.
 *
-!skills/
-!skills/**
 !.gitignore

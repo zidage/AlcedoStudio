@@ -314,7 +314,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
       std::vector<uint32_t> counts(static_cast<size_t>(output.histogram_bins) * 3U, 0U);
       const size_t          expected_bytes = counts.size() * sizeof(uint32_t);
       if (resource->size_bytes >= expected_bytes &&
-          clEnqueueReadBuffer(OpenClContext::Instance().Queue(), resource->buffer, CL_TRUE, 0,
+          clEnqueueReadBuffer(OpenClContext::Instance().ProductQueue(), resource->buffer, CL_TRUE, 0,
                               expected_bytes, counts.data(), 0, nullptr, nullptr) == CL_SUCCESS) {
         snapshot.histogram = NormalizeHistogramToUnitRange(counts, output.histogram_bins);
       }
@@ -332,7 +332,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
                                  0U);
       const size_t row_bytes = static_cast<size_t>(output.waveform_width) * sizeof(uint32_t) * 4U;
       if (resource->row_bytes == row_bytes) {
-        if (clEnqueueReadBuffer(OpenClContext::Instance().Queue(), resource->buffer, CL_TRUE, 0,
+        if (clEnqueueReadBuffer(OpenClContext::Instance().ProductQueue(), resource->buffer, CL_TRUE, 0,
                                 rgba.size() * sizeof(uint32_t), rgba.data(), 0, nullptr,
                                 nullptr) == CL_SUCCESS) {
           snapshot.waveform = NormalizeWaveformCountsToUnitRange(rgba, output.waveform_width,
@@ -342,7 +342,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
         bool read_ok = true;
         for (int y = 0; y < output.waveform_height; ++y) {
           const cl_int err =
-              clEnqueueReadBuffer(OpenClContext::Instance().Queue(), resource->buffer, CL_TRUE,
+              clEnqueueReadBuffer(OpenClContext::Instance().ProductQueue(), resource->buffer, CL_TRUE,
                                   static_cast<size_t>(y) * resource->row_bytes, row_bytes,
                                   rgba.data() + static_cast<size_t>(y) *
                                                     static_cast<size_t>(output.waveform_width) * 4U,

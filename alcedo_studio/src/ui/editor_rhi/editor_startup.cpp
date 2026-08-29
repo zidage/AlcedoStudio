@@ -5,6 +5,11 @@
 #include "ui/editor_rhi/editor_startup.hpp"
 
 #include <QtGui/rhi/qrhi.h>
+#if defined(__APPLE__) && defined(HAVE_METAL)
+#include <QQuickGraphicsDevice>
+
+#include "metal/metal_context.hpp"
+#endif
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -185,8 +190,9 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
     case EditorBackend::Metal: {
 #if defined(__APPLE__) && defined(HAVE_METAL)
       QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
+      (void)alcedo::MetalContext::Instance();
       result.diagnostics.notes =
-          "Metal API selected; shared-texture presentation qualified by the macOS RHI harness";
+          "Metal API selected; Qt Quick presents from the process MetalContext device";
       result.ok = true;
       SetActiveEditorBackend(backend);
       return result;
@@ -211,8 +217,16 @@ void BindEditorGraphicsToWindow(QQuickWindow* window, const EditorStartupResult&
     window->setGraphicsDevice(QQuickGraphicsDevice::fromAdapter(
         static_cast<quint32>(luid.LowPart), static_cast<qint32>(luid.HighPart)));
   }
-#else
-  (void)startup;
+#endif
+#if defined(__APPLE__) && defined(HAVE_METAL)
+  if (startup.diagnostics.backend == EditorBackend::Metal) {
+    auto& context = alcedo::MetalContext::Instance();
+    if (context.Device() != nullptr && context.Queue() != nullptr) {
+      window->setGraphicsDevice(QQuickGraphicsDevice::fromDeviceAndCommandQueue(
+          reinterpret_cast<MTLDevice*>(context.Device()),
+          reinterpret_cast<MTLCommandQueue*>(context.Queue())));
+    }
+  }
 #endif
 }
 

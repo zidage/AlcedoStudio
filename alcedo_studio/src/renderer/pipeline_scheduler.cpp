@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -189,8 +190,8 @@ void ApplyRenderFrameRole(const std::shared_ptr<CPUPipelineExecutor>& pipeline_e
 }
 
 auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
-                        bool should_use_viewport_region,
-                        const std::optional<ViewportRenderRegion>& requested_region)
+                        bool                                        should_use_viewport_region,
+                        const std::optional<ViewportRenderRegion>&  requested_region)
     -> std::optional<ViewportRenderRegion> {
   if (!pipeline_executor || !should_use_viewport_region) {
     return std::nullopt;
@@ -230,9 +231,12 @@ void PipelineTask::SetExecutorRenderParams() {
   const bool viewport_region_render  = (requested_render_type == RenderType::FAST_PREVIEW ||
                                        requested_render_type == RenderType::DETAIL_ROI_PREVIEW) &&
                                       desc.use_viewport_region_;
-  const auto viewport_region =
-      LoadViewportRegion(pipeline_executor_, viewport_region_render && !rotation_active_fast_preview,
-                         desc.viewport_region_);
+  const auto viewport_region = LoadViewportRegion(
+      pipeline_executor_, viewport_region_render && !rotation_active_fast_preview,
+      desc.viewport_region_);
+  // Freeze request geometry before any branch returns. In particular, Quality Base must carry
+  // null (full frame) instead of re-reading a live ROI later inside Apply.
+  pipeline_executor_->SetRenderRequestViewport(viewport_region);
   if (viewport_region.has_value()) {
     region_x                = viewport_region->x_;
     region_y                = viewport_region->y_;
@@ -242,7 +246,7 @@ void PipelineTask::SetExecutorRenderParams() {
     region_reference_height = viewport_region->reference_height_;
   }
 
-  FramePreviewMetadata frame_metadata = desc.frame_metadata_;
+  FramePreviewMetadata  frame_metadata    = desc.frame_metadata_;
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
 
   if (requested_render_type == RenderType::FAST_PREVIEW) {
@@ -266,8 +270,8 @@ void PipelineTask::SetExecutorRenderParams() {
     }
 
     presentation_mode = FramePresentationMode::RoiFrame;
-    frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
-                                        region_scale_x, region_scale_y);
+    frame_metadata    = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
+                                           region_scale_x, region_scale_y);
     frame_metadata.scope_update_allowed = frame_metadata.scope_refresh_requested;
     ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
     pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
@@ -300,8 +304,8 @@ void PipelineTask::SetExecutorRenderParams() {
     frame_metadata.frame_role = (region_scale_x < (1.0f - 1e-4f) || region_scale_y < (1.0f - 1e-4f))
                                     ? FrameRole::DetailPatch
                                     : FrameRole::QualityBase;
-    frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
-                                        region_scale_x, region_scale_y);
+    frame_metadata    = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
+                                           region_scale_x, region_scale_y);
     presentation_mode = FramePresentationMode::ViewportTransformed;
     ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
     pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
@@ -387,7 +391,6 @@ void PipelineTask::ResetThumbnailRenderParams() {
   pipeline_executor_->SetEnableCache(true);
   pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
   pipeline_executor_->SetCancelRequested(nullptr);
-  pipeline_executor_->ClearAllIntermediateBuffers();
 }
 
 PipelineScheduler::PipelineScheduler() : thread_pool_(1) {}
@@ -432,24 +435,27 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
     std::optional<bool> completion_result;
+    std::string         completion_message;
     // Some render paths return from inside the render_lock scope. Record the
     // result there, but invoke the external completion only when this outer
     // guard is destroyed, after every inner lock and render parameter guard.
-    auto completion_guard = std::unique_ptr<void, std::function<void(void*)>>(
-        reinterpret_cast<void*>(1), [&task, &completion_result](void*) {
+    auto                completion_guard = std::unique_ptr<void, std::function<void(void*)>>(
+        reinterpret_cast<void*>(1), [&task, &completion_result, &completion_message](void*) {
           if (!completion_result.has_value() || !task.on_complete_) {
             return;
           }
           try {
-            task.on_complete_(*completion_result);
+            task.on_complete_(*completion_result, std::move(completion_message));
           } catch (...) {
           }
         });
-    const auto finish = [&completion_result](bool success) {
+    const auto finish = [&completion_result, &completion_message](bool        success,
+                                                                  std::string message = {}) {
       if (completion_result.has_value()) {
         return;
       }
-      completion_result = success;
+      completion_result  = success;
+      completion_message = std::move(message);
     };
 
     const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
@@ -532,10 +538,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           bool prepared = false;
           try {
             prepared = (*task.prepare_)(task);
+          } catch (const std::exception& ex) {
+            notify_thumbnail_failure_callbacks();
+            set_blocking_exception();
+            finish(false, ex.what());
+            return;
           } catch (...) {
             notify_thumbnail_failure_callbacks();
             set_blocking_exception();
-            finish(false);
+            finish(false, "Pipeline render failed");
             return;
           }
           if (!prepared) {
@@ -578,10 +589,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               bool prepared = false;
               try {
                 prepared = (*task.configure_under_render_lock_)(task);
+              } catch (const std::exception& ex) {
+                notify_thumbnail_failure_callbacks();
+                set_blocking_exception();
+                finish(false, ex.what());
+                return;
               } catch (...) {
                 notify_thumbnail_failure_callbacks();
                 set_blocking_exception();
-                finish(false);
+                finish(false, "Pipeline render failed");
                 return;
               }
               if (!prepared) {
@@ -630,8 +646,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           // their explicit post-render baseline so geometry caches survive
           // consecutive interactive requests.
           auto render_params_guard = std::unique_ptr<void, std::function<void(void*)>>(
-              reinterpret_cast<void*>(1),
-              [&task, &prior_one_shot, &restore_frame_sink](void*) {
+              reinterpret_cast<void*>(1), [&task, &prior_one_shot, &restore_frame_sink](void*) {
                 if (prior_one_shot.has_value() && task.pipeline_executor_) {
                   task.pipeline_executor_->RestoreOneShotRenderParams(*prior_one_shot);
                 }
@@ -717,6 +732,14 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         set_blocking_value(nullptr);
         finish(false);
       }
+    } catch (const std::exception& ex) {
+      try {
+        apply_state_transition_after_render();
+      } catch (...) {
+      }
+      notify_thumbnail_failure_callbacks();
+      set_blocking_exception();
+      finish(false, ex.what());
     } catch (...) {
       try {
         apply_state_transition_after_render();
@@ -724,7 +747,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
       }
       notify_thumbnail_failure_callbacks();
       set_blocking_exception();
-      finish(false);
+      finish(false, "Pipeline render failed");
     }
   });
 }

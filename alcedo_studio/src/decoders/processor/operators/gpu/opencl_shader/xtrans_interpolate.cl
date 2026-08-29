@@ -25,15 +25,16 @@ static inline uint XTransPatternColorAt(XTransParams params, int y, int x) {
   return params.rgb_fc[wrapped_y * tile_w + wrapped_x];
 }
 
-static inline float XTransSafeRead(global const float* raw, XTransParams params, int y, int x) {
+static inline float XTransSafeRead(global const float* raw, uint offset, XTransParams params, int y,
+                                   int x) {
   const int clamped_x = XTransClampCoord(x, (int)params.width);
   const int clamped_y = XTransClampCoord(y, (int)params.height);
-  return raw[(size_t)clamped_y * (size_t)params.width + (size_t)clamped_x];
+  return raw[offset + (size_t)clamped_y * (size_t)params.width + (size_t)clamped_x];
 }
 
-static inline float XTransFindDirectionalGreen(global const float* raw, XTransParams params, int y,
-                                               int x) {
-  float left = XTransSafeRead(raw, params, y, x);
+static inline float XTransFindDirectionalGreen(global const float* raw, uint raw_off,
+                                               XTransParams params, int y, int x) {
+  float left = XTransSafeRead(raw, raw_off, params, y, x);
   float right = left;
   float up = left;
   float down = left;
@@ -46,22 +47,22 @@ static inline float XTransFindDirectionalGreen(global const float* raw, XTransPa
   for (int radius = 1; radius <= (int)params.green_radius && (!has_left || !has_right);
        ++radius) {
     if (!has_left && XTransPatternColorAt(params, y, x - radius) == 1u) {
-      left = XTransSafeRead(raw, params, y, x - radius);
+      left = XTransSafeRead(raw, raw_off, params, y, x - radius);
       has_left = 1;
     }
     if (!has_right && XTransPatternColorAt(params, y, x + radius) == 1u) {
-      right = XTransSafeRead(raw, params, y, x + radius);
+      right = XTransSafeRead(raw, raw_off, params, y, x + radius);
       has_right = 1;
     }
   }
 
   for (int radius = 1; radius <= (int)params.green_radius && (!has_up || !has_down); ++radius) {
     if (!has_up && XTransPatternColorAt(params, y - radius, x) == 1u) {
-      up = XTransSafeRead(raw, params, y - radius, x);
+      up = XTransSafeRead(raw, raw_off, params, y - radius, x);
       has_up = 1;
     }
     if (!has_down && XTransPatternColorAt(params, y + radius, x) == 1u) {
-      down = XTransSafeRead(raw, params, y + radius, x);
+      down = XTransSafeRead(raw, raw_off, params, y + radius, x);
       has_down = 1;
     }
   }
@@ -89,7 +90,7 @@ static inline float XTransFindDirectionalGreen(global const float* raw, XTransPa
         if (XTransPatternColorAt(params, y + dy, x + dx) != 1u) {
           continue;
         }
-        sum += XTransSafeRead(raw, params, y + dy, x + dx);
+        sum += XTransSafeRead(raw, raw_off, params, y + dy, x + dx);
         ++count;
       }
     }
@@ -98,11 +99,11 @@ static inline float XTransFindDirectionalGreen(global const float* raw, XTransPa
     }
   }
 
-  return count > 0u ? sum / (float)count : XTransSafeRead(raw, params, y, x);
+  return count > 0u ? sum / (float)count : XTransSafeRead(raw, raw_off, params, y, x);
 }
 
-static inline float XTransEstimateMissingChannel(global const float* raw,
-                                                 global const float* green,
+static inline float XTransEstimateMissingChannel(global const float* raw, uint raw_off,
+                                                 global const float* green, uint green_off,
                                                  XTransParams params, int y, int x,
                                                  uint target_color, float current_green) {
   float sum = 0.0f;
@@ -118,8 +119,8 @@ static inline float XTransEstimateMissingChannel(global const float* raw,
           continue;
         }
 
-        const float neigh_raw = XTransSafeRead(raw, params, y + dy, x + dx);
-        const float neigh_green = XTransSafeRead(green, params, y + dy, x + dx);
+        const float neigh_raw = XTransSafeRead(raw, raw_off, params, y + dy, x + dx);
+        const float neigh_green = XTransSafeRead(green, green_off, params, y + dy, x + dx);
         const float weight = 1.0f / (float)(abs(dx) + abs(dy));
         sum += (neigh_raw - neigh_green) * weight;
         wsum += weight;
@@ -133,7 +134,8 @@ static inline float XTransEstimateMissingChannel(global const float* raw,
   return wsum == 0.0f ? current_green : fmax(0.0f, current_green + sum / wsum);
 }
 
-__kernel void xtrans_green(global const float* raw, global float* green, XTransParams params) {
+__kernel void xtrans_green(global const float* raw, global float* green, XTransParams params,
+                           uint raw_off, uint green_off) {
   const uint x = get_global_id(0);
   const uint y = get_global_id(1);
   if (x >= params.width || y >= params.height) {
@@ -144,11 +146,13 @@ __kernel void xtrans_green(global const float* raw, global float* green, XTransP
   const int iy = (int)y;
   const uint color = XTransPatternColorAt(params, iy, ix);
   const size_t index = (size_t)y * (size_t)params.width + (size_t)x;
-  green[index] = color == 1u ? raw[index] : XTransFindDirectionalGreen(raw, params, iy, ix);
+  green[green_off + index] =
+      color == 1u ? raw[raw_off + index]
+                  : XTransFindDirectionalGreen(raw, raw_off, params, iy, ix);
 }
 
 __kernel void xtrans_rgba(global const float* raw, global const float* green, global float4* rgba,
-                          XTransParams params) {
+                          XTransParams params, uint raw_off, uint green_off, uint rgba_off) {
   const uint x = get_global_id(0);
   const uint y = get_global_id(1);
   if (x >= params.width || y >= params.height) {
@@ -159,20 +163,20 @@ __kernel void xtrans_rgba(global const float* raw, global const float* green, gl
   const int iy = (int)y;
   const size_t index = (size_t)y * (size_t)params.width + (size_t)x;
   const uint color = XTransPatternColorAt(params, iy, ix);
-  const float raw_value = raw[index];
-  const float green_value = green[index];
+  const float raw_value = raw[raw_off + index];
+  const float green_value = green[green_off + index];
 
   const float r = color == 0u ? raw_value
-                              : XTransEstimateMissingChannel(raw, green, params, iy, ix, 0u,
-                                                             green_value);
+                              : XTransEstimateMissingChannel(raw, raw_off, green, green_off, params,
+                                                             iy, ix, 0u, green_value);
   float g = green_value;
   const float b = color == 2u ? raw_value
-                              : XTransEstimateMissingChannel(raw, green, params, iy, ix, 2u,
-                                                             green_value);
+                              : XTransEstimateMissingChannel(raw, raw_off, green, green_off, params,
+                                                             iy, ix, 2u, green_value);
 
   if (color == 1u) {
     g = raw_value;
   }
 
-  rgba[index] = (float4)(r, g, b, 1.0f);
+  rgba[rgba_off + index] = (float4)(r, g, b, 1.0f);
 }

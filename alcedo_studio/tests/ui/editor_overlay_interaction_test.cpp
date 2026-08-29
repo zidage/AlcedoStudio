@@ -18,7 +18,6 @@
 #include <QTest>
 #include <QVector2D>
 #include <Qt>
-
 #include <cmath>
 #include <vector>
 
@@ -26,21 +25,21 @@
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
+#include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_overlay_item.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
-#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
 
 struct ViewportCase {
   const char* name;
-  qreal width;
-  qreal height;
-  qreal dpr;
+  qreal       width;
+  qreal       height;
+  qreal       dpr;
 };
 
 const ViewportCase kDprCases[] = {
@@ -60,17 +59,17 @@ auto PointInTriangle(const QPointF& p, const QPointF& a, const QPointF& b, const
   const auto cross = [](const QPointF& o, const QPointF& u, const QPointF& v) {
     return (u.x() - o.x()) * (v.y() - o.y()) - (u.y() - o.y()) * (v.x() - o.x());
   };
-  const double c1 = cross(a, b, p);
-  const double c2 = cross(b, c, p);
-  const double c3 = cross(c, a, p);
-  const bool has_neg = (c1 < 0) || (c2 < 0) || (c3 < 0);
-  const bool has_pos = (c1 > 0) || (c2 > 0) || (c3 > 0);
+  const double c1      = cross(a, b, p);
+  const double c2      = cross(b, c, p);
+  const double c3      = cross(c, a, p);
+  const bool   has_neg = (c1 < 0) || (c2 < 0) || (c3 < 0);
+  const bool   has_pos = (c1 > 0) || (c2 > 0) || (c3 > 0);
   return !(has_neg && has_pos);
 }
 
 auto MaskCoverageCount(const OverlaySceneGeometry& scene, const QPointF& p) -> int {
-  const auto& t = scene.mask_triangles;
-  int count = 0;
+  const auto& t     = scene.mask_triangles;
+  int         count = 0;
   for (size_t i = 0; i + 2 < t.size(); i += 3) {
     if (PointInTriangle(p, t[i], t[i + 1], t[i + 2])) {
       ++count;
@@ -145,7 +144,8 @@ TEST(EditorOverlayInteractionTest, ActualPixelsClampsToFitWhenFitExceedsOneToOne
 TEST(EditorOverlayInteractionTest, MaxZoomClampsToTrueZoomCeilingNotLegacyField) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
-  ConfigureImage(controller, 4000, 3000);  // fitFraction 0.2 → field ceiling 80 → true ceiling 1600%
+  ConfigureImage(controller, 4000,
+                 3000);  // fitFraction 0.2 → field ceiling 80 → true ceiling 1600%
 
   // Saturate the cap with many zoom-in steps. The cap is expressed in true
   // zoom (1600%), not the legacy 8x fit field, so the field reaches ~80 and
@@ -205,7 +205,7 @@ TEST(EditorOverlayInteractionTest, TrueZoomUsesCroppedOutputAfterCropCommit) {
   controller.setCropOverlayVisible(true);
   EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);
   controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));  // central 50% crop
-  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);  // still source-based
+  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);               // still source-based
 
   // Close the panel → crop commits (overlay hidden). Displayed image is now the
   // cropped output (round(4000*0.5) x round(3000*0.5) = 2000x1500, same aspect),
@@ -271,7 +271,7 @@ TEST(EditorOverlayInteractionTest, CropCreateDragUpdatesNormalizedRectAndFinaliz
     controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
 
     const QPointF start = controller.imageUvToItemPoint(0.1, 0.1);
-    const QPointF end = controller.imageUvToItemPoint(0.4, 0.45);
+    const QPointF end   = controller.imageUvToItemPoint(0.4, 0.45);
     ASSERT_FALSE(start.isNull()) << c.name;
     ASSERT_FALSE(end.isNull()) << c.name;
 
@@ -299,7 +299,7 @@ TEST(EditorOverlayInteractionTest, DisablingCropToolCancelsInFlightDragWithoutCo
   controller.setCropRectNormalized(initial);
 
   const QPointF start = controller.imageUvToItemPoint(0.1, 0.1);
-  const QPointF mid = controller.imageUvToItemPoint(0.35, 0.4);
+  const QPointF mid   = controller.imageUvToItemPoint(0.35, 0.4);
   ASSERT_FALSE(start.isNull());
   ASSERT_FALSE(mid.isNull());
 
@@ -471,11 +471,11 @@ TEST(EditorOverlayInteractionTest, OverlaySceneGeometryBuildsMaskBorderGridAndHa
 TEST(EditorOverlayInteractionTest, OverlaySceneGeometryGoldenAcrossViewportAspects) {
   struct Case {
     const char* name;
-    qreal w;
-    qreal h;
+    qreal       w;
+    qreal       h;
   };
-  const Case cases[] = {{"landscape", 960, 540}, {"portrait", 540, 960}, {"square", 700, 700},
-                        {"odd", 801, 599}};
+  const Case cases[] = {
+      {"landscape", 960, 540}, {"portrait", 540, 960}, {"square", 700, 700}, {"odd", 801, 599}};
 
   for (const auto& c : cases) {
     EditorInteractionController controller;
@@ -515,7 +515,7 @@ TEST(EditorOverlayInteractionTest, DimMaskDoesNotCoverCropInteriorAtMultipleRota
 
     const auto geometry = controller.overlayGeometry();
     ASSERT_TRUE(geometry.crop_corners_valid) << degrees;
-    const auto scene = BuildOverlaySceneGeometry(geometry, true);
+    const auto    scene  = BuildOverlaySceneGeometry(geometry, true);
     const QPointF center = CropGeometry::CropCenterWidgetPoint(geometry.crop_corners_widget);
     EXPECT_FALSE(MaskCoversPoint(scene, center)) << "rotation=" << degrees;
   }
@@ -570,19 +570,19 @@ TEST(EditorOverlayInteractionTest, RoundCapsExtendOutwardPastStrokeEndpoints) {
   ASSERT_FALSE(scene.grip_outer_triangles.empty());
 
   // Top edge grip is the middle 24% of the top crop edge (0.38..0.62).
-  const QPointF a = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
-                                            geometry.crop_corners_widget[1], 0.38f);
-  const QPointF b = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
-                                            geometry.crop_corners_widget[1], 0.62f);
-  const QPointF ab = b - a;
-  const double len = std::hypot(ab.x(), ab.y());
+  const QPointF a   = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
+                                              geometry.crop_corners_widget[1], 0.38f);
+  const QPointF b   = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
+                                              geometry.crop_corners_widget[1], 0.62f);
+  const QPointF ab  = b - a;
+  const double  len = std::hypot(ab.x(), ab.y());
   ASSERT_GT(len, 1.0);
   const QPointF outward_a(-ab.x() / len, -ab.y() / len);
   const QPointF outward_b(ab.x() / len, ab.y() / len);
 
   // Outer grip stroke width is 5.0 → radius 2.5. Caps must reach past endpoints.
-  const double reach_a = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, a, outward_a);
-  const double reach_b = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, b, outward_b);
+  const double  reach_a = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, a, outward_a);
+  const double  reach_b = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, b, outward_b);
   EXPECT_GT(reach_a, 1.5) << "left/top cap must extend outward past endpoint a";
   EXPECT_GT(reach_b, 1.5) << "right/top cap must extend outward past endpoint b";
 
@@ -641,12 +641,11 @@ TEST(EditorOverlayInteractionTest, SingleViewStatePushPerInputSequenceDespiteDua
   ConfigureImage(controller, 4000, 3000);
 
   EditorViewportItem viewport;
-  int push_count = 0;
-  QObject::connect(&controller, &EditorInteractionController::viewStateChanged, &controller,
-                   [&]() {
-                     controller.applyViewStateToViewport(&viewport);
-                     ++push_count;
-                   });
+  int                push_count = 0;
+  QObject::connect(&controller, &EditorInteractionController::viewStateChanged, &controller, [&]() {
+    controller.applyViewStateToViewport(&viewport);
+    ++push_count;
+  });
   // Intentionally do NOT connect viewChanged — production QML only listens to
   // viewStateChanged so dual emits cannot double-push.
 
@@ -827,8 +826,20 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   // render-ref is published later from SubmitMetalFrame with the real texture.
   if (metal_present) {
     EXPECT_EQ(target_size_signals, 0);
-    last_w = 2048;
-    last_h = 1536;
+#ifdef HAVE_METAL
+    const auto owner = std::make_shared<int>(1);
+    sink->SubmitMetalFrame(
+        alcedo::ViewerMetalFrame{2048,
+                                 1536,
+                                 reinterpret_cast<std::uintptr_t>(owner.get()),
+                                 std::shared_ptr<const void>(owner, owner.get()),
+                                 {},
+                                 alcedo::FramePresentationMode::ViewportTransformed,
+                                 quality_meta});
+    EXPECT_EQ(target_size_signals, 1);
+    EXPECT_EQ(last_w, 2048);
+    EXPECT_EQ(last_h, 1536);
+#endif
   } else {
     EXPECT_EQ(target_size_signals, 1);
     EXPECT_EQ(last_w, 2048);
@@ -852,7 +863,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
 
   // Must not emit targetSizeRequested — render reference stays full-frame.
   if (metal_present) {
-    EXPECT_EQ(target_size_signals, 0);
+    EXPECT_EQ(target_size_signals, 1);
   } else {
     EXPECT_EQ(target_size_signals, 1);
   }
@@ -937,14 +948,14 @@ TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
 
 TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateDirectPresentTargets) {
   EditorViewportItem viewport;
-  // Seed a synthetic target generation so the comparison is not 0 == 0 vacuously.
+  // Install a synthetic target generation so the comparison is not 0 == 0 vacuously.
   // View-state pushes must not advance direct-present target generation.
   if (viewport.present_queue()) {
     DirectPresentQueue::SizeRequest req;
-    req.width            = 64;
-    req.height           = 48;
-    req.session_epoch = 1;
-    req.image_identity   = 1;
+    req.width          = 64;
+    req.height         = 48;
+    req.session_epoch  = 1;
+    req.image_identity = 1;
     viewport.present_queue()->NoteSizeRequest(req);
     viewport.present_queue()->InvalidateTargetGeneration();
   }
@@ -1075,7 +1086,8 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   QTest::qWait(150);
   QCoreApplication::processEvents();
   ASSERT_FALSE(spy.empty());
-  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+  EXPECT_EQ(last_kind(),
+            static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 
   // Pan while zoomed → the detail patch must follow the new ROI → DetailRefresh.
   spy.clear();
@@ -1088,7 +1100,8 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   QTest::qWait(150);
   QCoreApplication::processEvents();
   ASSERT_EQ(spy.count(), 1);
-  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+  EXPECT_EQ(last_kind(),
+            static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 
   // Reset to fit (zoom ≤ 1) → the full frame is reused → ZoomPan.
   spy.clear();
@@ -1117,8 +1130,7 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::Resize));
 }
 
-TEST(EditorOverlayInteractionTest,
-     GeometryOverlayCropDraftDoesNotRouteCropRotateViewChanges) {
+TEST(EditorOverlayInteractionTest, GeometryOverlayCropDraftDoesNotRouteCropRotateViewChanges) {
   // While the geometry overlay is open, crop-frame edits are pure UI over the
   // source-frame preview. Pipeline bake is owned by panel confirm (leave/Enter).
   EditorInteractionController controller;
