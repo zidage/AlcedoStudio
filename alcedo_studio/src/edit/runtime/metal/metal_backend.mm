@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <alcedo/metal/Metal.hpp>
@@ -789,14 +790,15 @@ void MetalBackend::Submit(CommandContext& command_context) {
   in_flight_submission_ = submission_id;
 }
 
-void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
+void MetalBackend::CompleteCurrentCommandBuffer(CommandContext& command_context) {
   if (command_context.gpu_ == nullptr || command_context.gpu_->buffer.get() == nullptr) {
-    ReleaseRecordedWorkScratchResources();
     return;
   }
   command_context.gpu_->EndEncoders();
   auto* command_buffer = command_context.gpu_->buffer.get();
-  command_buffer->commit();
+  if (command_buffer->status() < MTL::CommandBufferStatusCommitted) {
+    command_buffer->commit();
+  }
   command_buffer->waitUntilCompleted();
   if (command_buffer->status() == MTL::CommandBufferStatusError) {
     std::string message = "MetalBackend: recorded work wait failed";
@@ -807,10 +809,18 @@ void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
       }
     }
     command_context.gpu_->Reset();
-    ReleaseRecordedWorkScratchResources();
     throw std::runtime_error(message);
   }
   command_context.gpu_->Reset();
+}
+
+void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
+  try {
+    CompleteCurrentCommandBuffer(command_context);
+  } catch (...) {
+    ReleaseRecordedWorkScratchResources();
+    throw;
+  }
   ReleaseRecordedWorkScratchResources();
 }
 

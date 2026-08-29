@@ -158,7 +158,7 @@ auto CropOrFull(const PreparedRawInput& input, std::uint32_t width, std::uint32_
   return RectI{0, 0, static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)};
 }
 
-void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const PreparedRawInput& input,
+void EncodeNeural(MetalRenderDevice& device, const PreparedRawInput& input,
                   MetalBackend::Texture2D& linear, ResourceLease<MetalBackend>& packed, bool hlr) {
   std::string error;
   const auto  geometry =
@@ -189,6 +189,12 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
                              cache.LastError());
   }
 
+  // MPSGraph encodeToCommandBuffer may commitAndContinue. Do not wrap the DAG command
+  // buffer: later HLR/copy encoders would hit a committed MTLCommandBuffer. Finish
+  // linearization first so Neural's own command buffers cannot race it, then wait
+  // once after the tile loop. Recorded-work scratch stays alive across both waits.
+  device.Workspace().Device().CompleteCurrentCommandBuffer(device.CommandContext());
+
   MetalDemosaicNetTiledDispatch dispatch;
   dispatch.cfa_image       = &cfa_image;
   dispatch.output_rgba     = &out_image;
@@ -197,8 +203,8 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
   dispatch.aligned_width   = geometry->aligned_width;
   dispatch.aligned_height  = geometry->aligned_height;
   dispatch.product_crop    = cv::Rect(crop.x, crop.y, crop.width, crop.height);
-  dispatch.commit_and_wait = false;
-  dispatch.command_buffer  = command_buffer;
+  dispatch.commit_and_wait = true;
+  dispatch.command_buffer  = nullptr;
   MetalDemosaicNetTiledExecutor executor;
   if (is_bayer) {
     (void)executor.EnqueueBayer(cache.Bayer(), dispatch);
@@ -206,9 +212,10 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
     (void)executor.EnqueueXTrans(cache.XTrans(), dispatch);
   }
 
-  auto* hlr_src = Native(neural_out);
-  auto  hlr_w   = neural_out.Width();
-  auto  hlr_h   = neural_out.Height();
+  auto* command_buffer = CommandBuffer(device);
+  auto* hlr_src        = Native(neural_out);
+  auto  hlr_w          = neural_out.Width();
+  auto  hlr_h          = neural_out.Height();
   if (hlr) {
     auto& hlr_dst = AcquireScratch(device.Workspace(), hlr_w, hlr_h, TextureFormat::Rgba32f);
     auto& stats = device.Workspace().Device().AcquireRecordedWorkScratchBuffer(6 * sizeof(float));
@@ -402,7 +409,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
   const auto method =
       ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
   if (method == RawDemosaicMethod::NeuralEngine) {
-    EncodeNeural(device, command_buffer, input, linear, decoded_lease, hlr);
+    EncodeNeural(device, input, linear, decoded_lease, hlr);
   } else {
     EncodeLegacyDemosaic(device, command_buffer, input, linear, decoded_lease, hlr);
   }

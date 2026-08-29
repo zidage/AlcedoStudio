@@ -52,8 +52,10 @@ struct MetalDemosaicNetTiledDispatch {
   // false only when they intentionally keep the command buffer live.
   bool commit_and_wait = true;
 
-  // When non-null, encode onto this existing MTLCommandBuffer instead of creating
-  // an MPSCommandBuffer from the process queue. The caller owns commit.
+  // When non-null, wrap this existing MTLCommandBuffer. MPSGraph may
+  // commitAndContinue, so the caller must not keep encoding onto this pointer
+  // after Enqueue*. The product Develop path leaves this null and uses a dedicated
+  // MPSCommandBuffer from the process queue.
   void* command_buffer = nullptr;
 };
 

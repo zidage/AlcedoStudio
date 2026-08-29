@@ -189,6 +189,14 @@ class MetalBackend {
   void               Submit(CommandContext& command_context);
   void               Wait(CommandContext& command_context);
   /**
+   * @brief Commit and wait the current command buffer. Recorded-work scratch stays alive.
+   *
+   * The next encode creates a new command buffer. Call this before MPSGraph Neural
+   * Engine work: `encodeToCommandBuffer` may `commitAndContinue`, so it cannot share
+   * this buffer, and later passes must not create encoders on the committed original.
+   */
+  void CompleteCurrentCommandBuffer(CommandContext& command_context);
+  /**
    * @brief Commit recorded Metal work and wait. The next encode gets a new command buffer.
    *
    * Used to finish and release Develop scratch before Geometry runs.

@@ -377,6 +377,46 @@ TEST_F(MetalDevelopFixture, MetalDevelopXTransMatchesCudaReferenceWithinToleranc
   EXPECT_LT(max_green_err, 2.0e-3f);
 }
 
+TEST_F(MetalDevelopFixture,
+       MetalDevelopNeuralEngineFinishesWithoutReusingACommittedCommandBuffer) {
+  auto& cache = MetalDemosaicNetModelCache::Instance();
+  if (!cache.EnsureLoaded(MetalDemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer Neural Engine weights are not available: " << cache.LastError();
+  }
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "neural_engine", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  MetalRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);
+
+  const auto pixels = Download(device, plan.sensor_linear_output);
+  ASSERT_FALSE(pixels.empty());
+  for (const auto& p : pixels) {
+    EXPECT_TRUE(std::isfinite(p.r) && std::isfinite(p.g) && std::isfinite(p.b));
+    EXPECT_NEAR(p.a, 1.0f, 1.0e-3f);
+  }
+
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(legacy_doc);
+  SetDevelopMethod(legacy_doc, "legacy", true);
+  const auto legacy_plan =
+      GraphCompiler::Compile(legacy_doc, prepared.CompileSource(), RenderRequest{});
+  MetalRenderDevice legacy_device;
+  (void)legacy_device.Execute(legacy_plan, prepared, legacy_doc);
+  legacy_device.WaitIdle();
+  EXPECT_TRUE(PixelsDiffer(Download(legacy_device, legacy_plan.sensor_linear_output), pixels));
+}
+
 TEST_F(MetalDevelopFixture, MetalDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectLegacyOnFailure) {
   MetalDemosaicNetModelCache failing;
   SetMetalDevelopNeuralModelCacheForTesting(&failing);

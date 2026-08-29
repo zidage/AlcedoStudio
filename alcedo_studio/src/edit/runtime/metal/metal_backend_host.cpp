@@ -183,6 +183,7 @@ void MetalBackend::Wait(CommandContext&) {
   in_flight_submission_ = 0;
   ReleaseRecordedWorkScratchResources();
 }
+void MetalBackend::CompleteCurrentCommandBuffer(CommandContext&) {}
 void MetalBackend::SynchronizeRecordedWork(CommandContext&) {
   ReleaseRecordedWorkScratchResources();
 }
