@@ -216,10 +216,12 @@ class OpenClBackend {
   void ReleaseNeuralDemosaicWorkspace();
   void Wait(CommandContext& command_context);
   /**
-   * @brief Wait for commands already on the product queue. Used to free Develop scratch.
+   * @brief Flush and wait for commands already on the product queue.
    *
-   * Does not submit or change in-flight submission state. Does not replace product
-   * Submit/Wait with clFinish.
+   * Used to free Develop scratch after SensorDevelop. Flushes before
+   * `clWaitForEvents` so a large in-order dispatch cannot stall forever with
+   * work still sitting in the host queue. Does not replace product Submit/Wait
+   * with `clFinish`.
    */
   void SynchronizeRecordedWork(CommandContext& command_context);
 
@@ -302,6 +304,7 @@ class OpenClBackend {
   void UnregisterBuffer(cl_mem native) noexcept;
   void TrackEnqueueEvent(CommandContext& command_context, cl_event event);
   auto EnqueueMarker(CommandContext& command_context) -> cl_event;
+  void FlushQueue();
 
   cl_device_id           device_  = nullptr;
   cl_context             context_ = nullptr;
@@ -346,6 +349,8 @@ class OpenClBackend {
   Buffer                     dummy_lut_;
   std::size_t                max_slab_bytes_device_   = 0;
   std::size_t                max_slab_bytes_override_ = 0;
+  std::size_t                max_image_width_         = 0;
+  std::size_t                max_image_height_        = 0;
 };
 
 using OpenClRenderDevice    = BasicRenderDevice<OpenClBackend>;

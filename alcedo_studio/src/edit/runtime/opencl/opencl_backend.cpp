@@ -309,6 +309,12 @@ OpenClBackend::OpenClBackend() {
   queue_   = context.ProductQueue();
   max_slab_bytes_device_ =
       AlignDownSlabBytes(static_cast<std::size_t>(context.Capabilities().max_single_allocation_bytes));
+  CheckOpenCl(clGetDeviceInfo(device_, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(max_image_width_),
+                                &max_image_width_, nullptr),
+              "OpenClBackend: CL_DEVICE_IMAGE2D_MAX_WIDTH");
+  CheckOpenCl(clGetDeviceInfo(device_, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(max_image_height_),
+                                &max_image_height_, nullptr),
+              "OpenClBackend: CL_DEVICE_IMAGE2D_MAX_HEIGHT");
   RegisterOpenClBackendPrograms();
   kernel_create_baseline_ = OpenClKernelCache::Instance().CreateCount();
   kernel_hit_baseline_    = OpenClKernelCache::Instance().HitCount();
@@ -349,6 +355,12 @@ auto OpenClBackend::EnqueueMarker(CommandContext& command_context) -> cl_event {
   return event;
 }
 
+void OpenClBackend::FlushQueue() {
+  CheckOpenCl(clFlush(queue_), "OpenClBackend::clFlush");
+  NoteOpenClFlush();
+  ++flush_count_;
+}
+
 auto OpenClBackend::CreateBuffer(std::size_t bytes) -> Buffer {
   if (bytes == 0) {
     return {};
@@ -360,8 +372,15 @@ auto OpenClBackend::CreateBuffer(std::size_t bytes) -> Buffer {
             << " exceeds device max allocation " << max_slab;
     throw std::runtime_error(message.str());
   }
+  if (GpuPoolTraceVerbose()) {
+    std::fprintf(stderr, "[GPU_POOL] OpenCL create buffer begin %.1f MiB\n", GpuPoolMiB(bytes));
+  }
   cl_int error  = CL_SUCCESS;
   cl_mem native = clCreateBuffer(context_, CL_MEM_READ_WRITE, bytes, nullptr, &error);
+  if (GpuPoolTraceVerbose()) {
+    std::fprintf(stderr, "[GPU_POOL] OpenCL create buffer end %.1f MiB status=%d\n",
+                 GpuPoolMiB(bytes), static_cast<int>(error));
+  }
   if (error != CL_SUCCESS) {
     std::ostringstream message;
     message << "OpenClBackend::CreateBuffer: OpenCL error " << error << " size=" << bytes
@@ -384,6 +403,12 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   const auto bytes = static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(format);
   if (bytes == 0) {
     return {};
+  }
+  if (max_image_width_ > 0 && (width > max_image_width_ || height > max_image_height_)) {
+    std::ostringstream message;
+    message << "OpenClBackend::CreateTexture2D: " << width << "x" << height
+            << " exceeds device IMAGE2D max " << max_image_width_ << "x" << max_image_height_;
+    throw std::runtime_error(message.str());
   }
   const auto    image_format = ImageFormatFor(format);
   cl_image_desc desc         = MakeImageDesc(width, height);
@@ -659,9 +684,7 @@ void OpenClBackend::CopyDeviceMemoryToBuffer(void* src, Buffer& dst, std::uint32
 
 void OpenClBackend::Submit(CommandContext& command_context) {
   EnqueueMarker(command_context);
-  CheckOpenCl(clFlush(queue_), "OpenClBackend::Submit clFlush");
-  NoteOpenClFlush();
-  ++flush_count_;
+  FlushQueue();
   in_flight_submission_ = command_context.SubmissionId();
 }
 
@@ -670,9 +693,7 @@ void OpenClBackend::FinalizePresentation(CommandContext& command_context) {
     throw std::runtime_error("OpenClBackend::FinalizePresentation: missing submission id");
   }
   EnqueueMarker(command_context);
-  CheckOpenCl(clFlush(queue_), "OpenClBackend::FinalizePresentation clFlush");
-  NoteOpenClFlush();
-  ++flush_count_;
+  FlushQueue();
   in_flight_submission_ = command_context.SubmissionId();
 }
 
@@ -686,6 +707,7 @@ void OpenClBackend::Wait(CommandContext& command_context) {
     cl_event last = completing_submission && command_context.FinalEvent() != nullptr
                         ? command_context.FinalEvent()
                         : command_context.live_events_.back();
+    FlushQueue();
     CheckOpenCl(clWaitForEvents(1, &last), "OpenClBackend::Wait");
     NoteOpenClFinalWait();
     ++wait_count_;
@@ -703,6 +725,7 @@ void OpenClBackend::Wait(CommandContext& command_context) {
 
 void OpenClBackend::SynchronizeRecordedWork(CommandContext& command_context) {
   cl_event event = EnqueueMarker(command_context);
+  FlushQueue();
   CheckOpenCl(clWaitForEvents(1, &event), "OpenClBackend::SynchronizeRecordedWork");
   NoteOpenClFinalWait();
   ++wait_count_;
@@ -722,6 +745,7 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
       add(kCoreProgramName, kCfaClamp01KernelName);
       add(kCvtRefSpaceProgramName, kPackPlanesCropInverseOrientKernelName);
       add(kCvtRefSpaceProgramName, kCopyRgbaCropInverseOrientKernelName);
+      add(kCvtRefSpaceProgramName, kCopyRgbCropInverseOrientKernelName);
       add(kHighlightProgramName, kHlrBuildMaskKernelName);
       add(kHighlightProgramName, kHlrDilateMaskKernelName);
       add(kHighlightProgramName, kHlrChrominanceContribKernelName);

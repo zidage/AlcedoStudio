@@ -77,6 +77,13 @@ void EncodeHighlightReconstruct(opencl::OpenClEncodeQueue& stream, opencl::OpenC
                                 opencl::OpenClBufferView cnts, opencl::OpenClBufferView anyclipped,
                                 const float* cam_mul, std::uint32_t width, std::uint32_t height);
 
+void EncodeHighlightReconstructPlanarAndPack(
+    opencl::OpenClEncodeQueue& stream, opencl::OpenClBufferView r, opencl::OpenClBufferView g,
+    opencl::OpenClBufferView b, cl_mem dst_rgba, opencl::OpenClBufferView mask,
+    opencl::OpenClBufferView dilated_mask, opencl::OpenClBufferView sums,
+    opencl::OpenClBufferView cnts, opencl::OpenClBufferView anyclipped, const float* cam_mul,
+    RectI crop, std::uint32_t plane_width, int flip);
+
 void EncodePackPlanesCropInverseOrient(opencl::OpenClEncodeQueue& stream,
                                        opencl::OpenClBufferView r, opencl::OpenClBufferView g,
                                        opencl::OpenClBufferView b, cl_mem dst_rgba, RectI crop,
@@ -85,6 +92,10 @@ void EncodePackPlanesCropInverseOrient(opencl::OpenClEncodeQueue& stream,
 void EncodeCopyRgbaCropInverseOrient(opencl::OpenClEncodeQueue& stream,
                                      opencl::OpenClBufferView src_rgba, cl_mem dst_rgba, RectI crop,
                                      std::uint32_t src_width, const float* cam_mul, int flip);
+
+void EncodeCopyRgbCropInverseOrient(opencl::OpenClEncodeQueue& stream,
+                                    opencl::OpenClBufferView src_rgb, cl_mem dst_rgba, RectI crop,
+                                    std::uint32_t src_width, const float* cam_mul, int flip);
 
 }  // namespace alcedo::OpenCL
 

@@ -223,6 +223,15 @@ auto WriteIdentityCube(const std::filesystem::path& path) -> void {
       << "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
 }
 
+auto WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, float b) -> void {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path);
+  out << "LUT_3D_SIZE 2\n";
+  for (int i = 0; i < 8; ++i) {
+    out << r << ' ' << g << ' ' << b << '\n';
+  }
+}
+
 class MetalGradeFixture : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -340,6 +349,25 @@ TEST_F(MetalGradeFixture, MetalLutTextureIsReusedByContentKey) {
   EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), 0U);
   EXPECT_EQ(device_.Workspace().Device().LastLutResourceId(), first.lut_resource_id);
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
+}
+
+TEST_F(MetalGradeFixture, MetalLutRemapChangesGradePixels) {
+  const auto cube_path = std::filesystem::absolute("build/tmp/gpu_dag_metal_lut/red.cube");
+  WriteConstantRgbCube(cube_path, 1.0f, 0.0f, 0.0f);
+  auto& lmt = ModelByType<LmtModel>(type_ids::Lmt());
+  lmt.SetCubePath(cube_path.string());
+  const auto result = RenderGrade();
+  const auto input  = Download(device_, plan_.develop_output);
+  const auto output = Download(device_, result.output);
+  ASSERT_FALSE(output.empty());
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_NE(result.lut_resource_id, 0U);
+  EXPECT_NEAR(output.front().r, 1.0f, 1.0e-4f);
+  EXPECT_NEAR(output.front().g, 0.0f, 1.0e-4f);
+  EXPECT_NEAR(output.front().b, 0.0f, 1.0e-4f);
+  EXPECT_GT(std::abs(output.front().r - input.front().r) + std::abs(output.front().g - input.front().g) +
+                std::abs(output.front().b - input.front().b),
+            1.0e-3f);
 }
 
 TEST_F(MetalGradeFixture, MetalDetailPassesAcquireAllTexturesFromWorkspace) {

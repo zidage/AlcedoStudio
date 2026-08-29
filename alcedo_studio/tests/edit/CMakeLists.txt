@@ -441,7 +441,9 @@ if(ALCEDO_OPENCL_ENABLED)
     GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNetEntry
     OpenClProgramLibrary)
   target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
-    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    ALCEDO_TEST_IMAGE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images")
   gtest_discover_tests(GpuDagOpenClDevelopTest TEST_PREFIX "GpuDagOpenClDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime;opencl")
   alcedo_register_test_target(GpuDagOpenClDevelopTest gpu)

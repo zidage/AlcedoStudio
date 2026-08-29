@@ -26,14 +26,18 @@ using opencl::OpenClBufferView;
 using opencl::OpenClEncodeQueue;
 using RawProcessor::kCfaClamp01KernelName;
 using RawProcessor::kCopyRgbaCropInverseOrientKernelName;
+using RawProcessor::kCopyRgbCropInverseOrientKernelName;
 using RawProcessor::kCoreProgramName;
 using RawProcessor::kCvtRefSpaceProgramName;
 using RawProcessor::kDebayerRcdProgramName;
 using RawProcessor::kHighlightProgramName;
 using RawProcessor::kHlrBuildMaskKernelName;
+using RawProcessor::kHlrBuildMaskPlanarKernelName;
 using RawProcessor::kHlrChrominanceContribKernelName;
+using RawProcessor::kHlrChrominanceContribPlanarKernelName;
 using RawProcessor::kHlrDilateMaskKernelName;
 using RawProcessor::kHlrReconstructFromStatsKernelName;
+using RawProcessor::kHlrReconstructFromStatsPlanarPackKernelName;
 using RawProcessor::kPackPlanesCropInverseOrientKernelName;
 using RawProcessor::kRcdGreenAtRbKernelName;
 using RawProcessor::kRcdInitAndVhKernelName;
@@ -484,6 +488,96 @@ void EncodeHighlightReconstruct(OpenClEncodeQueue& stream, OpenClBufferView src_
   }
 }
 
+void EncodeHighlightReconstructPlanarAndPack(
+    OpenClEncodeQueue& stream, OpenClBufferView r, OpenClBufferView g, OpenClBufferView b,
+    cl_mem dst_rgba, OpenClBufferView mask, OpenClBufferView dilated_mask, OpenClBufferView sums,
+    OpenClBufferView cnts, OpenClBufferView anyclipped, const float* cam_mul, RectI crop,
+    std::uint32_t plane_width, int flip) {
+  RequireMem(r.native, "HLR R");
+  RequireMem(g.native, "HLR G");
+  RequireMem(b.native, "HLR B");
+  RequireMem(dst_rgba, "HLR destination");
+  RequireMem(mask.native, "HLR mask");
+  RequireMem(dilated_mask.native, "HLR dilated mask");
+  RequireMem(sums.native, "HLR sums");
+  RequireMem(cnts.native, "HLR counts");
+  RequireMem(anyclipped.native, "HLR anyclipped");
+  const auto crop_w    = static_cast<std::uint32_t>(crop.width);
+  const auto crop_h    = static_cast<std::uint32_t>(crop.height);
+  auto       params     = MakeHighlightParams(cam_mul, crop_w, crop_h);
+  params.stride         = plane_width;
+  const auto pack       = MakePackParams(crop, plane_width, plane_width, cam_mul, flip);
+  const auto r_off     = ElementOffset(r, sizeof(float));
+  const auto g_off     = ElementOffset(g, sizeof(float));
+  const auto b_off     = ElementOffset(b, sizeof(float));
+  const auto mask_off   = ElementOffset(mask, sizeof(std::uint8_t));
+  const auto dilate_off = ElementOffset(dilated_mask, sizeof(std::uint8_t));
+  const auto sums_off   = ElementOffset(sums, sizeof(float));
+  const auto cnts_off   = ElementOffset(cnts, sizeof(float));
+  {
+    auto kernel = Kernel(kHighlightProgramName, kHlrBuildMaskPlanarKernelName);
+    SetMem(kernel, 0, r.native, "hlr planar mask arg0");
+    SetMem(kernel, 1, g.native, "hlr planar mask arg1");
+    SetMem(kernel, 2, b.native, "hlr planar mask arg2");
+    SetMem(kernel, 3, mask.native, "hlr planar mask arg3");
+    SetMem(kernel, 4, anyclipped.native, "hlr planar mask arg4");
+    CheckOpenCl(clSetKernelArg(kernel, 5, sizeof(params), &params), "hlr planar mask arg5");
+    SetUInt(kernel, 6, r_off, "hlr planar mask arg6");
+    SetUInt(kernel, 7, g_off, "hlr planar mask arg7");
+    SetUInt(kernel, 8, b_off, "hlr planar mask arg8");
+    SetUInt(kernel, 9, mask_off, "hlr planar mask arg9");
+    SetUInt(kernel, 10, ElementOffset(anyclipped, sizeof(cl_int)), "hlr planar mask arg10");
+    SetUInt(kernel, 11, pack.src_x, "hlr planar mask arg11");
+    SetUInt(kernel, 12, pack.src_y, "hlr planar mask arg12");
+    Dispatch2D(stream, kernel, crop_w, crop_h);
+  }
+  {
+    auto kernel = Kernel(kHighlightProgramName, kHlrDilateMaskKernelName);
+    SetMem(kernel, 0, mask.native, "hlr planar dilate arg0");
+    SetMem(kernel, 1, dilated_mask.native, "hlr planar dilate arg1");
+    CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(params), &params), "hlr planar dilate arg2");
+    SetUInt(kernel, 3, mask_off, "hlr planar dilate arg3");
+    SetUInt(kernel, 4, dilate_off, "hlr planar dilate arg4");
+    Dispatch2D(stream, kernel, crop_w, crop_h);
+  }
+  {
+    auto kernel = Kernel(kHighlightProgramName, kHlrChrominanceContribPlanarKernelName);
+    SetMem(kernel, 0, r.native, "hlr planar chroma arg0");
+    SetMem(kernel, 1, g.native, "hlr planar chroma arg1");
+    SetMem(kernel, 2, b.native, "hlr planar chroma arg2");
+    SetMem(kernel, 3, dilated_mask.native, "hlr planar chroma arg3");
+    SetMem(kernel, 4, sums.native, "hlr planar chroma arg4");
+    SetMem(kernel, 5, cnts.native, "hlr planar chroma arg5");
+    CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(params), &params), "hlr planar chroma arg6");
+    SetUInt(kernel, 7, r_off, "hlr planar chroma arg7");
+    SetUInt(kernel, 8, g_off, "hlr planar chroma arg8");
+    SetUInt(kernel, 9, b_off, "hlr planar chroma arg9");
+    SetUInt(kernel, 10, dilate_off, "hlr planar chroma arg10");
+    SetUInt(kernel, 11, sums_off, "hlr planar chroma arg11");
+    SetUInt(kernel, 12, cnts_off, "hlr planar chroma arg12");
+    SetUInt(kernel, 13, pack.src_x, "hlr planar chroma arg13");
+    SetUInt(kernel, 14, pack.src_y, "hlr planar chroma arg14");
+    Dispatch2D(stream, kernel, crop_w, crop_h);
+  }
+  {
+    auto kernel = Kernel(kHighlightProgramName, kHlrReconstructFromStatsPlanarPackKernelName);
+    SetMem(kernel, 0, r.native, "hlr planar pack arg0");
+    SetMem(kernel, 1, g.native, "hlr planar pack arg1");
+    SetMem(kernel, 2, b.native, "hlr planar pack arg2");
+    SetMem(kernel, 3, dst_rgba, "hlr planar pack arg3");
+    SetMem(kernel, 4, sums.native, "hlr planar pack arg4");
+    SetMem(kernel, 5, cnts.native, "hlr planar pack arg5");
+    CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(params), &params), "hlr planar pack arg6");
+    CheckOpenCl(clSetKernelArg(kernel, 7, sizeof(pack), &pack), "hlr planar pack arg7");
+    SetUInt(kernel, 8, r_off, "hlr planar pack arg8");
+    SetUInt(kernel, 9, g_off, "hlr planar pack arg9");
+    SetUInt(kernel, 10, b_off, "hlr planar pack arg10");
+    SetUInt(kernel, 11, sums_off, "hlr planar pack arg11");
+    SetUInt(kernel, 12, cnts_off, "hlr planar pack arg12");
+    Dispatch2D(stream, kernel, crop_w, crop_h);
+  }
+}
+
 void EncodePackPlanesCropInverseOrient(OpenClEncodeQueue& stream, OpenClBufferView r,
                                        OpenClBufferView g, OpenClBufferView b, cl_mem dst_rgba,
                                        RectI crop, std::uint32_t plane_width, const float* cam_mul,
@@ -516,6 +610,20 @@ void EncodeCopyRgbaCropInverseOrient(OpenClEncodeQueue& stream, OpenClBufferView
   SetMem(kernel, 1, dst_rgba, "copy arg1");
   CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(params), &params), "copy arg2");
   SetUInt(kernel, 3, ElementOffset(src_rgba, sizeof(float) * 4), "copy arg3");
+  Dispatch2D(stream, kernel, params.src_width, params.src_height);
+}
+
+void EncodeCopyRgbCropInverseOrient(OpenClEncodeQueue& stream, OpenClBufferView src_rgb,
+                                     cl_mem dst_rgba, RectI crop, std::uint32_t src_width,
+                                     const float* cam_mul, int flip) {
+  RequireMem(src_rgb.native, "copy rgb source");
+  RequireMem(dst_rgba, "copy rgb destination");
+  const auto params = MakePackParams(crop, src_width, src_width, cam_mul, flip);
+  auto       kernel = Kernel(kCvtRefSpaceProgramName, kCopyRgbCropInverseOrientKernelName);
+  SetMem(kernel, 0, src_rgb.native, "copy rgb arg0");
+  SetMem(kernel, 1, dst_rgba, "copy rgb arg1");
+  CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(params), &params), "copy rgb arg2");
+  SetUInt(kernel, 3, ElementOffset(src_rgb, sizeof(float)), "copy rgb arg3");
   Dispatch2D(stream, kernel, params.src_width, params.src_height);
 }
 

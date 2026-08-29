@@ -360,6 +360,8 @@ TEST(OpenClRuntimeTest, BuiltinRawProcessorProgramsCompile) {
       {"raw_processor_debayer_rcd", "rcd_init_and_vh"},
       {"raw_processor_xtrans", "xtrans_green"},
       {"raw_processor_highlight", "hlr_build_mask"},
+      {"raw_processor_highlight", "hlr_build_mask_planar"},
+      {"raw_processor_highlight", "hlr_reconstruct_from_stats_planar_pack"},
       {"raw_processor_cvt_ref_space", "apply_inverse_cam_mul_rgba32f"},
   };
 
@@ -656,6 +658,12 @@ TEST(OpenClRuntimeTest, DemosaicNetProgramsCompileOnceOnFirstUseAndReuse) {
       {OpenCL::DemosaicNet::kStructuralProgramName, OpenCL::DemosaicNet::kOutputGammaHwcKernelName},
       {OpenCL::DemosaicNet::kStructuralProgramName,
        OpenCL::DemosaicNet::kAssembleRgbTileKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kPackReflectBayerNhwc4MonoKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kPackReflectXTransNhwc4MonoKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kUnpackReflectConcatMonoKernelName},
   };
 
   for (const auto& item : demosaicnet_kernels) {

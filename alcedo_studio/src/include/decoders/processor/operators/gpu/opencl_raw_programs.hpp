@@ -33,10 +33,15 @@ inline constexpr const char* kHlrDilateMaskKernelName          = "hlr_dilate_mas
 inline constexpr const char* kHlrChrominanceContribKernelName  = "hlr_chrominance_contrib";
 inline constexpr const char* kHlrReconstructKernelName         = "hlr_reconstruct";
 inline constexpr const char* kHlrReconstructFromStatsKernelName = "hlr_reconstruct_from_stats";
+inline constexpr const char* kHlrBuildMaskPlanarKernelName              = "hlr_build_mask_planar";
+inline constexpr const char* kHlrChrominanceContribPlanarKernelName     = "hlr_chrominance_contrib_planar";
+inline constexpr const char* kHlrReconstructFromStatsPlanarPackKernelName =
+    "hlr_reconstruct_from_stats_planar_pack";
 
 inline constexpr const char* kApplyInverseCamMulKernelName           = "apply_inverse_cam_mul_rgba32f";
 inline constexpr const char* kPackPlanesCropInverseOrientKernelName  = "pack_planes_crop_inverse_orient";
 inline constexpr const char* kCopyRgbaCropInverseOrientKernelName    = "copy_rgba_crop_inverse_orient";
+inline constexpr const char* kCopyRgbCropInverseOrientKernelName     = "copy_rgb_crop_inverse_orient";
 
 }  // namespace alcedo::OpenCL::RawProcessor
 

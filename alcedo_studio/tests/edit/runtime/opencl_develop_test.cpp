@@ -5,8 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -14,6 +19,7 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_cache.hpp"
 #include "decoders/processor/operators/gpu/opencl_encode.hpp"
 #include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
@@ -135,6 +141,49 @@ auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> boo
     }
   }
   return false;
+}
+
+auto NeuralEngineAvailable(OpenClDemosaicNetVariant variant) -> bool {
+  OpenClDemosaicNetLoadOptions options;
+  return OpenClDemosaicNetModelCache::Instance().EnsureLoaded(variant, options);
+}
+
+auto RenderDevelop(PipelineDocument& document, const PreparedRawInput& prepared)
+    -> std::vector<Rgba> {
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  OpenClRenderDevice device;
+  if (plan.peak_transient_bytes > 0) {
+    device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
+  }
+  device.BeginRender();
+  ExecuteOpenClDevelop(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  return Download(device, plan.sensor_linear_output);
+}
+
+auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
+  bool any = false;
+  for (const auto& p : pixels) {
+    if (!std::isfinite(p.r) || !std::isfinite(p.g) || !std::isfinite(p.b) || !std::isfinite(p.a)) {
+      return false;
+    }
+    any = any || p.r != 0.0f || p.g != 0.0f || p.b != 0.0f;
+  }
+  return any;
+}
+
+auto LoadEncodedFixture(const std::filesystem::path& path) -> std::vector<std::byte> {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("Unable to open RAW fixture: " + path.string());
+  }
+  const std::vector<char> chars((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+  std::vector<std::byte> bytes(chars.size());
+  std::transform(chars.begin(), chars.end(), bytes.begin(),
+                 [](char value) { return static_cast<std::byte>(value); });
+  return bytes;
 }
 
 auto CpuLinearize(const PreparedRawInput& input) -> std::vector<float> {
@@ -300,7 +349,7 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopRcdOrderMatchesCudaDemosaicThenHighlig
 }
 
 TEST_F(OpenClDevelopFixture,
-       OpenClDevelopHighlightRecoveryFitsWhenSingleAllocCapIsBelowPaddedHostPixelReserve) {
+       OpenClDevelopHighlightRecoveryWritesTheOutputTextureWithoutASecondRgbaImage) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
@@ -308,20 +357,42 @@ TEST_F(OpenClDevelopFixture,
   auto document = CreateDefaultPipelineDocument();
   SetDevelopMethod(document, "legacy", true);
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  const auto host_pixels =
-      static_cast<std::size_t>(prepared.host_extent.width) * prepared.host_extent.height;
-  const auto padded =
-      plan.peak_transient_bytes + host_pixels * 16 + host_pixels * 12 + (64ull * 256ull);
-  ASSERT_GT(padded, plan.peak_transient_bytes);
-  const auto cap = (plan.peak_transient_bytes + (padded - plan.peak_transient_bytes) / 2) &
-                   ~std::size_t{255};
-  ASSERT_GT(cap, plan.peak_transient_bytes);
-  ASSERT_LT(cap, padded);
+  ASSERT_GT(plan.peak_transient_bytes, 0U);
+
+  OpenClRenderDevice device;
+  device.Workspace().Device().ResetCounters();
+  device.BeginRender();
+  ExecuteOpenClDevelop(device, plan, prepared, document);
+  EXPECT_LE(device.Workspace().TransientBuffers().used_bytes(), plan.peak_transient_bytes);
+  EXPECT_EQ(device.Workspace().Device().TextureCreateCount(), 1U);
+  EXPECT_EQ(device.Workspace().Textures().EntryCount(), 1U);
+  device.EndRender();
+  device.WaitIdle();
+  const auto pixels = Download(device, plan.sensor_linear_output);
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_GT(MaxChannel(pixels), 1.0f);
+}
+
+TEST_F(OpenClDevelopFixture,
+       OpenClDevelopHighlightRecoveryFitsWhenEachSlabIsCappedBelowCompiledPeak) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      MakeOverRangeCfa(pattern, 64, 64), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto cap  = (plan.peak_transient_bytes / 2) & ~std::size_t{255};
+  ASSERT_GT(cap, 64ull * 64ull * 12ull);
+  ASSERT_LT(cap, plan.peak_transient_bytes);
 
   OpenClRenderDevice device;
   device.Workspace().Device().SetMaxSlabBytes(cap);
+  device.Workspace().Device().ResetCounters();
   device.BeginRender();
   ExecuteOpenClDevelop(device, plan, prepared, document);
+  EXPECT_LE(device.Workspace().TransientBuffers().used_bytes(), plan.peak_transient_bytes);
+  EXPECT_EQ(device.Workspace().Device().TextureCreateCount(), 1U);
   device.EndRender();
   device.WaitIdle();
   const auto pixels = Download(device, plan.sensor_linear_output);
@@ -397,6 +468,78 @@ TEST_F(OpenClDevelopFixture,
   } catch (...) {
     SetOpenClDevelopNeuralModelCacheForTesting(nullptr);
     throw;
+  }
+}
+
+TEST_F(OpenClDevelopFixture,
+       OpenClDevelopNeuralEngineWritesFiniteRgbFromMonoCfaTilesAndDiffersFromLegacy) {
+  if (!NeuralEngineAvailable(OpenClDemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer Neural Engine weights are not available.";
+  }
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(legacy_doc, "legacy", false);
+  auto neural_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(neural_doc, "neural_engine", false);
+  const auto neural_pixels = RenderDevelop(neural_doc, prepared);
+  ASSERT_FALSE(neural_pixels.empty());
+  EXPECT_TRUE(AllFiniteNonZero(neural_pixels));
+  EXPECT_TRUE(PixelsDiffer(RenderDevelop(legacy_doc, prepared), neural_pixels));
+}
+
+TEST_F(OpenClDevelopFixture,
+       OpenClHundredMegapixelBayerFixturesCompleteAndProduceFinitePixels) {
+  if (std::getenv("ALCEDO_RUN_100MP_OPENCL_TEST") == nullptr) {
+    GTEST_SKIP() << "Set ALCEDO_RUN_100MP_OPENCL_TEST=1 for the bounded real-RAW GPU test.";
+  }
+  const auto root = std::filesystem::path(ALCEDO_TEST_IMAGE_ROOT) / "raw" / "camera";
+  const std::vector<std::filesystem::path> paths = {
+      root / "fuji" / "gfx100s" / "DSCF0224.RAF",
+      root / "fuji" / "gfx100s" / "DSCF0305.RAF",
+      root / "fuji" / "gfx100s" / "DSCF0337.RAF",
+      root / "hasselblad" / "x2d" / "B0004841.dng",
+  };
+
+  for (const auto& path : paths) {
+    SCOPED_TRACE(path.string());
+    if (!std::filesystem::exists(path)) {
+      GTEST_SKIP() << "100MP fixture is unavailable: " << path.string();
+    }
+    const auto encoded  = LoadEncodedFixture(path);
+    const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+    ASSERT_EQ(prepared.cfa_pattern.kind, RawCfaKind::Bayer2x2);
+    ASSERT_GT(static_cast<std::uint64_t>(prepared.host_extent.width) * prepared.host_extent.height,
+              100'000'000ULL);
+
+    auto       document = CreateDefaultPipelineDocument();
+    const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+    OpenClRenderDevice device;
+    const auto         started = std::chrono::steady_clock::now();
+    device.BeginRender();
+    ExecuteOpenClDevelop(device, plan, prepared, document);
+    device.EndRender();
+    device.WaitIdle();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    auto* output = device.Workspace().Images().Find(plan.sensor_linear_output);
+    ASSERT_NE(output, nullptr);
+    ASSERT_EQ(output->Texture().Width(), plan.source.develop_output_extent.width);
+    ASSERT_EQ(output->Texture().Height(), plan.source.develop_output_extent.height);
+    const std::size_t origin[3] = {output->Texture().Width() / 2,
+                                   output->Texture().Height() / 2, 0};
+    const std::size_t region[3] = {1, 1, 1};
+    Rgba              pixel{};
+    ASSERT_EQ(clEnqueueReadImage(device.Workspace().Device().NativeQueue(),
+                                 output->Texture().Native(), CL_TRUE, origin, region, 0, 0, &pixel,
+                                 0, nullptr, nullptr),
+              CL_SUCCESS);
+    EXPECT_TRUE(std::isfinite(pixel.r));
+    EXPECT_TRUE(std::isfinite(pixel.g));
+    EXPECT_TRUE(std::isfinite(pixel.b));
+    EXPECT_LT(elapsed, std::chrono::minutes(8));
   }
 }
 

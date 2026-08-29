@@ -338,12 +338,14 @@ struct ModuleState {
   // object because clSetKernelArg mutates kernel state.
   KernelHolder         pack;
   KernelHolder         pack_reflect_hwc;
+  KernelHolder         pack_reflect_mono;
   BoundConvKernel      trunk[8];
   BoundConvKernel      residual;
   BoundConvKernel      post;
   BoundConvKernel      output;
   KernelHolder         unpack_concat;
   KernelHolder         unpack_reflect_concat;
+  KernelHolder         unpack_reflect_concat_mono;
   KernelHolder         output_rgb;
 
   int                  depth       = 0;
@@ -378,9 +380,14 @@ void CreateKernels(ModuleState& s, bool is_bayer) {
   s.pack_reflect_hwc =
       KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackReflectBayerNhwc4KernelName
                                          : OpenCL::DemosaicNet::kPackReflectXTransNhwc4KernelName);
+  s.pack_reflect_mono = KernelHolder(
+      struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackReflectBayerNhwc4MonoKernelName
+                            : OpenCL::DemosaicNet::kPackReflectXTransNhwc4MonoKernelName);
   s.unpack_concat = KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackCropConcatKernelName);
   s.unpack_reflect_concat =
       KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackReflectConcatKernelName);
+  s.unpack_reflect_concat_mono =
+      KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackReflectConcatMonoKernelName);
   s.output_rgb = KernelHolder(struct_prog, OpenCL::DemosaicNet::kOutputRgbHwcKernelName);
 }
 
@@ -479,14 +486,27 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
   return total;
 }
 
-enum class ForwardInputMode { Nchw, ReflectHwc3 };
+enum class ForwardInputMode { Nchw, ReflectHwc3, ReflectMono };
+
+struct ForwardMonoCfa {
+  int    src_width           = 0;
+  int    src_height          = 0;
+  int    crop_x              = 0;
+  int    crop_y              = 0;
+  int    aligned_width       = 0;
+  int    aligned_height      = 0;
+  int    mono_offset_floats  = 0;
+  cl_mem rgb_fc              = nullptr;
+  int    period              = 0;
+};
 
 void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int width,
                  cl_mem output_rgb_hwc, nn_ocl::ActivationSlots& activation_slots,
                  cl_command_queue queue, bool apply_gamma_decode, int (*output_height_fn)(int, int),
                  int (*output_width_fn)(int, int), int min_spatial, const char* module,
                  ForwardInputMode input_mode = ForwardInputMode::Nchw, int frame_height = 0,
-                 int frame_width = 0, int origin_y = 0, int origin_x = 0) {
+                 int frame_width = 0, int origin_y = 0, int origin_x = 0,
+                 const ForwardMonoCfa* mono = nullptr) {
   if (!s.loaded) {
     throw std::runtime_error(std::string(module) + ": weights not loaded");
   }
@@ -540,12 +560,49 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
                 static_cast<size_t>(batch), queue, "pack enqueue");
     }
     nn_ocl::FinishDemosaicNetStage("pack_nchw_to_nhwc4", queue);
+  } else if (input_mode == ForwardInputMode::ReflectMono) {
+    if (mono == nullptr || mono->src_width <= 0 || mono->src_height <= 0 ||
+        mono->aligned_width <= 0 || mono->aligned_height <= 0 || mono->rgb_fc == nullptr ||
+        mono->period <= 0) {
+      throw std::runtime_error(std::string(module) + ": invalid mono CFA tile geometry");
+    }
+    nn_ocl::BeginDemosaicNetStage("reflect_pack_nhwc4_mono");
+    const cl_int src_w     = mono->src_width;
+    const cl_int src_h     = mono->src_height;
+    const cl_int crop_x    = mono->crop_x;
+    const cl_int crop_y    = mono->crop_y;
+    const cl_int aligned_h = mono->aligned_height;
+    const cl_int aligned_w = mono->aligned_width;
+    const cl_int oy        = origin_y;
+    const cl_int ox        = origin_x;
+    const cl_int th        = height;
+    const cl_int tw        = width;
+    const cl_int mono_off  = mono->mono_offset_floats;
+    SetArg(s.pack_reflect_mono.get(), 0, input, "mono pack arg0");
+    SetArg(s.pack_reflect_mono.get(), 1, slot_a, "mono pack arg1");
+    SetArg(s.pack_reflect_mono.get(), 2, src_w, "mono pack arg2");
+    SetArg(s.pack_reflect_mono.get(), 3, src_h, "mono pack arg3");
+    SetArg(s.pack_reflect_mono.get(), 4, crop_x, "mono pack arg4");
+    SetArg(s.pack_reflect_mono.get(), 5, crop_y, "mono pack arg5");
+    SetArg(s.pack_reflect_mono.get(), 6, aligned_h, "mono pack arg6");
+    SetArg(s.pack_reflect_mono.get(), 7, aligned_w, "mono pack arg7");
+    SetArg(s.pack_reflect_mono.get(), 8, oy, "mono pack arg8");
+    SetArg(s.pack_reflect_mono.get(), 9, ox, "mono pack arg9");
+    SetArg(s.pack_reflect_mono.get(), 10, th, "mono pack arg10");
+    SetArg(s.pack_reflect_mono.get(), 11, tw, "mono pack arg11");
+    SetArg(s.pack_reflect_mono.get(), 12, mono_off, "mono pack arg12");
+    if (!s.is_bayer) {
+      const cl_int period = mono->period;
+      SetArg(s.pack_reflect_mono.get(), 13, period, "mono pack arg13");
+      SetArg(s.pack_reflect_mono.get(), 14, mono->rgb_fc, "mono pack arg14");
+    }
+    Enqueue3D(s.pack_reflect_mono.get(), static_cast<size_t>(pw), static_cast<size_t>(ph), 1, queue,
+              "mono reflect pack enqueue");
+    nn_ocl::FinishDemosaicNetStage("reflect_pack_nhwc4_mono", queue);
   } else {
     if (frame_height <= 0 || frame_width <= 0) {
       throw std::runtime_error(std::string(module) + ": invalid reflected tile geometry");
     }
-    // Product path: reflect-101 + signed gamma + variant-specific packing
-    // writes slot_a directly. No intermediate NCHW tile is materialised.
     nn_ocl::BeginDemosaicNetStage("reflect_pack_nhwc4");
     const cl_int fh = frame_height;
     const cl_int fw = frame_width;
@@ -644,6 +701,39 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
       SetArg(kernel, 6, rh, "unpack arg6");
       SetArg(kernel, 7, rw, "unpack arg7");
       SetArg(kernel, 8, rcb, "unpack arg8");
+    } else if (input_mode == ForwardInputMode::ReflectMono) {
+      const cl_int src_w     = mono->src_width;
+      const cl_int src_h     = mono->src_height;
+      const cl_int crop_x    = mono->crop_x;
+      const cl_int crop_y    = mono->crop_y;
+      const cl_int aligned_h = mono->aligned_height;
+      const cl_int aligned_w = mono->aligned_width;
+      const cl_int oy        = origin_y;
+      const cl_int ox        = origin_x;
+      const cl_int th        = height;
+      const cl_int tw        = width;
+      const cl_int mono_off = mono->mono_offset_floats;
+      const cl_int period    = mono->period;
+      kernel                 = s.unpack_reflect_concat_mono.get();
+      SetArg(kernel, 0, input, "mono unpack arg0");
+      SetArg(kernel, 1, residual_buf, "mono unpack arg1");
+      SetArg(kernel, 2, cat_buf, "mono unpack arg2");
+      SetArg(kernel, 3, src_w, "mono unpack arg3");
+      SetArg(kernel, 4, src_h, "mono unpack arg4");
+      SetArg(kernel, 5, crop_x, "mono unpack arg5");
+      SetArg(kernel, 6, crop_y, "mono unpack arg6");
+      SetArg(kernel, 7, aligned_h, "mono unpack arg7");
+      SetArg(kernel, 8, aligned_w, "mono unpack arg8");
+      SetArg(kernel, 9, oy, "mono unpack arg9");
+      SetArg(kernel, 10, ox, "mono unpack arg10");
+      SetArg(kernel, 11, th, "mono unpack arg11");
+      SetArg(kernel, 12, tw, "mono unpack arg12");
+      SetArg(kernel, 13, mono_off, "mono unpack arg13");
+      SetArg(kernel, 14, period, "mono unpack arg14");
+      SetArg(kernel, 15, mono->rgb_fc, "mono unpack arg15");
+      SetArg(kernel, 16, rh, "mono unpack arg16");
+      SetArg(kernel, 17, rw, "mono unpack arg17");
+      SetArg(kernel, 18, rcb, "mono unpack arg18");
     } else {
       const cl_int fh = frame_height;
       const cl_int fw = frame_width;
@@ -817,6 +907,28 @@ void OpenClBayerDemosaicNet::ForwardReflectHwc3ToHwc(cl_mem input_frame_hwc3, in
       ForwardInputMode::ReflectHwc3, frame_height, frame_width, origin_y, origin_x);
 }
 
+void OpenClBayerDemosaicNet::ForwardReflectMonoCfaToHwc(
+    cl_mem input_mono_cfa, int src_width, int src_height, int crop_x, int crop_y,
+    int aligned_width, int aligned_height, int origin_y, int origin_x, int tile_height,
+    int tile_width, int mono_offset_floats, cl_mem rgb_fc, int period, cl_mem output_rgb_hwc,
+    opencl::nn::ActivationSlots& activation_slots, cl_command_queue queue,
+    bool apply_gamma_decode) const {
+  const ForwardMonoCfa mono{.src_width          = src_width,
+                             .src_height         = src_height,
+                             .crop_x             = crop_x,
+                             .crop_y             = crop_y,
+                             .aligned_width      = aligned_width,
+                             .aligned_height     = aligned_height,
+                             .mono_offset_floats = mono_offset_floats,
+                             .rgb_fc             = rgb_fc,
+                             .period             = period};
+  ForwardImpl(
+      impl_->state, input_mono_cfa, 1, tile_height, tile_width, output_rgb_hwc, activation_slots,
+      queue, apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClBayerDemosaicNet",
+      ForwardInputMode::ReflectMono, aligned_height, aligned_width, origin_y, origin_x, &mono);
+}
+
 auto OpenClBayerDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)
     -> std::size_t {
   return EstimateNhwc4ActivationSlotBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
@@ -899,6 +1011,28 @@ void OpenClXTransDemosaicNet::ForwardReflectHwc3ToHwc(cl_mem input_frame_hwc3, i
       queue, apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
       [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClXTransDemosaicNet",
       ForwardInputMode::ReflectHwc3, frame_height, frame_width, origin_y, origin_x);
+}
+
+void OpenClXTransDemosaicNet::ForwardReflectMonoCfaToHwc(
+    cl_mem input_mono_cfa, int src_width, int src_height, int crop_x, int crop_y,
+    int aligned_width, int aligned_height, int origin_y, int origin_x, int tile_height,
+    int tile_width, int mono_offset_floats, cl_mem rgb_fc, int period, cl_mem output_rgb_hwc,
+    opencl::nn::ActivationSlots& activation_slots, cl_command_queue queue,
+    bool apply_gamma_decode) const {
+  const ForwardMonoCfa mono{.src_width          = src_width,
+                             .src_height         = src_height,
+                             .crop_x             = crop_x,
+                             .crop_y             = crop_y,
+                             .aligned_width      = aligned_width,
+                             .aligned_height     = aligned_height,
+                             .mono_offset_floats = mono_offset_floats,
+                             .rgb_fc             = rgb_fc,
+                             .period             = period};
+  ForwardImpl(
+      impl_->state, input_mono_cfa, 1, tile_height, tile_width, output_rgb_hwc, activation_slots,
+      queue, apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClXTransDemosaicNet",
+      ForwardInputMode::ReflectMono, aligned_height, aligned_width, origin_y, origin_x, &mono);
 }
 
 auto OpenClXTransDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)

@@ -24,6 +24,7 @@
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/render_backend.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_buffer_arena.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
@@ -255,6 +256,108 @@ TEST_F(OpenClWorkspaceFixture, OpenClTransientAllocateAppendsASlabWhenTheReserve
   const auto b = backend.ResolveDeviceMemory(second, kLarge);
   EXPECT_NE(a.first, b.first);
   EXPECT_GE(transients.capacity_bytes(), kLarge + kLarge);
+}
+
+TEST(TransientBufferArena, ReserveFreesUnusedSlabsBeforeAllocatingReplacements) {
+  struct RecordingBackend {
+    struct Slab {
+      RecordingBackend*          owner = nullptr;
+      std::size_t               bytes  = 0;
+      std::unique_ptr<std::byte[]> storage;
+
+      Slab() = default;
+      Slab(RecordingBackend* owner_ptr, std::size_t n)
+          : owner(owner_ptr), bytes(n), storage(std::make_unique<std::byte[]>(n)) {}
+      Slab(const Slab&)                    = delete;
+      auto operator=(const Slab&) -> Slab& = delete;
+      Slab(Slab&& other) noexcept { *this = std::move(other); }
+      auto operator=(Slab&& other) noexcept -> Slab& {
+        Reset();
+        owner        = other.owner;
+        bytes        = other.bytes;
+        storage      = std::move(other.storage);
+        other.owner  = nullptr;
+        other.bytes  = 0;
+        return *this;
+      }
+      ~Slab() { Reset(); }
+
+      void Reset() noexcept {
+        if (owner != nullptr && storage) {
+          owner->events.push_back("free");
+        }
+        owner = nullptr;
+        storage.reset();
+        bytes = 0;
+      }
+
+      [[nodiscard]] auto DevicePointer() const -> void* { return storage.get(); }
+      [[nodiscard]] auto Bytes() const -> std::size_t { return bytes; }
+    };
+
+    std::vector<std::string> events;
+
+    auto CreateSlab(std::size_t n) -> Slab {
+      events.push_back("create");
+      return Slab(this, n);
+    }
+  };
+
+  RecordingBackend backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.Reserve(256);
+  ASSERT_EQ(backend.events, (std::vector<std::string>{"create"}));
+  arena.Reserve(1024);
+  ASSERT_EQ(backend.events, (std::vector<std::string>{"create", "free", "create"}));
+}
+
+TEST(TransientBufferArena, UnalignedFirstAllocationAppendsAnotherSlabWithoutLooping) {
+  struct AppendRecordingBackend {
+    struct Slab {
+      std::unique_ptr<std::byte[]> storage;
+      std::size_t                  bytes = 0;
+
+      Slab() = default;
+      explicit Slab(std::size_t n) : storage(std::make_unique<std::byte[]>(n)), bytes(n) {}
+      Slab(const Slab&)                    = delete;
+      auto operator=(const Slab&) -> Slab& = delete;
+      Slab(Slab&&) noexcept                = default;
+      auto operator=(Slab&&) noexcept -> Slab& = default;
+
+      [[nodiscard]] auto DevicePointer() const -> void* { return storage.get(); }
+      [[nodiscard]] auto Bytes() const -> std::size_t { return bytes; }
+    };
+
+    std::vector<std::size_t> create_sizes;
+
+    auto CreateSlab(std::size_t bytes) -> Slab {
+      create_sizes.push_back(bytes);
+      return Slab(bytes);
+    }
+  };
+
+  AppendRecordingBackend                       backend;
+  TransientBufferArena<AppendRecordingBackend> arena(backend);
+
+  void* first  = arena.Allocate(257, 256);
+  void* second = arena.Allocate(512, 256);
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(backend.create_sizes, (std::vector<std::size_t>{257, 512}));
+  EXPECT_EQ(arena.capacity_bytes(), 769U);
+  EXPECT_EQ(arena.used_bytes(), 769U);
+}
+
+TEST_F(OpenClWorkspaceFixture, OpenClSynchronizeRecordedWorkFlushesTheProductQueueBeforeWait) {
+  OpenClRenderDevice device;
+  device.BeginRender();
+  const auto flushes = device.Workspace().Device().FlushCount();
+  const auto waits   = device.Workspace().Device().WaitCount();
+  device.Workspace().Device().SynchronizeRecordedWork(device.CommandContext());
+  EXPECT_GT(device.Workspace().Device().FlushCount(), flushes);
+  EXPECT_GT(device.Workspace().Device().WaitCount(), waits);
+  device.CancelRender();
 }
 
 TEST_F(OpenClWorkspaceFixture, OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutInvalidBufferSize) {

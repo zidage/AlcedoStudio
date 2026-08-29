@@ -1374,8 +1374,10 @@ Fix:
 - `TransientBufferArena` splits capacity across slabs each `<= Backend::MaxSlabBytes()`.
 - OpenCL `MaxSlabBytes` is `CL_DEVICE_MAX_MEM_ALLOC_SIZE` from context creation, aligned
   down to 256 bytes.
-- Develop reserves `max(compiled peak, exclusive HLR working set)` and rewinds demosaic
-  planes before HLR, so HLR does not sit on top of RCD/LLF.
+- Develop reserved `max(compiled peak, host_pixels * 44)` and rewound demosaic
+  planes before HLR. That 44-byte formula is an OpenCL-only extra working set;
+  CUDA keeps HLR inside the compiled exclusive 12 bytes/pixel peak. See the
+  CUDA-aligned follow-up below.
 - `Allocate` walks every reserved slab, then appends a new slab when the remainder
   cannot hold the next plane. `Reserve` still cannot replace slabs while pointers
   are live. Slab size is `CL_DEVICE_MAX_MEM_ALLOC_SIZE` from context creation,
@@ -1396,10 +1398,161 @@ Tests: `OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSize`,
 `OpenClTransientReserveAboveMaxSlabUsesSeparateDeviceBuffers`,
 `OpenClTransientAllocateAppendsASlabWhenTheReservedTailIsTooShort`,
 `OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutInvalidBufferSize`,
-`OpenClDevelopHighlightRecoveryFitsWhenSingleAllocCapIsBelowPaddedHostPixelReserve`,
+`OpenClDevelopHighlightRecoveryWritesTheOutputTextureWithoutASecondRgbaImage`,
 `WorkspaceCannotReplaceReservedSlabWhileTransientPointersAreLive`.
 
-## 11. Phase O6 — 旧 OpenCL 管线删除与性能验收
+##### Phase O5 follow-up (2026-08-28) CUDA-aligned HLR VRAM
+
+Status: HLR VRAM overcommit and missing queue flush fixed. This did not remove the final 100MP
+spinner; the later on-demand scratch follow-up records the allocator-loop root cause and complete
+fix.
+
+Cause:
+
+- CUDA SensorDevelop reserves `plan.peak_transient_bytes` only. Bayer HLR keeps the
+  five RCD planes, binds 12 bytes/pixel exclusive scratch, and
+  `ApplyHighlightCorrectionAndPackRGBAOriented` writes the existing output texture.
+  Merge and HLR are exclusive; the compiler does not add a second full-res RGBA32F.
+- OpenCL acquired a second `Textures().Acquire` RGBA32F, rewound, then copied into
+  two float4 transients because HLR kernels were float4-buffer only. That is
+  `~4.4 GiB` transients plus `~1.55 GiB` output plus `~1.55 GiB` extra image on a
+  100MP Bayer frame.
+- `SynchronizeRecordedWork` waited on a marker without `clFlush`, so a large
+  in-order NVIDIA queue could stall forever.
+
+Fix:
+
+- `ExecuteOpenClDevelop` reserves `plan.peak_transient_bytes` only, matching CUDA.
+- Bayer HLR: planar mask / chroma / reconstruct-and-pack into `develop.sensor_linear`.
+- X-Trans and Neural HLR: reconstruct into an arena RGBA buffer and copy into the
+  existing output image. No second RGBA32F.
+- `OpenClBackend::SynchronizeRecordedWork` and `Wait` flush before `clWaitForEvents`.
+- `TransientBufferArena::EnsureCapacity` frees unused slabs before creating replacements.
+
+Primary call chain:
+
+```text
+EditPipeline::Apply
+  -> Renderer<OpenClBackend>::Render
+  -> ExecuteOpenClDevelop
+  -> TransientBufferArena::Reserve(plan.peak_transient_bytes)
+  -> EncodeBayerRcd
+  -> EncodeHighlightReconstructPlanarAndPack
+     (mask 12 B/px from the same arena, write_imagef into sensor_linear)
+  -> PlanExecutor SynchronizeRecordedWork
+  -> TransientBuffers().ReleaseDeviceMemory
+```
+
+Tests: `OpenClDevelopHighlightRecoveryWritesTheOutputTextureWithoutASecondRgbaImage`,
+`OpenClDevelopHighlightRecoveryFitsWhenEachSlabIsCappedBelowCompiledPeak`,
+`ReserveFreesUnusedSlabsBeforeAllocatingReplacements`,
+`OpenClSynchronizeRecordedWorkFlushesTheProductQueueBeforeWait`.
+
+##### Phase O5 follow-up (2026-08-28) CUDA-aligned Neural tiles
+
+Status: implemented. OpenCL Neural already tiled the network (`OpenClDemosaicNetTiledExecutor` +
+shared `BuildTileJobs`). The sandwich packed a full-frame HWC3 mosaic and a
+full-frame RGBA before packing the output.
+
+CUDA `DemosaicNeuralEngine` packs each student tile from the aligned mono CFA
+(`PackReflectPaddedCfaTile`), keeps activations tile-sized, and assembles into a
+full-frame RGB canvas.
+
+Fix:
+
+- Product OpenCL tiles pack from the original mono CFA (`ForwardReflectMonoCfaToHwc`).
+- DAG `EncodeNeural` no longer copies the linear CFA or materializes `mosaic_hwc` /
+  process-static RGBA. RGB assembly stays one aligned HWC3 canvas (CUDA `output_rgb`).
+- No-HLR packs that RGB into `develop.sensor_linear` with `copy_rgb_crop_inverse_orient`.
+
+Primary call chain:
+
+```text
+ExecuteOpenClDevelop
+  -> EncodeToLinearRef (arena CFA)
+  -> EncodeNeural
+  -> OpenClDemosaicNetTiledExecutor (PackReflect from mono CFA, tile activations)
+  -> EncodeCopyRgbCropInverseOrient into develop.sensor_linear
+```
+
+Tests: `BayerReflectMonoCfaForwardMatchesSparseHwc3Within1eMinus4`,
+`XTransReflectMonoCfaForwardMatchesSparseHwc3Within1eMinus4`,
+`OpenClDevelopNeuralEngineWritesFiniteRgbFromMonoCfaTilesAndDiffersFromLegacy`,
+`OpenClDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectAnotherDemosaicOnFailure`.
+
+##### Phase O5 follow-up (2026-08-28) on-demand Develop scratch and allocator progress
+
+Status: complete. Four real 100MP Bayer fixtures finish through the production OpenCL Develop
+path. The editor spinner and shutdown wait were caused by a CPU allocation loop, not by an
+unfinished OpenCL event.
+
+Cause:
+
+- `TransientBufferArena::PlaceFrom` aligned the next candidate above an unaligned slab end. The
+  subsequent `NextSlabOrigin` call returned that same slab end, and `AlignUp` reproduced the same
+  candidate. The loop therefore made no progress and never reached another `clCreateBuffer` call.
+- A 100MP U16 CFA allocation is not a 256-byte multiple. It deterministically exposed the loop on
+  the following F32 plane allocation. The earlier whole-frame `Reserve(peak_transient_bytes)` also
+  reproduced the same boundary condition when the estimated peak was split by
+  `CL_DEVICE_MAX_MEM_ALLOC_SIZE`.
+- The peak estimate described possible compiler liveness, not the exact runtime demosaic method,
+  HLR branch, alignment padding, and device slab layout. The reserved memory was released after the
+  same render, so eager reservation did not amortize allocation across frames.
+- `QObject::~QObject: Timers cannot be stopped from another thread` was a secondary shutdown
+  symptom: the render worker could not return from the allocator loop, so normal QObject teardown
+  ordering could not complete.
+
+Fix:
+
+- `PlaceFrom` now treats a non-increasing aligned candidate as no fit. `Allocate` can then append a
+  slab and retry instead of looping forever.
+- OpenCL Develop no longer eagerly reserves `plan.peak_transient_bytes`. It requests CFA,
+  linearization, selected demosaic, and HLR scratch from the arena only for the actual execution
+  branch. The arena still owns the allocations and releases them together at frame completion.
+- Legacy demosaic scratch is allocated before the final RGBA image. This keeps exact branch memory
+  visible to the arena and avoids using a coarse estimate as allocation policy.
+- Optional `ALCEDO_GPU_POOL_TRACE` stage and buffer-create diagnostics remain available without
+  changing normal stdout behavior.
+
+Primary success call chain:
+
+```text
+EditPipeline::Apply
+  -> Renderer<OpenClBackend>::Render
+  -> PlanExecutor
+  -> ExecuteOpenClDevelop
+  -> TransientBufferArena::Allocate(actual branch scratch)
+  -> PlaceFrom returns no-fit when the candidate cannot advance
+  -> AppendAndPlace(device-sized slab)
+  -> EncodeBayerRcd
+  -> EncodeHighlightReconstructPlanarAndPack
+  -> SynchronizeRecordedWork (flush, then wait)
+  -> TransientBuffers().ReleaseDeviceMemory
+  -> publish completed frame
+```
+
+Primary allocation failure chain:
+
+```text
+TransientBufferArena::Allocate
+  -> AppendAndPlace
+  -> OpenClBackend::CreateBuffer
+  -> real OpenCL allocation error
+  -> PlanExecutor cancels the render
+  -> no result publication and no backend or quality substitution
+```
+
+Verification:
+
+- `OpenClHundredMegapixelBayerFixturesCompleteAndProduceFinitePixels`: passed in 34.786 s for
+  `DSCF0224.RAF`, `DSCF0305.RAF`, `DSCF0337.RAF`, and `B0004841.dng`; each fixture contains more
+  than 100 million sensor pixels and returns finite RGB from the completed image.
+- `TransientBufferArena.UnalignedFirstAllocationAppendsAnotherSlabWithoutLooping`: passed; a
+  257-byte first allocation followed by a 512-byte aligned allocation exercises the exact
+  no-progress boundary without requiring a multi-gigabyte device.
+- Focused OpenCL workspace and Develop run: 33 discovered, 32 passed, the environment-gated real
+  fixture test skipped by default, zero failed, 40.02 s.
+- `alcedo_main` debug target: built and linked successfully after the production changes.
 
 目标：
 

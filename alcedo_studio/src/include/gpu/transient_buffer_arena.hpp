@@ -238,7 +238,11 @@ class TransientBufferArena {
       if (skipped == aligned_offset) {
         return nullptr;
       }
-      aligned_offset = AlignUp(skipped, alignment);
+      const auto next = AlignUp(skipped, alignment);
+      if (next <= aligned_offset) {
+        return nullptr;
+      }
+      aligned_offset = next;
     }
   }
 
@@ -261,6 +265,9 @@ class TransientBufferArena {
   }
 
   void EnsureCapacity(std::size_t bytes) {
+    // Drop unused slabs first. Creating the replacement before release would
+    // keep both working sets alive and double the VRAM occupancy.
+    ResetSlab();
     std::vector<SlabEntry> replacement;
     std::size_t            total     = 0;
     const auto             max_slab  = QueryMaxSlabBytes();

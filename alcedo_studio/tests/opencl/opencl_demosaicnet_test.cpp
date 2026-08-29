@@ -392,6 +392,138 @@ TEST_F(OpenClDemosaicNetModuleTest,
 }
 
 TEST_F(OpenClDemosaicNetModuleTest,
+       BayerReflectMonoCfaForwardMatchesSparseHwc3Within1eMinus4) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kFrameH = 64;
+  constexpr int kFrameW = 64;
+  constexpr int kTileH  = 64;
+  constexpr int kTileW  = 64;
+  const int     out_h   = OpenClBayerDemosaicNet::OutputHeight(kTileH, kTileW);
+  const int     out_w   = OpenClBayerDemosaicNet::OutputWidth(kTileW, kTileH);
+  const auto    training = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  const int     period   = CfaPeriod(training.kind);
+
+  std::vector<float> mono(static_cast<std::size_t>(kFrameH) * kFrameW);
+  std::vector<float> hwc(static_cast<std::size_t>(kFrameH) * kFrameW * 3, 0.0f);
+  std::vector<int>   rgb_fc(static_cast<std::size_t>(period) * period);
+  for (int y = 0; y < period; ++y) {
+    for (int x = 0; x < period; ++x) {
+      rgb_fc[static_cast<std::size_t>(y * period + x)] = RgbColorAt(training, y, x);
+    }
+  }
+  for (int y = 0; y < kFrameH; ++y) {
+    for (int x = 0; x < kFrameW; ++x) {
+      const float v = static_cast<float>((y * 13 + x) % 11) * 0.04f;
+      mono[static_cast<std::size_t>(y) * kFrameW + x] = v;
+      const int color = rgb_fc[static_cast<std::size_t>((y % period) * period + (x % period))];
+      hwc[(static_cast<std::size_t>(y) * kFrameW + x) * 3 + color] = v;
+    }
+  }
+
+  constexpr int kOriginY = -2;
+  constexpr int kOriginX = -4;
+  OpenClBayerDemosaicNet net;
+  net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  nn_ocl::DeviceBuffer mono_buffer = nn_ocl::DeviceBuffer::Floats(mono.size());
+  nn_ocl::DeviceBuffer hwc_buffer  = nn_ocl::DeviceBuffer::Floats(hwc.size());
+  nn_ocl::DeviceBuffer table(rgb_fc.size() * sizeof(int));
+  table.UploadBytes(rgb_fc.data(), rgb_fc.size() * sizeof(int));
+  nn_ocl::DeviceBuffer mono_out =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  nn_ocl::DeviceBuffer hwc_out =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  mono_buffer.UploadFloats(mono);
+  hwc_buffer.UploadFloats(hwc);
+  nn_ocl::ActivationSlots slots;
+  auto&                   context = OpenClContext::Instance();
+
+  net.ForwardReflectHwc3ToHwc(hwc_buffer.get(), kFrameH, kFrameW, kOriginY, kOriginX, kTileH, kTileW,
+                               hwc_out.get(), slots, context.Queue(), true);
+  nn_ocl::WaitQueue(context.Queue());
+  net.ForwardReflectMonoCfaToHwc(mono_buffer.get(), kFrameW, kFrameH, 0, 0, kFrameW, kFrameH,
+                                    kOriginY, kOriginX, kTileH, kTileW, 0, table.get(), period,
+                                    mono_out.get(), slots, context.Queue(), true);
+  nn_ocl::WaitQueue(context.Queue());
+
+  const auto from_hwc  = hwc_out.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  const auto from_mono = mono_out.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  ASSERT_EQ(from_hwc.size(), from_mono.size());
+  for (std::size_t i = 0; i < from_hwc.size(); ++i) {
+    EXPECT_NEAR(from_hwc[i], from_mono[i], kAbsTol) << "index=" << i;
+  }
+}
+
+TEST_F(OpenClDemosaicNetModuleTest,
+       XTransReflectMonoCfaForwardMatchesSparseHwc3Within1eMinus4) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kFrameH = 64;
+  constexpr int kFrameW = 64;
+  constexpr int kTileH  = 64;
+  constexpr int kTileW  = 64;
+  const int     out_h   = OpenClXTransDemosaicNet::OutputHeight(kTileH, kTileW);
+  const int     out_w   = OpenClXTransDemosaicNet::OutputWidth(kTileW, kTileH);
+  const auto    training = DemosaicNetTrainingPattern(RawCfaKind::XTrans6x6);
+  const int     period   = CfaPeriod(training.kind);
+
+  std::vector<float> mono(static_cast<std::size_t>(kFrameH) * kFrameW);
+  std::vector<float> hwc(static_cast<std::size_t>(kFrameH) * kFrameW * 3, 0.0f);
+  std::vector<int>   rgb_fc(static_cast<std::size_t>(period) * period);
+  for (int y = 0; y < period; ++y) {
+    for (int x = 0; x < period; ++x) {
+      rgb_fc[static_cast<std::size_t>(y * period + x)] = RgbColorAt(training, y, x);
+    }
+  }
+  for (int y = 0; y < kFrameH; ++y) {
+    for (int x = 0; x < kFrameW; ++x) {
+      const float v = static_cast<float>((y * 13 + x) % 11) * 0.04f;
+      mono[static_cast<std::size_t>(y) * kFrameW + x] = v;
+      const int color = rgb_fc[static_cast<std::size_t>((y % period) * period + (x % period))];
+      hwc[(static_cast<std::size_t>(y) * kFrameW + x) * 3 + color] = v;
+    }
+  }
+
+  constexpr int kOriginY = -6;
+  constexpr int kOriginX = -6;
+  OpenClXTransDemosaicNet net;
+  net.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  nn_ocl::DeviceBuffer mono_buffer = nn_ocl::DeviceBuffer::Floats(mono.size());
+  nn_ocl::DeviceBuffer hwc_buffer  = nn_ocl::DeviceBuffer::Floats(hwc.size());
+  nn_ocl::DeviceBuffer table(rgb_fc.size() * sizeof(int));
+  table.UploadBytes(rgb_fc.data(), rgb_fc.size() * sizeof(int));
+  nn_ocl::DeviceBuffer mono_out =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  nn_ocl::DeviceBuffer hwc_out =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  mono_buffer.UploadFloats(mono);
+  hwc_buffer.UploadFloats(hwc);
+  nn_ocl::ActivationSlots slots;
+  auto&                   context = OpenClContext::Instance();
+
+  net.ForwardReflectHwc3ToHwc(hwc_buffer.get(), kFrameH, kFrameW, kOriginY, kOriginX, kTileH, kTileW,
+                               hwc_out.get(), slots, context.Queue(), true);
+  nn_ocl::WaitQueue(context.Queue());
+  net.ForwardReflectMonoCfaToHwc(mono_buffer.get(), kFrameW, kFrameH, 0, 0, kFrameW, kFrameH,
+                                    kOriginY, kOriginX, kTileH, kTileW, 0, table.get(), period,
+                                    mono_out.get(), slots, context.Queue(), true);
+  nn_ocl::WaitQueue(context.Queue());
+
+  const auto from_hwc  = hwc_out.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  const auto from_mono = mono_out.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  ASSERT_EQ(from_hwc.size(), from_mono.size());
+  for (std::size_t i = 0; i < from_hwc.size(); ++i) {
+    EXPECT_NEAR(from_hwc[i], from_mono[i], kAbsTol) << "index=" << i;
+  }
+}
+
+TEST_F(OpenClDemosaicNetModuleTest,
        XTransReflectHwc3ForwardMatchesReferenceNchwInputWithin1eMinus4) {
   const auto model_dir = FindModelDir();
   if (model_dir.empty()) {

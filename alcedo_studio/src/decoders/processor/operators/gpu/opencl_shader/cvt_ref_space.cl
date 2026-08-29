@@ -88,3 +88,17 @@ __kernel void copy_rgba_crop_inverse_orient(global const float4* src, __write_on
       (float4)(pixel.x * params.scale_r, pixel.y * params.scale_g, pixel.z * params.scale_b, pixel.w);
   write_imagef(dst, OrientedCoord(x, y, params), rgba);
 }
+
+__kernel void copy_rgb_crop_inverse_orient(global const float* src, __write_only image2d_t dst,
+                                            PackOrientParams params, uint src_off) {
+  const uint x = get_global_id(0);
+  const uint y = get_global_id(1);
+  if (x >= params.src_width || y >= params.src_height) {
+    return;
+  }
+  const uint index =
+      src_off + ((params.src_y + y) * params.src_stride + (params.src_x + x)) * 3u;
+  const float4 rgba = (float4)(src[index] * params.scale_r, src[index + 1u] * params.scale_g,
+                                src[index + 2u] * params.scale_b, 1.0f);
+  write_imagef(dst, OrientedCoord(x, y, params), rgba);
+}
