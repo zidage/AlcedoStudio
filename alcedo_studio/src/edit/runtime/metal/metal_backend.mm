@@ -497,6 +497,17 @@ auto MetalBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, Te
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
 }
 
+auto MetalBackend::AcquireRecordedWorkScratchBuffer(std::size_t bytes) -> Buffer& {
+  recorded_work_scratch_buffers_.push_back(CreateSlab(bytes));
+  return recorded_work_scratch_buffers_.back();
+}
+
+auto MetalBackend::AcquireRecordedWorkScratchTexture(std::uint32_t width, std::uint32_t height,
+                                                     TextureFormat format) -> Texture2D& {
+  recorded_work_scratch_textures_.push_back(CreateTexture2D(width, height, format));
+  return recorded_work_scratch_textures_.back();
+}
+
 void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
                                      std::span<const std::byte> bytes,
                                      CommandContext&            command_context) {
@@ -780,6 +791,7 @@ void MetalBackend::Submit(CommandContext& command_context) {
 
 void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
   if (command_context.gpu_ == nullptr || command_context.gpu_->buffer.get() == nullptr) {
+    ReleaseRecordedWorkScratchResources();
     return;
   }
   command_context.gpu_->EndEncoders();
@@ -787,7 +799,7 @@ void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
   command_buffer->commit();
   command_buffer->waitUntilCompleted();
   if (command_buffer->status() == MTL::CommandBufferStatusError) {
-    std::string message = "MetalBackend: Develop scratch wait failed";
+    std::string message = "MetalBackend: recorded work wait failed";
     if (auto* error = command_buffer->error(); error != nullptr) {
       if (auto* description = error->localizedDescription(); description != nullptr) {
         message += ": ";
@@ -795,9 +807,11 @@ void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
       }
     }
     command_context.gpu_->Reset();
+    ReleaseRecordedWorkScratchResources();
     throw std::runtime_error(message);
   }
   command_context.gpu_->Reset();
+  ReleaseRecordedWorkScratchResources();
 }
 
 void MetalBackend::Wait(CommandContext& command_context) {
@@ -805,6 +819,7 @@ void MetalBackend::Wait(CommandContext& command_context) {
     if (command_context.gpu_) {
       command_context.gpu_->Reset();
     }
+    ReleaseRecordedWorkScratchResources();
     return;
   }
   auto* command_buffer = command_context.gpu_ ? command_context.gpu_->buffer.get() : nullptr;
@@ -820,6 +835,7 @@ void MetalBackend::Wait(CommandContext& command_context) {
       }
       command_context.gpu_->Reset();
       in_flight_submission_ = 0;
+      ReleaseRecordedWorkScratchResources();
       throw std::runtime_error(message);
     }
   }
@@ -828,6 +844,7 @@ void MetalBackend::Wait(CommandContext& command_context) {
   if (command_context.gpu_) {
     command_context.gpu_->Reset();
   }
+  ReleaseRecordedWorkScratchResources();
 }
 
 void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines) {

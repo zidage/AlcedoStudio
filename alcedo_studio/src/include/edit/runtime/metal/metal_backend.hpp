@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <span>
 #include <utility>
@@ -62,6 +63,8 @@ class MetalBackend {
  public:
   static constexpr std::uint32_t kCapabilityVersion = kMetalDagBackendCapabilityVersion;
   static constexpr const char*   kName              = "Metal";
+  /** @brief Metal Develop allocates command-buffer-owned scratch instead of arena slabs. */
+  static constexpr bool          kUsesDevelopTransientArena = false;
   static auto                    DefaultTextureBudgetBytes() -> std::size_t { return 256ull << 20; }
 
   class Buffer {
@@ -133,6 +136,33 @@ class MetalBackend {
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
 
+  /**
+   * @brief Create a scratch buffer owned until the recorded command buffer is finished.
+   *
+   * The backend owns the returned buffer. Its reference stays valid until
+   * SynchronizeRecordedWork(), Wait(), or cancellation discards the recorded work.
+   */
+  [[nodiscard]] auto AcquireRecordedWorkScratchBuffer(std::size_t bytes) -> Buffer&;
+  /** @brief Create a scratch texture with the same recorded-work lifetime as a scratch buffer. */
+  [[nodiscard]] auto AcquireRecordedWorkScratchTexture(std::uint32_t width, std::uint32_t height,
+                                                       TextureFormat format) -> Texture2D&;
+  /** @brief Return the number of scratch buffers awaiting recorded-work completion. */
+  [[nodiscard]] auto RecordedWorkScratchBufferCount() const -> std::size_t {
+    return recorded_work_scratch_buffers_.size();
+  }
+  /** @brief Return the total bytes in scratch buffers awaiting recorded-work completion. */
+  [[nodiscard]] auto RecordedWorkScratchBufferBytes() const -> std::size_t {
+    std::size_t bytes = 0;
+    for (const auto& buffer : recorded_work_scratch_buffers_) {
+      bytes += buffer.Bytes();
+    }
+    return bytes;
+  }
+  /** @brief Return the number of scratch textures awaiting recorded-work completion. */
+  [[nodiscard]] auto RecordedWorkScratchTextureCount() const -> std::size_t {
+    return recorded_work_scratch_textures_.size();
+  }
+
   void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
                          CommandContext& command_context);
   void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
@@ -161,7 +191,7 @@ class MetalBackend {
   /**
    * @brief Commit recorded Metal work and wait. The next encode gets a new command buffer.
    *
-   * Used to free Develop scratch before Geometry runs.
+   * Used to finish and release Develop scratch before Geometry runs.
    */
   void SynchronizeRecordedWork(CommandContext& command_context);
 
@@ -233,9 +263,15 @@ class MetalBackend {
     ++texture_create_count_;
     NoteMalloc();
   }
-  void                   NoteHeapCreate() noexcept { ++heap_create_count_; }
+  void NoteHeapCreate() noexcept { ++heap_create_count_; }
+  void ReleaseRecordedWorkScratchResources() noexcept {
+    recorded_work_scratch_buffers_.clear();
+    recorded_work_scratch_textures_.clear();
+  }
 
-  std::unique_ptr<Gpu>   gpu_{};
+  std::unique_ptr<Gpu>  gpu_{};
+  std::deque<Buffer>    recorded_work_scratch_buffers_;
+  std::deque<Texture2D> recorded_work_scratch_textures_;
   std::uint64_t          malloc_count_                = 0;
   std::uint64_t          free_count_                  = 0;
   std::uint64_t          buffer_create_count_         = 0;

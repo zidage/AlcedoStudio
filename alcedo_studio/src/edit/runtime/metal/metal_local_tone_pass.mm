@@ -166,16 +166,12 @@ void BindPlane(MTL::ComputeCommandEncoder* encoder, const Plane& plane, std::uin
 }
 
 auto AllocateTransientPlane(MetalRenderWorkspace& workspace, std::size_t bytes) -> Plane {
-  auto* ptr = workspace.TransientBuffers().Allocate(bytes);
-  if (ptr == nullptr) {
-    throw std::runtime_error("ExecuteMetalLocalTone: transient allocation failed");
-  }
-  const auto resolved = workspace.Device().ResolveDeviceMemory(ptr, bytes);
-  Plane      plane;
-  plane.ptr    = ptr;
-  plane.native = static_cast<MTL::Buffer*>(resolved.first);
-  plane.offset = resolved.second;
-  plane.bytes  = bytes;
+  auto& buffer = workspace.Device().AcquireRecordedWorkScratchBuffer(bytes);
+  Plane plane;
+  plane.ptr    = buffer.DevicePointer();
+  plane.native = static_cast<MTL::Buffer*>(buffer.Native());
+  plane.offset = 0;
+  plane.bytes  = buffer.Bytes();
   return plane;
 }
 
@@ -378,21 +374,21 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
     return tone;
   }
 
-  const bool seed_canonical = full_edit;
+  const bool build_canonical = full_edit;
   const bool reuse_source =
       source_valid && !(full_edit && current_long_edge > meta.source_long_edge);
-  const auto                    mask_dims = seed_canonical || reuse_source
-                                                ? canonical_dims
-                                                : local_tone_mapping::ComputeMaskDimensions(
+  const auto mask_dims = build_canonical || reuse_source
+                             ? canonical_dims
+                             : local_tone_mapping::ComputeMaskDimensions(
                                    static_cast<int>(width), static_cast<int>(height),
                                    local_tone_mapping::kReferenceMaskMaxLongEdge);
-  const auto                    layout    = MakeLayout(mask_dims.width, mask_dims.height);
+  const auto layout = MakeLayout(mask_dims.width, mask_dims.height);
 
   std::array<Plane, kMaxLevels> source{};
   std::array<Plane, kMaxLevels> remap_a{};
   std::array<Plane, kMaxLevels> remap_b{};
   std::array<Plane, kMaxLevels> result{};
-  const auto                    mark = workspace.TransientBuffers().used_bytes();
+  const auto mark = workspace.Device().RecordedWorkScratchBufferBytes();
   for (int level = 0; level < layout.count; ++level) {
     const auto bytes =
         static_cast<std::size_t>(layout.widths[level]) * layout.heights[level] * sizeof(float);
@@ -406,11 +402,11 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
     result[level]  = AllocateTransientPlane(workspace, bytes);
   }
   tone.transient_bytes =
-      static_cast<std::uint32_t>(workspace.TransientBuffers().used_bytes() - mark);
+      static_cast<std::uint32_t>(workspace.Device().RecordedWorkScratchBufferBytes() - mark);
 
   if (!reuse_source) {
     auto* encoder = Encoder(device);
-    if (seed_canonical) {
+    if (build_canonical) {
       auto pipeline = Pipeline("local_tone_extract_reference", "Metal LLF extract reference");
       ExtractReferenceParams params;
       params.input_width   = static_cast<std::int32_t>(width);
@@ -504,7 +500,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
   }
 
   const Matrix3x3 apply_uv =
-      seed_canonical || reuse_source
+      build_canonical || reuse_source
           ? MakeLlfSamplingPlan(geometry, Extent2D{static_cast<std::uint32_t>(layout.widths[0]),
                                                    static_cast<std::uint32_t>(layout.heights[0])})
                 .render_to_texture_uv
@@ -512,7 +508,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
   ApplyAdjusted(device, input, output, source[0], result[0], width, height, layout.widths[0],
                 layout.heights[0], apply_uv);
 
-  if (seed_canonical || reuse_source) {
+  if (build_canonical || reuse_source) {
     const auto bytes =
         static_cast<std::size_t>(layout.widths[0]) * layout.heights[0] * sizeof(float);
     auto& source_buffer = EnsureValueBuffer(workspace, LevelId(grade_id, "source", 0), bytes);

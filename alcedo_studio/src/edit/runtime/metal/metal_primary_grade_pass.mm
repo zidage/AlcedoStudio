@@ -53,8 +53,9 @@ auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::u
 }
 
 auto AcquireScratch(MetalRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
-    -> ResourceLease<MetalBackend> {
-  return workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
+    -> MetalBackend::Texture2D& {
+  return workspace.Device().AcquireRecordedWorkScratchTexture(width, height,
+                                                              TextureFormat::Rgba32f);
 }
 
 auto EnsureBuffer(MetalRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
@@ -344,7 +345,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const bool  skip_mix    = mix == 1.0f && !plan.primary_grade_mask.has_value();
   const auto  write_count = CountGpuWrites(ops, skip_mix);
 
-  std::vector<ResourceLease<MetalBackend>> scratches;
+  std::vector<MetalBackend::Texture2D*> scratches;
   scratches.reserve(write_count + 1);
   auto remaining = write_count;
   enum class ImageSlot : std::uint8_t { Input, Scratch, Output };
@@ -371,7 +372,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     if (scratch_index >= scratches.size()) {
       throw std::runtime_error("ExecuteMetalPrimaryGrade: scratch index is invalid");
     }
-    return scratches[scratch_index].Texture();
+    return *scratches[scratch_index];
   };
 
   auto AllocateDest = [&]() {
@@ -386,7 +387,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     }
     dest_slot    = ImageSlot::Scratch;
     dest_scratch = scratches.size();
-    scratches.push_back(AcquireScratch(workspace, width, height));
+    scratches.push_back(&AcquireScratch(workspace, width, height));
   };
 
   if (write_count == 0) {

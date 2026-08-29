@@ -476,7 +476,7 @@ class MetalLlfFixture : public ::testing::Test {
   MetalRenderDevice device_;
 };
 
-TEST_F(MetalLlfFixture, MetalLlfUsesWorkspaceTransientArenaForEveryPyramid) {
+TEST_F(MetalLlfFixture, MetalLlfDestroysPyramidScratchAfterCompletedRender) {
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
   const auto result = RenderGrade();
   EXPECT_GT(result.local_tone_transient_bytes, 0U);
@@ -492,7 +492,8 @@ TEST_F(MetalLlfFixture, MetalLlfUsesWorkspaceTransientArenaForEveryPyramid) {
   EXPECT_EQ(device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
                                               PortId{"local_tone.remap_a.0"}),
             nullptr);
-  EXPECT_GT(device_.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device_.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);
   EXPECT_GE(plan_.peak_transient_bytes, result.local_tone_transient_bytes);
 }
 
@@ -517,18 +518,25 @@ TEST_F(MetalLlfFixture, MetalLlfSliderEditReusesCanonicalReference) {
   EXPECT_EQ(first.local_tone_reference_resource_id, second.local_tone_reference_resource_id);
   EXPECT_TRUE(second.local_tone_rebuilt_reference);
   EXPECT_FALSE(second.local_tone_sampled_canonical_reference);
-  EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_GT(device_.Workspace().Device().BufferCreateCount(), 0U);
+  EXPECT_GT(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().FreeCount(),
+            device_.Workspace().Device().BufferCreateCount() +
+                device_.Workspace().Device().TextureCreateCount());
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
 }
 
-TEST_F(MetalLlfFixture, MetalLlfSecondStableRenderCreatesNoBufferTextureOrPipelineState) {
+TEST_F(MetalLlfFixture, MetalLlfSecondStableRenderRecreatesOnlyDisposableScratch) {
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
   (void)RenderGrade();
   device_.Workspace().Device().ResetCounters();
   (void)RenderGrade();
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_GT(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().FreeCount(),
+            device_.Workspace().Device().TextureCreateCount());
+  EXPECT_EQ(device_.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().HeapCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
 }

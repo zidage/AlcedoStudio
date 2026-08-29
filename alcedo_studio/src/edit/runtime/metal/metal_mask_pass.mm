@@ -205,16 +205,12 @@ auto EnsureValueBuffer(MetalRenderWorkspace& workspace, const GraphValueId& id, 
 }
 
 auto AllocateTransientPlane(MetalRenderWorkspace& workspace, std::size_t bytes) -> Plane {
-  auto* ptr = workspace.TransientBuffers().Allocate(bytes);
-  if (ptr == nullptr) {
-    throw std::runtime_error("ExecuteMetalMask: transient allocation failed");
-  }
-  const auto resolved = workspace.Device().ResolveDeviceMemory(ptr, bytes);
-  Plane      plane;
-  plane.ptr    = ptr;
-  plane.native = static_cast<MTL::Buffer*>(resolved.first);
-  plane.offset = resolved.second;
-  plane.bytes  = bytes;
+  auto& buffer = workspace.Device().AcquireRecordedWorkScratchBuffer(bytes);
+  Plane plane;
+  plane.ptr    = buffer.DevicePointer();
+  plane.native = static_cast<MTL::Buffer*>(buffer.Native());
+  plane.offset = 0;
+  plane.bytes  = buffer.Bytes();
   return plane;
 }
 
@@ -301,17 +297,12 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
   const auto pixels     = static_cast<std::size_t>(width) * height;
   const auto plane      = AlignUp(pixels * sizeof(float), kAlign);
   const auto sites      = AlignUp(pixels * sizeof(int), kAlign);
-  const auto needed     = plane * 3 + sites + plane;
-  auto&      transients = workspace.TransientBuffers();
-  if (transients.used_bytes() == 0) {
-    transients.Reserve(std::max(needed, transients.capacity_bytes()));
-  }
-  const auto mark                = transients.used_bytes();
-  const auto horizontal          = AllocateTransientPlane(workspace, plane);
-  const auto inside              = AllocateTransientPlane(workspace, plane);
-  const auto outside             = AllocateTransientPlane(workspace, plane);
-  const auto site_plane          = AllocateTransientPlane(workspace, sites);
-  const auto bound_plane         = AllocateTransientPlane(workspace, plane);
+  const auto mark        = workspace.Device().RecordedWorkScratchBufferBytes();
+  const auto horizontal  = AllocateTransientPlane(workspace, plane);
+  const auto inside      = AllocateTransientPlane(workspace, plane);
+  const auto outside     = AllocateTransientPlane(workspace, plane);
+  const auto site_plane  = AllocateTransientPlane(workspace, sites);
+  const auto bound_plane = AllocateTransientPlane(workspace, plane);
 
   auto       dispatch_horizontal = [&](bool target_inside, const Plane& dest) {
     auto*          encoder  = Encoder(device);
@@ -361,7 +352,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
   encoder->setBytes(&params, sizeof(params), 3);
   Dispatch2D(encoder, pipeline.get(), width, height);
   device.Workspace().Device().NoteComputeDispatch();
-  return static_cast<std::uint32_t>(workspace.TransientBuffers().used_bytes() - mark);
+  return static_cast<std::uint32_t>(workspace.Device().RecordedWorkScratchBufferBytes() - mark);
 }
 
 void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& distance,

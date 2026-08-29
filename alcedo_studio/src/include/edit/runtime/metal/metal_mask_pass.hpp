@@ -29,8 +29,9 @@ struct MetalMaskResult {
  * @brief Evaluate the optional compiled analytic or raster mask into RenderSpace R8.
  *
  * Raster source textures and mip levels live in workspace MaskTextureCache. Signed-distance
- * intermediates come from TransientBufferArena. The signed-distance result is stored by mask
- * content key so a feather-radius edit can reuse it. Failures throw; there is no CPU substitute.
+ * intermediates are destroyed after the recorded command buffer completes. The signed-distance
+ * result is stored by mask content key so a feather-radius edit can reuse it. Failures throw;
+ * there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document, MaskStore* store = nullptr,

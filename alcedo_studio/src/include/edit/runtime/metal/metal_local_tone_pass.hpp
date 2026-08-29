@@ -26,9 +26,9 @@ struct MetalLocalToneResult {
 /**
  * @brief Encode Shadows/Highlights LLF onto the current Metal command buffer.
  *
- * Pyramid scratch comes from TransientBufferArena. Canonical source/result planes live
- * in workspace Values() under GraphValueId. Failures throw; there is no CPU or
- * MetalStage substitute.
+ * Pyramid scratch is destroyed after the recorded command buffer completes. Canonical
+ * source/result planes live in workspace Values() under GraphValueId. Failures throw; there is no
+ * CPU or MetalStage substitute.
  */
 [[nodiscard]] auto ExecuteMetalLocalTone(MetalRenderDevice&             device,
                                          const MetalBackend::Texture2D& input,

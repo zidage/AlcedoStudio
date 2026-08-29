@@ -281,6 +281,63 @@ TEST_F(MetalDevelopFixture, MetalDevelopRcdOrderMatchesCudaDemosaicThenHighlight
   EXPECT_TRUE(PixelsDiffer(on_px, off_px));
 }
 
+TEST_F(MetalDevelopFixture, MetalDevelopScratchResourcesReleaseAfterRecordedWorkCompletes) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "legacy", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  MetalRenderDevice device;
+  auto&             workspace = device.Workspace();
+  workspace.Device().ResetCounters();
+  device.BeginRender();
+  ExecuteMetalDevelop(device, plan, prepared, document);
+
+  const auto scratch_count = workspace.Device().RecordedWorkScratchTextureCount();
+  ASSERT_GT(scratch_count, 0U);
+  const auto scratch_buffer_count = workspace.Device().RecordedWorkScratchBufferCount();
+  ASSERT_GT(scratch_buffer_count, 0U);
+  EXPECT_EQ(workspace.Textures().EntryCount(), 1U);
+  EXPECT_EQ(workspace.Textures().UsedBytes(),
+            static_cast<std::size_t>(plan.source.develop_output_extent.width) *
+                plan.source.develop_output_extent.height *
+                TextureFormatBytesPerPixel(TextureFormat::Rgba32f));
+  const auto free_before = workspace.Device().FreeCount();
+
+  workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+
+  EXPECT_EQ(workspace.Device().RecordedWorkScratchBufferCount(), 0U);
+  EXPECT_EQ(workspace.Device().RecordedWorkScratchTextureCount(), 0U);
+  EXPECT_EQ(workspace.Device().FreeCount() - free_before, scratch_count + scratch_buffer_count);
+  device.EndRender();
+  device.WaitIdle();
+}
+
+TEST_F(MetalDevelopFixture, MetalPlanExecutorDoesNotReserveDevelopTransientArena) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  MetalRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+
+  EXPECT_EQ(device.Workspace().DevelopTransientHighWater().ObservedCapacity(
+                plan.source, MetalBackend::kCapabilityVersion),
+            0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
+}
+
 TEST_F(MetalDevelopFixture, MetalDevelopXTransMatchesCudaReferenceWithinTolerance) {
   const auto pattern  = gpu_dag_test::MakeXTransPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
@@ -343,7 +400,9 @@ TEST_F(MetalDevelopFixture, MetalDevelopNeuralUsesSessionWorkspaceAndDoesNotSele
     EXPECT_NE(message.find("Neural Engine"), std::string::npos);
     EXPECT_EQ(message.find("legacy"), std::string::npos);
     EXPECT_EQ(message.find("Legacy"), std::string::npos);
+    EXPECT_GT(device.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
     device.CancelRender();
+    EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
     EXPECT_EQ(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
   } catch (...) {
     SetMetalDevelopNeuralModelCacheForTesting(nullptr);

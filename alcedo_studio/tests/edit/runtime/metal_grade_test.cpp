@@ -370,7 +370,7 @@ TEST_F(MetalGradeFixture, MetalLutRemapChangesGradePixels) {
             1.0e-3f);
 }
 
-TEST_F(MetalGradeFixture, MetalDetailPassesAcquireAllTexturesFromWorkspace) {
+TEST_F(MetalGradeFixture, MetalDetailScratchTexturesAreDestroyedAfterEachCompletedRender) {
   ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(20.0f);
   ModelByType<SharpenModel>(type_ids::Sharpen()).SetAmount(10.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(0.4f);
@@ -381,7 +381,10 @@ TEST_F(MetalGradeFixture, MetalDetailPassesAcquireAllTexturesFromWorkspace) {
   device_.Workspace().Device().ResetCounters();
   const auto second = RenderGrade();
   EXPECT_EQ(second.detail_pass_count, 4U);
-  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_GT(device_.Workspace().Device().TextureCreateCount(), 0U);
+  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(),
+            device_.Workspace().Device().FreeCount());
+  EXPECT_EQ(device_.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().HeapCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);

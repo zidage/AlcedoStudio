@@ -123,6 +123,15 @@ auto MetalBackend::CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer
 auto MetalBackend::CreateTexture2D(std::uint32_t, std::uint32_t, TextureFormat) -> Texture2D {
   throw std::runtime_error("MetalBackend: GPU texture allocation is not implemented");
 }
+auto MetalBackend::AcquireRecordedWorkScratchBuffer(std::size_t bytes) -> Buffer& {
+  recorded_work_scratch_buffers_.push_back(CreateSlab(bytes));
+  return recorded_work_scratch_buffers_.back();
+}
+auto MetalBackend::AcquireRecordedWorkScratchTexture(std::uint32_t width, std::uint32_t height,
+                                                     TextureFormat format) -> Texture2D& {
+  recorded_work_scratch_textures_.push_back(CreateTexture2D(width, height, format));
+  return recorded_work_scratch_textures_.back();
+}
 void MetalBackend::UploadBufferRange(Buffer&, std::uint32_t, std::span<const std::byte>,
                                      CommandContext&) {
   throw std::runtime_error("MetalBackend: buffer upload is not implemented");
@@ -167,12 +176,16 @@ void MetalBackend::Submit(CommandContext& command_context) {
 }
 void MetalBackend::Wait(CommandContext&) {
   if (in_flight_submission_ == 0) {
+    ReleaseRecordedWorkScratchResources();
     return;
   }
   completed_submission_ = in_flight_submission_;
   in_flight_submission_ = 0;
+  ReleaseRecordedWorkScratchResources();
 }
-void MetalBackend::SynchronizeRecordedWork(CommandContext&) {}
+void MetalBackend::SynchronizeRecordedWork(CommandContext&) {
+  ReleaseRecordedWorkScratchResources();
+}
 void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup>) {
   throw std::runtime_error("MetalBackend: pipeline warm-up is not implemented");
 }

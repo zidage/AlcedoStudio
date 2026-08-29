@@ -68,7 +68,9 @@ class PlanExecutor {
                      completed)) {
         ++stats.sensor_develop_skip;
       } else {
-        workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion);
+        if constexpr (UsesDevelopTransientArena()) {
+          workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion);
+        }
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
         try {
           if (plan.Contains(GpuPassKind::UploadRgb)) {
@@ -95,9 +97,11 @@ class PlanExecutor {
         ++stats.source_h2d_count;
         Record(device, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent);
         ++stats.sensor_develop_execute;
-        workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion);
-        // RCD planes are not a cache. Wait this stream so pack has finished, then
-        // cudaFree / Metal free the slab before Geometry allocates display textures.
+        if constexpr (UsesDevelopTransientArena()) {
+          workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion);
+        }
+        // Develop intermediates are not a cache. Finish the recorded work so backend-owned
+        // scratch can be destroyed before Geometry allocates display textures.
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
       }
       workspace.TransientBuffers().Reset();
@@ -175,6 +179,13 @@ class PlanExecutor {
 
  private:
   static constexpr TextureFormat kResultFormat = TextureFormat::Rgba32f;
+
+  static constexpr auto UsesDevelopTransientArena() -> bool {
+    if constexpr (requires { Backend::kUsesDevelopTransientArena; }) {
+      return Backend::kUsesDevelopTransientArena;
+    }
+    return true;
+  }
 
   template <class Workspace>
   static auto BindOrMiss(Workspace& images_owner, const GraphValueId& id, ContentKey key,

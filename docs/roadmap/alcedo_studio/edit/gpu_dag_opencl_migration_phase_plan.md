@@ -1554,6 +1554,90 @@ Verification:
   fixture test skipped by default, zero failed, 40.02 s.
 - `alcedo_main` debug target: built and linked successfully after the production changes.
 
+##### Phase O5 follow-up (2026-08-29) disposable Metal scratch resources
+
+Status: implemented. Metal Develop, mask evaluation, local tone, and Primary Grade scratch no
+longer enter the reusable texture pool or the retained transient slab arena. Persistent DAG
+outputs, mask source mip chains, signed-distance results, LLF canonical references, LUTs, model
+weights, and Neural Engine fixed tile workspace remain reusable resources.
+
+Cause:
+
+- Develop's CFA, linearization, demosaic planes, HLR intermediates, and Neural output used local
+  `ResourceLease` objects acquired from the general `TexturePool`.
+- Destroying a local lease only removed its pin. The pool retained the underlying `MTLTexture`, so
+  a completed Develop pass could leave several full-resolution scratch textures resident.
+- Mask and LLF temporary planes used `TransientBufferArena`. Resetting the arena changed its
+  logical cursor but retained its `MTLBuffer` slabs after the frame.
+- Metal command buffers use resources asynchronously. Destroying a C++ local immediately after an
+  encode would release the Metal resource before the GPU finished using it.
+
+Fix:
+
+- `MetalBackend` now owns recorded-work scratch buffers and textures directly. Allocation follows
+  the actual Develop, mask, LLF, or grade branch; it does not reserve a compiler peak first.
+- `PlanExecutor` skips Develop transient-arena preparation and high-water recording for Metal.
+- Develop waits for its recorded command buffer before Geometry and then physically destroys its
+  scratch buffers and textures.
+- Mask, LLF, and Primary Grade scratch stays alive through final submission and is physically
+  destroyed by `Wait` after the command buffer completes.
+- Failed encoding uses `CancelRender`; Metal discards unsubmitted recorded work before destroying
+  its scratch resources. A submitted command buffer is waited before destruction.
+- Reusable resources keep their existing caches. In particular, this change does not recreate
+  Neural Engine weights or its fixed tile-sized model workspace per operation.
+
+Primary Develop call chain:
+
+```text
+PlanExecutor
+  -> ExecuteMetalDevelop
+  -> AcquireRecordedWorkScratchTexture / AcquireRecordedWorkScratchBuffer
+  -> encode actual demosaic and HLR branch
+  -> SynchronizeRecordedWork
+  -> waitUntilCompleted
+  -> ReleaseRecordedWorkScratchResources
+  -> Geometry
+```
+
+Primary grade and mask call chain:
+
+```text
+ExecuteMetalMask / ExecuteMetalPrimaryGrade
+  -> AcquireRecordedWorkScratchBuffer / AcquireRecordedWorkScratchTexture
+  -> encode remaining frame passes
+  -> EndRender -> Submit
+  -> WaitIdle -> MetalBackend::Wait
+  -> waitUntilCompleted
+  -> ReleaseRecordedWorkScratchResources
+```
+
+Failure and cancellation call chain:
+
+```text
+Metal pass throws
+  -> PlanExecutor::CancelRender
+  -> MetalBackend::Wait
+  -> discard unsubmitted command buffer or wait submitted work
+  -> ReleaseRecordedWorkScratchResources
+  -> discard unpublished DAG images
+```
+
+Verification:
+
+- Added `MetalDevelopScratchResourcesReleaseAfterRecordedWorkCompletes`; it checks that Develop
+  scratch is outside `TexturePool` and that every recorded-work buffer and texture is physically
+  freed after synchronization.
+- Added `MetalPlanExecutorDoesNotReserveDevelopTransientArena`; it checks the product executor does
+  not create or record an unused Metal transient slab.
+- Extended the Neural Engine failure test to check scratch release through `CancelRender`.
+- Updated Primary Grade and LLF tests to require disposable scratch recreation and zero pending
+  recorded-work resources after GPU completion while persistent results remain cached.
+- Windows host-side `alcedo_main` debug target built and linked successfully. Metal Objective-C++
+  targets and runtime assertions require the macOS Metal runner and were not executable on this
+  Windows host.
+- Implementation and regression tests add 120 net source lines before this plan record; the
+  ownership change is centralized in `MetalBackend` rather than duplicated in each pass.
+
 目标：
 
 - 删除 OpenCL 产品路径中的旧 pipeline、stage、总参数 ABI 和混合 operator 执行；

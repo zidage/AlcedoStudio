@@ -64,8 +64,8 @@ auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::u
 }
 
 auto AcquireScratch(MetalRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height,
-                    TextureFormat format) -> ResourceLease<MetalBackend> {
-  return workspace.Textures().Acquire({width, height, format});
+                    TextureFormat format) -> MetalBackend::Texture2D& {
+  return workspace.Device().AcquireRecordedWorkScratchTexture(width, height, format);
 }
 
 auto CommandBuffer(MetalRenderDevice& device) -> void* {
@@ -159,12 +159,11 @@ auto CropOrFull(const PreparedRawInput& input, std::uint32_t width, std::uint32_
 }
 
 void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const PreparedRawInput& input,
-                  ResourceLease<MetalBackend>& linear, ResourceLease<MetalBackend>& packed,
-                  bool hlr) {
+                  MetalBackend::Texture2D& linear, ResourceLease<MetalBackend>& packed, bool hlr) {
   std::string error;
   const auto  geometry =
-      ComputeNeuralAlignedGeometry(input.cfa_pattern, static_cast<int>(linear.Texture().Width()),
-                                   static_cast<int>(linear.Texture().Height()), 32, &error);
+      ComputeNeuralAlignedGeometry(input.cfa_pattern, static_cast<int>(linear.Width()),
+                                   static_cast<int>(linear.Height()), 32, &error);
   if (!geometry.has_value()) {
     throw std::runtime_error("ExecuteMetalDevelop: Neural Engine preprocess failed: " + error);
   }
@@ -172,10 +171,9 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
                                       static_cast<std::uint32_t>(geometry->aligned_height));
   const auto  out_w      = static_cast<std::uint32_t>(crop.width);
   const auto  out_h      = static_cast<std::uint32_t>(crop.height);
-  auto        neural_out = AcquireScratch(device.Workspace(), out_w, out_h, TextureFormat::Rgba32f);
-  auto cfa_image = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(linear.Texture().Native()));
-  auto out_image =
-      metal::MetalImage::Wrap(static_cast<MTL::Texture*>(neural_out.Texture().Native()));
+  auto&       neural_out = AcquireScratch(device.Workspace(), out_w, out_h, TextureFormat::Rgba32f);
+  auto        cfa_image  = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(linear.Native()));
+  auto        out_image  = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(neural_out.Native()));
 
   MetalDemosaicNetLoadOptions load_options;
   if (g_metal_neural_cache_for_test != nullptr) {
@@ -208,21 +206,18 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
     (void)executor.EnqueueXTrans(cache.XTrans(), dispatch);
   }
 
-  auto* hlr_src = Native(neural_out.Texture());
-  auto  hlr_w   = neural_out.Texture().Width();
-  auto  hlr_h   = neural_out.Texture().Height();
+  auto* hlr_src = Native(neural_out);
+  auto  hlr_w   = neural_out.Width();
+  auto  hlr_h   = neural_out.Height();
   if (hlr) {
-    auto  hlr_dst = AcquireScratch(device.Workspace(), hlr_w, hlr_h, TextureFormat::Rgba32f);
-    void* stats   = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
-    auto [native_stats, offset] =
-        device.Workspace().Device().ResolveDeviceMemory(stats, 6 * sizeof(float));
-    device.Workspace().Device().FillDeviceMemory(stats, 6 * sizeof(float), 0,
+    auto& hlr_dst = AcquireScratch(device.Workspace(), hlr_w, hlr_h, TextureFormat::Rgba32f);
+    auto& stats = device.Workspace().Device().AcquireRecordedWorkScratchBuffer(6 * sizeof(float));
+    device.Workspace().Device().FillDeviceMemory(stats.DevicePointer(), stats.Bytes(), 0,
                                                  device.CommandContext());
     device.Workspace().Device().EndCommandEncoders(device.CommandContext());
-    metal::EncodeHighlightReconstruct(command_buffer, hlr_src, Native(hlr_dst.Texture()),
-                                      native_stats, offset, input.linearization.cam_mul, hlr_w,
-                                      hlr_h);
-    hlr_src = Native(hlr_dst.Texture());
+    metal::EncodeHighlightReconstruct(command_buffer, hlr_src, Native(hlr_dst), stats.Native(), 0,
+                                      input.linearization.cam_mul, hlr_w, hlr_h);
+    hlr_src = Native(hlr_dst);
   }
   const float* cam_mul = input.linearization.cam_mul;
   metal::EncodeCopyRgbaCropInverseOrient(
@@ -232,30 +227,27 @@ void EncodeNeural(MetalRenderDevice& device, void* command_buffer, const Prepare
 }
 
 void EncodeLegacyDemosaic(MetalRenderDevice& device, void* command_buffer,
-                          const PreparedRawInput& input, ResourceLease<MetalBackend>& linear,
+                          const PreparedRawInput& input, MetalBackend::Texture2D& linear,
                           ResourceLease<MetalBackend>& packed, bool hlr) {
-  const auto width  = linear.Texture().Width();
-  const auto height = linear.Texture().Height();
+  const auto width  = linear.Width();
+  const auto height = linear.Height();
   if (input.cfa_pattern.kind == RawCfaKind::XTrans6x6) {
-    auto      green  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-    auto      rgb    = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    auto&     green  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+    auto&     rgb    = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
     const int passes = input.downsample_passes == 0 ? 3 : 1;
-    metal::EncodeXTrans(command_buffer, Native(linear.Texture()), Native(green.Texture()),
-                        Native(rgb.Texture()), input.cfa_pattern.xtrans_pattern, width, height,
-                        passes);
-    auto* src = Native(rgb.Texture());
+    metal::EncodeXTrans(command_buffer, Native(linear), Native(green), Native(rgb),
+                        input.cfa_pattern.xtrans_pattern, width, height, passes);
+    auto* src = Native(rgb);
     if (hlr) {
-      auto  hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
-      void* stats   = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
-      auto [native_stats, offset] =
-          device.Workspace().Device().ResolveDeviceMemory(stats, 6 * sizeof(float));
-      device.Workspace().Device().FillDeviceMemory(stats, 6 * sizeof(float), 0,
+      auto& hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+      auto& stats =
+          device.Workspace().Device().AcquireRecordedWorkScratchBuffer(6 * sizeof(float));
+      device.Workspace().Device().FillDeviceMemory(stats.DevicePointer(), stats.Bytes(), 0,
                                                    device.CommandContext());
       device.Workspace().Device().EndCommandEncoders(device.CommandContext());
-      metal::EncodeHighlightReconstruct(command_buffer, src, Native(hlr_dst.Texture()),
-                                        native_stats, offset, input.linearization.cam_mul, width,
-                                        height);
-      src = Native(hlr_dst.Texture());
+      metal::EncodeHighlightReconstruct(command_buffer, src, Native(hlr_dst), stats.Native(), 0,
+                                        input.linearization.cam_mul, width, height);
+      src = Native(hlr_dst);
     }
     metal::EncodeCopyRgbaCropInverseOrient(
         command_buffer, src, Native(packed.Texture()), CropOrFull(input, width, height),
@@ -263,41 +255,34 @@ void EncodeLegacyDemosaic(MetalRenderDevice& device, void* command_buffer,
     return;
   }
 
-  auto r  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-  auto g  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-  auto b  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-  auto vh = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-  auto pq = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
-  metal::EncodeBayerRcd(command_buffer, Native(linear.Texture()), Native(r.Texture()),
-                        Native(g.Texture()), Native(b.Texture()), Native(vh.Texture()),
-                        Native(pq.Texture()), input.cfa_pattern.bayer_pattern, width, height);
+  auto& r  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+  auto& g  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+  auto& b  = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+  auto& vh = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+  auto& pq = AcquireScratch(device.Workspace(), width, height, TextureFormat::R32f);
+  metal::EncodeBayerRcd(command_buffer, Native(linear), Native(r), Native(g), Native(b), Native(vh),
+                        Native(pq), input.cfa_pattern.bayer_pattern, width, height);
   if (hlr) {
-    auto        rgba = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    auto&       rgba = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
     const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     metal::EncodePackPlanesCropInverseOrient(
-        command_buffer, Native(r.Texture()), Native(g.Texture()), Native(b.Texture()),
-        Native(rgba.Texture()), RectI{0, 0, static_cast<int>(width), static_cast<int>(height)},
-        identity, 0);
-    auto  hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
-    void* stats   = device.Workspace().TransientBuffers().Allocate(6 * sizeof(float));
-    auto [native_stats, offset] =
-        device.Workspace().Device().ResolveDeviceMemory(stats, 6 * sizeof(float));
-    device.Workspace().Device().FillDeviceMemory(stats, 6 * sizeof(float), 0,
+        command_buffer, Native(r), Native(g), Native(b), Native(rgba),
+        RectI{0, 0, static_cast<int>(width), static_cast<int>(height)}, identity, 0);
+    auto& hlr_dst = AcquireScratch(device.Workspace(), width, height, TextureFormat::Rgba32f);
+    auto& stats = device.Workspace().Device().AcquireRecordedWorkScratchBuffer(6 * sizeof(float));
+    device.Workspace().Device().FillDeviceMemory(stats.DevicePointer(), stats.Bytes(), 0,
                                                  device.CommandContext());
     device.Workspace().Device().EndCommandEncoders(device.CommandContext());
-    metal::EncodeHighlightReconstruct(command_buffer, Native(rgba.Texture()),
-                                      Native(hlr_dst.Texture()), native_stats, offset,
-                                      input.linearization.cam_mul, width, height);
+    metal::EncodeHighlightReconstruct(command_buffer, Native(rgba), Native(hlr_dst), stats.Native(),
+                                      0, input.linearization.cam_mul, width, height);
     metal::EncodeCopyRgbaCropInverseOrient(
-        command_buffer, Native(hlr_dst.Texture()), Native(packed.Texture()),
-        CropOrFull(input, width, height), input.linearization.cam_mul,
-        input.sensor.orientation_flip);
+        command_buffer, Native(hlr_dst), Native(packed.Texture()), CropOrFull(input, width, height),
+        input.linearization.cam_mul, input.sensor.orientation_flip);
     return;
   }
   metal::EncodePackPlanesCropInverseOrient(
-      command_buffer, Native(r.Texture()), Native(g.Texture()), Native(b.Texture()),
-      Native(packed.Texture()), CropOrFull(input, width, height), input.linearization.cam_mul,
-      input.sensor.orientation_flip);
+      command_buffer, Native(r), Native(g), Native(b), Native(packed.Texture()),
+      CropOrFull(input, width, height), input.linearization.cam_mul, input.sensor.orientation_flip);
 }
 
 }  // namespace
@@ -404,14 +389,14 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     throw std::runtime_error("ExecuteMetalDevelop: CFA plane must be tightly packed");
   }
 
-  auto cfa    = AcquireScratch(workspace, width, height, TextureFormat::R16u);
-  auto linear = AcquireScratch(workspace, width, height, TextureFormat::R32f);
-  workspace.Device().UploadTexture2D(cfa.Texture(), input.pixels.Span(), device.CommandContext());
+  auto& cfa    = AcquireScratch(workspace, width, height, TextureFormat::R16u);
+  auto& linear = AcquireScratch(workspace, width, height, TextureFormat::R32f);
+  workspace.Device().UploadTexture2D(cfa, input.pixels.Span(), device.CommandContext());
   auto* command_buffer = CommandBuffer(device);
-  metal::EncodeToLinearRef(command_buffer, Native(cfa.Texture()), Native(linear.Texture()),
-                           input.linearization, input.cfa_pattern);
+  metal::EncodeToLinearRef(command_buffer, Native(cfa), Native(linear), input.linearization,
+                           input.cfa_pattern);
   if (!hlr) {
-    metal::EncodeCfaClamp01(command_buffer, Native(linear.Texture()), width, height);
+    metal::EncodeCfaClamp01(command_buffer, Native(linear), width, height);
   }
 
   const auto method =
