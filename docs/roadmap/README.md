@@ -25,6 +25,7 @@ use their own top-level category.
 
 - [GPU DAG Pipeline Rebuild Phase Plan](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md)
 - [GPU DAG Metal Migration Phase Plan](alcedo_studio/edit/gpu_dag_metal_migration_phase_plan.md)
+- [Node-aware Pipeline Editing and Mask Authoring Master Plan](alcedo_studio/edit/node_mask_editor_master_plan.md)
 
 ## Alcedo Studio — UI
 
