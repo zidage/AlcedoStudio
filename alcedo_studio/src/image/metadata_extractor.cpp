@@ -29,6 +29,7 @@
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/libraw_unpack_guard.hpp"
 #include "edit/operators/basic/camera_matrices.hpp"
+#include "image/dng_camera_matrix.hpp"
 #include "json.hpp"
 #include "type/supported_file_type.hpp"
 
@@ -95,6 +96,10 @@ auto ContainsCaseInsensitive(const std::string& text, const std::string& pattern
 
 auto IsNikonCamera(const std::string& make, const std::string& model) -> bool {
   return ContainsCaseInsensitive(make, "nikon") || ContainsCaseInsensitive(model, "nikon");
+}
+
+auto IsHasselbladCamera(const std::string& make, const std::string& model) -> bool {
+  return ContainsCaseInsensitive(make, "hasselblad") || ContainsCaseInsensitive(model, "hasselblad");
 }
 
 auto IsDngExtension(const std::filesystem::path& path) -> bool {
@@ -944,11 +949,55 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData&  exif_data,
   std::memcpy(ctx.color_matrix_2_, cm2, sizeof(ctx.color_matrix_2_));
   ctx.color_matrices_valid_ = true;
 
+  double analog_balance[3] = {1.0, 1.0, 1.0};
+  if (!ReadExifNumericArrayTag(exif_data, "Exif.Image.AnalogBalance", 3, analog_balance) ||
+      !IsFinitePositive3(analog_balance)) {
+    analog_balance[0] = 1.0;
+    analog_balance[1] = 1.0;
+    analog_balance[2] = 1.0;
+  }
+
+  double camera_calibration_1[9];
+  double camera_calibration_2[9];
+  SetIdentity3x3(camera_calibration_1);
+  SetIdentity3x3(camera_calibration_2);
+  const std::string camera_calibration_signature =
+      ReadExifStringTag(exif_data, "Exif.Image.CameraCalibrationSignature");
+  const std::string profile_calibration_signature =
+      ReadExifStringTag(exif_data, "Exif.Image.ProfileCalibrationSignature");
+  if (CameraCalibrationSignaturesMatch(camera_calibration_signature,
+                                       profile_calibration_signature)) {
+    double     cc1[9]  = {};
+    double     cc2[9]  = {};
+    const bool has_cc1 =
+        ReadExifNumericArrayTag(exif_data, "Exif.Image.CameraCalibration1", 9, cc1);
+    const bool has_cc2 =
+        ReadExifNumericArrayTag(exif_data, "Exif.Image.CameraCalibration2", 9, cc2);
+    if (has_cc1 && IsFinite3x3(cc1)) {
+      std::memcpy(camera_calibration_1, cc1, sizeof(camera_calibration_1));
+    }
+    if (has_cc2 && IsFinite3x3(cc2)) {
+      std::memcpy(camera_calibration_2, cc2, sizeof(camera_calibration_2));
+    } else if (has_cc1 && IsFinite3x3(cc1)) {
+      std::memcpy(camera_calibration_2, camera_calibration_1, sizeof(camera_calibration_2));
+    }
+    if (!has_cc1 && has_cc2 && IsFinite3x3(cc2)) {
+      std::memcpy(camera_calibration_1, camera_calibration_2, sizeof(camera_calibration_1));
+    }
+  }
+  ApplyAnalogBalanceAndCameraCalibration(ctx.color_matrix_1_, analog_balance, camera_calibration_1);
+  ApplyAnalogBalanceAndCameraCalibration(ctx.color_matrix_2_, analog_balance, camera_calibration_2);
+
   double     fm1[9]         = {};
   double     fm2[9]         = {};
   const bool has_fm1 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix1", 9, fm1);
   const bool has_fm2 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix2", 9, fm2);
-  if ((has_fm1 || has_fm2) && !HasEmbeddedDngProfileTables(exif_data)) {
+  // Adobe Standard DNGs embed HueSatMap/LookTable as a post-PCS LUT, not as a
+  // replacement for ForwardMatrix. Hasselblad X2D tables are authored for the
+  // ColorMatrix + CAT path, so keep dropping FM only for that camera.
+  const bool drop_forward_matrix = HasEmbeddedDngProfileTables(exif_data) &&
+                                   IsHasselbladCamera(ctx.camera_make_, ctx.camera_model_);
+  if ((has_fm1 || has_fm2) && !drop_forward_matrix) {
     if (!has_fm1 && has_fm2) {
       std::memcpy(fm1, fm2, sizeof(fm1));
     } else if (has_fm1 && !has_fm2) {
