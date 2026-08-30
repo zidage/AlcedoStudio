@@ -28,6 +28,12 @@ NM0 没有执行子 Phase。本文件记录已经落地的依赖配置，不拆 
 git submodule update --init alcedo_studio/src/third_party/QuickQanava
 ```
 
+macOS / Unix 相同命令：
+
+```bash
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+```
+
 该 checkout 没有嵌套 submodule。不要对它使用 `--recursive` 去拉别的仓库。
 
 升级 pin 时：在 submodule 内 checkout 新的 tag 或 commit，更新本表、`THIRD_PARTY_NOTICE.txt` 和 `alcedo_studio/src/third_party/README.md`，不要改成跟踪 `master` / `develop`。
@@ -169,3 +175,55 @@ Suite totals: 3/3 for the NM0 pin checks above. No QML TestCase in this change.
 **LOC note (grill-code-review):** first-party edits are CMake, gitignore, notices, and this record. Upstream tree is the submodule checkout.
 
 **Residual gaps:** no QML import harness; `alcedo_main` does not link `QuickQanava`; macOS compile not run on this machine; `CanvasNodeTemplate.qml` still imports Material in upstream.
+
+##### Phase NM0 completion record (2026-08-29, macOS)
+
+**Status:** complete — same pin and Alcedo CMake wrapper; macOS Clang debug configured and linked. No production import. No CMake source change required for Clang.
+
+**Primary success call chain:**
+
+```text
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+  -> cmake --preset macos_debug
+  -> include AlcedoQuickQanava.cmake
+  -> qt_add_qml_module(QuickQanava STATIC URI QuickQanava)
+  -> cmake --build --preset macos_debug --target QuickQanava
+  -> libQuickQanava.a + qmldir under build/macos-debug/third_party/QuickQanava/QuickQanava
+```
+
+**Primary failure call chain:**
+
+```text
+submodule not initialized
+  -> FATAL_ERROR from alcedo_studio/src/third_party/CMakeLists.txt
+  -> configure stops; no online fetch; no sample build
+```
+
+macOS CI now inits the same gitlink from `scripts/ci_prepare_third_party.sh` (no `--recursive`).
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Pin tag `2.50` at `56bdf78d5b1d41fb60ae3b8ea2292df45787ecff` | git submodule gitlink | PASS |
+| CMake creates and compiles `QuickQanava` | `libQuickQanava.a` | PASS |
+| Static plugin and QML module metadata | `libQuickQanavaplugin.a`, `qmldir` | PASS |
+| Production `alcedo_main` does not import QuickQanava | source inspection | PASS |
+
+Commands:
+
+```text
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+cmake --preset macos_debug
+cmake --build --preset macos_debug --target QuickQanava --parallel 8
+cmake --build --preset macos_debug --target QuickQanavaplugin --parallel 8
+```
+
+Configure: `-- Configuring done (2.7s)` then `-- Generating done (0.6s)`.
+Build: 127/127, linked `alcedo_studio/src/third_party/libQuickQanava.a`. Plugin linked `third_party/QuickQanava/QuickQanava/libQuickQanavaplugin.a`. qmltyperegistration warns that `gtpo::graph` / `gtpo::node` bases are not found; expected for this pin.
+
+Host: macOS 26.5.2, Homebrew clang 21.1.1, Homebrew Qt 6.9.2 (Windows NM0 used Qt 6.9.3).
+
+**Checklist / exit condition:** macOS configure/build of the pinned module done. Harness and package load still not claimed.
+
+**Residual gaps:** no QML import harness; `alcedo_main` does not link `QuickQanava`; `CanvasNodeTemplate.qml` still imports Material in upstream.

@@ -51,6 +51,14 @@ if [[ ! -e "alcedo_studio/src/third_party/libraw/libraw/libraw.h" ]]; then
   git submodule update --init --recursive --depth 1 "alcedo_studio/src/third_party/libraw"
 fi
 
+# Pin is the superproject gitlink (tag 2.50). Do not clone HEAD and do not
+# --recursive: this checkout has no nested submodules.
+if [[ ! -e "alcedo_studio/src/third_party/QuickQanava/src/CMakeLists.txt" ]] \
+  || [[ ! -e "alcedo_studio/src/third_party/QuickQanava/licence.txt" ]]; then
+  git submodule sync -- "alcedo_studio/src/third_party/QuickQanava"
+  git submodule update --init --depth 1 "alcedo_studio/src/third_party/QuickQanava"
+fi
+
 # The CI preset forces PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON, so gRPC and protobuf
 # are consumed from Homebrew (brew install grpc protobuf in the workflow) and the
 # bundled source submodules are never built. Skip the recursive grpc/protobuf

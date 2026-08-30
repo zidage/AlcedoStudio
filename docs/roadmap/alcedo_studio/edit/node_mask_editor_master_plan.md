@@ -1192,6 +1192,46 @@ Windows debug linked `QuickQanava.lib`. macOS not built on this machine.
 
 **Residual gaps:** no production link; no QML harness; macOS not built here; upstream `CanvasNodeTemplate.qml` still imports Material.
 
+##### Phase NM0 completion record (2026-08-29, macOS)
+
+**Status:** complete — macOS Clang debug configured and linked the same pin. No production import.
+
+**Primary success call chain:**
+
+```text
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+  -> cmake --preset macos_debug
+  -> include AlcedoQuickQanava.cmake
+  -> qt_add_qml_module(QuickQanava STATIC URI QuickQanava)
+  -> cmake --build --preset macos_debug --target QuickQanava
+  -> libQuickQanava.a
+```
+
+**Primary failure call chain:**
+
+```text
+missing checkout
+  -> FATAL_ERROR
+  -> configure stops; no FetchContent
+```
+
+macOS CI inits the gitlink from `scripts/ci_prepare_third_party.sh`.
+
+**What was proven (executed tests):** see [NM0 configuration record](node_mask_editor/phase_nm0_quickqanava_integration_plan.md).
+
+Commands:
+
+```text
+cmake --preset macos_debug
+cmake --build --preset macos_debug --target QuickQanava --parallel 8
+```
+
+macOS debug linked `libQuickQanava.a` (Homebrew Qt 6.9.2, clang 21.1.1).
+
+**Checklist / exit condition:** dependency pin complete on Windows and macOS debug. Harness and package load not claimed.
+
+**Residual gaps:** no production link; no QML harness; upstream `CanvasNodeTemplate.qml` still imports Material.
+
 ### 21.2 Phase NM1 — PipelineDocument Editing Foundation
 
 **为什么排在 UI 前：** 当前 legacy stage 和 `PipelineDocument` 仍然都可能影响编辑状态。

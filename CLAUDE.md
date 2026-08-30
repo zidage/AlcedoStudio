@@ -101,7 +101,7 @@ These façade services are the **only** API surface the UI layer may call. They 
 ## Key Technical Notes
 
 - **Qt path is hardcoded** in `CMakeLists.txt` (~line 142) to `D:/misc/Qt/6.9.3/msvc2022_64`. Override with `-DCMAKE_PREFIX_PATH`.
-- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`) must be initialized before configuring: `git submodule update --init --recursive`.
+- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`, `third_party/QuickQanava`) must be initialized before configuring: `git submodule update --init --recursive` for lensfun/libultrahdr, and `git submodule update --init alcedo_studio/src/third_party/QuickQanava` (no nested checkout).
 - **Windows packages** are resolved via vcpkg; macOS via Homebrew.
 - **CUDA** requires Toolkit 12.8 and compute capability ≥ 6.0. CUDA files have their own compile database entry.
 - **C++ standard**: C++20 with AVX/AVX2 SIMD flags.
