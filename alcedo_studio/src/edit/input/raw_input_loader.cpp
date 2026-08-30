@@ -16,6 +16,7 @@
 
 #include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_normalization.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 namespace alcedo {
 namespace {
@@ -324,7 +325,7 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
                                      : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 3;
     cv::Mat           view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
-    CropMatToDecodeArea(view, sensor).convertTo(rgb32f, CV_32FC3, 1.0 / 65535.0);
+    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(CropMatToDecodeArea(view, sensor), raw_data.color);
   } else if (raw_data.float3_image != nullptr) {
     const std::size_t row_step = sizes.raw_pitch != 0
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
@@ -336,9 +337,8 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
                                      : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 4;
     cv::Mat           view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
-    cv::Mat           rgb16;
-    CropMatToDecodeArea(view, sensor).convertTo(rgb16, CV_32FC4, 1.0 / 65535.0);
-    rgb32f = ExtractRgb32f(rgb16);
+    rgb32f = ExtractRgb32f(
+        raw_norm::ConvertUnpackedRgbToFloat(CropMatToDecodeArea(view, sensor), raw_data.color));
   } else if (raw_data.float4_image != nullptr && idata.colors == 3) {
     const std::size_t row_step = sizes.raw_pitch != 0
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
@@ -418,7 +418,8 @@ auto LinearizationFromLibRaw(LibRaw& raw) -> RawLinearizationParams {
     params.white_level[c] = curve.white_level[c];
     params.cam_mul[c]     = raw.imgdata.color.cam_mul[c];
   }
-  params.apply_as_shot_wb = raw.imgdata.color.as_shot_wb_applied != 1 ? 1 : 0;
+  params.apply_as_shot_wb =
+      (raw.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
   const int tile_width    = raw.imgdata.rawdata.color.cblack[4];
   const int tile_height   = raw.imgdata.rawdata.color.cblack[5];
   const int entries       = tile_width * tile_height;

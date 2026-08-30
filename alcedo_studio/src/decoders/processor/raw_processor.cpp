@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 #include <libraw/libraw.h>
 #include <libraw/libraw_const.h>
@@ -226,8 +227,8 @@ auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t
                                 : static_cast<size_t>(raw_width) * sizeof(uint16_t) * 3;
     cv::Mat      view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
     cv::Mat      rgb32f;
-    CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop)
-        .convertTo(rgb32f, CV_32FC3, 1.0 / 65535.0);
+    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(
+        CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop), raw_data.color);
     return BuildOpaqueRgbaFromRgb(rgb32f);
   }
 
@@ -248,7 +249,7 @@ auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t
     cv::Mat      rgb16 = ExtractRgbFromFourChannel(
         CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop));
     cv::Mat rgb32f;
-    rgb16.convertTo(rgb32f, CV_32FC3, 1.0 / 65535.0);
+    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(rgb16, raw_data.color);
     return BuildOpaqueRgbaFromRgb(rgb32f);
   }
 
