@@ -11,9 +11,13 @@
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/raw_linearization_params.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "decoders/processor/raw_rgb_linearization_params.hpp"
 #include "edit/geometry/types.hpp"
 
 namespace alcedo::metal {
+
+/// Linearize uploaded RGBA in place before the normal RAW HLR/pack stages.
+void EncodeLinearizeRgb(void* command_buffer, void* rgba, const RawRgbLinearizationParams& params);
 
 /**
  * @brief Encode RAW Metal kernels onto an existing command buffer.

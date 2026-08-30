@@ -375,43 +375,60 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
     if (input.pixels.format != HostPixelFormat::F32Rgba ||
-        input.pixels.ByteCount() != decoded_lease.Texture().Bytes()) {
-      throw std::runtime_error("ExecuteMetalDevelop: direct RGB size does not match output");
+        input.pixels.stride_bytes != width * 4 * sizeof(float)) {
+      throw std::runtime_error("ExecuteMetalDevelop: expected tightly packed RGB input");
     }
-    workspace.Device().UploadTexture2D(decoded_lease.Texture(), input.pixels.Span(),
-                                       device.CommandContext());
-    if (pending.has_value()) {
-      pending->Commit();
+    auto& uploaded = AcquireScratch(workspace, width, height, TextureFormat::Rgba32f);
+    workspace.Device().UploadTexture2D(uploaded, input.pixels.Span(), device.CommandContext());
+    auto* command_buffer = CommandBuffer(device);
+    metal::EncodeLinearizeRgb(command_buffer, Native(uploaded),
+                              input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+    auto* source = Native(uploaded);
+    if (hlr && input.rgb_linearization.has_value()) {
+      auto& corrected = AcquireScratch(workspace, width, height, TextureFormat::Rgba32f);
+      auto& stats     = workspace.Device().AcquireRecordedWorkScratchBuffer(6 * sizeof(float));
+      workspace.Device().FillDeviceMemory(stats.DevicePointer(), stats.Bytes(), 0,
+                                          device.CommandContext());
+      command_buffer = CommandBuffer(device);
+      metal::EncodeHighlightReconstruct(command_buffer, source, Native(corrected), stats.Native(),
+                                        0, input.linearization.cam_mul, width, height);
+      source = Native(corrected);
     }
-    return;
-  }
-
-  const auto width  = input.host_extent.width;
-  const auto height = input.host_extent.height;
-  if (width == 0 || height == 0) {
-    throw std::runtime_error("ExecuteMetalDevelop: empty CFA");
-  }
-  if (input.pixels.stride_bytes != width * sizeof(std::uint16_t)) {
-    throw std::runtime_error("ExecuteMetalDevelop: CFA plane must be tightly packed");
-  }
-
-  auto& cfa    = AcquireScratch(workspace, width, height, TextureFormat::R16u);
-  auto& linear = AcquireScratch(workspace, width, height, TextureFormat::R32f);
-  workspace.Device().UploadTexture2D(cfa, input.pixels.Span(), device.CommandContext());
-  auto* command_buffer = CommandBuffer(device);
-  metal::EncodeToLinearRef(command_buffer, Native(cfa), Native(linear), input.linearization,
-                           input.cfa_pattern);
-  if (!hlr) {
-    metal::EncodeCfaClamp01(command_buffer, Native(linear), width, height);
-  }
-
-  const auto method =
-      ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
-  if (method == RawDemosaicMethod::NeuralEngine) {
-    EncodeNeural(device, input, linear, decoded_lease, hlr);
+    const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    metal::EncodeCopyRgbaCropInverseOrient(
+        command_buffer, source, Native(decoded_lease.Texture()), CropOrFull(input, width, height),
+        input.rgb_linearization ? input.linearization.cam_mul : identity,
+        input.sensor.orientation_flip);
   } else {
-    EncodeLegacyDemosaic(device, command_buffer, input, linear, decoded_lease, hlr);
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (width == 0 || height == 0) {
+      throw std::runtime_error("ExecuteMetalDevelop: empty CFA");
+    }
+    if (input.pixels.stride_bytes != width * sizeof(std::uint16_t)) {
+      throw std::runtime_error("ExecuteMetalDevelop: CFA plane must be tightly packed");
+    }
+
+    auto& cfa    = AcquireScratch(workspace, width, height, TextureFormat::R16u);
+    auto& linear = AcquireScratch(workspace, width, height, TextureFormat::R32f);
+    workspace.Device().UploadTexture2D(cfa, input.pixels.Span(), device.CommandContext());
+    auto* command_buffer = CommandBuffer(device);
+    metal::EncodeToLinearRef(command_buffer, Native(cfa), Native(linear), input.linearization,
+                             input.cfa_pattern);
+    if (!hlr) {
+      metal::EncodeCfaClamp01(command_buffer, Native(linear), width, height);
+    }
+
+    const auto method =
+        ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
+    if (method == RawDemosaicMethod::NeuralEngine) {
+      EncodeNeural(device, input, linear, decoded_lease, hlr);
+    } else {
+      EncodeLegacyDemosaic(device, command_buffer, input, linear, decoded_lease, hlr);
+    }
   }
 
   if (input.dng_warp_rectilinear.has_value()) {
@@ -420,7 +437,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     if (source == nullptr) {
       throw std::runtime_error("ExecuteMetalDevelop: DNG warp source was lost");
     }
-    command_buffer = CommandBuffer(device);
+    auto* command_buffer = CommandBuffer(device);
     metal::EncodeWarpRectilinear(command_buffer, Native(source->Texture()),
                                  Native(warped.Texture()), *input.dng_warp_rectilinear, out_w,
                                  out_h);

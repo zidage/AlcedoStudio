@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 #ifdef HAVE_CUDA
 
@@ -715,6 +716,25 @@ auto RawProcessor::ProcessDirectRgbCuda() -> ImageBuffer {
   process_buffer_.SyncToGPU();
   process_buffer_.ReleaseCPUData();
   auto& gpu_img = process_buffer_.GetCUDAImage();
+  cv::cuda::GpuMat rgb(gpu_img.size(), CV_32FC3);
+  const auto       linearization = raw_norm::BuildRgbLinearization(
+      raw_data_.color, raw_data_.color3_image != nullptr || raw_data_.color4_image != nullptr);
+  CUDA::LinearizeRgb(gpu_img, rgb, linearization, &stream);
+  if (params_.highlights_reconstruct_) {
+    CUDA::HighlightWorkspace workspace;
+    auto                     correction = CUDA::BuildHighlightCorrection(raw_data_.color.cam_mul);
+    CUDA::HighlightAccumulation accumulation;
+    CUDA::AccumulateHighlightStats(rgb, correction, cv::Rect{}, workspace, accumulation, &stream);
+    CUDA::FinalizeHighlightCorrection(accumulation, correction);
+    CUDA::ApplyHighlightCorrectionAndPackRGBA(rgb, gpu_img, correction, raw_data_.color.cam_mul,
+                                              &workspace, &stream);
+  } else {
+    CUDA::ApplyInverseCamMulAndPackRGBA(rgb, gpu_img, raw_data_.color.cam_mul, &stream);
+  }
+  if (dng_warp_rectilinear_) {
+    CUDA::ApplyDngWarpRectilinear(gpu_img, *dng_warp_rectilinear_, &stream);
+    runtime_color_context_.dng_warp_rectilinear_applied_ = true;
+  }
   ApplyCudaGeometricCorrections(gpu_img, raw_data_.sizes.flip, &stream);
   stream.waitForCompletion();
   return {std::move(process_buffer_)};

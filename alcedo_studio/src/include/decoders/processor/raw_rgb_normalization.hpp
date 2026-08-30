@@ -8,10 +8,46 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <opencv2/core.hpp>
 #include <stdexcept>
 
+#include "decoders/processor/raw_rgb_linearization_params.hpp"
+
 namespace alcedo::raw_norm {
+
+/// Read post-unpack levels and WB state without inspecting the file or camera type.
+inline auto BuildRgbLinearization(const libraw_colordata_t& color, bool integer_codes)
+    -> RawRgbLinearizationParams {
+  RawRgbLinearizationParams params;
+  params.integer_codes = integer_codes ? 1U : 0U;
+  for (int c = 0; c < 3; ++c) {
+    if (!std::isfinite(color.cam_mul[c]) || color.cam_mul[c] <= 0.0f) {
+      throw std::runtime_error("Decoded RGB requires positive finite camera white balance gains");
+    }
+  }
+  for (int c = 0; c < 3; ++c) {
+    const float gain = color.cam_mul[c] / color.cam_mul[1];
+    if (!std::isfinite(gain) || gain <= 0.0f || !std::isfinite(1.0f / gain)) {
+      throw std::runtime_error("Decoded RGB camera white balance ratio is not finite and positive");
+    }
+    if (integer_codes) {
+      params.black[c]   = static_cast<float>(color.black) + static_cast<float>(color.cblack[c]);
+      const float range = static_cast<float>(color.maximum) - params.black[c];
+      if (!(range > 0.0f)) {
+        throw std::runtime_error("Decoded RGB white level must exceed its black level");
+      }
+      params.scale[c] = 1.0f / range;
+    }
+    if ((color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0) {
+      params.scale[c] *= gain;
+    }
+    if (!std::isfinite(params.scale[c]) || params.scale[c] <= 0.0f) {
+      throw std::runtime_error("Decoded RGB normalization gain is not positive and finite");
+    }
+  }
+  return params;
+}
 
 /**
  * Convert unpacked integer RGB to float without applying white balance again.

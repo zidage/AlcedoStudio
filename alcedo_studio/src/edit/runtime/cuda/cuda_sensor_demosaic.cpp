@@ -5,22 +5,22 @@
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 
 #include <algorithm>
+#include <opencv2/core/cuda_stream_accessor.hpp>
 #include <stdexcept>
 #include <string>
 
-#include <opencv2/core/cuda_stream_accessor.hpp>
-
+#include "decoders/processor/neural_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
 #include "decoders/processor/nn/demosaicnet_specs.hpp"
 #include "decoders/processor/nn/demosaicnet_xtrans.hpp"
-#include "decoders/processor/neural_tile_jobs.hpp"
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_image_ops.hpp"
+#include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
 #include "decoders/processor/operators/gpu/cuda_xtrans_interpolate.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -252,6 +252,24 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
 
 void SetDevelopNeuralModelCacheForTesting(DemosaicNetModelCache* cache) {
   g_neural_model_cache_for_test = cache;
+}
+
+void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& input,
+                           cv::cuda::GpuMat uploaded_rgba, cv::cuda::GpuMat packed, bool hlr,
+                           cv::cuda::Stream& stream) {
+  auto&     workspace = device.Workspace();
+  const int width     = uploaded_rgba.cols;
+  const int height    = uploaded_rgba.rows;
+  auto      rgb       = WrapF32C3(
+      AllocateTransient(workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3),
+      width, height);
+  CUDA::LinearizeRgb(uploaded_rgba, rgb,
+                     input.rgb_linearization.value_or(RawRgbLinearizationParams{}), &stream);
+  const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  PackRgbWithOptionalHighlight(workspace, CropIfNeeded(rgb, input.demosaic_output_crop), packed,
+                               input.rgb_linearization ? input.linearization.cam_mul : identity,
+                               input.sensor.orientation_flip,
+                               hlr && input.rgb_linearization.has_value(), stream);
 }
 
 void ExecuteCudaSensorDemosaicAndPack(CudaRenderDevice& device, const PreparedRawInput& input,

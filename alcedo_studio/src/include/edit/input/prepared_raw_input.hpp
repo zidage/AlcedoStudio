@@ -13,13 +13,14 @@
 #include "decoders/processor/raw_color_context.hpp"
 #include "decoders/processor/raw_linearization_params.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "decoders/processor/raw_rgb_linearization_params.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 
 namespace alcedo {
 
 /// Bumped when LibRaw unpack, CFA/RGB downsample, or active-area mapping rules change.
-inline constexpr std::uint32_t kRawInputPreparationVersion = 5;
+inline constexpr std::uint32_t kRawInputPreparationVersion = 6;
 
 /**
  * @brief FNV-1a 64-bit hash of opaque bytes. Used for encoded-source identity, not pixels.
@@ -142,6 +143,8 @@ inline auto operator==(const PreparedSourceKey& a, const PreparedSourceKey& b) -
 /**
  * @brief CPU-side develop input. GPU work starts at upload.
  *
+ * Encoded RGB retains unpacked sample values in F32 storage. rgb_linearization
+ * carries its GPU level/WB conversion; F32 storage alone does not imply 0..1.
  * Output of Develop is camera scene-linear RGB. Camera-to-AP1 is a later node.
  */
 struct PreparedRawInput {
@@ -155,6 +158,8 @@ struct PreparedRawInput {
   RawInputKind                        input_kind        = RawInputKind::BayerRaw;
   RawCfaPattern                       cfa_pattern{};
   RawLinearizationParams              linearization{};
+  // Present for unpacked RGB; absent for already scene-linear FromDirectRgb inputs.
+  std::optional<RawRgbLinearizationParams> rgb_linearization;
   RawSensorGeometry                   sensor{};
   RawRuntimeColorContext              color_context{};
   std::optional<dng::WarpRectilinear> dng_warp_rectilinear;

@@ -420,69 +420,80 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                        : sensor_id;
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (input.pixels.format != HostPixelFormat::F32Rgba ||
+        input.pixels.stride_bytes != width * 4 * sizeof(float)) {
+      throw std::runtime_error("ExecuteOpenClDevelop: expected tightly packed RGB input");
+    }
+    auto&      backend  = workspace.Device();
+    const auto bytes    = input.pixels.ByteCount();
+    void*      uploaded = workspace.TransientBuffers().Allocate(bytes);
+    const auto source   = ViewFromPtr(backend, uploaded, bytes);
+    backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+    auto stream = MakeEncodeQueue(device);
+    OpenCL::EncodeLinearizeRgb(stream, source, width, height,
+                               input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+    auto& decoded = AcquireRgba(workspace, demosaic_id, out_w, out_h);
+    if (hlr && input.rgb_linearization.has_value()) {
+      auto       dst = ViewFromPtr(backend, workspace.TransientBuffers().Allocate(bytes), bytes);
+      const auto scratch = AllocateHighlightScratch(device, width, height);
+      EncodeHighlightFromRgbaAndPack(stream, source, decoded.Texture().Native(), input, width,
+                                     height, dst, scratch);
+    } else {
+      CopyRgbaToPacked(stream, source, decoded.Texture().Native(), input, width, height,
+                       input.rgb_linearization.has_value());
+    }
+  } else {
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (width == 0 || height == 0) {
+      throw std::runtime_error("ExecuteOpenClDevelop: empty CFA");
+    }
+    if (input.pixels.stride_bytes != width * sizeof(std::uint16_t)) {
+      throw std::runtime_error("ExecuteOpenClDevelop: CFA plane must be tightly packed");
+    }
+
+    auto&      backend    = workspace.Device();
+    auto&      transients = workspace.TransientBuffers();
+    const auto u16_bytes  = static_cast<std::size_t>(width) * height * sizeof(std::uint16_t);
+    const auto f32_bytes  = static_cast<std::size_t>(width) * height * sizeof(float);
+    void*      u16_ptr    = transients.Allocate(u16_bytes);
+    TraceDevelopStage("allocate CFA U16 end");
+    void* f32_ptr = transients.Allocate(f32_bytes);
+    TraceDevelopStage("allocate linear F32 end");
+    const auto method =
+        ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
+    std::optional<LegacyDemosaicScratch> legacy_scratch;
+    if (method != RawDemosaicMethod::NeuralEngine) {
+      legacy_scratch.emplace(AllocateLegacyDemosaicScratch(device, input, hlr));
+      TraceDevelopStage("allocate legacy scratch end");
+    }
     TraceDevelopStage("acquire output begin");
     auto& decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
     TraceDevelopStage("acquire output end");
-    if (input.pixels.format != HostPixelFormat::F32Rgba ||
-        input.pixels.ByteCount() != decoded_lease.Texture().Bytes()) {
-      throw std::runtime_error("ExecuteOpenClDevelop: direct RGB size does not match output");
+    backend.UploadDeviceMemory(u16_ptr, input.pixels.Span(), device.CommandContext());
+    TraceDevelopStage("enqueue CFA upload end");
+    auto stream = MakeEncodeQueue(device);
+    auto linear = ViewFromPtr(backend, f32_ptr, f32_bytes);
+    OpenCL::EncodeToLinearRef(stream, ViewFromPtr(backend, u16_ptr, u16_bytes), linear, width,
+                              height, input.linearization, input.cfa_pattern);
+    TraceDevelopStage("enqueue linearize end");
+    if (!hlr) {
+      OpenCL::EncodeCfaClamp01(stream, linear, width, height);
+      TraceDevelopStage("enqueue CFA clamp end");
     }
-    workspace.Device().UploadTexture2D(decoded_lease.Texture(), input.pixels.Span(),
-                                       device.CommandContext());
-    if (pending.has_value()) {
-      pending->Commit();
+
+    if (method == RawDemosaicMethod::NeuralEngine) {
+      TraceDevelopStage("neural begin");
+      EncodeNeural(device, stream, input, linear, decoded_lease.Texture().Native(), hlr);
+      TraceDevelopStage("neural end");
+    } else {
+      TraceDevelopStage("legacy demosaic begin");
+      EncodeLegacyDemosaic(stream, input, linear, decoded_lease.Texture().Native(), hlr,
+                           *legacy_scratch);
+      TraceDevelopStage("legacy demosaic end");
     }
-    return;
-  }
-
-  const auto width  = input.host_extent.width;
-  const auto height = input.host_extent.height;
-  if (width == 0 || height == 0) {
-    throw std::runtime_error("ExecuteOpenClDevelop: empty CFA");
-  }
-  if (input.pixels.stride_bytes != width * sizeof(std::uint16_t)) {
-    throw std::runtime_error("ExecuteOpenClDevelop: CFA plane must be tightly packed");
-  }
-
-  auto&      backend    = workspace.Device();
-  auto&      transients = workspace.TransientBuffers();
-  const auto u16_bytes  = static_cast<std::size_t>(width) * height * sizeof(std::uint16_t);
-  const auto f32_bytes  = static_cast<std::size_t>(width) * height * sizeof(float);
-  void*      u16_ptr    = transients.Allocate(u16_bytes);
-  TraceDevelopStage("allocate CFA U16 end");
-  void* f32_ptr = transients.Allocate(f32_bytes);
-  TraceDevelopStage("allocate linear F32 end");
-  const auto method =
-      ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
-  std::optional<LegacyDemosaicScratch> legacy_scratch;
-  if (method != RawDemosaicMethod::NeuralEngine) {
-    legacy_scratch.emplace(AllocateLegacyDemosaicScratch(device, input, hlr));
-    TraceDevelopStage("allocate legacy scratch end");
-  }
-  TraceDevelopStage("acquire output begin");
-  auto& decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
-  TraceDevelopStage("acquire output end");
-  backend.UploadDeviceMemory(u16_ptr, input.pixels.Span(), device.CommandContext());
-  TraceDevelopStage("enqueue CFA upload end");
-  auto stream = MakeEncodeQueue(device);
-  auto linear = ViewFromPtr(backend, f32_ptr, f32_bytes);
-  OpenCL::EncodeToLinearRef(stream, ViewFromPtr(backend, u16_ptr, u16_bytes), linear, width, height,
-                            input.linearization, input.cfa_pattern);
-  TraceDevelopStage("enqueue linearize end");
-  if (!hlr) {
-    OpenCL::EncodeCfaClamp01(stream, linear, width, height);
-    TraceDevelopStage("enqueue CFA clamp end");
-  }
-
-  if (method == RawDemosaicMethod::NeuralEngine) {
-    TraceDevelopStage("neural begin");
-    EncodeNeural(device, stream, input, linear, decoded_lease.Texture().Native(), hlr);
-    TraceDevelopStage("neural end");
-  } else {
-    TraceDevelopStage("legacy demosaic begin");
-    EncodeLegacyDemosaic(stream, input, linear, decoded_lease.Texture().Native(), hlr,
-                         *legacy_scratch);
-    TraceDevelopStage("legacy demosaic end");
   }
 
   if (input.dng_warp_rectilinear.has_value()) {

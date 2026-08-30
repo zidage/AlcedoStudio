@@ -41,7 +41,10 @@ auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t 
 
 auto EstimateDevelopTransientBytes(const DevelopCompileSource& source) -> std::size_t {
   if (source.kind == DevelopInputKind::DirectRgb) {
-    return AlignUp(4096, kAlign);
+    const auto pixels =
+        static_cast<std::size_t>(source.host_extent.width) * source.host_extent.height;
+    // Uploaded RGBA + linear RGB + HLR RGB and aligned reduction scalars.
+    return PlaneBytes(pixels, 16) + 2 * PlaneBytes(pixels, 12) + 4 * kAlign;
   }
   const std::size_t pixels =
       static_cast<std::size_t>(source.host_extent.width) * source.host_extent.height;

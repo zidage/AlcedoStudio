@@ -13,6 +13,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -167,6 +169,23 @@ TEST(GpuDagRawInput, SonyDecodedRgbMapsBlackAndWhiteWithoutRepeatingWhiteBalance
   }
 }
 
+TEST(GpuDagRawInput, RgbGpuParametersRejectInvalidLevelsAndWhiteBalanceInsteadOfProducingNaNs) {
+  auto  raw   = std::make_unique<LibRaw>();
+  auto& color = raw->imgdata.color;
+  std::fill_n(color.cam_mul, 4, 1.0f);
+  color.black   = 1024;
+  color.maximum = 1024;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.maximum   = 16383;
+  color.cblack[2] = 15359;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.cblack[2]  = 0;
+  color.cam_mul[1] = 0.0f;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.cam_mul[1] = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, false), std::runtime_error);
+}
+
 TEST(GpuDagRawInput, SonyDecodedRgbRejectsInvalidRangeAndHonorsChannelBlackOffsets) {
   auto  raw                = std::make_unique<LibRaw>();
   auto& color              = raw->imgdata.color;
@@ -214,7 +233,7 @@ TEST(GpuDagRawInput, IntegerRgbUsesDecodedLevelsWithoutCameraOrFormatFlags) {
   EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
 }
 
-TEST(GpuDagRawInput, SonyA7CiiYcbcrFileLoadsNormalizedRgbAtFullResolution) {
+TEST(GpuDagRawInput, SonyA7CiiYcbcrFilePreservesCodesForGpuLinearization) {
   // The large camera fixture is optional; do not add private RAW files to source control.
   const char* override_path = std::getenv("ALCEDO_SONY_YCBCR_RAW");
   const auto  path          = override_path ? std::filesystem::path(override_path)
@@ -238,6 +257,9 @@ TEST(GpuDagRawInput, SonyA7CiiYcbcrFileLoadsNormalizedRgbAtFullResolution) {
   ASSERT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
   ASSERT_EQ(prepared.pixels.format, HostPixelFormat::F32Rgba);
   EXPECT_EQ(prepared.linearization.apply_as_shot_wb, 0);
+  ASSERT_TRUE(prepared.rgb_linearization.has_value());
+  EXPECT_FLOAT_EQ(prepared.rgb_linearization->black[0], 1024.0f);
+  EXPECT_FLOAT_EQ(prepared.rgb_linearization->scale[0], 1.0f / 16512.0f);
   // DSC04739's default image crop is (8, 4, 4608, 3072), inside the decode area.
   ASSERT_EQ(prepared.host_extent.width, 4608U);
   ASSERT_EQ(prepared.host_extent.height, 3072U);
@@ -249,7 +271,7 @@ TEST(GpuDagRawInput, SonyA7CiiYcbcrFileLoadsNormalizedRgbAtFullResolution) {
               .color4_image[(y + 4) * raw->imgdata.sizes.raw_width + x + 8];
       const auto* pixel = output + y * (prepared.pixels.stride_bytes / sizeof(float)) + x * 4;
       for (int c = 0; c < 3; ++c) {
-        const float expected = std::max(0.0f, (static_cast<float>(sample[c]) - 1024.0f) / 16512.0f);
+        const float expected = static_cast<float>(sample[c]);
         EXPECT_NEAR(pixel[c], expected, 1e-6f);
         EXPECT_TRUE(std::isfinite(pixel[c]));
       }
@@ -278,7 +300,13 @@ TEST(GpuDagRawInput, ConvertedSonyLinearDngUsesItsOwnBlackAndWhiteLevels) {
   ASSERT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
   ASSERT_EQ(prepared.pixels.format, HostPixelFormat::F32Rgba);
   ASSERT_EQ(prepared.host_extent, (Extent2D{4622, 3078}));
-  // Preserve the loader's existing decoded area; only sample levels change here.
+  ASSERT_TRUE(prepared.rgb_linearization.has_value());
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_FLOAT_EQ(prepared.rgb_linearization->black[c], 1024.0f);
+    EXPECT_NEAR(prepared.rgb_linearization->scale[c],
+                raw->imgdata.color.cam_mul[c] / raw->imgdata.color.cam_mul[1] / 15359.0f, 1e-10f);
+  }
+  // The host preserves unpacked codes; the GPU applies the recorded levels and gains.
   const auto* output = reinterpret_cast<const float*>(prepared.pixels.bytes.get());
   for (unsigned y = 0; y < prepared.host_extent.height; y += 17) {
     for (unsigned x = 0; x < prepared.host_extent.width; x += 19) {
@@ -286,7 +314,7 @@ TEST(GpuDagRawInput, ConvertedSonyLinearDngUsesItsOwnBlackAndWhiteLevels) {
           y * raw->imgdata.sizes.raw_width + x];
       const auto* pixel = output + y * (prepared.pixels.stride_bytes / sizeof(float)) + x * 4;
       for (int c = 0; c < 3; ++c) {
-        const float expected = std::max(0.0f, (static_cast<float>(sample[c]) - 1024.0f) / 15359.0f);
+        const float expected = static_cast<float>(sample[c]);
         ASSERT_NEAR(pixel[c], expected, 1e-6f) << "pixel " << x << ',' << y << " channel " << c;
       }
       EXPECT_FLOAT_EQ(pixel[3], 1.0f);

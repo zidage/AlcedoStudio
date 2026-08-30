@@ -148,6 +148,23 @@ auto OrientedSize(uint32_t width, uint32_t height, int flip) -> std::pair<uint32
 
 }  // namespace
 
+void EncodeLinearizeRgb(void* command_buffer, void* rgba, const RawRgbLinearizationParams& params) {
+#ifndef ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH
+  throw std::runtime_error("Metal RGB linearization metallib path is not configured.");
+#else
+  auto  pipeline = Pipeline(ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH, "linearize_rgb",
+                            "Metal RGB linearization");
+  auto* image    = Texture(rgba, "RGB");
+  auto  compute  = Encoder(CommandBuffer(command_buffer));
+  compute->setComputePipelineState(pipeline.get());
+  compute->setTexture(image, 0);
+  compute->setBytes(&params, sizeof(params), 0);
+  Dispatch(compute.get(), pipeline.get(), static_cast<uint32_t>(image->width()),
+           static_cast<uint32_t>(image->height()));
+  compute->endEncoding();
+#endif
+}
+
 void EncodeToLinearRef(void* command_buffer, void* src_r16u, void* dst_r32f,
                        const RawLinearizationParams& linearization, const RawCfaPattern& pattern) {
   auto* buffer = CommandBuffer(command_buffer);

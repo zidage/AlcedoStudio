@@ -325,7 +325,7 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
                                      : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 3;
     cv::Mat           view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
-    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(CropMatToDecodeArea(view, sensor), raw_data.color);
+    CropMatToDecodeArea(view, sensor).convertTo(rgb32f, CV_32F);
   } else if (raw_data.float3_image != nullptr) {
     const std::size_t row_step = sizes.raw_pitch != 0
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
@@ -337,8 +337,9 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
                                      : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 4;
     cv::Mat           view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
-    rgb32f = ExtractRgb32f(
-        raw_norm::ConvertUnpackedRgbToFloat(CropMatToDecodeArea(view, sensor), raw_data.color));
+    cv::Mat           rgba32f;
+    CropMatToDecodeArea(view, sensor).convertTo(rgba32f, CV_32F);
+    rgb32f = ExtractRgb32f(rgba32f);
   } else if (raw_data.float4_image != nullptr && idata.colors == 3) {
     const std::size_t row_step = sizes.raw_pitch != 0
                                      ? static_cast<std::size_t>(sizes.raw_pitch)
@@ -609,6 +610,9 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
   }
 
   if (kind == RawInputKind::DebayeredRgb) {
+    const auto& data        = raw->imgdata.rawdata;
+    input.rgb_linearization = raw_norm::BuildRgbLinearization(
+        data.color, data.color3_image != nullptr || data.color4_image != nullptr);
     input.pixels      = CopyDebayeredRgbPlane(*raw, input.sensor);
     input.host_extent = input.pixels.extent;
     input.input_kind  = RawInputKind::DebayeredRgb;

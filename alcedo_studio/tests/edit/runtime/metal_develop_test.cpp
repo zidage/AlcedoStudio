@@ -14,6 +14,7 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "decoded_rgb_test_support.hpp"
 #include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 #include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
@@ -27,9 +28,9 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/graph_compiler.hpp"
-#include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
+#include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "metal/compute_pipeline_cache.hpp"
@@ -222,6 +223,26 @@ auto MakeSrcImage(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba
 }
 
 }  // namespace
+
+TEST_F(MetalDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
+  gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
+  gpu_dag_test::VerifyRgbWarpPublishes<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
+  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::Metal);
+}
+
+TEST_F(MetalDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<MetalRenderDevice>("DSC04739.ARW", ImageType::ARW, "metal");
+}
+
+TEST_F(MetalDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<MetalRenderDevice>("DSC04739_dng.dng", ImageType::DNG, "metal");
+}
 
 TEST_F(MetalDevelopFixture, MetalDevelopLinearizeMatchesCudaReferenceWithinTolerance) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();

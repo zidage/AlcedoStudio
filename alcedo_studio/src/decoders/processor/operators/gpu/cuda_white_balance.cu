@@ -42,6 +42,34 @@ struct WBParams {
   float pattern_black[36];
 };
 
+__global__ void LinearizeRgbKernel(cv::cuda::PtrStepSz<float4> src, cv::cuda::PtrStep<float3> dst,
+                                   RawRgbLinearizationParams params) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= src.cols || y >= src.rows) return;
+  const float4 pixel     = src(y, x);
+  float        values[3] = {pixel.x, pixel.y, pixel.z};
+  for (int c = 0; c < 3; ++c) {
+    values[c] -= params.black[c];
+    if (params.integer_codes) values[c] = fmaxf(values[c], 0.0f);
+    values[c] *= params.scale[c];
+  }
+  dst(y, x) = make_float3(values[0], values[1], values[2]);
+}
+
+void LinearizeRgb(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst,
+                  const RawRgbLinearizationParams& params, cv::cuda::Stream* stream) {
+  if (src.type() != CV_32FC4 || dst.type() != CV_32FC3 || src.size() != dst.size()) {
+    throw std::runtime_error(
+        "CUDA::LinearizeRgb: expected RGBA source and preallocated RGB output");
+  }
+  const dim3 block(16, 16);
+  const dim3 grid((src.cols + 15) / 16, (src.rows + 15) / 16);
+  LinearizeRgbKernel<<<grid, block, 0, GetCudaStream(stream)>>>(src, dst, params);
+  CUDA_CHECK(cudaGetLastError());
+  MaybeWait(stream);
+}
+
 __global__ void ToLinearRefKernel(cv::cuda::PtrStep<float> image, int width, int height,
                                   WBParams wb_params, RawCfaPattern pattern) {
   // Calculate the global x and y coordinates of the pixel for this thread
@@ -145,7 +173,8 @@ void ToLinearRef(cv::cuda::GpuMat& image, LibRaw& raw_processor, const RawCfaPat
     wb_params.white_level[c]    = raw_curve.white_level[c];
     wb_params.wb_multipliers[c] = wb[c];
   }
-  wb_params.apply_white_balance = raw_processor.imgdata.color.as_shot_wb_applied != 1 ? 1 : 0;
+  wb_params.apply_white_balance =
+      (raw_processor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
   wb_params.black_tile_width    = 0;
   wb_params.black_tile_height   = 0;
   const int tile_width          = raw_processor.imgdata.rawdata.color.cblack[4];

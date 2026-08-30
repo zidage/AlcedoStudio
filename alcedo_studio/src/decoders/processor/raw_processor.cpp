@@ -215,8 +215,8 @@ auto ExtractRgbFromFourChannel(const cv::Mat& src) -> cv::Mat {
   return rgb;
 }
 
-auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t& idata)
-    -> cv::Mat {
+auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t& idata,
+                        bool normalize_on_cpu) -> cv::Mat {
   const auto& sizes      = raw_data.sizes;
   const int   raw_width  = static_cast<int>(sizes.raw_width);
   const int   raw_height = static_cast<int>(sizes.raw_height);
@@ -227,8 +227,11 @@ auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t
                                 : static_cast<size_t>(raw_width) * sizeof(uint16_t) * 3;
     cv::Mat      view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
     cv::Mat      rgb32f;
-    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(
-        CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop), raw_data.color);
+    const auto   cropped = CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop);
+    if (normalize_on_cpu)
+      rgb32f = raw_norm::ConvertUnpackedRgbToFloat(cropped, raw_data.color);
+    else
+      cropped.convertTo(rgb32f, CV_32F);
     return BuildOpaqueRgbaFromRgb(rgb32f);
   }
 
@@ -249,7 +252,10 @@ auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t
     cv::Mat      rgb16 = ExtractRgbFromFourChannel(
         CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop));
     cv::Mat rgb32f;
-    rgb32f = raw_norm::ConvertUnpackedRgbToFloat(rgb16, raw_data.color);
+    if (normalize_on_cpu)
+      rgb32f = raw_norm::ConvertUnpackedRgbToFloat(rgb16, raw_data.color);
+    else
+      rgb16.convertTo(rgb32f, CV_32F);
     return BuildOpaqueRgbaFromRgb(rgb32f);
   }
 
@@ -475,12 +481,26 @@ auto RawProcessor::Process() -> ImageBuffer {
   params_.gpu_backend_ = ResolveRuntimeRawGpuBackend(params_.gpu_backend_);
 
   if (input_kind_ == RawInputKind::DebayeredRgb) {
-    params_.highlights_reconstruct_ = false;
-    process_buffer_                 = {BuildDirectRgbRgba(raw_data_, raw_processor_.imgdata.idata)};
+    process_buffer_ = {BuildDirectRgbRgba(raw_data_, raw_processor_.imgdata.idata,
+                                          !IsRawGpuBackend(params_.gpu_backend_))};
     runtime_color_context_.output_in_camera_space_ = true;
 
     if (IsRawGpuBackend(params_.gpu_backend_)) {
       return ProcessGpu();
+    }
+
+    if ((raw_data_.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) != 0) {
+      // Explicit CPU backend: restore the same unbalanced camera space as GPU pack.
+      (void)raw_norm::BuildRgbLinearization(raw_data_.color, false);
+      auto& rgb = process_buffer_.GetCPUData();
+      for (int y = 0; y < rgb.rows; ++y) {
+        auto* row = rgb.ptr<cv::Vec4f>(y);
+        for (int x = 0; x < rgb.cols; ++x) {
+          for (int c = 0; c < 3; ++c) {
+            row[x][c] *= raw_data_.color.cam_mul[1] / raw_data_.color.cam_mul[c];
+          }
+        }
+      }
     }
 
     ApplyGeometricCorrections();
