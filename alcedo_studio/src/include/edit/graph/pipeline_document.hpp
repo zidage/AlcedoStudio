@@ -60,8 +60,19 @@ class PipelineDocument {
   bool                topology_dirty_ = true;
 };
 
+/// Product Default Color Grade exposure, in EV. Baked by @ref CreateDefaultPipelineDocument.
+inline constexpr float kDefaultPipelineExposureEv = 1.5f;
+/// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
+inline constexpr float kDefaultPipelineSaturation = 1.3f;
+
 /**
- * @brief Three-node default: Develop -> Primary Color Grade -> DRT.
+ * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT.
+ *
+ * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with
+ * @ref kDefaultPipelineExposureEv and @ref kDefaultPipelineSaturation applied
+ * in this factory. Does not require legacy stage remirror.
+ *
+ * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
 

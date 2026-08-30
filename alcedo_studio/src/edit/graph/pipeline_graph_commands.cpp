@@ -200,7 +200,7 @@ auto AddCleanColorGrade(PipelineDocument& candidate, const NodeId& before_node_i
   const PortId to_port    = incoming->to_port;
   const NodeId inserted_id = new_id;
   candidate.Graph().Disconnect(predecessor, from_port, before_node_id, to_port);
-  candidate.Graph().AddNode(ColorGradeNodeModel::MakeDefault(inserted_id));
+  candidate.Graph().AddNode(CreateCleanColorGradeNode(inserted_id));
   candidate.Graph().Connect(predecessor, kImagePort, inserted_id, kImagePort);
   candidate.Graph().Connect(inserted_id, kImagePort, before_node_id, kImagePort);
   return CommitOrRestore(candidate, before_json);

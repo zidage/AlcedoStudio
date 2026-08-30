@@ -12,6 +12,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/pass_kind.hpp"
 
@@ -188,6 +189,38 @@ TEST(GpuDagModelGraph, GraphMutationInverseRestoresCanonicalDocumentJson) {
   EXPECT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.b"}, false).empty());
   EXPECT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.b"}, true).empty());
   EXPECT_EQ(DocumentJson(document), two_grades);
+}
+
+TEST(GpuDagModelGraph, AddCleanColorGradeDoesNotCopyDefaultExposureOrSaturation) {
+  auto document = CreateDefaultPipelineDocument();
+  const auto* primary = document.PrimaryGrade();
+  ASSERT_NE(primary, nullptr);
+  const auto* primary_exposure = dynamic_cast<const ExposureModel*>(
+      primary->FindAdjustmentByType(type_ids::Exposure()));
+  const auto* primary_saturation = dynamic_cast<const SaturationModel*>(
+      primary->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(primary_exposure, nullptr);
+  ASSERT_NE(primary_saturation, nullptr);
+  EXPECT_FLOAT_EQ(primary_exposure->Value(), 1.5f);
+  EXPECT_FLOAT_EQ(primary_saturation->Value(), 1.3f);
+
+  const NodeId added{"grade.extra"};
+  EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, added).empty());
+  const auto* inserted =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(added));
+  ASSERT_NE(inserted, nullptr);
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      inserted->FindAdjustmentByType(type_ids::Exposure()));
+  const auto* saturation = dynamic_cast<const SaturationModel*>(
+      inserted->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 0.0f);
+  EXPECT_FLOAT_EQ(saturation->Value(), 1.0f);
+  EXPECT_EQ(inserted->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  EXPECT_EQ(inserted->FindAdjustmentByType(type_ids::Sharpen()), nullptr);
+  EXPECT_EQ(inserted->FindAdjustmentByType(type_ids::Halation()), nullptr);
+  EXPECT_EQ(inserted->FindAdjustmentByType(type_ids::FilmGrain()), nullptr);
 }
 
 TEST(GpuDagModelGraph, GraphCompilerSkipsGradePassWhenBackboneHasNoColorGrade) {

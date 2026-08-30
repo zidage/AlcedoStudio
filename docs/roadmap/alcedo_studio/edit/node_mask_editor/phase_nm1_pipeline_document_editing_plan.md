@@ -2,9 +2,9 @@
 
 Date: 2026-08-29
 
-Status: in progress — NM1.1 complete; NM1.2–NM1.5 not started.
+Status: in progress — NM1.1–NM1.2 complete; NM1.3–NM1.5 not started.
 
-Branch: `feature/pipeline_document_migration`
+Branch: `feature/pipeline-document-editing`
 
 Base: `origin/main` at NM0 merge (`d5a96267`, QuickQanava pin already on main).
 
@@ -198,7 +198,7 @@ NM1.1 主链 validation 与图命令（含完整删除）
   -> NM1.5 产品写入权威与 Save/Apply 停止用 stage 覆盖新文档
 ```
 
-同一分支 `feature/pipeline_document_migration` 上按序落地。可以按 `NM1.1+NM1.2`、`NM1.3`、`NM1.4`、`NM1.5` 拆 PR；不要把 NM2–NM8 塞进本分支。
+同一分支 `feature/pipeline-document-editing` 上按序落地。可以按 `NM1.1+NM1.2`、`NM1.3`、`NM1.4`、`NM1.5` 拆 PR；不要把 NM2–NM8 塞进本分支。
 
 ---
 
@@ -404,6 +404,56 @@ UI or test tries to build a Clean node by patching Default
 | `DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree` | 不经 importer，Default Grade 即为 1.5 / 1.3 |
 | `MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments` | 0 EV、sat 1.0、无四项后处理 |
 | `AddCleanColorGradeDoesNotCopyDefaultExposureOrSaturation` | 新节点不是 +1.5 / 1.3 |
+
+##### Phase NM1.2 completion record (2026-08-30)
+
+**Status:** complete — Default document factory bakes +1.5 EV / saturation 1.3; Clean node factory is identity without the four post adjustments.
+
+**Primary success call chain:**
+
+```text
+CreateDefaultPipelineDocument
+  -> ColorGradeNodeModel::MakeDefault (catalog identity, 17 adjustments)
+  -> ApplyDefaultPipelineLook (exposure_ev 1.5, saturation 1.3)
+  -> Validate + ValidateImageBackbone empty
+```
+
+```text
+AddCleanColorGrade
+  -> CreateCleanColorGradeNode / ColorGradeNodeModel::MakeClean
+  -> insert + reconnect candidate backbone
+```
+
+**Primary failure call chain:**
+
+```text
+UI or test tries to build a Clean node by patching Default
+  -> not an API
+  -> MakeClean is a separate type list (13 adjustments); patched Default JSON still differs
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree` | `GpuDagModelGraphTest` | PASS |
+| `MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments` | `GpuDagModelGraphTest` | PASS |
+| `AddCleanColorGradeDoesNotCopyDefaultExposureOrSaturation` | `GpuDagModelGraphTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest
+ctest --test-dir build/debug -R GpuDagModelGraphTest --output-on-failure
+```
+
+Suite totals: `GpuDagModelGraphTest` 46/46 PASS.
+
+**Checklist / exit condition:** NM1.2 Default vs Clean factories, baked product look without remirror, and AddClean using MakeClean are done. NM1 overall items for typed targets, thumbnail DAG, and product Save/Apply remain for NM1.3–NM1.5.
+
+**LOC note (grill-code-review):** largest changed files — `pipeline_graph_commands.cpp` 318, `pipeline_graph_command_test.cpp` 255, `color_grade_node_model.cpp` 216, `legacy_import_test.cpp` 209, `pipeline_document.cpp` 176, `default_pipeline_test.cpp` 155. All under 1000 LOC. Clean vs Default lists are separate factories; product look is applied only in `CreateDefaultPipelineDocument`.
+
+**Remaining gaps:** typed `EditorParameterTarget` and history live document writes (NM1.3); thumbnail/snapshot DAG (NM1.4); product Apply/Save still remirror from stages (NM1.5). `pipeline_defaults::kCleanBaseline*` remains for the CPU compat layer. Default Color Grade still includes Clarity/Sharpen/Halation/Film Grain until NM2.
 
 ---
 
@@ -640,7 +690,7 @@ cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target Thu
 - [ ] 双向 mirror 仅作为旧项目 / 旧 payload 兼容层存在，且有测试锁住「不得覆盖新图结构」
 - [ ] Thumbnail / analysis / 同 snapshot 像素路径 DAG 渲染，不经 stage ApplyOnto
 - [x] Add / Remove（含 primary）/ Reconnect 原子、失败回滚、canonical JSON 可逆
-- [ ] Default 三节点工厂自带 `+1.5 EV` / saturation `1.3`；Clean 为 identity 且无四项后处理
+- [x] Default 三节点工厂自带 `+1.5 EV` / saturation `1.3`；Clean 为 identity 且无四项后处理
 - [ ] `EditorParameterTarget` 锁定；Mask target 拒绝
 - [ ] History live Undo 恢复文档值（payload schema 仍可是旧的）
 - [ ] 生产 UI 仍无新增节点入口
@@ -659,6 +709,7 @@ cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target Thu
 ## 16. Completion records
 
 NM1.1 (2026-08-29): complete — recorded under §7.
+NM1.2 (2026-08-30): complete — recorded under §8.
 
 后续子 Phase 完成后按同一模板追加。模板：
 

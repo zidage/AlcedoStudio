@@ -18,7 +18,8 @@ namespace alcedo {
  *
  * The new node becomes the scene-image predecessor of @p before_node_id. When
  * @p before_node_id is DRT, the insert is after the last Color Grade or Develop.
- * @p new_id is the stable NodeId of the inserted node.
+ * @p new_id is the stable NodeId of the inserted node. The node is
+ * @ref CreateCleanColorGradeNode, not a copy of the product Default look.
  *
  * @return Empty on success. On failure @p candidate is left unchanged.
  */

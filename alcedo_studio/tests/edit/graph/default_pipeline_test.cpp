@@ -7,9 +7,11 @@
 #include <cstddef>
 #include <string>
 
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
 
@@ -76,6 +78,67 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
   for (const auto& edge : document.Graph().Edges()) {
     EXPECT_NE(edge.to_port, PortId{"mask"});
   }
+}
+
+TEST(GpuDagModelGraph, DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree) {
+  const auto document = CreateDefaultPipelineDocument();
+  const auto* grade   = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      grade->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 1.5f);
+
+  const auto* saturation = dynamic_cast<const SaturationModel*>(
+      grade->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(saturation, nullptr);
+  EXPECT_FLOAT_EQ(saturation->Value(), 1.3f);
+
+  EXPECT_NE(document.Graph().FindNode(NodeId{"grade.primary"}), nullptr);
+  EXPECT_TRUE(document.Graph().Validate().empty());
+  EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
+}
+
+TEST(GpuDagModelGraph, MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments) {
+  const auto from_free   = CreateCleanColorGradeNode(NodeId{"grade.clean"});
+  const auto from_static = ColorGradeNodeModel::MakeClean(NodeId{"grade.clean"});
+  ASSERT_NE(from_free, nullptr);
+  ASSERT_NE(from_static, nullptr);
+  EXPECT_EQ(from_free->ToJson().dump(), from_static->ToJson().dump());
+
+  const auto* grade = from_free.get();
+  EXPECT_TRUE(grade->Enabled());
+  EXPECT_FLOAT_EQ(grade->Mix(), 1.0f);
+  ASSERT_EQ(grade->AdjustmentCount(), 13u);
+  EXPECT_EQ(grade->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  EXPECT_EQ(grade->FindAdjustmentByType(type_ids::Sharpen()), nullptr);
+  EXPECT_EQ(grade->FindAdjustmentByType(type_ids::Halation()), nullptr);
+  EXPECT_EQ(grade->FindAdjustmentByType(type_ids::FilmGrain()), nullptr);
+  for (std::size_t i = 0; i < grade->AdjustmentCount(); ++i) {
+    EXPECT_TRUE(grade->AdjustmentAt(i).IsDefault()) << i;
+  }
+
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      grade->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 0.0f);
+  const auto* saturation = dynamic_cast<const SaturationModel*>(
+      grade->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(saturation, nullptr);
+  EXPECT_FLOAT_EQ(saturation->Value(), 1.0f);
+
+  auto patched_default = ColorGradeNodeModel::MakeDefault(NodeId{"grade.clean"});
+  ASSERT_EQ(patched_default->AdjustmentCount(), 17u);
+  auto* default_exposure = dynamic_cast<ExposureModel*>(
+      patched_default->FindAdjustmentByType(type_ids::Exposure()));
+  auto* default_saturation = dynamic_cast<SaturationModel*>(
+      patched_default->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(default_exposure, nullptr);
+  ASSERT_NE(default_saturation, nullptr);
+  default_exposure->SetValue(0.0f);
+  default_saturation->SetValue(1.0f);
+  EXPECT_NE(patched_default->ToJson().dump(), from_free->ToJson().dump());
 }
 
 TEST(GpuDagModelGraph, BuiltinCatalogTypeIdsAreUnique) {

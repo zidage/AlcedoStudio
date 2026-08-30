@@ -45,6 +45,16 @@ auto NodeFromJson(const nlohmann::json& json) -> std::unique_ptr<INodeModel> {
   throw std::runtime_error("Unknown node type: " + type);
 }
 
+void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
+  auto* exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
+  auto* saturation = grade.FindAdjustmentByType(type_ids::Saturation());
+  if (exposure == nullptr || saturation == nullptr) {
+    throw std::logic_error("Default Color Grade is missing exposure or saturation");
+  }
+  exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
+  saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
+}
+
 }  // namespace
 
 auto PipelineDocument::Develop() -> DevelopNodeModel* {
@@ -131,7 +141,9 @@ auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument 
 auto CreateDefaultPipelineDocument() -> PipelineDocument {
   PipelineDocument document;
   document.Graph().AddNode(std::make_unique<DevelopNodeModel>(NodeId{"develop"}));
-  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"}));
+  auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
+  ApplyDefaultPipelineLook(*grade);
+  document.Graph().AddNode(std::move(grade));
   document.Graph().AddNode(std::make_unique<DrtNodeModel>(NodeId{"drt"}));
   document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
                            PortId{"image"});
