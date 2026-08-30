@@ -19,7 +19,7 @@
 namespace alcedo {
 
 /// Bumped when LibRaw unpack, CFA/RGB downsample, or active-area mapping rules change.
-inline constexpr std::uint32_t kRawInputPreparationVersion = 4;
+inline constexpr std::uint32_t kRawInputPreparationVersion = 5;
 
 /**
  * @brief FNV-1a 64-bit hash of opaque bytes. Used for encoded-source identity, not pixels.

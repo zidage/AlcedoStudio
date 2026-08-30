@@ -185,14 +185,33 @@ TEST(GpuDagRawInput, SonyDecodedRgbRejectsInvalidRangeAndHonorsChannelBlackOffse
   EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
 }
 
-TEST(GpuDagRawInput, OtherIntegerRgbKeepsExistingFullRangeConversion) {
+TEST(GpuDagRawInput, FullRangeIntegerRgbUsesZeroBlackAnd65535White) {
   auto raw                              = std::make_unique<LibRaw>();
   raw->imgdata.color.as_shot_wb_applied = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_CANON;
+  raw->imgdata.color.black = 0;
+  raw->imgdata.color.maximum = 65535;
   cv::Mat    source(1, 1, CV_16UC3, cv::Scalar(0, 32768, 65535));
   const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, raw->imgdata.color);
   EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[0], 0.0f);
   EXPECT_NEAR(result.at<cv::Vec3f>(0, 0)[1], 32768.0f / 65535.0f, 1e-7f);
   EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[2], 1.0f);
+}
+
+TEST(GpuDagRawInput, IntegerRgbUsesDecodedLevelsWithoutCameraOrFormatFlags) {
+  auto raw = std::make_unique<LibRaw>();
+  auto& color = raw->imgdata.color;
+  ASSERT_EQ(color.as_shot_wb_applied, 0);
+  ASSERT_EQ(raw->imgdata.idata.dng_version, 0U);
+  color.black = 0;
+  color.maximum = 16383;
+  for (int c = 0; c < 3; ++c) color.cblack[c] = 1024;
+  cv::Mat source(1, 1, CV_16UC3, cv::Scalar(1024, 8192, 16383));
+  const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, color);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[0], 0.0f);
+  EXPECT_NEAR(result.at<cv::Vec3f>(0, 0)[1], 7168.0f / 15359.0f, 1e-6f);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[2], 1.0f);
+  color.maximum = 0;
+  EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
 }
 
 TEST(GpuDagRawInput, SonyA7CiiYcbcrFileLoadsNormalizedRgbAtFullResolution) {
@@ -233,6 +252,42 @@ TEST(GpuDagRawInput, SonyA7CiiYcbcrFileLoadsNormalizedRgbAtFullResolution) {
         const float expected = std::max(0.0f, (static_cast<float>(sample[c]) - 1024.0f) / 16512.0f);
         EXPECT_NEAR(pixel[c], expected, 1e-6f);
         EXPECT_TRUE(std::isfinite(pixel[c]));
+      }
+      EXPECT_FLOAT_EQ(pixel[3], 1.0f);
+    }
+  }
+}
+
+TEST(GpuDagRawInput, ConvertedSonyLinearDngUsesItsOwnBlackAndWhiteLevels) {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "sony" /
+                    "a7cii" / "ycbcr_compressed" / "DSC04739_dng.dng";
+  if (!std::filesystem::exists(path)) GTEST_SKIP() << "Linear DNG fixture is missing: " << path;
+  auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty());
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(encoded.data(), encoded.size()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  ASSERT_NE(raw->imgdata.rawdata.color4_image, nullptr);
+  ASSERT_NE(raw->imgdata.idata.dng_version, 0U);
+  ASSERT_EQ(raw->imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_SONY, 0);
+  for (int c = 0; c < 3; ++c) {
+    ASSERT_EQ(raw->imgdata.color.black + raw->imgdata.color.cblack[c], 1024U);
+    ASSERT_EQ(raw->imgdata.color.linear_max[c], 16383);
+  }
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
+  ASSERT_EQ(prepared.pixels.format, HostPixelFormat::F32Rgba);
+  ASSERT_EQ(prepared.host_extent, (Extent2D{4622, 3078}));
+  // Preserve the loader's existing decoded area; only sample levels change here.
+  const auto* output = reinterpret_cast<const float*>(prepared.pixels.bytes.get());
+  for (unsigned y = 0; y < prepared.host_extent.height; y += 17) {
+    for (unsigned x = 0; x < prepared.host_extent.width; x += 19) {
+      const auto* sample = raw->imgdata.rawdata.color4_image[
+          y * raw->imgdata.sizes.raw_width + x];
+      const auto* pixel = output + y * (prepared.pixels.stride_bytes / sizeof(float)) + x * 4;
+      for (int c = 0; c < 3; ++c) {
+        const float expected = std::max(0.0f, (static_cast<float>(sample[c]) - 1024.0f) / 15359.0f);
+        ASSERT_NEAR(pixel[c], expected, 1e-6f) << "pixel " << x << ',' << y << " channel " << c;
       }
       EXPECT_FLOAT_EQ(pixel[3], 1.0f);
     }

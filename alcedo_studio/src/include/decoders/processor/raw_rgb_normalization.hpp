@@ -15,26 +15,21 @@ namespace alcedo::raw_norm {
 
 /**
  * Convert unpacked integer RGB to float without applying white balance again.
- * Sony YCbCr decoders leave a black offset in RGB and publish its decoded range
- * in black/maximum. Their linear_max still describes the original metadata range.
- * Other integer RGB inputs retain the existing full-range conversion.
+ * Use the post-unpack black/cblack and maximum for every file format. Integer
+ * storage does not imply a 0..65535 signal range. linear_max describes sensor
+ * linearity limits and can remain unchanged when a decoder converts to RGB.
  */
 inline auto ConvertUnpackedRgbToFloat(const cv::Mat& source, const libraw_colordata_t& color)
     -> cv::Mat {
   CV_Assert(source.type() == CV_16UC3 || source.type() == CV_16UC4);
-  cv::Mat result;
-  if ((color.as_shot_wb_applied & LIBRAW_ASWB_SONY) == 0) {
-    source.convertTo(result, CV_32F, 1.0 / 65535.0);
-    return result;
-  }
-
+  cv::Mat              result;
   std::array<float, 3> black{};
   std::array<float, 3> scale{};
   for (int c = 0; c < 3; ++c) {
     black[c]          = static_cast<float>(color.black) + static_cast<float>(color.cblack[c]);
     const float range = static_cast<float>(color.maximum) - black[c];
     if (!(range > 0.0f)) {
-      throw std::runtime_error("Sony decoded RGB white level must exceed its black level");
+      throw std::runtime_error("Decoded RGB white level must exceed its black level");
     }
     scale[c] = 1.0f / range;
   }

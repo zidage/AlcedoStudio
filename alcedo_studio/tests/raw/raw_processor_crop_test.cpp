@@ -15,7 +15,7 @@
 namespace alcedo::detail {
 namespace {
 
-TEST(RawProcessorRgbTest, SonyDecodedRgbNormalizesBeforeCpuOutput) {
+TEST(RawProcessorRgbTest, UnmarkedDecodedRgbNormalizesBeforeCpuOutput) {
   auto    raw  = std::make_unique<LibRaw>();
   auto&   data = raw->imgdata.rawdata;
   cv::Mat pixels(2, 3, CV_16UC4, cv::Scalar(1024, 9280, 17536, 0));
@@ -25,7 +25,7 @@ TEST(RawProcessorRgbTest, SonyDecodedRgbNormalizesBeforeCpuOutput) {
   data.sizes.raw_pitch                      = static_cast<unsigned>(pixels.step);
   data.color.black                          = 1024;
   data.color.maximum                        = 17536;
-  data.color.as_shot_wb_applied             = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_SONY;
+  data.color.as_shot_wb_applied             = 0;
   raw->imgdata.idata.colors                 = 3;
   raw->imgdata.idata.filters                = 0;
   RawParams params;
