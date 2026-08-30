@@ -354,7 +354,7 @@ def_library(EditorSessionEditController
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
     PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
-    PRIVATE_DEPS EditHistory
+    PRIVATE_DEPS EditHistory EditorAdjustmentPipeline
 )
 
 def_library(EditorMiniGitJournalFold
@@ -384,6 +384,13 @@ def_library(EditorAdjustmentPipeline
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
     PUBLIC_DEPS EditPipeline EditHistory JSON
+)
+
+def_library(EditorPipelineCommandService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
+    PUBLIC_DEPS EditGraph JSON
 )
 
 def_library(EditorSessionService

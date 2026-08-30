@@ -23,11 +23,14 @@ class EditorHistoryMutation {
   explicit EditorHistoryMutation(EditorHistoryState& state);
 
   /// Capture the committed operator value before interactive preview begins.
+  /// @pre @p patch.target is a complete production target. Incomplete targets are
+  ///      rejected; this path does not fill owner_kind or node_id.
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool;
 
   /// Append one settled adjustment and advance the live working head.
+  /// Live effect writes PipelineGuard::document_ using the locked target.
   auto CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::EditorAdjustmentPatch& patch, std::string* error) -> bool;
 

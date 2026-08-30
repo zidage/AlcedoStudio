@@ -83,6 +83,7 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto AdjustmentAt(std::size_t index) -> IOperatorModel&;
   [[nodiscard]] auto AdjustmentAt(std::size_t index) const -> const IOperatorModel&;
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
+  [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel*;
 

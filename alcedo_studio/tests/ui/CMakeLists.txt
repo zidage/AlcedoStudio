@@ -191,6 +191,8 @@ target_include_directories(EditorSessionHistoryPortTest
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
   EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditGraph
   EditorMiniGitMaterializer
   PipelineMgmtService
   ProjectService

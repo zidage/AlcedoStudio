@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: NM0 complete；NM1 in progress；NML 与 NM2–NM8 planned。
+Status: NM0 complete；NM1 in progress；NM2–NM8 planned。NML cancelled (2026-08-30).
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -10,7 +10,10 @@ Status: NM0 complete；NM1 in progress；NML 与 NM2–NM8 planned。
 调整面板、多蒙版绘制、编辑历史和 Version 工作流。
 
 本文件定义背景、产品语义、目标架构、跨模块边界、一级 Phase 顺序、主要调用链、风险和
-最终验收范围。它固定 `NM0` 到 `NM8` 以及兼容升级 Phase `NML` 的阶段门槛，但不预先写每个阶段内部的详细执行步骤。
+最终验收范围。它固定 `NM0` 到 `NM8` 的阶段门槛，但不预先写每个阶段内部的详细执行步骤。
+一级 Phase `NML`（旧 stage 存储升级到默认 DAG）于 2026-08-30 取消。产品不打开 DAG document
+之前的 stage-only 项目，也不迁移旧 mini-git commit。后续 Phase 删除 CPU stage 表，不做旧
+项目升级。详细措辞见 [NM1 执行方案第 3.1 节](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md)。
 开始某个一级 Phase 前，再根据当时的代码状态创建对应执行方案；该文件继续拆成
 `NMx.1`、`NMx.2` 等具体子 Phase，并决定实际 PR/branch 粒度。执行方案可以调整内部拆分，
 但不得无说明地越过本文的一级依赖或改变已经锁定的产品语义。
@@ -209,7 +212,9 @@ Mask 的唯一组合语义是 Union。
 - AI segmentation mask；
 - 在节点编辑器中显示内部 GPU pass；
 - detached HEAD；
-- 新的管线 merge 操作。
+- 新的管线 merge 操作；
+- 打开或升级 DAG document 之前的 stage-only 项目；
+- 把旧 mini-git commit 从 stage 身份迁移成 DAG mutation。
 
 ---
 
@@ -605,8 +610,10 @@ EditorParameterTarget
   field_key
 ```
 
-每次输入序列开始时锁定 target。即使用户在拖动期间通过快捷键或其他 UI 改变 selected node，
-当前序列也必须继续写入开始时的 NodeId/MaskId，或者明确取消；不能把后半段值写到另一个节点。
+每个 patch 必须携带完整 `EditorParameterTarget`。缺少 `owner_kind`、`node_id` 或 Color Grade
+的 `adjustment_instance_id` 时拒绝写入；不根据 field catalog 或选中节点填入缺省 target。
+输入序列的第一个合法 patch 锁定 target；同一序列的后续完整 patch 复用该锁定。详见 NM1
+执行方案第 3.1 节。
 
 ### 11.2 Mutation 分类
 
@@ -1126,8 +1133,8 @@ Adjustment Transfer Paste
 | Phase | Status | 未来执行方案 | 阶段结果 |
 | --- | --- | --- | --- |
 | NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
-| NM1 — PipelineDocument Editing Foundation | in progress | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | PipelineDocument 成为新编辑写入权威；图命令含完整删除；thumbnail DAG；stage 仅作兼容镜像 |
-| NML — Legacy Stage Compatibility and Default DAG Upgrade | planned | `node_mask_editor/phase_nml_legacy_stage_dag_upgrade_plan.md` | 旧 stage 存储可审计地升级为默认三节点 DAG；stage 表仍可作读取兼容层 |
+| NM1 — PipelineDocument Editing Foundation | in progress | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | PipelineDocument 成为新编辑写入权威；图命令含完整删除；thumbnail DAG；无 stage 产品镜像；无图存储拒绝打开 |
+| NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
 | NM2 — Multi-Grade Runtime and Ownership | planned | `node_mask_editor/phase_nm2_multi_grade_runtime_plan.md` | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
 | NM3 — Multi-Mask Model and Runtime | planned | `node_mask_editor/phase_nm3_multi_mask_runtime_plan.md` | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
 | NM4 — History, Version, Recovery, and Paste | planned | `node_mask_editor/phase_nm4_history_version_paste_plan.md` | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
@@ -1243,26 +1250,28 @@ macOS debug linked `libQuickQanava.a` (Homebrew Qt 6.9.2, clang 21.1.1).
 **阶段边界：** 让 `PipelineDocument` 成为新编辑、history live mutation 和 thumbnail 像素的
 写入/渲染权威；增加候选文档 mutation、完整 graph validation、原子 Add/Remove/Reconnect
 （含删除 Default / `grade.primary`）、stable IDs、Clean Color Grade 创建入口、typed
-parameter target 和失败回滚。`CPUPipelineExecutor` stage 表作为旧项目和旧 history payload
-的兼容镜像保留。调整面板可以暂时继续展示现有产品 UI，但所有新写入必须经过新
-app service API。Thumbnail 必须 DAG 渲染，不得先转到 stage 再出图。
+parameter target 和失败回滚。产品不保留 CPU stage 表作为旧项目兼容镜像。进程内 stage 表
+可以暂时留在代码中，直到后续 Phase 删除。NM 执行期间不要求现有 adjustment UI 继续可用；
+每个 patch 必须带完整 typed target。Thumbnail 必须 DAG 渲染，不得先转到 stage 再出图。无可用
+图的存储拒绝打开。
 
 **退出条件：** 新文档编辑不被 live stages 覆盖；无效 mutation 不改变 document/history
 head；默认三节点和 Clean node 行为有 model tests；thumbnail/analysis 走 DAG；UI 还未开放
-新增节点入口。旧 stage 项目的持久升级不在本 Phase 完成。
+新增节点入口。产品不打开 DAG document 之前的项目。
 
-### 21.2a Phase NML — Legacy Stage Compatibility and Default DAG Upgrade
+### 21.2a Phase NML — 已取消（2026-08-30）
 
-**为什么单独成一级 Phase：** NM1 必须立刻停止把 stage 当作新编辑和 thumbnail 的源，但旧项目
-仍要能打开。把「一次性、可审计地把旧 stage 存储升级成默认三节点 DAG」塞进 NM1 会把兼容
-读取和数据升级缠在一起。History payload 的 typed 重构仍在 NM4。
+后续 Phase 将删除 CPU stage 表。产品 stage 镜像会变成随后删除的额外工作。把旧 stage
+项目升级为默认 DAG 会改写参数和 mini-git commit。工作量大。本产品不保留这些旧项目。
 
-**阶段边界：** 保留 stage 表作为读取兼容层；提供明确的升级路径，把旧 stage JSON / adapter
-写成当前默认三节点 `PipelineDocument` 并持久化；升级失败返回真实错误，不恢复 legacy 编辑
-路径，也不静默丢弃可读取的旧数据。开始本 Phase 时再写执行方案。
+替代规则：
 
-**退出条件：** 旧项目可以升级到默认三节点 DAG；升级后的 root/checkpoint 以文档为准；未能升级
-的数据仍可按 NM1 的兼容打开规则失败或只读打开，行为有测试。
+- 存储含有可用 format v2 图：打开。文档是编辑状态。
+- 存储只有 stage JSON 或 stage adapter、没有可用图：不要打开。返回真实错误。不要 import
+  成默认三节点图。不要改写 mini-git commit。
+- 后续 Phase 删除 CPU stage 表。该 Phase 不是旧项目升级。
+
+不要创建 `phase_nml_legacy_stage_dag_upgrade_plan.md`。
 
 ### 21.3 Phase NM2 — Multi-Grade Runtime and Parameter Ownership
 
@@ -1365,7 +1374,6 @@ service 路径；更新本文 completion record。
 ```text
 NM0 QuickQanava baseline
   -> NM1 PipelineDocument editing foundation
-  -> NML Legacy stage compatibility and default DAG upgrade
   -> NM2 Multi-grade runtime and ownership
   -> NM3 Multi-mask model and runtime
   -> NM4 History, Version, recovery, and Paste
@@ -1375,8 +1383,8 @@ NM0 QuickQanava baseline
   -> NM8 Product qualification and cutover
 ```
 
-NML 插在 NM1 与 NM2 之间，是因为多 Grade runtime 假定存储里已经是可执行的 DAG 文档。NM1
-期间旧项目仍靠 importer 和双向镜像打开，不把持久升级提前做完。
+NML 已取消。NM2 假定已打开的项目带有可用 DAG 文档。没有图的项目不会进入 NM2。后续
+Phase 删除 CPU stage 表。该删除不是旧项目升级。
 
 上一个 Phase 的退出条件是下一个 Phase 的输入。可以在前一个 Phase 接近完成时做只读审计或
 准备下一份执行方案，但不能提前向 production 暴露依赖尚未完成的操作。若实施证据证明必须
@@ -1538,9 +1546,9 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 
 症状：node panel 修改新 document，adjustment panel 仍修改 legacy stage，下一帧或保存时覆盖。
 
-处理：NM1 让新编辑、history live 和 thumbnail 以 `PipelineDocument` 为权威；stage 只保留为旧
-项目兼容镜像，且不得覆盖新图结构。旧存储的持久升级由 NML 完成。N5/N6 production 接入以
-NM1 写入权威为前置条件。
+处理：NM1 让新编辑、history live 和 thumbnail 以 `PipelineDocument` 为权威。产品不保留
+stage 镜像。NM1.5 从产品 Apply/Save 移除 stage 覆盖文档。无图存储拒绝打开。N5/N6
+production 接入以 NM1 写入权威为前置条件。后续 Phase 删除 CPU stage 表。
 
 ### 25.2 多 Grade 只在 compiler 表面循环
 
@@ -1598,6 +1606,7 @@ NM1 写入权威为前置条件。
 - [ ] Adjustment Transfer 只创建 Paste Version，不再创建新的 pipeline merge commit。
 - [ ] Mask raster asset 不可变，stroke Undo/Redo 不依赖被覆盖文件。
 - [ ] CUDA、OpenCL、Metal 不使用 CPU 或其他 backend 替代路径。
+- [ ] 无可用图的 stage-only 存储拒绝打开；产品路径不使用 stage 镜像。
 - [ ] Windows/macOS package 可加载 QuickQanava QML module 和全部新 panel。
 - [ ] 真实 RAW E2E、reopen、Version、Paste、性能和资源证据全部记录在最终资格验证记录中。
 

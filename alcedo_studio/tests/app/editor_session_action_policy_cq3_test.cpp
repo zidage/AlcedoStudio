@@ -18,6 +18,7 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
 
 namespace alcedo {
@@ -308,9 +309,7 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   // interactive Patch does not bump history_revision.
   openInteractive();
   const auto before = service_->history_revision();
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"ev":0.5})";
+  auto patch = WithColorGradeTarget({"exposure", R"({"ev":0.5})", false});
   (void)service_->Patch(patch);
   drainQueue();
   EXPECT_EQ(service_->history_revision(), before);

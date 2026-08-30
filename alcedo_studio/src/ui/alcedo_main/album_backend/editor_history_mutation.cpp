@@ -7,9 +7,12 @@
 #include <ctime>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
@@ -37,6 +40,49 @@ auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* e
   }
 }
 
+auto RestoreLivePipelineParams(HistoryWorkingState& state, const nlohmann::json& prior_pipeline)
+    -> void {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) {
+    return;
+  }
+  try {
+    auto restore_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+    state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+    state.pipeline_guard->pipeline_->SetExecutionStages();
+  } catch (...) {
+  }
+}
+
+auto RestoreLiveDocumentJson(HistoryWorkingState& state, const nlohmann::json& prior_document)
+    -> void {
+  if (!state.pipeline_guard || !state.pipeline_guard->document_) {
+    return;
+  }
+  try {
+    *state.pipeline_guard->document_ = alcedo::PipelineDocument::FromJson(prior_document);
+  } catch (...) {
+  }
+}
+
+auto ApplyDocumentFieldEdits(HistoryWorkingState& state, const std::vector<alcedo::EditCommit>& commits,
+                             bool backward, std::string* error) -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->document_) {
+    return true;
+  }
+  auto& live = *state.pipeline_guard->document_;
+  for (const auto& commit : commits) {
+    const auto found = state.document_edit_by_commit.find(commit.GetCommitHash());
+    if (found == state.document_edit_by_commit.end()) {
+      continue;
+    }
+    const auto& json = backward ? found->second.before_model_json : found->second.after_model_json;
+    if (!alcedo::PublishEditorParameterPatch(live, found->second.target, json, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// WAL-first head move: publish journal + unique history head, then rebuild the
 /// unique live pipeline from defaults + first-parent chain (plan §4.7). On live
 /// apply failure, revoke the WAL tail and restore the prior head.
@@ -45,6 +91,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
                                          std::string* error) -> bool {
   const auto prior_selection = state.history->WorkingSelection();
   nlohmann::json prior_pipeline;
+  nlohmann::json prior_document;
   if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
     try {
       // Structural head move: wait out Apply (incl. present) before locking.
@@ -54,6 +101,9 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
       if (error) *error = ex.what();
       return false;
     }
+  }
+  if (state.pipeline_guard && state.pipeline_guard->document_) {
+    prior_document = state.pipeline_guard->document_->ToJson();
   }
 
   const auto published = state.history->PublishPreparedHeadMove(prepared);
@@ -72,31 +122,30 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
       render_lock.unlock();
       std::string abandon_error;
       (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
-      try {
-        auto restore_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-        state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
-        state.pipeline_guard->pipeline_->SetExecutionStages();
-      } catch (...) {
-      }
+      RestoreLivePipelineParams(state, prior_pipeline);
+      RestoreLiveDocumentJson(state, prior_document);
       return false;
     }
+  }
+
+  if (!ApplyDocumentFieldEdits(state, prepared.traversed_commits, prepared.backward, error)) {
+    std::string abandon_error;
+    (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
+    RestoreLivePipelineParams(state, prior_pipeline);
+    RestoreLiveDocumentJson(state, prior_document);
+    return false;
   }
 
   if (!RefreshCommittedSnapshotFromLive(state, error)) {
     std::string abandon_error;
     (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
-    try {
-      if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
-        auto restore_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-        state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
-        state.pipeline_guard->pipeline_->SetExecutionStages();
-      }
-    } catch (...) {
-    }
+    RestoreLivePipelineParams(state, prior_pipeline);
+    RestoreLiveDocumentJson(state, prior_document);
     return false;
   }
   state.pipeline_guard->dirty_ = true;
   state.pending_before.clear();
+  state.pending_document_sequence.clear();
   state.recovered_head = false;
   return true;
 }
@@ -110,6 +159,50 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
+  const auto target_error =
+      alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
+  if (!target_error.empty()) {
+    if (error) *error = target_error;
+    return false;
+  }
+  if (!alcedo::ResolveEditorAdjustmentField(patch.field_key).has_value()) {
+    if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
+    return false;
+  }
+  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+
+  nlohmann::json patch_params;
+  try {
+    patch_params = patch.params_json.empty() ? nlohmann::json::object()
+                                             : nlohmann::json::parse(patch.params_json);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  if (!patch_params.is_object()) {
+    if (error) *error = "Editor adjustment params must be a JSON object";
+    return false;
+  }
+
+  auto sequence = state->pending_document_sequence.find(patch.field_key);
+  if (sequence == state->pending_document_sequence.end()) {
+    HistoryWorkingState::DocumentFieldEdit edit;
+    edit.target = patch.target;
+    if (!alcedo::ReadEditorParameterJson(*state->pipeline_guard->document_, edit.target,
+                                         &edit.before_model_json, error)) {
+      return false;
+    }
+    sequence = state->pending_document_sequence.emplace(patch.field_key, std::move(edit)).first;
+  }
+  const auto& locked_target = sequence->second.target;
+  if (!alcedo::PublishEditorParameterPatch(*state->pipeline_guard->document_, locked_target,
+                                           patch_params, error)) {
+    return false;
+  }
+
   if (state->pending_before.contains(patch.field_key)) return true;
 
   // Before-values for the WAL come from the derived committed snapshot, not the
@@ -117,6 +210,9 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   // GetParams float round-trips must not redefine the previous committed edit.
   alcedo::EditorAdjustmentOperatorState before;
   if (!ReadCommittedAdjustmentState(state->committed_snapshot, patch.field_key, &before, error)) {
+    (void)alcedo::PublishEditorParameterPatch(*state->pipeline_guard->document_, locked_target,
+                                              sequence->second.before_model_json, nullptr);
+    state->pending_document_sequence.erase(patch.field_key);
     return false;
   }
   state->pending_before.emplace(patch.field_key, std::move(before));
@@ -132,6 +228,12 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
+  const auto target_error =
+      alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
+  if (!target_error.empty()) {
+    if (error) *error = target_error;
+    return false;
+  }
   const auto spec = alcedo::ResolveEditorAdjustmentField(patch.field_key);
   if (!spec) {
     if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
@@ -140,6 +242,15 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   const auto before = state->pending_before.find(patch.field_key);
   if (before == state->pending_before.end()) {
     if (error) *error = "Settled adjustment has no captured committed state";
+    return false;
+  }
+  const auto sequence = state->pending_document_sequence.find(patch.field_key);
+  if (sequence == state->pending_document_sequence.end()) {
+    if (error) *error = "Settled adjustment has no locked document target";
+    return false;
+  }
+  if (!state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
     return false;
   }
 
@@ -152,6 +263,17 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   }
   if (!after_params.is_object()) {
     if (error) *error = "Editor adjustment params must be a JSON object";
+    return false;
+  }
+
+  const auto locked_target = sequence->second.target;
+  if (!alcedo::PublishEditorParameterPatch(*state->pipeline_guard->document_, locked_target,
+                                           after_params, error)) {
+    return false;
+  }
+  nlohmann::json after_model_json;
+  if (!alcedo::ReadEditorParameterJson(*state->pipeline_guard->document_, locked_target,
+                                       &after_model_json, error)) {
     return false;
   }
 
@@ -171,10 +293,15 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   if (payload.before_value == payload.after_value &&
       payload.before_enabled == payload.after_enabled) {
     state->pending_before.erase(before);
+    state->pending_document_sequence.erase(sequence);
     return true;
   }
 
   auto restore_before_on_live = [&] {
+    if (state->pipeline_guard->document_) {
+      (void)alcedo::PublishEditorParameterPatch(*state->pipeline_guard->document_, locked_target,
+                                                sequence->second.before_model_json, nullptr);
+    }
     if (!state->pipeline_guard->pipeline_) return;
     alcedo::EditorAdjustmentOperatorState before_state;
     before_state.params  = payload.before_value;
@@ -225,8 +352,14 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     restore_before_on_live();
     return false;
   }
+  if (append.commit.has_value()) {
+    HistoryWorkingState::DocumentFieldEdit recorded = sequence->second;
+    recorded.after_model_json = std::move(after_model_json);
+    state->document_edit_by_commit[append.commit->GetCommitHash()] = std::move(recorded);
+  }
   state->pipeline_guard->dirty_ = true;
   state->pending_before.erase(before);
+  state->pending_document_sequence.erase(patch.field_key);
   state->recovered_head = false;
   return true;
 }
@@ -292,8 +425,16 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
     return false;
   }
 
+  if (state->pipeline_guard->document_) {
+    for (const auto& [_, edit] : state->pending_document_sequence) {
+      (void)alcedo::PublishEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
+                                                edit.before_model_json, nullptr);
+    }
+  }
+
   const auto materialized_head =
       state->pipeline_guard->commit_graph_->GetImageEditState().materialized_head_commit_hash;
+  std::vector<alcedo::EditCommit> abandoned;
   while (state->history->working_head() != materialized_head) {
     const auto prepared = materialized_head.has_value()
                               ? state->history->PrepareMoveHeadToCommit(*materialized_head)
@@ -306,6 +447,8 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
       if (error) *error = "Materialized history head could not be restored";
       return false;
     }
+    abandoned.insert(abandoned.end(), prepared.traversed_commits.begin(),
+                     prepared.traversed_commits.end());
     // Publish head moves first; live params + derived snapshot refresh once below.
     const auto published = state->history->PublishPreparedHeadMove(prepared);
     if (!published.moved) {
@@ -322,6 +465,9 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
       return false;
     }
   }
+  if (!ApplyDocumentFieldEdits(*state, abandoned, true, error)) {
+    return false;
+  }
   if (!RefreshCommittedSnapshotFromLive(*state, error)) return false;
 
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
@@ -329,6 +475,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();
+  state->pending_document_sequence.clear();
   state->recovered_head = false;
   return true;
 }

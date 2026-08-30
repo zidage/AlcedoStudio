@@ -13,6 +13,7 @@
 #include "edit/history/edit_transaction.hpp"
 #include "edit/operators/op_base.hpp"
 #include "json.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "support/editor_session_test_ports.hpp"
 
 namespace alcedo {
@@ -51,9 +52,7 @@ class EditorSessionEditControllerTest : public ::testing::Test {
 };
 
 TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryCommit) {
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure":1.0})";
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure":1.0})", false});
 
   auto r1 = edit_->HandlePatch(patch, false, guard(), identity());
   EXPECT_EQ(r1.kind, EditorEditOutcome::Kind::RenderRouted);
@@ -77,9 +76,7 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
 }
 
 TEST_F(EditorSessionEditControllerTest, InteractivePatchCarriesOnlyEditedField) {
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure":1.25})";
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure":1.25})", false});
   const auto result = edit_->HandlePatch(patch, false, guard(), identity());
   ASSERT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
   ASSERT_EQ(result.render_command.adjustment.patches.size(), 1u);
@@ -90,7 +87,7 @@ TEST_F(EditorSessionEditControllerTest, InteractivePatchCarriesOnlyEditedField) 
 
 TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
   history_->fail_commit = true;
-  EditorAdjustmentPatch patch{"exposure", R"({"exposure":0.5})", true};
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure":0.5})", true});
   auto                  result = edit_->HandlePatch(patch, true, guard(), identity());
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
   EXPECT_EQ(result.message, "mini-Git journal append failed");
@@ -98,8 +95,7 @@ TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
 }
 
 TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesOnlyStampLatestFieldOnRender) {
-  EditorAdjustmentPatch patch;
-  patch.field_key = "exposure";
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure":0})", false});
   for (int value = 0; value < 50; ++value) {
     patch.params_json = std::string{"{\"exposure\":"} + std::to_string(value) + "}";
     const auto routed = edit_->HandlePatch(patch, false, guard(), identity());
@@ -146,9 +142,34 @@ TEST_F(EditorSessionEditControllerTest, PatchWithEmptyFieldKeyIsRejected) {
 
 TEST_F(EditorSessionEditControllerTest, PatchWithoutValidGuardIsRejected) {
   EditorHistoryGuardHandle invalid_guard{};
-  EditorAdjustmentPatch    patch{"exposure", R"({"exposure":1.0})", false};
-  auto                     result = edit_->HandlePatch(patch, false, invalid_guard, identity());
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure":1.0})", false});
+  auto result = edit_->HandlePatch(patch, false, invalid_guard, identity());
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
+}
+
+TEST_F(EditorSessionEditControllerTest, IncompleteTargetIsRejected) {
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure_ev":1.0})";
+  auto result       = edit_->HandlePatch(patch, false, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
+  EXPECT_EQ(result.message, "Editor parameter target requires owner_kind");
+  EXPECT_EQ(history_->capture_count, 0);
+}
+
+TEST_F(EditorSessionEditControllerTest, MaskTargetIsRejected) {
+  EditorAdjustmentPatch patch;
+  patch.field_key                      = "exposure";
+  patch.params_json                    = R"({"exposure_ev":1.0})";
+  patch.target.owner_kind              = EditorParameterOwnerKind::ColorGradeMask;
+  patch.target.node_id                 = NodeId{"grade.primary"};
+  patch.target.adjustment_instance_id  = AdjustmentInstanceId{"grade.primary.exposure"};
+  patch.target.mask_id                 = "mask.1";
+  patch.target.field_key               = "exposure";
+  auto result                          = edit_->HandlePatch(patch, false, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
+  EXPECT_EQ(result.message, "Mask parameter targets are rejected until NM3");
+  EXPECT_EQ(history_->capture_count, 0);
 }
 
 }  // namespace

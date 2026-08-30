@@ -20,7 +20,10 @@
 
 #include "json.hpp"
 #include "app/adjustment_transfer_service.hpp"
-#include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_pipeline_command_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -41,18 +44,46 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
   guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->document_ =
+      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_                  = guard->commit_graph_->GetRootId();
   return guard;
 }
 
+auto ColorGradeTargetForField(const std::string& field, std::string node_id = "grade.primary")
+    -> alcedo::EditorParameterTarget {
+  alcedo::EditorParameterTarget target;
+  target.owner_kind              = alcedo::EditorParameterOwnerKind::ColorGrade;
+  target.node_id                 = alcedo::NodeId{node_id};
+  target.adjustment_instance_id  = alcedo::AdjustmentInstanceId{node_id + "." + field};
+  target.field_key               = field;
+  return target;
+}
+
+auto WithColorGradeTarget(alcedo::EditorAdjustmentPatch patch,
+                          std::string node_id = "grade.primary") -> alcedo::EditorAdjustmentPatch {
+  patch.target = ColorGradeTargetForField(patch.field_key, std::move(node_id));
+  return patch;
+}
+
+auto DocumentExposureEv(const alcedo::PipelineDocument& document, const std::string& node_id)
+    -> float {
+  nlohmann::json json;
+  std::string    error;
+  EXPECT_TRUE(alcedo::ReadEditorParameterJson(document, ColorGradeTargetForField("exposure", node_id),
+                                              &json, &error))
+      << error;
+  return json.at("exposure_ev").get<float>();
+}
+
 auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
                    const std::string& field, const std::string& after_json, std::string* error)
     -> bool {
-  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
+  alcedo::EditorAdjustmentPatch preview = WithColorGradeTarget({field, after_json, false});
   if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
-  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
+  alcedo::EditorAdjustmentPatch settled = WithColorGradeTarget({field, after_json, true});
   return port.CommitAdjustment(handle, settled, error);
 }
 
@@ -230,8 +261,8 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch preview{"exposure", R"({"exposure":0.25})", false};
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.75})", true};
+  const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false});
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.75})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
   ASSERT_EQ(guard_->commit_graph_->CommitCount(), 1u);
@@ -672,7 +703,7 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(handle.valid) << error;
 
   {
-    const alcedo::EditorAdjustmentPatch seed{"saturation", R"({"saturation":0})", true};
+    const auto seed = WithColorGradeTarget({"saturation", R"({"saturation":0})", true});
     ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, seed, &error)) << error;
     ASSERT_TRUE(history_.CommitAdjustment(handle, seed, &error)) << error;
   }
@@ -697,13 +728,13 @@ TEST_F(EditorSessionHistoryPortTest,
                                  [&] { return worker_holds_lock; }));
   }
 
-  const alcedo::EditorAdjustmentPatch preview{"saturation", R"({"saturation":20})", false};
+  const auto preview = WithColorGradeTarget({"saturation", R"({"saturation":20})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error
       << "Capture must not require the live pipeline render lock";
 
   std::atomic<bool> commit_finished{false};
   std::thread       commit_thread([&] {
-    const alcedo::EditorAdjustmentPatch settled{"saturation", R"({"saturation":40})", true};
+    const auto settled = WithColorGradeTarget({"saturation", R"({"saturation":40})", true});
     (void)history_.CommitAdjustment(handle, settled, &error);
     commit_finished.store(true);
   });
@@ -757,7 +788,8 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(handle.valid) << error;
   const auto commit_count_before = guard_->commit_graph_->CommitCount();
 
-  const alcedo::EditorAdjustmentPatch unsupported{"not_a_supported_adjustment", R"({})", false};
+  const auto unsupported =
+      WithColorGradeTarget({"not_a_supported_adjustment", R"({})", false});
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, unsupported, &error));
   EXPECT_FALSE(error.empty());
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), commit_count_before);
@@ -809,8 +841,8 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.5})", true};
-  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":1.25})", true};
+  const auto first = WithColorGradeTarget({"exposure", R"({"exposure":0.5})", true});
+  const auto second = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
@@ -842,7 +874,7 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.9})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.9})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -865,7 +897,7 @@ TEST_F(EditorSessionHistoryPortTest,
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
 
-  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.4})", true};
+  const auto first = WithColorGradeTarget({"exposure", R"({"exposure":0.4})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
   ASSERT_TRUE(history_.SyncMaterializedStateAfterCheckpoint(handle, &error)) << error;
@@ -874,7 +906,7 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &materialized_snapshot, &error)) << error;
   const auto materialized_head = guard_->commit_graph_->GetImageEditState().materialized_head_commit_hash;
 
-  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":0.9})", true};
+  const auto second = WithColorGradeTarget({"exposure", R"({"exposure":0.9})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
   EXPECT_TRUE(history_.HasUnmaterializedChanges(handle, &error)) << error;
@@ -896,7 +928,7 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.4})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.4})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -926,7 +958,7 @@ TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureKeepsWorkingHeadAtRoot)
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   EXPECT_FALSE(history_.CommitAdjustment(handle, settled, &error));
   EXPECT_FALSE(error.empty());
@@ -939,7 +971,7 @@ TEST_F(EditorSessionHistoryPortTest, ReopenReplaysJournalIntoWorkingPipeline) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
   history_.Release(handle);
@@ -965,7 +997,7 @@ TEST_F(EditorSessionHistoryPortTest, ProductionCaptureValueReachesCheckpointStor
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.85})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.85})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -1884,6 +1916,162 @@ TEST(EditorSessionHistoryPortPersistTest,
   std::filesystem::remove(db_path, ec);
   std::filesystem::remove(meta_path, ec);
   std::filesystem::remove(journal_path, ec);
+}
+
+TEST_F(EditorSessionHistoryPortTest, SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_NE(guard_->document_, nullptr);
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  auto       settled     = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_NE(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       IncompleteTargetRejectedLeavesDocumentHashAndHistoryHeadUnchanged) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure_ev":3.0})";
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
+  EXPECT_EQ(error, "Editor parameter target requires owner_kind");
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+                  alcedo::kDefaultPipelineExposureEv);
+
+  auto missing_node = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
+  missing_node.target.node_id = alcedo::NodeId{};
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, missing_node, &error));
+  EXPECT_EQ(error, "Editor parameter target requires node_id");
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+}
+
+TEST_F(EditorSessionHistoryPortTest, ProvisionalSequenceReusesTargetResolvedAtFirstPatch) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto add_errors =
+      alcedo::AddCleanColorGrade(*guard_->document_, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"});
+  ASSERT_TRUE(add_errors.empty());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 0.0f);
+
+  auto first = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", false}, "grade.primary");
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
+  auto second = WithColorGradeTarget({"exposure", R"({"exposure_ev":4.0})", false}, "grade.extra");
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
+  auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":4.0})", true}, "grade.extra");
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 4.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 0.0f);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       UnknownFieldRejectedLeavesDocumentHashAndHistoryHeadUnchanged) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  auto       patch       = WithColorGradeTarget({"not_a_supported_adjustment", R"({})", false});
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
+  EXPECT_EQ(error, "Unknown editor adjustment field: not_a_supported_adjustment");
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+}
+
+TEST_F(EditorSessionHistoryPortTest, UndoSettledExposureRestoresDocumentValue) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.5})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.5f);
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+                  alcedo::kDefaultPipelineExposureEv);
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.5f);
+}
+
+TEST_F(EditorSessionHistoryPortTest, IncompleteLaterPatchRejectedLeavesLockedDocumentUnchanged) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto first = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", false});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+
+  alcedo::EditorAdjustmentPatch incomplete;
+  incomplete.field_key   = "exposure";
+  incomplete.params_json = R"({"exposure_ev":4.0})";
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, incomplete, &error));
+  EXPECT_EQ(error, "Editor parameter target requires owner_kind");
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+}
+
+TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureRestoresDocumentExposureEv) {
+  history_.SetServices(
+      EditorSessionHistoryPort::Services{[bad = journal_path_.parent_path() / "not-a-directory"](
+                                             sl_element_id_t) { return bad / "image-42.wal"; }});
+  {
+    std::ofstream blocker(journal_path_.parent_path() / "not-a-directory", std::ios::binary);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "block";
+  }
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_FALSE(history_.CommitAdjustment(handle, settled, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+                  alcedo::kDefaultPipelineExposureEv);
+  std::error_code ec;
+  std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
+}
+
+TEST_F(EditorSessionHistoryPortTest, DiscardUncommittedPreviewRestoresDocumentExposureEv) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto preview = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", false});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  ASSERT_TRUE(history_.DiscardUnmaterializedChanges(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+                  alcedo::kDefaultPipelineExposureEv);
+}
+
+TEST_F(EditorSessionHistoryPortTest, MaskTargetWriteIsRejected) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key                      = "exposure";
+  patch.params_json                    = R"({"exposure_ev":3.0})";
+  patch.target.owner_kind              = alcedo::EditorParameterOwnerKind::ColorGradeMask;
+  patch.target.node_id                 = alcedo::NodeId{"grade.primary"};
+  patch.target.adjustment_instance_id  = alcedo::AdjustmentInstanceId{"grade.primary.exposure"};
+  patch.target.mask_id                 = "mask.1";
+  patch.target.field_key               = "exposure";
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
+  EXPECT_EQ(error, "Mask parameter targets are rejected until NM3");
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
 }
 
 }  // namespace

@@ -201,6 +201,7 @@ target_link_libraries(AlbumBackendLib
         AdjustmentTransferService
         EditorSessionService
         EditorAdjustmentPipeline
+        EditorPipelineCommandService
         EditorMiniGitMaterializer
         ThumbnailService
         SemanticGenerationService

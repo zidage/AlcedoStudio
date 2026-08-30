@@ -158,6 +158,16 @@ auto ColorGradeNodeModel::FindAdjustment(const AdjustmentInstanceId& id) -> IOpe
   return nullptr;
 }
 
+auto ColorGradeNodeModel::FindAdjustment(const AdjustmentInstanceId& id) const
+    -> const IOperatorModel* {
+  for (const auto& entry : adjustments_) {
+    if (entry.instance_id == id) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
 auto ColorGradeNodeModel::FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel* {
   for (auto& entry : adjustments_) {
     if (entry.model->Type() == type) {

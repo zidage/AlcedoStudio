@@ -13,9 +13,12 @@
 #include <unordered_map>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_adjustment_types.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/history/commit_graph.hpp"
+#include "json.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 class MiniGitJournal;
@@ -30,13 +33,21 @@ class EditorSessionPipelinePort;
 
 /// Per-image history state owned by the queue-thread history unit. The command
 /// queue is the sole mutation owner for graph, redo, pending-before, and
-/// committed-snapshot fields. The pipeline guard is only a worker hand-off
-/// identity here; no history reducer accesses its live executor.
+/// committed-snapshot fields. Live parameter writes go to pipeline_guard->document_.
+/// The executor is locked only for stage Apply and snapshot refresh.
 struct HistoryWorkingState {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;
   std::unique_ptr<alcedo::MiniGitWorkingHistory> history;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
+  /// First complete target of the current input sequence, keyed by field_key.
+  struct DocumentFieldEdit {
+    alcedo::EditorParameterTarget target;
+    nlohmann::json                before_model_json;
+    nlohmann::json                after_model_json;
+  };
+  std::unordered_map<std::string, DocumentFieldEdit> pending_document_sequence;
+  std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
   bool recovered_head = false;
