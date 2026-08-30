@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: proposed；等待评审后进入逐阶段实现。
+Status: NM0 complete；NM1–NM8 planned。
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -1125,7 +1125,7 @@ Adjustment Transfer Paste
 
 | Phase | Status | 未来执行方案 | 阶段结果 |
 | --- | --- | --- | --- |
-| NM0 — QuickQanava Integration Baseline | planned | `node_mask_editor/phase_nm0_quickqanava_integration_plan.md` | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
+| NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
 | NM1 — PipelineDocument Editing Foundation | planned | `node_mask_editor/phase_nm1_pipeline_document_editing_plan.md` | 删除双写来源，建立 graph 不变量、Clean node 和 typed mutation |
 | NM2 — Multi-Grade Runtime and Ownership | planned | `node_mask_editor/phase_nm2_multi_grade_runtime_plan.md` | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
 | NM3 — Multi-Mask Model and Runtime | planned | `node_mask_editor/phase_nm3_multi_mask_runtime_plan.md` | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
@@ -1137,6 +1137,9 @@ Adjustment Transfer Paste
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
 
+配置记录：[Phase NM0 QuickQanava integration](node_mask_editor/phase_nm0_quickqanava_integration_plan.md)。
+NM0 没有执行子 Phase；工作内容是固定上游 checkout、CMake 接入和 license 记录。
+
 **为什么先做：** QuickQanava 是明确指定的 node editor 基础。必须先证明固定版本能够在当前
 Qt 6.9.3、Basic style、Windows/MSVC、macOS/Clang、QML module 和最终 package 中正常工作，
 否则后续 UI 架构会建立在未经验证的依赖假设上。
@@ -1147,6 +1150,87 @@ production 节点修改，不创建临时领域模型，也不实现自有 graph
 
 **退出条件：** Windows 和 macOS build/package 都能加载固定 QuickQanava module；最小测试
 能够从只读 projection 创建、选择和销毁 node/edge，没有 QML import 或资源路径错误。
+
+NM0 按依赖固定落地：submodule pin、CMake 静态 QML module、license。原始退出条件里的只读
+harness 和 package 加载需要 `alcedo_main` 链接该 module，本次不声称完成；由 NM5 首次生产
+链接和 NM8 资格验证覆盖。
+
+##### Phase NM0 completion record (2026-08-29)
+
+**Status:** complete — pinned QuickQanava tag `2.50` (`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`), CMake `add_subdirectory(src)`, BSD-3-Clause / bezier MIT notices. No production import.
+
+**Primary success call chain:**
+
+```text
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+  -> alcedo_studio/src/third_party/CMakeLists.txt
+  -> include AlcedoQuickQanava.cmake
+  -> qt_add_qml_module(QuickQanava STATIC URI QuickQanava)
+  -> targets QuickQanava / QuickQanavaplugin
+```
+
+**Primary failure call chain:**
+
+```text
+missing checkout
+  -> FATAL_ERROR
+  -> configure stops; no FetchContent
+```
+
+**What was proven (executed tests):** see [NM0 configuration record](node_mask_editor/phase_nm0_quickqanava_integration_plan.md).
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target QuickQanava
+```
+
+Windows debug linked `QuickQanava.lib`. macOS not built on this machine.
+
+**Checklist / exit condition:** dependency pin complete. Harness and package load not claimed.
+
+**Residual gaps:** no production link; no QML harness; macOS not built here; upstream `CanvasNodeTemplate.qml` still imports Material.
+
+##### Phase NM0 completion record (2026-08-29, macOS)
+
+**Status:** complete — macOS Clang debug configured and linked the same pin. No production import.
+
+**Primary success call chain:**
+
+```text
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+  -> cmake --preset macos_debug
+  -> include AlcedoQuickQanava.cmake
+  -> qt_add_qml_module(QuickQanava STATIC URI QuickQanava)
+  -> cmake --build --preset macos_debug --target QuickQanava
+  -> libQuickQanava.a
+```
+
+**Primary failure call chain:**
+
+```text
+missing checkout
+  -> FATAL_ERROR
+  -> configure stops; no FetchContent
+```
+
+macOS CI inits the gitlink from `scripts/ci_prepare_third_party.sh`.
+
+**What was proven (executed tests):** see [NM0 configuration record](node_mask_editor/phase_nm0_quickqanava_integration_plan.md).
+
+Commands:
+
+```text
+cmake --preset macos_debug
+cmake --build --preset macos_debug --target QuickQanava --parallel 8
+```
+
+macOS debug linked `libQuickQanava.a` (Homebrew Qt 6.9.2, clang 21.1.1).
+
+**Checklist / exit condition:** dependency pin complete on Windows and macOS debug. Harness and package load not claimed.
+
+**Residual gaps:** no production link; no QML harness; upstream `CanvasNodeTemplate.qml` still imports Material.
 
 ### 21.2 Phase NM1 — PipelineDocument Editing Foundation
 

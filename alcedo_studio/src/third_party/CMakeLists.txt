@@ -604,3 +604,19 @@ endif()
 
 set(PUERHLAB_METALCPP_INCLUDE_DIR "${PUERHLAB_METALCPP_SOURCE_DIR}" CACHE INTERNAL
     "Header directory for the bundled metal-cpp checkout.")
+
+set(ALCEDO_QUICKQANAVA_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/QuickQanava"
+    CACHE PATH
+    "Path to the bundled QuickQanava source checkout.")
+
+if(NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/src/CMakeLists.txt"
+   OR NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/licence.txt")
+    message(FATAL_ERROR
+        "Bundled QuickQanava source was not found at ${ALCEDO_QUICKQANAVA_SOURCE_DIR}. "
+        "Run `git submodule update --init alcedo_studio/src/third_party/QuickQanava` "
+        "and re-configure.")
+endif()
+
+# Do not add_subdirectory() upstream CMake. Qt 6.9.3 rejects its qt_wrap_cpp call.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AlcedoQuickQanava.cmake")
