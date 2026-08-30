@@ -135,7 +135,7 @@ void VerifyRgbWhiteBalanceAndLevels() {
         else
           EXPECT_LT(cv::norm(display, reference, cv::NORM_INF), 3e-5);
         if (!highlights) {
-          const auto sensor = DownloadRgb(device, plan.sensor_linear_output);
+          const cv::Mat sensor = DownloadRgb(device, plan.sensor_linear_output);
           for (int x = 0; x < 5; ++x) {
             const float expected = integer_codes ? std::max(0.0f, native[x]) : native[x];
             for (int c = 0; c < 3; ++c) EXPECT_NEAR(sensor.at<cv::Vec4f>(0, x)[c], expected, 2e-6f);
@@ -164,7 +164,7 @@ void VerifyRgbWarpPublishes() {
     Device     device;
     const auto output = device.Execute(plan, input, document);
     device.WaitIdle();
-    const auto sensor = DownloadRgb(device, plan.sensor_linear_output);
+    const cv::Mat sensor = DownloadRgb(device, plan.sensor_linear_output);
     ASSERT_TRUE(cv::checkRange(DownloadRgb(device, output)));
     if (!warp_enabled)
       unwarped = sensor;
@@ -212,7 +212,7 @@ void VerifyCameraRgbFile(const char* filename, ImageType type, const char* backe
   ASSERT_TRUE(cv::checkRange(display));
   EXPECT_GT(cv::norm(display, cv::NORM_L1), 100.0);
   if (type == ImageType::ARW) {
-    const auto  sensor = DownloadRgb(device, plan.sensor_linear_output);
+    const cv::Mat sensor = DownloadRgb(device, plan.sensor_linear_output);
     const auto* codes  = reinterpret_cast<const float*>(input.pixels.bytes.get());
     for (int y = 0; y < sensor.rows; y += 37) {
       for (int x = 0; x < sensor.cols; x += 41) {

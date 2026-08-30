@@ -54,8 +54,8 @@ void VerifyCanonDngProfile(const char* backend) {
 
   // Sample GPU results against scalar table evaluation, independently of the output transform.
   {
-    const auto sensor    = DownloadRgb(device, plan.geometry_output);
-    const auto developed = DownloadRgb(device, plan.develop_output);
+    const cv::Mat sensor    = DownloadRgb(device, plan.geometry_output);
+    const cv::Mat developed = DownloadRgb(device, plan.develop_output);
     const auto transform = ResolveDevelopColorTransform(payload);
     ASSERT_TRUE(transform.ok);
     const auto table  = PackDngProfileGpuData(payload.camera_profile, transform.transform);
