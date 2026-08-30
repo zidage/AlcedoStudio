@@ -63,6 +63,7 @@ void HashFloatArray(std::uint64_t& seed, const float* values, int count) {
 auto BuildRuntimeCacheKey(const OperatorParams& params, ColorTempMode mode, float custom_cct,
                           float custom_tint) -> std::uint64_t {
   std::uint64_t key = 0xcbf29ce484222325ULL;
+  HashCombine(key, params.raw_dng_profile_ ? params.raw_dng_profile_->fingerprint : 0);
   HashCombine(key, static_cast<std::uint64_t>(params.color_temp_enabled_));
   HashCombine(key, static_cast<std::uint64_t>(params.raw_runtime_valid_));
   HashCombine(key, static_cast<std::uint64_t>(mode));
@@ -138,6 +139,7 @@ auto DevelopPayloadFromColorTemp(const OperatorParams& params, ColorTempMode mod
   develop.custom_cct  = custom_cct;
   develop.custom_tint = custom_tint;
   auto& profile       = develop.camera_profile;
+  profile.dng_profile                   = params.raw_dng_profile_;
   profile.color_matrices_valid          = params.raw_color_matrices_valid_;
   profile.forward_matrices_valid        = params.raw_forward_matrices_valid_;
   profile.as_shot_neutral_valid         = params.raw_as_shot_neutral_valid_;

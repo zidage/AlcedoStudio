@@ -8,11 +8,11 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <opencv2/core.hpp>
 #include <span>
 
-#include <opencv2/core.hpp>
-
 #include "edit/operators/basic/planckian_locus_table.hpp"
+#include "image/dng_camera_matrix.hpp"
 
 namespace alcedo {
 namespace {
@@ -603,6 +603,7 @@ auto Fail(ColorTransformError error) -> ColorTransformResult {
 
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported) {
   auto& profile                     = payload.camera_profile;
+  profile.dng_profile                   = imported.dng_profile_;
   profile.color_matrices_valid      = imported.color_matrices_valid_;
   profile.forward_matrices_valid    = imported.forward_matrices_valid_;
   profile.as_shot_neutral_valid     = imported.as_shot_neutral_valid_;
@@ -640,10 +641,21 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
     return Fail(endpoint_error);
   }
 
+  const auto& dng_profile = develop.camera_profile.dng_profile;
+  if (dng_profile) {
+    ApplyAnalogBalanceAndCameraCalibration(cm1.val, dng_profile->analog_balance.data(),
+                                           dng_profile->camera_calibration_1.data());
+    ApplyAnalogBalanceAndCameraCalibration(cm2.val, dng_profile->analog_balance.data(),
+                                           dng_profile->camera_calibration_2.data());
+  }
+
   cv::Matx33d fm1;
   cv::Matx33d fm2;
   const bool  has_forward_matrices =
       ResolveForwardMatrixEndpoints(develop.camera_profile, fm1, fm2);
+  if (dng_profile && develop.camera_profile.forward_matrices_valid && !has_forward_matrices) {
+    return Fail(ColorTransformError::NonFiniteMatrix);
+  }
 
   cv::Vec2d selected_xy(kD50X, kD50Y);
   double    selected_cct  = develop.custom_cct;
@@ -667,18 +679,57 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
   }
 
   cv::Matx33d camera_to_xyz_d50;
-  if (has_forward_matrices) {
+  if (dng_profile) {
+    cv::Vec3d    camera_white = xyz_to_camera * XYToXYZ(selected_xy);
+    const double scale        = std::max({camera_white[0], camera_white[1], camera_white[2]});
+    if (!std::isfinite(scale) || scale <= kValueEpsilon)
+      return Fail(ColorTransformError::InvalidWhitePoint);
+    if (has_forward_matrices) {
+      const auto calibration =
+          InterpolateColorMatrix(MatrixFromArray9(dng_profile->camera_calibration_1),
+                                 MatrixFromArray9(dng_profile->camera_calibration_2), selected_cct,
+                                 endpoint_cct_1, endpoint_cct_2);
+      const auto& ab = dng_profile->analog_balance;
+      cv::Matx33d individual_to_reference;
+      if (!Invert3x3(cv::Matx33d::diag(cv::Vec3d(ab[0], ab[1], ab[2])) * calibration,
+                     individual_to_reference))
+        return Fail(ColorTransformError::SingularCameraMatrix);
+      for (int c = 0; c < 3; ++c) camera_white[c] = std::clamp(camera_white[c] / scale, 0.001, 1.0);
+      const auto reference_white = individual_to_reference * camera_white;
+      if (std::any_of(std::begin(reference_white.val), std::end(reference_white.val),
+                      [](double v) { return !std::isfinite(v) || v <= kValueEpsilon; })) {
+        return Fail(ColorTransformError::InvalidWhitePoint);
+      }
+      // DNG normalizes each ForwardMatrix endpoint so unit camera RGB maps to D50.
+      const auto d50 = XYToXYZ(cv::Vec2d(kD50X, kD50Y));
+      for (auto* matrix : {&fm1, &fm2}) {
+        for (int r = 0; r < 3; ++r) {
+          const double sum = (*matrix)(r, 0) + (*matrix)(r, 1) + (*matrix)(r, 2);
+          if (!std::isfinite(sum) || std::abs(sum) <= kValueEpsilon)
+            return Fail(ColorTransformError::NonFiniteMatrix);
+          for (int c = 0; c < 3; ++c) (*matrix)(r, c) *= d50[r] / sum;
+        }
+      }
+      const auto forward =
+          InterpolateColorMatrix(fm1, fm2, selected_cct, endpoint_cct_1, endpoint_cct_2);
+      camera_to_xyz_d50 =
+          forward *
+          cv::Matx33d::diag(cv::Vec3d(1.0 / reference_white[0], 1.0 / reference_white[1],
+                                      1.0 / reference_white[2])) *
+          individual_to_reference;
+    } else {
+      camera_to_xyz_d50 =
+          scale * BuildBradfordCAT(selected_xy, cv::Vec2d(kD50X, kD50Y)) * camera_to_xyz;
+    }
+  } else if (has_forward_matrices) {
     if (!BuildCameraToXyzD50FromForwardMatrix(cm1, cm2, fm1, fm2, selected_cct, endpoint_cct_1,
                                               endpoint_cct_2, selected_xy, camera_to_xyz_d50)) {
       return Fail(ColorTransformError::NonFiniteMatrix);
     }
   } else {
-    const cv::Matx33d cat_src_to_d50 = BuildBradfordCAT(selected_xy, cv::Vec2d(kD50X, kD50Y));
-    camera_to_xyz_d50                = cat_src_to_d50 * camera_to_xyz;
-    if (!IsFiniteMatrix(camera_to_xyz_d50)) {
-      return Fail(ColorTransformError::NonFiniteMatrix);
-    }
+    camera_to_xyz_d50 = BuildBradfordCAT(selected_xy, cv::Vec2d(kD50X, kD50Y)) * camera_to_xyz;
   }
+  if (!IsFiniteMatrix(camera_to_xyz_d50)) return Fail(ColorTransformError::NonFiniteMatrix);
 
   const cv::Matx33d cat_d50_to_d60 =
       BuildBradfordCAT(cv::Vec2d(kD50X, kD50Y), cv::Vec2d(kD60X, kD60Y));

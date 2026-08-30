@@ -18,8 +18,8 @@ inline constexpr std::uint64_t kContentHashPrime                   = 10995116282
 inline constexpr std::uint32_t kSensorDevelopImplementationVersion = 2;
 /// Bumped when GeometryResample sampling rules change.
 inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
-/// Bumped when CameraColorPass math changes. Version 3 encodes its AP1 result as ACEScc.
-inline constexpr std::uint32_t kCameraColorImplementationVersion   = 3;
+/// Bumped when CameraColorPass math changes. Version 4 applies embedded DNG color profiles.
+inline constexpr std::uint32_t kCameraColorImplementationVersion   = 4;
 /// Bumped when Primary Grade pixel rules change. Version 4 samples the LMT cube in fused pointwise.
 inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 4;
 /// Bumped when the canonical LLF reference identity or sampling rules change.

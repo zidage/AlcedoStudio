@@ -31,6 +31,7 @@
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
+#include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -566,7 +567,8 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteOpenClCameraColor: missing develop node");
   }
-  const auto resolved = ResolveDevelopColorTransform(develop->Params().Params());
+  const auto develop_params = develop->Params().Params();
+  const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteOpenClCameraColor: ") +
                              std::string(ColorTransformErrorMessage(resolved.error)));
@@ -614,6 +616,11 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   CheckOpenCl(clSetKernelArg(kernel, 1, sizeof(cl_mem), &dst_mem), "camera arg1");
   CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(cl_mem), &params_mem), "camera arg2");
   CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_uint), &offset_floats), "camera arg3");
+  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  auto&      tables =
+      UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
+  cl_mem table_mem = tables.Native();
+  CheckOpenCl(clSetKernelArg(kernel, 4, sizeof(cl_mem), &table_mem), "camera profile arg4");
   DispatchKernel(device, kernel, width, height);
 }
 

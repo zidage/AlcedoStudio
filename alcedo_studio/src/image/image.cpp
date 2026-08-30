@@ -50,6 +50,7 @@ void LoadJsonArray(const json& value, const char* key, T* dst, const int count) 
 
 auto RawColorContextToJson(const RawRuntimeColorContext& ctx) -> json {
   json value;
+  value["DngColorProfile"] = DngColorProfileToJson(ctx.dng_profile_);
   value["Valid"]                      = ctx.valid_;
   value["OutputInCameraSpace"]        = ctx.output_in_camera_space_;
   value["CamMul"]              = MakeJsonArray(ctx.cam_mul_, 3);
@@ -87,6 +88,7 @@ auto RawColorContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> 
     return false;
   }
 
+  ctx.dng_profile_ = DngColorProfileFromJson(value.value("DngColorProfile", json(nullptr)));
   ctx.valid_                  = value.value("Valid", false);
   ctx.output_in_camera_space_ = value.value("OutputInCameraSpace", false);
   LoadJsonArray(value, "CamMul", ctx.cam_mul_, 3);

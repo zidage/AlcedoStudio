@@ -276,6 +276,12 @@ if(ALCEDO_CUDA_ENABLED)
 endif()
 
 # GPU DAG Phase G4: CPU RawInputLoader / GraphCompiler (no CUDA required).
+add_executable(DngColorProfileTest ${ALCEDO_TEST_ROOT}/edit/runtime/dng_color_profile_test.cpp)
+target_include_directories(DngColorProfileTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DngColorProfileTest PRIVATE GTest::gtest_main EditRuntime Image)
+gtest_discover_tests(DngColorProfileTest TEST_PREFIX "DngColorProfileTest.")
+alcedo_register_test_target(DngColorProfileTest edit)
+
 add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp

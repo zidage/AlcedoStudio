@@ -118,7 +118,8 @@ static inline float AcesccEncode(float value) {
 }
 
 __kernel void camera_color_acescc(__read_only image2d_t src, __write_only image2d_t dst,
-                                  global const float* camera_params, uint offset_floats) {
+                                  global const float* camera_params, uint offset_floats,
+                                  global const float* dng_profile) {
   const int2 gid  = (int2)((int)get_global_id(0), (int)get_global_id(1));
   const int2 size = get_image_dim(src);
   if (gid.x >= size.x || gid.y >= size.y) {
@@ -131,7 +132,10 @@ __kernel void camera_color_acescc(__read_only image2d_t src, __write_only image2
   const float x = m[0] * source.x + m[1] * source.y + m[2] * source.z;
   const float y = m[3] * source.x + m[4] * source.y + m[5] * source.z;
   const float z = m[6] * source.x + m[7] * source.y + m[8] * source.z;
-  write_imagef(dst, gid, (float4)(AcesccEncode(x), AcesccEncode(y), AcesccEncode(z), source.w));
+  const DngRgb        corrected = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
+  write_imagef(dst, gid,
+               (float4)(AcesccEncode(corrected.r), AcesccEncode(corrected.g),
+                        AcesccEncode(corrected.b), source.w));
 }
 
 typedef struct {

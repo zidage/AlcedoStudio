@@ -219,21 +219,21 @@ TEST(MetadataExtractorTest, ColorTempOpUsesForwardMatrixForBadColorDngAsShot) {
   EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[3]), 0.1f);
   EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[7]), 0.1f);
 
-  static constexpr float kExpectedCameraToXyzD50[9] = {
-      2.6879040f, 0.0538000f, 0.1229680f,
-      1.0163880f, 0.8399000f, -0.2334720f,
-      0.0430920f, -0.4061000f, 1.8512081f,
-  };
-
-  for (int i = 0; i < 9; ++i) {
-    EXPECT_NEAR(params.color_temp_cam_to_xyz_d50_[i], kExpectedCameraToXyzD50[i], 1e-3f)
-        << "matrix index " << i;
+  const auto&  ctx    = image.GetRawColorContext();
+  const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
+  const double maximum =
+      std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
+  for (int r = 0; r < 3; ++r) {
+    double neutral = 0;
+    for (int c = 0; c < 3; ++c)
+      neutral += params.color_temp_cam_to_xyz_d50_[r * 3 + c] * ctx.as_shot_neutral_[c] / maximum;
+    EXPECT_NEAR(neutral, d50[r], 2e-4);
   }
 }
 
 // Hasselblad X2D HueSatMap tables are authored for ColorMatrix + CAT. Adobe Standard
 // DNGs also embed those tables but still require ForwardMatrix; only Hasselblad drops FM.
-TEST(MetadataExtractorTest, EmbeddedDngProfileTablesDisableHasselbladForwardMatrix) {
+TEST(MetadataExtractorTest, EmbeddedDngProfileTablesPreserveHasselbladForwardMatrix) {
   const auto sample_path = HasselbladX2dSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -245,7 +245,9 @@ TEST(MetadataExtractorTest, EmbeddedDngProfileTablesDisableHasselbladForwardMatr
 
   const auto& ctx = image.GetRawColorContext();
   EXPECT_TRUE(ctx.color_matrices_valid_);
-  EXPECT_FALSE(ctx.forward_matrices_valid_);
+  EXPECT_TRUE(ctx.forward_matrices_valid_);
+  ASSERT_TRUE(ctx.dng_profile_);
+  EXPECT_FALSE(ctx.dng_profile_->hue_sat_map_1.entries.empty());
   EXPECT_TRUE(ctx.calibration_illuminants_valid_);
   EXPECT_EQ(ctx.camera_make_, "Hasselblad");
   EXPECT_EQ(ctx.camera_model_, "X2D 100C-100c");
@@ -262,10 +264,15 @@ TEST(MetadataExtractorTest, EmbeddedDngProfileTablesDisableHasselbladForwardMatr
   EXPECT_TRUE(params.color_temp_matrices_valid_);
   EXPECT_GT(params.color_temp_resolved_cct_, 4900.0f);
   EXPECT_LT(params.color_temp_resolved_cct_, 5050.0f);
-  EXPECT_GT(params.color_temp_cam_to_xyz_d50_[0], 1.5f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[2], 0.05f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[5], -0.2f);
-  EXPECT_LT(params.color_temp_cam_to_xyz_d50_[7], -0.1f);
+  const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
+  const double maximum =
+      std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
+  for (int r = 0; r < 3; ++r) {
+    double neutral = 0;
+    for (int c = 0; c < 3; ++c)
+      neutral += params.color_temp_cam_to_xyz_d50_[r * 3 + c] * ctx.as_shot_neutral_[c] / maximum;
+    EXPECT_NEAR(neutral, d50[r], 2e-4);
+  }
 }
 
 TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
@@ -304,7 +311,7 @@ TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
   EXPECT_LT(params.color_temp_resolved_tint_, 0.0f);
 }
 
-TEST(MetadataExtractorTest, SonyAdobeDngFoldsAnalogBalanceIntoColorMatrixAndKeepsForwardMatrix) {
+TEST(MetadataExtractorTest, SonyAdobeDngPreservesTaggedMatrixAndSeparateAnalogBalance) {
   const auto sample_path = SonyA7CiiConvertedDngPath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -336,14 +343,12 @@ TEST(MetadataExtractorTest, SonyAdobeDngFoldsAnalogBalanceIntoColorMatrixAndKeep
 
   const double analog_balance[3]     = {2.411133, 1.0, 1.62793};
   const double camera_calibration[9] = {1.0008, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9523};
-  double       expected_cm1[9]       = {
-      0.8784, -0.4791, 0.1177, -0.3468, 1.0693, 0.3213, 0.0009, 0.0507, 0.7395,
-  };
-  ApplyAnalogBalanceAndCameraCalibration(expected_cm1, analog_balance, camera_calibration);
-  ExpectMatrixNear(ctx.color_matrix_1_, expected_cm1, 1e-3);
-  EXPECT_GT(ctx.color_matrix_1_[0], 1.8);
-  EXPECT_GT(std::abs(ctx.color_matrix_1_[0] - kUnbakedCm1[0]), 0.5);
-
+  ExpectMatrixNear(ctx.color_matrix_1_, kUnbakedCm1, 1e-6);
+  ASSERT_TRUE(ctx.dng_profile_);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(ctx.dng_profile_->analog_balance[i], analog_balance[i], 1e-5);
+  for (int i = 0; i < 9; ++i)
+    EXPECT_NEAR(ctx.dng_profile_->camera_calibration_1[i], camera_calibration[i], 1e-5);
   const auto params = ResolveAsShotColorTemp(ctx);
   EXPECT_TRUE(params.color_temp_matrices_valid_);
   EXPECT_GT(params.color_temp_resolved_cct_, 4800.0f);

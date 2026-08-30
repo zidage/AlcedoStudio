@@ -32,6 +32,7 @@
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
+#include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -127,7 +128,7 @@ void DispatchGeometryResample(void* command_buffer, const ResolvedRenderGeometry
 
 void DispatchCameraColor(void* command_buffer, const MetalBackend::Texture2D& src,
                          MetalBackend::Texture2D& dst, const MetalBackend::Buffer& params,
-                         std::uint32_t offset) {
+                         std::uint32_t offset, const MetalBackend::Buffer& dng_profile) {
 #ifndef ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH
   throw std::runtime_error("Metal camera color metallib path is not configured.");
 #else
@@ -143,6 +144,7 @@ void DispatchCameraColor(void* command_buffer, const MetalBackend::Texture2D& sr
   compute->setTexture(static_cast<MTL::Texture*>(src.Native()), 0);
   compute->setTexture(static_cast<MTL::Texture*>(dst.Native()), 1);
   compute->setBuffer(static_cast<MTL::Buffer*>(params.Native()), offset, 0);
+  compute->setBuffer(static_cast<MTL::Buffer*>(dng_profile.Native()), 0, 1);
   const auto thread_width = std::max<NS::UInteger>(1, pipeline->threadExecutionWidth());
   const auto thread_height =
       std::max<NS::UInteger>(1, pipeline->maxTotalThreadsPerThreadgroup() / thread_width);
@@ -481,7 +483,8 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteMetalCameraColor: missing develop node");
   }
-  const auto resolved = ResolveDevelopColorTransform(develop->Params().Params());
+  const auto develop_params = develop->Params().Params();
+  const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteMetalCameraColor: ") +
                              std::string(ColorTransformErrorMessage(resolved.error)));
@@ -520,8 +523,11 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   arena.UploadDirty(device.CommandContext());
   const auto binding        = arena.Binding(key);
   auto*      command_buffer = CommandBuffer(device);
+  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  auto&      tables =
+      UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),
-                      binding.offset);
+                      binding.offset, tables);
 }
 
 }  // namespace alcedo

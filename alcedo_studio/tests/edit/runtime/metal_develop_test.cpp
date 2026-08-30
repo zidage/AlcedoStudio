@@ -19,6 +19,7 @@
 #include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
 #include "edit/geometry/types.hpp"
@@ -223,6 +224,10 @@ auto MakeSrcImage(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba
 }
 
 }  // namespace
+
+TEST_F(MetalDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<MetalRenderDevice>("metal");
+}
 
 TEST_F(MetalDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
   gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<MetalRenderDevice>();

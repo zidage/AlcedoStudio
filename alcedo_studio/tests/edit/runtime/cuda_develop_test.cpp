@@ -18,6 +18,7 @@
 #include "decoded_rgb_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
+#include "dng_profile_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -134,6 +135,10 @@ auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
 }
 
 }  // namespace
+
+TEST_F(CudaDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<CudaRenderDevice>("cuda");
+}
 
 TEST_F(CudaDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
   gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<CudaRenderDevice>();

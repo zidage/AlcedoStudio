@@ -30,6 +30,7 @@
 #include "decoders/libraw_unpack_guard.hpp"
 #include "edit/operators/basic/camera_matrices.hpp"
 #include "image/dng_camera_matrix.hpp"
+#include "image/dng_color_profile_import.hpp"
 #include "json.hpp"
 #include "type/supported_file_type.hpp"
 
@@ -96,10 +97,6 @@ auto ContainsCaseInsensitive(const std::string& text, const std::string& pattern
 
 auto IsNikonCamera(const std::string& make, const std::string& model) -> bool {
   return ContainsCaseInsensitive(make, "nikon") || ContainsCaseInsensitive(model, "nikon");
-}
-
-auto IsHasselbladCamera(const std::string& make, const std::string& model) -> bool {
-  return ContainsCaseInsensitive(make, "hasselblad") || ContainsCaseInsensitive(model, "hasselblad");
 }
 
 auto IsDngExtension(const std::filesystem::path& path) -> bool {
@@ -902,19 +899,6 @@ auto ShouldPreferUniqueCameraModel(const std::string& current_model, const std::
          exif_compact.find(unique_compact) != std::string::npos;
 }
 
-auto HasEmbeddedDngProfileTables(const Exiv2::ExifData& exif_data) -> bool {
-  for (const auto& datum : exif_data) {
-    const std::string key = datum.key();
-    if (key.find("ProfileHueSatMapDims") != std::string::npos ||
-        key.find("ProfileHueSatMapData") != std::string::npos ||
-        key.find("ProfileLookTableDims") != std::string::npos ||
-        key.find("ProfileLookTableData") != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
 void PopulateDngColorMetadataFromExif(const Exiv2::ExifData&  exif_data,
                                       RawRuntimeColorContext& ctx) {
   const std::string exif_make  = ReadExifStringTag(exif_data, "Exif.Image.Make");
@@ -949,55 +933,13 @@ void PopulateDngColorMetadataFromExif(const Exiv2::ExifData&  exif_data,
   std::memcpy(ctx.color_matrix_2_, cm2, sizeof(ctx.color_matrix_2_));
   ctx.color_matrices_valid_ = true;
 
-  double analog_balance[3] = {1.0, 1.0, 1.0};
-  if (!ReadExifNumericArrayTag(exif_data, "Exif.Image.AnalogBalance", 3, analog_balance) ||
-      !IsFinitePositive3(analog_balance)) {
-    analog_balance[0] = 1.0;
-    analog_balance[1] = 1.0;
-    analog_balance[2] = 1.0;
-  }
-
-  double camera_calibration_1[9];
-  double camera_calibration_2[9];
-  SetIdentity3x3(camera_calibration_1);
-  SetIdentity3x3(camera_calibration_2);
-  const std::string camera_calibration_signature =
-      ReadExifStringTag(exif_data, "Exif.Image.CameraCalibrationSignature");
-  const std::string profile_calibration_signature =
-      ReadExifStringTag(exif_data, "Exif.Image.ProfileCalibrationSignature");
-  if (CameraCalibrationSignaturesMatch(camera_calibration_signature,
-                                       profile_calibration_signature)) {
-    double     cc1[9]  = {};
-    double     cc2[9]  = {};
-    const bool has_cc1 =
-        ReadExifNumericArrayTag(exif_data, "Exif.Image.CameraCalibration1", 9, cc1);
-    const bool has_cc2 =
-        ReadExifNumericArrayTag(exif_data, "Exif.Image.CameraCalibration2", 9, cc2);
-    if (has_cc1 && IsFinite3x3(cc1)) {
-      std::memcpy(camera_calibration_1, cc1, sizeof(camera_calibration_1));
-    }
-    if (has_cc2 && IsFinite3x3(cc2)) {
-      std::memcpy(camera_calibration_2, cc2, sizeof(camera_calibration_2));
-    } else if (has_cc1 && IsFinite3x3(cc1)) {
-      std::memcpy(camera_calibration_2, camera_calibration_1, sizeof(camera_calibration_2));
-    }
-    if (!has_cc1 && has_cc2 && IsFinite3x3(cc2)) {
-      std::memcpy(camera_calibration_1, camera_calibration_2, sizeof(camera_calibration_1));
-    }
-  }
-  ApplyAnalogBalanceAndCameraCalibration(ctx.color_matrix_1_, analog_balance, camera_calibration_1);
-  ApplyAnalogBalanceAndCameraCalibration(ctx.color_matrix_2_, analog_balance, camera_calibration_2);
+  ctx.dng_profile_          = ReadDngColorProfile(exif_data);
 
   double     fm1[9]         = {};
   double     fm2[9]         = {};
   const bool has_fm1 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix1", 9, fm1);
   const bool has_fm2 = ReadExifNumericArrayTag(exif_data, "Exif.Image.ForwardMatrix2", 9, fm2);
-  // Adobe Standard DNGs embed HueSatMap/LookTable as a post-PCS LUT, not as a
-  // replacement for ForwardMatrix. Hasselblad X2D tables are authored for the
-  // ColorMatrix + CAT path, so keep dropping FM only for that camera.
-  const bool drop_forward_matrix = HasEmbeddedDngProfileTables(exif_data) &&
-                                   IsHasselbladCamera(ctx.camera_make_, ctx.camera_model_);
-  if ((has_fm1 || has_fm2) && !drop_forward_matrix) {
+  if (has_fm1 || has_fm2) {
     if (!has_fm1 && has_fm2) {
       std::memcpy(fm1, fm2, sizeof(fm1));
     } else if (has_fm1 && !has_fm2) {
@@ -1656,6 +1598,19 @@ auto IsImportableExiv2Raster(const Exiv2::Image& exiv_image) -> bool {
   return exiv_image.pixelWidth() > 0 && exiv_image.pixelHeight() > 0;
 }
 
+auto MetadataExtractor::ReadRawColorContextForRender(const Image& image) -> RawRuntimeColorContext {
+  auto context = image.GetRawColorContext();
+  if (IsDngExtension(image.image_path_) && !context.dng_profile_) {
+    auto exif = ExtractEXIF(image.image_path_);
+    if (!exif) throw std::runtime_error("DNG profile: source metadata is unavailable");
+    // Replace formerly baked ColorMatrix data with the tagged matrices and separate calibration.
+    PopulateDngColorMetadataFromExif(exif->exifData(), context);
+    if (!context.dng_profile_)
+      throw std::runtime_error("DNG profile: source color matrices are missing");
+  }
+  return context;
+}
+
 void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {
   // LibRaw is the authority on what constitutes a RAW image, regardless of
   // file extension.  Try it first on every file; a successful open+unpack means
@@ -1730,14 +1685,11 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
         dng_metadata.has_value()) {
       ctx.dng_warp_rectilinear_present_ = dng_metadata->warp_rectilinear.has_value();
     }
-    try {
-      auto exif_data = ExtractEXIF(image_path);
-      if (exif_data && !exif_data->exifData().empty()) {
-        PopulateDngColorMetadataFromExif(exif_data->exifData(), ctx);
-      }
-    } catch (...) {
-      // Non-fatal: keep the LibRaw-derived context if Exiv2 cannot read the DNG tags.
+    auto exif_data = ExtractEXIF(image_path);
+    if (!exif_data || exif_data->exifData().empty()) {
+      throw std::runtime_error("DNG color profile metadata could not be read");
     }
+    PopulateDngColorMetadataFromExif(exif_data->exifData(), ctx);
   }
 
   ExifDisplayMetaData display{};

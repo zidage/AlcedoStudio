@@ -21,16 +21,16 @@ void RegisterOpenClGpuDagPrograms() {
             {
                 OpenClProgramDescriptor{
                     .name                = OpenCL::GpuDag::kGeometryCameraProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL},
+                    .source_paths        = {ALCEDO_OPENCL_DNG_PROFILE_MATH_H,
+                                            ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL},
                     .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
-                    .name                = OpenCL::GpuDag::kPrimaryGradeProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL,
-                                            ALCEDO_OPENCL_PRNG_CL,
-                                            ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL},
-                    .build_options       = "-cl-std=CL1.2",
+                    .name          = OpenCL::GpuDag::kPrimaryGradeProgramName,
+                    .source_paths  = {ALCEDO_OPENCL_DAG_PRIMARY_GRADE_CL, ALCEDO_OPENCL_PRNG_CL,
+                                      ALCEDO_OPENCL_DAG_PRIMARY_GRADE_NEIGHBOR_CL},
+                    .build_options = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
@@ -49,8 +49,7 @@ void RegisterOpenClGpuDagPrograms() {
                     .name                = OpenCL::GpuDag::kDrtProgramName,
                     .source_paths        = {ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL,
                                             ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL,
-                                            ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL,
-                                            ALCEDO_OPENCL_DAG_DRT_CL},
+                                            ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL, ALCEDO_OPENCL_DAG_DRT_CL},
                     .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },

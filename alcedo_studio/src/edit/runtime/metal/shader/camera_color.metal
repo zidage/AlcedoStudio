@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/edit/runtime/dng_profile_gpu_math.h"
 
 struct CameraColorGpuParams {
   float camera_to_ap1[9];
@@ -26,10 +27,11 @@ static inline float AcesccEncode(float value) {
   return (log2(value) + kA) / kB;
 }
 
-kernel void camera_color_acescc(texture2d<float, access::read> src [[texture(0)]],
+kernel void camera_color_acescc(texture2d<float, access::read>  src [[texture(0)]],
                                 texture2d<float, access::write> dst [[texture(1)]],
-                                constant CameraColorGpuParams& camera [[buffer(0)]],
-                                uint2 gid [[thread_position_in_grid]]) {
+                                constant CameraColorGpuParams&  camera [[buffer(0)]],
+                                device const float*             dng_profile [[buffer(1)]],
+                                uint2                           gid [[thread_position_in_grid]]) {
   if (gid.x >= src.get_width() || gid.y >= src.get_height()) {
     return;
   }
@@ -43,5 +45,8 @@ kernel void camera_color_acescc(texture2d<float, access::read> src [[texture(0)]
   const float z =
       camera.camera_to_ap1[6] * source.x + camera.camera_to_ap1[7] * source.y +
       camera.camera_to_ap1[8] * source.z;
-  dst.write(float4(AcesccEncode(x), AcesccEncode(y), AcesccEncode(z), source.w), gid);
+  const auto corrected = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
+  dst.write(float4(AcesccEncode(corrected.r), AcesccEncode(corrected.g), AcesccEncode(corrected.b),
+                   source.w),
+            gid);
 }

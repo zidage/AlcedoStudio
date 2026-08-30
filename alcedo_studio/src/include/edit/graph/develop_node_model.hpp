@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -14,6 +14,7 @@
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
+#include "image/dng_color_profile.hpp"
 
 namespace alcedo {
 
@@ -26,6 +27,7 @@ namespace alcedo {
  * to derive as-shot neutral when AsShotNeutral is absent.
  */
 struct DevelopCameraProfile {
+  DngColorProfilePtr    dng_profile;
   bool                  color_matrices_valid = false;
   std::array<double, 9> color_matrix_1{};
   std::array<double, 9> color_matrix_2{};
@@ -41,7 +43,8 @@ struct DevelopCameraProfile {
 };
 
 inline auto operator==(const DevelopCameraProfile& a, const DevelopCameraProfile& b) -> bool {
-  return a.color_matrices_valid == b.color_matrices_valid && a.color_matrix_1 == b.color_matrix_1 &&
+  return DngColorProfilesEqual(a.dng_profile, b.dng_profile) &&
+         a.color_matrices_valid == b.color_matrices_valid && a.color_matrix_1 == b.color_matrix_1 &&
          a.color_matrix_2 == b.color_matrix_2 &&
          a.forward_matrices_valid == b.forward_matrices_valid &&
          a.forward_matrix_1 == b.forward_matrix_1 && a.forward_matrix_2 == b.forward_matrix_2 &&

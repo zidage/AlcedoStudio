@@ -22,6 +22,8 @@
 #include "sleeve/sleeve_filesystem.hpp"
 #include "type/type.hpp"
 
+#include "app/pipeline_service.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -171,7 +173,7 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // Inject pre-extracted raw metadata from the real Image into the pipeline
     // so downstream operators resolve eagerly.
     if (source_img->HasRawColorContext()) {
-      pipeline_snapshot->executor_->InjectRawMetadata(source_img->GetRawColorContext());
+      PipelineMgmtService::InjectImageRawMetadata(*pipeline_snapshot->executor_, *source_img);
     }
 
     // Use full res export, even though the task requires resizing,

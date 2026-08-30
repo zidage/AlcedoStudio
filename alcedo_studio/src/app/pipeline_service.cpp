@@ -20,6 +20,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "image/metadata_extractor.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
@@ -372,6 +373,12 @@ void RebuildPipelineFromRoot(CPUPipelineExecutor& exec, const CommitGraph& graph
   exec.SetExecutionStages();
 }
 }  // namespace
+
+void PipelineMgmtService::InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image) {
+  if (image.HasRawColorContext()) {
+    executor.InjectRawMetadata(MetadataExtractor::ReadRawColorContextForRender(image));
+  }
+}
 
 void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
   // If the would-be evicted pipeline is pinned, keep it and evict another entry instead.

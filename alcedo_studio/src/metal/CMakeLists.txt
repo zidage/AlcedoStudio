@@ -306,6 +306,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_CAMERA_COLOR_METALLIB}"
         "Compiling Metal DAG camera color shader"
         "Linking Metal DAG camera color library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
     )
 
     alcedo_add_metal_library(
