@@ -18,6 +18,8 @@
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/dng_profile_gpu_data.hpp"
+#include "edit/runtime/dng_profile_gpu_math.h"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -34,7 +36,7 @@ auto MakeGpuParams(const DevelopColorTransform& transform) -> CameraColorGpuPara
 }
 
 __global__ void CameraColorKernel(const float4* input, float4* output, std::uint32_t pixel_count,
-                                  const CameraColorGpuParams* camera) {
+                                  const CameraColorGpuParams* camera, const float* dng_profile) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) {
     return;
@@ -45,8 +47,9 @@ __global__ void CameraColorKernel(const float4* input, float4* output, std::uint
   c.x           = m[0] * source.x + m[1] * source.y + m[2] * source.z;
   c.y           = m[3] * source.x + m[4] * source.y + m[5] * source.z;
   c.z           = m[6] * source.x + m[7] * source.y + m[8] * source.z;
-  output[index] = make_float4(cuda_acescc::Encode(c.x), cuda_acescc::Encode(c.y),
-                              cuda_acescc::Encode(c.z), source.w);
+  const auto corrected = DngApplyColorProfile(DngMakeRgb(c.x, c.y, c.z), dng_profile);
+  output[index] = make_float4(cuda_acescc::Encode(corrected.r), cuda_acescc::Encode(corrected.g),
+                              cuda_acescc::Encode(corrected.b), source.w);
 }
 
 }  // namespace
@@ -61,7 +64,8 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
   }
-  const auto resolved = ResolveDevelopColorTransform(develop->Params().Params());
+  const auto develop_params = develop->Params().Params();
+  const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
     throw std::runtime_error(std::string("ExecuteCudaCameraColor: ") +
                              std::string(ColorTransformErrorMessage(resolved.error)));
@@ -98,6 +102,8 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
 
+  const auto table_data = PackDngProfileGpuData(develop_params.camera_profile, resolved.transform);
+  auto&      tables     = UploadDngProfileGpuData(workspace, develop->Id(), table_data, context);
   const auto              binding = arena.Binding(key);
   const std::uint32_t     pixels  = width * height;
   constexpr std::uint32_t block   = 256;
@@ -105,7 +111,8 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
       static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
   CameraColorKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
       static_cast<const float4*>(input->Texture().DevicePointer()),
-      static_cast<float4*>(output.Texture().DevicePointer()), pixels, params);
+      static_cast<float4*>(output.Texture().DevicePointer()), pixels, params,
+      static_cast<const float*>(tables.DevicePointer()));
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaCameraColor: CUDA kernel launch failed");
   }

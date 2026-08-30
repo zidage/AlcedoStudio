@@ -117,6 +117,9 @@ class PipelineMgmtService final {
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
 
+  /// Load image-local RAW color data, including DNG profiles absent from older projects.
+  static void InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image);
+
   /// Persist the current editor graph and serialized pipeline state while the
   /// caller keeps its editor guard pinned. `expected_materialized_state` is
   /// the state observed before the in-memory history mutation and prevents a

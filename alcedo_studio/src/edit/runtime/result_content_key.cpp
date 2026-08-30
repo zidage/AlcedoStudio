@@ -87,6 +87,7 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> vo
   hash.MixF32(params.as_shot_cct);
   hash.MixF32(params.as_shot_tint);
   const auto& profile = params.camera_profile;
+  hash.MixU64(profile.dng_profile ? profile.dng_profile->fingerprint : 0);
   hash.MixBool(profile.color_matrices_valid);
   hash.MixBool(profile.forward_matrices_valid);
   hash.MixBool(profile.as_shot_neutral_valid);

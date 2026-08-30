@@ -12,7 +12,7 @@ namespace alcedo {
  * @brief Black/white and as-shot cam_mul used by GPU linearization. No LibRaw types.
  *
  * @p apply_as_shot_wb is true when the file has not already applied camera white
- * balance, matching LibRaw `as_shot_wb_applied != 1`.
+ * balance, matching the absence of LibRaw's LIBRAW_ASWB_APPLIED bit.
  */
 struct RawLinearizationParams {
   float         black_level[4]     = {0.0f, 0.0f, 0.0f, 0.0f};

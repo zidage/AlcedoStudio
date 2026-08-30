@@ -89,6 +89,10 @@ class MetadataExtractor {
    */
   static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image);
 
+  /// Resolve missing DNG profile data in older project metadata before rendering.
+  /// Does not mutate shared Image state; missing or invalid source data raises an error.
+  static auto ReadRawColorContextForRender(const Image& image) -> RawRuntimeColorContext;
+
   /**
    * @brief Extract metadata from a raw file using libraw and populate the Image with
    *        both display metadata (ExifDisplayMetaData) and raw color context

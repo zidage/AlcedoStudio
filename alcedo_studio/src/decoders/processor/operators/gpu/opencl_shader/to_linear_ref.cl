@@ -5,6 +5,27 @@
 // OpenCL kernels for RAW to linear reference conversion.
 // Depends on definitions from raw_utils_opencl.cl (concatenated at build time).
 
+typedef struct {
+  float black[3];
+  float scale[3];
+  uint integer_codes;
+} RawRgbLinearizationParams;
+
+__kernel void linearize_rgb(global float4* rgba, uint width, uint height,
+                            RawRgbLinearizationParams params, uint offset) {
+  const uint x = get_global_id(0);
+  const uint y = get_global_id(1);
+  if (x >= width || y >= height) return;
+  float4 value = rgba[offset + y * width + x];
+  for (int c = 0; c < 3; ++c) {
+    value[c] -= params.black[c];
+    if (params.integer_codes) value[c] = fmax(value[c], 0.0f);
+    value[c] *= params.scale[c];
+  }
+  value.w = 1.0f;
+  rgba[offset + y * width + x] = value;
+}
+
 // Converts uint16 raw input to linearized float output in one pass.
 __kernel void to_linear_ref_u16_to_f32(global const ushort* image_in,
                                        global float*          image_out,

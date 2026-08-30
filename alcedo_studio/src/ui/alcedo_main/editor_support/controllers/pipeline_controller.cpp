@@ -8,6 +8,8 @@
 
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "image/image.hpp"
+#include "app/pipeline_service.hpp"
+
 namespace alcedo::ui::controllers {
 namespace {
 
@@ -114,14 +116,10 @@ void RebuildBaselinePipelineForImage(const std::shared_ptr<CPUPipelineExecutor>&
   exec->ResetToCleanBaselineAdjustments();
 
   if (image_pool && image_id != 0) {
-    try {
-      auto img = image_pool->Read<std::shared_ptr<Image>>(
-          image_id, [](const std::shared_ptr<Image>& image) { return image; });
-      if (img && img->HasRawColorContext()) {
-        exec->InjectRawMetadata(img->GetRawColorContext());
-      }
-    } catch (...) {
-      // Match editor startup: metadata injection is best-effort for non-RAW inputs.
+    auto img = image_pool->Read<std::shared_ptr<Image>>(
+        image_id, [](const std::shared_ptr<Image>& image) { return image; });
+    if (img) {
+      PipelineMgmtService::InjectImageRawMetadata(*exec, *img);
     }
   }
 

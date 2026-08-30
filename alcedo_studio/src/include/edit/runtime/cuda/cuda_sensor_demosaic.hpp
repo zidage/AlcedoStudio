@@ -19,6 +19,11 @@ namespace alcedo {
 
 class CudaRenderDevice;
 
+/// Process unpacked RGB with the same HLR and camera-space pack as demosaiced CFA.
+void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& input,
+                           cv::cuda::GpuMat uploaded_rgba, cv::cuda::GpuMat packed, bool hlr,
+                           cv::cuda::Stream& stream);
+
 /**
  * @brief Test hook: inject a model cache so Neural load failure can be asserted.
  *

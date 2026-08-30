@@ -10,6 +10,7 @@
 
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "image/dng_camera_matrix.hpp"
 #include "test_camera_profile.hpp"
 
 namespace alcedo {
@@ -277,6 +278,36 @@ TEST(GpuDagModelGraph, BindDevelopCameraProfileWritesAsShotCctFromStoredNeutral)
   EXPECT_LE(bound.as_shot_cct, 15000.0f);
   EXPECT_GE(bound.as_shot_tint, -150.0f);
   EXPECT_LE(bound.as_shot_tint, 150.0f);
+}
+
+TEST(GpuDagModelGraph, DevelopColorTransformSolvesDaylightCctWhenAnalogBalanceIsFoldedIntoColorMatrix) {
+  auto payload = DualIlluminantPayload();
+  payload.wb_mode = "as_shot";
+  payload.camera_profile.as_shot_neutral_valid = true;
+  payload.camera_profile.as_shot_neutral       = {1.0, 0.999595, 0.998996};
+  payload.camera_profile.forward_matrices_valid = false;
+  payload.camera_profile.color_matrix_1 = {0.8784, -0.4791, 0.1177, -0.3468, 1.0693, 0.3213,
+                                           0.0009, 0.0507, 0.7395};
+  payload.camera_profile.color_matrix_2 = {0.746, -0.2365, -0.0588, -0.5687, 1.3442, 0.2474,
+                                           -0.0624, 0.1156, 0.6584};
+
+  const auto without_analog = ResolveDevelopColorTransform(payload);
+  ASSERT_TRUE(without_analog.ok);
+  EXPECT_LT(without_analog.transform.resolved_cct, 3000.0f);
+  EXPECT_GT(std::abs(without_analog.transform.resolved_tint), 50.0f);
+
+  const double analog_balance[3]     = {2.411133, 1.0, 1.62793};
+  const double camera_calibration[9] = {1.0008, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.9523};
+  ApplyAnalogBalanceAndCameraCalibration(payload.camera_profile.color_matrix_1.data(),
+                                         analog_balance, camera_calibration);
+  ApplyAnalogBalanceAndCameraCalibration(payload.camera_profile.color_matrix_2.data(),
+                                         analog_balance, camera_calibration);
+
+  const auto with_analog = ResolveDevelopColorTransform(payload);
+  ASSERT_TRUE(with_analog.ok);
+  EXPECT_GT(with_analog.transform.resolved_cct, 4800.0f);
+  EXPECT_LT(with_analog.transform.resolved_cct, 6200.0f);
+  EXPECT_LT(std::abs(with_analog.transform.resolved_tint), 40.0f);
 }
 
 }  // namespace

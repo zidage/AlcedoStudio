@@ -15,8 +15,10 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "decoded_rgb_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
+#include "dng_profile_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -133,6 +135,30 @@ auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
 }
 
 }  // namespace
+
+TEST_F(CudaDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<CudaRenderDevice>("cuda");
+}
+
+TEST_F(CudaDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
+  gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<CudaRenderDevice>();
+}
+
+TEST_F(CudaDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
+  gpu_dag_test::VerifyRgbWarpPublishes<CudaRenderDevice>();
+}
+
+TEST_F(CudaDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
+  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::CUDA);
+}
+
+TEST_F(CudaDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739.ARW", ImageType::ARW, "cuda");
+}
+
+TEST_F(CudaDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739_dng.dng", ImageType::DNG, "cuda");
+}
 
 TEST_F(CudaDevelopFixture, CudaDevelopProducesFiniteCameraSceneLinearRgbFromBayerInput) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();

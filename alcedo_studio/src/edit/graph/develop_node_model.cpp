@@ -28,7 +28,8 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
           {"as_shot_cct", payload.as_shot_cct},
           {"as_shot_tint", payload.as_shot_tint},
           {"camera_profile",
-           {{"color_matrices_valid", profile.color_matrices_valid},
+           {{"dng_profile", DngColorProfileToJson(profile.dng_profile)},
+            {"color_matrices_valid", profile.color_matrices_valid},
             {"color_matrix_1", json_util::MakeJsonArray(profile.color_matrix_1.data(), 9)},
             {"color_matrix_2", json_util::MakeJsonArray(profile.color_matrix_2.data(), 9)},
             {"forward_matrices_valid", profile.forward_matrices_valid},
@@ -67,6 +68,8 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
     if (json.contains("camera_profile") && json["camera_profile"].is_object()) {
       const auto& profile_json = json["camera_profile"];
       auto&       profile      = payload.camera_profile;
+      profile.dng_profile =
+          DngColorProfileFromJson(profile_json.value("dng_profile", nlohmann::json(nullptr)));
       profile.color_matrices_valid =
           json_util::ReadBool(profile_json, "color_matrices_valid", profile.color_matrices_valid);
       json_util::ReadNumberArray(profile_json, "color_matrix_1", profile.color_matrix_1.data(), 9);

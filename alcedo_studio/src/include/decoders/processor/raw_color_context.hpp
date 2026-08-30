@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "image/dng_color_profile.hpp"
+
 #include <json.hpp>
 #include <string>
 
@@ -14,6 +16,7 @@ namespace alcedo {
 /// headers without heavyweight dependencies (Image, OperatorParams, …) can
 /// use it without pulling in libraw / decoder_scheduler.
 struct RawRuntimeColorContext {
+  DngColorProfilePtr dng_profile_;
   bool              valid_                   = false;
   bool              output_in_camera_space_  = false;
   float             cam_mul_[3]              = {1.0f, 1.0f, 1.0f};

@@ -6,11 +6,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +22,8 @@
 #include <pthread.h>
 #endif
 
+#include "decoders/processor/raw_normalization.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "prepared_raw_test_support.hpp"
@@ -129,6 +135,244 @@ TEST(GpuDagRawInput, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint) {
   EXPECT_FALSE(plan.Contains(GpuPassKind::UploadRaw));
   EXPECT_FALSE(plan.Contains(GpuPassKind::Linearize));
   EXPECT_FALSE(plan.Contains(GpuPassKind::Demosaic));
+}
+
+TEST(GpuDagRawInput, SonyDecodedRgbMapsBlackAndWhiteWithoutRepeatingWhiteBalance) {
+  auto raw = std::make_unique<LibRaw>();
+  auto& color = raw->imgdata.color;
+  color.as_shot_wb_applied = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_SONY;
+  color.black              = 1024;
+  color.maximum            = 17536;
+  for (int c = 0; c < 4; ++c) {
+    color.linear_max[c] = 15360;
+    color.cam_mul[c]    = c == 0 ? 2468.0f : 1024.0f;
+  }
+  for (int channels : {3, 4}) {
+    SCOPED_TRACE(channels);
+    // Use a non-contiguous ROI to also exercise row stride handling.
+    cv::Mat      storage(2, 7, CV_MAKETYPE(CV_16U, channels), cv::Scalar::all(0));
+    cv::Mat      source     = storage(cv::Rect(1, 0, 5, 2));
+    const ushort samples[]  = {921, 1024, 9280, 17536, 19313};
+    const float  expected[] = {0.0f, 0.0f, 0.5f, 1.0f, 18289.0f / 16512.0f};
+    for (int y = 0; y < source.rows; ++y) {
+      for (int x = 0; x < source.cols; ++x) {
+        for (int c = 0; c < channels; ++c) source.ptr<ushort>(y)[x * channels + c] = samples[x];
+      }
+    }
+    const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, color);
+    for (int y = 0; y < source.rows; ++y) {
+      for (int x = 0; x < source.cols; ++x) {
+        for (int c = 0; c < 3; ++c) {
+          EXPECT_NEAR(result.ptr<float>(y)[x * channels + c], expected[x], 1e-6f);
+        }
+      }
+    }
+  }
+}
+
+TEST(GpuDagRawInput, RgbGpuParametersRejectInvalidLevelsAndWhiteBalanceInsteadOfProducingNaNs) {
+  auto  raw   = std::make_unique<LibRaw>();
+  auto& color = raw->imgdata.color;
+  std::fill_n(color.cam_mul, 4, 1.0f);
+  color.black   = 1024;
+  color.maximum = 1024;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.maximum   = 16383;
+  color.cblack[2] = 15359;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.cblack[2]  = 0;
+  color.cam_mul[1] = 0.0f;
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, true), std::runtime_error);
+  color.cam_mul[1] = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_THROW(raw_norm::BuildRgbLinearization(color, false), std::runtime_error);
+}
+
+TEST(GpuDagRawInput, SonyDecodedRgbRejectsInvalidRangeAndHonorsChannelBlackOffsets) {
+  auto  raw                = std::make_unique<LibRaw>();
+  auto& color              = raw->imgdata.color;
+  color.as_shot_wb_applied = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_SONY;
+  color.black              = 100;
+  color.maximum            = 1100;
+  color.cblack[1]          = 200;
+  cv::Mat    source(1, 1, CV_16UC3, cv::Scalar(600, 700, 1100));
+  const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, color);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[0], 0.5f);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[1], 0.5f);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[2], 1.0f);
+  color.maximum = 300;
+  EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
+  color.maximum = 0;
+  EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
+}
+
+TEST(GpuDagRawInput, FullRangeIntegerRgbUsesZeroBlackAnd65535White) {
+  auto raw                              = std::make_unique<LibRaw>();
+  raw->imgdata.color.as_shot_wb_applied = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_CANON;
+  raw->imgdata.color.black = 0;
+  raw->imgdata.color.maximum = 65535;
+  cv::Mat    source(1, 1, CV_16UC3, cv::Scalar(0, 32768, 65535));
+  const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, raw->imgdata.color);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[0], 0.0f);
+  EXPECT_NEAR(result.at<cv::Vec3f>(0, 0)[1], 32768.0f / 65535.0f, 1e-7f);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[2], 1.0f);
+}
+
+TEST(GpuDagRawInput, IntegerRgbUsesDecodedLevelsWithoutCameraOrFormatFlags) {
+  auto raw = std::make_unique<LibRaw>();
+  auto& color = raw->imgdata.color;
+  ASSERT_EQ(color.as_shot_wb_applied, 0);
+  ASSERT_EQ(raw->imgdata.idata.dng_version, 0U);
+  color.black = 0;
+  color.maximum = 16383;
+  for (int c = 0; c < 3; ++c) color.cblack[c] = 1024;
+  cv::Mat source(1, 1, CV_16UC3, cv::Scalar(1024, 8192, 16383));
+  const auto result = raw_norm::ConvertUnpackedRgbToFloat(source, color);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[0], 0.0f);
+  EXPECT_NEAR(result.at<cv::Vec3f>(0, 0)[1], 7168.0f / 15359.0f, 1e-6f);
+  EXPECT_FLOAT_EQ(result.at<cv::Vec3f>(0, 0)[2], 1.0f);
+  color.maximum = 0;
+  EXPECT_THROW(raw_norm::ConvertUnpackedRgbToFloat(source, color), std::runtime_error);
+}
+
+TEST(GpuDagRawInput, SonyA7CiiYcbcrFilePreservesCodesForGpuLinearization) {
+  // The large camera fixture is optional; do not add private RAW files to source control.
+  const char* override_path = std::getenv("ALCEDO_SONY_YCBCR_RAW");
+  const auto  path          = override_path ? std::filesystem::path(override_path)
+                                            : std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" /
+                                        "sony" / "a7cii" / "ycbcr_compressed" / "DSC04739.ARW";
+  if (!override_path && !std::filesystem::exists(path)) {
+    GTEST_SKIP() << "Sony YCbCr fixture is missing: " << path;
+  }
+  const auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty());
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(const_cast<std::byte*>(encoded.data()), encoded.size()),
+            LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  ASSERT_NE(raw->imgdata.rawdata.color4_image, nullptr);
+  ASSERT_EQ(raw->imgdata.color.as_shot_wb_applied, LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_SONY);
+  ASSERT_EQ(raw->imgdata.color.black, 1024U);
+  ASSERT_EQ(raw->imgdata.color.maximum, 17536U);
+
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
+  ASSERT_EQ(prepared.pixels.format, HostPixelFormat::F32Rgba);
+  EXPECT_EQ(prepared.linearization.apply_as_shot_wb, 0);
+  ASSERT_TRUE(prepared.rgb_linearization.has_value());
+  EXPECT_FLOAT_EQ(prepared.rgb_linearization->black[0], 1024.0f);
+  EXPECT_FLOAT_EQ(prepared.rgb_linearization->scale[0], 1.0f / 16512.0f);
+  // DSC04739's default image crop is (8, 4, 4608, 3072), inside the decode area.
+  ASSERT_EQ(prepared.host_extent.width, 4608U);
+  ASSERT_EQ(prepared.host_extent.height, 3072U);
+  const auto* output = reinterpret_cast<const float*>(prepared.pixels.bytes.get());
+  for (unsigned y = 0; y < prepared.host_extent.height; y += 17) {
+    for (unsigned x = 0; x < prepared.host_extent.width; x += 19) {
+      const auto* sample =
+          raw->imgdata.rawdata
+              .color4_image[(y + 4) * raw->imgdata.sizes.raw_width + x + 8];
+      const auto* pixel = output + y * (prepared.pixels.stride_bytes / sizeof(float)) + x * 4;
+      for (int c = 0; c < 3; ++c) {
+        const float expected = static_cast<float>(sample[c]);
+        EXPECT_NEAR(pixel[c], expected, 1e-6f);
+        EXPECT_TRUE(std::isfinite(pixel[c]));
+      }
+      EXPECT_FLOAT_EQ(pixel[3], 1.0f);
+    }
+  }
+}
+
+TEST(GpuDagRawInput, ConvertedSonyLinearDngUsesItsOwnBlackAndWhiteLevels) {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "sony" /
+                    "a7cii" / "ycbcr_compressed" / "DSC04739_dng.dng";
+  if (!std::filesystem::exists(path)) GTEST_SKIP() << "Linear DNG fixture is missing: " << path;
+  auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty());
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(encoded.data(), encoded.size()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  ASSERT_NE(raw->imgdata.rawdata.color4_image, nullptr);
+  ASSERT_NE(raw->imgdata.idata.dng_version, 0U);
+  ASSERT_EQ(raw->imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_SONY, 0);
+  for (int c = 0; c < 3; ++c) {
+    ASSERT_EQ(raw->imgdata.color.black + raw->imgdata.color.cblack[c], 1024U);
+    ASSERT_EQ(raw->imgdata.color.linear_max[c], 16383);
+  }
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.input_kind, RawInputKind::DebayeredRgb);
+  ASSERT_EQ(prepared.pixels.format, HostPixelFormat::F32Rgba);
+  ASSERT_EQ(prepared.host_extent, (Extent2D{4622, 3078}));
+  ASSERT_TRUE(prepared.rgb_linearization.has_value());
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_FLOAT_EQ(prepared.rgb_linearization->black[c], 1024.0f);
+    EXPECT_NEAR(prepared.rgb_linearization->scale[c],
+                raw->imgdata.color.cam_mul[c] / raw->imgdata.color.cam_mul[1] / 15359.0f, 1e-10f);
+  }
+  // The host preserves unpacked codes; the GPU applies the recorded levels and gains.
+  const auto* output = reinterpret_cast<const float*>(prepared.pixels.bytes.get());
+  for (unsigned y = 0; y < prepared.host_extent.height; y += 17) {
+    for (unsigned x = 0; x < prepared.host_extent.width; x += 19) {
+      const auto* sample = raw->imgdata.rawdata.color4_image[
+          y * raw->imgdata.sizes.raw_width + x];
+      const auto* pixel = output + y * (prepared.pixels.stride_bytes / sizeof(float)) + x * 4;
+      for (int c = 0; c < 3; ++c) {
+        const float expected = static_cast<float>(sample[c]);
+        ASSERT_NEAR(pixel[c], expected, 1e-6f) << "pixel " << x << ',' << y << " channel " << c;
+      }
+      EXPECT_FLOAT_EQ(pixel[3], 1.0f);
+    }
+  }
+}
+
+TEST(GpuDagRawInput, CanonR6MarkIiiCr3UsesColorDataSpecularWhite) {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "canon" / "r6iii" /
+                    "9327411796.cr3";
+  if (!std::filesystem::exists(path)) GTEST_SKIP() << "R6 Mark III fixture is missing: " << path;
+
+  auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty());
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(encoded.data(), encoded.size()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.ColorDataSubVer, 66);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.SpecularWhiteLevel, 14351);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.AverageBlackLevel, 2048);
+  for (int c = 0; c < 4; ++c) {
+    ASSERT_EQ(raw->imgdata.color.linear_max[c], 14351);
+    ASSERT_GT(raw->imgdata.color.linear_max[c], 1000)
+        << "version-48 ColorData offsets would set linear_max to a LUT value near 147";
+  }
+
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  ASSERT_NE(raw->imgdata.rawdata.raw_image, nullptr);
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.input_kind, RawInputKind::BayerRaw);
+  for (int c = 0; c < 4; ++c) {
+    EXPECT_NEAR(prepared.linearization.black_level[c], 2048.0f, 1.0f);
+    EXPECT_NEAR(prepared.linearization.white_level[c], 14351.0f, 1.0f);
+  }
+
+  const auto curve = raw_norm::BuildLinearizationCurve(raw->imgdata.rawdata);
+  const auto* samples = raw->imgdata.rawdata.raw_image;
+  const int raw_width = raw->imgdata.sizes.raw_width;
+  const int left = raw->imgdata.sizes.left_margin;
+  const int top = raw->imgdata.sizes.top_margin;
+  int clipped = 0;
+  int counted = 0;
+  for (int y = top; y < top + raw->imgdata.sizes.height; y += 64) {
+    for (int x = left; x < left + raw->imgdata.sizes.width; x += 64) {
+      const int color = raw->COLOR(y, x);
+      const float linear =
+          raw_norm::NormalizeSample(static_cast<float>(samples[y * raw_width + x]),
+                                    curve.black_level[color], curve.white_level[color]);
+      ASSERT_TRUE(std::isfinite(linear));
+      if (linear >= 1.0f) {
+        ++clipped;
+      }
+      ++counted;
+    }
+  }
+  ASSERT_GT(counted, 0);
+  EXPECT_LT(clipped, counted / 5)
+      << "ColorData version 66 parsed with version-48 white (147) clips the frame to 1.0";
 }
 
 TEST(GpuDagRawInput, UnsupportedCfaDoesNotProducePreparedRawInput) {

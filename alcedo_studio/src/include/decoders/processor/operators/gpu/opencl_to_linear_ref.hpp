@@ -9,10 +9,13 @@
 #include <libraw/libraw.h>
 
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "decoders/processor/raw_rgb_linearization_params.hpp"
 #include "image/opencl_image.hpp"
 
 namespace alcedo {
 namespace OpenCL {
+
+void LinearizeRgb(opencl::OpenClImage& img, const RawRgbLinearizationParams& params);
 
 void ToLinearRef(opencl::OpenClImage& img, LibRaw& raw_processor, const RawCfaPattern& pattern);
 

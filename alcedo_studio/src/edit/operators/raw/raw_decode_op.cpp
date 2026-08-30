@@ -313,15 +313,17 @@ void RawDecodeOp::SetParams(const nlohmann::json& params) {
 void RawDecodeOp::SetGlobalParams(OperatorParams& params) const {
   const auto& ctx = inherent_raw_context_;
 
-  const bool inherent_changed =
+  const bool  inherent_changed =
       params.raw_runtime_valid_ != ctx.valid_ || params.raw_camera_make_ != ctx.camera_make_ ||
       params.raw_camera_model_ != ctx.camera_model_ ||
+      !DngColorProfilesEqual(params.raw_dng_profile_, ctx.dng_profile_) ||
       params.raw_color_matrices_valid_ != ctx.color_matrices_valid_ ||
       params.raw_forward_matrices_valid_ != ctx.forward_matrices_valid_ ||
       params.raw_as_shot_neutral_valid_ != ctx.as_shot_neutral_valid_ ||
       params.raw_lens_make_ != ctx.lens_make_ || params.raw_lens_model_ != ctx.lens_model_;
 
   params.raw_runtime_valid_      = ctx.valid_;
+  params.raw_dng_profile_        = ctx.dng_profile_;
   params.raw_decode_input_space_ =
       ctx.output_in_camera_space_ ? RawDecodeInputSpace::CAMERA : RawDecodeInputSpace::AP0;
 

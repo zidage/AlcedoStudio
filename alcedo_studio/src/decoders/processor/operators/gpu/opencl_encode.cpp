@@ -263,6 +263,17 @@ auto MakePackParams(RectI crop, std::uint32_t plane_width, std::uint32_t src_str
 
 }  // namespace
 
+void EncodeLinearizeRgb(OpenClEncodeQueue& stream, OpenClBufferView rgba, std::uint32_t width,
+                        std::uint32_t height, const RawRgbLinearizationParams& params) {
+  auto kernel = Kernel(kCoreProgramName, RawProcessor::kLinearizeRgbKernelName);
+  SetMem(kernel, 0, RequireMem(rgba.native, "RGB"), "RGB arg0");
+  SetUInt(kernel, 1, width, "RGB arg1");
+  SetUInt(kernel, 2, height, "RGB arg2");
+  CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(params), &params), "RGB params");
+  SetUInt(kernel, 4, ElementOffset(rgba, 4 * sizeof(float)), "RGB offset");
+  Dispatch2D(stream, kernel, width, height);
+}
+
 void EncodeToLinearRef(OpenClEncodeQueue& stream, OpenClBufferView src_u16,
                        OpenClBufferView dst_f32, std::uint32_t width, std::uint32_t height,
                        const RawLinearizationParams& linearization, const RawCfaPattern& pattern) {

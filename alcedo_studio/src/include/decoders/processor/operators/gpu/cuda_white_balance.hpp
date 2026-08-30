@@ -11,10 +11,14 @@
 
 #include "decoders/processor/raw_linearization_params.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "decoders/processor/raw_rgb_linearization_params.hpp"
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
 namespace CUDA {
+/// Linearize unpacked RGBA into preallocated RGB for the normal HLR/pack stages.
+void LinearizeRgb(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst,
+                  const RawRgbLinearizationParams& params, cv::cuda::Stream* stream = nullptr);
 void ToLinearRef(cv::cuda::GpuMat& img, LibRaw& raw_processor, const RawCfaPattern& pattern,
                  cv::cuda::Stream* stream = nullptr);
 

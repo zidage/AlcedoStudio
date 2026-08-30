@@ -19,12 +19,14 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "decoded_rgb_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_cache.hpp"
 #include "decoders/processor/operators/gpu/opencl_encode.hpp"
 #include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
+#include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/render_request.hpp"
 #include "edit/geometry/source_geometry.hpp"
@@ -281,6 +283,31 @@ auto MakeSrcImage(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba
 }
 
 }  // namespace
+
+TEST_F(OpenClDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<OpenClRenderDevice>("opencl");
+}
+
+TEST_F(OpenClDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
+  gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<OpenClRenderDevice>();
+}
+
+TEST_F(OpenClDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
+  gpu_dag_test::VerifyRgbWarpPublishes<OpenClRenderDevice>();
+}
+
+TEST_F(OpenClDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
+  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::OpenCL);
+}
+
+TEST_F(OpenClDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739.ARW", ImageType::ARW, "opencl");
+}
+
+TEST_F(OpenClDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
+  gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739_dng.dng", ImageType::DNG,
+                                                        "opencl");
+}
 
 TEST_F(OpenClDevelopFixture, OpenClDevelopLinearizeMatchesCudaReferenceWithinTolerance) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();

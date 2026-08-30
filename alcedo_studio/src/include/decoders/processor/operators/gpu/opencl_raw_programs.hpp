@@ -16,6 +16,7 @@ inline constexpr const char* kHighlightProgramName    = "raw_processor_highlight
 inline constexpr const char* kCvtRefSpaceProgramName  = "raw_processor_cvt_ref_space";
 
 inline constexpr const char* kToLinearRefKernelName   = "to_linear_ref_u16_to_f32";
+inline constexpr const char* kLinearizeRgbKernelName            = "linearize_rgb";
 inline constexpr const char* kCfaClamp01KernelName    = "cfa_clamp01_f32";
 
 inline constexpr const char* kRcdInitAndVhKernelName  = "rcd_init_and_vh";

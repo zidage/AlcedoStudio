@@ -50,7 +50,7 @@ constexpr DecodeRes ResolutionToDecodeRes(ThumbnailResolution res) {
 
 void InjectSnapshotRawContext(CPUPipelineExecutor& exec, const std::shared_ptr<Image>& image) {
   if (image && image->HasRawColorContext()) {
-    exec.InjectRawMetadata(image->GetRawColorContext());
+    PipelineMgmtService::InjectImageRawMetadata(exec, *image);
   }
 }
 
@@ -264,7 +264,8 @@ struct ThumbnailService::State {
     key.resolution           = resolution;
     key.purpose              = purpose;
     key.edit_version_hash    = ReadCurrentVersionHash(id);
-    key.cache_schema_version = 1;
+    // Invalidate images rendered before embedded DNG profiles were applied.
+    key.cache_schema_version = 2;
     if (key.edit_version_hash.empty()) {
       return std::nullopt;
     }

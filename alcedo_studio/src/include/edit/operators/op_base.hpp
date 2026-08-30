@@ -283,6 +283,7 @@ struct OperatorParams {
   float                raw_rgb_cam_[9]                               = {};
   std::string          raw_camera_make_                              = {};
   std::string          raw_camera_model_                             = {};
+  DngColorProfilePtr   raw_dng_profile_;
   bool                 raw_color_matrices_valid_                     = false;
   double               raw_color_matrix_1_[9]                        = {};
   double               raw_color_matrix_2_[9]                        = {};
@@ -375,6 +376,7 @@ struct OperatorParams {
   /// Call this at import/load time so that downstream operators (ColorTemp, LensCalib)
   /// can resolve eagerly in their SetGlobalParams without waiting for pipeline execution.
   void                         PopulateRawMetadata(const RawRuntimeColorContext& ctx) {
+    raw_dng_profile_   = ctx.dng_profile_;
     raw_runtime_valid_ = ctx.valid_;
     raw_decode_input_space_ =
         ctx.output_in_camera_space_ ? RawDecodeInputSpace::CAMERA : RawDecodeInputSpace::AP0;

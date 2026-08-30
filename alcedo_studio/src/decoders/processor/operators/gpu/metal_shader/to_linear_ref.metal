@@ -6,6 +6,26 @@
 
 using namespace metal;
 
+struct RawRgbLinearizationParams {
+  float black[3];
+  float scale[3];
+  uint  integer_codes;
+};
+
+kernel void linearize_rgb(texture2d<float, access::read_write> rgba [[texture(0)]],
+                          constant RawRgbLinearizationParams&  params [[buffer(0)]],
+                          uint2                                gid [[thread_position_in_grid]]) {
+  if (gid.x >= rgba.get_width() || gid.y >= rgba.get_height()) return;
+  float4 value = rgba.read(gid);
+  for (int c = 0; c < 3; ++c) {
+    value[c] -= params.black[c];
+    if (params.integer_codes) value[c] = max(value[c], 0.0f);
+    value[c] *= params.scale[c];
+  }
+  value.w = 1.0f;
+  rgba.write(value, gid);
+}
+
 struct WBParams {
   float black_level[4];
   float white_level[4];

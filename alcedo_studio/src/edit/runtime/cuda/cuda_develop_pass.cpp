@@ -83,43 +83,46 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
       plan.source.kind == DevelopInputKind::DirectRgb) {
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
     if (input.pixels.format != HostPixelFormat::F32Rgba ||
-        input.pixels.ByteCount() != out_tex.Bytes()) {
-      throw std::runtime_error("ExecuteCudaDevelop: direct RGB size does not match output");
+        input.pixels.stride_bytes != width * 4 * sizeof(float)) {
+      throw std::runtime_error("ExecuteCudaDevelop: expected tightly packed RGB input");
     }
-    workspace.Device().UploadTexture2D(out_tex, input.pixels.Span(), ctx);
-    if (pending.has_value()) {
-      pending->Commit();
+    void* uploaded = AllocateTransient(workspace, input.pixels.ByteCount());
+    workspace.Device().UploadDeviceMemory(uploaded, input.pixels.Span(), ctx);
+    auto rgba = WrapF32C4(uploaded, static_cast<int>(width), static_cast<int>(height));
+    auto packed =
+        WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
+    ExecuteCudaRgbAndPack(device, input, rgba, packed, hlr, stream);
+  } else {
+    const int w = static_cast<int>(input.host_extent.width);
+    const int h = static_cast<int>(input.host_extent.height);
+    if (w <= 0 || h <= 0) {
+      throw std::runtime_error("ExecuteCudaDevelop: empty CFA");
     }
-    return;
+    const std::uint32_t packed_stride = static_cast<std::uint32_t>(w) * sizeof(std::uint16_t);
+    if (input.pixels.stride_bytes != packed_stride) {
+      throw std::runtime_error("ExecuteCudaDevelop: CFA plane must be tightly packed");
+    }
+
+    void* u16_ptr =
+        AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(std::uint16_t));
+    void* f32_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+    workspace.Device().UploadDeviceMemory(u16_ptr, input.pixels.Span(), ctx);
+
+    auto src_u16 = WrapU16(u16_ptr, w, h);
+    auto linear  = WrapF32C1(f32_ptr, w, h);
+    CUDA::ToLinearRef(src_u16, linear, input.linearization, input.cfa_pattern, &stream);
+
+    if (!hlr) {
+      CUDA::Clamp01(linear, &stream);
+    }
+
+    cv::cuda::GpuMat packed =
+        WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
+    ExecuteCudaSensorDemosaicAndPack(device, input, flags, linear, packed, stream);
   }
-
-  const int w = static_cast<int>(input.host_extent.width);
-  const int h = static_cast<int>(input.host_extent.height);
-  if (w <= 0 || h <= 0) {
-    throw std::runtime_error("ExecuteCudaDevelop: empty CFA");
-  }
-  const std::uint32_t packed_stride = static_cast<std::uint32_t>(w) * sizeof(std::uint16_t);
-  if (input.pixels.stride_bytes != packed_stride) {
-    throw std::runtime_error("ExecuteCudaDevelop: CFA plane must be tightly packed");
-  }
-
-  void* u16_ptr =
-      AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(std::uint16_t));
-  void* f32_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  workspace.Device().UploadDeviceMemory(u16_ptr, input.pixels.Span(), ctx);
-
-  auto src_u16 = WrapU16(u16_ptr, w, h);
-  auto linear  = WrapF32C1(f32_ptr, w, h);
-  CUDA::ToLinearRef(src_u16, linear, input.linearization, input.cfa_pattern, &stream);
-
-  if (!hlr) {
-    CUDA::Clamp01(linear, &stream);
-  }
-
-  cv::cuda::GpuMat packed =
-      WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
-  ExecuteCudaSensorDemosaicAndPack(device, input, flags, linear, packed, stream);
 
   if (input.dng_warp_rectilinear.has_value()) {
     auto& warped_lease = AcquireRgba(workspace, sensor_id, out_w, out_h);
