@@ -5,6 +5,7 @@
 #pragma once
 
 #include <span>
+#include <string_view>
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/port.hpp"
@@ -22,6 +23,11 @@ class INodeModel {
 
   [[nodiscard]] virtual auto Id() const -> const NodeId&                 = 0;
   [[nodiscard]] virtual auto Type() const -> const OperatorTypeId&       = 0;
+  /**
+   * @brief UI label for this node. Distinct from @ref Id; renaming a Color Grade
+   *        must not change NodeId. Develop and DRT names are fixed.
+   */
+  [[nodiscard]] virtual auto DisplayName() const -> std::string_view   = 0;
   [[nodiscard]] virtual auto InputPorts() const -> std::span<const PortDescriptor>  = 0;
   [[nodiscard]] virtual auto OutputPorts() const -> std::span<const PortDescriptor> = 0;
 

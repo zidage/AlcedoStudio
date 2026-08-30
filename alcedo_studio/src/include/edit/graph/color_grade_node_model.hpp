@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <memory>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "edit/graph/i_node_model.hpp"
@@ -34,9 +36,16 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override {
     return type_ids::ColorGradeNode();
   }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return display_name_; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
+
+  /**
+   * @brief Replace the UI label. Does not change @ref Id.
+   * @param name New label. Empty names are rejected by graph commands, not by this setter.
+   */
+  void SetDisplayName(std::string name);
 
   /**
    * @brief Default primary grade: CAT02 through film grain in the documented order.
@@ -69,6 +78,7 @@ class ColorGradeNodeModel final : public INodeModel {
 
  private:
   NodeId id_;
+  std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
   bool  enabled_ = true;
   float mix_     = 1.0f;

@@ -8,6 +8,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "edit/geometry/types.hpp"
 #include "edit/graph/i_node_model.hpp"
@@ -27,6 +28,7 @@ class RasterMaskNodeModel final : public INodeModel {
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override {
     return type_ids::RasterMaskNode();
   }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return "Mask"; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;

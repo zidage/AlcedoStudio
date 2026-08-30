@@ -144,6 +144,18 @@ auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
   return PipelineDocument::FromJson(src.ToJson());
 }
 
+auto ColorGradesOnImageBackbone(const PipelineDocument& document)
+    -> std::vector<const ColorGradeNodeModel*> {
+  std::vector<const ColorGradeNodeModel*> grades;
+  for (const auto& id : document.Graph().ImageBackboneNodeIds()) {
+    const auto* grade = Downcast<ColorGradeNodeModel>(document.Graph().FindNode(id));
+    if (grade != nullptr) {
+      grades.push_back(grade);
+    }
+  }
+  return grades;
+}
+
 auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool {
   return document.Develop() != nullptr && document.PrimaryGrade() != nullptr &&
          document.Drt() != nullptr;

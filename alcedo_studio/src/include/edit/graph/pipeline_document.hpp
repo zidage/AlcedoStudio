@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -68,6 +69,14 @@ class PipelineDocument {
  * @brief Deep copy via JSON round-trip. The clone does not share Model pointers.
  */
 [[nodiscard]] auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument;
+
+/**
+ * @brief Color Grade nodes on the unique Develop-to-DRT scene-image path, in path order.
+ *
+ * Empty when the backbone cannot be walked. Off-path Color Grades are omitted.
+ */
+[[nodiscard]] auto ColorGradesOnImageBackbone(const PipelineDocument& document)
+    -> std::vector<const ColorGradeNodeModel*>;
 
 /**
  * @brief True when Apply may remirror the legacy stage adapter into this document.

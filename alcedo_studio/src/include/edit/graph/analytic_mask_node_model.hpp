@@ -7,6 +7,7 @@
 #include <array>
 #include <memory>
 #include <span>
+#include <string_view>
 
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -51,6 +52,7 @@ class AnalyticMaskNodeModel final : public INodeModel {
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override {
     return type_ids::AnalyticMaskNode();
   }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return "Mask"; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;

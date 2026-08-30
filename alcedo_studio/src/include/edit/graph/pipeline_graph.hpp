@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -23,14 +24,40 @@ struct GraphEdge {
 /**
  * @brief Simple directed graph of INodeModel instances.
  *
- * Does not own GPU resources. Validate reports endpoint, port-type, and cycle errors.
+ * Does not own GPU resources. @ref Validate reports endpoint, port-type, fan-in, and
+ * cycle errors. @ref ValidateImageBackbone additionally requires a unique Develop to
+ * DRT scene-image path that visits every Color Grade. Product graph edits go through
+ * pipeline graph commands; this type does not expose a mutable node container.
  */
 class PipelineGraph {
  public:
   void AddNode(std::unique_ptr<INodeModel> node);
   void Connect(NodeId from_node, PortId from_port, NodeId to_node, PortId to_port);
+  /**
+   * @brief Remove one exact edge. No-op if that edge is absent.
+   */
+  void Disconnect(const NodeId& from_node, const PortId& from_port, const NodeId& to_node,
+                   const PortId& to_port);
+  /**
+   * @brief Remove @p id and every incident edge.
+   * @throws std::invalid_argument if @p id is not in the graph.
+   */
+  void RemoveNode(const NodeId& id);
 
   [[nodiscard]] auto Validate() const -> std::vector<GraphValidationError>;
+  /**
+   * @brief Scene-image backbone rules on top of @ref Validate.
+   *
+   * Rejects scene-image fan-out, a path that does not run Develop to DRT, Color
+   * Grades off that path, and non-image node types on the path. Mask edges are
+   * ignored. Does not replace @ref Validate.
+   */
+  [[nodiscard]] auto ValidateImageBackbone() const -> std::vector<GraphValidationError>;
+  /**
+   * @brief Develop through Color Grades to DRT along unique scene-image edges.
+   * @return Empty when the unique backbone cannot be walked.
+   */
+  [[nodiscard]] auto ImageBackboneNodeIds() const -> std::vector<NodeId>;
   /**
    * @brief Topological node order.
    * @pre Validate() is empty; otherwise throws std::runtime_error.
@@ -45,7 +72,6 @@ class PipelineGraph {
   [[nodiscard]] auto FindNode(std::string_view id) -> INodeModel*;
   [[nodiscard]] auto FindNode(std::string_view id) const -> const INodeModel*;
 
-  [[nodiscard]] auto Nodes() -> std::vector<std::unique_ptr<INodeModel>>& { return nodes_; }
   [[nodiscard]] auto Nodes() const -> const std::vector<std::unique_ptr<INodeModel>>& {
     return nodes_;
   }

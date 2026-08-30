@@ -14,11 +14,14 @@
 namespace alcedo {
 
 /**
- * @brief Builds the complete Develop -> PrimaryColorGrade -> DRT plan. Does not allocate GPU
+ * @brief Builds Develop -> first backbone Color Grade (if any) -> DRT. Does not allocate GPU
  * memory.
  *
- * Validates the three-node document. SensorDevelop, GeometryResample, and CameraToAp1 are
- * separate compiled passes with distinct GraphValueIds.
+ * Validates the document graph and image backbone. Zero Color Grades omits
+ * PrimaryColorGrade and feeds DRT from Develop. One or more Color Grades compile only
+ * the first node on the image backbone; the node id need not be grade.primary.
+ * SensorDevelop, GeometryResample, and CameraToAp1 are separate compiled passes with
+ * distinct GraphValueIds.
  *
  * The static plan key covers graph topology, adjustment types and order, source layout,
  * and backend capability version. Viewport, crop, CCT, Grade values, and DRT values are

@@ -4,10 +4,12 @@
 
 #include "edit/graph/pipeline_graph.hpp"
 
+#include <algorithm>
 #include <queue>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
 
@@ -26,6 +28,33 @@ void PipelineGraph::AddNode(std::unique_ptr<INodeModel> node) {
 void PipelineGraph::Connect(NodeId from_node, PortId from_port, NodeId to_node, PortId to_port) {
   edges_.push_back(GraphEdge{std::move(from_node), std::move(from_port), std::move(to_node),
                              std::move(to_port)});
+}
+
+void PipelineGraph::Disconnect(const NodeId& from_node, const PortId& from_port,
+                                 const NodeId& to_node, const PortId& to_port) {
+  const auto it = std::find_if(edges_.begin(), edges_.end(), [&](const GraphEdge& edge) {
+    return edge.from_node == from_node && edge.from_port == from_port && edge.to_node == to_node &&
+           edge.to_port == to_port;
+  });
+  if (it != edges_.end()) {
+    edges_.erase(it);
+  }
+}
+
+void PipelineGraph::RemoveNode(const NodeId& id) {
+  if (FindNode(id) == nullptr) {
+    throw std::invalid_argument("Unknown node: " + std::string{id.Value()});
+  }
+  edges_.erase(std::remove_if(edges_.begin(), edges_.end(),
+                              [&id](const GraphEdge& edge) {
+                                return edge.from_node == id || edge.to_node == id;
+                              }),
+               edges_.end());
+  nodes_.erase(std::remove_if(nodes_.begin(), nodes_.end(),
+                              [&id](const std::unique_ptr<INodeModel>& node) {
+                                return node->Id() == id;
+                              }),
+               nodes_.end());
 }
 
 auto PipelineGraph::FindNode(const NodeId& id) -> INodeModel* {
@@ -164,6 +193,136 @@ auto PipelineGraph::Validate() const -> std::vector<GraphValidationError> {
   }
   if (visited != nodes_.size()) {
     errors.push_back({GraphValidationCode::Cycle, "PipelineGraph contains a cycle"});
+  }
+  return errors;
+}
+
+auto PipelineGraph::ImageBackboneNodeIds() const -> std::vector<NodeId> {
+  const INodeModel* develop = nullptr;
+  const INodeModel* drt      = nullptr;
+  int               develop_count = 0;
+  int               drt_count      = 0;
+  for (const auto& node : nodes_) {
+    if (node->Type() == type_ids::DevelopNode()) {
+      ++develop_count;
+      develop = node.get();
+    }
+    if (node->Type() == type_ids::DrtNode()) {
+      ++drt_count;
+      drt = node.get();
+    }
+  }
+  if (develop == nullptr || drt == nullptr || develop_count != 1 || drt_count != 1) {
+    return {};
+  }
+
+  std::vector<NodeId> path;
+  std::unordered_set<std::string> visited;
+  NodeId current = develop->Id();
+  while (true) {
+    const std::string key{current.Value()};
+    if (visited.contains(key)) {
+      return {};
+    }
+    visited.insert(key);
+    path.push_back(current);
+    const auto* node = FindNode(current);
+    if (node == nullptr) {
+      return {};
+    }
+    std::vector<NodeId> outgoing;
+    for (const auto& edge : edges_) {
+      if (edge.from_node != current) {
+        continue;
+      }
+      const auto* from_port = FindPort(*node, edge.from_port, false);
+      if (from_port == nullptr || from_port->data_type != PortDataType::SceneImage) {
+        continue;
+      }
+      outgoing.push_back(edge.to_node);
+    }
+    if (outgoing.size() > 1) {
+      return {};
+    }
+    if (outgoing.empty()) {
+      if (current == drt->Id()) {
+        return path;
+      }
+      return {};
+    }
+    current = outgoing.front();
+  }
+}
+
+auto PipelineGraph::ValidateImageBackbone() const -> std::vector<GraphValidationError> {
+  std::vector<GraphValidationError> errors;
+  const INodeModel* develop = nullptr;
+  const INodeModel* drt      = nullptr;
+  for (const auto& node : nodes_) {
+    if (node->Type() == type_ids::DevelopNode()) {
+      develop = node.get();
+    }
+    if (node->Type() == type_ids::DrtNode()) {
+      drt = node.get();
+    }
+  }
+  if (develop == nullptr || drt == nullptr) {
+    errors.push_back({GraphValidationCode::BrokenImageBackbone,
+                       "Image backbone requires one Develop and one DRT"});
+    return errors;
+  }
+
+  for (const auto& node : nodes_) {
+    std::size_t scene_out = 0;
+    for (const auto& edge : edges_) {
+      if (edge.from_node != node->Id()) {
+        continue;
+      }
+      const auto* from_port = FindPort(*node, edge.from_port, false);
+      if (from_port != nullptr && from_port->data_type == PortDataType::SceneImage) {
+        ++scene_out;
+      }
+    }
+    if (scene_out > 1) {
+      errors.push_back({GraphValidationCode::SceneImageFanOut,
+                        "Scene-image fan-out from " + std::string{node->Id().Value()}});
+    }
+  }
+
+  const auto path = ImageBackboneNodeIds();
+  if (path.empty()) {
+    errors.push_back({GraphValidationCode::BrokenImageBackbone,
+                       "Graph has no unique Develop to DRT scene-image path"});
+    return errors;
+  }
+  if (path.front() != develop->Id() || path.back() != drt->Id()) {
+    errors.push_back({GraphValidationCode::BrokenImageBackbone,
+                       "Image backbone does not start at Develop and end at DRT"});
+  }
+
+  std::unordered_set<std::string> on_path;
+  for (const auto& id : path) {
+    on_path.insert(std::string{id.Value()});
+    const auto* node = FindNode(id);
+    if (node == nullptr) {
+      continue;
+    }
+    const auto& type = node->Type();
+    if (type != type_ids::DevelopNode() && type != type_ids::ColorGradeNode() &&
+        type != type_ids::DrtNode()) {
+      errors.push_back({GraphValidationCode::BrokenImageBackbone,
+                        "Non-image node on backbone: " + std::string{id.Value()}});
+    }
+  }
+  for (const auto& node : nodes_) {
+    if (node->Type() != type_ids::ColorGradeNode()) {
+      continue;
+    }
+    if (!on_path.contains(std::string{node->Id().Value()})) {
+      errors.push_back({GraphValidationCode::ColorGradeNotOnImageBackbone,
+                        "Color Grade is not on the image backbone: " +
+                            std::string{node->Id().Value()}});
+    }
   }
   return errors;
 }

@@ -56,6 +56,7 @@ auto ColorGradeNodeModel::ToJson() const -> nlohmann::json {
   }
   return {{"id", std::string{id_.Value()}},
           {"type", std::string{Type().Text()}},
+          {"display_name", display_name_},
           {"enabled", enabled_},
           {"mix", mix_},
           {"adjustments", std::move(adjustments)}};
@@ -86,6 +87,7 @@ auto ColorGradeNodeModel::MakeDefault(NodeId id) -> std::unique_ptr<ColorGradeNo
 auto ColorGradeNodeModel::FromJson(const nlohmann::json& json) -> std::unique_ptr<ColorGradeNodeModel> {
   auto        node    = std::make_unique<ColorGradeNodeModel>(NodeId{json.at("id").get<std::string>()});
   const auto& catalog = BuiltinAdjustmentCatalog::Instance();
+  node->display_name_ = json.value("display_name", std::string{"Color Grade"});
   node->enabled_      = json.value("enabled", true);
   node->mix_          = json.value("mix", 1.0f);
   if (json.contains("adjustments") && json["adjustments"].is_array()) {
@@ -106,6 +108,8 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json) -> std::unique_pt
 }
 
 void ColorGradeNodeModel::SetEnabled(bool enabled) { enabled_ = enabled; }
+
+void ColorGradeNodeModel::SetDisplayName(std::string name) { display_name_ = std::move(name); }
 
 void ColorGradeNodeModel::SetMix(float mix) { mix_ = std::clamp(mix, 0.0f, 1.0f); }
 
