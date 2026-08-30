@@ -61,6 +61,67 @@ auto PipelineGraph::FindNode(const NodeId& id) -> INodeModel* {
   return const_cast<INodeModel*>(static_cast<const PipelineGraph*>(this)->FindNode(id));
 }
 
+auto PipelineGraph::ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected,
+                                      std::vector<GraphEdge>        connected,
+                                      std::unique_ptr<INodeModel> inserted, const NodeId& removed)
+    -> std::vector<GraphValidationError> {
+  if ((inserted && (!removed.Empty() || FindNode(inserted->Id()))) ||
+      (!removed.Empty() && !FindNode(removed))) {
+    throw std::invalid_argument("Invalid backbone node insertion/removal");
+  }
+  const auto matches = [](const GraphEdge& a, const GraphEdge& b) {
+    return a.from_node == b.from_node && a.from_port == b.from_port && a.to_node == b.to_node &&
+           a.to_port == b.to_port;
+  };
+  std::vector<std::pair<std::size_t, GraphEdge>> retained;
+  for (std::size_t i = 0; i < edges_.size(); ++i) {
+    const auto& edge = edges_[i];
+    if ((!removed.Empty() && (edge.from_node == removed || edge.to_node == removed)) ||
+        std::any_of(disconnected.begin(), disconnected.end(),
+                    [&](const auto& other) { return matches(edge, other); })) {
+      retained.emplace_back(i, edge);
+    }
+  }
+  // Reserve both forward and restoration capacity before changing any live state.
+  edges_.reserve(edges_.size() + connected.size());
+  nodes_.reserve(nodes_.size() + (inserted ? 1 : 0));
+  const auto                  removed_index = static_cast<std::size_t>(std::distance(
+      nodes_.begin(), std::find_if(nodes_.begin(), nodes_.end(),
+                                                    [&](const auto& node) { return node->Id() == removed; })));
+  std::unique_ptr<INodeModel> retained_node;
+  const bool                  has_insert = inserted != nullptr;
+  for (auto it = retained.rbegin(); it != retained.rend(); ++it) {
+    edges_.erase(edges_.begin() + it->first);
+  }
+  const auto kept_edge_count = edges_.size();
+  for (auto& edge : connected) edges_.push_back(std::move(edge));
+  if (has_insert) nodes_.push_back(std::move(inserted));
+  if (!removed.Empty()) {
+    retained_node = std::move(nodes_[removed_index]);
+    nodes_.erase(nodes_.begin() + removed_index);
+  }
+  const auto restore = [&] {
+    edges_.resize(kept_edge_count);
+    for (auto& [index, edge] : retained) {
+      edges_.insert(edges_.begin() + index, std::move(edge));
+    }
+    if (has_insert) nodes_.pop_back();
+    if (retained_node) {
+      nodes_.insert(nodes_.begin() + removed_index, std::move(retained_node));
+    }
+  };
+  try {
+    auto errors   = Validate();
+    auto backbone = ValidateImageBackbone();
+    errors.insert(errors.end(), backbone.begin(), backbone.end());
+    if (!errors.empty()) restore();
+    return errors;
+  } catch (...) {
+    restore();
+    throw;
+  }
+}
+
 auto PipelineGraph::FindNode(const NodeId& id) const -> const INodeModel* {
   for (const auto& node : nodes_) {
     if (node->Id() == id) {

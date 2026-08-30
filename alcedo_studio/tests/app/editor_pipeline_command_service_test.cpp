@@ -6,11 +6,143 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <stdexcept>
+
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "support/editor_parameter_target_test.hpp"
 
 namespace alcedo {
 namespace {
+
+/// Instrument only this unrelated Model, so repeated patches cannot hide a graph serialization.
+class SerializationCountingModel : public IOperatorModel {
+ public:
+  mutable int reads = 0;
+  auto        Type() const -> OperatorTypeId override { return value_.Type(); }
+  auto        IsDefault() const -> bool override { return value_.IsDefault(); }
+  auto        IsDirty() const -> bool override { return value_.IsDirty(); }
+  auto        MakeFullDto() const -> OperatorParamDto override { return value_.MakeFullDto(); }
+  auto        TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
+    return value_.TakeDirtyPatch();
+  }
+  void RestoreDirty(DirtyFieldMask fields) override { value_.RestoreDirty(fields); }
+  void MarkAllDirty() override { value_.MarkAllDirty(); }
+  auto ToJson() const -> nlohmann::json override {
+    ++reads;
+    return value_.ToJson();
+  }
+  void LoadJson(const nlohmann::json& json) override { value_.LoadJson(json); }
+
+ private:
+  ExposureModel value_;
+};
+
+/// Simulate a multi-field setter failing after it already changed a value.
+class PartiallyFailingModel final : public SerializationCountingModel {
+ public:
+  void LoadJson(const nlohmann::json& json) override {
+    SerializationCountingModel::LoadJson(json);
+    if (json.at("exposure_ev") == 5.0) throw std::runtime_error("injected setter failure");
+  }
+};
+
+TEST(EditorPipelineCommandServiceTest, ThrowingSetterRestoresOnlyAffectedModelParameters) {
+  auto  document          = CreateDefaultPipelineDocument();
+  auto  failing           = std::make_unique<PartiallyFailingModel>();
+  auto* affected          = failing.get();
+  auto* primary           = document.PrimaryGrade();
+  auto* original_exposure = primary->FindAdjustment(AdjustmentInstanceId{"grade.primary.exposure"});
+  document.InsertAdjustment(NodeId{"grade.primary"}, 0, AdjustmentInstanceId{"failing"},
+                            std::move(failing));
+  const auto before             = document.ToJson();
+  auto       target             = test::ColorGradeFieldTarget("exposure");
+  target.adjustment_instance_id = AdjustmentInstanceId{"failing"};
+  std::string error;
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target, {{"exposure_ev", 5.0}}, &error));
+  EXPECT_EQ(error, "injected setter failure");
+  EXPECT_EQ(document.PrimaryGrade(), primary);
+  EXPECT_EQ(primary->FindAdjustment(AdjustmentInstanceId{"failing"}), affected);
+  EXPECT_EQ(primary->FindAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}),
+            original_exposure);
+  EXPECT_EQ(document.ToJson(), before);
+}
+
+TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto  counter  = std::make_unique<SerializationCountingModel>();
+  auto* observed = counter.get();
+  document.InsertAdjustment(NodeId{"grade.primary"}, 0, AdjustmentInstanceId{"counted"},
+                            std::move(counter));
+  std::vector<const INodeModel*>     nodes;
+  std::vector<const IOperatorModel*> models;
+  for (const auto& node : document.Graph().Nodes()) nodes.push_back(node.get());
+  auto* grade = document.PrimaryGrade();
+  for (std::size_t i = 0; i < grade->AdjustmentCount(); ++i) {
+    models.push_back(&grade->AdjustmentAt(i));
+    (void)grade->AdjustmentAt(i).TakeDirtyPatch();
+  }
+  const auto edges = document.ToJson().at("edges");
+  observed->reads  = 0;
+  document.ClearTopologyDirty();
+  std::string error;
+  for (int i = 0; i < 40; ++i) {
+    ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
+                                            {{"exposure_ev", i / 4.0}}, &error))
+        << error;
+  }
+  EXPECT_EQ(observed->reads, 0);
+  EXPECT_FALSE(document.TopologyDirty());
+  for (std::size_t i = 0; i < nodes.size(); ++i)
+    EXPECT_EQ(document.Graph().Nodes()[i].get(), nodes[i]);
+  for (std::size_t i = 0; i < models.size(); ++i) EXPECT_EQ(&grade->AdjustmentAt(i), models[i]);
+  EXPECT_FALSE(observed->IsDirty());
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      grade->FindAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}));
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->Value(), 9.75f);
+  EXPECT_TRUE(exposure->IsDirty());
+  EXPECT_EQ(document.ToJson().at("edges"), edges);
+}
+
+TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyApplyOrDirtyModel) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* model    = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Sharpen());
+  ASSERT_NE(model, nullptr);
+  const auto before = model->ToJson();
+  (void)model->TakeDirtyPatch();
+  std::string error;
+  for (const auto& patch :
+       std::vector<nlohmann::json>{{{"amount", 12}, {"radius", "invalid"}},
+                                   {{"amount", nullptr}},
+                                   {{"amount", 12}, {"unknown", 1}},
+                                   {{"amount", std::numeric_limits<double>::infinity()}}}) {
+    EXPECT_FALSE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("sharpen"),
+                                             patch, &error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_EQ(model->ToJson(), before);
+    EXPECT_FALSE(model->IsDirty());
+  }
+}
+
+TEST(EditorPipelineCommandServiceTest, GeometryAndDevelopRejectInvalidValuesBeforeAnyWrite) {
+  auto                  document = CreateDefaultPipelineDocument();
+  const auto            before   = document.ToJson();
+  std::string           error;
+  EditorParameterTarget geometry;
+  geometry.owner_kind = EditorParameterOwnerKind::Document;
+  geometry.field_key  = "crop_rotate";
+  EXPECT_FALSE(ApplyEditorParameterPatch(
+      document, geometry, {{"crop_rect", {0, 0, 1, "bad"}}, {"rotation_degrees", 30}}, &error));
+  EditorParameterTarget develop;
+  develop.owner_kind = EditorParameterOwnerKind::Develop;
+  develop.node_id    = NodeId{"develop"};
+  develop.field_key  = "raw_decode";
+  EXPECT_FALSE(ApplyEditorParameterPatch(
+      document, develop, {{"demosaic_method", "test"}, {"user_wb", "bad"}}, &error));
+  EXPECT_EQ(document.ToJson(), before);
+}
 
 TEST(EditorPipelineCommandServiceTest, SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages) {
   auto document = CreateDefaultPipelineDocument();

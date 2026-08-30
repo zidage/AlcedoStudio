@@ -44,6 +44,17 @@ class PipelineGraph {
    */
   void RemoveNode(const NodeId& id);
 
+  /**
+   * @brief Apply one backbone edit, retaining only removed edges and the removed node.
+   * @pre Caller holds the live executor render lock. Insert/remove are mutually exclusive.
+   * @return Validation errors after restoring exact edge order and node ownership, or empty.
+   * All storage is reserved before mutation; exceptions restore the same objects and propagate.
+   */
+  auto ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected,
+                         std::vector<GraphEdge>        connected,
+                         std::unique_ptr<INodeModel> inserted = nullptr, const NodeId& removed = {})
+      -> std::vector<GraphValidationError>;
+
   [[nodiscard]] auto Validate() const -> std::vector<GraphValidationError>;
   /**
    * @brief Scene-image backbone rules on top of @ref Validate.

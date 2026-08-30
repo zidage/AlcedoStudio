@@ -2,833 +2,589 @@
 
 Date: 2026-08-29
 
-Status: in progress — NM1.1–NM1.3 complete; NM1.4–NM1.5 not started.
+Revised: 2026-08-30 — 按单 live document、原地函数应用、共享 executor 重定执行方案。
+
+Status: in progress — NM1.4 A 已完成并通过本版验收，NM1.1/NM1.3 的原地参数修改与局部恢复已修正；NM1.2 保留；NM1.4 B/C、NM1.5 待实施。
 
 Branch: `feature/pipeline-document-editing`
 
-Base: `origin/main` at NM0 merge (`d5a96267`, QuickQanava pin already on main).
+Base: `origin/main` at NM0 merge (`d5a96267`)。
 
-对应总体方案：[Node-aware Pipeline Editing and Mask Authoring 总体方案](../node_mask_editor_master_plan.md) 第 2.1、6、7.1、11、21.2 节。
+对应[总体方案](../node_mask_editor_master_plan.md)第 2.1、6、11、21.2、21.5 节。
+[NM0](phase_nm0_quickqanava_integration_plan.md)只记录 QuickQanava 接入；history 的阶段边界定义在总体方案 NM4。
 
-本文件是 NM1 的执行方案。总体方案只跟踪一级 Phase；本文件拆 `NM1.1`–`NM1.5`，并记录调用链、测试和未完成项。
-
----
-
-## 1. 必读
-
-- [总体方案](../node_mask_editor_master_plan.md)
-- [GPU DAG 编辑管线重构 Phase 计划](../gpu_dag_pipeline_rebuild_phase_plan.md) 中 format v2、`CreateDefaultPipelineDocument`、`LegacyPipelineImporter`
-- 本仓库 `AGENTS.md`：roadmap 用词禁令、测试禁止 `smoke`、临时文件只放 `build/tmp/`
-
-发生冲突时的优先级：
-
-1. 总体方案已锁定的产品语义（单主链、Clean 与 Default 的区别、typed target、失败回滚）。2026-08-30 起，总体方案不再要求旧 stage 项目可打开，也不再要求双向 stage 镜像。
-2. 本执行方案对 NM1 子 Phase、完整 typed target、输入序列锁定、以及 thumbnail DAG 的明确要求。
-3. 当前代码中已经落地的 GPU DAG 三节点 runtime。
+本版替换原 NM1 的整图 candidate、独立 snapshot executor 和多份编辑状态要求。既有功能不推倒重来；
+从当前 NM1.4 工作区继续，先消除 NM1.1/NM1.3 的相关实现债务，再完成渲染和保存读取。
+2026-08-30 的方案修订未撤回未提交源码；其后 NM1.4 A 已定向实施，见第 10.1 节完成记录。过去的测试结果保留在第 16 节，不代表 B/C 或整个 NM1 已完成。
 
 ---
 
-## 2. 开工时源码审计（2026-08-29）
+## 1. 目标与优先级
 
-### 2.1 双写仍然存在
+**NM1 的交付物是一套可以直接使用的内存编辑基础：每张图片一个 live document，参数和结构通过领域函数原地修改；
+同一 executor 根据任务请求渲染；保存读取不再经过 stage 镜像。**
 
-产品编辑状态不是 `PipelineDocument`。当前写入链：
+NM1 结束时，应能从 app/service 测试完成以下流程：
 
-```text
-QML slider
-  -> EditorSessionEditController::HandlePatch(field_key)
-  -> EditorHistoryMutation::CommitAdjustment
-  -> ApplyEditorAdjustmentOperatorState(CPUPipelineExecutor stages)
-  -> GPU ApplyGpuDagProduct
-       if mirror: LegacyPipelineImporter::ApplyOnto(document, stage JSON)
-  -> SavePipeline dirty: Import(stages) 整份替换 document_
-```
+1. 创建或加载 document，取得同一图片的 pipeline 使用权。
+2. 通过完整 target 修改参数；通过领域命令新增、删除、重接 Color Grade。
+3. 用同一 document/executor 交替执行编辑器、缩略图、分析和导出渲染。
+4. 保存并重新读取相同的 document 参数和结构，释放后台任务不触发保存。
+5. 非法输入、任务取消、WAL 写入失败和存储失败均返回真实结果，不留下半次修改或泄漏使用权。
 
-`LoadPipelineDocument` 注释写明：live CPU stages 是 editor source of truth，format v2 图被 remirror。`SyncPipelineDocument` 只写 `document.ToJson()`，但 dirty `SavePipeline` 会用 stages 重建整张图。
+这不是完整节点历史的交付阶段。typed history schema、跨进程节点重放、Version/Paste 和项目格式切换仍属于 NM4。
+Nodes UI 属于 NM5，完整 adjustment UI 接线属于 NM6。
 
-`AllowsLegacyStageAdapterRemirror` 只检查 Develop / `grade.primary` / DRT 三个节点是否存在。
+冲突时按以下顺序执行：
 
-### 2.2 图命令不完整
+1. 2026-08-30 用户确认的本版简化原则和 NM4 边界。
+2. 总体方案的单主链、Default/Clean、完整 target、质量策略与禁止替代实现的产品规则。
+3. 原完成记录和现有代码；它们只说明起点，不能反过来要求保留复制模型。
 
-`PipelineGraph` 只有 `AddNode()` 和 `Connect()`，并公开可变 `Nodes()`。没有断开、删除、桥接或原子 Reconnect。`Validate()` 检查 endpoint 数量、端口类型、环和单端口 fan-in，**不**检查：
+参考：[单 live pipeline、WAL 与 checkpoint 方案](../../ui/editor_single_live_pipeline_wal_checkpoint_plan.md)。
+其中关于单操作对象、history 决定 HEAD 的原则继续适用；历史文档中的不同 root/chain 设计不作为 NM1 新增状态的理由。
 
-- 恰好一条 Develop → … → DRT 的 scene-image 路径；
-- scene-image 禁止 fan-out；
-- 全部 Color Grade 都在这条路径上；
-- Develop / DRT 不可删除、不可替换。
+## 2. 当前起点与未提交改动处置
 
-### 2.3 Default 基线不在文档工厂里
+截至本次审阅：
 
-`ColorGradeNodeModel::MakeDefault()` 用 catalog 默认值：`ExposureModel` 的 `exposure_ev = 0`，`SaturationModel` 的 `saturation = 1.0`。产品 `+1.5 EV` / 旧 UI `+30` 只存在于 `pipeline_defaults::kCleanBaselineExposure` / `kCleanBaselineSaturation`，靠 remirror 灌进图。
+| 已有内容 | 保留的能力 | 必须修正的部分 |
+| --- | --- | --- |
+| NM1.1 图命令与主链校验 | 完整删除、重接、稳定 NodeId、零 Grade 编译 | 命令内整图 JSON 回滚及调用方 candidate clone |
+| NM1.2 Default/Clean 工厂 | Default 的 1.5 EV/1.3 saturation；独立 Clean 工厂 | 不重写该功能 |
+| NM1.3 完整 target 与 live history 接线 | 输入序列锁定、参数写入、同会话参数 Undo/Redo | 每次 preview/settled 的整图 clone、未统一的锁、stage 参数读写 |
+| 未提交 NM1.4 | DAG 像素接线、错误传播、已有真实 RAW 测试准备 | 独立 document/executor、stage export/import、逐层旧格式分流、强制副本独立的测试 |
+| 现有 scheduler/runtime | render lock、任务参数、frame sink 切换、session/单次资源 | 检查所有退出路径和调用方是否真正使用这些能力 |
 
-`LegacyPipelineImporter` 的对应关系已经固定：legacy `exposure = 1.5` → `exposure_ev = 1.5`；legacy `saturation = 30` → 新模型 `1.3`（`1 + offset/100`）。
+执行决定：**在当前工作区定向改写，不执行整批 reset/revert。** 只撤掉下面列出的实现要求；
+删除前确认用途，不触碰无关改动。原 NM1.4 的“complete”已撤销。
 
-注意：现有 `kCleanBaseline*` 名字是产品 Default 观感，不是总体方案里的 Clean（无视觉变化）。NM1 新 API 不得复用 `CleanBaseline` 表示 identity。
+| 文件/实现 | 继续实施时的处置 |
+| --- | --- |
+| `pipeline_service.hpp/.cpp` 的 `PipelineSnapshot`、`LoadPipelineSnapshot`、`ReleasePipelineSnapshot` | 用普通 pipeline 获取/释放承载后台任务；迁移调用方后删除 snapshot 专用对象和生命周期 |
+| `pipeline_document.hpp/.cpp` 的 `HasUsablePipelineGraph` | 将合法性检查集中到 document 读取边界；不再把它作为逐层选择 live、executor、存储或 stage 的分流器 |
+| `pipeline_cpu.cpp` 的 `!require_host_output` remirror 条件 | 删除产品 remirror；不能只保护 host output 而让编辑器继续覆盖 document |
+| `thumbnail_service.cpp`、`export_service.cpp` | 保留 DAG 输出和真实错误；改为持有普通 pipeline 使用权，任务配置移入 render lock |
+| snapshot/thumbnail 测试 | 保留参数、输出、错误、资源释放断言；删除“必须新建 executor”“必须不共享 Model”的验收 |
+| `default_pipeline_test.cpp` 新增的格式探测断言 | 按统一读取边界的行为测试取舍，不为保留辅助函数而保留断言 |
 
-### 2.4 参数没有节点身份
+## 3. 锁定的模型
 
-`EditorAdjustmentPatch` 只有 `field_key` + JSON。`HandlePatch` 不碰 `PipelineDocument`。History payload 仍是 `OrdinaryEditPayload`（`OperatorType + PipelineStageName + field`）。这是 NM4 要换掉的格式；NM1 不改 commit schema。
+| 对象 | 职责 |
+| --- | --- |
+| History | 唯一拥有 Version/HEAD；最终已提交状态的恢复依据 |
+| Live `PipelineDocument` / OperatorModel | 唯一可写内存状态；预览期间允许包含尚未提交的值 |
+| `PipelineGuard` 或等价使用句柄 | 保证同一图片的 document/executor 存活；不是冻结状态 |
+| Executor / Renderer | 读取 document 和本次 RenderRequest；维护运行资源、编译和结果缓存 |
+| Pipeline checkpoint | 已保存 document 及其对应提交位置；只用于快速恢复，不是另一份可编辑状态 |
+| WAL | 保护尚未完成持久化的操作；不是第二份 history |
 
-### 2.5 Thumbnail 仍先重建 stage 再渲染
+“document 是编辑和渲染输入”不等于“document 覆盖 history”。完整的加载顺序在 NM4 接入：
+先恢复合法 WAL、确定 history HEAD，再比较 checkpoint 记录的 commit hash；不匹配则从确定的初始状态重放。
+NM1 不新增并行 HEAD、逐参数 chain hash、document/stage 身份比较或多写者发布协议。
 
-`LoadPipelineSnapshot` 导出 stage JSON，`ImportPipelineParams` 建成独立 `CPUPipelineExecutor`，再 `SetPipelineDocument(..., mirror)`。`ThumbnailService` 把该 executor 交给 `PipelineTask`，`SetForceCPUOutput(true)` 后走 executor Apply。GPU 路径会再次从 stages `ApplyOnto` 文档。这就是「转到 stage 上再渲染」。
+这里的 commit hash 是状态所对应的提交标签，不是 document 内容哈希。不能把实时读取 history HEAD
+当成“参数已应用到该提交”的证明。NM4 负责把实际应用位置与 checkpoint 一起正确保存。
+JSON round-trip 测试、节点定位和渲染缓存键各自保留，不用这些比较来协调多份编辑模型。
 
-分析 rendition 和 export 共用同一 snapshot API。
-
-### 2.6 Compiler 仍按固定 id 找一个 Grade
-
-`GraphCompiler::CompileStatic` 要求 `document.PrimaryGrade()`（`grade.primary`），只编一个 `PrimaryColorGrade` pass。多 Color Grade 存在于图里也不会执行。这是 NM2 的工作。NM1 只把「当前仍只执行一个 Grade」的查找从硬编码 id 改成主链上的 Color Grade 列表，以免删除 `grade.primary` 后文档无法编译。
-
----
-
-## 3. 本 Phase 锁定的产品决定
-
-这些决定来自开工评审，覆盖总体方案 21.2 的原表述。
-
-1. **新编辑的写入权威是 `PipelineDocument`。** 调整条、history 的 live mutation、thumbnail/analysis 像素都不把 CPU stage 当作渲染或提交的源。
-2. **删除能力完整保留。** `RemoveColorGradeAndBridge` 可删除任意 Color Grade，包括 Default / `grade.primary`。不能删除 Develop 或 DRT。删光 Color Grade 后主链为 Develop → DRT，这是合法文档。
-3. **产品不保留双向 stage 镜像。** 新编辑只写 `PipelineDocument`。产品 Load / Save / Apply / thumbnail 不以 CPU stage 表为兼容层。进程内 stage 表可以暂时留在代码里，直到后续 Phase 删除整个 stage；NM1 不得为了旧读取器再做 document → stage 或 stage → document 的产品镜像。
-4. **Thumbnail 和 snapshot 像素必须 DAG 渲染。** 克隆 `PipelineDocument`，交给现有 GPU `Renderer`。禁止 `ExportPipelineParams` → `ImportPipelineParams` → stage Apply 作为出图像素路径。
-5. **History 的 typed `PipelineEditBatch`、Version/Paste、format 升级属于 NM4。** NM1 只要求 live 提交/Undo/Redo 作用在文档上；payload 仍可暂时是 `OrdinaryEditPayload`。NM1 与后续 Phase 都不把旧 mini-git commit 从 stage 身份迁移成 DAG mutation。
-6. **不支持 DAG document 之前的项目。** 存储里若没有可用的 format v2 图（`nodes` 与 `edges`），产品拒绝打开，并返回真实错误。不要把旧 stage JSON import 成默认三节点图。不要为了打开旧项目而改写 mini-git commit。一级 Phase NML（旧存储升级）取消。后续 Phase 删除 stage 表，不做旧项目升级。
-
-### 3.1 2026-08-30 产品规则
-
-NM 方案执行期间不为当前 UI 补完整 target。写入路径按最终生产接口设计。缺少 `owner_kind`、`node_id` 或 `adjustment_instance_id` 的 patch 一律拒绝。app 不根据 field catalog 或当前选中节点填入缺省 target。
+### 3.1 完整 target 与项目读取边界
 
 每个 patch 必须带完整 `EditorParameterTarget`：
 
-- `owner_kind` 为 Document / Develop / ColorGrade / DrtPost 之一（Mask 写入拒绝）
-- `field_key` 非空，且与 patch 上的 `field_key` 相同
-- Document：`node_id` 为空
-- Develop / ColorGrade / DrtPost：`node_id` 非空
-- ColorGrade：`adjustment_instance_id` 非空
-- `mask_id` 在 NM1 必须为空
+- `owner_kind` 为 Document / Develop / ColorGrade / DrtPost；NM1 拒绝 Mask 写入。
+- `field_key` 非空，且与 patch 的 `field_key` 相同。
+- Document 的 `node_id` 为空；其余三类的 `node_id` 非空。
+- ColorGrade 的 `adjustment_instance_id` 非空；NM1 的 `mask_id` 为空。
+- app 不根据字段目录、选中节点或前一次 patch 补缺失 target。
 
-输入序列：第一个合法 patch 锁定 target。同一序列的后续 patch 即使带不同 `node_id`，仍写入锁定的 NodeId。每个后续 patch 仍必须自身完整；不完整则拒绝，不靠锁定去补字段。
+输入序列的第一个合法 patch 锁定 target。同一序列后续 patch 即使携带另一个完整 NodeId，
+仍写锁定目标；后续 patch 自身不完整则拒绝。取消恢复该目标的 before。
+当前 QML 缺完整 target 的请求继续拒绝，不为 NM1 临时补 UI。
 
-产品不保留 stage 镜像，也不打开没有可用图的旧存储。NM1.3 把 live 编辑写入文档。NM1.5 阻止 Apply/Save 用 stage 覆盖文档。后续 Phase 删除 stage 表。NML 取消。
+发布新项目格式后只读取支持的项目元数据版本；旧项目在项目打开入口拒绝，不迁移。
+NM4 负责版本提升和最终 schema 切换，NM1 不提前宣称已经完成版本门禁升级。
+NM1 的 document 读取只接受当前有效图数据；缺失、损坏或非法图明确失败，不从 stage/default/live 另找替代来源。
+新图片导入时创建 Default 是正常初始化；已有图片读取失败后创建 Default 则禁止。
 
----
+### 3.2 NM1 与 NM4 的 history 边界
 
-## 4. 范围与明确排除
+NM1 保留已完成的同会话参数 Commit/Undo/Redo 和 WAL 失败恢复，不将 typed `PipelineEditBatch` 提前实施。
+`OrdinaryEditPayload` 的既有格式可以保留到 NM4；其中的 stage/operator 字段只是旧日志标识，
+不能要求产品继续维护另一张可写 stage 参数表。
 
-### 4.1 NM1 包含
+`document_edit_by_commit` 是 NM1.3 已有的同会话参数 before/after 记录，当前不扩展、不复制成另一份 document、
+不新增持久化、不得作为跨进程重放来源。NM4 用真实 typed payload 替换后删除。
+NM1 可调整其写入，使 before/after 来自 Model 的实际规范化值，并通过相同的领域函数恢复。
 
-- 候选文档 mutation、主链 validation、原子 Add / Remove / Reconnect / Rename / SetEnabled；
-- 稳定 `NodeId`；失败不改 live document / history head；
-- `CreateDefaultPipelineDocument` 在工厂内写入 Default 基线；`MakeClean` / `CreateCleanColorGradeNode`；
-- `EditorParameterTarget`；每个 patch 必须带完整 target；输入序列锁定 target；缺字段拒绝；
-- History live 路径改为写/读文档（payload 格式暂不升级）；
-- Thumbnail、analysis rendition、以及同一 snapshot API 上的像素改为 DAG；
-- 产品 GPU Apply 以文档为渲染输入；
-- `SavePipeline` 不得再用 stages `Import` 整份替换文档；
-- 无可用图的旧存储：Load 失败，不 import。
+完整节点新增/删除/重接的历史记录、进程重启后的节点 Undo/Redo、Version checkout、Paste 和 WAL 节点重放
+均不在 NM1 验收范围。缺少所需记录时不能静默跳过并报告成功，也不能转回 stage 编辑；
+依赖这些能力的用户入口保持未开放。NM1 不为填这个阶段空缺设计新的历史桥接框架。
 
-### 4.2 NM1 不包含
+## 4. 范围
 
-| 排除项 | 归属 |
+| NM1 必须完成 | 本阶段不做 |
 | --- | --- |
-| 主链上多个 Color Grade 的真实 GPU 执行、按 NodeId 的 dirty/cache | NM2 |
-| Clarity / Sharpen / Halation / Film Grain 搬到 DRT/Post | NM2 |
-| 多 Mask、Range 字段落地、不可变 MaskStore `Put()` | NM3 |
-| typed `PipelineEditBatch`、每 Version 一 DAG 的 history schema、Paste、format 提升 | NM4 |
-| 打开或升级 DAG document 之前的 stage-only 项目；迁移 mini-git commit | 不做（NML 取消） |
-| 从代码中删除 CPU stage 表 / `LegacyPipelineImporter` | 后续 Phase，不是 NM1 |
-| Nodes 面板、QuickQanava 生产链接、开放用户 Add 入口 | NM5 |
-| 按节点切换右侧 adjustment stack | NM6 |
-| Viewer 蒙版绘制 | NM7 |
+| 原地参数/图命令；局部失败恢复；统一访问互斥 | 完整 typed history 与节点 recovery（NM4） |
+| Default/Clean；完整 target；同会话已有参数 Undo/Redo | 多 Grade 的完整 GPU 执行、按节点缓存优化、后处理迁移（NM2） |
+| 同一图片的共享 document/executor 渲染 | Mask 列表与资源编辑（NM3） |
+| 停止产品 Load/Save/Apply 的 stage 镜像 | 旧项目和旧提交迁移（不做） |
+| document 序列化保存与读取；导入时模型参数完整 | 新项目 metadata/history schema 切换（NM4） |
+| 获取/释放与持久化分离；任务参数无泄漏 | Nodes/Mask/adjustment UI 接线（NM5–NM7） |
 
-生产 UI 在本 Phase **不**开放新增/删除/重连节点入口。领域 API 和 tests 必须先具备完整删除能力。
+CPU stage 类型和测试工具不必在 NM1 全部删除，但不得继续成为产品参数源或镜像。
+不增加持久化 root document、完整 committed document 副本、shadow CommitGraph 或通用 Prepare/Publish 服务。
+初始默认状态的跨版本稳定性由 NM4 的存储设计保证；NM1 只提供正确的工厂和 Model 操作。
 
----
+## 5. 实现规则
 
-## 5. 跨子 Phase 的实现规则
+### 5.1 状态转移通过函数完成
 
-### 5.1 候选文档 + 失败回滚
+概念上：`DocumentAt(head) = ApplyEdits(initial_document, edits_to_head)`。
+实现上在同一 document 上依次调用领域函数，不需要为每一步分配新 document。
 
-所有图 mutation 和 settled 参数 mutation：
+- 输入解析、值规范化和前置条件检查不产生副作用；通过 Model 行为得到合法的新参数。
+- 局部新参数、待插入节点、受影响边和 before 值可以临时存在；禁止复制无关节点/OperatorModel。
+- JSON 留在请求解析、序列化、既有日志边界和测试比较处，不用整图 JSON 重演 Model 行为。
+- 优先保留已有领域函数，不为“函数式”新增 reducer 框架、命令总线、工厂层或接口层。
+- 原地 setter 必须按现有规则更新 dirty/cache 信息；禁止把所有参数修改都标记成拓扑修改。
 
-```text
-clone PipelineDocument
-  -> apply typed mutation on candidate
-  -> ValidateGraph + ValidateImageBackbone
-  -> 失败：丢弃 candidate；live document、history head、最后一帧不变
-  -> 成功：替换 live document
-```
+### 5.2 原子性与失败恢复
 
-不得先改 live 再捕获异常继续。不得用 CPU 或其他 backend 代替失败的 GPU 路径。
+参数修改：完整解析并校验所改参数，再应用到目标 Model。setter 如果可能部分失败，先保留该参数对象的旧值；
+恢复只涉及该对象，不重建整个 document。曝光、改名等不改变连线的操作不做整图拓扑验证。
 
-### 5.2 主链不变量（在现有 `Validate()` 之上）
+图命令：检查 endpoint、NodeId、插入位置和受影响连接；预先完成必要分配，在同一互斥范围内修改节点和边，
+验证主链；失败将保留的节点/边移回。未受影响的 Model 继续存在。结构验证保留，失败不暴露中间图。
 
-合法 scene-image 拓扑：
+预览开始只捕获一次所改目标的 before；preview 直接改 live，不写 WAL、不创建 commit。
+settled 使用规范化 before/after；没有变化就结束。WAL append/flush 成功后完成既有 history 记录和 live 应用。
+已有 preview 在失败时恢复 before；成功后才确认 dirty 并请求最终渲染。
+失败撤销只涉及本次未生效操作和对应日志尾，不清空此前仍负责恢复的 WAL。
 
-```text
-Develop -> ColorGrade[0] -> ... -> ColorGrade[n] -> DRT/Post
-```
+正常 GPU 执行失败返回真实错误，保留最后一个成功显示结果，不切换算法、后端或质量。
+GPU 输出失败不应被当成隐式 Undo：已经成功记录的编辑仍在；输入/结构验证失败与渲染失败分别处理。
+局部恢复本身失败时明确报告并停止继续使用损坏状态，不能吞异常后继续渲染。
 
-或零个 Color Grade：
+### 5.3 一处访问互斥
 
-```text
-Develop -> DRT/Post
-```
+复用 executor 的 `GetRenderLock()` 及现有 owner-thread 等待方式：
 
-必须拒绝：删 Develop/DRT、替换 endpoint 类型、scene-image fan-in/fan-out、Color Grade 不在主链上、环、端口类型错误。Mask 边仍按现有顶层 mask node 规则验证（NM3 之前不改 Mask 所有权）。
+- Model 写入、图结构修改、序列化读取与渲染读取遵循同一把锁。
+- scheduler 在锁内安装请求参数、执行并完成必要的输出交接；锁外不改共享 executor。
+- 缓存锁只用于查找和 pin，不在持有它时等待渲染、访问 DuckDB 或执行回调。
+- 领域函数不重复获取调用方已持有的锁；明确 app/scheduler 是共享访问边界。
+- 完成、取消和异常都恢复请求参数、frame sink 并释放使用权；释放不能在回调中递归等待同一 render lock。
 
-### 5.3 删除与当前单 Grade compiler
+同图任务串行，不承诺后台任务零等待；复用现有优先级/取消机制，不另起任务系统。
 
-NM2 之前 runtime 仍然只执行 **一个** Color Grade。NM1 必须让删除后的文档仍能编译当前形状：
+### 5.4 单主链
 
-```text
-Color grades on image backbone
-  0 -> 跳过 PrimaryColorGrade pass，DRT 输入接 Develop 输出
-  1 或更多 -> 只编译主链上第一个 Color Grade（按路径顺序，不要求 id 为 grade.primary）
-```
+合法图为 `Develop -> ColorGrade[0..n] -> DRT/Post`；零 Grade 时 Develop 直连 DRT。
+拒绝删除/替换 endpoint、环、scene-image fan-in/fan-out、端口类型错误和游离 Color Grade。
+NM3 之前不重写 Mask 所有权。
 
-其余 Color Grade 保存在文档里，本 Phase 不执行。这不是多 Grade runtime。
+NM2 之前 compiler 保留现有阶段能力：零 Grade 跳过 Grade pass；有 Grade 时编译主链第一个，
+不能依赖它叫 `grade.primary`。多 Grade GPU 执行留在 NM2，不对用户开放新增节点入口。
+NM1 的新像素验收使用当前已支持的默认图，图命令的多节点测试验证模型与编译结果，不冒充多节点渲染证明。
 
-`PipelineDocument::PrimaryGrade()` 对默认三节点文档仍可按 `grade.primary` 查找，供现有 tests 使用。Compiler 不得再把「缺少 `grade.primary`」当成硬失败，只要主链合法。
-
-### 5.4 Stage 表与打开规则
-
-产品写入与渲染方向：
-
-| 方向 | NM1 是否允许 | 用途 |
-| --- | ---: | --- |
-| 新编辑 → `PipelineDocument` | 必须 | 唯一新写入权威 |
-| document → stage 表（产品兼容镜像） | 禁止 | 不为旧读取器保留镜像 |
-| stage → document 覆盖一次**新的**文档编辑 | 禁止 | 这是当前 Save/Apply remirror 的缺陷 |
-| thumbnail/analysis：stage JSON → Import → Apply | 禁止 | 必须 DAG |
-| 无图的旧 stage 存储 → Import 成默认三节点后打开 | 禁止 | 拒绝打开，返回真实错误 |
-
-`LegacyPipelineImporter` 可以暂时留在仓库，供现有 GPU DAG 测试使用。产品 Load 不得用它打开用户项目。后续删除 stage 的 Phase 再删除 importer。
-
-NM1.5 仍必须从产品 Apply/Save 中移除 live stages `ApplyOnto` / `Import` 覆盖文档。这是停止双写，不是旧项目兼容。
-
-### 5.5 文件体量
-
-`pipeline_service.cpp` 已经很大。本 Phase 若继续往里堆 Load/Save/snapshot 逻辑，按职责拆出 document persist / snapshot 辅助单元，而不是再加一整段。`EditorPipelineCommandService` 必须是独立类型，不把图规则塞回 `PipelineMgmtService` 或 QML。
-
----
-
-## 6. 子 Phase 顺序
+## 6. 从当前工作区继续的顺序
 
 ```text
-NM1.1 主链 validation 与图命令（含完整删除）
-  -> NM1.2 Default / Clean 工厂
-  -> NM1.3 typed target 与参数写入文档（含 history live）
-  -> NM1.4 thumbnail / snapshot DAG 渲染
-  -> NM1.5 产品写入权威与 Save/Apply 停止用 stage 覆盖新文档
+NM1.4 A：修正 NM1.1/NM1.3 的原地修改与锁
+  -> NM1.4 B：统一 document 输入，删除产品 Apply 的 stage 覆盖
+  -> NM1.4 C：后台任务共用 pipeline/executor，迁移并删除 snapshot API
+  -> NM1.5：统一保存读取、导入初始化与释放边界，执行全阶段验收
 ```
 
-同一分支 `feature/pipeline-document-editing` 上按序落地。可以按 `NM1.1+NM1.2`、`NM1.3`、`NM1.4`、`NM1.5` 拆 PR；不要把 NM2–NM8 塞进本分支。
+A/B/C 是 NM1.4 内部实施顺序，不新增一级 Phase。B 必须先于 C，避免共享 executor 后编辑器再次覆盖后台所读文档。
+每一段应可单独构建和运行受影响测试；完整 NM1 以第 14 节为准。
 
----
+## 7. NM1.1 保留的图能力
 
-## 7. NM1.1 — 主链 validation 与图命令
+保留 `AddCleanColorGrade`、`RemoveColorGradeAndBridge`、`ReconnectColorGrade`、
+`RenameColorGrade`、`SetColorGradeEnabled`；参数中的 document 表示当前操作对象，不再要求 candidate。
 
-### 7.1 结果
+- Add 在指定 `before_node_id` 之前插入；指定 DRT 则插入主链末尾。
+- Remove 可删除任意 Grade，包括 `grade.primary`；删除最后一个后桥接 Develop/DRT。
+- Rename 不改 NodeId；Develop/DRT 不允许以 Grade 命令修改。
+- 图容器不向 UI 暴露可变访问；测试用领域命令或专用 fixture 建图。
+- forward/inverse 后参数与连接恢复；不要求副本有不同地址。
 
-领域层可以原子地 Add / Remove / Reconnect / Rename / SetEnabled。QML 仍不能改 `Nodes()` / `Edges()`。删除任意 Color Grade（含 `grade.primary`）后文档满足第 5.2 节不变量。Compiler 按 5.3 编译。
+已有主链校验、删除与 compiler 测试继续保留。整图复制和 JSON 回滚的删除由 NM1.4 A 完成，
+不能因这部分代码已经提交就排除在简化范围外。
 
-### 7.2 API
+## 8. NM1.2 保留的 Default/Clean
 
-```cpp
-auto AddCleanColorGrade(PipelineDocument& candidate, const NodeId& before_node_id,
-                        NodeId new_id) -> std::vector<GraphValidationError>;
-auto RemoveColorGradeAndBridge(PipelineDocument& candidate, const NodeId& node_id)
-    -> std::vector<GraphValidationError>;
-auto ReconnectColorGrade(PipelineDocument& candidate, const NodeId& node_id,
-                          const NodeId& new_predecessor_id, const NodeId& new_successor_id)
-    -> std::vector<GraphValidationError>;
-auto RenameColorGrade(PipelineDocument& candidate, const NodeId& node_id,
-                       std::string display_name) -> std::vector<GraphValidationError>;
-auto SetColorGradeEnabled(PipelineDocument& candidate, const NodeId& node_id, bool enabled)
-    -> std::vector<GraphValidationError>;
-```
+`CreateDefaultPipelineDocument()` 创建 Develop、Default Grade、DRT；
+Default 自带 exposure 1.5 EV、saturation 1.3，不经过 importer。
 
-`RemoveColorGradeAndBridge`：删除该节点及其相邻两条 scene-image 边，再把前驱接到后继。一次调用，不暴露中间图。
+`CreateCleanColorGradeNode()` / `MakeClean()` 创建无视觉变化 Grade：
+exposure 0 EV、saturation 1.0、enabled、mix 1、无 mask，
+不包含 Clarity/Sharpen/Halation/Film Grain。Default 内现有后处理项由 NM2 搬到 DRT/Post。
 
-`AddCleanColorGrade(before_node_id)`：在 `before_node_id` 之前插入（即新节点成为 `before` 的前驱）。若 `before` 是 DRT，则插在最后一个 Color Grade（或 Develop）之后。具体插入点必须在测试里写死，并与日后 NM5 UI 一致。
+历史重放所说的 clean ground 是清除旧用户编辑后得到的确定初始文档，必须保留图片固有参数；
+不等于把 Default 改成 Clean Grade，也不等于添加一份持久化 root snapshot。
 
-节点需要 `display_name`。Develop / DRT 显示名固定，Rename 拒绝。Color Grade 改名不改 `NodeId`。
+## 9. NM1.3 保留的参数能力
 
-关掉 `PipelineGraph::Nodes()` 的可变引用。测试用命令或测试 builder 建图。
-
-### 7.3 主成功调用链
+完整 target、输入序列锁定和拒绝规则按第 3.1 节执行。同会话已有参数 Undo/Redo 按第 3.2 节执行。
 
 ```text
-test / future EditorPipelineCommandService
-  -> ClonePipelineDocument
-  -> RemoveColorGradeAndBridge(candidate, node_id)
-  -> Validate + ValidateImageBackbone
-  -> GraphCompiler::CompileStatic (5.3 规则)
-  -> replace live document
+HandlePatch(complete target)
+  -> validate target / parse and normalize parameters
+  -> lock shared live pipeline
+  -> capture local before once; apply through Model
+  -> preview: request render
+  -> settled: record existing WAL/history edit; finish live change
+  -> Undo/Redo: apply recorded local before/after through the same Model operation
 ```
 
-### 7.4 主失败调用链
+`PublishEditorParameterPatch` 的 clone/validate-whole-graph/move 实现应被直接应用函数取代。
+before/after 不能继续从 stage 表读取；既有 payload 需要的字段表示在原有窄边界处理，
+不能因为旧日志仍有 `stage_name` 就调用 stage `SetOperator` 维护镜像。
+不新建完整 committed document；已有 UI 参数投影只读，不能成为编辑源。
 
-```text
-Remove Develop or DRT
-  or Reconnect that creates scene-image fan-out
-  -> candidate discarded
-  -> live ToJson hash, node count, history head unchanged
-```
+## 10. NM1.4 — 原地编辑与共享 DAG 渲染
 
-### 7.5 文件
+Status: partial — A complete（2026-08-30）；B/C rework required。A 使用下列新证据，B/C 不沿用旧 clone 测试的完成结论。
 
-- `alcedo_studio/src/include/edit/graph/pipeline_graph.hpp`
-- `alcedo_studio/src/edit/graph/pipeline_graph.cpp`
-- `alcedo_studio/src/include/edit/graph/graph_validation.hpp`
-- 新 `pipeline_graph_commands.hpp` / `.cpp`（或同等名字；命令拥有规则，`PipelineGraph` 不向 UI 暴露容器）
-- `alcedo_studio/src/include/edit/graph/pipeline_document.hpp` / `.cpp`（主链遍历、`display_name`）
-- `alcedo_studio/src/include/edit/graph/color_grade_node_model.hpp` / `.cpp`
-- `alcedo_studio/src/include/edit/graph/i_node_model.hpp`（display name）
-- `alcedo_studio/src/edit/runtime/graph_compiler.cpp`（5.3 查找规则）
-- `alcedo_studio/tests/edit/graph/graph_validation_test.cpp`
-- 新 `alcedo_studio/tests/edit/graph/pipeline_graph_command_test.cpp`
-- `alcedo_studio/tests/edit/CMakeLists.txt`（`GpuDagModelGraphTest`）
+### 10.1 A：原地修改和局部恢复
 
-### 7.6 测试
+工作：
 
-| 名称 | 断言 |
-| --- | --- |
-| `AddCleanColorGradeKeepsSingleImageBackbone` | 插入后仍一条 Develop→…→DRT 路径，新 NodeId 稳定 |
-| `RemoveColorGradeAndBridgeConnectsPredecessorToSuccessor` | 一次调用后无悬空边；前驱接到后继 |
-| `RemovePrimaryGradeKeepsRemainingGradesAndValidBackbone` | 删除 `grade.primary` 后其余 Color Grade 仍在主链，NodeId 不变 |
-| `RemoveLastColorGradeLeavesDevelopConnectedToDrt` | 零 Color Grade 合法 |
-| `RemoveDevelopOrDrtIsRejectedWithoutMutation` | hash 与节点数不变 |
-| `InvalidReconnectLeavesDocumentHashUnchanged` | 非法 fan-out/环不改 canonical JSON |
-| `GraphMutationInverseRestoresCanonicalDocumentJson` | forward 再 inverse，canonical JSON 一致 |
-| `GraphCompilerSkipsGradePassWhenBackboneHasNoColorGrade` | 零 Grade 时 CompileStatic 成功且无 PrimaryColorGrade |
-| `GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbsent` | 仅剩非 `grade.primary` 的 Grade 时仍能编译那一个 |
+1. 清理 `editor_pipeline_command_service.cpp` 的整图 clone；规范化参数后直接调用 Model。
+2. 清理 `pipeline_graph_commands.cpp` 的整图 JSON 回滚；保留受影响节点/边以便恢复。
+3. 统一 `editor_history_mutation.cpp` 中 preview/settled/Undo/Redo 的 document 访问锁。
+4. 同会话 before/after 来自 document，删除为维持 stage 镜像发生的参数读写。
+5. 保留未知字段、缺 target、Mask target、无效拓扑、WAL 失败的拒绝与恢复行为。
 
-Canonical JSON：对 `ToJson()` 做稳定序列化比较（节点/边顺序确定）。不要用指针或 Qan 对象。
+验收：
 
-##### Phase NM1.1 completion record (2026-08-29)
+- `ParameterPatchPreservesUnchangedModels`：修改一个值，其余节点/Model 不重建，所改值正确。
+- `InvalidParameterLeavesLiveValueAndHistoryHeadUnchanged`：非法输入不部分改值。
+- `GraphCommandFailureRestoresAffectedNodesAndEdges`：失败恢复精确连接、NodeId 和参数。
+- 重新运行现有完整 target、输入锁定、Undo 和 `JournalAppendFailureRestoresDocumentExposureEv` 测试。
+- 参数重复修改不触发整图序列化，也不改变无关拓扑；用调用链检查及必要的测试计数证明，不新增生产观测框架。
 
-**Status:** complete — atomic graph commands, image-backbone validation, const-only `Nodes()`, GraphCompiler first-backbone-grade lookup.
+#### NM1.4 A completion record (2026-08-30)
+
+**Status:** complete — 参数直接写既有 Model；结构修改只保留受影响节点/边；preview、settled、同会话 Undo/Redo、取消和显式 HEAD 移动在 executor render lock 内访问 document。
+
+**实现与验收清单：**
+
+- [x] `PublishEditorParameterPatch` 直接调用 `ApplyEditorParameterPatch`，不 clone、整图验证或替换 live document。
+- [x] 在 Model setter 前检查参数键、类型、有限数值和数组长度；Model 执行既有规范化。setter 异常仅恢复该 Model；恢复异常返回明确错误。
+- [x] Add/Remove/Reconnect 经 `PipelineGraph::ApplyBackboneEdit` 预留容器容量，只暂存受影响边及删除节点的原对象；失败恢复节点所有权和精确边顺序。Rename/Enabled 不验证整图。
+- [x] 首个成功 patch 锁定 target 并捕获 before；无效首 patch 不锁定目标，后续不完整 target 仍拒绝。
+- [x] WAL/history 的 before/after 来自规范化后的 document；相同规范化值不产生 commit。仅在既有日志边界将 `exposure_ev` 表示为 `exposure`，不调用 stage 参数读写。
+- [x] 同会话 Undo/Redo 仅应用所经过提交的局部值。无同会话 document target 的记录在 WAL publication 前拒绝，不经 stage 重放；完整 merge/跨会话重放仍属于 NM4。
 
 **Primary success call chain:**
 
 ```text
-test / future EditorPipelineCommandService
-  -> ClonePipelineDocument (or mutate a candidate)
-  -> RemoveColorGradeAndBridge / AddCleanColorGrade / ReconnectColorGrade
-  -> PipelineGraph::Validate + ValidateImageBackbone
-  -> GraphCompiler::CompileStatic (0 grades: skip PrimaryColorGrade; else first backbone grade)
-  -> replace live document (candidate kept on success)
+EditorSessionEditController::HandlePatch(complete target)
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview
+  -> LockLivePipeline(GetRenderLock) -> capture target Model before once
+  -> ApplyEditorParameterPatch -> validate supplied values -> existing Model::LoadJson/setters
+  -> CommitAdjustment: read normalized after -> PrepareAppendEdit -> PublishPreparedEdit(WAL/history)
+  -> record local before/after + update read-only panel projection -> release lock -> RenderRouted
+
+Undo / Redo / MoveHeadToCommit
+  -> same render lock -> prepare head move -> resolve existing local target records
+  -> PublishPreparedHeadMove -> ApplyEditorParameterPatch(local before/after)
+  -> update panel projection -> release lock
+
+Add / Remove / Reconnect Color Grade
+  -> check endpoints and affected edges -> ApplyBackboneEdit
+  -> retain removed node/edges -> mutate -> Validate + ValidateImageBackbone
+  -> success: mark topology dirty, retain all unrelated Models
 ```
 
 **Primary failure call chain:**
 
 ```text
-Remove Develop or DRT
-  or Reconnect that creates scene-image fan-out
-  -> command returns GraphValidationError
-  -> candidate restored from ToJson snapshot
-  -> live ToJson dump, node count, and history head unchanged
+invalid target / unknown field / Mask / invalid parameter
+  -> reject before setters -> live value and history HEAD unchanged
+throwing Model setter -> restore this Model's before value -> return real error
+WAL append failure after preview -> restore locked target's before -> no HEAD advance
+invalid graph edit -> restore original node ownership and edge order -> return validation errors
+history record missing same-session target -> reject before WAL/document mutation
 ```
 
 **What was proven (executed tests):**
 
-| Required name / criterion | Target / binary | Result |
+| Required name / criterion | Target / suite | Result |
 | --- | --- | --- |
-| `AddCleanColorGradeKeepsSingleImageBackbone` | `GpuDagModelGraphTest` | PASS |
-| `RemoveColorGradeAndBridgeConnectsPredecessorToSuccessor` | `GpuDagModelGraphTest` | PASS |
-| `RemovePrimaryGradeKeepsRemainingGradesAndValidBackbone` | `GpuDagModelGraphTest` | PASS |
-| `RemoveLastColorGradeLeavesDevelopConnectedToDrt` | `GpuDagModelGraphTest` | PASS |
-| `RemoveDevelopOrDrtIsRejectedWithoutMutation` | `GpuDagModelGraphTest` | PASS |
-| `InvalidReconnectLeavesDocumentHashUnchanged` | `GpuDagModelGraphTest` | PASS |
-| `GraphMutationInverseRestoresCanonicalDocumentJson` | `GpuDagModelGraphTest` | PASS |
-| `GraphCompilerSkipsGradePassWhenBackboneHasNoColorGrade` | `GpuDagModelGraphTest` | PASS |
-| `GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbsent` | `GpuDagModelGraphTest` | PASS |
+| `ParameterPatchPreservesUnchangedModels` | `EditorPipelineCommandServiceTest` | PASS；40 次参数修改保留全部节点/Model 地址、无关 dirty 状态与拓扑；测试内计数 Model 的序列化调用为 0 |
+| `InvalidParameterLeavesLiveValueAndHistoryHeadUnchanged` | `EditorSessionHistoryPortTest.EditorDocumentHistoryTest` | PASS；首个非法值和 settled 非法值均不部分应用或移动 HEAD |
+| `GraphCommandFailureRestoresAffectedNodesAndEdges` | `GpuDagModelGraphTest` | PASS；重接、删除、插入校验失败恢复对象、NodeId、参数和精确连接；非法图上的原位置重接也被拒绝 |
+| `InvalidCompoundParameterDoesNotPartiallyApplyOrDirtyModel`、`GeometryAndDevelopRejectInvalidValuesBeforeAnyWrite` | `EditorPipelineCommandServiceTest` | PASS；错误类型、未知键、非有限值与复合参数边界 |
+| `ThrowingSetterRestoresOnlyAffectedModelParameters` | `EditorPipelineCommandServiceTest` | PASS；注入 setter 部分写入后抛异常，局部值恢复且其余对象不重建 |
+| 既有完整 target、输入序列锁定、未知字段/Mask 拒绝、`UndoSettledExposureRestoresDocumentValue`、`JournalAppendFailureRestoresDocumentExposureEv` | `EditorSessionHistoryPortTest.EditorDocumentHistoryTest` | PASS；原行为测试移至独立 document fixture，保留断言目标 |
+| `RejectedFirstPatchDoesNotLockTargetAndHistoryUsesNormalizedModelValues` | `EditorSessionHistoryPortTest.EditorDocumentHistoryTest` | PASS；额外 Grade 目标独立、clamp 后 before/after 入日志、规范化 no-op、Undo/Redo 与 stage 不变 |
+| `PreviewCommitUndoRedoAndCancelWaitForRenderLock` | `EditorSessionHistoryPortTest.EditorDocumentHistoryTest` | PASS；持锁屏障与 promise 控制顺序，无 sleep；所有操作等待同一锁，地址保持且 stage 不变 |
 
-Commands:
-
-```text
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest
-ctest --test-dir build/debug -R GpuDagModelGraphTest --output-on-failure
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest
-ctest --test-dir build/debug -R "GpuDagRawInputTest.GpuDagGraphCompiler" --output-on-failure
-```
-
-Suite totals: `GpuDagModelGraphTest` 42/42 PASS; `GpuDagRawInputTest.GpuDagGraphCompiler` 18/18 PASS.
-
-**Checklist / exit condition:** NM1.1 API, backbone validation, deletion including `grade.primary`, and compiler 5.3 lookup are done. NM1 overall exit items for Default/Clean factories, typed targets, thumbnail DAG, and product Save/Apply remain for NM1.2–NM1.5.
-
-**LOC note (grill-code-review):** largest changed files — `pipeline_graph.cpp` 364, `pipeline_graph_commands.cpp` 318, `graph_compiler.cpp` 302, `pipeline_graph_command_test.cpp` 222. All under 1000 LOC; commands own mutation rules as a separate type from `PipelineGraph`.
-
-**Remaining gaps:** `AddCleanColorGrade` currently inserts `ColorGradeNodeModel::MakeDefault` (Clean vs Default factories are NM1.2). CUDA/OpenCL/Metal grade encoders and `result_content_key` still look up `document.PrimaryGrade()` (`grade.primary`); CompileStatic no longer requires that id, but GPU execute of a non-primary remaining grade is not proven here (NM2 execution). Production UI still has no Add/Remove entry (NM5).
-
----
-
-## 8. NM1.2 — Default 与 Clean 工厂
-
-### 8.1 结果
-
-两个入口从名字上即可区分：
-
-```cpp
-auto CreateDefaultPipelineDocument() -> PipelineDocument;
-auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
-// 或 ColorGradeNodeModel::MakeClean(NodeId)
-```
-
-`CreateDefaultPipelineDocument()`：
-
-- Develop、Default Color Grade（默认仍可用 id `grade.primary`）、DRT；
-- Default Color Grade 带产品基线：`exposure_ev = 1.5`，saturation `1.3`（对应旧 `+30`）；
-- 其余 Default 调整与当前 `MakeDefault` 目录一致（含 Clarity/Sharpen/Halation/Film Grain，直到 NM2 搬家）；
-- 不依赖 remirror 才能得到基线。
-
-`CreateCleanColorGradeNode()` / `MakeClean()`：
-
-- Exposure `0 EV`，saturation `1.0`，其余 Color Grade 参数为无视觉变化；
-- `enabled = true`，`mix = 1`，无 mask；
-- **不含** Clarity、Sharpen、Halation、Film Grain；
-- 不是 Default 节点改几个 Patch 装出来的。
-
-现有 `pipeline_defaults::kCleanBaseline*` 可以继续给 CPU 兼容层用，但新文档工厂代码用 Default / identity 这类准确名字。
-
-### 8.2 主成功调用链
+Commands（仓库根目录）：
 
 ```text
-CreateDefaultPipelineDocument
-  -> MakeDefault Color Grade
-  -> set exposure_ev 1.5 and saturation 1.3
-  -> ValidateImageBackbone empty
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest EditorPipelineCommandServiceTest EditorSessionHistoryPortTest EditorAdjustmentPipelineTest EditorSessionEditControllerTest
+ctest --test-dir build/debug -R "GpuDagModelGraphTest|EditorPipelineCommandServiceTest|EditorSessionHistoryPortTest|EditorAdjustmentPipelineTest|EditorSessionEditControllerTest" --output-on-failure
 ```
+
+Suite totals: **121/121 PASS，0 skipped** — Graph 47、CommandService 8、HistoryPort 49（含 document 编辑 13）、AdjustmentPipeline 6、SessionEditController 11。
+最终日志：`build/tmp/nm1/nm14a-final-build.log`、`build/tmp/nm1/nm14a-final-ctest.log`。
+
+**旧测试调整：** 移除“preview 不取渲染锁”的过时前提，由新的五类操作互斥测试覆盖；曝光请求 fixture 使用 `exposure_ev`，参数结果以 document 和 Model 的 clamp 后值为准；四个无 document target 的旧历史移动测试改为断言真实拒绝、HEAD/document/投影/WAL 不变。Version/Paste 的其余既有回归仍运行；未通过恢复 stage 写入使旧断言通过。
+
+**Checklist / exit condition:** 第 10.1 节五项工作和全部验收已完成。仅勾选第 14 节由 A 证明的两个条件；NM1.4 整体保持 partial，B/C 与 NM1.5 未完成。
+
+**LOC note（grill-code-review）：**
+
+| 本次文件 | 总 LOC | Diff + / - |
+| --- | ---: | ---: |
+| `src/app/editor_pipeline_command_service.cpp` | 253 | +65 / -27 |
+| `src/include/app/editor_pipeline_command_service.hpp` | 57 | +14 / -17 |
+| `src/edit/graph/pipeline_graph.cpp` | 425 | +61 / -0 |
+| `src/include/edit/graph/pipeline_graph.hpp` | 98 | +11 / -0 |
+| `src/edit/graph/pipeline_graph_commands.cpp` | 252 | +51 / -117 |
+| `src/include/edit/graph/pipeline_graph_commands.hpp` | 74 | +17 / -12 |
+| `src/ui/alcedo_main/album_backend/editor_history_mutation.cpp` | 503 | +126 / -210 |
+| `src/include/ui/alcedo_main/album_backend/editor_history_mutation.hpp` | 66 | +9 / -3 |
+| `src/include/ui/alcedo_main/album_backend/editor_history_state_detail.hpp` | 101 | +1 / -1 |
+| `tests/app/editor_pipeline_command_service_test.cpp` | 206 | +132 / -0 |
+| `tests/edit/graph/pipeline_graph_command_test.cpp` | 296 | +41 / -0 |
+| `tests/edit/history/editor_document_history_test.cpp` | 351 | +351 / -0 |
+| `tests/edit/history/editor_session_history_port_test.cpp` | 1843 | +104 / -339 |
+| `tests/ui/CMakeLists.txt` | 1399 | +1 / -0 |
+
+原 `editor_session_history_port_test.cpp` 仍超过 1,000 LOC：本次已将 document 参数行为及其独立 guard/document/WAL fixture 移到 `editor_document_history_test.cpp`，没有继续向旧 fixture 添加该职责。旧文件剩余 Version/Paste/持久化集成与纯投影测试不在 A 中重构；将来可按 transfer、persistence、projection 分成独立 fixture，每组自行拥有所需 graph/guard/journal/services，不能以共享巨大 fixture 的方式拆文件。`tests/ui/CMakeLists.txt` 是测试注册清单，本次仅加一个源文件，无运行时状态需要拆分。
+
+**Residual gaps / scope boundaries:** B 的产品 Apply remirror、C 的共享后台 executor/lifetime、NM1.5 的统一 I/O 仍保留当前工作区实现，未修改也未以 A 的测试宣称通过；无真实 RAW/GPU 像素或完整应用交互验收。NM4 的 typed history、跨会话节点/merge 重放及 Version/Paste 新模型接线没有提前实施。全树术语扫描未发现 roadmap 违规；本次代码/测试无禁用术语，其他 QML/旧源码的既存命名未纳入此范围。
+
+### 10.2 B：让所有产品渲染只读 document
+
+工作：
+
+1. 从 `ApplyGpuDagProduct` 删除产品 `LegacyPipelineImporter::ApplyOnto`，不再按 host/editor 区分参数来源。
+2. 产品渲染要求绑定同一 live document；缺失时返回真实错误，不能去 executor/stage/store 找替代文档。
+3. executor 的请求配置仅处理输出、decode、ROI、sink、cache 等运行参数，不能修改持久 Model。
+4. RAW camera/profile/lens 参数在正常导入或 document 加载时准备到位；
+   移除任务调用方为复制 executor 而重新灌入 stage 参数的动作，不改变既有解码质量。
+5. 保留现有 Renderer 资源策略；没有证据时不重写缓存或强制共享全部 GPU 中间资源。
+
+验收：
+
+- `EditorAndHostRenderUseDocumentParameters`：实际改变 document 参数后，编辑器/host 输出符合该值；
+  用可区分的像素结果或可靠的数值参考证明，不只断言输出非空和 JSON 未变。
+- `RenderLeavesPersistentDocumentParametersUnchanged`：不同任务前后持久参数、节点和边相同。
+- 对默认图运行真实 RAW；GPU 失败不进入 CPU、旧 stage 或较低质量出图。
+
+### 10.3 C：共享 pipeline 使用权
+
+工作：
+
+1. cache hit 返回同一图片已有 document/executor；cache miss 走同一创建/读取入口，不建立后台专用加载链。
+2. 任务持有使用句柄至真正完成；缓存淘汰不能使使用中的对象失效，也不能同时创建同图片的另一套 live 对象。
+3. 获取、释放与保存分开。释放最后一个后台使用权也不写存储、不清 dirty；
+   编辑器仍持有使用权时不能清掉其 GPU session cache。
+4. thumbnail、analysis 和 export 都使用普通 pipeline 句柄；迁移调用方后删除 snapshot 专用 API。
+5. `SetForceCPUOutput`、decode/resize、frame sink 等共享 executor 配置只在 scheduler 锁内发生。
+   使用既有请求参数保存/恢复机制，不另加一份编辑状态快照。
+6. 任务使用取得 render lock 时的 document，渲染期间不允许写入。
+   缩略图不保证与编辑器每帧同步；analysis/export 的单次输出必须来自同一次连贯读取，
+   不宣称冻结了排队时刻的参数。NM1 不新增按任意历史 HEAD 导出的能力。
+7. 沿用现有缩略图失效/取消机制。若磁盘结果按提交标签缓存，不能把排队时旧标签贴到执行时新像素上；
+   预览值也不能冒充已提交结果写入该缓存。必要时只不写这次磁盘缓存，仍交付实际渲染结果。
+   这是现有缓存写入的正确性要求，不新增 hash/token/修订号，也不恢复冻结 document。
+8. 所有完成回调只终结一次；避免 callback 在 render lock 内释放资源时重复取锁。
+
+主调用链：
 
 ```text
-AddCleanColorGrade
-  -> CreateCleanColorGradeNode
-  -> insert + reconnect candidate backbone
+Thumbnail / Analysis / Export
+  -> acquire normal pipeline handle (same element => same live document/executor)
+  -> PipelineTask(input, RenderRequest, handle)
+  -> scheduler: lock -> configure -> Renderer::Render(document) -> restore -> unlock
+  -> deliver output / real error / cancellation
+  -> release handle (no save)
 ```
 
-### 8.3 主失败调用链
+关键验收：
 
-```text
-UI or test tries to build a Clean node by patching Default
-  -> not an API; tests assert MakeClean identity without going through Default
-```
-
-### 8.4 文件
-
-- `color_grade_node_model.hpp` / `.cpp`
-- `pipeline_document.hpp` / `.cpp`
-- `alcedo_studio/tests/edit/graph/default_pipeline_test.cpp`
-- 新或并入 `pipeline_graph_command_test.cpp` 的 Clean 断言
-
-### 8.5 测试
-
-| 名称 | 断言 |
+| 测试 | 必须观察到的行为 |
 | --- | --- |
-| `DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree` | 不经 importer，Default Grade 即为 1.5 / 1.3 |
-| `MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments` | 0 EV、sat 1.0、无四项后处理 |
-| `AddCleanColorGradeDoesNotCopyDefaultExposureOrSaturation` | 新节点不是 +1.5 / 1.3 |
+| `BackgroundTasksReuseLivePipelineAndDocument` | cache hit 复用同一对象；任务返回实际 DAG 结果 |
+| `BackgroundCacheMissUsesNormalDocumentLoad` | 无后台专用参数导入；并发取得同图片使用权不产生第二份 live |
+| `ThumbnailThenEditorRestoresTaskParameters` | 同 executor 上编辑器→缩略图→编辑器；ROI/decode/sink/输出模式正确恢复 |
+| `AnalysisAndExportUseSharedExecutorWithoutChangingEdits` | 单次读取连贯；分析和完整质量导出不改用户参数 |
+| `CanceledAndFailedTaskReleasesPipelineUse` | 取消/配置异常/Apply 异常各自终结一次，释放 pin、恢复请求状态 |
+| `BackgroundReleaseDoesNotSaveOrClearEditorState` | 无 DB 写入，不清 dirty；编辑器仍持有时缓存不被整体释放 |
+| `DocumentMutationWaitsForSharedRender` | 通过屏障控制读写顺序，观察到完整旧值或新值，无半更新；不用 sleep 猜时序 |
+| `QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel` | 排队后编辑不会造成错误缓存标签；预览不污染已提交磁盘结果 |
 
-##### Phase NM1.2 completion record (2026-08-30)
+### 10.4 修改范围
 
-**Status:** complete — Default document factory bakes +1.5 EV / saturation 1.3; Clean node factory is identity without the four post adjustments.
-
-**Primary success call chain:**
-
-```text
-CreateDefaultPipelineDocument
-  -> ColorGradeNodeModel::MakeDefault (catalog identity, 17 adjustments)
-  -> ApplyDefaultPipelineLook (exposure_ev 1.5, saturation 1.3)
-  -> Validate + ValidateImageBackbone empty
-```
-
-```text
-AddCleanColorGrade
-  -> CreateCleanColorGradeNode / ColorGradeNodeModel::MakeClean
-  -> insert + reconnect candidate backbone
-```
-
-**Primary failure call chain:**
-
-```text
-UI or test tries to build a Clean node by patching Default
-  -> not an API
-  -> MakeClean is a separate type list (13 adjustments); patched Default JSON still differs
-```
-
-**What was proven (executed tests):**
-
-| Required name / criterion | Target / binary | Result |
-| --- | --- | --- |
-| `DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree` | `GpuDagModelGraphTest` | PASS |
-| `MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments` | `GpuDagModelGraphTest` | PASS |
-| `AddCleanColorGradeDoesNotCopyDefaultExposureOrSaturation` | `GpuDagModelGraphTest` | PASS |
-
-Commands:
-
-```text
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest
-ctest --test-dir build/debug -R GpuDagModelGraphTest --output-on-failure
-```
-
-Suite totals: `GpuDagModelGraphTest` 46/46 PASS.
-
-**Checklist / exit condition:** NM1.2 Default vs Clean factories, baked product look without remirror, and AddClean using MakeClean are done. NM1 overall items for typed targets, thumbnail DAG, and product Save/Apply remain for NM1.3–NM1.5.
-
-**LOC note (grill-code-review):** largest changed files — `pipeline_graph_commands.cpp` 318, `pipeline_graph_command_test.cpp` 255, `color_grade_node_model.cpp` 216, `legacy_import_test.cpp` 209, `pipeline_document.cpp` 176, `default_pipeline_test.cpp` 155. All under 1000 LOC. Clean vs Default lists are separate factories; product look is applied only in `CreateDefaultPipelineDocument`.
-
-**Remaining gaps:** typed `EditorParameterTarget` and history live document writes (NM1.3); thumbnail/snapshot DAG (NM1.4); product Apply/Save still remirror from stages (NM1.5). `pipeline_defaults::kCleanBaseline*` remains for the CPU compat layer. Default Color Grade still includes Clarity/Sharpen/Halation/Film Grain until NM2.
-
----
-
-## 9. NM1.3 — Typed target 与 history live 写文档
-
-### 9.1 结果
-
-```text
-EditorParameterTarget
-  owner_kind: Document | Develop | ColorGrade | ColorGradeMask | DrtPost
-  node_id                  // Document 为空
-  adjustment_instance_id
-  mask_id                  // NM1 只预留；写入拒绝
-  field_key
-```
-
-现有 `EditorAdjustmentPatch` 增加必填 `target`。规则见第 3.1 节：不完整、Mask、未知 field 均拒绝。app 不填缺省 target。
-
-输入序列第一个合法 patch 锁定 target。后续完整 patch 复用该锁定，即使它们携带另一个 `node_id`。
-
-`EditorHistoryMutation::CommitAdjustment` / Undo / Redo 的 **live 效果**写 `PipelineGuard::document_`。不要同步 stage 镜像。失败回滚以文档为准。`OrdinaryEditPayload` 本 Phase 不改 schema。
-
-Mask target 和多节点 UI 选择恢复属于后续 Phase；本 Phase 拒绝 Mask target 写入。
-
-### 9.2 主成功调用链
-
-```text
-HandlePatch(settled)
-  -> lock EditorParameterTarget (first patch of the input sequence)
-  -> Capture before from document
-  -> PrepareAppendEdit(OrdinaryEditPayload)   // schema unchanged
-  -> candidate document SetAdjustmentField
-  -> validate
-  -> PublishPreparedEdit
-  -> publish document
-  -> SettledAdjustment render reads document
-```
-
-### 9.3 主失败调用链
-
-```text
-unknown field, missing instance, or Mask target
-  -> Rejected
-  -> document hash and history head unchanged
-```
-
-```text
-WAL or history publish fails
-  -> restore document to before
-  -> no new head
-```
-
-### 9.4 文件
-
-- `alcedo_studio/src/include/app/editor_adjustment_types.hpp`
-- `alcedo_studio/src/app/editor_adjustment_pipeline.cpp`（未知 field 仍拒绝）
-- `alcedo_studio/src/include/app/editor_pipeline_command_service.hpp` / `.cpp`（完整 target 校验、文档字段写入）
-- `alcedo_studio/src/app/editor_session_edit_controller.cpp`
+- `alcedo_studio/src/app/editor_pipeline_command_service.cpp`
+- `alcedo_studio/src/edit/graph/pipeline_graph_commands.cpp`
 - `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_mutation.cpp`
-- `alcedo_studio/tests/app/editor_adjustment_pipeline_test.cpp`
-- `alcedo_studio/tests/app/editor_pipeline_command_service_test.cpp`
-- `alcedo_studio/tests/app/editor_session_edit_controller_test.cpp`
-- `alcedo_studio/tests/edit/history/editor_session_history_port_test.cpp`
-- `alcedo_studio/tests/support/editor_parameter_target_test.hpp`（测试夹具；不是产品缺省 target）
+- `alcedo_studio/src/include/app/pipeline_service.hpp`、`src/app/pipeline_service.cpp`
+- `alcedo_studio/src/app/thumbnail_service.cpp`、`src/app/export_service.cpp`
+- `alcedo_studio/src/include/renderer/pipeline_task.hpp`、`src/renderer/pipeline_scheduler.cpp`
+- `alcedo_studio/src/include/edit/pipeline/pipeline_cpu.hpp`、`src/edit/pipeline/pipeline_cpu.cpp`
+- 对应 graph、command、history port、pipeline、thumbnail、export 和 scheduler 测试。
 
-### 9.5 测试
+以上路径中缩写的 `src/...` 均相对于 `alcedo_studio/`。
+优先删除旧分支并复用现有函数；文件变大时按已有职责拆分，不用新服务层包住旧复杂度。
 
-| 名称 | 断言 |
+## 11. NM1.5 — 保存读取与阶段验收
+
+Status: not started。
+
+### 11.1 工作
+
+1. `SavePipeline` / `SyncPipelineDocument` 从锁保护的 document 序列化。
+   不 `Import(stages)` 替换图，不写 `legacy_stage_adapter`，不覆盖 history HEAD。
+   编辑器保存前先完成或取消现有预览输入，再保存 settled 状态；不把 preview 标成已提交 checkpoint，
+   也不为绕过这个顺序保留第二份 committed document。
+2. 序列化内容与 dirty 处理对应同一次受保护的状态；写入失败不清 dirty、不清 WAL。
+   保存期间若释放锁，必须保证后续编辑不被这次保存误标为已保存；优先使用现有串行保存边界。
+3. 普通 document 读取集中在一处：解析当前格式并验证节点、边和主链。
+   不“试 live，失败试 executor，再试 store/stage”；单个来源无效就报告错误。
+4. mapper 的产品 document 读写不解包 stage adapter；正常新图片初始化直接从 Default 工厂和图片固有参数建图。
+5. 从产品 load/apply/save 路径移除 remirror；现有旧 history 加载若不能处理新节点记录，不得通过重放 stage 覆盖图。
+   不新增 history root snapshot，不在 NM1 改 commit/WAL schema 或实现节点重放。
+6. 释放句柄只管理生命周期；现有调用方确实需要保存时显式调用保存，不能靠后台释放顺带保存。
+7. 项目打开继续使用既有 metadata 校验入口；新版本常量和旧项目全面拒绝在 NM4 一次切换。
+   NM1 的新图测试使用当前开发格式，不添加旧项目升级 fixture 或迁移代码。
+8. 审核 NM1.4 的所有调用方、字段缓存失效、资源清理和失败路径，执行第 14 节退出检查。
+
+成功链：
+
+```text
+local edit functions -> live document
+  -> explicit save under coherent access -> document JSON in storage
+  -> release / normal load -> same nodes, edges, parameters
+```
+
+失败链：
+
+```text
+invalid stored document -> report load error -> no importer/default substitute
+storage write failure -> keep live edits and dirty/WAL -> report save error
+background release -> no persistence attempt
+```
+
+### 11.2 验收
+
+| 测试 | 必须观察到的行为 |
 | --- | --- |
-| `SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages` | `document` 上 exposure_ev 变化 |
-| `IncompleteTargetRejectedLeavesDocumentHashAndHistoryHeadUnchanged` | 缺少 owner_kind 或 node_id 时拒绝，不填缺省 |
-| `ProvisionalSequenceReusesTargetResolvedAtFirstPatch` | 同一序列后半段仍写第一个完整 patch 锁定的 NodeId |
-| `UnknownFieldRejectedLeavesDocumentHashAndHistoryHeadUnchanged` | 失败封闭 |
-| `UndoSettledExposureRestoresDocumentValue` | Undo 后文档回到 before |
-| `MaskTargetWriteIsRejected` | NM1 不写 Mask |
+| `DocumentSaveReloadPreservesNodesEdgesAndParameters` | 额外 Grade、删除 primary、重接、参数、enabled/name 均 round-trip；这是 document I/O，不是 history reopen |
+| `SavedDocumentContainsNoStageAdapter` | 持久图不包含旧 stage 镜像，保存不重建节点 |
+| `InvalidStoredDocumentFailsWithoutReplacement` | 缺失字段、非法拓扑、损坏值准确失败；不生成默认图 |
+| `FailedDocumentSaveKeepsDirtyStateAndJournal` | 失败保留未保存状态及已有日志，history head 不被改写 |
+| `SaveDoesNotPersistUnsettledPreviewAsCommittedState` | 保存遵循完成/取消输入的顺序，重读结果不把预览冒充 settled 值 |
+| `ImportCreatesRenderableDocumentWithoutStageMirror` | 新图 Default 参数、相机/镜头固有数据完整；未打开编辑器也能 DAG 出图 |
 
-History 投影文案、commit hash 算法、journal 格式留给 NM4。本 Phase 只要 Undo 后文档值正确。
+主要范围为 pipeline service、pipeline mapper、必要的 import 初始化、对应 app/storage 测试。
+只有读取边界测试需要覆盖非法格式；不再让每个渲染调用方重复证明“stage-only 项目被拒绝”。
 
-##### Phase NM1.3 completion record (2026-08-30)
+## 12. API 与所有权约束
 
-**Status:** complete — production patches require a complete `EditorParameterTarget`; live Capture/Commit/Undo/Redo write `PipelineGuard::document_`; incomplete, Mask, and unknown-field patches are rejected without filling a default target.
+保留简单的领域函数形态，例如：
 
-**Primary success call chain:**
-
-```text
-HandlePatch(settled, complete EditorParameterTarget)
-  -> DescribeEditorParameterTargetError empty
-  -> ResolveEditorAdjustmentField
-  -> CaptureAdjustmentBeforePreview
-       lock target on first complete patch of this field_key
-       ReadEditorParameterJson before
-       PublishEditorParameterPatch(document, locked target, params)
-  -> CommitAdjustment
-       PublishEditorParameterPatch after
-       PrepareAppendEdit(OrdinaryEditPayload)   // schema unchanged
-       PublishPreparedEdit
-       record document_edit_by_commit[hash]
-  -> Undo / Redo
-       PublishPreparedHeadMove
-       ApplyDocumentFieldEdits from document_edit_by_commit
+```cpp
+ApplyEditorParameterPatch(PipelineDocument& document, target, params, error);
+AddCleanColorGrade(PipelineDocument& document, before_node_id, new_id);
+RemoveColorGradeAndBridge(PipelineDocument& document, node_id);
+ReconnectColorGrade(PipelineDocument& document, node_id, predecessor, successor);
 ```
 
-**Primary failure call chain:**
+以上为形态说明，不要求新增同名接口或通用命令类型。函数操作当前文档；锁和 WAL/history 由 app 边界协调。
+共享生命周期使用现有 guard/pin 机制，缺少无保存 release 时只补最小对称释放能力。
+不新增 snapshot registry、租约服务、发布 token 或每消费者一个 executor。
 
-```text
-missing owner_kind / node_id / adjustment_instance_id, Mask target, or unknown field
-  -> Rejected before history publish
-  -> document canonical JSON unchanged
-  -> working head unchanged
-```
+## 13. 验证方式与证据
 
-```text
-WAL / history publish fails after provisional document write
-  -> restore document from before_model_json
-  -> no new head
-```
+以下为 NM1 全阶段验证要求；NM1.4 A 的已执行命令、结果和范围见第 10.1 节，B/C 与 NM1.5 仍须独立验收。
 
-**What was proven (executed tests):**
-
-| Required name / criterion | Target / binary | Result |
-| --- | --- | --- |
-| `SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages` | `EditorSessionHistoryPortTest`, `EditorPipelineCommandServiceTest` | PASS |
-| `IncompleteTargetRejectedLeavesDocumentHashAndHistoryHeadUnchanged` | `EditorSessionHistoryPortTest` | PASS |
-| `ProvisionalSequenceReusesTargetResolvedAtFirstPatch` | `EditorSessionHistoryPortTest` | PASS |
-| `UnknownFieldRejectedLeavesDocumentHashAndHistoryHeadUnchanged` | `EditorSessionHistoryPortTest` | PASS |
-| `UndoSettledExposureRestoresDocumentValue` | `EditorSessionHistoryPortTest` | PASS |
-| `MaskTargetWriteIsRejected` | `EditorSessionHistoryPortTest`, `EditorPipelineCommandServiceTest` | PASS |
-| `IncompleteLaterPatchRejectedLeavesLockedDocumentUnchanged` (3.1 later-patch rule) | `EditorSessionHistoryPortTest` | PASS |
-| `JournalAppendFailureRestoresDocumentExposureEv` (9.3 WAL restore) | `EditorSessionHistoryPortTest` | PASS |
-| `IncompleteTargetIsRejected` / `MaskTargetIsRejected` | `EditorSessionEditControllerTest` | PASS |
-
-Commands:
+Windows 构建遵循 `alcedo-msvc-cmake` 技能，从仓库根目录运行：
 
 ```text
 cmd /c scripts\msvc_env.cmd --preset win_debug
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPipelineCommandServiceTest --target EditorSessionEditControllerTest --target EditorSessionHistoryPortTest --target EditorSessionActionPolicyCq3Test --target EditorAdjustmentPipelineTest
-ctest --test-dir build/debug -R "EditorPipelineCommandServiceTest|EditorSessionEditControllerTest|EditorSessionHistoryPortTest|EditorSessionActionPolicyCq3Test|EditorAdjustmentPipelineTest" --output-on-failure
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest PipelineMapperTest ThumbnailServiceTest EditorPipelineCommandServiceTest EditorSessionHistoryPortTest
+ctest --test-dir build/debug -R "GpuDagModelGraphTest|PipelineMapperTest|ThumbnailServiceTest|EditorPipelineCommandServiceTest|EditorSessionHistoryPortTest" --output-on-failure
 ```
 
-Suite totals: `EditorSessionHistoryPortTest` 46/46 PASS; `EditorAdjustmentPipelineTest` 6/6 PASS; `EditorPipelineCommandServiceTest` 4/4 PASS; `EditorSessionEditControllerTest` 11/11 PASS; `EditorSessionActionPolicyCq3Test` 10/10 PASS. Combined filtered run: 77/77 PASS. Logs: `build/tmp/nm1/`.
+同时从实际 CMake/CTest 清单确认并运行 export、pipeline scheduler、editor controller 和 import 受影响目标；
+不猜测尚未存在的 target 名。测试矩阵中的新名称是行为要求，可以合并为参数化测试，不机械地每行新增一个文件。
 
-**Checklist / exit condition:** NM1.3 typed target, input-sequence lock, live document write, and Undo document restore are done. NM1 overall Apply/Save authority and thumbnail DAG remain for NM1.4–NM1.5.
+先运行各修改段的聚焦测试，最后运行完整受影响 suite。GPU 数值断言使用受支持真实 RAW 或固定可验证输入，
+保留当前质量设置；缺 fixture/后端时记录未验证，不把跳过写成通过。并发测试用确定的屏障。
+代码检查确认产品路径无整图 clone、stage remirror 和 snapshot executor 创建；输出比较不能只检查 buffer 非空。
 
-**LOC note (grill-code-review):** production files under 1000 LOC — `editor_history_mutation.cpp` 539, `editor_pipeline_command_service.cpp` 198, `editor_session_edit_controller.cpp` 149, `editor_adjustment_types.hpp` 112. `editor_session_history_port_test.cpp` is 1842 lines (pre-existing history/WAL/paste suite; NM1.3 tests appended). Not split in this phase.
-
-**Remaining gaps:** QML `submitPatch` still sends `field_key` only; those writes are rejected until NM6 fills a complete target. `document_edit_by_commit` is in-process; crash reopen still replays stage WAL, not a persisted document mutation (NM4). Product Apply/Save may still remirror from stages (NM1.5). Thumbnail/snapshot still clone via stages (NM1.4). `CheckoutVersion` does not restore document JSON from the side table. Process-internal stage `SetOperator` on commit remains until the stage table is deleted.
-
----
-
-## 10. NM1.4 — Thumbnail 与 snapshot DAG
-
-### 10.1 结果
-
-`PipelineSnapshot` 携带独立的 `PipelineDocument` 克隆（不共享 live Model 指针）。Thumbnail、analysis rendition 用该文档走 GPU DAG 出图。
-
-禁止：
-
-```text
-ExportPipelineParams
-  -> ImportPipelineParams
-  -> stage Apply / remirror
-  -> thumbnail pixels
-```
-
-允许 snapshot 仍持有 `CPUPipelineExecutor` 作为 GPU session / 调度宿主，但 Apply 必须绑定已克隆的文档且 **不得**用 snapshot 的 stage JSON 覆盖该文档后再渲染。
-
-`LoadPipelineSnapshot` 在 cache miss 时仍可 `LoadPipeline`，但捕获的是文档，不是「只导出 stages 再重建一份编辑状态」。
-
-Export 目前走同一 snapshot。本子 Phase 把 snapshot API 改成文档权威后，export 像素也必须 DAG，不得留下一条 stage-only 克隆。
-
-### 10.2 主成功调用链
-
-```text
-ThumbnailService::GetThumbnail
-  -> LoadPipelineSnapshot
-  -> ClonePipelineDocument(live or stored)
-  -> snapshot.document
-  -> GPU Renderer::Render(document)
-  -> host thumbnail buffer
-```
-
-### 10.3 主失败调用链
-
-```text
-missing document on a v2 image
-  -> snapshot load fails with real error
-  -> no stage-only thumbnail substitute
-```
-
-```text
-stage-only storage, no usable graph
-  -> Load / snapshot fails with real error
-  -> no LegacyPipelineImporter product open path
-```
-
-### 10.4 文件
-
-- `alcedo_studio/src/include/app/pipeline_service.hpp`（`PipelineSnapshot` 增加 document）
-- `alcedo_studio/src/app/pipeline_service.cpp`（`LoadPipelineSnapshot`）
-- `alcedo_studio/src/app/thumbnail_service.cpp`
-- `alcedo_studio/src/edit/pipeline/pipeline_cpu.cpp`（thumbnail Apply 不再 `ApplyOnto` 覆盖 snapshot 文档）
-- `alcedo_studio/tests/app/thumbnail_service_test.cpp`
-
-### 10.5 测试
-
-| 名称 | 断言 |
-| --- | --- |
-| `LoadPipelineSnapshotClonesDocumentWithoutReimportingStagesAsRenderSource` | snapshot 文档与 live 文档 canonical JSON 一致，且不是从 stage JSON Import 出来覆盖 live 图 |
-| `ThumbnailRenderUsesGpuDagDocumentWithoutStageApplyOnto` | 文档上的 exposure 与 thumbnail 路径使用的文档一致；渲染前文档 hash 不被 stage JSON 改写 |
-| `AnalysisRenditionUsesSameDocumentSnapshot` | 分析路径同样绑定 snapshot document |
-| `StageOnlyStoreFailsSnapshotLoadWithoutImporterSubstitute` | 无图存储失败；不 Import 成默认图再出缩略图 |
-
-若现有 `ThumbnailServiceTest` 依赖 remirror 或 `MirrorsLegacyStageAdapter()`，改为断言 DAG 文档身份，或断言无图存储失败。
-
----
-
-## 11. NM1.5 — 产品写入权威（停止 stage 覆盖文档）
-
-### 11.1 结果
-
-Live editor：
-
-- 新参数写入文档（NM1.3）；
-- GPU 产品帧读取文档；
-- **禁止**每次 Apply 用当前 stages `ApplyOnto` 覆盖刚刚写过的文档；
-- **禁止** dirty `SavePipeline` 用 `LegacyPipelineImporter::Import(stages)` 整份替换 `document_`。
-
-`SavePipeline` / `SyncPipelineDocument` 持久化 `document.ToJson()`。不要为旧读取器附带 `legacy_stage_adapter` 镜像 blob。
-
-Load 规则：
-
-- format v2 且含完整 nodes/edges：文档权威。不要用 adapter 或 stage 表覆盖图。
-- 仅有旧 stage JSON / adapter、没有可用图：Load 失败，返回真实错误。不要 Import 成默认三节点。不要升级 mini-git commit。
-
-`InitializeImageRoot` 必须把当时的完整默认 **文档**记入 root，而不是只存 stage 表。后续 catalog 默认值变化不得重写已存在 root。
-
-本子 Phase 不从代码中删除 CPU stage 表。删除 stage 属于后续 Phase。
-
-### 11.2 主成功调用链
-
-```text
-settled slider
-  -> document mutation
-  -> GPU Render(document)
-  -> SyncPipelineDocument / Save writes document ToJson
-```
-
-### 11.3 主失败调用链
-
-```text
-ApplyOnto of live stages would overwrite a newer document edit
-  -> this path is removed from product Apply/Save
-```
-
-```text
-stage-only store, no usable graph
-  -> real error
-  -> project does not open
-  -> no CPU stage editor path restored
-```
-
-### 11.4 文件
-
-- `alcedo_studio/src/app/pipeline_service.cpp`（Load / Save / Remirror / InitializeImageRoot）
-- `alcedo_studio/src/edit/pipeline/pipeline_cpu.cpp`（`ApplyGpuDagProduct`）
-- `alcedo_studio/src/include/edit/graph/pipeline_document.hpp`（产品默认路径不再调用 `AllowsLegacyStageAdapterRemirror`）
-- `alcedo_studio/src/storage/mapper/pipeline/pipeline_mapper.cpp`
-- `alcedo_studio/tests/app/pipeline_service_test.cpp`
-- `alcedo_studio/tests/edit/graph/legacy_import_test.cpp`（importer 可留作非产品测试；产品 Load 不调用）
-
-### 11.5 测试
-
-| 名称 | 断言 |
-| --- | --- |
-| `DirtySaveWritesDocumentJsonAndDoesNotReplaceGraphFromStages` | 文档里若有额外 Color Grade，save 后仍在 |
-| `GpuApplyDoesNotApplyOntoDocumentFromLiveStagesAfterDocumentEdit` | 文档 exposure 不被 stage 旧值盖回 |
-| `Format2LoadTreatsDocumentAsAuthorityWhenNodesPresent` | load 不因 adapter 抹掉图结构 |
-| `StageOnlyStoreLoadFailsWithoutDefaultGraphImport` | 无图存储失败；不打开；不 Import |
-
-现有 `ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuNeuralEngine` 一类测试必须改写：不再要求 reload 后仍把 CPU 当权威去 remirror 覆盖文档。旧名 `LegacyStageOnlyStoreImportsOnceThenRendersDocument` 不再作为产品要求。
-
----
-
-## 12. 建议的 app 类型
-
-```text
-EditorPipelineCommandService
-  Prepare(mutation) -> candidate clone, validate, optional CompileStatic
-  Publish -> document, history head if settled
-```
-
-QML 本 Phase 不调用图命令。`EditorSessionEditController` 和 `EditorHistoryMutation` 走该 service 或同等窄接口，避免再直接 `SetOperator` 后指望 ApplyOnto。
-
----
-
-## 13. 构建与证据
-
-Windows：
-
-```text
-cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target ThumbnailServiceTest
-```
-
-日志放 `build/tmp/nm1/`。每个子 Phase 完成后在本文件追加 completion record（调用链、命令、通过的测试名）。不要把这些日志写进总体方案。
-
----
+临时工具、日志、测试证据仅放 `build/tmp/nm1/`。完成记录须包含实际命令、测试结果和未覆盖项；
+不能以旧 snapshot 测试通过替代共享 executor 与失败路径证明。
 
 ## 14. NM1 退出条件
 
-- [ ] 新编辑写入 `PipelineDocument`；产品 Apply/Save 不再用 live stages 覆盖新文档
-- [ ] 产品不提供 stage 镜像；无可用图的旧存储 Load 失败
-- [ ] Thumbnail / analysis / 同 snapshot 像素路径 DAG 渲染，不经 stage ApplyOnto
-- [x] Add / Remove（含 primary）/ Reconnect 原子、失败回滚、canonical JSON 可逆
-- [x] Default 三节点工厂自带 `+1.5 EV` / saturation `1.3`；Clean 为 identity 且无四项后处理
-- [x] `EditorParameterTarget`：每个 patch 完整；缺字段拒绝；输入序列锁定；Mask target 拒绝
-- [x] History live Undo 恢复文档值（payload schema 仍可是旧的）
-- [ ] 生产 UI 仍无新增节点入口
-- [ ] 不声称打开或升级 DAG document 之前的项目；NML 取消
+- [ ] 同一图片只有一个 live document/executor；后台任务复用普通使用句柄。
+- [x] preview/settled/参数 Undo/Redo 不深拷贝整图；图命令只保留局部恢复数据（NM1.4 A）。
+- [ ] document 读写、渲染和序列化遵守统一互斥，完成/取消/异常没有锁重入或使用权泄漏。
+- [ ] Add/Remove/Reconnect/Rename/Enabled 保留；非法操作恢复节点、边、值和已支持的 history 状态。
+- [x] Default 工厂自带 1.5 EV/1.3 saturation；Clean 工厂无视觉变化且无四项后处理（既有证据，集成时复测）。
+- [x] 完整 target、输入序列锁定、未知字段/Mask 拒绝及同会话参数 Undo/Redo 在简化后重新通过（NM1.4 A）。
+- [ ] 编辑器、缩略图、analysis、export 从同一 document 得到正确 DAG 像素；单次参数不污染后续任务。
+- [ ] 后台完成不保存、不清 dirty；最后一次使用结束前不淘汰对象，编辑器在用的缓存不被整体释放。
+- [ ] 产品 Apply/Load/Save 不再使用 stage 镜像或 stage 作为参数源；旧类型可留作非产品代码。
+- [ ] 新图导入和 document 保存读取完整；存储失败保留未保存状态，坏图读取真实失败。
+- [ ] NM1 未引入完整 typed history、跨进程节点重放、旧项目迁移或额外 root/document 副本。
+- [ ] 不开放依赖 NM2/NM4/NM5/NM6 的生产入口；不宣称节点 history/recovery 或多 Grade GPU 已完成。
+- [ ] 第 10/11 节行为有执行证据；第 16 节追加本版实施结果，NM1.4/NM1.5 才能改为 complete。
 
----
+## 15. 交给后续 Phase 的边界
 
-## 15. 与后续 Phase 的接口
+- **NM2：** 在现有单 live document 和共享 executor 上执行完整 Grade 主链，迁移 DRT/Post，完善按节点缓存；
+  不恢复独立参数副本来绕过任务状态问题。
+- **NM3：** Mask 字段和资源操作遵循局部修改原则；不可变像素资产不要求 document 不可变。
+- **NM4：** 使用 NM1 领域函数实现 typed `PipelineEditBatch`、forward/inverse、节点 WAL/recovery、Version/Paste；
+  替换 `document_edit_by_commit` 等临时记录，切换 checkpoint/history/project metadata 格式。
+  以 history 为准重放，checkpoint hash 只用于跳过不必要重放；不保留旧项目兼容读取和 stage 提交迁移。
+- **NM5/NM6：** 在模型、真实多节点渲染和 history 完成后接 UI；不把 QML 对象当作模型或复制存储。
+- **Stage 类型删除：** 后续删除仍未被产品使用的旧类型及测试 importer，不为保留它们增加新镜像。
+- **NML：** 已取消，不创建旧项目升级阶段。
 
-- **Stage table delete (later, not NM1):** 从代码中删除 CPU stage 表和产品路径上的 `LegacyPipelineImporter`。不是旧项目升级。
-- **NML：** 取消。本产品不打开、不升级 DAG document 之前的 stage-only 项目，也不迁移旧 mini-git commit。
-- **NM2：** 主链上每一个 Color Grade 都执行；本 Phase 只执行第一个。删除能力已在 NM1 证明，NM2 不得再拿「compiler 需要 `grade.primary`」限制删除。NM2 假定打开的项目已经是可用 DAG 文档。无图项目不会进入 NM2。
-- **NM4：** 把 `OrdinaryEditPayload` 换成 typed `PipelineEditBatch`；checkpoint 存文档而不是只存 stage params。NM4 不回填旧 stage commit。
-- **NM6：** 右侧面板按选中节点发送完整 target。NM1 已要求完整 target 与输入序列锁定。
+## 16. 既有证据与本版状态
 
----
+以下为 2026-08-29/30 原执行记录的摘要，保留其实际测试范围。旧复制调用链不再是实施要求。
 
-## 16. Completion records
+| 原阶段 | 已记录证据 | 本版解释 |
+| --- | --- | --- |
+| NM1.1 | `GpuDagModelGraphTest` 42/42；`GpuDagRawInputTest.GpuDagGraphCompiler` 18/18 PASS | 图功能与编译行为保留；原地实现要复测 |
+| NM1.2 | `GpuDagModelGraphTest` 46/46 PASS | Default/Clean 功能保留 |
+| NM1.3 | HistoryPort 46、AdjustmentPipeline 6、CommandService 4、SessionEditController 11、ActionPolicyCq3 10；合计 77/77 PASS | 完整 target 与同会话参数行为保留；不证明跨进程 history，锁与复制要修正 |
+| 未提交 NM1.4 | PipelineMapper filter 5/5、Thumbnail filter 4/4、ModelGraph filter 1/1 PASS | 只证明原 snapshot 实现下的检查；不足以通过本版共享渲染验收 |
 
-NM1.1 (2026-08-29): complete — recorded under §7.
-NM1.2 (2026-08-30): complete — recorded under §8.
-NM1.3 (2026-08-30): complete — recorded under §9.
+旧记录主要行为名：
 
-后续子 Phase 完成后按同一模板追加。模板：
+- `RemovePrimaryGradeKeepsRemainingGradesAndValidBackbone`
+- `RemoveLastColorGradeLeavesDevelopConnectedToDrt`
+- `GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbsent`
+- `DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree`
+- `MakeCleanColorGradeUsesIdentityParamsAndOmitsPostAdjustments`
+- `IncompleteTargetRejectedLeavesDocumentHashAndHistoryHeadUnchanged`
+- `ProvisionalSequenceReusesTargetResolvedAtFirstPatch`
+- `UndoSettledExposureRestoresDocumentValue`
+- `JournalAppendFailureRestoresDocumentExposureEv`
 
-##### Phase NM1.x completion record (YYYY-MM-DD)
+历史命令使用第 13 节 MSVC wrapper 和对应 CTest suite；原 NM1.4 使用可执行文件 filter：
+`*LoadPipelineSnapshot*`、`*StageOnlyStore*`、`*ThumbnailRenderUsesGpuDagDocument*`、
+`*AnalysisRenditionUsesSameDocumentSnapshot*`、`*DefaultPipelineHasDevelop*`。历史日志位于 `build/tmp/nm1/`。
 
-**Status:** complete | partial — …
+已知证据限制：原 NM1.4 的 `mfzoty.dng` 用 image pool + LibRaw 准备输入，因本机 Exiv2 路径打开失败
+未证明完整 ImportToFolder 链；它也不能替代 import 初始化验收。QML field-only 请求仍被拒绝；
+非 primary Grade 的实际 GPU 执行和跨进程节点恢复分别属于 NM2/NM4。
 
-**Primary success call chain:** （`text` 箭头链）
+本版方案更新（2026-08-30）：**documentation only**。源码/测试保持原样，没有新 build/test 结果。
+实施后追加真实成功链、失败链、命令、结果及缺口，再更新状态和退出清单。
 
-**Primary failure call chain:**
-
-**What was proven (executed tests):** 表
-
-Commands: …
-
-**Remaining gaps:**
+NM1.4 A 实施结果（2026-08-30）：**complete**，本版验收 121/121 PASS，成功链、失败链、测试和缺口见第 10.1 节完成记录。NM1.4 B/C、NM1.5 的状态未提前提升。

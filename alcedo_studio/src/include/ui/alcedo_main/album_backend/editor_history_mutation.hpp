@@ -17,12 +17,14 @@ class EditorHistoryState;
 
 /// Extracted mutation/navigation unit. Handles adjustment capture, settled
 /// commit, Undo, Redo, explicit head movement, and Version checkout. Preserves
-/// the existing render and revision publication call chain.
+/// the existing render and revision publication call chain. Parameter operations
+/// run on the history queue and hold the executor render lock across document
+/// access and WAL publication. They never copy the document or update stage params.
 class EditorHistoryMutation {
  public:
   explicit EditorHistoryMutation(EditorHistoryState& state);
 
-  /// Capture the committed operator value before interactive preview begins.
+  /// Capture the target Model value once and apply preview under the render lock.
   /// @pre @p patch.target is a complete production target. Incomplete targets are
   ///      rejected; this path does not fill owner_kind or node_id.
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
@@ -30,17 +32,21 @@ class EditorHistoryMutation {
                                       std::string* error) -> bool;
 
   /// Append one settled adjustment and advance the live working head.
-  /// Live effect writes PipelineGuard::document_ using the locked target.
+  /// Uses actual normalized document values. WAL failure restores only the locked target;
+  /// unchanged normalized values produce neither a commit nor a WAL record.
   auto CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::EditorAdjustmentPatch& patch, std::string* error) -> bool;
 
   /// Move the working head to its first parent and apply the before value.
+  /// Missing same-session target records fail before any WAL or document mutation.
   auto Undo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool;
 
   /// Move the working head to the redo child and apply the after value.
+  /// Restores affected values and the published head if a Model rejects the change.
   auto Redo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool;
 
   /// Move the working head to an explicit commit in one operation.
+  /// Only recorded same-session parameter edits are supported; typed replay belongs to NM4.
   auto MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::commit_hash_t& commit_id, std::string* error) -> bool;
 

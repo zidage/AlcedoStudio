@@ -34,7 +34,7 @@ class EditorSessionPipelinePort;
 /// Per-image history state owned by the queue-thread history unit. The command
 /// queue is the sole mutation owner for graph, redo, pending-before, and
 /// committed-snapshot fields. Live parameter writes go to pipeline_guard->document_.
-/// The executor is locked only for stage Apply and snapshot refresh.
+/// Document reads/writes and rendering use the same executor render lock.
 struct HistoryWorkingState {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;

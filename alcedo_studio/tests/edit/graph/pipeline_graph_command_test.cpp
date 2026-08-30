@@ -161,6 +161,47 @@ TEST(GpuDagModelGraph, InvalidReconnectLeavesDocumentHashUnchanged) {
   EXPECT_EQ(document.Graph().FindNode("grade.b")->Id(), NodeId{"grade.b"});
 }
 
+TEST(GpuDagModelGraph, GraphCommandFailureRestoresAffectedNodesAndEdges) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  auto* primary = document.PrimaryGrade();
+  auto* extra   = document.Graph().FindNode("grade.b");
+  auto* exposure =
+      dynamic_cast<ExposureModel*>(primary->FindAdjustmentByType(type_ids::Exposure()));
+  exposure->SetValue(2.75f);
+  document.ClearTopologyDirty();
+  const auto before      = document.ToJson();
+  const auto exact_edges = document.Graph().Edges();
+  EXPECT_FALSE(
+      ReconnectColorGrade(document, NodeId{"grade.primary"}, NodeId{"develop"}, NodeId{"drt"})
+          .empty());
+  EXPECT_EQ(document.PrimaryGrade(), primary);
+  EXPECT_EQ(document.Graph().FindNode("grade.b"), extra);
+  EXPECT_EQ(primary->FindAdjustmentByType(type_ids::Exposure()), exposure);
+  EXPECT_FLOAT_EQ(exposure->Value(), 2.75f);
+  EXPECT_EQ(document.ToJson(), before);
+  EXPECT_FALSE(document.TopologyDirty());
+  ASSERT_EQ(document.Graph().Edges().size(), exact_edges.size());
+  for (std::size_t i = 0; i < exact_edges.size(); ++i) {
+    EXPECT_EQ(document.Graph().Edges()[i].from_node, exact_edges[i].from_node);
+    EXPECT_EQ(document.Graph().Edges()[i].to_node, exact_edges[i].to_node);
+  }
+  // An unrelated invalid edge forces validation failure after node extraction/insertion.
+  document.Graph().Connect(NodeId{"develop"}, PortId{"invalid"}, NodeId{"drt"}, PortId{"image"});
+  const auto invalid_before = document.ToJson();
+  EXPECT_FALSE(ReconnectColorGrade(document, NodeId{"grade.primary"}, NodeId{"develop"},
+                                   NodeId{"grade.b"}).empty());
+  EXPECT_FALSE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  EXPECT_EQ(document.PrimaryGrade(), primary);
+  EXPECT_EQ(primary->FindAdjustmentByType(type_ids::Exposure()), exposure);
+  EXPECT_EQ(document.ToJson(), invalid_before);
+  EXPECT_FALSE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.failed"}).empty());
+  EXPECT_EQ(document.Graph().FindNode("grade.failed"), nullptr);
+  EXPECT_EQ(document.Graph().FindNode("grade.b"), extra);
+  EXPECT_EQ(document.ToJson(), invalid_before);
+  EXPECT_FALSE(document.TopologyDirty());
+}
+
 TEST(GpuDagModelGraph, GraphMutationInverseRestoresCanonicalDocumentJson) {
   auto document = CreateDefaultPipelineDocument();
   const auto original = DocumentJson(document);
