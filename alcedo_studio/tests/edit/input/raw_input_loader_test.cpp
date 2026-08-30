@@ -22,6 +22,7 @@
 #include <pthread.h>
 #endif
 
+#include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -320,6 +321,58 @@ TEST(GpuDagRawInput, ConvertedSonyLinearDngUsesItsOwnBlackAndWhiteLevels) {
       EXPECT_FLOAT_EQ(pixel[3], 1.0f);
     }
   }
+}
+
+TEST(GpuDagRawInput, CanonR6MarkIiiCr3UsesColorDataSpecularWhite) {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "canon" / "r6iii" /
+                    "9327411796.cr3";
+  if (!std::filesystem::exists(path)) GTEST_SKIP() << "R6 Mark III fixture is missing: " << path;
+
+  auto encoded = ReadBytes(path);
+  ASSERT_FALSE(encoded.empty());
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_buffer(encoded.data(), encoded.size()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.ColorDataSubVer, 66);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.SpecularWhiteLevel, 14351);
+  ASSERT_EQ(raw->imgdata.makernotes.canon.AverageBlackLevel, 2048);
+  for (int c = 0; c < 4; ++c) {
+    ASSERT_EQ(raw->imgdata.color.linear_max[c], 14351);
+    ASSERT_GT(raw->imgdata.color.linear_max[c], 1000)
+        << "version-48 ColorData offsets would set linear_max to a LUT value near 147";
+  }
+
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  ASSERT_NE(raw->imgdata.rawdata.raw_image, nullptr);
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.input_kind, RawInputKind::BayerRaw);
+  for (int c = 0; c < 4; ++c) {
+    EXPECT_NEAR(prepared.linearization.black_level[c], 2048.0f, 1.0f);
+    EXPECT_NEAR(prepared.linearization.white_level[c], 14351.0f, 1.0f);
+  }
+
+  const auto curve = raw_norm::BuildLinearizationCurve(raw->imgdata.rawdata);
+  const auto* samples = raw->imgdata.rawdata.raw_image;
+  const int raw_width = raw->imgdata.sizes.raw_width;
+  const int left = raw->imgdata.sizes.left_margin;
+  const int top = raw->imgdata.sizes.top_margin;
+  int clipped = 0;
+  int counted = 0;
+  for (int y = top; y < top + raw->imgdata.sizes.height; y += 64) {
+    for (int x = left; x < left + raw->imgdata.sizes.width; x += 64) {
+      const int color = raw->COLOR(y, x);
+      const float linear =
+          raw_norm::NormalizeSample(static_cast<float>(samples[y * raw_width + x]),
+                                    curve.black_level[color], curve.white_level[color]);
+      ASSERT_TRUE(std::isfinite(linear));
+      if (linear >= 1.0f) {
+        ++clipped;
+      }
+      ++counted;
+    }
+  }
+  ASSERT_GT(counted, 0);
+  EXPECT_LT(clipped, counted / 5)
+      << "ColorData version 66 parsed with version-48 white (147) clips the frame to 1.0";
 }
 
 TEST(GpuDagRawInput, UnsupportedCfaDoesNotProducePreparedRawInput) {
