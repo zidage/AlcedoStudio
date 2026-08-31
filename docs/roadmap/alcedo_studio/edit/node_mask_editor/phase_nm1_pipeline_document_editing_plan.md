@@ -951,6 +951,55 @@ ctest --test-dir build\debug\alcedo_studio\tests\ui -R "EditorSessionPipelinePor
 
 **Checklist / exit condition:** 第 11.1 节八项工作、第 11.2 节六项验收和第 14 节 NM1.5 相关退出项均有执行证据；Issue #113 明确保持为未完成的独立待办。
 
+##### CI follow-up completion record (2026-08-31)
+
+**Status:** complete — macOS CI 的 6 个 `ci_raw_flow` 失败来自同一缺口：产品 DAG 只读 document 里的相机矩阵。semantic / album 缩略图走 `RenderType::THUMBNAIL`（one-shot、host download）；相关测试在 import 时没有把 `PipelineMgmtService` 交给 `ImportServiceImpl`，CI RAW 的 `Apply` / scheduler 则对未绑定 document 的 executor 直接渲染。`FAST_PREVIEW` / `QUALITY_BASE_PREVIEW` 是编辑器 interactive present，不是缩略图路径。
+
+**Primary success call chain:**
+
+```text
+ImportServiceImpl(fs, pool, PipelineMgmtService)
+  -> PersistAssembledImportPipeline
+  -> InjectRawMetadata into bound Default document
+  -> SyncPipelineDocument
+  -> ThumbnailService schedules RenderType::THUMBNAIL
+  -> LoadPipeline binds stored document
+  -> DAG camera color uses stored matrices; host download for album/semantic
+```
+
+**Primary failure call chain:**
+
+```text
+import without PipelineMgmtService, or Apply/THUMBNAIL without a bound document
+  -> Default document has no camera matrices, or Apply throws missing document
+  -> ExecuteMetalCameraColor: missing camera matrices
+  -> thumbnail callback fails; semantic items counted as failed
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `UsesRealThumbnailServiceAndBatchesMockEmbedding` | `SemanticGenerationServiceTest` | PASS |
+| `RealThumbnailFailureSkipsMockEmbeddingForThatItem` | `SemanticGenerationServiceTest` | PASS |
+| `CancelDuringMockEmbeddingDoesNotHoldRealThumbnailPin` | `SemanticGenerationServiceTest` | PASS |
+| `GeneratesLabelsForRecursiveCameraSampleDatabaseAndSqlChecks` | `SemanticGenerationServiceTest` | PASS |
+| `DefaultPipelineRendersCiRawFixture` | `CiRawWorkflowTest` | PASS |
+| `SchedulerProducesThumbnailAndFastPreview` | `CiRawWorkflowTest` | PASS；像素断言只落在 `THUMBNAIL` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target SemanticGenerationServiceTest CiRawWorkflowTest
+build\debug\alcedo_studio\tests\ci\CiRawWorkflowTest_runtime\CiRawWorkflowTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\SemanticGenerationServiceTest_runtime\SemanticGenerationServiceTest.exe --gtest_filter=SemanticGenerationServiceTest.UsesRealThumbnailServiceAndBatchesMockEmbedding:SemanticGenerationServiceTest.RealThumbnailFailureSkipsMockEmbeddingForThatItem:SemanticGenerationServiceTest.CancelDuringMockEmbeddingDoesNotHoldRealThumbnailPin --gtest_brief=1
+build\debug\alcedo_studio\tests\app\SemanticGenerationServiceTest_runtime\SemanticGenerationServiceTest.exe --gtest_filter=SemanticGenerationServiceTest.GeneratesLabelsForRecursiveCameraSampleDatabaseAndSqlChecks --gtest_brief=1
+```
+
+本机 Windows debug：`CiRawWorkflowTest` 3/3 PASS（2574 ms）；上述 3 个 real-thumbnail semantic 测试 PASS（5275 ms）；recursive camera-sample semantic PASS（7153 ms）。Metal 未在本机运行。
+
+**Remaining gaps:** Issue #113 磁盘写回仍未实施。本 follow-up 不改产品 import 接线；`project_handler` 本来就会把 `PipelineMgmtService` 交给 import。`FAST_PREVIEW` 的 GPU sink present 仍由编辑器 / `PipelineFrameSinkTest` / `PipelineDocumentRenderTest` 覆盖。
+
 ## 12. API 与所有权约束
 
 保留简单的领域函数形态，例如：

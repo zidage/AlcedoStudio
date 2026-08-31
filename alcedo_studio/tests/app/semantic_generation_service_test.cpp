@@ -769,7 +769,11 @@ class SemanticGenerationServiceTest : public ::testing::Test {
       return {};
     }
 
-    ImportServiceImpl          import_service(fs_service, img_pool);
+    // Product import writes camera/profile data into the stored document. Thumbnail
+    // DAG rendering reads that document; omitting PipelineMgmtService leaves a Default
+    // graph without camera matrices and Metal/CUDA camera color fails.
+    auto                       pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl          import_service(fs_service, img_pool, pipelines);
     auto                       import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> done;
     auto                       future = done.get_future();
@@ -800,7 +804,9 @@ class SemanticGenerationServiceTest : public ::testing::Test {
     auto                       fs_service = project.GetSleeveService();
     auto                       img_pool   = project.GetImagePoolService();
 
-    ImportServiceImpl          import_service(fs_service, img_pool);
+    // Same as ImportItems: assemble and persist camera/profile data before thumbnail DAG render.
+    auto                       pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl          import_service(fs_service, img_pool, pipelines);
     auto                       import_job = std::make_shared<ImportJob>();
     std::promise<ImportResult> done;
     auto                       future = done.get_future();
