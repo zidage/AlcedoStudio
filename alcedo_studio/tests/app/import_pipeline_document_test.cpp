@@ -20,8 +20,8 @@
 namespace alcedo {
 namespace {
 
-/** @brief Exercise normal RAW import, persisted camera data and the first background render. */
-TEST(ImportPipelineDocumentTest, ImportPreparesCameraProfileBeforeDocumentLoadAndRender) {
+/** @brief Exercise import graph creation, persisted camera data and the first background render. */
+TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirror) {
   RegisterAllOperators();
   const auto root =
       std::filesystem::path(TEST_IMG_PATH).parent_path().parent_path().parent_path().parent_path();
@@ -61,9 +61,22 @@ TEST(ImportPipelineDocumentTest, ImportPreparesCameraProfileBeforeDocumentLoadAn
   const auto stored =
       project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
   ASSERT_TRUE(stored.has_value());
+  EXPECT_FALSE(stored->contains("stages"));
+  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
   const auto persisted = PipelineDocument::FromJson(*stored);
+  EXPECT_EQ(persisted.Graph().Nodes().size(), 3U);
+  EXPECT_EQ(persisted.Graph().Edges().size(), 2U);
+  EXPECT_TRUE(persisted.Graph().Validate().empty());
+  EXPECT_TRUE(persisted.Graph().ValidateImageBackbone().empty());
   ASSERT_NE(persisted.Develop(), nullptr);
   const auto expected = persisted.Develop()->Params().Params();
+  ASSERT_NE(persisted.PrimaryGrade(), nullptr);
+  const auto* exposure = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_FLOAT_EQ(exposure->ToJson().at("exposure_ev").get<float>(), kDefaultPipelineExposureEv);
+  const auto* saturation = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation());
+  ASSERT_NE(saturation, nullptr);
+  EXPECT_FLOAT_EQ(saturation->ToJson().at("saturation").get<float>(), kDefaultPipelineSaturation);
   EXPECT_TRUE(DngColorProfilesEqual(expected.camera_profile.dng_profile, raw.dng_profile_));
   EXPECT_TRUE(expected.camera_profile.color_matrices_valid);
   EXPECT_TRUE(ResolveDevelopColorTransform(expected).ok);

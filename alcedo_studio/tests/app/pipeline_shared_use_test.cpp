@@ -572,6 +572,7 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
                                                         ThumbnailResolution::k256);
   EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
   EXPECT_TRUE(live->dirty_);
+  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, std::chrono::seconds(10)));
   EXPECT_EQ(live->pin_count_, size_t{1});
   EXPECT_EQ(live->document_->ToJson(), live_json);
   const auto stored_after =
@@ -683,6 +684,7 @@ TEST_F(PipelineSharedUseTest, QueuedRenderDoesNotStorePixelsUnderStaleCommitLabe
   ASSERT_NE(result.guard, nullptr);
   EXPECT_TRUE(live->dirty_);
   EXPECT_TRUE(live->unsettled_preview_);
+  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, std::chrono::seconds(10)));
   EXPECT_EQ(live->pin_count_, size_t{1});
 
   thumbnails.FlushDiskCacheMetadata();
@@ -700,6 +702,9 @@ TEST_F(PipelineSharedUseTest, QueuedRenderDoesNotStorePixelsUnderStaleCommitLabe
 
   live->dirty_             = false;
   live->unsettled_preview_ = false;
+  // The first request intentionally remains cached above. Force this second request through the
+  // scheduler so the test exercises a render queued behind the held live render lock.
+  thumbnails.InvalidateThumbnail(ids.first);
   std::unique_lock held(live->pipeline_->GetRenderLock());
   const auto queued_head = live->working_head_commit_hash();
   std::promise<ThumbnailRequestResult> queued;

@@ -112,6 +112,8 @@ class PipelineMgmtService final {
   std::uint64_t                editor_pipeline_history_rebuild_count_ = 0;
 
   void                         HandleEviction(sl_element_id_t evicted_id);
+  void                         SyncDirtyPipelineDocument(
+      const std::shared_ptr<PipelineGuard>& pipeline);
   void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:

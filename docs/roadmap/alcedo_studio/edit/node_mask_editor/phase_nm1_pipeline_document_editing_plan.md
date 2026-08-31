@@ -2,9 +2,9 @@
 
 Date: 2026-08-29
 
-Revised: 2026-08-31 — 保留单 live document/共享 executor；NM1.4R 明确后台 scratch 不预留、不保留空闲块；缩略图磁盘写回策略独立跟踪。
+Revised: 2026-08-31 — NM1.5 已完成保存读取、导入初始化与释放边界；保留单 live document/共享 executor；缩略图磁盘写回策略独立跟踪。
 
-Status: in progress — NM1.4 A/B/R 完成；NM1.2 保留；C 由 R 替代，不再作为独立验收；NM1.5 未开始。缩略图磁盘写回仍为 Issue #113。
+Status: complete — NM1.4 A/B/R 与 NM1.5 完成；NM1.2 保留；C 由 R 替代，不再作为独立验收；缩略图磁盘写回仍为 Issue #113。
 
 Branch: `feature/pipeline-document-editing`
 
@@ -256,7 +256,7 @@ before/after 不能继续从 stage 表读取；既有 payload 需要的字段表
 
 ## 10. NM1.4 — 原地编辑与共享 DAG 渲染
 
-Status: partial — A complete（2026-08-30）；B complete（2026-08-30）；C 由 R 替代；R complete（2026-08-31）。历史 A/B 完成记录保留。NM1.5 未开始。
+Status: complete — A complete（2026-08-30）；B complete（2026-08-30）；C 由 R 替代；R complete（2026-08-31）。历史 A/B 完成记录保留；NM1.5 已在第 11 节完成。
 
 ### 10.1 A：原地修改和局部恢复
 
@@ -712,7 +712,7 @@ document/Model 仍由 live pipeline 拥有；请求由 task 拥有；运行资�
 
 ##### Phase NM1.4R completion record (2026-08-31)
 
-**Status:** complete — 产品 scheduler 把 `PipelineApplyRequest` 直接交给 `Apply`；后台 Bypass 使用 ExactRelease arena（按请求对齐字节分配、最后使用后释放、不保留空闲 slab）；中间写入图在最后消费者后 `ReleaseWrite`；已删除 `GpuDeviceAllocationMutex`；pin 降到 0 后不持 cache lock 等 render lock，就绪发布与 `WaitUntilPinCount` 分开；每图 `ExportRecipe.output_color_` 在入队前解析，像素与 ICC 读同一份配置；`HasUsablePipelineGraph` 已删除。未开始 NM1.5。Issue #113 磁盘写回不在本轮门槛内。
+**Status:** complete — 产品 scheduler 把 `PipelineApplyRequest` 直接交给 `Apply`；后台 Bypass 使用 ExactRelease arena（按请求对齐字节分配、最后使用后释放、不保留空闲 slab）；中间写入图在最后消费者后 `ReleaseWrite`；已删除 `GpuDeviceAllocationMutex`；pin 降到 0 后不持 cache lock 等 render lock，就绪发布与 `WaitUntilPinCount` 分开；每图 `ExportRecipe.output_color_` 在入队前解析，像素与 ICC 读同一份配置；`HasUsablePipelineGraph` 已删除。当时尚未开始 NM1.5，随后由第 11 节完成。Issue #113 磁盘写回不在本轮门槛内。
 
 **Primary success call chain:**
 
@@ -794,7 +794,7 @@ build\debug\alcedo_studio\tests\app\ThumbnailServiceTest_runtime\ThumbnailServic
 
 日志：`build/tmp/nm14r/tests.log`。
 
-**Checklist / exit condition:** 第 10.5 节十条修复与具名测试均有本次执行证据。磁盘写回两例仍属 Issue #113，未勾成通过。未进入 NM1.5。
+**Checklist / exit condition:** 第 10.5 节十条修复与具名测试均有本次执行证据。磁盘写回两例仍属 Issue #113，未勾成通过；随后进入并完成第 11 节 NM1.5。
 
 **LOC note（grill-code-review）：**
 
@@ -810,9 +810,9 @@ build\debug\alcedo_studio\tests\app\ThumbnailServiceTest_runtime\ThumbnailServic
 | `tests/app/thumbnail_service_test.cpp` | ~2866 | 既有大文件；本轮只改 import 接线与少量 GPU-DAG 断言 |
 | `tests/edit/pipeline/pipeline_frame_sink_test.cpp` | ~1087 | 重置后 merged-stage 指针可能堆复用；断言改为经过 null identity |
 
-**Residual gaps:**
+**Residual gaps at the NM1.4R boundary:**
 
-- `LoadPipeline` 仍 `RemirrorGpuDagDocument`，属 NM1.5。
+- 当时 `LoadPipeline` 仍使用 `RemirrorGpuDagDocument`；该缺口已由 NM1.5 的 document-only load/save 收敛。
 - `SetEnableCache` / `CaptureOneShotRenderParams` 仍存在，供旧 FrameSink 测试；产品 scheduler 不靠它们切换 Bypass。
 - 本机产品路径为 CUDA。OpenCL DRT overlay 已编译；Metal overlay 已改同源但未在本机运行。OpenCL `ExecuteOpenClCameraColor: missing camera matrices` 出现在未把 `PipelineMgmtService` 交给 import 的旧测试夹具，补齐后 7/7 PASS，不视为后端降级。
 - ExactRelease 帧内 texture pool 仍可达数百 MiB（真实 RAW 纹理）；证据是 transient used==capacity、任务后 residual 0，以及 arena 单测禁止 16/64 MiB 预留。
@@ -822,7 +822,7 @@ build\debug\alcedo_studio\tests\app\ThumbnailServiceTest_runtime\ThumbnailServic
 
 ## 11. NM1.5 — 保存读取与阶段验收
 
-Status: not started — 前置条件为 NM1.4R 完成；独立缩略图磁盘写回 Issue 不作为前置条件。
+Status: complete — 2026-08-31；前置条件 NM1.4R 已满足；独立缩略图磁盘写回 Issue 不作为前置条件。
 
 ### 11.1 工作
 
@@ -872,6 +872,85 @@ background release -> no persistence attempt
 主要范围为 pipeline service、pipeline mapper、必要的 import 初始化、对应 app/storage 测试。
 只有读取边界测试需要覆盖非法格式；不再让每个渲染调用方重复证明“stage-only 项目被拒绝”。
 
+#### NM1.5 completion record (2026-08-31)
+
+**Status:** complete — 产品保存与普通读取统一以 format-version-2 `PipelineDocument` 为来源；产品边界不再把 executor stage 导出为 document、不写 `legacy_stage_adapter`，也不通过 remirror 覆盖 live graph。显式保存先写 document，再处理可选的 history serialized-state checkpoint；释放句柄只释放使用权，不触发存储写入。存储失败、坏 document 和未 settled preview 均保留真实错误与未保存状态。
+
+**实现与验收清单：**
+
+- `PipelineDocument::FromJson` 集中验证当前格式、geometry、节点、ColorGrade adjustments、边和有限数值；`PipelineMgmtService::LoadPipelineDocument` 只读取这一份存储 JSON，并由 `ValidateProductDocument` 验证图与 image backbone，坏数据不生成默认替代图。
+- `SyncPipelineDocument` 在同一 render lock 内完成 document 校验、序列化、写入和 dirty 清除；`SavePipeline`、`Sync`、`SyncPipeline` 与 cache eviction 只在 dirty 时调用同一受保护写入边界。写入异常不会清 dirty，也不会清除 history serialized-state writeback 标记；eviction 写入失败会把 guard 放回 cache。
+- `SavePipeline` 对 `unsettled_preview_` 真实报错，保存不把 preview 当作 committed 状态；history checkpoint 只在 document 写成功后尝试，checkpoint 失败不会覆盖 document 或 history HEAD。
+- mapper 对 format 2 不再解包 stage adapter；import 初始化保留 Default 工厂和图片固有 RAW/profile 参数，初始化 immutable history root 后显式保存 document；duplicate 复制存储 document JSON；编辑器 session release 使用无保存的 `ReleasePipelineUse`。
+
+**Primary success call chain:**
+
+```text
+local edit functions
+  -> live PipelineDocument under CPUPipelineExecutor::render_lock_
+  -> explicit SavePipeline / SyncPipelineDocument
+  -> ElementStore::UpdatePipelineJsonByElementId(format_version=2 document)
+  -> ReleasePipelineUse (lifecycle only) / normal LoadPipeline
+  -> PipelineDocument::FromJson -> Graph::Validate -> ValidateImageBackbone
+  -> SetPipelineDocument(..., false) -> same nodes, edges and parameters render
+```
+
+**Primary failure call chain:**
+
+```text
+invalid stored document or graph
+  -> FromJson / ValidateProductDocument throws
+  -> initializing cache record is removed; no importer, stage or default replacement
+storage write failure
+  -> dirty_ and serialized_state_needs_writeback_ remain set; SavePipeline releases only its pin
+  -> real save error is reported; live document and history HEAD remain available
+unsettled editor preview
+  -> explicit save rejects before document write; stored JSON is unchanged
+background release
+  -> ReleasePipelineUse only updates lifetime/cache state; no persistence attempt
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DocumentSaveReloadPreservesNodesEdgesAndParameters` | `PipelineMapperTest` | PASS |
+| `SavedDocumentContainsNoStageAdapter` | `PipelineMapperTest` | PASS |
+| `InvalidStoredDocumentFailsWithoutReplacement` | `PipelineMapperTest` | PASS |
+| `FailedDocumentSaveKeepsDirtyStateAndJournal` | `PipelineMapperTest` | PASS |
+| `SaveDoesNotPersistUnsettledPreviewAsCommittedState` | `PipelineMapperTest` | PASS |
+| `ImportCreatesRenderableDocumentWithoutStageMirror` | `ImportPipelineDocumentTest` | PASS；Default graph、RAW/profile 数据和真实完整 CPU render 验证通过 |
+| `ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree` | `PipelineMapperTest` | PASS；重读 document 不被不一致 stage 覆盖 |
+| shared executor/lifetime regression suite | `PipelineSharedUseTest` | **16/16 PASS**；含后台 release 不保存、queued render、并行 RAW 渲染和资源释放 |
+| Sleeve document duplicate / lifecycle suite | `SleeveServiceTest` | **24/24 PASS** |
+| adjustment transfer regression suite | `AdjustmentTransferServiceTest` | **7/7 PASS** |
+| editor session release port | `EditorSessionPipelinePortTest` | **2/2 PASS** |
+
+`PipelineMapperTest` 全量为 **30/30 PASS**，另有 2 个明确 disabled 测试；其中 5 个新增 NM1.5 保存/读取失败路径全部通过。构建同时成功链接 `alcedo_main`。
+
+**Commands（仓库根目录，Windows/MSVC debug，CUDA/OpenCL 可用）：**
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target PipelineMapperTest ImportPipelineDocumentTest SleeveServiceTest PipelineSharedUseTest EditorSessionPipelinePortTest alcedo_main --parallel 4
+build\debug\alcedo_studio\tests\app\PipelineMapperTest_runtime\PipelineMapperTest.exe --gtest_color=no
+ctest --test-dir build\debug\alcedo_studio\tests\app -R "ImportPipelineDocumentTest" --output-on-failure
+build\debug\alcedo_studio\tests\app\PipelineSharedUseTest_runtime\PipelineSharedUseTest.exe --gtest_color=no
+build\debug\alcedo_studio\tests\app\SleeveServiceTest_runtime\SleeveServiceTest.exe --gtest_color=no
+build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceTest_runtime\AdjustmentTransferServiceTest.exe --gtest_color=no
+ctest --test-dir build\debug\alcedo_studio\tests\ui -R "EditorSessionPipelinePortTest" --output-on-failure
+```
+
+**LOC note（grill-code-review）：** 本次把 document read/write 边界集中在既有 `pipeline_service.cpp`，没有新增保存服务或 snapshot registry；`pipeline_document.cpp` 只增加输入验证；测试扩展既有 mapper/import/shared/Sleeve fixture。当前行数为 `pipeline_service.cpp` 1256、`pipeline_document.cpp` 251、`import_service.cpp` 360、`sleeve_service.cpp` 296、`pipeline_service_test.cpp` 1332、`import_pipeline_document_test.cpp` 112、`pipeline_shared_use_test.cpp` 1069、`sleeve_service_test.cpp` 953；其中 shared/mapper 测试文件仍是既有大型 fixture，本次未借 NM1.5 扩大职责拆分。所有临时命令输出仍只使用受版本控制忽略的 `build/tmp/`（本次直接运行测试未产生新的仓库根目录文件）。
+
+**Residual gaps / scope boundaries:**
+
+- Issue #113 的缩略图/analysis 磁盘写回资格、提交标签和失效策略仍未实现，不属于 NM1.5 门槛。
+- 本机只执行 Windows/MSVC CUDA/OpenCL 路径；Metal 未在本机运行。测试日志中的 DNG/XMP warning 不改变通过结果。
+- 旧 `ElementStore` stage API、`LegacyPipelineImporter` 及旧 history serialized-state checkpoint 仍为非本阶段删除对象；产品 NM1.5 load/apply/save 不调用它们作为 document 来源。typed history、节点重放、旧项目迁移和多 Grade GPU 仍交给 NM4/NM2。
+- `alcedo_studio/src/edit/CMakeLists.txt` 的现有 `dng_profile_gpu_data.cpp` 行只有换行符差异；`git diff --check` 对该保留差异报告 trailing whitespace，忽略行尾空白后无内容差异。本次未改动该无关差异。
+
+**Checklist / exit condition:** 第 11.1 节八项工作、第 11.2 节六项验收和第 14 节 NM1.5 相关退出项均有执行证据；Issue #113 明确保持为未完成的独立待办。
+
 ## 12. API 与所有权约束
 
 保留简单的领域函数形态，例如：
@@ -889,7 +968,7 @@ ReconnectColorGrade(PipelineDocument& document, node_id, predecessor, successor)
 
 ## 13. 验证方式与证据
 
-以下为 NM1 全阶段验证要求；NM1.4 A 的已执行命令、结果和范围见第 10.1 节，B 见第 10.2 节；C/R 与 NM1.5 仍须独立验收，磁盘写回策略单列独立 Issue。
+以下为 NM1 全阶段验证要求；NM1.4 A 的已执行命令、结果和范围见第 10.1 节，B 见第 10.2 节，C/R 见第 10.5 节，NM1.5 见第 11 节；磁盘写回策略单列独立 Issue。
 
 Windows 构建遵循 `alcedo-msvc-cmake` 技能，从仓库根目录运行：
 
@@ -913,19 +992,19 @@ ctest --test-dir build/debug -R "GpuDagModelGraphTest|PipelineMapperTest|Thumbna
 
 - [x] 同一图片只有一个 live document/executor；后台任务复用普通使用句柄。
 - [x] preview/settled/参数 Undo/Redo 不深拷贝整图；图命令只保留局部恢复数据（NM1.4 A）。
-- [ ] document 读写、渲染和序列化遵守统一互斥，完成/取消/异常没有锁重入或使用权泄漏。
-- [ ] Add/Remove/Reconnect/Rename/Enabled 保留；非法操作恢复节点、边、值和已支持的 history 状态。
+- [x] document 读写、渲染和序列化遵守统一互斥，完成/取消/异常没有锁重入或使用权泄漏（NM1.4/R/NM1.5）。
+- [x] Add/Remove/Reconnect/Rename/Enabled 保留；非法操作恢复节点、边、值和已支持的 history 状态（NM1.4 A/NM1.5）。
 - [x] Default 工厂自带 1.5 EV/1.3 saturation；Clean 工厂无视觉变化且无四项后处理（既有证据，集成时复测）。
 - [x] 完整 target、输入序列锁定、未知字段/Mask 拒绝及同会话参数 Undo/Redo 在简化后重新通过（NM1.4 A）。
 - [x] 编辑器、缩略图、analysis、export 从同一 document 得到正确 DAG 像素；单次参数不污染后续任务。
 - [x] NM1.4R 完成：请求直接传入；后台 scratch 不预留、不保留空闲块，中间图按需分配和及时释放；真实并发资源峰值与底层释放有证据，不增加预算驱动的调度或通用两阶段分配机制。
 - [x] 每图 export recipe 在排队前包含完整输出配置；渲染与编码/ICC 使用同一配置，不回读或临时改写共享 DRT。
 - [x] 后台完成不保存、不清 dirty；最后一次使用结束前不淘汰对象，编辑器在用的缓存不被整体释放。
-- [ ] 产品 Apply/Load/Save 不再使用 stage 镜像或 stage 作为参数源；旧类型可留作非产品代码。
-- [ ] 新图导入和 document 保存读取完整；存储失败保留未保存状态，坏图读取真实失败。
-- [ ] NM1 未引入完整 typed history、跨进程节点重放、旧项目迁移或额外 root/document 副本。
-- [ ] 不开放依赖 NM2/NM4/NM5/NM6 的生产入口；不宣称节点 history/recovery 或多 Grade GPU 已完成。
-- [ ] 第 10/11 节本阶段范围内行为有执行证据；第 16 节追加本版实施结果，NM1.4/R/NM1.5 才能改为 complete。独立磁盘写回 Issue 明确列为未完成，不虚报已解决。
+- [x] 产品 Apply/Load/Save 不再使用 stage 镜像或 stage 作为参数源；旧类型可留作非产品代码（NM1.5）。
+- [x] 新图导入和 document 保存读取完整；存储失败保留未保存状态，坏图读取真实失败（NM1.5）。
+- [x] NM1 未引入完整 typed history、跨进程节点重放、旧项目迁移或额外 root/document 副本（NM1.5 范围审计）。
+- [x] 不开放依赖 NM2/NM4/NM5/NM6 的生产入口；不宣称节点 history/recovery 或多 Grade GPU 已完成（NM1.5 范围审计）。
+- [x] 第 10/11 节本阶段范围内行为有执行证据；第 16 节已追加本版实施结果，NM1.4/R/NM1.5 状态均已记录为 complete。独立磁盘写回 Issue 明确列为未完成，不虚报已解决。
 
 ## 15. 交给后续 Phase 的边界
 
@@ -989,4 +1068,13 @@ arena 按实际请求分配，在最后使用完成后释放底层资源，不�
 
 NM1.4R 实施结果（2026-08-31）：**complete** — 请求直接传入、ExactRelease 后台 scratch、
 中间图最后消费者释放、pin/完成同步、完整 export recipe。聚焦具名测试与复跑均 PASS；
-#113 磁盘标签两例未作为门槛。证据与缺口见第 10.5 节完成记录。NM1.5 未开始。
+#113 磁盘标签两例未作为门槛。证据与缺口见第 10.5 节完成记录；随后完成 NM1.5。
+
+NM1.5 实施结果（2026-08-31）：**complete** — 保存、读取、导入初始化和释放边界已切换到
+document-only 路径；`PipelineDocument::FromJson` 集中验证当前格式、节点、边和有限数值；
+`SavePipeline`/`SyncPipelineDocument` 在 render lock 内以同一次受保护状态写入 JSON，写入失败保留
+dirty/WAL 与 history 写回标记；坏 document、非法主链和 unsettled preview 真实失败；后台 release
+不再顺带保存。5 个 mapper 保存/读取失败路径与 1 个 import render 验收通过，完整
+`PipelineMapperTest` 30/30、`PipelineSharedUseTest` 16/16、`SleeveServiceTest` 24/24、
+`AdjustmentTransferServiceTest` 7/7、`EditorSessionPipelinePortTest` 2/2 通过，`alcedo_main`
+成功构建链接。成功链、失败链、实际命令、平台限制与 Issue #113 缺口见第 11 节完成记录。

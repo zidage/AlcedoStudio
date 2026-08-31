@@ -121,20 +121,16 @@ void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
   }
 
   guard->dirty_ = true;
-  pipeline_service.SyncPipeline(element_id);
 
   // Graph bootstrap still uses InitializeImageRoot until later plan items delete root.
-  // Inherent operator params are already in the executor and serialized pipeline JSON.
+  // Inherent image parameters are captured by the immutable history root; the product save below
+  // persists only the document graph.
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
   pipeline_service.InitializeImageRoot(guard, ctx_ptr);
 
   // Publish the prepared camera/profile data before background tasks can load the document.
-  // Stage serialization above remains only for the existing history initialization boundary.
-  {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    pipeline_service.SyncPipelineDocument(guard);
-  }
+  pipeline_service.SyncPipelineDocument(guard);
   pipeline_service.SavePipeline(guard);
 }
 
