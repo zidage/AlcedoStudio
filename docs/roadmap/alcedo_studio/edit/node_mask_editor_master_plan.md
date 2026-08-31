@@ -1153,7 +1153,7 @@ Adjustment Transfer Paste
 | NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
 | NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | 单 live document；共享 executor；R 修复任务请求、后台资源占用、使用权与导出 recipe；随后统一 document I/O |
 | NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
-| NM2 — Multi-Grade Runtime and Ownership | planned | `node_mask_editor/phase_nm2_multi_grade_runtime_plan.md` | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
+| NM2 — Multi-Grade Runtime and Ownership | planned | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
 | NM3 — Multi-Mask Model and Runtime | planned | `node_mask_editor/phase_nm3_multi_mask_runtime_plan.md` | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
 | NM4 — History, Version, Recovery, and Paste | planned | `node_mask_editor/phase_nm4_history_version_paste_plan.md` | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
 | NM5 — QuickQanava Nodes Panel | planned | `node_mask_editor/phase_nm5_nodes_panel_plan.md` | 左侧 Nodes 面板连接真实 command/history/render 路径 |
@@ -1307,6 +1307,8 @@ NM1 不宣称完整节点 history/reopen 或多 Grade GPU 执行完成，不开�
 
 ### 21.3 Phase NM2 — Multi-Grade Runtime and Parameter Ownership
 
+Execution plan: [NM2 — Multi-Grade Runtime and Parameter Ownership](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md).
+
 **为什么排在节点操作前：** 数据模型能够保存多个节点，不代表 renderer 真正执行多个节点。
 在 backend 完成前开放 Add/Reconnect 会制造保存后存在、画面中无效的节点。
 
@@ -1314,6 +1316,17 @@ NM1 不宣称完整节点 history/reopen 或多 Grade GPU 执行完成，不开�
 GraphValueId、ParameterArena、content key、dirty 传播、cache 和 CUDA/OpenCL/Metal 都按 NodeId
 独立工作。Clarity、Sharpen、Halation、Film Grain 移入 DRT/Post model，并保留经过 reference
 验证的内部计算顺序。
+
+**Extension boundary:** Passes declare their node owner, input ports, and output values.
+Content keys follow actual input dependencies. Resource lifetime includes every consumer and GPU completion.
+Keep the single-backbone rule in product validation. Test shared inputs and branch joins through internal plans only.
+NM2 does not enable product branches, define a branch mixer, or add concurrent GPU scheduling.
+
+The default factory can retain `grade.primary` as a node ID.
+Current Grade controls can retain their default-node target at the application boundary.
+Runtime execution and cache keys must use the compiled NodeId and connected input instead.
+Move the four post-processing controls to DRT/Post with their parameter ownership.
+Keep NM1's live document, shared executor, request isolation, and background resource rules.
 
 **退出条件：** 两个以上 Color Grade 在三后端产生顺序正确的结果；调整一个 node 只使该
 node 及下游失效；中间 node 无法保存或编译 DRT/Post 专属调整；仍不开放 production Nodes
