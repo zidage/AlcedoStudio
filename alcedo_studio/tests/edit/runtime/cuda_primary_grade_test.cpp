@@ -23,10 +23,12 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 
@@ -133,6 +135,17 @@ void WriteIdentityCube(const std::filesystem::path& path) {
       << "0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
 }
 
+void ResetProductLookToIdentity(PipelineDocument& document) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  auto* saturation = dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  exposure->SetValue(0.0f);
+  saturation->SetValue(1.0f);
+}
+
 class CudaPrimaryGradeFixture : public ::testing::Test {
  protected:
   // Direct RGB plus a stored dual-illuminant camera profile. Grade assertions
@@ -143,6 +156,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
     gpu_dag_test::EnsureTestCameraProfile(document_);
+    ResetProductLookToIdentity(document_);
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
@@ -152,6 +166,18 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     ExecuteCudaGeometryResample(device_, plan_);
     ExecuteCudaCameraColor(device_, plan_, document_);
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
+    device_.EndRender();
+    device_.WaitIdle();
+    return result;
+  }
+
+  auto RenderThroughDrtPost() -> CudaDrtResult {
+    device_.BeginRender();
+    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
+    (void)ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
+    auto result = ExecuteCudaDrt(device_, plan_, document_);
     device_.EndRender();
     device_.WaitIdle();
     return result;
@@ -173,7 +199,11 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
 
   template <class Model>
   auto ModelByType(const OperatorTypeId& type) -> Model& {
-    auto* model = dynamic_cast<Model*>(document_.PrimaryGrade()->FindAdjustmentByType(type));
+    IOperatorModel* found = document_.PrimaryGrade()->FindAdjustmentByType(type);
+    if (found == nullptr && document_.Drt() != nullptr) {
+      found = document_.Drt()->FindAdjustmentByType(type);
+    }
+    auto* model = dynamic_cast<Model*>(found);
     EXPECT_NE(model, nullptr);
     return *model;
   }
@@ -288,12 +318,14 @@ TEST_F(CudaPrimaryGradeFixture, CudaSharpenUsesSurroundingPixelsForUnsharpMask) 
   sharpen.SetRadius(3.0f);
   sharpen.SetThreshold(0.0f);
 
-  const auto output         = Download(Render().output);
-  const auto input          = Download(plan_.develop_output);
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(result.scene_post);
+  const auto input          = Download(plan_.primary_grade_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
   ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   EXPECT_GT(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
@@ -310,9 +342,9 @@ TEST_F(CudaPrimaryGradeFixture, CudaSharpenDarkRingFollowsPreviewResolution) {
 
   UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
   sharpen.SetAmount(0.0f);
-  const auto full_identity = Download(Render().output);
+  const auto full_identity = Download(RenderThroughDrtPost().scene_post);
   sharpen.SetAmount(100.0f);
-  const auto full_sharpened = Download(Render().output);
+  const auto full_sharpened = Download(RenderThroughDrtPost().scene_post);
   const auto full_near =
       static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
   ASSERT_EQ(full_identity.size(), full_sharpened.size());
@@ -322,12 +354,14 @@ TEST_F(CudaPrimaryGradeFixture, CudaSharpenDarkRingFollowsPreviewResolution) {
   half_request.resolution.render_scale = 0.5f;
   UseNeighborhoodPlane(width, height, 0.18f, 0.55f, half_request);
   sharpen.SetAmount(0.0f);
-  const auto half_identity = Download(Render().output);
+  const auto half_identity = Download(RenderThroughDrtPost().scene_post);
   sharpen.SetAmount(100.0f);
-  const auto half_sharpened = Download(Render().output);
+  const auto half_result    = RenderThroughDrtPost();
+  const auto half_sharpened = Download(half_result.scene_post);
   ASSERT_EQ(half_identity.size(), static_cast<std::size_t>(64) * 64);
   const auto half_near = static_cast<std::size_t>(32) * 64U + 32U + 1U;
   const auto half_far  = static_cast<std::size_t>(32) * 64U + 32U + 10U;
+  EXPECT_EQ(half_result.post_neighborhood_count, 1U);
   EXPECT_GT(half_identity[half_near].r - half_sharpened[half_near].r, 1.0e-5f);
   EXPECT_NEAR(half_sharpened[half_far].r, half_identity[half_far].r, 2.0e-3f);
 }
@@ -338,12 +372,14 @@ TEST_F(CudaPrimaryGradeFixture, CudaClarityUsesLargeRadiusLocalContrast) {
   UseNeighborhoodPlane(width, height, 0.22f, 0.48f);
   ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(80.0f);
 
-  const auto output         = Download(Render().output);
-  const auto input          = Download(plan_.develop_output);
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(result.scene_post);
+  const auto input          = Download(plan_.primary_grade_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 1;
   ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   EXPECT_GT(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
@@ -355,12 +391,14 @@ TEST_F(CudaPrimaryGradeFixture, CudaHalationSpreadsRedLightIntoDarkNeighbors) {
   UseNeighborhoodPlane(width, height, 0.02f, 1.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(1.0f);
 
-  const auto output         = Download(Render().output);
-  const auto input          = Download(plan_.develop_output);
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(result.scene_post);
+  const auto input          = Download(plan_.primary_grade_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
   ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   const float red_spill   = output[neighbor_index].r - input[neighbor_index].r;
   const float green_spill = output[neighbor_index].g - input[neighbor_index].g;
   EXPECT_GT(red_spill, 1.0e-4f);
@@ -375,11 +413,11 @@ TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainStrengthScalesDeterministicDensityV
   auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
 
   grain.SetValue(0.25f);
-  const auto low   = Download(Render().output);
-  const auto input = Download(plan_.develop_output);
+  const auto low   = Download(RenderThroughDrtPost().scene_post);
+  const auto input = Download(plan_.primary_grade_output);
   grain.SetValue(0.75f);
-  const auto high       = Download(Render().output);
-  const auto high_again = Download(Render().output);
+  const auto high       = Download(RenderThroughDrtPost().scene_post);
+  const auto high_again = Download(RenderThroughDrtPost().scene_post);
   ASSERT_EQ(input.size(), high.size());
 
   double low_energy  = 0.0;
@@ -399,10 +437,10 @@ TEST_F(CudaPrimaryGradeFixture, CudaNeighborStagesReuseWorkspaceTexturesAfterFir
   ModelByType<SharpenModel>(type_ids::Sharpen()).SetAmount(10.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(0.4f);
   ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.3f);
-  (void)Render();
+  (void)RenderThroughDrtPost();
 
   device_.Workspace().Device().ResetCounters();
-  (void)Render();
+  (void)RenderThroughDrtPost();
   EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
 }

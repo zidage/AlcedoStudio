@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "cuda_neighbor_grade.cuh"
+#include "cuda_neighbor_grade.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"

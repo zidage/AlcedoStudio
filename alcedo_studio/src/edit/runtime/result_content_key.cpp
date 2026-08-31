@@ -125,6 +125,15 @@ auto MixGrade(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   }
 }
 
+auto MixDrtPost(ContentHash& hash, const DrtNodeModel& drt) -> void {
+  hash.MixU64(drt.AdjustmentCount());
+  for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
+    hash.MixText(drt.AdjustmentIdAt(index).Value());
+    hash.MixText(drt.AdjustmentAt(index).Type().Text());
+    hash.MixText(drt.AdjustmentAt(index).ToJson().dump());
+  }
+}
+
 auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   hash.MixU64(grade.AdjustmentCount());
   for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
@@ -307,6 +316,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   drt.MixKey(keys.primary_grade);
   if (document.Drt() != nullptr) {
     drt.MixText(document.Drt()->Params().ToJson().dump());
+    MixDrtPost(drt, *document.Drt());
   }
   if (plan.output_color_override.has_value()) {
     drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_space));

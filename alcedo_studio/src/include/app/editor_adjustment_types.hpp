@@ -16,7 +16,8 @@
 
 namespace alcedo {
 
-/// Owner of one editor parameter write. Unspecified is invalid on the production path.
+/// Owner of one editor parameter write. Unspecified is filled at history from the
+/// current-panel field_key. ApplyEditorParameterPatch still requires a complete target.
 enum class EditorParameterOwnerKind : std::uint8_t {
   Unspecified = 0,
   Document,
@@ -34,6 +35,8 @@ enum class EditorParameterOwnerKind : std::uint8_t {
  *
  * @pre ColorGrade writes set node_id and adjustment_instance_id.
  * @pre Document writes leave node_id empty.
+ * @pre DrtPost writes set node_id. Clarity/Sharpen/Halation/Film Grain also set
+ *      adjustment_instance_id. `odt` may leave adjustment_instance_id empty.
  * @pre mask_id stays empty until NM3.
  */
 struct EditorParameterTarget {
@@ -75,9 +78,18 @@ struct EditorParameterTarget {
       }
       return {};
     case EditorParameterOwnerKind::Develop:
+      if (target.node_id.Empty()) {
+        return "Editor parameter target requires node_id";
+      }
+      return {};
     case EditorParameterOwnerKind::DrtPost:
       if (target.node_id.Empty()) {
         return "Editor parameter target requires node_id";
+      }
+      if ((target.field_key == "clarity" || target.field_key == "sharpen" ||
+           target.field_key == "halation" || target.field_key == "film_grain") &&
+          target.adjustment_instance_id.Empty()) {
+        return "DRT/Post parameter target requires adjustment_instance_id";
       }
       return {};
     case EditorParameterOwnerKind::ColorGrade:
@@ -104,7 +116,7 @@ struct EditorAdjustmentPatch {
   /// Enabled state captured with the immutable adjustment value. Interactive callers that do not
   /// provide a separate enabled flag keep the default and may encode it inside params_json.
   bool enabled = true;
-  /// Production write identity. Incomplete targets are rejected.
+  /// Production write identity. Unspecified is filled at history; Apply still requires a complete target.
   EditorParameterTarget target{};
 
   auto operator==(const EditorAdjustmentPatch& other) const -> bool = default;

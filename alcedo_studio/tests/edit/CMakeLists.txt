@@ -227,6 +227,7 @@ alcedo_register_test_target(EditorJournalFuzzFrameworkTest edit)
 # GPU DAG Phase G1: Model, DTO, PipelineGraph, format v2 JSON, legacy import.
 add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/default_pipeline_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/adjustment_ownership_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/graph_validation_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp

@@ -46,7 +46,8 @@ class EditorSessionEditController final {
   explicit EditorSessionEditController(Dependencies dependencies);
 
   /// Apply an interactive (settled=false) or settled (settled=true) adjustment
-  /// patch. Requires a complete EditorParameterTarget. Captures the
+  /// patch. Unspecified current-panel targets are completed from the live
+  /// document in history. Explicit incomplete targets are rejected. Captures the
   /// before-preview state, commits settled patches to history, and returns a
   /// render command carrying only the current field patch.
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,

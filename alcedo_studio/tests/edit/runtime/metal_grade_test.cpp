@@ -21,6 +21,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
@@ -28,6 +29,7 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -232,6 +234,17 @@ auto WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, f
   }
 }
 
+void ResetProductLookToIdentity(PipelineDocument& document) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  auto* saturation = dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  exposure->SetValue(0.0f);
+  saturation->SetValue(1.0f);
+}
+
 class MetalGradeFixture : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -243,6 +256,7 @@ class MetalGradeFixture : public ::testing::Test {
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
     gpu_dag_test::EnsureTestCameraProfile(document_);
+    ResetProductLookToIdentity(document_);
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
@@ -257,9 +271,25 @@ class MetalGradeFixture : public ::testing::Test {
     return result;
   }
 
+  auto RenderThroughDrtPost() -> MetalDrtResult {
+    device_.BeginRender();
+    ExecuteMetalDevelop(device_, plan_, prepared_, document_);
+    ExecuteMetalGeometryResample(device_, plan_);
+    ExecuteMetalCameraColor(device_, plan_, document_);
+    (void)ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
+    auto result = ExecuteMetalDrt(device_, plan_, document_);
+    device_.EndRender();
+    device_.WaitIdle();
+    return result;
+  }
+
   template <class Model>
   auto ModelByType(const OperatorTypeId& type) -> Model& {
-    auto* model = dynamic_cast<Model*>(document_.PrimaryGrade()->FindAdjustmentByType(type));
+    IOperatorModel* found = document_.PrimaryGrade()->FindAdjustmentByType(type);
+    if (found == nullptr && document_.Drt() != nullptr) {
+      found = document_.Drt()->FindAdjustmentByType(type);
+    }
+    auto* model = dynamic_cast<Model*>(found);
     EXPECT_NE(model, nullptr);
     return *model;
   }
@@ -370,24 +400,20 @@ TEST_F(MetalGradeFixture, MetalLutRemapChangesGradePixels) {
             1.0e-3f);
 }
 
-TEST_F(MetalGradeFixture, MetalDetailScratchTexturesAreDestroyedAfterEachCompletedRender) {
+TEST_F(MetalGradeFixture, MetalDrtPostNeighborhoodPassesReuseWorkspaceImages) {
   ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(20.0f);
   ModelByType<SharpenModel>(type_ids::Sharpen()).SetAmount(10.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(0.4f);
   ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.3f);
-  const auto first = RenderGrade();
-  EXPECT_EQ(first.detail_pass_count, 4U);
+  const auto first = RenderThroughDrtPost();
+  EXPECT_EQ(first.post_neighborhood_count, 4U);
   EXPECT_GT(device_.Workspace().Textures().EntryCount(), 0U);
   device_.Workspace().Device().ResetCounters();
-  const auto second = RenderGrade();
-  EXPECT_EQ(second.detail_pass_count, 4U);
-  EXPECT_GT(device_.Workspace().Device().TextureCreateCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(),
-            device_.Workspace().Device().FreeCount());
-  EXPECT_EQ(device_.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
+  const auto second = RenderThroughDrtPost();
+  EXPECT_EQ(second.post_neighborhood_count, 4U);
+  EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().HeapCreateCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
 }
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) {
@@ -431,20 +457,12 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   EXPECT_LT(max_err, 2.0e-4f);
 }
 
-TEST_F(MetalGradeFixture, MetalUnknownAdjustmentReturnsExplicitBackendError) {
-  document_.InsertAdjustment(document_.PrimaryGrade()->Id(),
-                             document_.PrimaryGrade()->AdjustmentCount(),
-                             AdjustmentInstanceId{"grade.primary.tint"},
-                             std::make_unique<TintModel>());
-  plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
-  try {
-    (void)RenderGrade();
-    FAIL() << "expected unregistered adjustment to throw";
-  } catch (const std::runtime_error& error) {
-    const std::string message = error.what();
-    EXPECT_NE(message.find("unregistered adjustment type"), std::string::npos);
-    EXPECT_NE(message.find("alcedo.adjustment.tint"), std::string::npos);
-  }
+TEST_F(MetalGradeFixture, MetalUnknownAdjustmentIsRejectedAtInsert) {
+  EXPECT_THROW(document_.InsertAdjustment(document_.PrimaryGrade()->Id(),
+                                          document_.PrimaryGrade()->AdjustmentCount(),
+                                          AdjustmentInstanceId{"grade.primary.tint"},
+                                          std::make_unique<TintModel>()),
+               std::runtime_error);
 }
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradeMissingMetallibThrowsExplicitError) {

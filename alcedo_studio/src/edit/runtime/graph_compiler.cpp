@@ -13,7 +13,9 @@
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -138,13 +140,22 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
     hash              = MixText(hash, node->Id().Value());
     hash              = MixText(hash, node->Type().Text());
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
-    if (grade == nullptr) {
+    if (grade != nullptr) {
+      hash = MixU64(hash, grade->AdjustmentCount());
+      for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+        hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
+        hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
+      }
       continue;
     }
-    hash = MixU64(hash, grade->AdjustmentCount());
-    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
-      hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
+    const auto* drt = dynamic_cast<const DrtNodeModel*>(node);
+    if (drt == nullptr) {
+      continue;
+    }
+    hash = MixU64(hash, drt->AdjustmentCount());
+    for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
+      hash = MixText(hash, drt->AdjustmentIdAt(index).Value());
+      hash = MixText(hash, drt->AdjustmentAt(index).Type().Text());
     }
   }
 
@@ -265,15 +276,31 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
     plan.passes.push_back(GpuPassDesc{GpuPassKind::PrimaryColorGrade});
     plan.primary_grade_output = GraphValueId{grade->Id(), PortId{"image"}};
     for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      const auto& type      = grade->AdjustmentAt(index).Type();
-      const auto  algorithm = CompileAdjustmentAlgorithm(type);
+      const auto& type = grade->AdjustmentAt(index).Type();
+      RequireAdjustmentOwner(type, AdjustmentParameterOwner::ColorGrade,
+                             "GraphCompiler Color Grade");
+      const auto algorithm = CompileAdjustmentAlgorithm(type);
       plan.primary_grade_adjustments.push_back({grade->AdjustmentIdAt(index), type, algorithm});
       AppendGradeStage(plan, algorithm);
     }
   } else {
     plan.primary_grade_output = plan.develop_output;
   }
-  plan.display_output = GraphValueId{document.Drt()->Id(), PortId{"display"}};
+  const auto* drt = document.Drt();
+  plan.display_output    = GraphValueId{drt->Id(), PortId{"display"}};
+  plan.drt_scene_output  = GraphValueId{drt->Id(), PortId{"runtime.scene_post"}};
+  std::vector<OperatorTypeId> drt_types;
+  drt_types.reserve(drt->AdjustmentCount());
+  for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
+    const auto& type = drt->AdjustmentAt(index).Type();
+    drt_types.push_back(type);
+    const auto algorithm = CompileAdjustmentAlgorithm(type);
+    if (algorithm != CompiledAdjustmentAlgorithm::Neighborhood) {
+      throw std::runtime_error("GraphCompiler: DRT/Post adjustment is not a neighborhood operation");
+    }
+    plan.drt_post_adjustments.push_back({drt->AdjustmentIdAt(index), type, algorithm});
+  }
+  RequireCompleteDrtPostTypes(drt_types, "GraphCompiler DRT");
   plan.passes.push_back(GpuPassDesc{GpuPassKind::Drt});
 
   return plan;

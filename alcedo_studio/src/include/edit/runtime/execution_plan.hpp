@@ -149,6 +149,8 @@ struct ExecutionPlan {
   std::optional<CompiledMask>     primary_grade_mask;
   GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
   GraphValueId                    primary_grade_output{NodeId{"grade.primary"}, PortId{"image"}};
+  std::vector<CompiledAdjustment> drt_post_adjustments;
+  GraphValueId                    drt_scene_output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
   GraphValueId                    display_output{NodeId{"drt"}, PortId{"display"}};
   std::optional<ExportColorProfileConfig> output_color_override;
 

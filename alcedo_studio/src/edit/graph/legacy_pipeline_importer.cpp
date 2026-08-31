@@ -304,8 +304,6 @@ auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator
                    "saturation", "saturation", true);
   ApplyGradeScalar(*grade, type_ids::Vibrance(), FindOp(operators, kLegacyVibrance), "vibrance",
                    "vibrance", false);
-  ApplyGradeScalar(*grade, type_ids::Clarity(), FindOp(operators, kLegacyClarity), "clarity",
-                   "clarity", false);
 
   if (const auto* curve = FindOp(operators, kLegacyCurve)) {
     if (auto* model = grade->FindAdjustmentByType(type_ids::Curve())) {
@@ -328,8 +326,12 @@ auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator
       LoadJsonIfChanged(model, nlohmann::json{{"cube_path", LegacyCubePath(lmt->params)}});
     }
   }
+  if (const auto* clarity = FindOp(operators, kLegacyClarity)) {
+    auto* model = drt->FindAdjustmentByType(type_ids::Clarity());
+    ApplyScalar(model, NestedOrSelf(clarity->params, "clarity"), "clarity");
+  }
   if (const auto* sharpen = FindOp(operators, kLegacySharpen)) {
-    if (auto* model = grade->FindAdjustmentByType(type_ids::Sharpen())) {
+    if (auto* model = drt->FindAdjustmentByType(type_ids::Sharpen())) {
       const auto nested = NestedOrSelf(sharpen->params, "sharpen");
       nlohmann::json json;
       json["amount"] =
@@ -340,16 +342,14 @@ auto ApplyOperators(PipelineDocument& document, const std::vector<LegacyOperator
     }
   }
   if (const auto* grain = FindOp(operators, kLegacyFilmGrain)) {
-    if (auto* model = grade->FindAdjustmentByType(type_ids::FilmGrain())) {
-      const auto nested = NestedOrSelf(grain->params, "film_grain");
-      ApplyLegacyPercentScalar(model, nested, "strength");
-    }
+    auto* model = drt->FindAdjustmentByType(type_ids::FilmGrain());
+    const auto nested = NestedOrSelf(grain->params, "film_grain");
+    ApplyLegacyPercentScalar(model, nested, "strength");
   }
   if (const auto* halo = FindOp(operators, kLegacyHalation)) {
-    if (auto* model = grade->FindAdjustmentByType(type_ids::Halation())) {
-      const auto nested = NestedOrSelf(halo->params, "halation");
-      ApplyLegacyPercentScalar(model, nested, "strength");
-    }
+    auto* model = drt->FindAdjustmentByType(type_ids::Halation());
+    const auto nested = NestedOrSelf(halo->params, "halation");
+    ApplyLegacyPercentScalar(model, nested, "strength");
   }
   if (const auto* tint = FindOp(operators, kLegacyTint)) {
     // Legacy Tint is not a CUDA grade kernel. Fold it into CAT02 tint_offset so reopen of

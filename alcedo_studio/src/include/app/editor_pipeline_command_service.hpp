@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
@@ -53,5 +54,22 @@ auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::str
  */
 auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
                                  const nlohmann::json& params, std::string* error) -> bool;
+
+/**
+ * @brief Fill a current-panel target from @p field_key and the live document.
+ *
+ * Ordinary Grade fields target the Default Grade (`grade.primary`, else the first
+ * backbone Grade). Clarity, Sharpen, Halation, and Film Grain target DRT/Post.
+ * Develop, geometry, and `odt` target their existing owners. Instance ids come from
+ * the live Models, not from concatenating the field key.
+ *
+ * @param document Live document used to resolve node and instance ids.
+ * @param field_key Current-panel field key, such as `exposure` or `clarity`.
+ * @param error Optional failure detail.
+ * @return Complete target, or nullopt when the field or owner Model is missing.
+ */
+[[nodiscard]] auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document,
+                                                       std::string field_key, std::string* error)
+    -> std::optional<EditorParameterTarget>;
 
 }  // namespace alcedo

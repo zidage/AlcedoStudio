@@ -268,5 +268,23 @@ TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWi
   EXPECT_NE(edited.drt_display, base.drt_display);
 }
 
+TEST(GpuDagResultContentKey, ClarityOnDrtChangesDisplayKeyNotGradeKey) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto* clarity = dynamic_cast<ClarityModel*>(
+      document.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(clarity, nullptr);
+  clarity->SetValue(40.0f);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_EQ(edited.primary_grade, base.primary_grade);
+  EXPECT_NE(edited.drt_display, base.drt_display);
+}
+
 }  // namespace
 }  // namespace alcedo

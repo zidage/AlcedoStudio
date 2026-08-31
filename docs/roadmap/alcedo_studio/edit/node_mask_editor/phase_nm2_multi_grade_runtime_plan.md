@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: planned
+Status: NM2.1 complete; NM2.2–NM2.5 planned
 
 Prerequisite: NM1, including NM1.4R and NM1.5.
 
@@ -56,7 +56,7 @@ Check the implementation at the execution revision before you change it.
 | Document and factories | [pipeline_document.cpp](../../../../../alcedo_studio/src/edit/graph/pipeline_document.cpp) creates the default graph and supplies node lookup. |
 | Topology | [pipeline_graph.hpp](../../../../../alcedo_studio/src/include/edit/graph/pipeline_graph.hpp) separates graph validation from backbone validation. |
 | Grade model | [color_grade_node_model.cpp](../../../../../alcedo_studio/src/edit/graph/color_grade_node_model.cpp) creates Default and Clean adjustments. |
-| DRT model | [drt_node_model.hpp](../../../../../alcedo_studio/src/include/edit/graph/drt_node_model.hpp) owns output-transform parameters. |
+| DRT model | [drt_node_model.hpp](../../../../../alcedo_studio/src/include/edit/graph/drt_node_model.hpp) owns output-transform parameters and the four DRT/Post neighborhood adjustments (NM2.1). |
 | Parameter targets | [editor_adjustment_types.hpp](../../../../../alcedo_studio/src/include/app/editor_adjustment_types.hpp) defines owner and node identity. |
 | Parameter commands | [editor_pipeline_command_service.cpp](../../../../../alcedo_studio/src/app/editor_pipeline_command_service.cpp) reads and applies typed targets. |
 | Compiler | [graph_compiler.cpp](../../../../../alcedo_studio/src/edit/runtime/graph_compiler.cpp) currently compiles only the first backbone Grade. |
@@ -98,8 +98,8 @@ NM2 does not add node selection to the adjustment stack.
 - The shared executor has fixed Develop, Grade, and DRT steps.
 - Grade encoders fetch Develop output instead of the connected input.
 - Several content keys read `PrimaryGrade()` instead of the compiled node.
-- The Default Grade still contains four post-processing adjustments.
-- The Clean Grade already excludes those adjustments.
+- Default and Clean Grades contain only Color Grade catalog types (NM2.1).
+- DRT/Post owns Clarity, Sharpen, Halation, and Film Grain with factory defaults (NM2.1).
 - Local tone resources need checks for both node identity and source content.
 
 Existing ID types and workspace interfaces remain useful.
@@ -462,7 +462,7 @@ Do not weaken product validation to admit it.
 
 | Phase | Status | Result |
 | --- | --- | --- |
-| NM2.1 | planned | Parameter ownership and single-Grade reference behavior. |
+| NM2.1 | complete | Parameter ownership and single-Grade reference behavior. |
 | NM2.2 | planned | Explicit node plans, pass instances, and value dependencies. |
 | NM2.3 | planned | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
 | NM2.4 | planned | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
@@ -495,13 +495,73 @@ Update the relevant native DRT and Grade encoders with ownership changes.
 
 **Exit conditions**
 
-- [ ] Default and Clean nodes contain only Grade-owned adjustments.
-- [ ] DRT/Post contains all four moved adjustments and their defaults.
-- [ ] Wrong-owner insertion, load, save, and compilation fail explicitly.
-- [ ] Existing controls read, edit, and restore the new owner correctly.
-- [ ] Current parameter Undo/Redo retains the moved values for new edits.
-- [ ] Unmasked single-Grade output preserves the captured reference within the declared tolerance.
-- [ ] Grade mask and mix do not suppress endpoint operations.
+- [x] Default and Clean nodes contain only Grade-owned adjustments.
+- [x] DRT/Post contains all four moved adjustments and their defaults.
+- [x] Wrong-owner insertion, load, save, and compilation fail explicitly.
+- [x] Existing controls read, edit, and restore the new owner correctly.
+- [x] Current parameter Undo/Redo retains the moved values for new edits.
+- [x] Unmasked single-Grade output preserves the captured reference within the declared tolerance.
+- [x] Grade mask and mix do not suppress endpoint operations.
+
+##### Phase NM2.1 completion record (2026-08-31)
+
+**Status:** complete — Color Grade owns CAT02 through LMT only; DRT/Post owns Clarity, Sharpen, Halation, and Film Grain; unmasked CUDA pixels match the captured reference; QML `field_key` fills DRT/Post at history.
+
+**Primary success call chain:**
+
+```text
+QML / panel field_key (Unspecified owner)
+  -> EditorSessionEditController::HandlePatch
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview
+  -> CompleteCurrentPanelParameterTarget (document lookup: DrtPost + drt.<type>)
+  -> ApplyEditorParameterPatch on DrtNodeModel (or ColorGrade for Grade fields)
+  -> GraphCompiler: Grade catalog + RequireCompleteDrtPostTypes
+  -> MixDrtPost into keys.drt_display
+  -> Grade mix -> DRT neighborhood in ACEScc (Clarity, Sharpen, Halation, Film Grain)
+  -> DRT display transform -> sink
+```
+
+**Primary failure call chain:**
+
+```text
+wrong-owner InsertAdjustment / FromJson / ToJson / GraphCompiler
+  -> RequireAdjustmentOwner / RequireCompleteDrtPostTypes
+  -> std::runtime_error
+  -> document JSON unchanged; no GPU work
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PostAdjustmentsRejectGradeOwnership` | `GpuDagModelGraphTest` | PASS |
+| `PostControlTargetsDrtAndRestoresOnUndo` | `EditorSessionHistoryPortTest` | PASS |
+| `DrtPostPreservesUnmaskedReferenceOrder` (tol `2.0e-3f`; mix=0 Clarity still differs) | `GpuDagCudaDrtProductTest` | PASS |
+| Default Grade 13 types; DRT four defaults | `GpuDagModelGraphTest` | PASS |
+| `CompleteCurrentPanelRoutesClarityToDrtPost`, `PublishClarityWritesDrtModelAndRejectsGradeOwner` | `EditorPipelineCommandServiceTest` | PASS |
+| `ClarityOnDrtChangesDisplayKeyNotGradeKey` | `GpuDagRawInputTest` | PASS |
+| CUDA neighborhood + identity Grade after look reset | `GpuDagCudaPrimaryGradeTest` | PASS |
+| OpenCL DRT/Post neighborhood | `GpuDagOpenClGradeTest` | PASS |
+| Document save/load with new owners | `PipelineMapperTest` | PASS (39 ran, 2 disabled) |
+| Viewport ROI host size after ClampRoi (19×19 native, not 40×24 upsample) | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest GpuDagRawInputTest EditorPipelineCommandServiceTest EditorSessionHistoryPortTest EditorSessionEditControllerTest GpuDagCudaDrtProductTest GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest EditorAdjustmentPipelineTest PipelineMapperTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaPrimaryGradeTest\.|GpuDagOpenClGradeTest\.|GpuDagCudaDrtProductTest\.(GpuDagCudaDrtProduct|CudaDrtProductFixture)\.|PostAdjustmentsReject|PostControlTargetsDrt|DrtPostPreserves"
+ctest --test-dir build/debug --output-on-failure -R "GpuDagModelGraphTest\.|EditorSessionHistoryPortTest\.|GpuDagRawInputTest\.(GpuDagGraphCompiler|GpuDagResultContentKey)\.|EditorPipelineCommandServiceTest\."
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaDrtProductTest PipelineMapperTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaDrtProductTest\.GpuDagCudaDrtProduct\.|CudaDrtProductFixture\.DrtPostPreserves|PipelineMapperTest\."
+```
+
+Suite totals: first GPU + required-name filter **77/78** (the failure was `ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch` expecting 40×24 after a visible subregion). After aligning that assertion with `ClampRoiRenderExtentToNativePixels`, that test **PASS**; CUDA Grade and OpenCL Grade binaries were unchanged. Graph + history + compiler/content-key + command service **139/139**. DRT product `GpuDagCudaDrtProduct` + `DrtPostPreserves` + PipelineMapper **39/39** executed (2 PipelineMapper tests disabled).
+
+**Checklist / exit condition:** all seven boxes checked from the tests above.
+
+**LOC note (grill-code-review):** no changed production file exceeds 1000 lines. Largest after this phase: `editor_history_mutation.cpp` 487, `editor_pipeline_command_service.cpp` 366, `drt_node_model.cpp` 357, `metal_drt_pass.mm` 275, `opencl_drt_pass.cpp` 242, `cuda_drt_pass.cu` 208. CUDA neighborhood kernels compile once in `cuda_neighbor_grade.cu` (ODR: previously included from two translation units). New ownership module: `adjustment_ownership.hpp` / `.cpp`.
+
+**Remaining gaps:** Metal DRT/Post neighborhood was compiled but not executed on this Windows host. The plan still uses singular `primary_grade_output` / `primary_grade_adjustments` until NM2.2. Factory node id `grade.primary` remains; runtime must not treat it as a special type. `ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch` now asserts the ROI-clamped 19×19 host size (`ClampRoiRenderExtentToNativePixels` on 0.8 × 24 develop pixels); that policy predates NM2.1 and is not an ownership change.
 
 ### 6.2 NM2.2 — Node plans and explicit dependencies
 

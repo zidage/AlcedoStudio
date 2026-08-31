@@ -103,26 +103,33 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
     } else if (adjustment.type == type_ids::Lmt()) {
       saw_lmt = true;
       EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
-    } else if (adjustment.type == type_ids::Clarity() || adjustment.type == type_ids::Sharpen() ||
-               adjustment.type == type_ids::Halation() ||
-               adjustment.type == type_ids::FilmGrain()) {
-      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
+    } else {
+      EXPECT_NE(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
     }
   }
   EXPECT_TRUE(saw_shadows);
   EXPECT_TRUE(saw_highlights);
   EXPECT_TRUE(saw_curve);
   EXPECT_TRUE(saw_lmt);
-  ASSERT_GE(plan.primary_grade_stages.size(), 5U);
+  ASSERT_EQ(plan.primary_grade_stages.size(), 3U);
   EXPECT_EQ(plan.primary_grade_stages.front().kind, CompiledGradeStageKind::Pointwise);
   bool saw_llf_stage = false;
   for (const auto& stage : plan.primary_grade_stages) {
+    EXPECT_NE(stage.kind, CompiledGradeStageKind::Neighborhood);
     if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
       saw_llf_stage = true;
       EXPECT_EQ(stage.count, 2U);
     }
   }
   EXPECT_TRUE(saw_llf_stage);
+  ASSERT_EQ(plan.drt_post_adjustments.size(), 4U);
+  EXPECT_EQ(plan.drt_post_adjustments[0].type, type_ids::Clarity());
+  EXPECT_EQ(plan.drt_post_adjustments[1].type, type_ids::Sharpen());
+  EXPECT_EQ(plan.drt_post_adjustments[2].type, type_ids::Halation());
+  EXPECT_EQ(plan.drt_post_adjustments[3].type, type_ids::FilmGrain());
+  for (const auto& adjustment : plan.drt_post_adjustments) {
+    EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
+  }
 }
 
 TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected) {

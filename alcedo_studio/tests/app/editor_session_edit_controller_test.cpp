@@ -147,13 +147,21 @@ TEST_F(EditorSessionEditControllerTest, PatchWithoutValidGuardIsRejected) {
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
 }
 
-TEST_F(EditorSessionEditControllerTest, IncompleteTargetIsRejected) {
+TEST_F(EditorSessionEditControllerTest, UnspecifiedFieldKeyIsRoutedToHistory) {
   EditorAdjustmentPatch patch;
   patch.field_key   = "exposure";
   patch.params_json = R"({"exposure_ev":1.0})";
   auto result       = edit_->HandlePatch(patch, false, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(history_->capture_count, 1);
+}
+
+TEST_F(EditorSessionEditControllerTest, ExplicitIncompleteColorGradeTargetIsRejected) {
+  auto patch = test::WithColorGradeTarget({"exposure", R"({"exposure_ev":1.0})", false});
+  patch.target.node_id = NodeId{};
+  auto result          = edit_->HandlePatch(patch, false, guard(), identity());
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
-  EXPECT_EQ(result.message, "Editor parameter target requires owner_kind");
+  EXPECT_EQ(result.message, "Editor parameter target requires node_id");
   EXPECT_EQ(history_->capture_count, 0);
 }
 

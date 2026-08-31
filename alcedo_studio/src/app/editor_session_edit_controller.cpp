@@ -27,12 +27,14 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
     outcome.message = "Adjustment patch requires a field key";
     return outcome;
   }
-  const auto target_error =
-      DescribeEditorParameterTargetError(patch.target, patch.field_key);
-  if (!target_error.empty()) {
-    outcome.kind    = EditorEditOutcome::Kind::Rejected;
-    outcome.message = target_error;
-    return outcome;
+  if (patch.target.owner_kind != EditorParameterOwnerKind::Unspecified) {
+    const auto target_error =
+        DescribeEditorParameterTargetError(patch.target, patch.field_key);
+    if (!target_error.empty()) {
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = target_error;
+      return outcome;
+    }
   }
   if (!ResolveEditorAdjustmentField(patch.field_key).has_value()) {
     outcome.kind    = EditorEditOutcome::Kind::Rejected;

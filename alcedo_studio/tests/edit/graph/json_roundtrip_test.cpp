@@ -33,7 +33,7 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(1.25f);
-  document.PrimaryGrade()->MoveAdjustment(AdjustmentInstanceId{"grade.primary.film_grain"}, 8);
+  document.PrimaryGrade()->MoveAdjustment(AdjustmentInstanceId{"grade.primary.lmt"}, 8);
 
   const auto json = document.ToJson();
   EXPECT_EQ(json["format_version"], 2);
@@ -53,11 +53,15 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
   EXPECT_EQ(restored.Graph().Edges()[1].to_node, NodeId{"drt"});
 
   const auto* grade = restored.PrimaryGrade();
-  ASSERT_EQ(grade->AdjustmentCount(), 17u);
-  EXPECT_EQ(std::string{grade->AdjustmentIdAt(8).Value()}, "grade.primary.film_grain");
+  ASSERT_EQ(grade->AdjustmentCount(), 13u);
+  EXPECT_EQ(std::string{grade->AdjustmentIdAt(8).Value()}, "grade.primary.lmt");
   const auto* restored_exposure = dynamic_cast<const ExposureModel*>(&grade->AdjustmentAt(1));
   ASSERT_NE(restored_exposure, nullptr);
   EXPECT_FLOAT_EQ(restored_exposure->Value(), 1.25f);
+  const auto* restored_drt = restored.Drt();
+  ASSERT_NE(restored_drt, nullptr);
+  ASSERT_EQ(restored_drt->AdjustmentCount(), 4u);
+  EXPECT_EQ(std::string{restored_drt->AdjustmentIdAt(3).Value()}, "drt.film_grain");
   EXPECT_TRUE(restored.Graph().Validate().empty());
 }
 

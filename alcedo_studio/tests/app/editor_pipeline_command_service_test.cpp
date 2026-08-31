@@ -108,7 +108,7 @@ TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
 
 TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyApplyOrDirtyModel) {
   auto  document = CreateDefaultPipelineDocument();
-  auto* model    = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Sharpen());
+  auto* model    = document.Drt()->FindAdjustmentByType(type_ids::Sharpen());
   ASSERT_NE(model, nullptr);
   const auto before = model->ToJson();
   (void)model->TakeDirtyPatch();
@@ -118,7 +118,7 @@ TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyA
                                    {{"amount", nullptr}},
                                    {{"amount", 12}, {"unknown", 1}},
                                    {{"amount", std::numeric_limits<double>::infinity()}}}) {
-    EXPECT_FALSE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("sharpen"),
+    EXPECT_FALSE(PublishEditorParameterPatch(document, test::DrtPostFieldTarget("sharpen"),
                                              patch, &error));
     EXPECT_FALSE(error.empty());
     EXPECT_EQ(model->ToJson(), before);
@@ -189,6 +189,44 @@ TEST(EditorPipelineCommandServiceTest, MaskTargetWriteIsRejected) {
   std::string error;
   EXPECT_FALSE(PublishEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
   EXPECT_EQ(error, "Mask parameter targets are rejected until NM3");
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
+}
+
+TEST(EditorPipelineCommandServiceTest, CompleteCurrentPanelRoutesClarityToDrtPost) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  target = CompleteCurrentPanelParameterTarget(document, "clarity", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  EXPECT_EQ(target->owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(target->node_id, NodeId{"drt"});
+  EXPECT_EQ(target->adjustment_instance_id, AdjustmentInstanceId{"drt.clarity"});
+  EXPECT_EQ(target->field_key, "clarity");
+
+  const auto exposure = CompleteCurrentPanelParameterTarget(document, "exposure", &error);
+  ASSERT_TRUE(exposure.has_value()) << error;
+  EXPECT_EQ(exposure->owner_kind, EditorParameterOwnerKind::ColorGrade);
+  EXPECT_EQ(exposure->node_id, NodeId{"grade.primary"});
+}
+
+TEST(EditorPipelineCommandServiceTest, PublishClarityWritesDrtModelAndRejectsGradeOwner) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  ASSERT_TRUE(PublishEditorParameterPatch(document, test::DrtPostFieldTarget("clarity"),
+                                          {{"clarity", 40.0}}, &error))
+      << error;
+  nlohmann::json json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, test::DrtPostFieldTarget("clarity"), &json, &error))
+      << error;
+  EXPECT_FLOAT_EQ(json.at("clarity").get<float>(), 40.0f);
+  const auto* drt_clarity = dynamic_cast<const ClarityModel*>(
+      document.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(drt_clarity, nullptr);
+  EXPECT_FLOAT_EQ(drt_clarity->Value(), 40.0f);
+  EXPECT_EQ(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+
+  const auto before = CanonicalPipelineDocumentJson(document);
+  EXPECT_FALSE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("clarity"),
+                                           {{"clarity", 12.0}}, &error));
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
 
