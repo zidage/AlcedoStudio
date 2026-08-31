@@ -267,6 +267,15 @@ alcedo_register_test_target(GpuDagMaskStoreTest edit)
 
 # GPU DAG Phase G3: CUDA GeometryResamplePass.
 if(ALCEDO_CUDA_ENABLED)
+  qt_add_executable(PipelineDocumentRenderTest
+    ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_document_render_test.cpp)
+  target_include_directories(PipelineDocumentRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(PipelineDocumentRenderTest PRIVATE
+    GTest::gtest_main EditPipeline EditRuntimeCuda Image ThreadPool)
+  gtest_discover_tests(PipelineDocumentRenderTest TEST_PREFIX "PipelineDocumentRenderTest."
+    PROPERTIES LABELS "gpu;edit;pipeline;product")
+  alcedo_register_test_target(PipelineDocumentRenderTest gpu)
+
   add_executable(GpuDagCudaGeometryTest
     ${ALCEDO_TEST_ROOT}/edit/geometry/cuda_geometry_resample_test.cpp)
   target_include_directories(GpuDagCudaGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})

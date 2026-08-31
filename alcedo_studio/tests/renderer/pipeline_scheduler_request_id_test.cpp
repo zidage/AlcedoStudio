@@ -211,7 +211,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
 }
 
 TEST(PipelineSchedulerRequestIdTest,
-     ConsecutiveInteractiveAdjustmentsReuseGeometryStageOutput) {
+     MissingDocumentRequestsReportFailureWithoutUsingStageCache) {
   RegisterAllOperators();
 
   auto exec = std::make_shared<CPUPipelineExecutor>();
@@ -236,17 +236,15 @@ TEST(PipelineSchedulerRequestIdTest,
     return future.get();
   };
 
-  ASSERT_NE(run_interactive(101), nullptr);
+  EXPECT_THROW((void)run_interactive(101), std::runtime_error);
   auto& geometry = exec->GetStage(PipelineStageName::Geometry_Adjustment);
-  ASSERT_TRUE(geometry.CacheValid());
+  EXPECT_FALSE(geometry.CacheValid());
 
   auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
   basic.SetOperator(OperatorType::EXPOSURE, {{"exposure", 0.5f}}, exec->GetGlobalParams());
 
-  ASSERT_NE(run_interactive(102), nullptr);
-  EXPECT_TRUE(geometry.CacheValid());
-  EXPECT_NE(geometry.GetLastProfileSummary().find("cache=hit"), std::string::npos)
-      << geometry.GetLastProfileSummary();
+  EXPECT_THROW((void)run_interactive(102), std::runtime_error);
+  EXPECT_FALSE(geometry.CacheValid());
 }
 
 TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) {

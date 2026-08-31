@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 Revised: 2026-08-30 — 按单 live document、原地函数应用、共享 executor 重定执行方案。
 
-Status: in progress — NM1.4 A 已完成并通过本版验收，NM1.1/NM1.3 的原地参数修改与局部恢复已修正；NM1.2 保留；NM1.4 B/C、NM1.5 待实施。
+Status: in progress — NM1.4 A/B 已完成并通过本版验收；NM1.2 保留；NM1.4 C、NM1.5 待实施。
 
 Branch: `feature/pipeline-document-editing`
 
@@ -15,7 +15,7 @@ Base: `origin/main` at NM0 merge (`d5a96267`)。
 
 本版替换原 NM1 的整图 candidate、独立 snapshot executor 和多份编辑状态要求。既有功能不推倒重来；
 从当前 NM1.4 工作区继续，先消除 NM1.1/NM1.3 的相关实现债务，再完成渲染和保存读取。
-2026-08-30 的方案修订未撤回未提交源码；其后 NM1.4 A 已定向实施，见第 10.1 节完成记录。过去的测试结果保留在第 16 节，不代表 B/C 或整个 NM1 已完成。
+2026-08-30 的方案修订未撤回未提交源码；其后 NM1.4 A 已定向实施，见第 10.1 节完成记录；NM1.4 B 见第 10.2 节完成记录。过去的测试结果保留在第 16 节，不代表 C 或整个 NM1 已完成。
 
 ---
 
@@ -246,7 +246,7 @@ before/after 不能继续从 stage 表读取；既有 payload 需要的字段表
 
 ## 10. NM1.4 — 原地编辑与共享 DAG 渲染
 
-Status: partial — A complete（2026-08-30）；B/C rework required。A 使用下列新证据，B/C 不沿用旧 clone 测试的完成结论。
+Status: partial — A complete（2026-08-30）；B complete（2026-08-30）；C rework required。A/B 使用下列新证据，C 不沿用旧 snapshot 测试的完成结论。
 
 ### 10.1 A：原地修改和局部恢复
 
@@ -379,6 +379,92 @@ Suite totals: **121/121 PASS，0 skipped** — Graph 47、CommandService 8、His
 - `RenderLeavesPersistentDocumentParametersUnchanged`：不同任务前后持久参数、节点和边相同。
 - 对默认图运行真实 RAW；GPU 失败不进入 CPU、旧 stage 或较低质量出图。
 
+#### NM1.4 B completion record (2026-08-30)
+
+**Status:** complete — 产品 `Apply` 只读已绑定 document；host/thumbnail/export 走 BypassSessionCache，复用同一 one-shot device 并在交付后释放 workspace；并行独立 renderer 的 one-shot 分配可完成且不写入 session cache。
+
+**实现与验收清单：**
+
+- [x] `ApplyGpuDagProduct` 不再调用 `LegacyPipelineImporter::ApplyOnto`；editor/host 都从绑定 document 取参数，stage 曝光与 document 故意不一致时像素仍跟 document。
+- [x] 未绑定 document 时 `Apply` 抛出真实错误，不创建 renderer、不执行 stage、不写输出。
+- [x] `BuildGpuDagRenderRequest` 只翻译 viewport/resize/quality；`RenderLeavesPersistentDocumentParametersUnchanged` 证明节点、边、Model 地址和 stage JSON 在多种请求配置后不变。
+- [x] `InjectRawMetadata` 仅在导入/显式加载路径写入 Develop；任务 `Apply` 不从 stage 补相机矩阵。缺 document 相机配置失败，不读 stage metadata。
+- [x] Thumbnail/export 的 `SetExecutorRenderParams` 关闭 session cache；连续 Bypass 复用 one-shot device，交付后 texture pool used bytes 为 0；两条并行 Bypass 使用不同 device，均释放 workspace，且不增加 session prepared-source 计数。
+
+**Primary success call chain:**
+
+```text
+CPUPipelineExecutor::Apply (bound document)
+  -> BuildGpuDagRenderRequest (viewport/decode/resize/quality only)
+  -> cache_policy = enable_cache_ ? UseSessionCache : BypassSessionCache
+  -> ApplyGpuDagProduct -> Renderer::Render(document, request, cache_policy)
+  -> session: prepared-source / plan / published GPU results
+  -> bypass: EnsureOneShotDevice (reuse) -> CompileStatic -> Execute
+     -> download/present -> ReleaseSessionResources on one-shot workspace
+  -> pixels match document parameters; persistent Models unchanged
+```
+
+**Primary failure call chain:**
+
+```text
+missing PipelineDocument
+  -> throw before renderer construction
+  -> no stage execution, no frame-sink notify, no GPU substitute
+GPU presentation/download failure
+  -> discard unpublished; bypass also WaitIdle + ReleaseSessionResources
+  -> propagate runtime_error; last successful display retained
+  -> no CPU / legacy stage / lower-quality retry
+CPU / unsupported backend preference
+  -> throw "supported GPU backend"; no legacy stage Apply
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / suite | Result |
+| --- | --- | --- |
+| `EditorAndHostRenderUseDocumentParameters` | `PipelineDocumentRenderTest` | PASS；stage 曝光 ±9 EV 时 editor/host 像素跟 document −1.5 / +1.5 EV 参考，INF < 2e-5，明暗可区分 |
+| `RenderLeavesPersistentDocumentParametersUnchanged` | `PipelineDocumentRenderTest` | PASS；host/editor 交替改 decode/ROI/cache 后 document JSON、stage JSON、Exposure 地址不变 |
+| 默认图真实 RAW；GPU 失败不降级 | `DefaultDocumentRendersRealRawAtFullDecodeAndOutputResolution`、`FailedGpuPresentationPropagatesErrorWithoutSubstituteOutput`、`CpuPreferenceFailsInsteadOfExecutingLegacyStages` | PASS；FULL decode 输出尺寸等于 DNG；拒绝 mapping 后无 host 帧；CPU 偏好抛错且 renderer 仍为空 |
+| `MissingDocumentFailsWithoutExecutingStages` | `PipelineDocumentRenderTest` | PASS |
+| `HostBypassRendersReuseOneShotDeviceAndLeaveSessionCacheUntouched` | `PipelineDocumentRenderTest` | PASS；两次 host Bypass 同一 one-shot device，pool used=0，随后 editor 仍命中 session prepared source |
+| `RepeatedOneShotRendersReuseDeviceAndReleaseWorkspace` | `GpuDagCudaDrtProductTest` / `CudaResultCacheProductFixture` | PASS |
+| `ParallelOneShotRendersCompleteAndReleaseWorkspaces` | `GpuDagCudaDrtProductTest` / `CudaResultCacheProductFixture` | PASS；两线程独立 renderer 同时 Bypass，各自 device 非空且不同，published/pool=0，session hits/misses=0 |
+| `ThumbnailAndExportTasksDisableSessionCache` | `PipelineFrameSinkTest` | PASS；THUMBNAIL/FULL_RES_EXPORT 关闭 cache 并 force CPU output；FAST_PREVIEW 恢复 session cache |
+| `OneShotRenderDoesNotReadWriteOrClearEditorSessionCaches`、`RendererOneShotWorkspaceCannotPublishIntoSessionCache` | `GpuDagCudaDrtProductTest` | PASS（既有） |
+
+Commands（仓库根目录）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineDocumentRenderTest GpuDagCudaDrtProductTest PipelineFrameSinkTest
+ctest --test-dir build/debug -R "PipelineDocumentRenderTest|GpuDagCudaDrtProductTest|PipelineFrameSinkTest" --output-on-failure
+```
+
+Suite totals:
+
+- `PipelineDocumentRenderTest` **10/10 PASS**
+- `PipelineFrameSinkTest` **34/34 PASS**
+- `GpuDagCudaDrtProductTest` **41/43 PASS** — 本次新增的 one-shot 复用/并行测试均 PASS；失败的 `ProductRendererViewportAndMaxEdgeResampleDecodedSourceWithoutSizeMismatch` 与 `ProductRendererRendersLegacyImportWithTintWithoutUnregisteredType` 未改其源码，属既有 viewport/tint 问题，不是 B 的 document 只读或 Bypass 证据
+
+最终日志：`build/tmp/nm1/nm14b-ctest.log`、`build/tmp/nm1/nm14b-frame-sink-ctest.log`。
+
+**Checklist / exit condition:** 第 10.2 节五项工作与三条验收已完成。第 14 节仅能勾选由 B 证明的 Apply 只读 document；共享 executor、无保存 release、统一 I/O 仍属 C / NM1.5。
+
+**LOC note（grill-code-review）：**
+
+| 本次文件 | 总 LOC | Diff + / - |
+| --- | ---: | ---: |
+| `src/edit/pipeline/pipeline_cpu.cpp` | 810 | + / − 以删除 ApplyOnto remirror 为主（约 −200 净） |
+| `src/include/edit/pipeline/pipeline_cpu.hpp` | 273 | +46 / − 少量 |
+| `src/include/edit/runtime/renderer.hpp` | 306 | +36 / −0（`OneShotResources`、`DebugOneShotDeviceIdentity`） |
+| `tests/edit/pipeline/pipeline_document_render_test.cpp` | 358 | 新文件（含 HostBypass 复用断言） |
+| `tests/edit/runtime/cuda_result_cache_test.cpp` | 735 | +120 / −0 |
+| `tests/edit/pipeline/pipeline_frame_sink_test.cpp` | 1086 | +30 本测试；其余为既有 SetExecutorRenderParams 改为读 request snapshot |
+| `tests/edit/CMakeLists.txt` | 496 | +9 / −0（注册 `PipelineDocumentRenderTest`） |
+
+`pipeline_frame_sink_test.cpp` 已超过 1,000 LOC：本次只在 `SetExecutorRenderParams` 组旁增加 cache 开关断言，未再向该文件加入 GPU 像素或并行分配职责。按 sink 生命周期 / 请求参数 / 并发锁拆分属于后续整理，不是 B 的退出条件。`cuda_result_cache_test.cpp` 仍低于 1,000 LOC。
+
+**Residual gaps / scope boundaries:** C 的共享 live executor、snapshot API 删除、后台 release 不保存仍未做；thumbnail/export 当前仍可持有独立 snapshot executor，B 只证明 Bypass 不建 session cache、one-shot device 复用且交付后释放、并行独立 renderer 不互相写入 session cache。`RemirrorGpuDagDocument` 仍在 `pipeline_service` 的 load/save 边界，属 NM1.5。上述两条既有 `GpuDagCudaDrtProductTest` 失败未在 B 中修复。无完整应用交互或 Metal/OpenCL 对等 Bypass 并行证据。
+
 ### 10.3 C：共享 pipeline 使用权
 
 工作：
@@ -505,7 +591,7 @@ ReconnectColorGrade(PipelineDocument& document, node_id, predecessor, successor)
 
 ## 13. 验证方式与证据
 
-以下为 NM1 全阶段验证要求；NM1.4 A 的已执行命令、结果和范围见第 10.1 节，B/C 与 NM1.5 仍须独立验收。
+以下为 NM1 全阶段验证要求；NM1.4 A 的已执行命令、结果和范围见第 10.1 节，B 见第 10.2 节；C 与 NM1.5 仍须独立验收。
 
 Windows 构建遵循 `alcedo-msvc-cmake` 技能，从仓库根目录运行：
 
@@ -587,4 +673,6 @@ ctest --test-dir build/debug -R "GpuDagModelGraphTest|PipelineMapperTest|Thumbna
 本版方案更新（2026-08-30）：**documentation only**。源码/测试保持原样，没有新 build/test 结果。
 实施后追加真实成功链、失败链、命令、结果及缺口，再更新状态和退出清单。
 
-NM1.4 A 实施结果（2026-08-30）：**complete**，本版验收 121/121 PASS，成功链、失败链、测试和缺口见第 10.1 节完成记录。NM1.4 B/C、NM1.5 的状态未提前提升。
+NM1.4 A 实施结果（2026-08-30）：**complete**，本版验收 121/121 PASS，成功链、失败链、测试和缺口见第 10.1 节完成记录。
+
+NM1.4 B 实施结果（2026-08-30）：**complete** — 产品 Apply 只读绑定 document；BypassSessionCache 复用 one-shot device 并释放 workspace；并行独立 renderer 的 one-shot 分配通过。证据见第 10.2 节完成记录。NM1.4 C、NM1.5 的状态未提前提升。

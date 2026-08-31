@@ -5,12 +5,16 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -477,6 +481,122 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
                                      keys.geometry_extent, TextureFormat::Rgba32f, completed));
   EXPECT_TRUE(images.FindValidResult(plan.display_output, keys.drt_display, keys.geometry_extent,
                                      TextureFormat::Rgba32f, completed));
+}
+
+TEST_F(CudaResultCacheProductFixture, RepeatedOneShotRendersReuseDeviceAndReleaseWorkspace) {
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto session_before = renderer_->SessionResources();
+  EXPECT_GT(session_before.published_result_count, 0U);
+  renderer_->ResetStats();
+  EXPECT_EQ(renderer_->DebugOneShotDeviceIdentity(), 0U);
+
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+  const auto first_id = renderer_->DebugOneShotDeviceIdentity();
+  EXPECT_NE(first_id, 0U);
+  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
+  EXPECT_EQ(renderer_->OneShotResources().published_result_count, 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_entry_count, 0U);
+  EXPECT_EQ(renderer_->SessionResources().published_result_count,
+            session_before.published_result_count);
+  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+            session_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(renderer_->Stats().prepared_source_misses, 0U);
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+  EXPECT_EQ(renderer_->DebugOneShotDeviceIdentity(), first_id);
+  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_entry_count, 0U);
+  EXPECT_EQ(renderer_->SessionResources().published_result_count,
+            session_before.published_result_count);
+
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_EQ(renderer_->Stats().prepared_source_hits, 1U);
+  EXPECT_EQ(renderer_->Stats().libraw_open_unpack_count, 0U);
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture, ParallelOneShotRendersCompleteAndReleaseWorkspaces) {
+  constexpr int kWorkers = 2;
+  struct Worker {
+    std::unique_ptr<CudaProductRenderer> renderer;
+    std::shared_ptr<ImageBuffer>         image;
+    bool                                 finite           = false;
+    std::uintptr_t                       device_identity  = 0;
+    std::size_t                          published        = 1;
+    std::size_t                          pool_bytes       = 1;
+    std::size_t                          pool_entries     = 1;
+    std::uint64_t                        source_hits      = 1;
+    std::uint64_t                        source_misses    = 1;
+    std::string                          error;
+  };
+
+  std::vector<Worker> workers(static_cast<std::size_t>(kWorkers));
+  for (int i = 0; i < kWorkers; ++i) {
+    auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+    gpu_dag_test::EnsureTestCameraProfile(*document);
+    workers[static_cast<std::size_t>(i)].renderer =
+        std::make_unique<CudaProductRenderer>(document, MakeUnpacker());
+    workers[static_cast<std::size_t>(i)].image =
+        MakeEncodedImage(static_cast<std::uint8_t>(90 + i));
+  }
+
+  std::promise<void> start;
+  const auto         go = start.get_future().share();
+  std::atomic<int>   ready{0};
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<std::size_t>(kWorkers));
+  for (int i = 0; i < kWorkers; ++i) {
+    threads.emplace_back([&, i] {
+      auto& worker = workers[static_cast<std::size_t>(i)];
+      ready.fetch_add(1, std::memory_order_relaxed);
+      go.wait();
+      try {
+        const auto output =
+            RenderHostWithoutSessionCache(*worker.renderer, worker.image, DecodeRes::FULL, {});
+        worker.finite          = OutputIsFinite(output);
+        worker.device_identity = worker.renderer->DebugOneShotDeviceIdentity();
+        worker.published       = worker.renderer->OneShotPublishedResultCount();
+        const auto one_shot    = worker.renderer->OneShotResources();
+        worker.pool_bytes      = one_shot.texture_pool_used_bytes;
+        worker.pool_entries    = one_shot.texture_pool_entry_count;
+        worker.source_hits     = worker.renderer->Stats().prepared_source_hits;
+        worker.source_misses   = worker.renderer->Stats().prepared_source_misses;
+      } catch (const std::exception& ex) {
+        worker.error = ex.what();
+      } catch (...) {
+        worker.error = "unknown parallel one-shot failure";
+      }
+    });
+  }
+
+  while (ready.load(std::memory_order_relaxed) < kWorkers) {
+    std::this_thread::yield();
+  }
+  start.set_value();
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  for (int i = 0; i < kWorkers; ++i) {
+    SCOPED_TRACE(i);
+    const auto& worker = workers[static_cast<std::size_t>(i)];
+    EXPECT_TRUE(worker.error.empty()) << worker.error;
+    EXPECT_TRUE(worker.finite);
+    EXPECT_NE(worker.device_identity, 0U);
+    EXPECT_EQ(worker.published, 0U);
+    EXPECT_EQ(worker.pool_bytes, 0U);
+    EXPECT_EQ(worker.pool_entries, 0U);
+    EXPECT_EQ(worker.source_hits, 0U);
+    EXPECT_EQ(worker.source_misses, 0U);
+  }
+  EXPECT_NE(workers[0].device_identity, workers[1].device_identity);
 }
 
 TEST_F(CudaResultCacheProductFixture, RendererOneShotWorkspaceCannotPublishIntoSessionCache) {

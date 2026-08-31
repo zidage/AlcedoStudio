@@ -127,6 +127,23 @@ class Renderer {
    */
   [[nodiscard]] auto OneShotPublishedResultCount() const -> std::size_t;
 
+  /**
+   * @brief Live allocations of the isolated one-shot workspace.
+   *
+   * Empty when no one-shot device exists. After a successful BypassSessionCache
+   * render, published results and texture-pool used bytes are zero because that
+   * workspace is released on delivery. Session prepared-source fields stay zero.
+   */
+  [[nodiscard]] auto OneShotResources() const -> RenderSessionResources;
+
+  /**
+   * @brief Address of the lazily created one-shot device, or 0 if none exists.
+   *
+   * Stable across BypassSessionCache renders until @ref ReleaseSessionCaches.
+   * Tests use this to detect per-Apply device reconstruction.
+   */
+  [[nodiscard]] auto DebugOneShotDeviceIdentity() const -> std::uintptr_t;
+
   [[nodiscard]] auto Device() -> RenderDevice& { return *device_; }
   [[nodiscard]] auto Device() const -> const RenderDevice& { return *device_; }
 
@@ -265,6 +282,25 @@ auto Renderer<Backend>::OneShotPublishedResultCount() const -> std::size_t {
     return 0;
   }
   return one_shot_device_->Workspace().Images().PublishedCount();
+}
+
+template <class Backend>
+auto Renderer<Backend>::OneShotResources() const -> RenderSessionResources {
+  RenderSessionResources resources;
+  if (!one_shot_device_) {
+    return resources;
+  }
+  const auto& workspace              = one_shot_device_->Workspace();
+  resources.published_result_count   = workspace.Images().PublishedCount();
+  resources.texture_pool_used_bytes  = workspace.Textures().UsedBytes();
+  resources.texture_pool_entry_count = workspace.Textures().EntryCount();
+  resources.session_value_ids        = workspace.Images().CurrentValueIds();
+  return resources;
+}
+
+template <class Backend>
+auto Renderer<Backend>::DebugOneShotDeviceIdentity() const -> std::uintptr_t {
+  return reinterpret_cast<std::uintptr_t>(one_shot_device_.get());
 }
 
 }  // namespace alcedo
