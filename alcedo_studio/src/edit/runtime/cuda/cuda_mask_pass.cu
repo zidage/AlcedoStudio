@@ -284,16 +284,18 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
   if (!device.Workspace().IsRendering())
     throw std::runtime_error("ExecuteCudaMask: BeginRender has not been called");
-  if (!plan.primary_grade_mask) throw std::runtime_error("ExecuteCudaMask: plan has no mask");
+  if (!plan.FirstGrade() || !plan.FirstGrade()->mask) {
+    throw std::runtime_error("ExecuteCudaMask: plan has no mask");
+  }
   auto&                   workspace     = device.Workspace();
   auto&                   context       = device.CommandContext();
   const auto              extent        = plan.geometry.render_extent;
-  auto&                   output        = EnsureOutput(workspace, plan.mask_output, extent);
+  auto&                   output        = EnsureOutput(workspace, plan.FirstGrade()->mask_output, extent);
   constexpr std::uint32_t block         = 256;
   const auto              render_pixels = extent.width * extent.height;
-  CudaMaskResult          result{plan.mask_output};
+  CudaMaskResult          result{plan.FirstGrade()->mask_output};
 
-  const auto*             node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*             node = document.Graph().FindNode(plan.FirstGrade()->mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
         static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,

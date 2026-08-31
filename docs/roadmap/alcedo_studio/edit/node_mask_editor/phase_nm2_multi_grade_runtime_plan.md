@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: NM2.1 complete; NM2.2–NM2.5 planned
+Status: NM2.1–NM2.2 complete; NM2.3–NM2.5 planned
 
 Prerequisite: NM1, including NM1.4R and NM1.5.
 
@@ -59,16 +59,16 @@ Check the implementation at the execution revision before you change it.
 | DRT model | [drt_node_model.hpp](../../../../../alcedo_studio/src/include/edit/graph/drt_node_model.hpp) owns output-transform parameters and the four DRT/Post neighborhood adjustments (NM2.1). |
 | Parameter targets | [editor_adjustment_types.hpp](../../../../../alcedo_studio/src/include/app/editor_adjustment_types.hpp) defines owner and node identity. |
 | Parameter commands | [editor_pipeline_command_service.cpp](../../../../../alcedo_studio/src/app/editor_pipeline_command_service.cpp) reads and applies typed targets. |
-| Compiler | [graph_compiler.cpp](../../../../../alcedo_studio/src/edit/runtime/graph_compiler.cpp) currently compiles only the first backbone Grade. |
-| Plan | [execution_plan.hpp](../../../../../alcedo_studio/src/include/edit/runtime/execution_plan.hpp) currently has one Grade, mask, and Grade output. |
+| Compiler | [graph_compiler.cpp](../../../../../alcedo_studio/src/edit/runtime/graph_compiler.cpp) compiles every backbone Color Grade in edge order, including the zero-Grade Develop-to-DRT path. |
+| Plan | [execution_plan.hpp](../../../../../alcedo_studio/src/include/edit/runtime/execution_plan.hpp) stores `grade_nodes` in edge order, DRT/Post steps, and explicit pass I/O. [execution_plan.cpp](../../../../../alcedo_studio/src/edit/runtime/execution_plan.cpp) validates those bindings. |
 | Shared execution | [plan_executor.hpp](../../../../../alcedo_studio/src/include/edit/runtime/plan_executor.hpp) controls result reuse, execution, completion, and failure. |
 | Parameter storage | [parameter_binding.hpp](../../../../../alcedo_studio/src/include/edit/runtime/parameter_binding.hpp) defines node and adjustment slot identity. [parameter_arena.hpp](../../../../../alcedo_studio/src/include/edit/runtime/parameter_arena.hpp) owns parameter storage. |
 | Content identity | [result_content_key.cpp](../../../../../alcedo_studio/src/edit/runtime/result_content_key.cpp) currently reads the fixed primary Grade for several keys. |
 | GPU resources | [basic_render_workspace.hpp](../../../../../alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp) owns parameters, images, buffers, and temporary storage. |
 | Image results | [graph_image_cache.hpp](../../../../../alcedo_studio/src/include/edit/runtime/graph_image_cache.hpp) separates completed results from unpublished writes. |
-| CUDA Grade | [cuda_primary_grade_pass.cu](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu) currently reads the fixed primary Grade and Develop output. |
-| OpenCL Grade | [opencl_primary_grade_pass.cpp](../../../../../alcedo_studio/src/edit/runtime/opencl/opencl_primary_grade_pass.cpp) has the same fixed lookup. |
-| Metal Grade | [metal_primary_grade_pass.mm](../../../../../alcedo_studio/src/edit/runtime/metal/metal_primary_grade_pass.mm) has the same fixed lookup. |
+| CUDA Grade | [cuda_primary_grade_pass.cu](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu) executes `FirstGrade()` using that node's compiled `scene_input`. Multi-Grade GPU dispatch is NM2.4. |
+| OpenCL Grade | [opencl_primary_grade_pass.cpp](../../../../../alcedo_studio/src/edit/runtime/opencl/opencl_primary_grade_pass.cpp) has the same `FirstGrade()` lookup. |
+| Metal Grade | [metal_primary_grade_pass.mm](../../../../../alcedo_studio/src/edit/runtime/metal/metal_primary_grade_pass.mm) has the same `FirstGrade()` lookup. |
 
 ### 2.2 Primary Grade and current panels
 
@@ -79,7 +79,8 @@ The ID does not define a special node type or permanent execution role.
 
 `PipelineDocument::PrimaryGrade()` currently finds that fixed ID.
 It does not find the selected Grade or follow image edges.
-The compiler uses the first backbone Grade, but several runtime paths still use the fixed ID.
+The compiler compiles every backbone Grade in edge order.
+Several runtime paths still use the fixed ID or `FirstGrade()` until NM2.3 and NM2.4.
 NM2 must remove this difference.
 
 The current editor has no product node editor.
@@ -94,10 +95,8 @@ NM2 does not add node selection to the adjustment stack.
 
 ### 2.3 Existing limits
 
-- The plan stores one `primary_grade_adjustments` list and one Grade output.
-- The shared executor has fixed Develop, Grade, and DRT steps.
-- Grade encoders fetch Develop output instead of the connected input.
-- Several content keys read `PrimaryGrade()` instead of the compiled node.
+- The shared executor still records and skips only the first compiled Grade; later Grades wait for NM2.4.
+- Several content keys still read `PrimaryGrade()` instead of each compiled node (NM2.3).
 - Default and Clean Grades contain only Color Grade catalog types (NM2.1).
 - DRT/Post owns Clarity, Sharpen, Halation, and Film Grain with factory defaults (NM2.1).
 - Local tone resources need checks for both node identity and source content.
@@ -463,7 +462,7 @@ Do not weaken product validation to admit it.
 | Phase | Status | Result |
 | --- | --- | --- |
 | NM2.1 | complete | Parameter ownership and single-Grade reference behavior. |
-| NM2.2 | planned | Explicit node plans, pass instances, and value dependencies. |
+| NM2.2 | complete | Explicit node plans, pass instances, and value dependencies. |
 | NM2.3 | planned | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
 | NM2.4 | planned | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
 | NM2.5 | planned | Numerical, resource, failure, and service qualification. |
@@ -583,12 +582,74 @@ Keep GPU implementation details out of the shared plan types.
 
 **Exit conditions**
 
-- [ ] Arbitrary Grade IDs compile without `grade.primary`.
-- [ ] Edge order determines inputs; container order does not.
-- [ ] Repeated pass kinds have distinct instances and outputs.
-- [ ] Parameter-only and viewport changes reuse the static plan.
-- [ ] Product compilation still rejects branches and invalid backbones.
-- [ ] Invalid compiled bindings fail before GPU work starts.
+- [x] Arbitrary Grade IDs compile without `grade.primary`.
+- [x] Edge order determines inputs; container order does not.
+- [x] Repeated pass kinds have distinct instances and outputs.
+- [x] Parameter-only and viewport changes reuse the static plan.
+- [x] Product compilation still rejects branches and invalid backbones.
+- [x] Invalid compiled bindings fail before GPU work starts.
+
+##### Phase NM2.2 completion record (2026-08-31)
+
+**Status:** complete — compiled plans describe every backbone Color Grade with unique pass instances and explicit I/O; GPU still executes only `FirstGrade()` until NM2.4.
+
+**Primary success call chain:**
+
+```text
+GraphCompiler::CompileStatic(document, source)
+  -> RequireValidGraph (Validate + ValidateImageBackbone)
+  -> CompileDevelopPasses
+  -> ImageBackboneNodeIds() walk in edge order
+  -> CompileColorGrade per Color Grade (incoming scene edge, optional mask, PrimaryColorGrade I/O)
+  -> CompileDrt(last Grade output or Develop)
+  -> ValidateExecutionPlan
+  -> ExecutionPlan.grade_nodes + drt.steps + passes
+```
+
+**Primary failure call chain:**
+
+```text
+scene-image fan-out / invalid backbone / missing DRT types
+  -> RequireValidGraph / RequireCompleteDrtPostTypes
+  -> std::runtime_error before GPU work
+
+mutated pass input with no producer, duplicate output, or kind mismatch
+  -> ValidateExecutionPlan
+  -> std::runtime_error before GPU work
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ZeroGradesFeedDevelopIntoDrtPost` (compile: no Grade pass; DRT input is Develop; DRT steps present) | `GpuDagRawInputTest` | PASS |
+| `GradeWithoutPrimaryIdRendersItsParameters` (compile: compiled node is `grade.b`; adjustments match that model) | `GpuDagRawInputTest` | PASS |
+| `ThreeGradesComposeInEdgeOrder` (each Grade `scene_input` is previous output; DRT input is last Grade; distinct `PassInstanceId`) | `GpuDagRawInputTest` | PASS |
+| `GradeInputsFollowBackboneEdgesNotContainerOrder` | `GpuDagRawInputTest` | PASS |
+| `RepeatedAdjustmentInstancesKeepTheirOrder` | `GpuDagRawInputTest` | PASS |
+| `ParameterAndViewportEditsKeepStaticPlan` | `GpuDagRawInputTest` | PASS |
+| `GraphCompilerRejectsSceneImageBranch` | `GpuDagRawInputTest` | PASS |
+| `InvalidCompiledBindingsFailBeforeGpuWork` | `GpuDagRawInputTest` | PASS |
+| Zero Grade / absent `grade.primary` compile | `GpuDagModelGraphTest` | PASS |
+| Incomplete DRT compile rejection | `GpuDagModelGraphTest` (`PostAdjustmentsRejectGradeOwnership`) | PASS |
+| Single-Grade CUDA/OpenCL callers after plan field rename | `GpuDagCudaPrimaryGradeTest`, `GpuDagCudaDrtProductTest`, `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS (113/113) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest GpuDagRawInputTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagModelGraphTest\.|GpuDagRawInputTest\."
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagCudaMaskTest GpuDagOpenClGradeTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaPrimaryGradeTest\.|GpuDagCudaDrtProductTest\.|GpuDagCudaMaskTest\.|GpuDagOpenClGradeTest\."
+```
+
+Suite totals: graph + compiler **112/112**. CUDA Grade + DRT product + mask + OpenCL Grade **113/113**.
+
+**Checklist / exit condition:** all six boxes checked from the compiler tests above. Pixel composition of multiple Grades is NM2.4.
+
+**LOC note (grill-code-review):** no changed production file exceeds 1000 lines. Largest after this phase: `graph_compiler.cpp` 463, `graph_compiler_test.cpp` 462, `execution_plan.hpp` 362, `plan_executor.hpp` 260. New validation module: `execution_plan.cpp` 85.
+
+**Remaining gaps:** GPU PlanExecutor and Grade encoders still run only `FirstGrade()`. Per-value content keys still hash `document.PrimaryGrade()` (NM2.3). `ZeroGradesFeedDevelopIntoDrtPost`, `GradeWithoutPrimaryIdRendersItsParameters`, and `ThreeGradesComposeInEdgeOrder` prove compiled identity and edge order, not independently calculated multi-Grade pixels. Metal Grade/DRT tests were updated to compile but were not executed on this Windows host.
 
 ### 6.3 NM2.3 — Bindings, keys, and resource lifetime
 

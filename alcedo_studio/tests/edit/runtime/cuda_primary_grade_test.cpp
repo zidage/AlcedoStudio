@@ -320,7 +320,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaSharpenUsesSurroundingPixelsForUnsharpMask) 
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(result.scene_post);
-  const auto input          = Download(plan_.primary_grade_output);
+  const auto input          = Download(plan_.FirstGrade()->scene_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
@@ -374,7 +374,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaClarityUsesLargeRadiusLocalContrast) {
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(result.scene_post);
-  const auto input          = Download(plan_.primary_grade_output);
+  const auto input          = Download(plan_.FirstGrade()->scene_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 1;
@@ -393,7 +393,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaHalationSpreadsRedLightIntoDarkNeighbors) {
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(result.scene_post);
-  const auto input          = Download(plan_.primary_grade_output);
+  const auto input          = Download(plan_.FirstGrade()->scene_output);
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
@@ -414,7 +414,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaFilmGrainStrengthScalesDeterministicDensityV
 
   grain.SetValue(0.25f);
   const auto low   = Download(RenderThroughDrtPost().scene_post);
-  const auto input = Download(plan_.primary_grade_output);
+  const auto input = Download(plan_.FirstGrade()->scene_output);
   grain.SetValue(0.75f);
   const auto high       = Download(RenderThroughDrtPost().scene_post);
   const auto high_again = Download(RenderThroughDrtPost().scene_post);

@@ -106,8 +106,8 @@ TEST(GpuDagModelGraph, PostAdjustmentsRejectGradeOwnership) {
 
   EXPECT_NO_THROW((void)GraphCompiler::CompileStatic(document, DirectRgbSource()));
   const auto plan = GraphCompiler::CompileStatic(document, DirectRgbSource());
-  ASSERT_EQ(plan.drt_post_adjustments.size(), 4u);
-  EXPECT_EQ(plan.drt_post_adjustments[0].type, type_ids::Clarity());
+  ASSERT_EQ(plan.drt.post_adjustments.size(), 4u);
+  EXPECT_EQ(plan.drt.post_adjustments[0].type, type_ids::Clarity());
 }
 
 }  // namespace alcedo

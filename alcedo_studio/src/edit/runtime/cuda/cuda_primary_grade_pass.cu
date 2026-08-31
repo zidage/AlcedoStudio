@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "cuda_neighbor_grade.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -310,19 +311,26 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: BeginRender has not been called");
   }
-  auto* grade = document.PrimaryGrade();
-  if (grade == nullptr) throw std::runtime_error("ExecuteCudaPrimaryGrade: missing primary grade");
-  auto* input = workspace.Images().Find(plan.develop_output);
+  const auto* compiled_grade = plan.FirstGrade();
+  if (compiled_grade == nullptr) {
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
+  }
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
+  if (grade == nullptr) {
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled Color Grade is missing");
+  }
+  auto* input = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: missing Develop output");
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: missing Color Grade scene input");
   }
 
   auto& arena = workspace.Parameters();
-  arena.Reserve(plan.primary_grade_adjustments.size() *
+  arena.Reserve(compiled_grade->adjustments.size() *
                 (sizeof(CudaAdjustmentParams) + ParameterArena<CudaBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
   std::vector<GradeOp>               ops;
-  ops.reserve(plan.primary_grade_adjustments.size());
+  ops.reserve(compiled_grade->adjustments.size());
   float                       shadows_slider    = 0.0f;
   float                       highlights_slider = 0.0f;
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
@@ -335,7 +343,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     return &ops.back();
   };
 
-  for (const auto& compiled : plan.primary_grade_adjustments) {
+  for (const auto& compiled : compiled_grade->adjustments) {
     auto* model = grade->FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error(
@@ -406,7 +414,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   for (auto& patch : pending) patch.Commit();
 
   std::vector<CudaAdjustmentCommand> commands;
-  commands.reserve(plan.primary_grade_adjustments.size());
+  commands.reserve(compiled_grade->adjustments.size());
   std::vector<std::uint32_t> command_starts;
   command_starts.reserve(ops.size());
   for (const auto& op : ops) {
@@ -424,12 +432,12 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
         context);
   }
 
-  const GraphValueId  output_id    = plan.primary_grade_output;
+  const GraphValueId  output_id    = compiled_grade->scene_output;
   const auto          input_width  = input->Texture().Width();
   const auto          input_height = input->Texture().Height();
   const std::uint8_t* mask_pointer = nullptr;
-  if (plan.primary_grade_mask) {
-    auto* mask = workspace.Images().Find(plan.mask_output);
+  if (compiled_grade->mask) {
+    auto* mask = workspace.Images().Find(compiled_grade->mask_output);
     if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
         mask->Texture().Width() != input_width || mask->Texture().Height() != input_height) {
       throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
@@ -448,17 +456,17 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
 
   if (ops.empty()) {
     auto& output = EnsureImage(workspace, output_id, input_width, input_height);
-    input        = workspace.Images().Find(plan.develop_output);
+    input        = workspace.Images().Find(compiled_grade->scene_input);
     workspace.Device().CopyTexture2D(input->Texture(), output.Texture(), context);
     return {output_id, lut.resource_id, 0, false, false};
   }
 
   const float        grade_mix        = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool         skip_mix         = grade_mix == 1.0f && !plan.primary_grade_mask.has_value();
+  const bool         skip_mix         = grade_mix == 1.0f && !compiled_grade->mask.has_value();
   std::size_t        remaining_writes = ops.size() + (skip_mix ? 0U : 1U);
   const GraphValueId ping_id{grade->Id(), PortId{"runtime.ping"}};
   const GraphValueId pong_id{grade->Id(), PortId{"runtime.pong"}};
-  GraphValueId       current_id = plan.develop_output;
+  GraphValueId       current_id = compiled_grade->scene_input;
 
   auto               Resolve    = [&](const GraphValueId& id) -> CudaBackend::Texture2D& {
     auto* image = workspace.Images().Find(id);

@@ -24,8 +24,8 @@ struct MetalDrtResult {
 /**
  * @brief Run DRT/Post neighborhood ops in ACEScc, then ACES 2.0 or OpenDRT.
  *
- * Input is the compiled primary-grade AP1/ACEScc image. Neighborhood ops write
- * @ref ExecutionPlan::drt_scene_output. The display kernel then decodes ACEScc
+ * Input is the compiled DRT scene-input AP1/ACEScc image. Neighborhood ops write
+ * @ref ExecutionPlan::drt.scene_output. The display kernel then decodes ACEScc
  * to AP1 scene-linear. Grade mix and masks do not suppress these operations.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,

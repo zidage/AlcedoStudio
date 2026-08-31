@@ -22,8 +22,8 @@ struct CudaDrtResult {
 /**
  * @brief Run DRT/Post neighborhood ops in ACEScc, then the selected display transform.
  *
- * Neighborhood ops consume the compiled primary-grade AP1/ACEScc image and write
- * @ref ExecutionPlan::drt_scene_output. The display kernel then decodes ACEScc to
+ * Neighborhood ops consume the compiled DRT scene-input AP1/ACEScc image and write
+ * @ref ExecutionPlan::drt.scene_output. The display kernel then decodes ACEScc to
  * AP1 scene-linear before ACES 2.0 or OpenDRT. Grade mix and masks do not suppress
  * these endpoint operations. A failed parameter upload retains Model dirty bits.
  */

@@ -149,9 +149,9 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (drt == nullptr) {
     throw std::runtime_error("ExecuteOpenClDrt: missing DRT endpoint");
   }
-  auto* input = workspace.Images().Find(plan.primary_grade_output);
+  auto* input = workspace.Images().Find(plan.SceneInputForDrt());
   if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteOpenClDrt: missing primary-grade output");
+    throw std::runtime_error("ExecuteOpenClDrt: missing DRT scene input");
   }
 
   const auto width   = input->Texture().Width();
@@ -160,8 +160,8 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
 
   std::vector<PendingParameterPatch> post_pending;
   std::vector<GradeNeighborParams>   enabled;
-  enabled.reserve(plan.drt_post_adjustments.size());
-  for (const auto& compiled : plan.drt_post_adjustments) {
+  enabled.reserve(plan.drt.post_adjustments.size());
+  for (const auto& compiled : plan.drt.post_adjustments) {
     auto* model = drt->FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error("ExecuteOpenClDrt: compiled DRT/Post adjustment no longer matches");
@@ -191,15 +191,15 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
     return image->Texture();
   };
 
-  GraphValueId scene_id = plan.primary_grade_output;
+  GraphValueId scene_id = plan.SceneInputForDrt();
   if (enabled.empty()) {
-    AcquireRgba(workspace, plan.drt_scene_output, width, height);
-    input = workspace.Images().Find(plan.primary_grade_output);
+    AcquireRgba(workspace, plan.drt.scene_output, width, height);
+    input = workspace.Images().Find(plan.SceneInputForDrt());
     if (input == nullptr) {
-      throw std::runtime_error("ExecuteOpenClDrt: primary-grade output lost during scene copy");
+      throw std::runtime_error("ExecuteOpenClDrt: DRT scene input lost during scene copy");
     }
-    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt_scene_output), context);
-    scene_id = plan.drt_scene_output;
+    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt.scene_output), context);
+    scene_id = plan.drt.scene_output;
   } else {
     const GraphValueId ping_id{drt->Id(), PortId{"runtime.ping"}};
     const GraphValueId pong_id{drt->Id(), PortId{"runtime.pong"}};
@@ -209,7 +209,7 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
         throw std::runtime_error("ExecuteOpenClDrt: neighborhood destination underflow");
       }
       --remaining;
-      GraphValueId dest_id = plan.drt_scene_output;
+      GraphValueId dest_id = plan.drt.scene_output;
       if (remaining != 0) {
         dest_id = scene_id == ping_id ? pong_id : ping_id;
       }
@@ -260,7 +260,7 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
   const auto& binding = arena.Binding(key);
   DispatchDrt(device, scene->Texture(), output->Texture(), arena.DeviceBuffer(), binding.offset);
-  return {plan.display_output, plan.drt_scene_output, static_cast<std::uint32_t>(enabled.size())};
+  return {plan.display_output, plan.drt.scene_output, static_cast<std::uint32_t>(enabled.size())};
 }
 
 }  // namespace alcedo

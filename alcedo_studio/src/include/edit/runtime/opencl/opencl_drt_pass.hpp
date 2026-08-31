@@ -25,7 +25,7 @@ struct OpenClDrtResult {
 /**
  * @brief Run DRT/Post neighborhood ops in ACEScc, then ACES 2.0 or OpenDRT.
  *
- * Consumes the primary-grade ACEScc image and writes a workspace RGBA32F display
+ * Consumes the compiled DRT scene-input ACEScc image and writes a workspace RGBA32F display
  * image. Grade mix and masks do not suppress the endpoint operations.
  */
 [[nodiscard]] auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,

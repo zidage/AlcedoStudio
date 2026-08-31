@@ -188,7 +188,7 @@ class MetalDrtFixture : public ::testing::Test {
 
 TEST_F(MetalDrtFixture, MetalDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
   const auto output = Render();
-  const auto grade  = Download(device_, plan_.primary_grade_output);
+  const auto grade  = Download(device_, plan_.FirstGrade()->scene_output);
   const auto display = Download(device_, output);
   ASSERT_EQ(grade.size(), display.size());
   ASSERT_TRUE(AllFinite(display));
@@ -284,7 +284,7 @@ TEST_F(MetalDrtFixture, MetalDrtAcesMatchesCudaReferenceWithinTolerance) {
 TEST_F(MetalDrtFixture, MetalDrtEditRunsOnlyDrtPass) {
   (void)Render();
   auto* develop = device_.Workspace().Images().Find(plan_.develop_output);
-  auto* grade   = device_.Workspace().Images().Find(plan_.primary_grade_output);
+  auto* grade   = device_.Workspace().Images().Find(plan_.FirstGrade()->scene_output);
   ASSERT_NE(develop, nullptr);
   ASSERT_NE(grade, nullptr);
   const auto develop_id = develop->Texture().ResourceId();
@@ -312,7 +312,7 @@ TEST_F(MetalDrtFixture, MetalDrtEditRunsOnlyDrtPass) {
             develop_id);
   EXPECT_EQ(device_.Workspace()
                 .Images()
-                .Find(plan_.primary_grade_output)
+                .Find(plan_.FirstGrade()->scene_output)
                 ->Texture()
                 .ResourceId(),
             grade_id);

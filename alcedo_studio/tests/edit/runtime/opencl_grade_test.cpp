@@ -655,12 +655,13 @@ class OpenClGradeFixture : public ::testing::Test {
 };
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
-  ASSERT_FALSE(plan_.primary_grade_adjustments.empty());
-  ASSERT_EQ(plan_.primary_grade_adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
-  for (std::size_t i = 0; i < plan_.primary_grade_adjustments.size(); ++i) {
-    EXPECT_EQ(plan_.primary_grade_adjustments[i].instance_id,
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  ASSERT_FALSE(plan_.FirstGrade()->adjustments.empty());
+  ASSERT_EQ(plan_.FirstGrade()->adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
+  for (std::size_t i = 0; i < plan_.FirstGrade()->adjustments.size(); ++i) {
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].instance_id,
               document_.PrimaryGrade()->AdjustmentIdAt(i));
-    EXPECT_EQ(plan_.primary_grade_adjustments[i].type,
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type,
               document_.PrimaryGrade()->AdjustmentAt(i).Type());
   }
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
@@ -918,7 +919,8 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
 
   std::vector<GradeAdjustmentParams> params;
   auto*                              grade = document_.PrimaryGrade();
-  for (const auto& compiled : plan_.primary_grade_adjustments) {
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  for (const auto& compiled : plan_.FirstGrade()->adjustments) {
     auto* model = grade->FindAdjustment(compiled.instance_id);
     ASSERT_NE(model, nullptr);
     const auto behavior = TryResolveAdjustmentBehavior(compiled.type);

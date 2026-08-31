@@ -295,10 +295,10 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   camera.MixU32(kCameraColorImplementationVersion);
   keys.develop_image = camera.Key();
 
-  if (plan.primary_grade_mask) {
+  if (plan.FirstGrade() != nullptr && plan.FirstGrade()->mask) {
     ContentHash mask;
     mask.MixKey(keys.geometry_scene_source);
-    MixCompiledMask(mask, document, *plan.primary_grade_mask);
+    MixCompiledMask(mask, document, *plan.FirstGrade()->mask);
     mask.MixU32(kMaskImplementationVersion);
     keys.mask = mask.Key();
   }

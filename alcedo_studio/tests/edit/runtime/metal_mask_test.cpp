@@ -187,7 +187,7 @@ class MetalMaskFixture : public ::testing::Test {
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
     ExecuteMetalGeometryResample(device_, plan_);
     ExecuteMetalCameraColor(device_, plan_, document_);
-    if (plan_.primary_grade_mask) {
+    if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask) {
       (void)ExecuteMetalMask(device_, plan_, document_, store_.get());
     }
     auto result = ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
@@ -197,7 +197,7 @@ class MetalMaskFixture : public ::testing::Test {
   }
 
   auto DownloadMask() -> std::vector<std::uint8_t> {
-    auto* lease = device_.Workspace().Images().Find(plan_.mask_output);
+    auto* lease = device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output);
     EXPECT_NE(lease, nullptr);
     if (lease == nullptr) {
       return {};
@@ -368,7 +368,7 @@ TEST_F(MetalMaskFixture, MetalDisconnectedMaskUsesConstantOneWithoutTextureAlloc
   document_.PrimaryGrade()->SetMix(0.5f);
   const auto result = RenderGrade();
   EXPECT_EQ(device_.Workspace().MaskTextures().EntryCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Images().Find(plan_.mask_output), nullptr);
+  EXPECT_EQ(device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output), nullptr);
   const auto source = DownloadImage(plan_.develop_output);
   const auto mixed  = DownloadImage(result.output);
   document_.PrimaryGrade()->SetMix(1.0f);

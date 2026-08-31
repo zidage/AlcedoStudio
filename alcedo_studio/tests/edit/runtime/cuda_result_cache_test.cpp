@@ -469,7 +469,8 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
   EXPECT_EQ(images.PublishedContentKey(plan.sensor_linear_output), keys.sensor_linear);
   EXPECT_EQ(images.PublishedContentKey(plan.geometry_output), keys.geometry_scene_source);
   EXPECT_EQ(images.PublishedContentKey(plan.develop_output), keys.develop_image);
-  EXPECT_EQ(images.PublishedContentKey(plan.primary_grade_output), keys.primary_grade);
+  ASSERT_NE(plan.FirstGrade(), nullptr);
+  EXPECT_EQ(images.PublishedContentKey(plan.FirstGrade()->scene_output), keys.primary_grade);
   EXPECT_EQ(images.PublishedContentKey(plan.display_output), keys.drt_display);
   EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, keys.sensor_linear,
                                      keys.sensor_extent, TextureFormat::Rgba32f, completed));
@@ -477,7 +478,7 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
                                      keys.geometry_extent, TextureFormat::Rgba32f, completed));
   EXPECT_TRUE(images.FindValidResult(plan.develop_output, keys.develop_image, keys.geometry_extent,
                                      TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.primary_grade_output, keys.primary_grade,
+  EXPECT_TRUE(images.FindValidResult(plan.FirstGrade()->scene_output, keys.primary_grade,
                                      keys.geometry_extent, TextureFormat::Rgba32f, completed));
   EXPECT_TRUE(images.FindValidResult(plan.display_output, keys.drt_display, keys.geometry_extent,
                                      TextureFormat::Rgba32f, completed));

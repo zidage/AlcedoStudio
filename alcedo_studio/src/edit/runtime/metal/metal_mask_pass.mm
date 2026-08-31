@@ -405,16 +405,16 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMask: BeginRender has not been called");
   }
-  if (!plan.primary_grade_mask) {
+  if (plan.FirstGrade() == nullptr || !plan.FirstGrade()->mask) {
     throw std::runtime_error("ExecuteMetalMask: plan has no mask");
   }
   auto&           workspace = device.Workspace();
   auto&           context   = device.CommandContext();
   const auto      extent    = plan.geometry.render_extent;
-  auto&           output    = EnsureOutput(workspace, plan.mask_output, extent);
-  MetalMaskResult result{plan.mask_output};
+  auto&           output    = EnsureOutput(workspace, plan.FirstGrade()->mask_output, extent);
+  MetalMaskResult result{plan.FirstGrade()->mask_output};
 
-  const auto*     node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*     node = document.Graph().FindNode(plan.FirstGrade()->mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     EncodeAnalytic(device, output.Texture(), *analytic, plan);
     return result;

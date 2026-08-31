@@ -88,9 +88,9 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
   }
   auto* drt = document.Drt();
   if (drt == nullptr) throw std::runtime_error("ExecuteCudaDrt: missing DRT endpoint");
-  auto* input = workspace.Images().Find(plan.primary_grade_output);
+  auto* input = workspace.Images().Find(plan.SceneInputForDrt());
   if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteCudaDrt: missing primary-grade output");
+    throw std::runtime_error("ExecuteCudaDrt: missing DRT scene input");
   }
 
   const auto input_width  = input->Texture().Width();
@@ -99,8 +99,8 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
 
   std::vector<PendingParameterPatch> post_pending;
   std::vector<GradeNeighborParams>   enabled;
-  enabled.reserve(plan.drt_post_adjustments.size());
-  for (const auto& compiled : plan.drt_post_adjustments) {
+  enabled.reserve(plan.drt.post_adjustments.size());
+  for (const auto& compiled : plan.drt.post_adjustments) {
     auto* model = drt->FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error("ExecuteCudaDrt: compiled DRT/Post adjustment no longer matches");
@@ -129,15 +129,15 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
     return image->Texture();
   };
 
-  GraphValueId scene_id = plan.primary_grade_output;
+  GraphValueId scene_id = plan.SceneInputForDrt();
   if (enabled.empty()) {
-    EnsureDisplayImage(workspace, plan.drt_scene_output, input_width, input_height);
-    input = workspace.Images().Find(plan.primary_grade_output);
+    EnsureDisplayImage(workspace, plan.drt.scene_output, input_width, input_height);
+    input = workspace.Images().Find(plan.SceneInputForDrt());
     if (input == nullptr) {
-      throw std::runtime_error("ExecuteCudaDrt: primary-grade output lost during scene copy");
+      throw std::runtime_error("ExecuteCudaDrt: DRT scene input lost during scene copy");
     }
-    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt_scene_output), context);
-    scene_id = plan.drt_scene_output;
+    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt.scene_output), context);
+    scene_id = plan.drt.scene_output;
   } else {
     const GraphValueId ping_id{drt->Id(), PortId{"runtime.ping"}};
     const GraphValueId pong_id{drt->Id(), PortId{"runtime.pong"}};
@@ -150,7 +150,7 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
         throw std::runtime_error("ExecuteCudaDrt: neighborhood destination underflow");
       }
       --remaining;
-      GraphValueId dest_id = plan.drt_scene_output;
+      GraphValueId dest_id = plan.drt.scene_output;
       if (remaining != 0) {
         dest_id = scene_id == ping_id ? pong_id : ping_id;
       }
@@ -220,7 +220,7 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
       static_cast<const float4*>(scene->Texture().DevicePointer()),
       static_cast<float4*>(output->Texture().DevicePointer()), pixels, params);
   cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: kernel launch");
-  return {plan.display_output, plan.drt_scene_output,
+  return {plan.display_output, plan.drt.scene_output,
           static_cast<std::uint32_t>(enabled.size())};
 }
 

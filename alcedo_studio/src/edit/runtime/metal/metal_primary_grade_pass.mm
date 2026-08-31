@@ -14,6 +14,7 @@
 
 #include <alcedo/metal/Metal.hpp>
 
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
@@ -208,21 +209,26 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: BeginRender has not been called");
   }
-  auto* grade = document.PrimaryGrade();
-  if (grade == nullptr) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: missing primary grade");
+  const auto* compiled_grade = plan.FirstGrade();
+  if (compiled_grade == nullptr) {
+    throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");
   }
-  auto* input = workspace.Images().Find(plan.develop_output);
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
+  if (grade == nullptr) {
+    throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled Color Grade is missing");
+  }
+  auto* input = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Develop output");
+    throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
   }
 
   auto& arena = workspace.Parameters();
-  arena.Reserve(plan.primary_grade_adjustments.size() *
+  arena.Reserve(compiled_grade->adjustments.size() *
                 (kGradeRuntimeParamBytes + ParameterArena<MetalBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
   std::vector<GradeOp>               ops;
-  ops.reserve(plan.primary_grade_adjustments.size());
+  ops.reserve(compiled_grade->adjustments.size());
   float                       shadows_slider    = 0.0f;
   float                       highlights_slider = 0.0f;
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
@@ -235,7 +241,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     return &ops.back();
   };
 
-  for (const auto& compiled : plan.primary_grade_adjustments) {
+  for (const auto& compiled : compiled_grade->adjustments) {
     auto* model = grade->FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error(
@@ -299,7 +305,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   }
 
   std::vector<std::uint32_t> command_offsets;
-  command_offsets.reserve(plan.primary_grade_adjustments.size());
+  command_offsets.reserve(compiled_grade->adjustments.size());
   std::vector<std::uint32_t> fused_starts;
   fused_starts.reserve(ops.size());
   ContentHash topology;
@@ -315,7 +321,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const auto              topology_hash = topology.Key().hash;
 
   MetalPrimaryGradeResult result;
-  result.output = plan.primary_grade_output;
+  result.output = compiled_grade->scene_output;
   const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
   if (!command_offsets.empty()) {
     const auto bytes = command_offsets.size() * sizeof(command_offsets[0]);
@@ -335,14 +341,15 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const auto lut         = LoadLut(device, *grade);
   result.lut_resource_id = lut.resource_id;
 
-  input                  = workspace.Images().Find(plan.develop_output);
+  input                  = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: develop image lost during parameter bind");
+    throw std::runtime_error(
+        "ExecuteMetalPrimaryGrade: Color Grade scene input lost during parameter bind");
   }
   const auto  width       = input->Texture().Width();
   const auto  height      = input->Texture().Height();
   const float mix         = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool  skip_mix    = mix == 1.0f && !plan.primary_grade_mask.has_value();
+  const bool  skip_mix    = mix == 1.0f && !compiled_grade->mask.has_value();
   const auto  write_count = CountGpuWrites(ops, skip_mix);
 
   std::vector<MetalBackend::Texture2D*> scratches;
@@ -356,14 +363,14 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
 
   auto        Resolve = [&](ImageSlot slot, std::size_t scratch_index) -> MetalBackend::Texture2D& {
     if (slot == ImageSlot::Input) {
-      auto* source = workspace.Images().Find(plan.develop_output);
+      auto* source = workspace.Images().Find(compiled_grade->scene_input);
       if (source == nullptr) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Develop output");
+        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
       }
       return source->Texture();
     }
     if (slot == ImageSlot::Output) {
-      auto* dest = workspace.Images().Find(plan.primary_grade_output);
+      auto* dest = workspace.Images().Find(compiled_grade->scene_output);
       if (dest == nullptr) {
         throw std::runtime_error("ExecuteMetalPrimaryGrade: missing grade output");
       }
@@ -382,7 +389,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     --remaining;
     if (remaining == 0) {
       dest_slot = ImageSlot::Output;
-      (void)AcquireRgba(workspace, plan.primary_grade_output, width, height);
+      (void)AcquireRgba(workspace, compiled_grade->scene_output, width, height);
       return;
     }
     dest_slot    = ImageSlot::Scratch;
@@ -391,8 +398,8 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   };
 
   if (write_count == 0) {
-    auto& dest   = AcquireRgba(workspace, plan.primary_grade_output, width, height);
-    auto* source = workspace.Images().Find(plan.develop_output);
+    auto& dest   = AcquireRgba(workspace, compiled_grade->scene_output, width, height);
+    auto* source = workspace.Images().Find(compiled_grade->scene_input);
     workspace.Device().CopyTexture2D(source->Texture(), dest.Texture(), context);
     return result;
   }
@@ -438,8 +445,8 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     auto&                          adjusted     = Resolve(current_slot, current_scratch);
     auto&                          dest         = Resolve(dest_slot, dest_scratch);
     const MetalBackend::Texture2D* mask_texture = nullptr;
-    if (plan.primary_grade_mask) {
-      auto* mask = workspace.Images().Find(plan.mask_output);
+    if (compiled_grade->mask) {
+      auto* mask = workspace.Images().Find(compiled_grade->mask_output);
       if (mask == nullptr || mask->Texture().Native() == nullptr ||
           mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
           mask->Texture().Height() != height) {

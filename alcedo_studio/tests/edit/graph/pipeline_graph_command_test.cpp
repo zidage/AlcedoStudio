@@ -270,8 +270,9 @@ TEST(GpuDagModelGraph, GraphCompilerSkipsGradePassWhenBackboneHasNoColorGrade) {
   const auto plan = GraphCompiler::CompileStatic(document, DummyCompileSource());
   EXPECT_FALSE(plan.Contains(GpuPassKind::PrimaryColorGrade));
   EXPECT_TRUE(plan.Contains(GpuPassKind::Drt));
-  EXPECT_TRUE(plan.primary_grade_adjustments.empty());
-  EXPECT_EQ(plan.primary_grade_output.producer, NodeId{"develop"});
+  EXPECT_TRUE(plan.grade_nodes.empty());
+  EXPECT_EQ(plan.SceneInputForDrt().producer, NodeId{"develop"});
+  EXPECT_EQ(plan.drt.scene_input, plan.develop_output);
 }
 
 TEST(GpuDagModelGraph, GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbsent) {
@@ -285,11 +286,14 @@ TEST(GpuDagModelGraph, GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbs
   ASSERT_NE(remaining, nullptr);
   const auto plan = GraphCompiler::CompileStatic(document, DummyCompileSource());
   EXPECT_TRUE(plan.Contains(GpuPassKind::PrimaryColorGrade));
-  EXPECT_EQ(plan.primary_grade_output.producer, NodeId{"grade.b"});
-  ASSERT_EQ(plan.primary_grade_adjustments.size(), remaining->AdjustmentCount());
+  ASSERT_NE(plan.FirstGrade(), nullptr);
+  EXPECT_EQ(plan.FirstGrade()->node_id, NodeId{"grade.b"});
+  EXPECT_EQ(plan.FindGrade(NodeId{"grade.b"}), plan.FirstGrade());
+  EXPECT_EQ(plan.FirstGrade()->scene_output.producer, NodeId{"grade.b"});
+  ASSERT_EQ(plan.FirstGrade()->adjustments.size(), remaining->AdjustmentCount());
   for (std::size_t i = 0; i < remaining->AdjustmentCount(); ++i) {
-    EXPECT_EQ(plan.primary_grade_adjustments[i].instance_id, remaining->AdjustmentIdAt(i));
-    EXPECT_EQ(plan.primary_grade_adjustments[i].type, remaining->AdjustmentAt(i).Type());
+    EXPECT_EQ(plan.FirstGrade()->adjustments[i].instance_id, remaining->AdjustmentIdAt(i));
+    EXPECT_EQ(plan.FirstGrade()->adjustments[i].type, remaining->AdjustmentAt(i).Type());
   }
 }
 

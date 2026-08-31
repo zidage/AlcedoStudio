@@ -157,34 +157,40 @@ class PlanExecutor {
         }
       }
 
-      if (plan.primary_grade_mask) {
-        if (BindOrMiss(workspace, plan.mask_output, keys.mask, keys.geometry_extent, completed,
-                       TextureFormat::R8)) {
+      const auto* compiled_grade = plan.FirstGrade();
+      if (compiled_grade != nullptr && compiled_grade->mask.has_value()) {
+        if (BindOrMiss(workspace, compiled_grade->mask_output, keys.mask, keys.geometry_extent,
+                       completed, TextureFormat::R8)) {
           ++stats.mask_skip;
         } else {
           PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(device, plan, input, document,
                                                                   mask_store);
-          Record(device, plan.mask_output, keys.mask, keys.geometry_extent, TextureFormat::R8);
+          Record(device, compiled_grade->mask_output, keys.mask, keys.geometry_extent,
+                 TextureFormat::R8);
           ++stats.mask_execute;
         }
         workspace.TransientBuffers().Reset();
       }
 
-      if (BindOrMiss(workspace, plan.primary_grade_output, keys.primary_grade, keys.geometry_extent,
-                     completed)) {
+      const GraphValueId grade_scene =
+          compiled_grade != nullptr ? compiled_grade->scene_output : plan.develop_output;
+      if (compiled_grade == nullptr) {
+        ++stats.primary_grade_skip;
+      } else if (BindOrMiss(workspace, grade_scene, keys.primary_grade, keys.geometry_extent,
+                            completed)) {
         ++stats.primary_grade_skip;
       } else {
         PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(device, plan, input, document,
                                                                      mask_store);
-        Record(device, plan.primary_grade_output, keys.primary_grade, keys.geometry_extent);
+        Record(device, grade_scene, keys.primary_grade, keys.geometry_extent);
         ++stats.primary_grade_execute;
       }
       if (exact_release) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-        if (plan.primary_grade_mask) {
-          workspace.ReleaseConsumedImage(plan.mask_output);
+        if (compiled_grade != nullptr && compiled_grade->mask.has_value()) {
+          workspace.ReleaseConsumedImage(compiled_grade->mask_output);
         }
-        if (plan.primary_grade_output != plan.develop_output) {
+        if (grade_scene != plan.develop_output) {
           workspace.ReleaseConsumedImage(plan.develop_output);
         }
       }
@@ -197,9 +203,9 @@ class PlanExecutor {
         Record(device, plan.display_output, keys.drt_display, keys.geometry_extent);
         ++stats.drt_execute;
       }
-      if (exact_release && plan.display_output != plan.primary_grade_output) {
+      if (exact_release && plan.display_output != plan.SceneInputForDrt()) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-        workspace.ReleaseConsumedImage(plan.primary_grade_output);
+        workspace.ReleaseConsumedImage(plan.SceneInputForDrt());
       }
 
       stats.result_content_hits += workspace.Images().ContentHitCount() - hits_before;

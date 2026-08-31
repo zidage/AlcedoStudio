@@ -433,7 +433,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMask: BeginRender has not been called");
   }
-  if (!plan.primary_grade_mask.has_value()) {
+  if (plan.FirstGrade() == nullptr || !plan.FirstGrade()->mask.has_value()) {
     throw std::runtime_error("ExecuteOpenClMask: plan has no mask");
   }
   const auto extent = plan.geometry.render_extent;
@@ -442,10 +442,10 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
 
   auto&            workspace = device.Workspace();
-  auto&            output    = EnsureOutput(workspace, plan.mask_output, extent);
-  OpenClMaskResult result{plan.mask_output};
+  auto&            output    = EnsureOutput(workspace, plan.FirstGrade()->mask_output, extent);
+  OpenClMaskResult result{plan.FirstGrade()->mask_output};
 
-  const auto*      node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*      node = document.Graph().FindNode(plan.FirstGrade()->mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     EncodeAnalytic(device, output.Texture(), *analytic, plan);
     return result;
