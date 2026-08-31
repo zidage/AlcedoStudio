@@ -18,8 +18,11 @@
 #include <vector>
 
 #include "app/project_service.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
@@ -593,126 +596,7 @@ TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
   }
 }
 
-// Phase 3: LoadPipelineSnapshot must clone the current pipeline params into an
-// independent executor WITHOUT pinning the live guard, clearing dirty state, or
-// writing storage. A later user edit must persist through the normal editor path
-// and not be overwritten by the snapshot.
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveGuard) {
-  nlohmann::json params_v1;
-  nlohmann::json params_v2;
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorage());
-
-    auto                g1 = ps.LoadPipeline(1);
-    ASSERT_NE(g1, nullptr);
-    ASSERT_NE(g1->pipeline_, nullptr);
-
-    // Simulate an unsaved editor edit: exposure = 1.5, guard dirty.
-    auto&          stage = g1->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-    nlohmann::json exp1;
-    exp1["exposure"] = 1.5f;
-    stage.SetOperator(OperatorType::EXPOSURE, exp1);
-    g1->dirty_ = true;
-    params_v1  = g1->pipeline_->ExportPipelineParams();
-
-    // Capture a snapshot of the current (dirty, pinned) live state.
-    std::string err;
-    auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
-    ASSERT_NE(snap, nullptr);
-    ASSERT_NE(snap->executor_, nullptr);
-    EXPECT_NE(snap->executor_, g1->pipeline_);  // independent instance
-    EXPECT_NE(&snap->executor_->GetRenderLock(), &g1->pipeline_->GetRenderLock());
-    EXPECT_EQ(snap->pipeline_params_, params_v1);                   // captured current params
-    EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);  // snapshot holds them
-    EXPECT_TRUE(g1->pipeline_->HasGpuDagDocument());
-    EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
-    EXPECT_NE(snap->executor_->GpuDagDocument(), g1->pipeline_->GpuDagDocument());
-
-    // Acceptance: the live guard is untouched by the capture.
-    EXPECT_EQ(g1->dirty_, true);                                  // dirty NOT cleared
-    EXPECT_EQ(g1->pin_count_, size_t{1});                         // pin NOT changed
-    EXPECT_EQ(g1->pipeline_->ExportPipelineParams(), params_v1);  // live exec unchanged
-
-    ps.ReleasePipelineSnapshot(snap);
-    EXPECT_EQ(g1->dirty_, true);  // release didn't touch live
-    EXPECT_EQ(g1->pin_count_, size_t{1});
-
-    // Later user edit after the snapshot. Must persist, not be overwritten.
-    nlohmann::json exp2;
-    exp2["exposure"] = 2.5f;
-    stage.SetOperator(OperatorType::EXPOSURE, exp2);
-    g1->dirty_ = true;
-    params_v2  = g1->pipeline_->ExportPipelineParams();
-    EXPECT_NE(params_v2, params_v1);  // the later edit took effect
-
-    ps.SavePipeline(g1);  // return to cache (last pin)
-    ps.Sync();            // write the later edit to storage
-  }
-  // Re-open from storage and verify the LATER edit (2.5) persisted, not the
-  // snapshot's 1.5.
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorage());
-    auto                g2 = ps.LoadPipeline(1);
-    ASSERT_NE(g2, nullptr);
-    ASSERT_NE(g2->pipeline_, nullptr);
-    EXPECT_EQ(g2->pipeline_->ExportPipelineParams(), params_v2);
-  }
-}
-
-// Phase 3: cache-miss fallback. When the element is not currently loaded, the
-// snapshot path falls back to LoadPipeline/SavePipeline (net-zero pin) to obtain
-// a coherent, repaired executor. Must not crash or write storage.
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService ps(project.GetStorage());
-
-  // 999 was never loaded → cache-miss fallback inside LoadPipelineSnapshot.
-  std::string         err;
-  auto                snap = ps.LoadPipelineSnapshot(999, 0, &err);
-  ASSERT_NE(snap, nullptr);
-  ASSERT_NE(snap->executor_, nullptr);
-
-  // The fallback guard is in cache unpinned (pin_count_ == 0) — re-loading must
-  // re-pin it cleanly without throwing.
-  auto g = ps.LoadPipeline(999);
-  ASSERT_NE(g, nullptr);
-  EXPECT_EQ(g->pinned_, true);
-  EXPECT_EQ(g->pin_count_, size_t{1});
-  ps.SavePipeline(g);
-
-  EXPECT_NO_THROW(ps.ReleasePipelineSnapshot(snap));
-}
-
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesGpuDagDocumentIndependently) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService ps(project.GetStorage());
-  auto                live = ps.LoadPipeline(1);
-  ASSERT_NE(live, nullptr);
-  ASSERT_NE(live->pipeline_, nullptr);
-  ASSERT_TRUE(live->pipeline_->HasGpuDagDocument());
-  auto* live_lmt = dynamic_cast<LmtModel*>(
-      live->pipeline_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
-  ASSERT_NE(live_lmt, nullptr);
-  live_lmt->SetCubePath("C:/looks/live.cube");
-
-  std::string err;
-  auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
-  ASSERT_NE(snap, nullptr) << err;
-  ASSERT_NE(snap->executor_, nullptr);
-  ASSERT_TRUE(snap->executor_->HasGpuDagDocument());
-  auto* snap_lmt = dynamic_cast<LmtModel*>(
-      snap->executor_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
-  ASSERT_NE(snap_lmt, nullptr);
-  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
-  live_lmt->SetCubePath("C:/looks/changed.cube");
-  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
-  ps.ReleasePipelineSnapshot(snap);
-  ps.SavePipeline(live);
-}
-
-TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuNeuralEngine) {
+TEST_F(PipelineMapperTests, ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
@@ -745,8 +629,8 @@ TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuN
   auto                loaded = reopened.LoadEditorPipeline(9102);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->document_, nullptr);
-  EXPECT_TRUE(loaded->pipeline_->MirrorsLegacyStageAdapter());
-  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "neural_engine");
+  EXPECT_FALSE(loaded->pipeline_->MirrorsLegacyStageAdapter());
+  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "default");
   const auto exported = loaded->pipeline_->ExportPipelineParams();
   EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]["method"],
             "neural_engine");

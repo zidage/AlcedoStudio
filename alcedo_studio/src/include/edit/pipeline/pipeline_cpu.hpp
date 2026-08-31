@@ -13,6 +13,7 @@
 
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
 #include "pipeline.hpp"
@@ -131,6 +132,17 @@ class CPUPipelineExecutor : public PipelineExecutor {
    * Persistent Model values, nodes and edges are never changed; runtime caches may be updated.
    */
   auto Apply(std::shared_ptr<ImageBuffer> input) -> std::shared_ptr<ImageBuffer> override;
+
+  /**
+   * @brief Render using an immutable per-task request. Does not write decode, cache, ROI,
+   *        or host-output onto executor members.
+   * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
+   * @throws std::runtime_error for missing document/backend, decode, GPU, or presentation failure.
+   *         Failures do not switch executor cache/decode mode. Bypass ExactRelease scratch is
+   *         released after GPU last-use or on the failure path.
+   */
+  auto Apply(std::shared_ptr<ImageBuffer> input, const PipelineApplyRequest& request)
+      -> std::shared_ptr<ImageBuffer>;
 
   /**
    * @brief Select the format-version-2 document used by the GPU DAG product path.

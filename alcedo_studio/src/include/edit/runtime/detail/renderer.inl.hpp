@@ -16,6 +16,7 @@
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/renderer.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
@@ -60,7 +61,8 @@ template <class Backend>
 auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
                                const RenderRequest& request, IFrameSink* sink,
                                const FrameCompletionSubmission& submission,
-                               bool require_host_output, RenderCachePolicy cache_policy)
+                               bool require_host_output, RenderCachePolicy cache_policy,
+                               const std::optional<ExportColorProfileConfig>& output_color)
     -> std::shared_ptr<ImageBuffer> {
   if (!document_) {
     throw std::runtime_error("Renderer: PipelineDocument is not configured");
@@ -73,7 +75,9 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
   const bool use_session_cache = cache_policy == RenderCachePolicy::UseSessionCache;
-  if (!use_session_cache) {
+  if (use_session_cache) {
+    EnsureSessionDevice();
+  } else {
     EnsureOneShotDevice();
   }
 
@@ -91,13 +95,16 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
     render_device = one_shot_device_.get();
   }
   GraphCompiler::BindFrameGeometry(plan, *document_, request);
+  plan.output_color_override = output_color;
   detail::TraceGpuDagGeometry<Backend>(plan, request, submission);
   if (document_->TopologyDirty()) {
     document_->ClearTopologyDirty();
   }
   const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
-  const auto  output_id =
-      render_device->Execute(plan, prepared, *document_, mask_store_.get(), false);
+  const auto  output_id = render_device->Execute(
+      plan, prepared, *document_, mask_store_.get(), false,
+      use_session_cache ? TransientAllocationPolicy::SessionPacked
+                        : TransientAllocationPolicy::ExactRelease);
   const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;
@@ -109,7 +116,11 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
   };
 
   ViewerDisplayConfig display_config{};
-  if (const auto* drt = document_->Drt()) {
+  if (output_color.has_value()) {
+    display_config.encoding_space = output_color->encoding_space;
+    display_config.encoding_eotf  = output_color->encoding_eotf;
+    display_config.peak_luminance = output_color->peak_luminance;
+  } else if (const auto* drt = document_->Drt()) {
     display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
   }
 

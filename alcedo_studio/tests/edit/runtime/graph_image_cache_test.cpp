@@ -170,5 +170,28 @@ TEST_F(CudaWorkspaceFixture, UnpublishedWriteIsNotAContentHitUntilPublish) {
                                                  workspace.Device().CompletedSubmission()));
 }
 
+TEST_F(CudaWorkspaceFixture, BackgroundIntermediateImagesReleaseAfterLastConsumer) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId develop{NodeId{"develop"}, PortId{"image"}};
+  const GraphValueId grade{NodeId{"grade.primary"}, PortId{"image"}};
+  const GraphValueId mask{NodeId{"mask"}, PortId{"mask"}};
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(develop, {kWidth, kHeight, TextureFormat::Rgba32f});
+  (void)workspace.AcquireImageForWrite(grade, {kWidth, kHeight, TextureFormat::Rgba32f});
+  (void)workspace.AcquireImageForWrite(mask, {kWidth, kHeight, TextureFormat::R8});
+  EXPECT_EQ(workspace.Images().UnpublishedWriteCount(), 3U);
+  device.WaitIdle();
+  workspace.ReleaseConsumedImage(develop);
+  EXPECT_EQ(workspace.Images().UnpublishedWriteCount(), 2U);
+  EXPECT_EQ(workspace.Images().Find(develop), nullptr);
+  ASSERT_NE(workspace.Images().Find(grade), nullptr);
+  ASSERT_NE(workspace.Images().Find(mask), nullptr);
+  workspace.ReleaseConsumedImage(mask);
+  EXPECT_EQ(workspace.Images().UnpublishedWriteCount(), 1U);
+  EXPECT_NE(workspace.Images().Find(grade), nullptr);
+  device.CancelRender();
+}
+
 }  // namespace
 }  // namespace alcedo

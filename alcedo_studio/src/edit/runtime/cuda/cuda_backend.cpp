@@ -454,7 +454,7 @@ auto CudaBackend::MaxTransientBytes() const -> std::size_t {
 auto DefaultProductTextureBudgetBytes() -> std::size_t {
   constexpr std::size_t kFloorBytes = 256ull << 20;
   std::size_t           free_bytes  = 0;
-  std::size_t           total_bytes = 0;
+  std::size_t                            total_bytes = 0;
   if (::cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || total_bytes == 0) {
     return kFloorBytes;
   }

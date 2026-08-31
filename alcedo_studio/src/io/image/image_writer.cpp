@@ -615,14 +615,15 @@ void ImageWriter::WriteImageToPath(const image_path_t&                     src_p
   if (recipe.metadata_.mode_ == ExportMetadataMode::NONE || !recipe.metadata_.include_exif_) {
     export_metadata.reset();
   }
+  const auto pixel_color = recipe.output_color_.has_value() ? recipe.output_color_ : color_profile;
   const auto embedded_profile = recipe.icc_ == ExportIccPolicy::EMBED_OUTPUT_PROFILE
-                                    ? color_profile
+                                    ? pixel_color
                                     : std::optional<ExportColorProfileConfig>{};
 
-  if (ShouldWriteUltraHdr(options, color_profile)) {
+  if (ShouldWriteUltraHdr(options, pixel_color)) {
 #if defined(ALCEDO_HAS_ULTRAHDR)
     UltraHdrWriter::WriteImageToPath(
-        src_path, export_path, working, options, *color_profile, export_metadata,
+        src_path, export_path, working, options, *pixel_color, export_metadata,
         recipe.metadata_.mode_ == ExportMetadataMode::STANDARD && recipe.metadata_.include_exif_,
         recipe.icc_ == ExportIccPolicy::EMBED_OUTPUT_PROFILE);
     return;
@@ -632,7 +633,7 @@ void ImageWriter::WriteImageToPath(const image_path_t&                     src_p
 #endif
   }
 
-  if (color_profile.has_value() && IsUltraHdrTransfer(color_profile->encoding_eotf)) {
+  if (pixel_color.has_value() && IsUltraHdrTransfer(pixel_color->encoding_eotf)) {
     throw std::runtime_error("ImageWriter: HDR export requires Ultra HDR JPEG output.");
   }
 

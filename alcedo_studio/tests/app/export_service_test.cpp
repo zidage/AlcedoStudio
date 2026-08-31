@@ -8,13 +8,18 @@
 
 #include <algorithm>
 #include <chrono>
+#include <OpenImageIO/imageio.h>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <string>
 #include <vector>
 #if defined(ALCEDO_HAS_ULTRAHDR)
@@ -24,8 +29,14 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/operator_registeration.hpp"
+#include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/runtime/drt_display.hpp"
+#include "image/image.hpp"
+#include "io/image/export_color_profile_config.hpp"
+#include "io/image/export_icc_profile_resolver.hpp"
 #include "io/image/image_writer.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -43,6 +54,23 @@ auto SanitizeForPath(std::string s) -> std::string {
     if (!ok) c = '_';
   }
   return s;
+}
+
+void AttachResolvedExportColor(ExportTask& task, PipelineMgmtService& pipelines) {
+  auto recipe = task.recipe_.value_or(ExportRecipe::FromLegacyOptions(task.options_));
+  auto live   = pipelines.LoadPipeline(task.sleeve_id_);
+  if (!live || !live->document_ || !live->document_->Drt() || !live->pipeline_) {
+    if (live) {
+      pipelines.ReleasePipelineUse(live);
+    }
+    throw std::runtime_error("export test: document DRT is missing");
+  }
+  {
+    std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
+    recipe.output_color_ = ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
+  }
+  pipelines.ReleasePipelineUse(live);
+  task.recipe_ = std::move(recipe);
 }
 
 auto CollectSupportedBatchImportImages(size_t max_count) -> std::vector<image_path_t> {
@@ -104,6 +132,27 @@ void AssertReadableJpegFile(const std::filesystem::path& path) {
   ASSERT_FALSE(img.empty()) << "Failed to read JPEG file: " << path.string();
   ASSERT_GT(img.cols, 0);
   ASSERT_GT(img.rows, 0);
+}
+
+auto ReadExportRgb8(const std::filesystem::path& path) -> cv::Mat {
+  OIIO_NAMESPACE_USING
+  auto input = ImageInput::open(conv::ToBytes(path.wstring()));
+  if (!input) {
+    return {};
+  }
+  const ImageSpec& spec = input->spec();
+  if (spec.width <= 0 || spec.height <= 0 || spec.nchannels < 3) {
+    input->close();
+    return {};
+  }
+  cv::Mat rgb(spec.height, spec.width, CV_8UC3);
+  const bool ok = input->read_image(0, 0, 0, 3, TypeDesc::UINT8, rgb.data, sizeof(uint8_t) * 3,
+                                    AutoStride, AutoStride);
+  input->close();
+  if (!ok) {
+    return {};
+  }
+  return rgb;
 }
 
 auto ReadFileBytes(const std::filesystem::path& path) -> std::vector<uint8_t> {
@@ -188,7 +237,7 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
     auto           image_pool       = project.GetImagePoolService();
     auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-    ImportServiceImpl import_service(sleeve_service, image_pool);
+    ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
     if (paths.empty()) {
       GTEST_SKIP() << "No supported images found under TEST_IMG_PATH/raw/batch_import";
@@ -245,6 +294,7 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
       std::ofstream old_destination(dst_path, std::ios::binary);
       old_destination << "old";
     }
+    AttachResolvedExportColor(task, *pipeline_service);
     export_service.EnqueueExportTask(task);
 
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
@@ -279,7 +329,7 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
     auto           image_pool       = project.GetImagePoolService();
     auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-    ImportServiceImpl import_service(sleeve_service, image_pool);
+    ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
     auto              paths = CollectSupportedBatchImportImages(/*max_count=*/1);
     if (paths.empty()) {
       GTEST_SKIP() << "No supported images found under TEST_IMG_PATH/raw/batch_import";
@@ -307,15 +357,18 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
 
     auto       pipeline_guard = pipeline_service->LoadPipeline(element_id);
     ASSERT_NE(pipeline_guard, nullptr);
-    nlohmann::json odt_params           = pipeline_defaults::MakeDefaultODTParams();
-    odt_params["odt"]["encoding_space"] = "rec2020";
-    odt_params["odt"]["encoding_eotf"]  = "st2084";
-    odt_params["odt"]["peak_luminance"] = 600.0f;
-    auto& output_stage = pipeline_guard->pipeline_->GetStage(PipelineStageName::Output_Transform);
-    output_stage.SetOperator(OperatorType::ODT, odt_params);
-    pipeline_guard->dirty_ = true;
+    ASSERT_NE(pipeline_guard->document_, nullptr);
+    {
+      std::unique_lock lock(pipeline_guard->pipeline_->GetRenderLock());
+      auto drt = pipeline_guard->document_->Drt()->Params().Params();
+      drt.encoding_space = DrtColorSpace::Rec2020;
+      drt.encoding_eotf = DrtEotf::St2084;
+      drt.peak_luminance = 600.0f;
+      pipeline_guard->document_->Drt()->Params().ReplaceParams(drt);
+      // Stage defaults remain SDR: both pixels and export encoding must use the document.
+      pipeline_service->SyncPipelineDocument(pipeline_guard);
+    }
     pipeline_service->SavePipeline(pipeline_guard);
-    pipeline_service->Sync();
 
     const auto src_path = image_pool->Read<std::filesystem::path>(
         image_id, [](std::shared_ptr<Image> img) { return img->image_path_; });
@@ -330,6 +383,7 @@ TEST_F(ExportServiceTests, ExportHdrJpeg_WritesUltraHdrFile) {
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
+    AttachResolvedExportColor(task, *pipeline_service);
     export_service.EnqueueExportTask(task);
 
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
@@ -434,6 +488,7 @@ TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
+    AttachResolvedExportColor(task, *pipeline_service);
     export_service.EnqueueExportTask(task);
     expected_paths.push_back(dst_path);
   }
@@ -506,6 +561,7 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
+    AttachResolvedExportColor(task, *pipeline_service);
     export_service.EnqueueExportTask(task);
     expected_paths.push_back(dst_path);
   }
@@ -525,6 +581,121 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
   }
 
   std::cout << "[Manual Export] Kept export outputs under: " << export_dir_.string() << std::endl;
+}
+
+TEST_F(ExportServiceTests, ExportRecipeContainsResolvedOutputColorBeforeScheduling) {
+  ProjectService project(db_path_, meta_path_);
+  ExportService  export_service(project.GetSleeveService(), project.GetImagePoolService(),
+                                std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  ExportTask     task;
+  task.options_.format_ = ImageFormatType::JPEG;
+  EXPECT_THROW(export_service.EnqueueExportTask(task), std::runtime_error);
+  task.recipe_ = ExportRecipe::FromLegacyOptions(task.options_);
+  EXPECT_THROW(export_service.EnqueueExportTask(task), std::runtime_error);
+  task.recipe_->output_color_ = ExportColorProfileConfig{};
+  EXPECT_NO_THROW(export_service.EnqueueExportTask(task));
+}
+
+TEST_F(ExportServiceTests, ExportPixelsAndIccUseTheSameRecipeColorConfiguration) {
+  if (!std::filesystem::exists(std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" /
+                               "mfzoty.dng")) {
+    GTEST_SKIP() << "Sample DNG file is missing";
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           sleeve_service   = project.GetSleeveService();
+  auto           image_pool       = project.GetImagePoolService();
+  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
+  auto              import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> import_done;
+  auto                       import_done_fut = import_done.get_future();
+  import_job->on_finished_                   = [&import_done](const ImportResult& result) {
+    import_done.set_value(result);
+  };
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  import_job          = import_service.ImportToFolder({raw_path}, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(import_done_fut.wait_for(120s), std::future_status::ready);
+  ASSERT_EQ(import_done_fut.get().imported_, 1u);
+  import_service.SyncImports(import_job->import_log_->Snapshot(), L"");
+  const auto snapshot   = import_job->import_log_->Snapshot();
+  const auto element_id = snapshot.created_[0].element_id_;
+  const auto image_id   = snapshot.created_[0].image_id_;
+  auto       live       = pipeline_service->LoadPipeline(element_id);
+  const auto document_before = live->document_->Drt()->Params().ToJson();
+  pipeline_service->ReleasePipelineUse(live);
+
+  auto run_export = [&](const std::filesystem::path& path, ExportColorProfileConfig color,
+                        ExportIccPolicy icc) {
+    ExportService export_service(sleeve_service, image_pool, pipeline_service);
+    ExportTask    task;
+    task.sleeve_id_                = element_id;
+    task.image_id_                 = image_id;
+    task.options_.format_          = ImageFormatType::JPEG;
+    task.options_.export_path_     = path;
+    task.options_.resize_enabled_  = true;
+    task.options_.max_length_side_ = 256;
+    task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
+    task.recipe_->output_color_    = color;
+    task.recipe_->icc_             = icc;
+    export_service.EnqueueExportTask(task);
+    std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
+    auto                                                     fut = done.get_future();
+    export_service.ExportAll(
+        [&done](std::shared_ptr<std::vector<ExportResult>> results) { done.set_value(results); });
+    EXPECT_EQ(fut.wait_for(180s), std::future_status::ready);
+    auto results = fut.get();
+    EXPECT_NE(results, nullptr);
+    EXPECT_EQ(results->size(), 1u);
+    EXPECT_TRUE((*results)[0].success_) << (*results)[0].message_;
+  };
+
+  const ExportColorProfileConfig rec709{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2,
+                                        100.0f};
+  const ExportColorProfileConfig p3{ColorUtils::ColorSpace::P3_D65, ColorUtils::EOTF::GAMMA_2_2,
+                                    100.0f};
+  const auto rec709_path = export_dir_ / "recipe-rec709.jpg";
+  const auto p3_path     = export_dir_ / "recipe-p3.jpg";
+  const auto omit_path   = export_dir_ / "recipe-omit.jpg";
+  run_export(rec709_path, rec709, ExportIccPolicy::EMBED_OUTPUT_PROFILE);
+  run_export(p3_path, p3, ExportIccPolicy::EMBED_OUTPUT_PROFILE);
+  run_export(omit_path, p3, ExportIccPolicy::OMIT);
+
+  live = pipeline_service->LoadPipeline(element_id);
+  EXPECT_EQ(live->document_->Drt()->Params().ToJson(), document_before);
+  pipeline_service->ReleasePipelineUse(live);
+
+  const auto rec709_icc = ExportIccProfileResolver::ResolveIccProfileBytes(rec709);
+  const auto p3_icc     = ExportIccProfileResolver::ResolveIccProfileBytes(p3);
+  auto       read_icc   = [](const std::filesystem::path& path) {
+    auto image = Exiv2::ImageFactory::open(path.string());
+    image->readMetadata();
+    if (!image->iccProfileDefined()) {
+      return std::vector<uint8_t>{};
+    }
+    const auto& profile = image->iccProfile();
+    if (profile.empty()) {
+      return std::vector<uint8_t>{};
+    }
+    return std::vector<uint8_t>(profile.c_data(), profile.c_data() + profile.size());
+  };
+  EXPECT_FALSE(rec709_icc.empty());
+  EXPECT_FALSE(p3_icc.empty());
+  EXPECT_EQ(read_icc(rec709_path), rec709_icc);
+  EXPECT_EQ(read_icc(p3_path), p3_icc);
+  EXPECT_TRUE(read_icc(omit_path).empty());
+
+  AssertReadableNonEmptyImageFile(rec709_path);
+  AssertReadableNonEmptyImageFile(p3_path);
+  AssertReadableNonEmptyImageFile(omit_path);
+  const auto rec709_pixels = ReadExportRgb8(rec709_path);
+  const auto p3_pixels     = ReadExportRgb8(p3_path);
+  const auto omit_pixels   = ReadExportRgb8(omit_path);
+  ASSERT_FALSE(rec709_pixels.empty()) << rec709_path.string();
+  ASSERT_FALSE(p3_pixels.empty()) << p3_path.string();
+  ASSERT_FALSE(omit_pixels.empty()) << omit_path.string();
+  EXPECT_GT(cv::norm(rec709_pixels, p3_pixels, cv::NORM_INF), 1.0);
+  EXPECT_LE(cv::norm(p3_pixels, omit_pixels, cv::NORM_INF), 1.0);
 }
 
 }  // namespace alcedo

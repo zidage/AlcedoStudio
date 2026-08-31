@@ -5,6 +5,7 @@
 #include "app/pipeline_service.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <format>
@@ -41,12 +42,11 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id,
     -> LoadedPipelineDocument {
   const auto stored = store.GetPipelineJsonByElementId(id);
   if (stored && stored->is_object() && stored->value("format_version", 0) == 2) {
-    // Live CPU stages (history + QML patches) remain the editor source of truth.
-    // Remirror onto the format-2 graph even when the saved JSON omitted the nested
-    // adapter blob (SyncPipelineDocument writes document ToJson only).
+    // A loaded document already owns its imported camera/profile and editable values.
+    // Preparing an executor must not replace those values with stage defaults.
     return FinishLoadedDocument(
         std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored)),
-        legacy != nullptr);
+        false);
   }
   if (legacy) {
     auto imported = LegacyPipelineImporter::Import(legacy->ExportPipelineParams());
@@ -372,6 +372,7 @@ void RebuildPipelineFromRoot(CPUPipelineExecutor& exec, const CommitGraph& graph
   }
   exec.SetExecutionStages();
 }
+
 }  // namespace
 
 void PipelineMgmtService::InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image) {
@@ -433,28 +434,83 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
     // Clear intermediate buffers before removing from cache to ensure timely memory release.
     pipeline_guard->pipeline_->ClearAllIntermediateBuffers();
   }
+  pipeline_guard->live_ready_ = false;
+}
+
+void PipelineMgmtService::CleanupIdlePipelineResources(
+    const std::shared_ptr<PipelineGuard>& pipeline) {
+  if (!pipeline || !pipeline->pipeline_) {
+    return;
+  }
+  std::unique_lock<std::mutex> render_guard(pipeline->pipeline_->GetRenderLock());
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    if (pipeline->pin_count_ > 0) {
+      return;
+    }
+    pipeline->live_ready_ = false;
+    cache_cv_.notify_all();
+  }
+  try {
+    pipeline->pipeline_->ClearAllIntermediateBuffers();
+    pipeline->pipeline_->ResetExecutionStages();
+  } catch (...) {
+  }
+}
+
+auto PipelineMgmtService::WaitUntilPinCount(const std::shared_ptr<PipelineGuard>& pipeline,
+                                            size_t                                expected,
+                                            std::chrono::milliseconds             timeout) -> bool {
+  if (!pipeline) {
+    return false;
+  }
+  std::unique_lock<std::mutex> cache_lock(lock_);
+  return cache_cv_.wait_for(cache_lock, timeout,
+                            [&] { return pipeline->pin_count_ == expected; });
 }
 
 auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
   std::shared_ptr<PipelineGuard> cached;
-  bool                           reinitialize = false;
+  bool                           need_reinit = false;
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     const auto                   it = loaded_pipelines_.find(id);
-    if (it != loaded_pipelines_.end() && it->second && it->second->pipeline_) {
-      cached       = it->second;
-      reinitialize = !cached->pinned_;
+    if (it != loaded_pipelines_.end() && it->second) {
+      cached = it->second;
       cached->pin_count_++;
       cached->pinned_ = true;
       cached->id_     = id;
+      ++pipeline_load_count_;
       pipeline_cache_.AccessElement(id);
+      cache_cv_.notify_all();
+      for (;;) {
+        if (cached->load_error_) {
+          if (cached->pin_count_ > 0) {
+            cached->pin_count_--;
+          }
+          cached->pinned_ = cached->pin_count_ > 0;
+          cache_cv_.notify_all();
+          std::rethrow_exception(cached->load_error_);
+        }
+        if (cached->live_ready_) {
+          return cached;
+        }
+        if (cached->initializing_) {
+          cache_cv_.wait(cache_lock);
+          continue;
+        }
+        if (cached->pipeline_) {
+          cached->initializing_ = true;
+          need_reinit           = true;
+          break;
+        }
+        cache_cv_.wait(cache_lock);
+      }
     }
   }
 
-  if (cached) {
-    // If the pipeline was previously returned to cache (unpinned), it likely had its execution
-    // stages reset (e.g. to detach frame sinks). Re-initialize it outside the cache mutex.
-    if (reinitialize) {
+  if (cached && need_reinit) {
+    try {
       std::unique_lock<std::mutex> render_guard(cached->pipeline_->GetRenderLock());
       cached->pipeline_->SetBoundFile(id);
       cached->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
@@ -466,83 +522,132 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       EnsureDefaultColorTemp(*cached->pipeline_);
       EnsureDefaultLensCalib(*cached->pipeline_);
       ResyncGlobalParamsFromOperators(*cached->pipeline_);
+      storage_->RememberLivePipeline(id, cached->pipeline_);
+      {
+        std::unique_lock<std::mutex> cache_lock(lock_);
+        cached->live_ready_    = true;
+        cached->initializing_  = false;
+        cached->load_error_    = nullptr;
+        cache_cv_.notify_all();
+      }
+      return cached;
+    } catch (...) {
+      {
+        std::unique_lock<std::mutex> cache_lock(lock_);
+        cached->load_error_   = std::current_exception();
+        cached->initializing_ = false;
+        cache_cv_.notify_all();
+      }
+      ReleasePipelineUse(cached);
+      throw;
     }
-    storage_->RememberLivePipeline(id, cached->pipeline_);
-    return cached;
   }
 
-  std::shared_ptr<CPUPipelineExecutor> pipeline;
-  auto                                 pipeline_guard = std::make_shared<PipelineGuard>();
-  try {
-    pipeline = storage_->GetLivePipeline(id);
-    if (!pipeline) {
-      pipeline = storage_->GetElementStore().GetPipelineByElementId(id);
-    }
-  } catch (std::exception& e) {
-    throw std::runtime_error(
-        "[ERROR] PipelineMgmtService: Failed to load pipeline from storage for element ID " +
-        std::to_string(id) + ": " + e.what());
-  }
-  if (pipeline == nullptr) {
-    pipeline = std::make_shared<CPUPipelineExecutor>();
-  }
-
-  // Ensure the loaded pipeline is bound to the requested element id. All executor setup happens
-  // before the guard is published into the cache, and therefore without holding lock_.
-  {
-    std::unique_lock<std::mutex> render_guard(pipeline->GetRenderLock());
-    pipeline->SetBoundFile(id);
-    pipeline->SetAcceleratorBackendPreference(accelerator_preference_);
-    ResetTransientPreviewState(*pipeline);
-    EnsureDefaultOutputTransform(*pipeline);
-    EnsureDefaultRawDecode(*pipeline);
-    EnsureDefaultColorTemp(*pipeline);
-    EnsureDefaultLensCalib(*pipeline);
-    ResyncGlobalParamsFromOperators(*pipeline);
-    pipeline->SetExecutionStages();
-  }
-  storage_->RememberLivePipeline(id, pipeline);
-
-  pipeline_guard->pipeline_ = std::move(pipeline);
-  auto loaded_document =
-      LoadPipelineDocument(storage_->GetElementStore(), id, pipeline_guard->pipeline_);
-  pipeline_guard->document_ = std::move(loaded_document.document);
-  pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_,
-                                                 loaded_document.mirror_legacy_stage_adapter);
-  {
-    std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
-    RemirrorGpuDagDocument(*pipeline_guard);
-  }
-  pipeline_guard->id_        = id;
-  pipeline_guard->pinned_    = true;
-  pipeline_guard->pin_count_ = 1;
-  pipeline_guard->dirty_     = false;
-
-  std::shared_ptr<PipelineGuard> raced_cached;
-  std::optional<sl_element_id_t> evicted;
+  auto pipeline_guard = std::make_shared<PipelineGuard>();
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     const auto                   it = loaded_pipelines_.find(id);
-    if (it != loaded_pipelines_.end() && it->second && it->second->pipeline_) {
-      raced_cached = it->second;
-      raced_cached->pin_count_++;
-      raced_cached->pinned_ = true;
+    if (it != loaded_pipelines_.end() && it->second) {
+      cached = it->second;
+      cached->pin_count_++;
+      cached->pinned_ = true;
+      ++pipeline_load_count_;
       pipeline_cache_.AccessElement(id);
-    } else {
-      evicted               = pipeline_cache_.RecordAccess_WithEvict(id, id);
-      loaded_pipelines_[id] = pipeline_guard;
+      cache_cv_.notify_all();
+      while (!cached->live_ready_ && !cached->load_error_) {
+        cache_cv_.wait(cache_lock);
+      }
+      if (cached->load_error_) {
+        if (cached->pin_count_ > 0) {
+          cached->pin_count_--;
+        }
+        cached->pinned_ = cached->pin_count_ > 0;
+        cache_cv_.notify_all();
+        std::rethrow_exception(cached->load_error_);
+      }
+      return cached;
+    }
+    pipeline_guard->id_            = id;
+    pipeline_guard->pinned_        = true;
+    pipeline_guard->pin_count_     = 1;
+    pipeline_guard->live_ready_    = false;
+    pipeline_guard->initializing_  = true;
+    loaded_pipelines_[id]          = pipeline_guard;
+    ++pipeline_construct_count_;
+    ++pipeline_load_count_;
+    cache_cv_.notify_all();
+  }
+
+  try {
+    std::shared_ptr<CPUPipelineExecutor> pipeline;
+    try {
+      pipeline = storage_->GetLivePipeline(id);
+      if (!pipeline) {
+        pipeline = storage_->GetElementStore().GetPipelineByElementId(id);
+      }
+    } catch (std::exception& e) {
+      throw std::runtime_error(
+          "[ERROR] PipelineMgmtService: Failed to load pipeline from storage for element ID " +
+          std::to_string(id) + ": " + e.what());
+    }
+    if (pipeline == nullptr) {
+      pipeline = std::make_shared<CPUPipelineExecutor>();
+    }
+
+    {
+      std::unique_lock<std::mutex> render_guard(pipeline->GetRenderLock());
+      pipeline->SetBoundFile(id);
+      pipeline->SetAcceleratorBackendPreference(accelerator_preference_);
+      ResetTransientPreviewState(*pipeline);
+      EnsureDefaultOutputTransform(*pipeline);
+      EnsureDefaultRawDecode(*pipeline);
+      EnsureDefaultColorTemp(*pipeline);
+      EnsureDefaultLensCalib(*pipeline);
+      ResyncGlobalParamsFromOperators(*pipeline);
+      pipeline->SetExecutionStages();
+    }
+
+    pipeline_guard->pipeline_ = std::move(pipeline);
+    auto loaded_document =
+        LoadPipelineDocument(storage_->GetElementStore(), id, pipeline_guard->pipeline_);
+    pipeline_guard->document_ = std::move(loaded_document.document);
+    pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_,
+                                                   loaded_document.mirror_legacy_stage_adapter);
+    {
+      std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
+      RemirrorGpuDagDocument(*pipeline_guard);
+    }
+    pipeline_guard->dirty_ = false;
+
+    std::optional<sl_element_id_t> evicted;
+    {
+      std::unique_lock<std::mutex> cache_lock(lock_);
+      pipeline_guard->live_ready_   = true;
+      pipeline_guard->initializing_ = false;
+      evicted                       = pipeline_cache_.RecordAccess_WithEvict(id, id);
       if (!evicted.has_value() && loaded_pipelines_.size() + 1 > default_cache_capacity_) {
         pipeline_cache_.Resize(loaded_pipelines_.size() - 1);
       }
+      cache_cv_.notify_all();
     }
+    if (evicted.has_value()) {
+      HandleEviction(evicted.value());
+    }
+    storage_->RememberLivePipeline(id, pipeline_guard->pipeline_);
+    return pipeline_guard;
+  } catch (...) {
+    {
+      std::unique_lock<std::mutex> cache_lock(lock_);
+      pipeline_guard->load_error_   = std::current_exception();
+      pipeline_guard->initializing_ = false;
+      const auto it                 = loaded_pipelines_.find(id);
+      if (it != loaded_pipelines_.end() && it->second == pipeline_guard) {
+        loaded_pipelines_.erase(it);
+      }
+      cache_cv_.notify_all();
+    }
+    throw;
   }
-  if (evicted.has_value()) {
-    HandleEviction(evicted.value());
-  }
-  if (raced_cached) {
-    return raced_cached;
-  }
-  return pipeline_guard;
 }
 
 void PipelineMgmtService::SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline) {
@@ -757,6 +862,7 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
     }
     last_pin          = pipeline->pin_count_ == 0;
     pipeline->pinned_ = !last_pin;
+    cache_cv_.notify_all();
   }
 
   // Shared by multiple callers (e.g. thumbnail + export): only the last owner may release/reset.
@@ -785,14 +891,7 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
     pipeline->dirty_ = false;
   }
 
-  // Always clear intermediate buffers and GPU resources when returning a pipeline to cache.
-  // This prevents large cached allocations (and any frame-sink related state) from leaking across
-  // editor sessions and hurting interactive performance.
-  {
-    std::unique_lock<std::mutex> render_guard(pipeline->pipeline_->GetRenderLock());
-    pipeline->pipeline_->ClearAllIntermediateBuffers();
-    pipeline->pipeline_->ResetExecutionStages();
-  }
+  CleanupIdlePipelineResources(pipeline);
 
   if (!pipeline->dirty_) {
     return;
@@ -814,6 +913,29 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
   if (evicted.has_value()) {
     HandleEviction(evicted.value());
   }
+}
+
+void PipelineMgmtService::ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipeline) {
+  if (!pipeline) {
+    return;
+  }
+
+  bool last_pin = false;
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    if (pipeline->pin_count_ > 0) {
+      pipeline->pin_count_--;
+    }
+    last_pin          = pipeline->pin_count_ == 0;
+    pipeline->pinned_ = !last_pin;
+    cache_cv_.notify_all();
+  }
+
+  if (!last_pin) {
+    return;
+  }
+
+  CleanupIdlePipelineResources(pipeline);
 }
 
 auto PipelineMgmtService::PersistEditorHistoryState(
@@ -1157,140 +1279,6 @@ void PipelineMgmtService::SyncPipeline(sl_element_id_t id) {
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     pipeline_guard->dirty_ = false;
-  }
-}
-
-auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id,
-                                               std::string* error)
-    -> std::shared_ptr<PipelineSnapshot> {
-  std::shared_ptr<CPUPipelineExecutor> live_exec;
-
-  // Cache-hit path: borrow the executor shared_ptr without touching pin_count_.
-  // The copy keeps the executor alive even if the guard is evicted mid-capture.
-  {
-    std::unique_lock<std::mutex> g(lock_);
-    auto                         it = loaded_pipelines_.find(id);
-    if (it != loaded_pipelines_.end() && it->second && it->second->pipeline_) {
-      live_exec = it->second->pipeline_;
-    }
-  }
-
-  // Cache-miss fallback: LoadPipeline (pin + repair + build stages), capture the
-  // executor, then SavePipeline to release the pin (net-zero). dirty_ is false on
-  // a fresh load, so SavePipeline's last-pin path returns without writing storage
-  // or re-recording into the cache; the guard stays in cache unpinned. This reuses
-  // the EnsureDefault*/ResyncGlobalParamsFromOperators repair logic so the
-  // snapshot reflects a coherent state even when the image was not live.
-  if (!live_exec) {
-    std::shared_ptr<PipelineGuard> guard;
-    try {
-      guard = LoadPipeline(id);
-    } catch (const std::exception& e) {
-      if (error) {
-        *error = std::format("LoadPipelineSnapshot: load failed for {}: {}", id, e.what());
-      }
-      return nullptr;
-    } catch (...) {
-      if (error) {
-        *error = std::format("LoadPipelineSnapshot: load failed for {}: unknown error", id);
-      }
-      return nullptr;
-    }
-    if (!guard || !guard->pipeline_) {
-      if (error) {
-        *error = std::format("LoadPipelineSnapshot: no executor for {}", id);
-      }
-      return nullptr;
-    }
-    live_exec = guard->pipeline_;
-    try {
-      SavePipeline(guard);
-    } catch (...) {
-      // Non-fatal: live_exec is valid. A leaked pin is rare and bounded; the guard
-      // remains in cache and is reaped by Sync/eviction on the next opportunity.
-    }
-  }
-
-  // Capture params and clone the live DAG document under the executor's render
-  // lock. This serializes with any in-flight editor render on the same executor,
-  // so the snapshot's stages and graph stay coherent with each other.
-  nlohmann::json params;
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  std::shared_ptr<PipelineDocument> cloned_live_document;
-  bool                              mirror = true;
-#endif
-  try {
-    std::unique_lock<std::mutex> rg(live_exec->GetRenderLock());
-    params = live_exec->ExportPipelineParams();
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-    if (auto live_doc = live_exec->GpuDagDocument()) {
-      cloned_live_document =
-          std::make_shared<PipelineDocument>(ClonePipelineDocument(*live_doc));
-      mirror = live_exec->MirrorsLegacyStageAdapter();
-    }
-#endif
-  } catch (const std::exception& e) {
-    if (error) {
-      *error = std::format("LoadPipelineSnapshot: export failed for {}: {}", id, e.what());
-    }
-    return nullptr;
-  } catch (...) {
-    if (error) {
-      *error = std::format("LoadPipelineSnapshot: export failed for {}: unknown error", id);
-    }
-    return nullptr;
-  }
-
-  // Build the independent snapshot executor. SetAcceleratorBackendPreference
-  // runs before ImportPipelineParams so the import's final SetExecutionStages()
-  // is the last stage-build call; ImportPipelineParams itself re-aligns the RAW
-  // decode backend to the runtime preference, so a backend saved in the stored
-  // state never leaks into snapshot renders. ResetTransientPreviewState mirrors
-  // LoadPipeline's normalization of cached executors; it touches only transient
-  // render state, not serialized operator params.
-  std::shared_ptr<CPUPipelineExecutor> snap_exec;
-  try {
-    snap_exec = std::make_shared<CPUPipelineExecutor>();
-    snap_exec->SetBoundFile(id);
-    snap_exec->SetAcceleratorBackendPreference(accelerator_preference_);
-    snap_exec->ImportPipelineParams(params);
-    ResetTransientPreviewState(*snap_exec);
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-    std::shared_ptr<PipelineDocument> snap_document = std::move(cloned_live_document);
-    if (!snap_document) {
-      auto imported = LegacyPipelineImporter::Import(params);
-      if (!imported.Ok() || !imported.document) {
-        throw std::runtime_error("GPU DAG import failed: " + imported.error);
-      }
-      snap_document = std::make_shared<PipelineDocument>(std::move(*imported.document));
-    }
-    snap_exec->SetPipelineDocument(std::move(snap_document), mirror);
-#endif
-  } catch (const std::exception& e) {
-    if (error) {
-      *error = std::format("LoadPipelineSnapshot: snapshot build failed for {}: {}", id, e.what());
-    }
-    return nullptr;
-  } catch (...) {
-    if (error) {
-      *error = std::format("LoadPipelineSnapshot: snapshot build failed for {}: unknown error", id);
-    }
-    return nullptr;
-  }
-
-  return std::make_shared<PipelineSnapshot>(
-      PipelineSnapshot{id, image_id, std::move(params), snap_exec});
-}
-
-void PipelineMgmtService::ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot) {
-  if (!snapshot || !snapshot->executor_) {
-    return;
-  }
-  try {
-    std::unique_lock<std::mutex> rg(snapshot->executor_->GetRenderLock());
-    snapshot->executor_->ClearAllIntermediateBuffers();
-  } catch (...) {
-    // Best-effort cleanup; the shared_ptr drops naturally regardless.
   }
 }
 

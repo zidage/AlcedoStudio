@@ -139,13 +139,14 @@ TEST_F(PipelineFrameSinkTest, ReattachingFrameSinkPreservesMergedStage) {
   EXPECT_EQ(exec->GetFrameSink(), &other_sink);
 
   // A genuine reset (e.g. backend switch routes through ResetExecutionStages)
-  // tears the graph down; the next attach rebuilds a fresh merged stage.
+  // tears the graph down; the next attach rebuilds a merged stage. The new
+  // object's heap address may match the previous one after an immediate free
+  // and realloc, so freshness is the null identity between the two builds.
   exec->ResetExecutionStages();
   EXPECT_EQ(exec->DebugGetMergedStageIdentity(), std::uintptr_t{0});
   exec->SetExecutionStages(&sink);
   const auto identity_after_reset = exec->DebugGetMergedStageIdentity();
   EXPECT_NE(identity_after_reset, std::uintptr_t{0});
-  EXPECT_NE(identity_after_reset, identity_after_build);
 }
 
 TEST_F(PipelineFrameSinkTest, BindFrameSubmissionIsNoOpWhenSinkIsDetached) {

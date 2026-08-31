@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "io/image/export_color_profile_config.hpp"
 #include "type/supported_file_type.hpp"
 
 namespace alcedo {
@@ -120,17 +121,33 @@ struct ExportFileNameResult {
 };
 
 struct ExportRecipe {
-  ExportFormatOptions    codec_;
-  ExportResizeSpec       resize_;
-  ExportMetadataPolicy   metadata_;
-  ExportIccPolicy        icc_       = ExportIccPolicy::EMBED_OUTPUT_PROFILE;
-  ExportAlphaPolicy      alpha_     = ExportAlphaPolicy::PRESERVE_IF_SUPPORTED;
-  ExportCollisionPolicy  collision_ = ExportCollisionPolicy::FAIL;
-  ExportFileNameTemplate file_name_;
+  ExportFormatOptions                       codec_;
+  ExportResizeSpec                          resize_;
+  ExportMetadataPolicy                      metadata_;
+  ExportIccPolicy                           icc_       = ExportIccPolicy::EMBED_OUTPUT_PROFILE;
+  ExportAlphaPolicy                         alpha_     = ExportAlphaPolicy::PRESERVE_IF_SUPPORTED;
+  ExportCollisionPolicy                     collision_ = ExportCollisionPolicy::FAIL;
+  ExportFileNameTemplate                    file_name_;
+  /**
+   * Pixel encoding for this image. Required before enqueue. FromLegacyOptions
+   * leaves this empty; the app fills it from this image's DRT (or an explicit target).
+   */
+  std::optional<ExportColorProfileConfig>   output_color_;
 
   /** Create a recipe that preserves the behavior of the former flat options. */
   static auto            FromLegacyOptions(const ExportFormatOptions& options) -> ExportRecipe;
 };
+
+/**
+ * @brief True when @p recipe has finite positive peak luminance and an encoding space/EOTF.
+ */
+[[nodiscard]] auto ExportRecipeHasResolvedOutputColor(const ExportRecipe& recipe) -> bool;
+
+/**
+ * @brief Throw when the recipe is missing encoding used by both render and ICC.
+ * @throws std::runtime_error when output_color_ is missing or peak luminance is invalid.
+ */
+void RequireResolvedExportOutputColor(const ExportRecipe& recipe);
 
 /** Resolve output pixels and optional physical-resolution metadata. */
 auto ResolveExportResolution(const ExportResizeSpec& spec, ExportPixelSize source)

@@ -75,6 +75,17 @@ target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtes
 
 alcedo_register_test_target(ImportServiceTest app)
 
+if(ALCEDO_CUDA_ENABLED)
+  qt_add_executable(ImportPipelineDocumentTest
+    ${ALCEDO_TEST_ROOT}/app/import_pipeline_document_test.cpp)
+  target_include_directories(ImportPipelineDocumentTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(ImportPipelineDocumentTest PRIVATE
+    ImportService ProjectService PipelineMgmtService GTest::gtest_main)
+  gtest_discover_tests(ImportPipelineDocumentTest TEST_PREFIX "ImportPipelineDocumentTest."
+    PROPERTIES LABELS "gpu;app;import;pipeline")
+  alcedo_register_test_target(ImportPipelineDocumentTest app)
+endif()
+
 add_executable(SleeveServiceTest ${ALCEDO_TEST_ROOT}/app/sleeve_service_test.cpp)
 target_include_directories(SleeveServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(SleeveServiceTest
@@ -436,8 +447,16 @@ alcedo_register_test_target(ImageAnalysisLiveSmokeTest app ci_raw)
 add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_test.cpp)
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ThumbnailServiceTest ThumbnailService ProjectService ImportService GTest::gtest_main)
+gtest_discover_tests(ThumbnailServiceTest TEST_PREFIX "ThumbnailServiceTest.")
 
 alcedo_register_test_target(ThumbnailServiceTest app)
+
+add_executable(PipelineSharedUseTest ${ALCEDO_TEST_ROOT}/app/pipeline_shared_use_test.cpp)
+target_include_directories(PipelineSharedUseTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineSharedUseTest ThumbnailService ExportService ProjectService
+  ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(PipelineSharedUseTest TEST_PREFIX "PipelineSharedUseTest.")
+alcedo_register_test_target(PipelineSharedUseTest app)
 
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
 target_include_directories(ThumbnailDiskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

@@ -17,6 +17,7 @@
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
+#include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -82,10 +83,16 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
   const ParameterSlotKey      key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
   const ParameterFieldBinding field{DirtyFieldMask{kDrtDirtyBits}, 0, 0,
                                     sizeof(OpenClToOutputParams)};
-  auto                        pending          = TakePendingParameterPatch(drt->Params());
+  auto                        pending          = plan.output_color_override.has_value()
+                                ? decltype(TakePendingParameterPatch(drt->Params())){}
+                                : TakePendingParameterPatch(drt->Params());
   const bool                  needs_initialize = !arena.Contains(key);
-  if (needs_initialize || pending.has_value()) {
-    const auto runtime = ResolveOpenClDrtParams(drt->Params().ToJson());
+  if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
+    auto drt_json = drt->Params().ToJson();
+    if (plan.output_color_override.has_value()) {
+      OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
+    }
+    const auto runtime = ResolveOpenClDrtParams(drt_json);
     auto       payload = std::make_shared<TypedOperatorParamPayload<OpenClToOutputParams>>(
         drt->Params().Type(), 1, runtime);
     if (needs_initialize) {

@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -173,14 +174,6 @@ auto RenderFrameRoleId(FrameRole role) -> int {
   return OperatorParams::kRenderFrameRoleInteractivePrimary;
 }
 
-auto UsesTaskScopedRenderParams(RenderType render_type) -> bool {
-  // Editor preview tasks deliberately leave the executor in a known preview
-  // state so the next interactive request can reuse the decoded/geometry
-  // caches. Thumbnail and export are isolated jobs and must restore the live
-  // executor configuration after they finish.
-  return render_type == RenderType::THUMBNAIL || render_type == RenderType::FULL_RES_EXPORT;
-}
-
 void ApplyRenderFrameRole(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
                           const FramePreviewMetadata&                 metadata) {
   if (!pipeline_executor) {
@@ -203,22 +196,51 @@ auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_exe
 }
 }  // namespace
 
-void PipelineTask::SetExecutorRenderParams() {
-  if (!pipeline_executor_) {
-    return;
+namespace {
+
+auto MakeGeometryRequest(const std::optional<ViewportRenderRegion>& viewport, int max_edge,
+                         bool export_quality) -> RenderRequest {
+  RenderRequest request;
+  if (viewport.has_value() && viewport->reference_width_ > 0 && viewport->reference_height_ > 0) {
+    request.view.visible_rect_in_edit_space = {
+        static_cast<float>(viewport->x_) / static_cast<float>(viewport->reference_width_),
+        static_cast<float>(viewport->y_) / static_cast<float>(viewport->reference_height_),
+        viewport->scale_x_, viewport->scale_y_};
+    if (viewport->target_width_ > 0 && viewport->target_height_ > 0) {
+      request.view.viewport_extent = {static_cast<std::uint32_t>(viewport->target_width_),
+                                      static_cast<std::uint32_t>(viewport->target_height_)};
+    }
   }
-  pipeline_executor_->SetCancelRequested(cancel_requested_);
-  pipeline_executor_->GetGlobalParams().render_source_cache_key_ = BuildRenderSourceCacheKey(*this);
-  pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ = false;
-  pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_     = false;
-  pipeline_executor_->GetGlobalParams().render_hs_reference_max_long_edge_ =
-      kHsReferenceMaskMaxLongEdge;
-  auto&      desc                         = options_.render_desc_;
+  request.resolution.max_edge = static_cast<std::uint32_t>(std::max(0, max_edge));
+  request.resolution.quality  = export_quality ? RenderQuality::Export : RenderQuality::Preview;
+  return request;
+}
+
+auto DownsampleForRenderType(RenderType render_type) -> ResizeDownsampleAlgorithm {
+  switch (render_type) {
+    case RenderType::QUALITY_BASE_PREVIEW:
+    case RenderType::DETAIL_ROI_PREVIEW:
+    case RenderType::FULL_RES_PREVIEW:
+    case RenderType::FULL_RES_EXPORT:
+      return ResizeDownsampleAlgorithm::Area;
+    case RenderType::FAST_PREVIEW:
+    case RenderType::THUMBNAIL:
+      return ResizeDownsampleAlgorithm::Bilinear;
+  }
+  return ResizeDownsampleAlgorithm::Bilinear;
+}
+
+}  // namespace
+
+auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
+  PipelineApplyRequest request;
+  if (!pipeline_executor_) {
+    return request;
+  }
+  request.cancel_requested = cancel_requested_;
+  auto&      desc          = options_.render_desc_;
   const auto requested_render_type        = desc.render_type_;
 
-  // Keep explicit full-res/export requests authoritative.
-  // Even when the executor sits in FAST_PREVIEW baseline, callers still need
-  // FULL_RES_PREVIEW/FULL_RES_EXPORT to be honored (slider release/undo/version switch/crop/LUT).
   const bool rotation_active_fast_preview = (requested_render_type == RenderType::FAST_PREVIEW) &&
                                             HasActiveGeometryRotation(pipeline_executor_);
 
@@ -234,9 +256,6 @@ void PipelineTask::SetExecutorRenderParams() {
   const auto viewport_region = LoadViewportRegion(
       pipeline_executor_, viewport_region_render && !rotation_active_fast_preview,
       desc.viewport_region_);
-  // Freeze request geometry before any branch returns. In particular, Quality Base must carry
-  // null (full frame) instead of re-reading a live ROI later inside Apply.
-  pipeline_executor_->SetRenderRequestViewport(viewport_region);
   if (viewport_region.has_value()) {
     region_x                = viewport_region->x_;
     region_y                = viewport_region->y_;
@@ -245,9 +264,22 @@ void PipelineTask::SetExecutorRenderParams() {
     region_reference_width  = viewport_region->reference_width_;
     region_reference_height = viewport_region->reference_height_;
   }
+  (void)region_reference_width;
+  (void)region_reference_height;
 
   FramePreviewMetadata  frame_metadata    = desc.frame_metadata_;
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
+  request.sink                            = pipeline_executor_->GetFrameSink();
+
+  auto finish = [&](DecodeRes decode, bool host_output, RenderCachePolicy cache, int max_edge,
+                    bool export_quality, std::optional<ViewportRenderRegion> view) {
+    request.decode_res          = decode;
+    request.require_host_output = host_output;
+    request.cache_policy        = cache;
+    request.geometry            = MakeGeometryRequest(view, max_edge, export_quality);
+    request.submission          = FrameCompletionSubmission{.metadata = frame_metadata,
+                                                            .mode     = presentation_mode};
+  };
 
   if (requested_render_type == RenderType::FAST_PREVIEW) {
     frame_metadata.frame_role    = FrameRole::InteractivePrimary;
@@ -255,50 +287,27 @@ void PipelineTask::SetExecutorRenderParams() {
                                    region_scale_x >= (1.0f - kFullFrameRegionEpsilon) &&
                                    region_scale_y >= (1.0f - kFullFrameRegionEpsilon);
     if (rotation_active_fast_preview || full_frame_region) {
-      presentation_mode = FramePresentationMode::ViewportTransformed;
-      pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-      frame_metadata.source_roi_norm                                      = {};
-      ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-      pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-      pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-      pipeline_executor_->SetRenderRegion(0, 0, 1.0f, 1.0f);
-      pipeline_executor_->SetForceCPUOutput(false);
-      pipeline_executor_->SetRenderRes(false, kFastPreviewMaxLongEdge);
-      pipeline_executor_->SetEnableCache(true);
-      pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-      return;
+      presentation_mode              = FramePresentationMode::ViewportTransformed;
+      frame_metadata.source_roi_norm = {};
+      finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFastPreviewMaxLongEdge,
+             false, viewport_region);
+      return request;
     }
-
     presentation_mode = FramePresentationMode::RoiFrame;
     frame_metadata    = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                            region_scale_x, region_scale_y);
     frame_metadata.scope_update_allowed = frame_metadata.scope_refresh_requested;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-    pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
-                                        region_reference_width, region_reference_height);
-    pipeline_executor_->SetForceCPUOutput(false);
-    pipeline_executor_->SetRenderRes(false, kFastPreviewMaxLongEdge);
-    pipeline_executor_->SetEnableCache(true);
-    // The default decode res is full, this call will be effective only when changed before
-    pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-    return;
+    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFastPreviewMaxLongEdge,
+           false, viewport_region);
+    return request;
   }
   if (requested_render_type == RenderType::QUALITY_BASE_PREVIEW) {
     frame_metadata.frame_role      = FrameRole::QualityBase;
     frame_metadata.source_roi_norm = {};
     presentation_mode              = FramePresentationMode::ViewportTransformed;
-    pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
-    pipeline_executor_->SetRenderRegion(0, 0, 1.0f, 1.0f);
-    pipeline_executor_->SetRenderRes(false, kQualityBasePreviewMaxLongEdge);
-    pipeline_executor_->SetForceCPUOutput(false);
-    pipeline_executor_->SetEnableCache(true);
-    pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-    return;
+    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache,
+           kQualityBasePreviewMaxLongEdge, false, std::nullopt);
+    return request;
   }
   if (requested_render_type == RenderType::DETAIL_ROI_PREVIEW) {
     frame_metadata.frame_role = (region_scale_x < (1.0f - 1e-4f) || region_scale_y < (1.0f - 1e-4f))
@@ -307,63 +316,82 @@ void PipelineTask::SetExecutorRenderParams() {
     frame_metadata    = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                            region_scale_x, region_scale_y);
     presentation_mode = FramePresentationMode::ViewportTransformed;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
-    pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
-                                        region_reference_width, region_reference_height);
     const int detail_target_long_edge = ViewportTargetLongEdge(viewport_region);
-    if (detail_target_long_edge > 0) {
-      pipeline_executor_->SetRenderRes(false, detail_target_long_edge);
-    } else {
-      pipeline_executor_->SetRenderRes(true);
-    }
-    pipeline_executor_->SetForceCPUOutput(false);
-    pipeline_executor_->SetEnableCache(true);
-    pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-    return;
+    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache,
+           detail_target_long_edge > 0 ? detail_target_long_edge : 0, false, viewport_region);
+    return request;
   }
   if (requested_render_type == RenderType::THUMBNAIL) {
-    presentation_mode = FramePresentationMode::ViewportTransformed;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-    pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
-    pipeline_executor_->SetForceCPUOutput(true);
-    pipeline_executor_->SetRenderRes(false, static_cast<int>(desc.max_edge_));
-    pipeline_executor_->SetEnableCache(false);
-    pipeline_executor_->SetDecodeRes(desc.decode_res_);
-    return;
+    presentation_mode    = FramePresentationMode::ViewportTransformed;
+    request.sink         = nullptr;
+    request.output_color = std::nullopt;
+    finish(desc.decode_res_, true, RenderCachePolicy::BypassSessionCache,
+           static_cast<int>(desc.max_edge_), false, std::nullopt);
+    return request;
   }
   if (requested_render_type == RenderType::FULL_RES_PREVIEW) {
     presentation_mode = FramePresentationMode::ViewportTransformed;
-    pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
-    pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
-    pipeline_executor_->SetRenderRes(false, kFullResPreviewMaxLongEdge);
-    pipeline_executor_->SetForceCPUOutput(false);
-    pipeline_executor_->SetEnableCache(true);
-    pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-    return;
+    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFullResPreviewMaxLongEdge,
+           false, std::nullopt);
+    return request;
   }
   if (requested_render_type == RenderType::FULL_RES_EXPORT) {
-    pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ = true;
-    pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_     = true;
-    presentation_mode = FramePresentationMode::ViewportTransformed;
-    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
-    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
-    pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
-    pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
-    pipeline_executor_->SetRenderRes(true);
-    pipeline_executor_->SetForceCPUOutput(true);
-    pipeline_executor_->SetEnableCache(false);
-    // The default decode res is full, this call will be effective only when changed before
-    pipeline_executor_->SetDecodeRes(DecodeRes::FULL);
-    return;
+    presentation_mode    = FramePresentationMode::ViewportTransformed;
+    request.sink         = nullptr;
+    request.output_color = options_.export_output_color_;
+    finish(DecodeRes::FULL, true, RenderCachePolicy::BypassSessionCache, 0, true, std::nullopt);
+    return request;
   }
   throw std::runtime_error("[ERROR] PipelineTask: Unknown render type");
+}
+
+void PipelineTask::SetExecutorRenderParams() {
+  if (!pipeline_executor_) {
+    return;
+  }
+  const auto request = MakeApplyRequest();
+  auto&      desc    = options_.render_desc_;
+  const auto requested_render_type = desc.render_type_;
+  const bool rotation_active_fast_preview = (requested_render_type == RenderType::FAST_PREVIEW) &&
+                                            HasActiveGeometryRotation(pipeline_executor_);
+  const bool viewport_region_render = (requested_render_type == RenderType::FAST_PREVIEW ||
+                                       requested_render_type == RenderType::DETAIL_ROI_PREVIEW) &&
+                                      desc.use_viewport_region_;
+  const auto viewport_region = LoadViewportRegion(
+      pipeline_executor_, viewport_region_render && !rotation_active_fast_preview,
+      desc.viewport_region_);
+  int   region_x               = desc.x_;
+  int   region_y               = desc.y_;
+  float region_scale_x         = desc.scale_factor_x_;
+  float region_scale_y         = desc.scale_factor_y_;
+  int   region_reference_width = 0;
+  int   region_reference_height = 0;
+  if (viewport_region.has_value()) {
+    region_x                = viewport_region->x_;
+    region_y                = viewport_region->y_;
+    region_scale_x          = viewport_region->scale_x_;
+    region_scale_y          = viewport_region->scale_y_;
+    region_reference_width  = viewport_region->reference_width_;
+    region_reference_height = viewport_region->reference_height_;
+  }
+  pipeline_executor_->SetCancelRequested(request.cancel_requested);
+  pipeline_executor_->SetRenderRequestViewport(viewport_region);
+  pipeline_executor_->BindFrameSubmission(request.submission.metadata, request.submission.mode);
+  ApplyRenderFrameRole(pipeline_executor_, request.submission.metadata);
+  pipeline_executor_->SetResizeDownsampleAlgorithm(DownsampleForRenderType(requested_render_type));
+  pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
+                                      region_reference_width, region_reference_height);
+  pipeline_executor_->SetForceCPUOutput(request.require_host_output);
+  if (request.geometry.resolution.max_edge > 0) {
+    pipeline_executor_->SetRenderRes(false,
+                                     static_cast<int>(request.geometry.resolution.max_edge));
+  } else {
+    pipeline_executor_->SetRenderRes(true);
+  }
+  pipeline_executor_->SetEnableCache(request.cache_policy == RenderCachePolicy::UseSessionCache);
+  pipeline_executor_->SetDecodeRes(request.decode_res);
+  pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ =
+      request.geometry.resolution.quality == RenderQuality::Export;
 }
 
 void PipelineTask::ResetPreviewRenderParams() {
@@ -480,17 +508,11 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
 
     const auto apply_state_transition_after_render = [&task]() {
       const auto render_type = task.options_.render_desc_.render_type_;
-      if (render_type == RenderType::THUMBNAIL) {
-        // THUMBNAIL -> FULL_RES_PREVIEW baseline
-        task.ResetThumbnailRenderParams();
-        return;
-      }
-      if (render_type == RenderType::QUALITY_BASE_PREVIEW ||
-          render_type == RenderType::DETAIL_ROI_PREVIEW ||
-          render_type == RenderType::FULL_RES_PREVIEW ||
-          render_type == RenderType::FULL_RES_EXPORT) {
-        // FULL_RES_PREVIEW/FULL_RES_EXPORT -> FAST_PREVIEW baseline
-        task.ResetPreviewRenderParams();
+      if ((render_type == RenderType::QUALITY_BASE_PREVIEW ||
+           render_type == RenderType::DETAIL_ROI_PREVIEW ||
+           render_type == RenderType::FULL_RES_PREVIEW) &&
+          task.pipeline_executor_) {
+        task.pipeline_executor_->ReleasePreviewGpuScratch();
       }
     };
 
@@ -579,8 +601,8 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           // queues on this lock (owner thread pumps events while waiting so
           // present slot waits can complete without dropping ownership).
           std::unique_lock<std::mutex> render_lock;
-          auto&                        render_desc      = task.options_.render_desc_;
-          IFrameSink*                  saved_frame_sink = nullptr;
+          auto&                        render_desc = task.options_.render_desc_;
+          PipelineApplyRequest         apply_request;
 
           if (task.pipeline_executor_) {
             render_lock = std::unique_lock<std::mutex>(task.pipeline_executor_->GetRenderLock());
@@ -608,32 +630,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               }
             }
 
-            // Thumbnail and export tasks must not interact with any editor-owned
-            // frame sink that may still be attached to a cached pipeline.
-            if (render_desc.render_type_ == RenderType::THUMBNAIL ||
-                render_desc.render_type_ == RenderType::FULL_RES_EXPORT) {
-              saved_frame_sink = task.pipeline_executor_->GetFrameSink();
-              if (saved_frame_sink) {
-                task.pipeline_executor_->DetachFrameSink();
-              }
-            }
+            apply_request = task.MakeApplyRequest();
           }
 
-          std::optional<CPUPipelineExecutor::OneShotRenderParamsSnapshot> prior_one_shot;
-          if (task.pipeline_executor_ && UsesTaskScopedRenderParams(render_desc.render_type_)) {
-            prior_one_shot = task.pipeline_executor_->CaptureOneShotRenderParams();
-          }
-
-          const auto restore_frame_sink = [&]() {
-            if (saved_frame_sink && task.pipeline_executor_) {
-              task.pipeline_executor_->AttachFrameSink(saved_frame_sink);
-            }
-          };
-
-          IFrameSink* output_sink = nullptr;
-          if (task.pipeline_executor_) {
-            output_sink = task.pipeline_executor_->GetFrameSink();
-          }
+          IFrameSink* output_sink = apply_request.sink;
           if (IsStaleForSink(output_sink, task.request_id_)) {
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
@@ -641,22 +641,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             return;
           }
 
-          // RAII: isolated thumbnail/export work restores one-shot render
-          // params (decode/resize/ROI/force-cpu/cache). Editor previews retain
-          // their explicit post-render baseline so geometry caches survive
-          // consecutive interactive requests.
-          auto render_params_guard = std::unique_ptr<void, std::function<void(void*)>>(
-              reinterpret_cast<void*>(1), [&task, &prior_one_shot, &restore_frame_sink](void*) {
-                if (prior_one_shot.has_value() && task.pipeline_executor_) {
-                  task.pipeline_executor_->RestoreOneShotRenderParams(*prior_one_shot);
-                }
-                restore_frame_sink();
-              });
-
-          task.SetExecutorRenderParams();
-
           if (task_cancelled()) {
-            // Guard restores one-shot params; still clear scratch/buffers by type.
             apply_state_transition_after_render();
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
@@ -675,7 +660,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
 
           MarkSinkApplyStarted(output_sink, task.request_id_);
 
-          auto result         = task.pipeline_executor_->Apply(task.input_);
+          auto result         = task.pipeline_executor_->Apply(task.input_, apply_request);
           bool result_has_cpu = false;
           if (result && result->cpu_data_valid_) {
             try {
@@ -733,18 +718,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         finish(false);
       }
     } catch (const std::exception& ex) {
-      try {
-        apply_state_transition_after_render();
-      } catch (...) {
-      }
       notify_thumbnail_failure_callbacks();
       set_blocking_exception();
       finish(false, ex.what());
     } catch (...) {
-      try {
-        apply_state_transition_after_render();
-      } catch (...) {
-      }
       notify_thumbnail_failure_callbacks();
       set_blocking_exception();
       finish(false, "Pipeline render failed");

@@ -189,6 +189,54 @@ TEST(TransientBufferArena, ReserveWithinOneSlabStillCreatesCapacityUpFront) {
   EXPECT_EQ(arena.slab_count(), 1U);
 }
 
+TEST(TransientBufferArena, BackgroundScratchAllocatesOnlyRequestedAlignedBytes) {
+  RecordingBackend backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.SetAllocationPolicy(TransientAllocationPolicy::ExactRelease);
+  EXPECT_THROW(arena.Reserve(1u << 20), std::runtime_error);
+  constexpr std::size_t kAlign = 256;
+  void* first  = arena.Allocate(64, kAlign);
+  void* second = arena.Allocate(64, kAlign);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  ASSERT_EQ(backend.create_sizes.size(), 2U);
+  EXPECT_EQ(backend.create_sizes[0], kAlign);
+  EXPECT_EQ(backend.create_sizes[1], kAlign);
+  EXPECT_LT(backend.create_sizes[0], TransientBufferArena<RecordingBackend>::kMinSlabBytes);
+  EXPECT_EQ(arena.slab_count(), 2U);
+  arena.Reset();
+  backend.create_sizes.clear();
+  (void)arena.Allocate(96, kAlign);
+  ASSERT_EQ(backend.create_sizes.size(), 1U);
+  EXPECT_EQ(backend.create_sizes.front(), kAlign);
+}
+
+TEST(TransientBufferArena, BackgroundScratchReleasesStorageAfterLastUse) {
+  RecordingBackend backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.SetAllocationPolicy(TransientAllocationPolicy::ExactRelease);
+  void* outer = arena.Allocate(64, 256);
+  ASSERT_NE(outer, nullptr);
+  static_cast<std::byte*>(outer)[0] = std::byte{0x11};
+  backend.events.clear();
+  {
+    TransientBufferScope<RecordingBackend> inner(arena);
+    ASSERT_NE(arena.Allocate(32, 256), nullptr);
+    EXPECT_EQ(arena.slab_count(), 2U);
+  }
+  ASSERT_FALSE(backend.events.empty());
+  EXPECT_EQ(backend.events.back(), "free");
+  EXPECT_EQ(arena.slab_count(), 1U);
+  EXPECT_EQ(static_cast<std::byte*>(outer)[0], std::byte{0x11});
+  backend.events.clear();
+  arena.Reset();
+  EXPECT_EQ(arena.slab_count(), 0U);
+  EXPECT_EQ(arena.used_bytes(), 0U);
+  ASSERT_FALSE(backend.events.empty());
+  EXPECT_EQ(backend.events.back(), "free");
+}
+
 TEST(DevelopTransientFailure, DescribesResolvedDemosaicMethodNotEmptyPayloadString) {
   DevelopCompileSource source;
   source.kind        = DevelopInputKind::BayerCfa;

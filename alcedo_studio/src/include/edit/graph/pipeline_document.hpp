@@ -13,6 +13,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 

@@ -208,6 +208,16 @@ class GraphImageCache {
   void               DiscardUnpublished() { write_slots_.clear(); }
 
   /**
+   * @brief Drop the unpublished write of @p id and return its texture to the pool.
+   *
+   * Published results are unchanged. No-op when @p id has no write slot.
+   * Caller must satisfy GPU last-use of that texture first.
+   */
+  void ReleaseWrite(const GraphValueId& id) { write_slots_.erase(id); }
+
+  [[nodiscard]] auto UnpublishedWriteCount() const -> std::size_t { return write_slots_.size(); }
+
+  /**
    * @brief Current texture for @p id: this-frame write slot, else last bound/published result.
    */
   [[nodiscard]] auto Find(const GraphValueId& id) -> ResourceLease<Backend>* {

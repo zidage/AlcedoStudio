@@ -18,6 +18,7 @@
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
 
@@ -46,10 +47,15 @@ class PlanExecutor {
    */
   template <class Device>
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
-                      PipelineDocument& document, MaskStore* mask_store, bool publish_on_success)
+                      PipelineDocument& document, MaskStore* mask_store, bool publish_on_success,
+                      TransientAllocationPolicy transient_policy =
+                          TransientAllocationPolicy::SessionPacked)
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();
+      workspace.TransientBuffers().SetAllocationPolicy(transient_policy);
+      const bool exact_release =
+          transient_policy == TransientAllocationPolicy::ExactRelease;
       if constexpr (requires(Backend& backend, const ExecutionPlan& compiled) {
                       backend.WarmUpPlan(compiled);
                     }) {
@@ -78,10 +84,12 @@ class PlanExecutor {
             develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
         try {
-          if constexpr (UsesDevelopTransientArena()) {
+        if constexpr (UsesDevelopTransientArena()) {
+          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
             workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion,
                                                develop_method);
           }
+        }
           if (plan.Contains(GpuPassKind::UploadRgb)) {
             PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
                                                                  mask_store);
@@ -103,8 +111,10 @@ class PlanExecutor {
         Record(device, plan.sensor_linear_output, keys.sensor_linear, keys.sensor_extent);
         ++stats.sensor_develop_execute;
         if constexpr (UsesDevelopTransientArena()) {
-          workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion,
-                                            develop_method);
+          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
+            workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion,
+                                              develop_method);
+          }
         }
         // Develop intermediates are not a cache. Finish the recorded work so backend-owned
         // scratch can be destroyed before Geometry allocates display textures.
@@ -125,6 +135,10 @@ class PlanExecutor {
         Record(device, plan.geometry_output, keys.geometry_scene_source, keys.geometry_extent);
         ++stats.geometry_execute;
       }
+      if (exact_release && plan.encode_geometry_resample) {
+        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+        workspace.ReleaseConsumedImage(plan.sensor_linear_output);
+      }
 
       if (BindOrMiss(workspace, plan.develop_output, keys.develop_image, keys.geometry_extent,
                      completed)) {
@@ -134,6 +148,13 @@ class PlanExecutor {
                                                                mask_store);
         Record(device, plan.develop_output, keys.develop_image, keys.geometry_extent);
         ++stats.camera_color_execute;
+      }
+      if (exact_release) {
+        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+        workspace.ReleaseConsumedImage(plan.geometry_output);
+        if (!plan.encode_geometry_resample) {
+          workspace.ReleaseConsumedImage(plan.sensor_linear_output);
+        }
       }
 
       if (plan.primary_grade_mask) {
@@ -158,6 +179,15 @@ class PlanExecutor {
         Record(device, plan.primary_grade_output, keys.primary_grade, keys.geometry_extent);
         ++stats.primary_grade_execute;
       }
+      if (exact_release) {
+        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+        if (plan.primary_grade_mask) {
+          workspace.ReleaseConsumedImage(plan.mask_output);
+        }
+        if (plan.primary_grade_output != plan.develop_output) {
+          workspace.ReleaseConsumedImage(plan.develop_output);
+        }
+      }
 
       if (BindOrMiss(workspace, plan.display_output, keys.drt_display, keys.geometry_extent,
                      completed)) {
@@ -166,6 +196,10 @@ class PlanExecutor {
         PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document, mask_store);
         Record(device, plan.display_output, keys.drt_display, keys.geometry_extent);
         ++stats.drt_execute;
+      }
+      if (exact_release && plan.display_output != plan.primary_grade_output) {
+        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+        workspace.ReleaseConsumedImage(plan.primary_grade_output);
       }
 
       stats.result_content_hits += workspace.Images().ContentHitCount() - hits_before;

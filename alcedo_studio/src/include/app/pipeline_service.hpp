@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -48,12 +51,19 @@ struct PipelineGuard {
   std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
-  /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
-  /// "unpinned → re-init stages" do not drop a live editor/export guard.
-  /// Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
+  /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
+  /// LRU eviction and "unpinned → re-init stages" do not drop a live editor/export
+  /// guard. Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
   /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
+  /// False until construct/reinit finished. Cache hits wait; never treat an unready live as usable.
+  bool                                 live_ready_ = false;
+  bool                                 initializing_ = false;
+  std::exception_ptr                   load_error_;
+  /// True while an editor input sequence has live values that are not a history HEAD.
+  /// Thumbnail/export disk caches must not store pixels under the committed label.
+  bool                                 unsettled_preview_ = false;
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
@@ -81,17 +91,6 @@ struct PipelineGuard {
   }
 };
 
-// Phase 3: a read-only clone of a pipeline's params captured into an independent
-// executor, used for background analysis rendering. The snapshot never pins the
-// live PipelineGuard, never writes storage, and never clears the live guard's
-// dirty state. Rendering on `executor_` does not affect the live pipeline.
-struct PipelineSnapshot {
-  sl_element_id_t                      element_id_ = 0;
-  image_id_t                           image_id_   = 0;
-  nlohmann::json                       pipeline_params_;
-  std::shared_ptr<CPUPipelineExecutor> executor_;
-};
-
 class PipelineMgmtService final {
  private:
   std::shared_ptr<Storage>                                            storage_;
@@ -101,6 +100,10 @@ class PipelineMgmtService final {
   std::unordered_map<sl_element_id_t, std::shared_ptr<PipelineGuard>> loaded_pipelines_;
 
   std::mutex                                                          lock_;
+  std::condition_variable                                             cache_cv_;
+
+  std::uint64_t                pipeline_construct_count_ = 0;
+  std::uint64_t                pipeline_load_count_      = 0;
 
   static constexpr size_t                                             default_cache_capacity_ = 16;
 
@@ -109,6 +112,7 @@ class PipelineMgmtService final {
   std::uint64_t                editor_pipeline_history_rebuild_count_ = 0;
 
   void                         HandleEviction(sl_element_id_t evicted_id);
+  void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:
   PipelineMgmtService() = delete;
@@ -116,6 +120,19 @@ class PipelineMgmtService final {
       : storage_(storage_service), pipeline_cache_(default_cache_capacity_), loaded_pipelines_() {}
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
+
+  /**
+   * @brief Unpin a live pipeline without writing storage or clearing dirty.
+   *
+   * Thumbnail, analysis, and export must call this instead of @ref SavePipeline.
+   * When other pins remain (the editor), GPU session caches stay. When this is
+   * the last pin, intermediate GPU caches and the one-shot device are released
+   * so unused LRU entries do not keep VRAM. Must not be called while holding
+   * @c CPUPipelineExecutor::GetRenderLock().
+   *
+   * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
+   */
+  void               ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipeline);
 
   /// Load image-local RAW color data, including DNG profiles absent from older projects.
   static void InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image);
@@ -129,6 +146,25 @@ class PipelineMgmtService final {
                                                std::string*                          error = nullptr) -> bool;
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /**
+   * @brief Wait until @p pipeline pin_count_ equals @p expected.
+   * @pre Must not hold the cache lock or the pipeline render lock.
+   * @return true if the count matched before @p timeout.
+   */
+  auto WaitUntilPinCount(const std::shared_ptr<PipelineGuard>& pipeline, size_t expected,
+                         std::chrono::milliseconds timeout) -> bool;
+
+  /// Test/instrumentation: executor+document constructions for cache misses.
+  [[nodiscard]] auto PipelineConstructCount() const -> std::uint64_t {
+    return pipeline_construct_count_;
+  }
+  /// Test/instrumentation: LoadPipeline returns, including cache hits and waiters.
+  [[nodiscard]] auto PipelineLoadCount() const -> std::uint64_t { return pipeline_load_count_; }
+  void               ResetPipelineAcquireCountsForTesting() {
+    pipeline_construct_count_ = 0;
+    pipeline_load_count_      = 0;
+  }
 
   /** @brief Save the guard's authoritative GPU DAG document as format version 2. */
   void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
@@ -192,20 +228,6 @@ class PipelineMgmtService final {
 
   /// Persist only the requested live pipeline. This avoids saving unrelated dirty editor state.
   void SyncPipeline(sl_element_id_t id);
-
-  // Phase 3: capture a read-only snapshot of the current pipeline state without
-  // pinning the live guard, forcing it to disk, or touching dirty state. The
-  // returned executor is an independent clone; rendering on it does not affect the
-  // live pipeline. May briefly block on the live executor's render lock
-  // (serializes with an in-flight editor render on the same executor). Returns
-  // nullptr and writes *error on failure.
-  auto LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id, std::string* error)
-      -> std::shared_ptr<PipelineSnapshot>;
-
-  // Release the snapshot executor's intermediate buffers (mirrors SavePipeline's
-  // last-pin cleanup). Safe to call from the snapshot's task callback; the
-  // shared_ptr then drops naturally. Not a storage write. No-op if null.
-  void ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot);
 };
 
 /// Checkpoint label: which history tip the serialized params claim to match.

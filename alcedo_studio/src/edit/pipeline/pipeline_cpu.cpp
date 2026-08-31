@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
@@ -23,6 +25,7 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #endif
 #ifdef HAVE_CUDA
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -87,12 +90,14 @@ auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
                         const std::shared_ptr<ImageBuffer>&          input, DecodeRes decode_res,
                         const RenderRequest& request, IFrameSink* sink,
                         const FrameCompletionSubmission& submission, bool require_host_output,
-                        RenderCachePolicy cache_policy) -> std::shared_ptr<ImageBuffer> {
+                        RenderCachePolicy cache_policy,
+                        const std::optional<ExportColorProfileConfig>& output_color)
+    -> std::shared_ptr<ImageBuffer> {
   if (!renderer) {
     renderer = std::make_shared<ProductRenderer>(document);
   }
   return renderer->Render(input, decode_res, request, sink, submission, require_host_output,
-                          cache_policy);
+                          cache_policy, output_color);
 }
 #endif
 
@@ -217,6 +222,22 @@ auto CPUPipelineExecutor::GetStage(PipelineStageName stage) -> PipelineStage& {
 
 auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     -> std::shared_ptr<ImageBuffer> {
+  PipelineApplyRequest request;
+  request.geometry            = BuildGpuDagRenderRequest(render_request_viewport_, render_params_,
+                                                         force_cpu_output_);
+  request.decode_res          = decode_res_;
+  request.cache_policy        = enable_cache_ ? RenderCachePolicy::UseSessionCache
+                                              : RenderCachePolicy::BypassSessionCache;
+  request.require_host_output = force_cpu_output_;
+  request.sink                = frame_sink_;
+  request.submission          = bound_frame_submission_;
+  request.cancel_requested    = cancel_requested_;
+  return Apply(std::move(input), request);
+}
+
+auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
+                                const PipelineApplyRequest& request)
+    -> std::shared_ptr<ImageBuffer> {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   const bool use_gpu_dag =
 #ifdef HAVE_CUDA
@@ -234,33 +255,35 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
         "CPUPipelineExecutor: product rendering requires a bound PipelineDocument");
   }
   if (use_gpu_dag) {
-    const auto request =
-        BuildGpuDagRenderRequest(render_request_viewport_, render_params_, force_cpu_output_);
-    const auto cache_policy =
-        enable_cache_ ? RenderCachePolicy::UseSessionCache : RenderCachePolicy::BypassSessionCache;
+    SetCancelRequested(request.cancel_requested);
 #ifdef HAVE_CUDA
     if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input, decode_res_,
-                                request, frame_sink_, bound_frame_submission_, force_cpu_output_,
-                                cache_policy);
+      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
 #ifdef HAVE_METAL
     if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input, decode_res_,
-                                request, frame_sink_, bound_frame_submission_, force_cpu_output_,
-                                cache_policy);
+      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
 #ifdef HAVE_OPENCL
     if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input, decode_res_,
-                                request, frame_sink_, bound_frame_submission_, force_cpu_output_,
-                                cache_policy);
+      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
   }
 #endif
+  (void)input;
+  (void)request;
   throw std::runtime_error(
       "CPUPipelineExecutor: product rendering requires a supported GPU backend");
 }

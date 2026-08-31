@@ -21,6 +21,12 @@
 namespace alcedo::ui {
 namespace {
 
+void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
+  if (state.pipeline_guard) {
+    state.pipeline_guard->unsettled_preview_ = !state.pending_document_sequence.empty();
+  }
+}
+
 /// Refresh committed_snapshot from the live pipeline after a successful history mutation.
 /// Prefer live GetOperator/GetParams over root_snapshot + SnapshotAtHead (plan §4.7).
 auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* error) -> bool {
@@ -122,6 +128,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
   state.pending_before.clear();
   state.pending_document_sequence.clear();
   state.recovered_head = false;
+  SyncUnsettledPreviewFlag(state);
   return true;
 }
 
@@ -185,6 +192,7 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   if (sequence == state->pending_document_sequence.end()) {
     state->pending_document_sequence.emplace(patch.field_key, std::move(edit));
   }
+  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -256,6 +264,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   if (recorded.before_model_json == recorded.after_model_json) {
     ProjectDocumentEdit(*state, recorded, false);
     state->pending_document_sequence.erase(sequence);
+    SyncUnsettledPreviewFlag(*state);
     return true;
   }
   const auto restore_before = [&] { return RestoreDocumentFields(*state, {recorded}, error); };
@@ -278,6 +287,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   state->pipeline_guard->dirty_ = true;
   state->pending_document_sequence.erase(patch.field_key);
   state->recovered_head = false;
+  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -393,6 +403,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
   state->pending_before.clear();
   state->pending_document_sequence.clear();
   state->recovered_head = false;
+  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
