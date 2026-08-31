@@ -6,14 +6,12 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
-#include <iomanip>
-#include <iostream>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/opencv.hpp>
-#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -26,8 +24,8 @@
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/develop_color_transform.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #endif
 #ifdef HAVE_CUDA
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -42,9 +40,9 @@
 namespace alcedo {
 
 namespace {
-using ProfileClock = std::chrono::steady_clock;
 
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+/** @brief Bind import-time camera metadata with exclusive document access, preserving user edits. */
 void ApplyImportedCameraProfile(PipelineDocument&             document,
                                 const RawRuntimeColorContext& imported) {
   auto* develop = document.Develop();
@@ -59,6 +57,7 @@ void ApplyImportedCameraProfile(PipelineDocument&             document,
   }
 }
 
+/** @brief Translate runtime settings to a render request without touching persistent Models. */
 auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewport,
                               const nlohmann::json& render_params, bool force_cpu_output)
     -> RenderRequest {
@@ -84,46 +83,23 @@ auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewpor
   return request;
 }
 
+/** @brief Reuse the renderer bound to this document; propagate all render failures to the caller. */
 template <class ProductRenderer>
 auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
                         const std::shared_ptr<PipelineDocument>&     document,
-                        nlohmann::json&                              legacy_snapshot,
-                        bool                                         mirror_legacy,
-                        const std::optional<RawRuntimeColorContext>& injected,
-                        const nlohmann::json&                        legacy_params,
                         const std::shared_ptr<ImageBuffer>&          input, DecodeRes decode_res,
                         const RenderRequest& request, IFrameSink* sink,
                         const FrameCompletionSubmission& submission, bool require_host_output,
-                        RenderCachePolicy cache_policy) -> std::shared_ptr<ImageBuffer> {
+                        RenderCachePolicy cache_policy,
+                        const std::optional<ExportColorProfileConfig>& output_color)
+    -> std::shared_ptr<ImageBuffer> {
   if (!renderer) {
     renderer = std::make_shared<ProductRenderer>(document);
   }
-  if (mirror_legacy && AllowsLegacyStageAdapterRemirror(*document)) {
-    if (legacy_params != legacy_snapshot) {
-      const auto error = LegacyPipelineImporter::ApplyOnto(*document, legacy_params);
-      if (!error.empty()) {
-        throw std::runtime_error("CPUPipelineExecutor: legacy adapter import failed: " + error);
-      }
-      legacy_snapshot = legacy_params;
-      if (injected.has_value()) {
-        ApplyImportedCameraProfile(*document, *injected);
-      }
-    }
-  }
   return renderer->Render(input, decode_res, request, sink, submission, require_host_output,
-                          cache_policy);
+                          cache_policy, output_color);
 }
 #endif
-
-auto DurationToMs(const ProfileClock::duration duration) -> double {
-  return std::chrono::duration<double, std::milli>(duration).count();
-}
-
-auto FormatDurationMs(const double duration_ms) -> std::string {
-  std::ostringstream oss;
-  oss << std::fixed << std::setprecision(2) << duration_ms << " ms";
-  return oss.str();
-}
 
 void SetCleanBaselineAdjustableOperators(
     std::array<PipelineStage, static_cast<int>(PipelineStageName::Stage_Count)>& stages,
@@ -166,24 +142,6 @@ void SetCleanBaselineAdjustableOperators(
   set_enabled(PipelineStageName::Output_Transform, OperatorType::FILM_GRAIN,
               baseline.at("film_grain"));
   set_enabled(PipelineStageName::Output_Transform, OperatorType::HALATION, baseline.at("halation"));
-}
-
-void PrintPipelineProfile(const ProfileClock::time_point  apply_start,
-                          const std::vector<std::string>& executor_steps,
-                          const std::vector<std::string>& stage_profiles) {
-  std::ostringstream summary;
-  summary << "[PROFILE][PipelineCPU] total="
-          << FormatDurationMs(DurationToMs(ProfileClock::now() - apply_start));
-  for (const auto& step : executor_steps) {
-    summary << " | " << step;
-  }
-  std::cout << summary.str() << '\n';
-
-  for (const auto& profile : stage_profiles) {
-    if (!profile.empty()) {
-      std::cout << "[PROFILE][PipelineCPU] " << profile << '\n';
-    }
-  }
 }
 
 auto ToResizeAlgorithmParam(ResizeDownsampleAlgorithm algorithm) -> const char* {
@@ -264,7 +222,22 @@ auto CPUPipelineExecutor::GetStage(PipelineStageName stage) -> PipelineStage& {
 
 auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     -> std::shared_ptr<ImageBuffer> {
-  const auto apply_start = ProfileClock::now();
+  PipelineApplyRequest request;
+  request.geometry            = BuildGpuDagRenderRequest(render_request_viewport_, render_params_,
+                                                         force_cpu_output_);
+  request.decode_res          = decode_res_;
+  request.cache_policy        = enable_cache_ ? RenderCachePolicy::UseSessionCache
+                                              : RenderCachePolicy::BypassSessionCache;
+  request.require_host_output = force_cpu_output_;
+  request.sink                = frame_sink_;
+  request.submission          = bound_frame_submission_;
+  request.cancel_requested    = cancel_requested_;
+  return Apply(std::move(input), request);
+}
+
+auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
+                                const PipelineApplyRequest& request)
+    -> std::shared_ptr<ImageBuffer> {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   const bool use_gpu_dag =
 #ifdef HAVE_CUDA
@@ -277,160 +250,52 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
       resolved_accelerator_backend_ == GpuBackendKind::OpenCL ||
 #endif
       false;
-  if (pipeline_document_ && use_gpu_dag) {
-    const auto request = BuildGpuDagRenderRequest(render_request_viewport_, render_params_,
-                                                  force_cpu_output_);
-    const auto cache_policy = enable_cache_ ? RenderCachePolicy::UseSessionCache
-                                            : RenderCachePolicy::BypassSessionCache;
+  if (!pipeline_document_) {
+    throw std::runtime_error(
+        "CPUPipelineExecutor: product rendering requires a bound PipelineDocument");
+  }
+  if (use_gpu_dag) {
+    SetCancelRequested(request.cancel_requested);
 #ifdef HAVE_CUDA
     if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_,
-                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
-                                injected_raw_color_context_, ExportPipelineParams(), input,
-                                decode_res_, request, frame_sink_, bound_frame_submission_,
-                                force_cpu_output_, cache_policy);
+      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
 #ifdef HAVE_METAL
     if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_,
-                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
-                                injected_raw_color_context_, ExportPipelineParams(), input,
-                                decode_res_, request, frame_sink_, bound_frame_submission_,
-                                force_cpu_output_, cache_policy);
+      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
 #ifdef HAVE_OPENCL
     if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_,
-                                gpu_dag_legacy_snapshot_, mirror_legacy_stage_adapter_,
-                                injected_raw_color_context_, ExportPipelineParams(), input,
-                                decode_res_, request, frame_sink_, bound_frame_submission_,
-                                force_cpu_output_, cache_policy);
+      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input,
+                                request.decode_res, request.geometry, request.sink,
+                                request.submission, request.require_host_output,
+                                request.cache_policy, request.output_color);
     }
 #endif
   }
 #endif
-  if (exec_stages_.empty()) {
-    return input;
-  }
-
-  // The RAW decode backend follows the resolved runtime preference on every
-  // render; a stage op replaced by direct SetOperator writes can never drift
-  // the decode away from the user's backend setting.
-  ApplyRuntimeRawDecodeBackend();
-
-  std::vector<std::string> executor_steps;
-  std::vector<std::string> stage_profiles;
-  auto*                    first_stage = exec_stages_.front();
-  if (!first_stage) {
-    return input;
-  }
-
-  std::shared_ptr<ImageBuffer> output;
-  // Before the merged GPU stream, re-trigger SetGlobalParams for operators
-  // in stages that feed into it, so they pick up runtime data (e.g. raw decode
-  // context) written by earlier non-merged stages.
-  auto                         refresh_before_merged = [&](PipelineStage* stage) {
-    if (stage->stage_ == PipelineStageName::Merged_Stage) {
-      for (size_t i = static_cast<size_t>(PipelineStageName::To_WorkingSpace); i < stages_.size();
-           ++i) {
-        stages_[i].RefreshGlobalParams(global_params_);
-      }
-    }
-  };
-
-  const auto apply_stage = [&](PipelineStage* stage) {
-    const auto refresh_start = ProfileClock::now();
-    refresh_before_merged(stage);
-    const auto refresh_elapsed = ProfileClock::now() - refresh_start;
-
-    const auto stage_start     = ProfileClock::now();
-    stage->SetInputImage(output);
-    stage->SetForceCPUOutput(force_cpu_output_);
-    output                    = stage->ApplyStage(global_params_);
-
-    std::string stage_profile = stage->GetLastProfileSummary();
-    if (stage_profile.empty()) {
-      std::ostringstream fallback;
-      fallback << "stage=" << stage->GetStageNameString()
-               << " total=" << FormatDurationMs(DurationToMs(ProfileClock::now() - stage_start));
-      stage_profile = fallback.str();
-    } else {
-      stage_profile +=
-          " | executor_call=" + FormatDurationMs(DurationToMs(ProfileClock::now() - stage_start));
-    }
-
-    if (stage->stage_ == PipelineStageName::Merged_Stage) {
-      stage_profile +=
-          " | refresh_global_params=" + FormatDurationMs(DurationToMs(refresh_elapsed));
-    }
-    stage_profiles.push_back(std::move(stage_profile));
-  };
-
-  // Session tasks hold a multi-MB encoded source (RAW file bytes). A distinct
-  // ImageBuffer must wrap that payload for RAW_DECODE (*input = move(decoded)),
-  // but the underlying vector must be shared — deep-cloning it on every
-  // quality-ladder cache miss re-copies the whole file into working results.
-  const auto materialize_stage_input = [&](const char* step_name) {
-    const auto materialize_start = ProfileClock::now();
-    if (input && input->buffer_valid_ && !input->cpu_data_valid_ && !input->gpu_data_valid_) {
-      output = input->ShareEncodedBuffer();
-      executor_steps.push_back(
-          std::string(step_name) + "_share_encoded=" +
-          FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
-      return;
-    }
-    output = std::make_shared<ImageBuffer>(input->Clone());
-    executor_steps.push_back(
-        std::string(step_name) +
-        "_clone=" + FormatDurationMs(DurationToMs(ProfileClock::now() - materialize_start)));
-  };
-
-  if (enable_cache_) {
-    if (!first_stage->CacheValid()) {
-      materialize_stage_input("stage_input");
-      for (auto* stage : exec_stages_) {
-        apply_stage(stage);
-      }
-    } else {
-      // If cache is valid, use cached output
-      const auto cache_fetch_start   = ProfileClock::now();
-      output                         = first_stage->GetOutputCache();
-      const auto cache_fetch_elapsed = ProfileClock::now() - cache_fetch_start;
-      executor_steps.push_back("first_stage_cache_fetch=" +
-                               FormatDurationMs(DurationToMs(cache_fetch_elapsed)));
-      stage_profiles.push_back(
-          "stage=" + first_stage->GetStageNameString() + " mode=executor_cache cache=hit total=" +
-          FormatDurationMs(DurationToMs(cache_fetch_elapsed)) +
-          " | get_output_cache=" + FormatDurationMs(DurationToMs(cache_fetch_elapsed)));
-      for (auto* stage : exec_stages_) {
-        if (stage != first_stage) {
-          apply_stage(stage);
-        }
-      }
-    }
-  } else {
-    // Cache is disabled, just process the stages sequentially
-    materialize_stage_input("stage_input");
-    for (auto* stage : exec_stages_) {
-      apply_stage(stage);
-    }
-  }
-
-  PrintPipelineProfile(apply_start, executor_steps, stage_profiles);
-  return output;
+  (void)input;
+  (void)request;
+  throw std::runtime_error(
+      "CPUPipelineExecutor: product rendering requires a supported GPU backend");
 }
-
 void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                                               bool mirror_legacy_stage_adapter) {
+  if (!document) {
+    throw std::invalid_argument("CPUPipelineExecutor: PipelineDocument is null");
+  }
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   pipeline_document_           = std::move(document);
   mirror_legacy_stage_adapter_ = mirror_legacy_stage_adapter;
-  gpu_dag_legacy_snapshot_     = nullptr;
-  if (pipeline_document_ && injected_raw_color_context_.has_value()) {
-    ApplyImportedCameraProfile(*pipeline_document_, *injected_raw_color_context_);
-  }
+
 #ifdef HAVE_CUDA
   if (cuda_product_renderer_) {
     cuda_product_renderer_->SetDocument(pipeline_document_);
@@ -681,8 +546,6 @@ void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
 
 void CPUPipelineExecutor::SetRenderRegion(int x, int y, float scale_factor_x, float scale_factor_y,
                                           int reference_width, int reference_height) {
-  const nlohmann::json prev_resize_params =
-      render_params_.contains("resize") ? render_params_["resize"] : nlohmann::json::object();
   auto&       resize_params   = render_params_["resize"];
 
   const float clamped_scale_x = std::clamp(scale_factor_x, 1e-4f, 1.0f);
@@ -705,16 +568,9 @@ void CPUPipelineExecutor::SetRenderRegion(int x, int y, float scale_factor_x, fl
   global_params_.render_roi_scale_y_          = clamped_scale_y;
   global_params_.render_roi_reference_width_  = std::max(0, reference_width);
   global_params_.render_roi_reference_height_ = std::max(0, reference_height);
-
-  if (resize_params != prev_resize_params) {
-    stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
-        OperatorType::RESIZE, render_params_);
-  }
 }
 
 void CPUPipelineExecutor::SetRenderRes(bool full_res, int max_side_length) {
-  const nlohmann::json prev_resize_params =
-      render_params_.contains("resize") ? render_params_["resize"] : nlohmann::json::object();
   auto& resize_params           = render_params_["resize"];
   // render_params_["resize"] = {
   //   {"enable_scale", true},
@@ -722,51 +578,15 @@ void CPUPipelineExecutor::SetRenderRes(bool full_res, int max_side_length) {
   // };
   resize_params["enable_scale"] = !full_res;
   resize_params["maximum_edge"] = max_side_length;
-
-  if (resize_params != prev_resize_params) {
-    stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
-        OperatorType::RESIZE, render_params_);
-  }
 }
 
 void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) {
-  const nlohmann::json prev_resize_params =
-      render_params_.contains("resize") ? render_params_["resize"] : nlohmann::json::object();
   auto& resize_params                   = render_params_["resize"];
 
   resize_params["downsample_algorithm"] = ToResizeAlgorithmParam(algorithm);
-
-  if (resize_params != prev_resize_params) {
-    stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
-        OperatorType::RESIZE, render_params_);
-  }
 }
 
-void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
-  decode_res_     = res;
-
-  // decode_res is a one-shot render parameter. Install it on the live op for this
-  // Apply only; RawDecodeOp::GetParams deliberately omits it from durable export.
-  auto& raw_stage = GetStage(PipelineStageName::Image_Loading);
-  auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
-  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
-    SyncRawDecodeRuntimeControls();
-    return;
-  }
-  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
-  if (raw_op) {
-    raw_op->params_.decode_res_ = res;
-  } else {
-    auto  raw_param = entry.value()->ExportOperatorParams();
-    auto& params    = raw_param["params"];
-    if (!params.contains("raw") || !params["raw"].is_object()) {
-      params["raw"] = nlohmann::json::object();
-    }
-    params["raw"]["decode_res"] = static_cast<int>(res);
-    raw_stage.SetOperator(OperatorType::RAW_DECODE, raw_param["params"]);
-  }
-  SyncRawDecodeRuntimeControls();
-}
+void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) { decode_res_ = res; }
 
 auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
   OneShotRenderParamsSnapshot snapshot;
@@ -786,8 +606,6 @@ void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSn
   }
   render_params_           = snapshot.render_params_;
   render_request_viewport_ = snapshot.render_request_viewport_;
-  stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
-      OperatorType::RESIZE, render_params_);
 
   if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
     const auto& resize_params          = render_params_["resize"];
@@ -903,7 +721,7 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
-  injected_raw_color_context_ = ctx;
+
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   if (pipeline_document_) {
     ApplyImportedCameraProfile(*pipeline_document_, ctx);

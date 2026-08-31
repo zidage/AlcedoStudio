@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 namespace alcedo {
 
 TEST(ExportResolutionTests, OriginalPixelsKeepDimensionsAndApplyOptionalDpiTag) {
@@ -236,6 +238,21 @@ TEST(ExportRecipeTests, LegacyOptionsPreserveLongEdgeAndReplaceBehavior) {
   EXPECT_EQ(recipe.resize_.mode_, ExportResizeMode::LONG_EDGE_PIXELS);
   EXPECT_EQ(recipe.resize_.long_edge_pixels_, 2048);
   EXPECT_EQ(recipe.collision_, ExportCollisionPolicy::REPLACE);
+  EXPECT_FALSE(recipe.output_color_.has_value());
+  EXPECT_FALSE(ExportRecipeHasResolvedOutputColor(recipe));
+}
+
+TEST(ExportRecipeTests, ExportRecipeContainsResolvedOutputColorBeforeScheduling) {
+  ExportRecipe missing = ExportRecipe::FromLegacyOptions({});
+  EXPECT_THROW(RequireResolvedExportOutputColor(missing), std::runtime_error);
+  missing.output_color_ = ExportColorProfileConfig{};
+  missing.output_color_->peak_luminance = 0.0f;
+  EXPECT_THROW(RequireResolvedExportOutputColor(missing), std::runtime_error);
+  ExportRecipe recipe = ExportRecipe::FromLegacyOptions({});
+  recipe.output_color_ = ExportColorProfileConfig{
+      ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2, 100.0f};
+  EXPECT_NO_THROW(RequireResolvedExportOutputColor(recipe));
+  EXPECT_TRUE(ExportRecipeHasResolvedOutputColor(recipe));
 }
 
 }  // namespace alcedo

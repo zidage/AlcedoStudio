@@ -13,6 +13,7 @@
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/plan_executor.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
 
@@ -108,9 +109,11 @@ class BasicRenderDevice {
    */
   [[nodiscard]] auto Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
                              PipelineDocument& document, MaskStore* mask_store = nullptr,
-                             bool publish_on_success = true) -> GraphValueId {
+                             bool publish_on_success = true,
+                             TransientAllocationPolicy transient_policy =
+                                 TransientAllocationPolicy::SessionPacked) -> GraphValueId {
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, mask_store,
-                                          publish_on_success);
+                                          publish_on_success, transient_policy);
   }
 
  private:

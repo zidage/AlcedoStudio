@@ -30,12 +30,20 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "image/metadata_extractor.hpp"
+#include "image/dng_color_profile_import.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
+
+#include <libraw/libraw.h>
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
@@ -104,6 +112,42 @@ static uint64_t HashImageBufferCpuBytes(ImageBuffer& buffer) {
   auto& mat = buffer.GetCPUData();
   EXPECT_FALSE(mat.empty());
   return HashMatBytes(mat);
+}
+
+auto PinLinearDngInPool(ImagePoolService& pool, const std::filesystem::path& raw_path)
+    -> ImagePoolManager::PinnedImageHandle {
+  auto handle = pool.CreateAndReturnPinnedEmpty();
+  if (!handle) {
+    return {};
+  }
+  auto& image       = *handle;
+  image.image_path_ = raw_path;
+  image.image_type_ = ImageType::DNG;
+
+  auto raw = std::make_unique<LibRaw>();
+#if defined(_WIN32)
+  const int open_ret = raw->open_file(raw_path.wstring().c_str());
+#else
+  const int open_ret = raw->open_file(raw_path.string().c_str());
+#endif
+  if (open_ret != LIBRAW_SUCCESS) {
+    return handle;
+  }
+  if (raw->unpack() != LIBRAW_SUCCESS) {
+    raw->recycle();
+    return handle;
+  }
+  RawRuntimeColorContext ctx;
+  MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(*raw, ctx);
+  raw->recycle();
+  std::ifstream stream(raw_path, std::ios::binary);
+  const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(stream),
+                                        std::istreambuf_iterator<char>()};
+  const auto exif = MetadataExtractor::ExtractEXIFFromBuffer(bytes.data(), bytes.size());
+  if (!exif) throw std::runtime_error("DNG fixture metadata is missing");
+  ctx.dng_profile_ = ReadDngColorProfile(exif->exifData());
+  image.SetRawColorContext(std::move(ctx));
+  return handle;
 }
 
 static std::shared_ptr<ThumbnailGuard> GetThumbnailBlocking(
@@ -1036,9 +1080,10 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   }
 
   ProjectService             project(db_path_, meta_path_);
-  auto                       fs_service = project.GetSleeveService();
-  auto                       img_pool   = project.GetImagePoolService();
-  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto                       fs_service        = project.GetSleeveService();
+  auto                       img_pool          = project.GetImagePoolService();
+  auto                       pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl          import_service(fs_service, img_pool, pipeline_service);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
@@ -1064,10 +1109,9 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   project.GetImagePoolService()->SyncWithStorage();
   project.SaveProject(meta_path_);
 
-  const auto       element_id       = snapshot.created_.front().element_id_;
-  const auto       image_id         = snapshot.created_.front().image_id_;
+  const auto       element_id = snapshot.created_.front().element_id_;
+  const auto       image_id   = snapshot.created_.front().image_id_;
 
-  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
   // Pin the live guard and mark it dirty. A correct snapshot render must leave
@@ -1100,7 +1144,7 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   pipeline_service->SavePipeline(live_guard);  // release the test's pin
 }
 
-TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExecutor) {
+TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocument) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
@@ -1109,7 +1153,8 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExec
   ProjectService             project(db_path_, meta_path_);
   auto                       fs_service = project.GetSleeveService();
   auto                       img_pool   = project.GetImagePoolService();
-  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto                       pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl          import_service(fs_service, img_pool, pipeline_service);
   auto                       import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> imported;
   auto                       imported_future = imported.get_future();
@@ -1129,7 +1174,6 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExec
 
   const auto       element_id       = import_snapshot.created_.front().element_id_;
   const auto       image_id         = import_snapshot.created_.front().image_id_;
-  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
   auto             live_guard = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(live_guard, nullptr);
@@ -1137,40 +1181,15 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExec
   live_guard->dirty_ = true;
   ASSERT_EQ(live_guard->pin_count_, size_t{1});
   EXPECT_TRUE(live_guard->pipeline_->HasGpuDagDocument());
-
-  std::string snap_err;
-  auto        snap = pipeline_service->LoadPipelineSnapshot(element_id, image_id, &snap_err);
-  ASSERT_NE(snap, nullptr) << snap_err;
-  ASSERT_NE(snap->executor_, nullptr);
-  EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
-
-  auto img = img_pool->Read<std::shared_ptr<Image>>(
-      image_id, [](const std::shared_ptr<Image>& image) { return image; });
-  ASSERT_NE(img, nullptr);
-  ASSERT_TRUE(img->HasRawColorContext());
-  snap->executor_->InjectRawMetadata(img->GetRawColorContext());
-  snap->executor_->SetForceCPUOutput(true);
-  snap->executor_->SetEnableCache(false);
-  snap->executor_->SetDecodeRes(DecodeRes::EIGHTH);
-  snap->executor_->SetRenderRes(false, 256);
-  auto encoded = ByteBufferLoader::LoadByteBufferFromImage(img);
-  auto input   = std::make_shared<ImageBuffer>(std::move(encoded));
-  std::shared_ptr<ImageBuffer> dag_output;
-  try {
-    std::unique_lock<std::mutex> render_lock(snap->executor_->GetRenderLock());
-    dag_output = snap->executor_->Apply(input);
-  } catch (const std::exception& e) {
-    FAIL() << e.what();
-  }
-  ASSERT_NE(dag_output, nullptr);
-  EXPECT_TRUE(dag_output->cpu_data_valid_);
-
-  pipeline_service->ReleasePipelineSnapshot(snap);
+  CPUPipelineExecutor* const live_executor = live_guard->pipeline_.get();
+  PipelineDocument* const    live_document = live_guard->document_.get();
 
   auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                         ThumbnailResolution::k256);
   ASSERT_NE(thumbnail, nullptr);
   ASSERT_NE(thumbnail->thumbnail_buffer_, nullptr);
+  EXPECT_EQ(live_guard->pipeline_.get(), live_executor);
+  EXPECT_EQ(live_guard->document_.get(), live_document);
   EXPECT_EQ(live_guard->pin_count_, size_t{1});
   EXPECT_TRUE(live_guard->dirty_);
 
@@ -1178,6 +1197,109 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailRendersWithoutUsingLiveEditorExec
   pipeline_service->SavePipeline(live_guard);
 }
 
+TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesGpuDagDocumentWithoutStageApplyOnto) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  if (!std::filesystem::exists(raw_path)) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
+  }
+
+  ProjectService project(db_path_, meta_path_);
+  auto           img_pool = project.GetImagePoolService();
+  auto           pinned   = PinLinearDngInPool(*img_pool, raw_path);
+  ASSERT_TRUE(pinned);
+  ASSERT_TRUE(pinned.Get()->HasRawColorContext());
+  const auto image_id   = pinned.Get()->image_id_;
+  const auto element_id = sl_element_id_t{1};
+
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
+  auto             live_guard = pipeline_service->LoadPipeline(element_id);
+  ASSERT_NE(live_guard, nullptr);
+  ASSERT_NE(live_guard->document_, nullptr);
+  live_guard->pipeline_->InjectRawMetadata(pinned.Get()->GetRawColorContext());
+  auto* exposure = live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  ASSERT_NE(exposure, nullptr);
+  exposure->LoadJson({{"exposure_ev", 2.25f}});
+  nlohmann::json stage_exposure;
+  stage_exposure["exposure"] = 9.0f;
+  live_guard->pipeline_->GetStage(PipelineStageName::Basic_Adjustment)
+      .SetOperator(OperatorType::EXPOSURE, stage_exposure);
+  live_guard->dirty_   = true;
+  const auto live_json = live_guard->document_->ToJson().dump();
+  EXPECT_EQ(live_guard->document_.get(), live_guard->pipeline_->GpuDagDocument().get());
+  EXPECT_FLOAT_EQ(exposure->ToJson().at("exposure_ev").get<float>(), 2.25f);
+
+  std::promise<ThumbnailRequestResult> done;
+  auto                                 done_future = done.get_future();
+  thumbnail_service.GetThumbnailDetailed(
+      element_id, image_id,
+      [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); }, true, nullptr,
+      ThumbnailResolution::k256);
+  ASSERT_EQ(done_future.wait_for(60s), std::future_status::ready);
+  const auto thumb_result = done_future.get();
+  EXPECT_EQ(thumb_result.status, ThumbnailRequestStatus::kReady) << thumb_result.message;
+  ASSERT_NE(thumb_result.guard, nullptr);
+  ASSERT_NE(thumb_result.guard->thumbnail_buffer_, nullptr);
+  EXPECT_EQ(live_guard->document_->ToJson().dump(), live_json);
+  EXPECT_EQ(live_guard->pin_count_, size_t{1});
+  EXPECT_TRUE(live_guard->dirty_);
+  EXPECT_FLOAT_EQ(live_guard->document_->PrimaryGrade()
+                      ->FindAdjustmentByType(type_ids::Exposure())
+                      ->ToJson()
+                      .at("exposure_ev")
+                      .get<float>(),
+                  2.25f);
+
+  thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
+  pipeline_service->SavePipeline(live_guard);
+}
+
+TEST_F(ThumbnailServiceTests, AnalysisRenditionUsesLiveDocument) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  if (!std::filesystem::exists(raw_path)) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
+  }
+
+  ProjectService project(db_path_, meta_path_);
+  auto           img_pool = project.GetImagePoolService();
+  auto           pinned   = PinLinearDngInPool(*img_pool, raw_path);
+  ASSERT_TRUE(pinned);
+  ASSERT_TRUE(pinned.Get()->HasRawColorContext());
+  const auto image_id   = pinned.Get()->image_id_;
+  const auto element_id = sl_element_id_t{1};
+
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
+  auto             live_guard = pipeline_service->LoadPipeline(element_id);
+  ASSERT_NE(live_guard, nullptr);
+  ASSERT_NE(live_guard->document_, nullptr);
+  live_guard->pipeline_->InjectRawMetadata(pinned.Get()->GetRawColorContext());
+  auto* analysis_exposure =
+      live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  ASSERT_NE(analysis_exposure, nullptr);
+  analysis_exposure->LoadJson({{"exposure_ev", 2.25f}});
+  live_guard->dirty_   = true;
+  const auto live_json = live_guard->document_->ToJson().dump();
+  PipelineDocument* const live_document = live_guard->document_.get();
+
+  std::promise<ThumbnailRequestResult> done;
+  auto                                 done_future = done.get_future();
+  thumbnail_service.RequestAnalysisRendition(
+      element_id, image_id, ThumbnailResolution::k256,
+      [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); });
+  ASSERT_EQ(done_future.wait_for(60s), std::future_status::ready);
+  const auto result = done_future.get();
+  EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
+  ASSERT_NE(result.guard, nullptr);
+  ASSERT_NE(result.guard->thumbnail_buffer_, nullptr);
+  EXPECT_EQ(live_guard->document_.get(), live_document);
+  EXPECT_EQ(live_guard->document_->ToJson().dump(), live_json);
+  EXPECT_EQ(live_guard->pin_count_, size_t{1});
+  EXPECT_TRUE(live_guard->dirty_);
+
+  thumbnail_service.ReleaseAnalysisRendition(result.key);
+  pipeline_service->SavePipeline(live_guard);
+}
 TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
@@ -2630,9 +2752,10 @@ TEST_F(ThumbnailServiceTests, CancelPendingDrainsAllResolutions) {
 TEST_F(ThumbnailServiceTests, ReleaseThumbnailTriggersCancel) {
   // ReleaseThumbnail() calls CancelPending() internally (Strategy A+C).
   ProjectService            project(db_path_, meta_path_);
-  auto                      fs_service = project.GetSleeveService();
-  auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto                      fs_service        = project.GetSleeveService();
+  auto                      img_pool          = project.GetImagePoolService();
+  auto                      pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl         import_service(fs_service, img_pool, pipeline_service);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2642,8 +2765,6 @@ TEST_F(ThumbnailServiceTests, ReleaseThumbnailTriggersCancel) {
     }
   }
   ASSERT_GE(paths.size(), 1u);
-
-  auto            pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
   sl_element_id_t eid              = 0;
   image_id_t      iid              = 0;

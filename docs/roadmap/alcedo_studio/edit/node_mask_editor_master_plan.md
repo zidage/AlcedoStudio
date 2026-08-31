@@ -2,7 +2,17 @@
 
 Date: 2026-08-29
 
-Status: NM0 complete；NM1–NM8 planned。
+Status: NM0 complete；NM1 in progress；NM2–NM8 planned。NML cancelled (2026-08-30).
+
+2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
+executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
+的恢复依据，完整 typed history、节点 recovery 与项目格式切换仍在 NM4。
+NM1.4 C 已有未提交的共享 executor 实现，但验收未通过；新增 NM1.4R 修复作为 NM1.5 的前置阶段。
+R 处理任务请求、后台工作区占用、使用权与完整导出 recipe，不增加全局显存预算驱动的并发调度。
+2026-08-31 补充：后台 scratch 不做首轮像素估算或历史容量预留，按实际请求申请，用完释放，
+不保留空闲块；不增加通用两阶段分配或延迟指针回填机制。
+[缩略图磁盘写回 Issue #113](https://github.com/zidage/AlcedoStudio/issues/113)单独跟踪，后续讨论由
+disk cache service 拥有写回/失效机制；不在 R 中实施，也不作为 NM1.5 的前置条件。
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -11,6 +21,10 @@ Status: NM0 complete；NM1–NM8 planned。
 
 本文件定义背景、产品语义、目标架构、跨模块边界、一级 Phase 顺序、主要调用链、风险和
 最终验收范围。它固定 `NM0` 到 `NM8` 的阶段门槛，但不预先写每个阶段内部的详细执行步骤。
+一级 Phase `NML`（旧 stage 存储升级到默认 DAG）于 2026-08-30 取消。产品不打开 DAG document
+之前的 stage-only 项目，也不迁移旧 mini-git commit。后续 Phase 删除 CPU stage 表，不做旧
+项目升级。最终格式发布时通过项目 metadata 版本统一拒绝旧项目，不设计 v2/stage 迁移。
+详细边界见 [NM1 执行方案](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md)第 3、10、11 节。
 开始某个一级 Phase 前，再根据当时的代码状态创建对应执行方案；该文件继续拆成
 `NMx.1`、`NMx.2` 等具体子 Phase，并决定实际 PR/branch 粒度。执行方案可以调整内部拆分，
 但不得无说明地越过本文的一级依赖或改变已经锁定的产品语义。
@@ -72,13 +86,22 @@ DRT and Post Processing
 
 ```text
 PipelineDocument
-  = 当前图片、当前 Version、当前 working head 的唯一可写编辑状态
+  = 当前图片的唯一可写内存编辑状态，允许包含尚未提交的 preview
 
-GPU runtime / execution plan / QML projection / history projection
+GPU runtime / execution plan / QML parameter projection
   = PipelineDocument 的派生状态
+
+History
+  = 唯一 Version/HEAD；已提交编辑的记录和恢复依据
+
+Pipeline checkpoint
+  = 已保存 document + 对应的 commit hash 标签；只用于快速读取
 ```
 
-旧 stage adapter 不得继续接收 UI 写入后再反向覆盖新图。
+PipelineMgmtService 管理同一图片的使用权和存活期；editor、thumbnail、analysis、export
+可以共用 document/executor，单次请求参数由 scheduler 在 render lock 内安装和恢复。
+旧 stage adapter 不得继续接收 UI 写入后再反向覆盖新图；后台释放不隐式保存编辑。
+NM4 才完成 history 对新图的持久化和重放，不能为填阶段空缺在 NM1 新建一套历史模型。
 
 ### 2.2 PipelineGraph 只有添加和连接
 
@@ -197,7 +220,7 @@ Mask 的唯一组合语义是 Union。
 - 节点和蒙版 edit history；
 - 每个 Version 对应一份 DAG；
 - Paste 创建新 Version；
-- 当前格式数据升级、存储恢复、重开和跨后端验证。
+- 新项目格式切换、存储恢复、重开和跨后端验证；不迁移旧项目。
 
 ### 4.2 本方案不包含
 
@@ -209,7 +232,9 @@ Mask 的唯一组合语义是 Union。
 - AI segmentation mask；
 - 在节点编辑器中显示内部 GPU pass；
 - detached HEAD；
-- 新的管线 merge 操作。
+- 新的管线 merge 操作；
+- 打开或升级 DAG document 之前的 stage-only 项目；
+- 把旧 mini-git commit 从 stage 身份迁移成 DAG mutation。
 
 ---
 
@@ -268,7 +293,7 @@ Develop -> ColorGrade[0] -> ... -> ColorGrade[n] -> DRT/Post
 7. 该路径必须经过全部 Color Grade 并最终到达 DRT/Post；
 8. scene-image 端口不允许 fan-out 或 fan-in；
 9. Mask 不作为可自由连接的顶层 graph node；
-10. 图结构修改必须先在候选文档上完成全部验证，再替换 live document；
+10. 图结构修改在同一访问互斥范围内完成，预查条件并保留受影响节点/边以便局部恢复，不复制整份文档；
 11. 失败的修改不能留下部分 edge、history commit 或半更新的 UI projection。
 
 这个限制不是退回串行 stage。NodeId、edge、拓扑 hash、编译顺序、Version 文档仍然是图数据；
@@ -326,7 +351,7 @@ SetColorGradeEnabled(node_id, enabled)
 | DRT method / output transform | 否 | 否 | 是 | 否 |
 | Crop / rotation / image geometry | 否 | 否 | 否 | 是 |
 
-DRT/Post endpoint 可以继续保留现有序列化 type ID，以降低当前文档升级成本，但其 model 和
+DRT/Post endpoint 可以继续保留现有序列化 type ID，但其 model 和
 execution plan 必须实际拥有后处理参数。中间 Color Grade 的 adjustment catalog 不得创建
 Clarity、Sharpen、Halation 或 Film Grain 实例。
 
@@ -346,7 +371,8 @@ auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel
 - 创建 Develop、Default Color Grade、DRT/Post；
 - Default Color Grade 使用当前产品基线，包括 Exposure `+1.5 EV` 和 Saturation `+30`
   对应的新模型数值；
-- 为图片 root 记录当时的完整默认文档，后续代码默认值变化不能重写已存在 root。
+- 导入时加入图片固有参数；NM4 保证初始状态在项目格式内可稳定重建，
+  后续默认值变化不能改变既有历史重放。NM1 不为此新增持久化 root document。
 
 `CreateCleanColorGradeNode()`：
 
@@ -605,8 +631,10 @@ EditorParameterTarget
   field_key
 ```
 
-每次输入序列开始时锁定 target。即使用户在拖动期间通过快捷键或其他 UI 改变 selected node，
-当前序列也必须继续写入开始时的 NodeId/MaskId，或者明确取消；不能把后半段值写到另一个节点。
+每个 patch 必须携带完整 `EditorParameterTarget`。缺少 `owner_kind`、`node_id` 或 Color Grade
+的 `adjustment_instance_id` 时拒绝写入；不根据 field catalog 或选中节点填入缺省 target。
+输入序列的第一个合法 patch 锁定 target；同一序列的后续完整 patch 复用该锁定。详见 NM1
+执行方案第 3.1 节。
 
 ### 11.2 Mutation 分类
 
@@ -633,18 +661,20 @@ Mask 列表 UI 重排和 QuickQanava layout 不属于照片 mutation。
 
 ### 11.3 原子执行
 
-Graph 和 Mask 结构修改使用 prepared operation：
+原子性表示外部看不到半次修改，输入或结构失败能够恢复；不要求整图复制或多对象发布协议。
 
-1. clone 当前 `PipelineDocument`；
-2. 对候选文档应用 typed mutation；
-3. 验证 graph、参数所有权、MaskId 唯一性和 asset 引用；
-4. 为当前 backend 准备或验证新的 static execution plan；
-5. 构造 forward/inverse history payload；
-6. 只有全部准备成功后，原子发布 document、working head 和 projection revision；
-7. 提交 Quality render；
-8. 任一步失败都保留旧 document、旧 history tip 和最后一帧。
+1. 解析输入，通过 Model 规范化值，检查目标、参数所有权、连接与 asset 引用；
+2. 预先准备必要的局部参数、节点或资源，保留受影响的 before 数据；
+3. 在统一的 live pipeline 访问互斥范围内原地应用领域函数；
+4. 结构变化验证 graph/Mask 不变量，失败只恢复受影响对象；普通参数修改不做整图拓扑验证；
+5. settled 按 WAL 顺序记录同一份修改并完成 history/live 更新，成功后通知 projection 和提交渲染；
+6. preview 不写 WAL、不移动 HEAD，取消恢复输入开始时的局部 before。
 
-不允许通过捕获异常后继续使用旧 stage 或较弱管线路径来隐藏失败。
+完整结构 forward/inverse、WAL 节点重放与 Version/Paste 属于 NM4。NM1 只保留已完成的
+同会话参数 history 接线，不借此新增持久化桥接或 candidate 服务。
+失败恢复不重建无关 OperatorModel，不通过整图 JSON 重演模型行为。
+GPU 执行失败返回真实错误并保留最后一帧；已经记录成功的编辑不会因此被隐式撤销。
+不允许通过捕获异常后继续使用旧 stage、其他 backend 或较低质量来隐藏失败。
 
 ---
 
@@ -751,23 +781,28 @@ busy state 或 QSG overlay 更新而全量刷新。
 
 ## 14. Version 和 Paste
 
-### 14.1 每个 Version 对应一份 DAG
+### 14.1 每个 Version 可以重建自己的 DAG
 
 Version 仍然是 named ref，history 仍然拥有唯一 HEAD。语义改为：
 
 ```text
 image root
-  = 导入元数据解析完成后的不可变默认 PipelineDocument
+  = 确定的初始默认状态 + 图片固有参数，是重放起点
 
 Version head
-  = 从 root 沿 first-parent commits 重放后得到的 PipelineDocument
+  = 历史提交位置；从初始状态沿 first-parent commits 应用得到该 Version 的 document
 
 serialized_pipeline_state
-  = 与 materialized head/chain 匹配的 PipelineDocument checkpoint
+  = document + 已落实的 commit hash 标签，用于跳过不必要的重放
 ```
 
-新建默认 Version 指向当前三节点 root。新建 Version at root 也恢复三节点 DAG，而不是复制当前
-working graph。
+每个 Version 对应一份逻辑结果，不表示每个 Version 常驻一份可写 document。切换时仍然只操作
+该图片的一个 live document。初始状态清除先前用户编辑，但保留图片固有参数；Default 与 Clean
+Grade 的区别不变。新建默认 Version 指向初始三节点状态。
+
+NM4 负责稳定初始状态、typed payload 和实际 checkpoint 标签的存储，先接入有效 WAL 再比较
+history HEAD 与 checkpoint 的 commit hash；相符就加载，不符就重放。Pipeline 标签不自行移动 HEAD，
+也不是从 history 实时读一个 getter 来声称 Model 已经应用成功。不要求额外的逐参数 chain 比较。
 
 ### 14.2 Pipeline DAG merge 取消
 
@@ -776,10 +811,8 @@ Adjustment Transfer 产品层只保留 Paste：
 - UI 删除 Merge 入口、冲突对话框和 merge-specific 状态；
 - service 不再创建新的 two-parent pipeline merge commit；
 - 不定义 NodeId 匹配、edge 冲突、Mask 冲突或两个 DAG 的自动合并；
-- history 存储如果已经包含旧 two-parent merge commit，默认保留读取和 first-parent replay
-  能力，避免现有项目无法打开；
-- 是否在下一次项目格式升级中彻底转换旧 merge commit，必须在数据迁移测试后单独决定，不能
-  静默丢弃。
+- 新项目格式不读取或转换旧项目内的 merge commit；旧项目在打开入口明确拒绝，
+  不能为了兼容旧提交保留 stage 编辑路径。
 
 取消新的 merge 产品操作不等于把 history commit graph 改成线性数组。Version 分支和共享
 祖先仍然保留。
@@ -788,15 +821,15 @@ Adjustment Transfer 产品层只保留 Paste：
 
 Paste 是“把一份可转移 PipelineDocument 写成目标图片的新 Version”，不是把它与当前图合并：
 
-1. 读取目标图片不可变 root；
+1. 取得目标图片的初始状态定义和图片固有参数；
 2. 保留目标 Develop endpoint 及其 RAW metadata/camera profile/lens identity；
 3. 从 transfer package 导入 Color Grade 主链、参数、Mask 和 DRT/Post 可转移参数；
-4. 按目标 root 重新映射 NodeId、AdjustmentInstanceId 和 MaskId；
+4. 按目标图片重新映射 NodeId、AdjustmentInstanceId 和 MaskId；
 5. 复制或复用内容寻址 MaskAsset；
 6. 验证目标 image backbone 和参数所有权；
 7. 创建一个新的 named Version；
 8. 将该 Version 设为 active；
-9. 进行一次原子的 history/pipeline/storage publication；
+9. 在唯一 live document 上完成局部操作，使用 WAL/history 正常记录和保存，不建立第二份候选编辑模型；
 10. 请求 Quality render。
 
 Document geometry 默认不随 Paste 转移，避免把源图片比例和 crop 直接套到目标图片；如果产品
@@ -838,7 +871,7 @@ connectorCreateDefaultEdge = false
 connectorRequestEdgeCreation
   -> EditorNodeController validate
   -> typed reconnect mutation
-  -> PipelineDocument publish
+  -> apply command on live PipelineDocument
   -> graph projection revision
 ```
 
@@ -957,7 +990,7 @@ version_id / working head generation
 NodeId
 MaskId
 Mask source kind
-before snapshot
+before parameters of the edited mask
 provisional params or stroke
 dirty rectangle
 ```
@@ -979,14 +1012,14 @@ select Color Grade
 
 - image switch、Version checkout、Undo/Redo、node deletion 前必须完成或取消 authoring；
 - stale session generation 的异步 render/result 不得更新新图片 overlay；
-- Escape 恢复 before snapshot；
+- Escape 恢复被编辑 Mask 的 before 参数；
 - Delete 删除 selected Mask，但不能删除错误节点中同 index 的 Mask；
 - viewer pan/zoom 与 Mask authoring 使用明确 mode/focus 路由，不能同时解释同一个 pointer input；
 - keyboard 用户可以选择 Mask、移动控制点、调整数值并退出模式。
 
 ---
 
-## 19. 序列化与数据升级
+## 19. 序列化与项目格式切换
 
 新 PipelineDocument schema 至少保存：
 
@@ -1012,17 +1045,13 @@ select Color Grade
 - render request；
 - panel active page。
 
-由于当前 format v2 使用单 `grade.primary` 和顶层 MaskNode，新模型需要提升 document format。
-提供一个明确、单向的当前 v2 -> 新格式转换：
+NM4 在节点、Mask 和 history 数据就绪后统一切换 document/history/project metadata 格式。
+新版本只创建和读取新项目；旧项目在打开入口返回 unsupported-format error，不转换当前 v2
+或 stage 项目，不重算旧提交。
 
-- `grade.primary` 成为 Default Color Grade；
-- 当前唯一 mask edge 转成该 grade 的第一个 Mask；
-- Clarity/Sharpen/Halation/Film Grain 从 primary grade 移到 DRT/Post；
-- 保留节点参数和 MaskAssetKey；
-- 无法满足新不变量的数据返回明确升级错误；
-- 旧 stage JSON 仍按 GPU DAG 计划返回 unsupported-format error，不恢复 legacy 编辑路径。
-
-转换必须有 golden JSON、round-trip、错误注入和真实项目 reopen 测试。
+NM1 使用当前开发图格式完成模型和 document 保存读取；NM2/NM3 修改节点字段与所有权，
+不因此要求 NM1 先实现最终项目版本。NM4 才证明新格式的 golden JSON、round-trip、
+错误处理、history recovery 与真实项目 reopen。合法性校验留在读取边界，不在渲染调用方逐层分流。
 
 ---
 
@@ -1033,15 +1062,12 @@ select Color Grade
 ```text
 NodeEditorPanel / QuickQanava action
   -> EditorNodeController::AddCleanColorGrade
-  -> EditorPipelineCommandService::Prepare
-  -> Clone PipelineDocument
+  -> validate command inputs and acquire live pipeline access
   -> CreateCleanColorGradeNode
-  -> Insert node + reconnect candidate backbone
+  -> Insert node + reconnect live backbone (keep affected edges for rollback)
   -> Validate graph and ownership
-  -> Compile/validate static plan
-  -> Build PipelineEditBatch
-  -> append journal + move active Version head
-  -> publish PipelineDocument + graph/context/history revisions
+  -> record PipelineEditBatch with WAL/history ordering (NM4)
+  -> finish local change and notify graph/context/history projections
   -> submit GraphTopologyChanged Quality render
 ```
 
@@ -1092,10 +1118,9 @@ pointer samples
 ```text
 Version selected
   -> finish/cancel provisional input
-  -> reconstruct PipelineDocument from root + first-parent commits
+  -> reset the same live document to initial state and apply first-parent commits
   -> validate graph/assets
-  -> prepare runtime execution plan
-  -> atomically publish active Version + document
+  -> finish WAL/history head move; failure restores prior state through existing operations
   -> replace node/context/history projections
   -> VersionDocumentChanged Quality render
 ```
@@ -1104,12 +1129,12 @@ Version selected
 
 ```text
 Adjustment Transfer Paste
-  -> read target root PipelineDocument
+  -> read target initial state and image metadata
   -> import transferable grade chain + DRT/Post params + Mask assets
   -> remap IDs
-  -> validate and prepare runtime
+  -> validate local changes and apply to the same live document
   -> create and activate new Version
-  -> atomic storage publication
+  -> finish WAL/history operation and use normal persistence
   -> PastedPipelineDocument Quality render
 ```
 
@@ -1126,7 +1151,8 @@ Adjustment Transfer Paste
 | Phase | Status | 未来执行方案 | 阶段结果 |
 | --- | --- | --- | --- |
 | NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
-| NM1 — PipelineDocument Editing Foundation | planned | `node_mask_editor/phase_nm1_pipeline_document_editing_plan.md` | 删除双写来源，建立 graph 不变量、Clean node 和 typed mutation |
+| NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | 单 live document；共享 executor；R 修复任务请求、后台资源占用、使用权与导出 recipe；随后统一 document I/O |
+| NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
 | NM2 — Multi-Grade Runtime and Ownership | planned | `node_mask_editor/phase_nm2_multi_grade_runtime_plan.md` | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
 | NM3 — Multi-Mask Model and Runtime | planned | `node_mask_editor/phase_nm3_multi_mask_runtime_plan.md` | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
 | NM4 — History, Version, Recovery, and Paste | planned | `node_mask_editor/phase_nm4_history_version_paste_plan.md` | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
@@ -1234,16 +1260,50 @@ macOS debug linked `libQuickQanava.a` (Homebrew Qt 6.9.2, clang 21.1.1).
 
 ### 21.2 Phase NM1 — PipelineDocument Editing Foundation
 
+执行方案：[Phase NM1 PipelineDocument editing foundation](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md)。
+
 **为什么排在 UI 前：** 当前 legacy stage 和 `PipelineDocument` 仍然都可能影响编辑状态。
 如果先做 Nodes panel，QuickQanava 会成为第三个状态来源。
 
-**阶段边界：** 让 `PipelineDocument` 成为唯一可写编辑状态；增加候选文档 mutation、完整
-graph validation、原子 Add/Remove/Reconnect、stable IDs、Clean Color Grade 创建入口、typed
-parameter target 和失败回滚。调整面板可以暂时继续展示现有产品 UI，但所有写入必须经过新
-app service API。
+**阶段边界：** 一个 live `PipelineDocument` 作为内存编辑对象，领域函数原地修改参数与结构；
+保留完整 Add/Remove/Reconnect（含删除 Default / `grade.primary`）、stable IDs、Default/Clean、
+完整 target、输入锁定与局部失败恢复。后台任务共用该图片的 document/executor，
+获取/释放与保存分离；产品 Load/Apply/Save 无 stage 镜像。旧 stage 类型可留到后续删除。
+JSON 是存储格式，不是反复复制和发布的编辑模型。
 
-**退出条件：** legacy stage 不再反向覆盖新文档；无效 mutation 不改变 document/history
-head；默认三节点和 Clean node 行为有 model tests；UI 还未开放新增节点入口。
+NM1.4 先修正 NM1.1/NM1.3 的整图复制和访问锁，再移除产品 Apply 覆盖并迁移后台任务；
+**NM1.4R 必须先于 NM1.5 完成**：任务配置直接作为请求输入；后台 scratch 沿用 arena 接口，
+只按实际请求申请，不做首轮像素估算、历史高水位或增长余量预留；GPU 最后使用完成后释放底层
+分配，不以 Reset/Rewind 代替释放，不保留空闲块。不增加通用两阶段分配或延迟指针回填机制；
+中间图/ping-pong 按真实消费者寿命释放或安全复用；修复 release/repin 与完成同步；
+每图导出 recipe 在入队前确定实际输出色彩配置，渲染和编码/ICC 共用，不在渲染后回读 live DRT。
+用户明确不做全局显存预算、预留账本或基于预算动态调整 task 数；保留既有并行线程池、算法和质量。
+编辑器修改不与后台刷新/导出同时发生，但 thumbnail 与 export 可以并发；不为任意并发编辑增加冻结图。
+[缩略图/analysis 磁盘写回 Issue #113](https://github.com/zidage/AlcedoStudio/issues/113)留独立 Issue 讨论，
+目标由 disk cache service 管理，不在 scheduler callback 推测 live 编辑状态；不纳入 R 退出条件。
+NM1.5 随后完成保存读取和本阶段范围内的全阶段验收。完整 typed history、节点 recovery、Version/Paste 与项目
+格式切换仍由 NM4 完成，不为 NM1 的阶段空缺新增持久化记录或影子图。
+
+**退出条件：** 同图共享对象和请求参数不残留有测试；后台资源生命周期及真实 GPU 并发峰值有证据，
+区分仍在使用的内存、分配器保留量和设备实际占用，不能只证明逻辑释放或 CPU task 并发；
+导出 recipe 的输出配置与像素/ICC 一致；参数编辑不重建整图；无效修改恢复局部数据；
+Default/Clean、完整 target 与同会话已有参数 Undo/Redo 通过；thumbnail/analysis/export 使用 DAG；
+document 保存读取不丢节点和参数，后台释放不保存或清 dirty。坏图明确失败。
+NM1 不宣称完整节点 history/reopen 或多 Grade GPU 执行完成，不开放 Nodes 或缺少 target 的 UI 写入。
+
+### 21.2a Phase NML — 已取消（2026-08-30）
+
+后续 Phase 将删除 CPU stage 表。产品 stage 镜像会变成随后删除的额外工作。把旧 stage
+项目升级为默认 DAG 会改写参数和 mini-git commit。工作量大。本产品不保留这些旧项目。
+
+替代规则：
+
+- NM1 开发中的 document 读取只接受当前有效图，坏图真实失败，不从 stage/default 替代。
+- NM4 统一发布新项目 metadata/document/history 格式，旧项目在入口拒绝。
+  不以“旧项目碰巧含 v2 图”为理由继续打开，不 import、不改写 mini-git commit。
+- 后续 Phase 删除 CPU stage 表。该 Phase 不是旧项目升级。
+
+不要创建 `phase_nml_legacy_stage_dag_upgrade_plan.md`。
 
 ### 21.3 Phase NM2 — Multi-Grade Runtime and Parameter Ownership
 
@@ -1278,9 +1338,10 @@ immutable asset Undo 前置能力都有测试；尚不开放 viewer 绘制 UI。
 Version、journal、recovery 和 reopen 语义，不能把持久性留到 UI 之后补做。
 
 **阶段边界：** 普通 stage/operator payload 切换为 typed `PipelineEditBatch`；结构操作保存完整
-forward/inverse 数据；root、Version head 和 serialized checkpoint 都使用新
-`PipelineDocument`；完成 format v2 升级；Adjustment Transfer 删除新的 merge 创建路径，只
-保留创建新 Version 的 Paste；旧可达 merge commit 继续可读。
+forward/inverse 数据；替换 NM1.3 的同会话参数记录，完成初始状态、history HEAD 和 document
+checkpoint 的保存及重放。统一提升项目 metadata/document/history 格式，只支持新项目，不迁移旧提交。
+Adjustment Transfer 删除新的 merge 创建路径，只保留创建新 Version 的 Paste。
+继续通过 NM1 的领域函数操作同一个 live document，不恢复 candidate/snapshot 发布模型。
 
 **退出条件：** Add/Delete/Reconnect/Mask asset replacement 能在无 production UI 的 service
 integration tests 中 Undo/Redo、branch、checkout、recover 和 reopen；Paste 保留目标 Develop
@@ -1355,6 +1416,9 @@ NM0 QuickQanava baseline
   -> NM8 Product qualification and cutover
 ```
 
+NML 已取消。NM2 假定已打开的项目带有可用 DAG 文档。没有图的项目不会进入 NM2。后续
+Phase 删除 CPU stage 表。该删除不是旧项目升级。
+
 上一个 Phase 的退出条件是下一个 Phase 的输入。可以在前一个 Phase 接近完成时做只读审计或
 准备下一份执行方案，但不能提前向 production 暴露依赖尚未完成的操作。若实施证据证明必须
 改变一级顺序，先更新本总体方案并说明原因，不能只在执行分支中悄悄换序。
@@ -1421,7 +1485,7 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - 多 Mask Union 与 CPU reference 一致；
 - zero masks、all-disabled masks、one/many enabled masks 的边界行为；
 - MaskStore 同内容复用 key，不同内容不能覆盖旧 key；
-- v2 -> 新格式转换和 JSON round-trip。
+- 当前受支持格式的 JSON round-trip；旧项目 metadata 在入口被拒绝。
 
 ### 23.2 Runtime/backend tests
 
@@ -1443,8 +1507,8 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - Paste 创建新 Version，保留目标 Develop metadata；
 - Paste remap 后无 ID 冲突，Mask asset 可读取；
 - 不再创建新的 merge commit；
-- 旧可达 merge commit 仍可读取和 first-parent replay；
-- journal/recovery/reopen 后 working head、chain hash、document hash 一致。
+- 旧项目拒绝打开，不迁移旧 stage/merge 提交；
+- journal/recovery/reopen 后 checkpoint 的 commit 标签与 history HEAD 对应，document 等于该提交链的重放结果。
 
 ### 23.4 QML/UI tests
 
@@ -1515,7 +1579,11 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 
 症状：node panel 修改新 document，adjustment panel 仍修改 legacy stage，下一帧或保存时覆盖。
 
-处理：N1 先完成 PipelineDocument 单一写入来源；N5/N6 production 接入以此为前置条件。
+处理：NM1 让新编辑和全部渲染使用同一个 live `PipelineDocument`，history 仍决定已提交状态。
+NM1.4 删除整图复制和产品 Apply 的 stage 覆盖，再复用后台 executor；NM1.4R 收敛请求与后台
+资源生命周期、修复使用权和导出 recipe，完成后 NM1.5 才实施无镜像保存读取。
+坏图真实失败，项目格式统一切换留在 NM4。NM5/NM6 接入以前必须完成这些基础及 NM4 history。
+后续删除未被产品使用的 CPU stage 类型。
 
 ### 25.2 多 Grade 只在 compiler 表面循环
 
@@ -1546,7 +1614,8 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 
 ### 25.7 Paste 误复制源 RAW 状态
 
-处理：始终从目标 root 建文档并保留目标 Develop；transfer package 显式列出可转移内容。
+处理：在目标 live document 上应用目标图片的初始状态并保留目标 Develop；
+transfer package 显式列出可转移内容。
 
 ### 25.8 UI panel 太窄
 
@@ -1573,6 +1642,7 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - [ ] Adjustment Transfer 只创建 Paste Version，不再创建新的 pipeline merge commit。
 - [ ] Mask raster asset 不可变，stroke Undo/Redo 不依赖被覆盖文件。
 - [ ] CUDA、OpenCL、Metal 不使用 CPU 或其他 backend 替代路径。
+- [ ] 旧项目 metadata 在打开入口拒绝；当前格式坏图真实失败；产品路径不使用 stage 镜像。
 - [ ] Windows/macOS package 可加载 QuickQanava QML module 和全部新 panel。
 - [ ] 真实 RAW E2E、reopen、Version、Paste、性能和资源证据全部记录在最终资格验证记录中。
 

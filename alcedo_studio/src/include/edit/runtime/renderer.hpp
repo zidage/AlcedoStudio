@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -23,18 +25,13 @@
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/render_device_type.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
+#include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 
 class ImageBuffer;
-
-/** @brief Select whether a render may read or publish the editor session caches. */
-enum class RenderCachePolicy {
-  UseSessionCache,
-  BypassSessionCache,
-};
 
 using CudaProductCachePolicy = RenderCachePolicy;
 
@@ -62,6 +59,9 @@ struct RenderSessionResources {
   std::size_t               texture_pool_entry_count    = 0;
   std::size_t               prepared_source_host_bytes  = 0;
   std::size_t               prepared_source_entry_count = 0;
+  std::size_t               transient_used_bytes        = 0;
+  std::size_t               transient_capacity_bytes    = 0;
+  std::size_t               transient_slab_count        = 0;
   std::vector<GraphValueId> session_value_ids;
 };
 
@@ -101,7 +101,8 @@ class Renderer {
   [[nodiscard]] auto Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
                             const RenderRequest& request, IFrameSink* sink,
                             const FrameCompletionSubmission& submission, bool require_host_output,
-                            RenderCachePolicy cache_policy = RenderCachePolicy::UseSessionCache)
+                            RenderCachePolicy cache_policy = RenderCachePolicy::UseSessionCache,
+                            const std::optional<ExportColorProfileConfig>& output_color = {})
       -> std::shared_ptr<ImageBuffer>;
 
   /** @brief Snapshot of source and static-plan cache counters since construction or ResetStats. */
@@ -109,11 +110,13 @@ class Renderer {
   void               ResetStats();
 
   /**
-   * @brief Drop GPU result textures, host prepared sources, the plan cache, and
-   *        backend session extras. Keeps the session device.
+   * @brief Drop GPU result textures, host prepared sources, the plan cache, the
+   *        one-shot device, and backend session extras.
    *
-   * Call when the pipeline is returned to PipelineMgmtService. The next Render
-   * rebuilds caches from the still-owned PipelineDocument.
+   * The session device is kept when it already exists so the next editor Render
+   * does not rebuild CUDA/Metal/OpenCL streams. Thumbnail-only Bypass renders
+   * never create that session device. Call when the last pipeline pin is
+   * released. The next Render rebuilds caches from the still-owned document.
    */
   void ReleaseSessionCaches();
 
@@ -127,8 +130,33 @@ class Renderer {
    */
   [[nodiscard]] auto OneShotPublishedResultCount() const -> std::size_t;
 
-  [[nodiscard]] auto Device() -> RenderDevice& { return *device_; }
-  [[nodiscard]] auto Device() const -> const RenderDevice& { return *device_; }
+  /**
+   * @brief Live allocations of the isolated one-shot workspace.
+   *
+   * Empty when no one-shot device exists. After a successful BypassSessionCache
+   * render, published results and texture-pool used bytes are zero because that
+   * workspace is released on delivery. Session prepared-source fields stay zero.
+   */
+  [[nodiscard]] auto OneShotResources() const -> RenderSessionResources;
+
+  /**
+   * @brief Address of the lazily created one-shot device, or 0 if none exists.
+   *
+   * Stable across BypassSessionCache renders until @ref ReleaseSessionCaches.
+   * Tests use this to detect per-Apply device reconstruction.
+   */
+  [[nodiscard]] auto DebugOneShotDeviceIdentity() const -> std::uintptr_t;
+
+  [[nodiscard]] auto Device() -> RenderDevice& {
+    EnsureSessionDevice();
+    return *device_;
+  }
+  [[nodiscard]] auto Device() const -> const RenderDevice& {
+    if (!device_) {
+      throw std::runtime_error("Renderer: session device has not been created");
+    }
+    return *device_;
+  }
 
   [[nodiscard]] auto SourceCache() -> PreparedSourceCache& { return source_cache_; }
   [[nodiscard]] auto SourceCache() const -> const PreparedSourceCache& { return source_cache_; }
@@ -137,6 +165,7 @@ class Renderer {
   [[nodiscard]] auto MaskAssets() -> MaskStore&;
 
  private:
+  void EnsureSessionDevice();
   void EnsureOneShotDevice();
   void ConfigureDevice(RenderDevice& device, const char* error_label);
 
@@ -157,7 +186,7 @@ template <class Backend>
 Renderer<Backend>::Renderer(std::shared_ptr<PipelineDocument> document,
                             PreparedSourceCache::UnpackFn     unpack)
     : document_(std::move(document)),
-      device_(std::make_unique<RenderDevice>()),
+      device_(),
       one_shot_device_(),
       mask_store_(std::make_unique<MaskStore>(std::filesystem::temp_directory_path() /
                                               "alcedo_studio" / "product_mask_store")),
@@ -167,9 +196,7 @@ Renderer<Backend>::Renderer(std::shared_ptr<PipelineDocument> document,
                          return RawInputLoader::LoadEncoded(encoded, decode_res);
                        }}),
       source_cache_(unpack_),
-      plan_cache_(Backend::kCapabilityVersion) {
-  ConfigureDevice(*device_, "product");
-}
+      plan_cache_(Backend::kCapabilityVersion) {}
 
 template <class Backend>
 Renderer<Backend>::~Renderer() = default;
@@ -181,6 +208,15 @@ void Renderer<Backend>::ConfigureDevice(RenderDevice& device, const char* error_
     std::fprintf(stderr, "[ERROR] %s DAG %s render failed: %.*s\n", Backend::kName, error_label,
                  static_cast<int>(message.size()), message.data());
   });
+}
+
+template <class Backend>
+void Renderer<Backend>::EnsureSessionDevice() {
+  if (device_) {
+    return;
+  }
+  device_ = std::make_unique<RenderDevice>();
+  ConfigureDevice(*device_, "product");
 }
 
 template <class Backend>
@@ -216,7 +252,9 @@ auto Renderer<Backend>::Stats() const -> RenderSessionStats {
   stats.plan_cache_hits          = plan.hits;
   stats.plan_cache_misses        = plan.misses;
   stats.plan_compile_count       = plan.compiles;
-  stats.pass                     = device_->PassStats();
+  if (device_) {
+    stats.pass = device_->PassStats();
+  }
   return stats;
 }
 
@@ -224,11 +262,16 @@ template <class Backend>
 void Renderer<Backend>::ResetStats() {
   source_cache_.ResetStats();
   plan_cache_.ResetStats();
-  device_->ResetPassStats();
+  if (device_) {
+    device_->ResetPassStats();
+  }
 }
 
 template <class Backend>
 void Renderer<Backend>::ReleaseSessionCaches() {
+  one_shot_device_.reset();
+  source_cache_.Clear();
+  plan_cache_.Clear();
   if (!device_) {
     return;
   }
@@ -237,9 +280,6 @@ void Renderer<Backend>::ReleaseSessionCaches() {
   if constexpr (requires(RenderDevice& device) { device.ReleaseNeuralDemosaicWorkspace(); }) {
     device_->ReleaseNeuralDemosaicWorkspace();
   }
-  one_shot_device_.reset();
-  source_cache_.Clear();
-  plan_cache_.Clear();
   device_->ResetPassStats();
 }
 
@@ -255,6 +295,9 @@ auto Renderer<Backend>::SessionResources() const -> RenderSessionResources {
   resources.texture_pool_entry_count    = workspace.Textures().EntryCount();
   resources.prepared_source_host_bytes  = source_cache_.HostBytesUsed();
   resources.prepared_source_entry_count = source_cache_.EntryCount();
+  resources.transient_used_bytes        = workspace.TransientBuffers().used_bytes();
+  resources.transient_capacity_bytes    = workspace.TransientBuffers().capacity_bytes();
+  resources.transient_slab_count        = workspace.TransientBuffers().slab_count();
   resources.session_value_ids           = workspace.Images().CurrentValueIds();
   return resources;
 }
@@ -265,6 +308,28 @@ auto Renderer<Backend>::OneShotPublishedResultCount() const -> std::size_t {
     return 0;
   }
   return one_shot_device_->Workspace().Images().PublishedCount();
+}
+
+template <class Backend>
+auto Renderer<Backend>::OneShotResources() const -> RenderSessionResources {
+  RenderSessionResources resources;
+  if (!one_shot_device_) {
+    return resources;
+  }
+  const auto& workspace              = one_shot_device_->Workspace();
+  resources.published_result_count   = workspace.Images().PublishedCount();
+  resources.texture_pool_used_bytes  = workspace.Textures().UsedBytes();
+  resources.texture_pool_entry_count = workspace.Textures().EntryCount();
+  resources.transient_used_bytes     = workspace.TransientBuffers().used_bytes();
+  resources.transient_capacity_bytes = workspace.TransientBuffers().capacity_bytes();
+  resources.transient_slab_count     = workspace.TransientBuffers().slab_count();
+  resources.session_value_ids        = workspace.Images().CurrentValueIds();
+  return resources;
+}
+
+template <class Backend>
+auto Renderer<Backend>::DebugOneShotDeviceIdentity() const -> std::uintptr_t {
+  return reinterpret_cast<std::uintptr_t>(one_shot_device_.get());
 }
 
 }  // namespace alcedo

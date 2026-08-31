@@ -21,6 +21,12 @@ enum class GraphValidationCode {
   Cycle,
   MissingRequiredInput,
   MultipleInputsOnPort,
+  SceneImageFanOut,
+  ColorGradeNotOnImageBackbone,
+  BrokenImageBackbone,
+  ProtectedEndpoint,
+  NotAColorGrade,
+  InvalidDisplayName,
 };
 
 struct GraphValidationError {

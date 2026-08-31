@@ -501,6 +501,9 @@ if (TARGET Exiv2::Exiv2 AND NOT TARGET Exiv2)
 elseif(WIN32)
     add_library(Exiv2 SHARED IMPORTED)
     set_target_properties(Exiv2 PROPERTIES
+        # Exiv2 exposes STL containers: Debug consumers need the matching MSVC iterator ABI.
+        IMPORTED_LOCATION_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/bin/exiv2.dll"
+        IMPORTED_IMPLIB_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/lib/exiv2.lib"
         IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin/exiv2.dll"
         IMPORTED_IMPLIB "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/lib/exiv2.lib"
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/include"

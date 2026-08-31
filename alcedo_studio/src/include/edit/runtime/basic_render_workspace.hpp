@@ -14,6 +14,7 @@
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 
 namespace alcedo {
@@ -47,6 +48,9 @@ class BasicRenderWorkspace {
 
   [[nodiscard]] auto Parameters() -> ParameterArena<Backend>& { return parameters_; }
   [[nodiscard]] auto TransientBuffers() -> TransientBufferArena<Backend>& { return transients_; }
+  [[nodiscard]] auto TransientBuffers() const -> const TransientBufferArena<Backend>& {
+    return transients_;
+  }
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto Textures() const -> const TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto MaskTextures() -> MaskTextureCache<Backend>& { return mask_textures_; }
@@ -70,6 +74,9 @@ class BasicRenderWorkspace {
   void PrepareDevelopTransients(const DevelopCompileSource& source,
                                  std::uint32_t backend_capability_version,
                                  RawDemosaicMethod demosaic_method) {
+    if (transients_.allocation_policy() == TransientAllocationPolicy::ExactRelease) {
+      return;
+    }
     const auto bytes =
         develop_high_water_.SuggestInitial(source, backend_capability_version, demosaic_method);
     if (bytes == 0) {
@@ -140,6 +147,11 @@ class BasicRenderWorkspace {
       -> ResourceLease<Backend>& {
     return images_.AliasTextureFrom(textures_, dest, source);
   }
+
+  /**
+   * @brief Drop an unpublished image after its last consumer. GPU last-use must already be done.
+   */
+  void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
 
   /**
    * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -136,6 +137,7 @@ class DevelopNodeModel final : public INodeModel {
 
   [[nodiscard]] auto Id() const -> const NodeId& override { return id_; }
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override { return type_ids::DevelopNode(); }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return "Develop"; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;

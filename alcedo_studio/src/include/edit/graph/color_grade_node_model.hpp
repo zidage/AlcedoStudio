@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <memory>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "edit/graph/i_node_model.hpp"
@@ -34,15 +36,40 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override {
     return type_ids::ColorGradeNode();
   }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return display_name_; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
 
   /**
-   * @brief Default primary grade: CAT02 through film grain in the documented order.
-   * @param id Node id, typically "grade.primary".
+   * @brief Replace the UI label. Does not change @ref Id.
+   * @param name New label. Empty names are rejected by graph commands, not by this setter.
+   */
+  void SetDisplayName(std::string name);
+
+  /**
+   * @brief Catalog Color Grade: CAT02 through Film Grain in the documented order.
+   *
+   * Adjustment values are catalog identity (exposure 0 EV, saturation 1.0). Product
+   * Default look (+1.5 EV, saturation 1.3) is applied by
+   * @ref CreateDefaultPipelineDocument, not by this factory.
+   *
+   * @param id Node id, typically "grade.primary" for the Default document.
    */
   static auto MakeDefault(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
+
+  /**
+   * @brief Identity Color Grade: catalog-default params and no post adjustments.
+   *
+   * Exposure is 0 EV, saturation is 1.0, mix is 1, enabled is true. Clarity,
+   * Sharpen, Halation, and Film Grain are omitted. Does not copy or patch
+   * @ref MakeDefault.
+   *
+   * @param id Stable NodeId for the new node.
+   * @return Owned node. Caller inserts it into a graph.
+   */
+  static auto MakeClean(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
+
   static auto FromJson(const nlohmann::json& json) -> std::unique_ptr<ColorGradeNodeModel>;
 
   void SetEnabled(bool enabled);
@@ -56,6 +83,7 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto AdjustmentAt(std::size_t index) -> IOperatorModel&;
   [[nodiscard]] auto AdjustmentAt(std::size_t index) const -> const IOperatorModel&;
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
+  [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel*;
 
@@ -69,11 +97,24 @@ class ColorGradeNodeModel final : public INodeModel {
 
  private:
   NodeId id_;
+  std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
   bool  enabled_ = true;
   float mix_     = 1.0f;
   std::array<PortDescriptor, 2> inputs_;
   std::array<PortDescriptor, 1> outputs_;
 };
+
+/**
+ * @brief Identity Color Grade node for @ref AddCleanColorGrade.
+ *
+ * Equivalent to @ref ColorGradeNodeModel::MakeClean. Distinct from the product
+ * Default look on @ref CreateDefaultPipelineDocument.
+ *
+ * @param id Stable NodeId.
+ * @return Owned node with identity params and no Clarity, Sharpen, Halation, or
+ *         Film Grain. The caller owns insertion into a graph.
+ */
+[[nodiscard]] auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
 
 }  // namespace alcedo

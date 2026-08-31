@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "gpu/gpu_pool_trace.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
 
@@ -39,13 +40,13 @@ struct TransientArenaSnapshot {
  * fit in one slab; allocations never span slab boundaries and never relocate
  * live device pointers. Optional `MaxTransientBytes()` caps the sum of slabs.
  *
- * `Reserve` may replace unused slabs when the request fits in one slab. Requests
- * larger than `MaxSlabBytes()` leave the arena empty so `Allocate` can create
- * request-sized slabs (pre-splitting into a max-slab plus leftover cannot satisfy
- * a later near-max-slab allocation, then exceeds `MaxTransientBytes`). `Allocate`
- * that does not fit any current remainder appends another slab. Develop scratch
- * is exclusive and discarded after SensorDevelop (`ReleaseDeviceMemory`).
- * `Reset()` rewinds every local bump without freeing slabs. Not thread-safe.
+ * SessionPacked `Reserve` may replace unused slabs when the request fits in one
+ * slab. ExactRelease never reserves: each `Allocate` creates a slab of the
+ * requested aligned size and unused slabs are dropped after last GPU use.
+ * `Allocate` that does not fit any current remainder appends another slab.
+ * Develop scratch is exclusive and discarded after SensorDevelop
+ * (`ReleaseDeviceMemory`). SessionPacked `Reset()` rewinds bump pointers without
+ * freeing slabs; ExactRelease `Reset()` frees slabs. Not thread-safe.
  *
  * @tparam Backend Slab factory. Must outlive this arena when passed by reference.
  */
@@ -91,10 +92,22 @@ class TransientBufferArena {
   ~TransientBufferArena() { ResetSlab(); }
 
   /**
+   * @brief Select packed reuse vs exact-size release. Per-request, not a pipeline flag.
+   */
+  void SetAllocationPolicy(TransientAllocationPolicy policy) { allocation_policy_ = policy; }
+  [[nodiscard]] auto allocation_policy() const noexcept -> TransientAllocationPolicy {
+    return allocation_policy_;
+  }
+
+  /**
    * @brief Ensure slab capacity is at least @p bytes. Grows only when unused.
-   * @throws std::runtime_error if bump allocations are live.
+   * @throws std::runtime_error if bump allocations are live or policy is ExactRelease.
    */
   void Reserve(std::size_t bytes) {
+    if (allocation_policy_ == TransientAllocationPolicy::ExactRelease) {
+      throw std::runtime_error(
+          "TransientBufferArena::Reserve: ExactRelease allocates only at Allocate");
+    }
     if (bytes <= capacity_bytes() && !slabs_.empty()) {
       return;
     }
@@ -134,14 +147,16 @@ class TransientBufferArena {
           "TransientBufferArena::Allocate: request exceeds backend max slab bytes", bytes));
     }
 
-    for (auto& entry : slabs_) {
-      if (void* placed = TryAllocateIn(entry, bytes, alignment)) {
-        NoteAllocation(bytes);
-        return placed;
+    if (allocation_policy_ != TransientAllocationPolicy::ExactRelease) {
+      for (auto& entry : slabs_) {
+        if (void* placed = TryAllocateIn(entry, bytes, alignment)) {
+          NoteAllocation(bytes);
+          return placed;
+        }
       }
     }
 
-    const auto slab_bytes = SlabBytesForRequest(bytes);
+    const auto slab_bytes = SlabBytesForRequest(bytes, alignment);
     AppendSlab(slab_bytes);
     ++grow_count_;
     if (void* placed = TryAllocateIn(slabs_.back(), bytes, alignment)) {
@@ -159,12 +174,28 @@ class TransientBufferArena {
     return static_cast<T*>(Allocate(count * sizeof(T), alignment));
   }
 
-  /// Rewind every slab bump to zero. Does not free device memory.
+  /// SessionPacked: rewind bump pointers. ExactRelease: free slabs.
   void Reset() noexcept {
+    if (allocation_policy_ == TransientAllocationPolicy::ExactRelease) {
+      ResetSlab();
+      return;
+    }
     for (auto& entry : slabs_) {
       entry.offset = 0;
     }
     ClearStageStats();
+  }
+
+  /**
+   * @brief Rewind to @p mark and destroy slabs allocated after it.
+   *
+   * Caller must satisfy GPU last-use before calling. Nested marks keep outer slabs.
+   */
+  void ReleaseSlabsAfterMark(const Mark& mark) noexcept {
+    RewindToMark(mark);
+    if (slabs_.size() > mark.size()) {
+      slabs_.erase(slabs_.begin() + static_cast<std::ptrdiff_t>(mark.size()), slabs_.end());
+    }
   }
 
   /**
@@ -312,9 +343,19 @@ class TransientBufferArena {
     return (std::numeric_limits<std::size_t>::max)();
   }
 
-  auto SlabBytesForRequest(std::size_t request) const -> std::size_t {
+  auto SlabBytesForRequest(std::size_t request, std::size_t alignment) const -> std::size_t {
     const auto max_slab = QueryMaxSlabBytes();
-    std::size_t size     = kMinSlabBytes;
+    if (allocation_policy_ == TransientAllocationPolicy::ExactRelease) {
+      auto size = AlignUp(request, alignment == 0 ? kDefaultAlignment : alignment);
+      if (size < request) {
+        size = request;
+      }
+      if (size > max_slab) {
+        size = request;
+      }
+      return size;
+    }
+    std::size_t size = kMinSlabBytes;
     if (request > kMinSlabBytes && request <= kSlabQuantumBytes) {
       size = kSlabQuantumBytes;
     } else if (request > kSlabQuantumBytes) {
@@ -438,13 +479,14 @@ class TransientBufferArena {
     other.grow_count_          = 0;
   }
 
-  std::optional<Backend> owned_;
-  Backend*               backend_            = nullptr;
-  std::vector<SlabEntry> slabs_;
-  std::size_t            requested_bytes_     = 0;
-  std::size_t            padding_bytes_      = 0;
-  std::size_t            largest_allocation_ = 0;
-  std::size_t            grow_count_         = 0;
+  std::optional<Backend>      owned_;
+  Backend*                    backend_            = nullptr;
+  std::vector<SlabEntry>      slabs_;
+  TransientAllocationPolicy   allocation_policy_  = TransientAllocationPolicy::SessionPacked;
+  std::size_t                 requested_bytes_     = 0;
+  std::size_t                 padding_bytes_      = 0;
+  std::size_t                 largest_allocation_ = 0;
+  std::size_t                 grow_count_         = 0;
 };
 
 }  // namespace alcedo

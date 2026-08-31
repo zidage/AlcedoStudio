@@ -20,7 +20,10 @@
 
 #include "json.hpp"
 #include "app/adjustment_transfer_service.hpp"
-#include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_pipeline_command_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -41,18 +44,44 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
   guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->document_ =
+      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_                  = guard->commit_graph_->GetRootId();
   return guard;
 }
 
+auto ColorGradeTargetForField(const std::string& field, std::string node_id = "grade.primary")
+    -> alcedo::EditorParameterTarget {
+  alcedo::EditorParameterTarget target;
+  target.owner_kind              = alcedo::EditorParameterOwnerKind::ColorGrade;
+  target.node_id                 = alcedo::NodeId{node_id};
+  target.adjustment_instance_id  = alcedo::AdjustmentInstanceId{node_id + "." + field};
+  target.field_key               = field;
+  return target;
+}
+
+auto WithColorGradeTarget(alcedo::EditorAdjustmentPatch patch,
+                          std::string node_id = "grade.primary") -> alcedo::EditorAdjustmentPatch {
+  if (patch.field_key == "exposure") {
+    auto params = nlohmann::json::parse(patch.params_json);
+    if (params.contains("exposure")) {
+      params["exposure_ev"] = params.at("exposure");
+      params.erase("exposure");
+      patch.params_json = params.dump();
+    }
+  }
+  patch.target = ColorGradeTargetForField(patch.field_key, std::move(node_id));
+  return patch;
+}
+
 auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
                    const std::string& field, const std::string& after_json, std::string* error)
     -> bool {
-  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
+  alcedo::EditorAdjustmentPatch preview = WithColorGradeTarget({field, after_json, false});
   if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
-  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
+  alcedo::EditorAdjustmentPatch settled = WithColorGradeTarget({field, after_json, true});
   return port.CommitAdjustment(handle, settled, error);
 }
 
@@ -230,8 +259,8 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch preview{"exposure", R"({"exposure":0.25})", false};
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.75})", true};
+  const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false});
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.75})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
   ASSERT_EQ(guard_->commit_graph_->CommitCount(), 1u);
@@ -242,7 +271,7 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
 }
 
 TEST_F(EditorSessionHistoryPortTest,
-       UndoRedoAcrossTwoParentTintMergeRestoresFirstParentAndResolvedValues) {
+       UndoOfMergeWithoutDocumentTargetLeavesHeadValuesAndJournalUnchanged) {
   const auto                  root_id        = guard_->commit_graph_->GetRootId();
   const auto                  active_version = guard_->commit_graph_->GetActiveVersionId();
 
@@ -301,26 +330,25 @@ TEST_F(EditorSessionHistoryPortTest,
     stage.EnableOperator(alcedo::OperatorType::TINT, true, globals);
   }
 
-  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(guard_->working_head_commit_hash(), current_head);
-  alcedo::EditorRenderAdjustmentSnapshot undo_snapshot;
-  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &undo_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(undo_snapshot, "tint"), R"({"tint":2.0})");
-  alcedo::EditorAdjustmentOperatorState tint_state;
-  ASSERT_TRUE(
-      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
-      << error;
-  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 2.0);
-
-  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_EQ(guard_->working_head_commit_hash(), merge_head);
-  alcedo::EditorRenderAdjustmentSnapshot redo_snapshot;
-  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &redo_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(redo_snapshot, "tint"), R"({"tint":10.0})");
-  ASSERT_TRUE(
-      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
-      << error;
-  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 10.0);
+  const auto                     before_document = guard_->document_->ToJson();
+  const auto                     before_pipeline = guard_->pipeline_->ExportPipelineParams();
+  const auto                     before_head     = guard_->working_head_commit_hash();
+  EditorRenderAdjustmentSnapshot before_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &before_snapshot, &error)) << error;
+  MiniGitJournal before_journal(journal_path_);
+  ASSERT_TRUE(before_journal.Load(&error)) << error;
+  const auto records = before_journal.records().size();
+  EXPECT_FALSE(history_.Undo(handle, &error));
+  EXPECT_NE(error.find("same-session document target"), std::string::npos);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(guard_->document_->ToJson(), before_document);
+  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), before_pipeline);
+  EditorRenderAdjustmentSnapshot after_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &after_snapshot, &error)) << error;
+  EXPECT_EQ(after_snapshot, before_snapshot);
+  MiniGitJournal after_journal(journal_path_);
+  ASSERT_TRUE(after_journal.Load(&error)) << error;
+  EXPECT_EQ(after_journal.records().size(), records);
 }
 
 TEST_F(EditorSessionHistoryPortTest,
@@ -477,7 +505,7 @@ TEST_F(EditorSessionHistoryPortTest,
                    prior_exposure.params.at("exposure").get<double>());
 }
 
-TEST_F(EditorSessionHistoryPortTest, MergeUndoRestoresPreMergeOperatorParams) {
+TEST_F(EditorSessionHistoryPortTest, MergeWithoutDocumentTargetsRejectsUndoBeforePublication) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -513,17 +541,25 @@ TEST_F(EditorSessionHistoryPortTest, MergeUndoRestoresPreMergeOperatorParams) {
       << error;
   EXPECT_DOUBLE_EQ(merged.params.at("exposure").get<double>(), 1.25);
 
-  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(guard_->working_head_commit_hash(), first_parent_head);
-  alcedo::EditorAdjustmentOperatorState restored;
-  ASSERT_TRUE(
-      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "exposure", &restored, &error))
-      << error;
-  EXPECT_NEAR(restored.params.at("exposure").get<double>(),
-              pre_merge.params.at("exposure").get<double>(), 1e-5);
-  alcedo::EditorRenderAdjustmentSnapshot undo_snapshot;
-  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &undo_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(undo_snapshot, "exposure"), R"({"exposure":0.25})");
+  const auto                     before_document = guard_->document_->ToJson();
+  const auto                     before_pipeline = guard_->pipeline_->ExportPipelineParams();
+  const auto                     before_head     = guard_->working_head_commit_hash();
+  EditorRenderAdjustmentSnapshot before_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &before_snapshot, &error)) << error;
+  MiniGitJournal before_journal(journal_path_);
+  ASSERT_TRUE(before_journal.Load(&error)) << error;
+  const auto records = before_journal.records().size();
+  EXPECT_FALSE(history_.Undo(handle, &error));
+  EXPECT_NE(error.find("same-session document target"), std::string::npos);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(guard_->document_->ToJson(), before_document);
+  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), before_pipeline);
+  EditorRenderAdjustmentSnapshot after_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &after_snapshot, &error)) << error;
+  EXPECT_EQ(after_snapshot, before_snapshot);
+  MiniGitJournal after_journal(journal_path_);
+  ASSERT_TRUE(after_journal.Load(&error)) << error;
+  EXPECT_EQ(after_journal.records().size(), records);
 }
 
 TEST_F(EditorSessionHistoryPortTest,
@@ -568,26 +604,25 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_FALSE(journal.records().empty()) << "CompleteLiveMerge must append WAL records";
 }
 
-TEST_F(EditorSessionHistoryPortTest, OrdinaryEditChangesLivePipelineBeforeOrWithWalAppend) {
+TEST_F(EditorSessionHistoryPortTest, OrdinaryEditChangesDocumentBeforeOrWithWalAppend) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
 
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error))
       << error;
-  alcedo::EditorAdjustmentOperatorState exposure_state;
-  ASSERT_TRUE(alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "exposure",
-                                                        &exposure_state, &error))
+  nlohmann::json actual;
+  ASSERT_TRUE(ReadEditorParameterJson(*guard_->document_, ColorGradeTargetForField("exposure"),
+                                      &actual, &error))
       << error;
-  EXPECT_NEAR(exposure_state.params.at("exposure").get<double>(), 0.5, 1e-5);
+  EXPECT_FLOAT_EQ(actual.at("exposure_ev").get<float>(), 0.5f);
 
   alcedo::MiniGitJournal journal(journal_path_);
   ASSERT_TRUE(journal.Load(&error)) << error;
   EXPECT_FALSE(journal.records().empty());
 }
 
-TEST_F(EditorSessionHistoryPortTest,
-       CommittedSnapshotIfPresentMatchesLivePipelineExportAfterEdit) {
+TEST_F(EditorSessionHistoryPortTest, CommittedSnapshotMatchesDocumentValueAfterEdit) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -598,11 +633,11 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &snapshot, &error)) << error;
   EXPECT_EQ(PatchValue(snapshot, "exposure"), R"({"exposure":0.75})");
 
-  alcedo::EditorAdjustmentOperatorState exposure_state;
-  ASSERT_TRUE(alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "exposure",
-                                                        &exposure_state, &error))
+  nlohmann::json actual;
+  ASSERT_TRUE(ReadEditorParameterJson(*guard_->document_, ColorGradeTargetForField("exposure"),
+                                      &actual, &error))
       << error;
-  EXPECT_NEAR(exposure_state.params.at("exposure").get<double>(), 0.75, 1e-5);
+  EXPECT_FLOAT_EQ(actual.at("exposure_ev").get<float>(), 0.75f);
 }
 
 TEST_F(EditorSessionHistoryPortTest,
@@ -664,70 +699,6 @@ TEST_F(EditorSessionHistoryPortTest,
 }
 
 TEST_F(EditorSessionHistoryPortTest,
-       CommitSerializesWithLivePipelineRenderLock) {
-  // Capture reads the derived committed snapshot (no render lock). Commit applies
-  // to the live executor under GetRenderLock() and must wait if that lock is held.
-  std::string error;
-  const auto  handle = history_.Acquire(42, &error);
-  ASSERT_TRUE(handle.valid) << error;
-
-  {
-    const alcedo::EditorAdjustmentPatch seed{"saturation", R"({"saturation":0})", true};
-    ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, seed, &error)) << error;
-    ASSERT_TRUE(history_.CommitAdjustment(handle, seed, &error)) << error;
-  }
-
-  std::mutex                gate;
-  std::condition_variable   gate_cv;
-  bool                      worker_holds_lock = false;
-  bool                      release_worker    = false;
-  std::thread               worker([&] {
-    std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
-    {
-      std::lock_guard lock(gate);
-      worker_holds_lock = true;
-    }
-    gate_cv.notify_one();
-    std::unique_lock wait_lock(gate);
-    gate_cv.wait(wait_lock, [&] { return release_worker; });
-  });
-  {
-    std::unique_lock wait_lock(gate);
-    ASSERT_TRUE(gate_cv.wait_for(wait_lock, std::chrono::seconds(2),
-                                 [&] { return worker_holds_lock; }));
-  }
-
-  const alcedo::EditorAdjustmentPatch preview{"saturation", R"({"saturation":20})", false};
-  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error
-      << "Capture must not require the live pipeline render lock";
-
-  std::atomic<bool> commit_finished{false};
-  std::thread       commit_thread([&] {
-    const alcedo::EditorAdjustmentPatch settled{"saturation", R"({"saturation":40})", true};
-    (void)history_.CommitAdjustment(handle, settled, &error);
-    commit_finished.store(true);
-  });
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  EXPECT_FALSE(commit_finished.load())
-      << "Commit must wait for the live pipeline render lock";
-
-  {
-    std::lock_guard lock(gate);
-    release_worker = true;
-  }
-  gate_cv.notify_one();
-  if (worker.joinable()) worker.join();
-  if (commit_thread.joinable()) commit_thread.join();
-  EXPECT_TRUE(commit_finished.load());
-
-  alcedo::EditorAdjustmentOperatorState sat;
-  ASSERT_TRUE(
-      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "saturation", &sat, &error))
-      << error;
-  EXPECT_NEAR(sat.params.at("saturation").get<double>(), 40.0, 1e-5);
-}
-
-TEST_F(EditorSessionHistoryPortTest,
        InitialAdjustmentSnapshotContainsEverySupportedFieldBeforeAnyRender) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
@@ -757,7 +728,8 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(handle.valid) << error;
   const auto commit_count_before = guard_->commit_graph_->CommitCount();
 
-  const alcedo::EditorAdjustmentPatch unsupported{"not_a_supported_adjustment", R"({})", false};
+  const auto unsupported =
+      WithColorGradeTarget({"not_a_supported_adjustment", R"({})", false});
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, unsupported, &error));
   EXPECT_FALSE(error.empty());
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), commit_count_before);
@@ -809,8 +781,8 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.5})", true};
-  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":1.25})", true};
+  const auto first = WithColorGradeTarget({"exposure", R"({"exposure":0.5})", true});
+  const auto second = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
@@ -842,7 +814,7 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.9})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.9})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -865,7 +837,7 @@ TEST_F(EditorSessionHistoryPortTest,
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
 
-  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.4})", true};
+  const auto first = WithColorGradeTarget({"exposure", R"({"exposure":0.4})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
   ASSERT_TRUE(history_.SyncMaterializedStateAfterCheckpoint(handle, &error)) << error;
@@ -874,7 +846,7 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &materialized_snapshot, &error)) << error;
   const auto materialized_head = guard_->commit_graph_->GetImageEditState().materialized_head_commit_hash;
 
-  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":0.9})", true};
+  const auto second = WithColorGradeTarget({"exposure", R"({"exposure":0.9})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
   EXPECT_TRUE(history_.HasUnmaterializedChanges(handle, &error)) << error;
@@ -896,7 +868,7 @@ TEST_F(EditorSessionHistoryPortTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.4})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.4})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -926,7 +898,7 @@ TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureKeepsWorkingHeadAtRoot)
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   EXPECT_FALSE(history_.CommitAdjustment(handle, settled, &error));
   EXPECT_FALSE(error.empty());
@@ -939,7 +911,7 @@ TEST_F(EditorSessionHistoryPortTest, ReopenReplaysJournalIntoWorkingPipeline) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
   history_.Release(handle);
@@ -965,7 +937,7 @@ TEST_F(EditorSessionHistoryPortTest, ProductionCaptureValueReachesCheckpointStor
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.85})", true};
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.85})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
@@ -1119,7 +1091,7 @@ TEST_F(EditorSessionHistoryPortTest,
   const auto forward_contrast   = PatchNumber(forward_snapshot, "contrast");
   ASSERT_TRUE(forward_saturation.has_value());
   ASSERT_TRUE(forward_contrast.has_value());
-  EXPECT_NEAR(*forward_saturation, 8.0, 1e-6);
+  EXPECT_NEAR(*forward_saturation, 4.0, 1e-6);  // Model clamps its multiplier to 4.
   EXPECT_NEAR(*forward_contrast, 12.0, 1e-6);
 }
 
@@ -1169,19 +1141,16 @@ TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompou
 }
 
 // ---------------------------------------------------------------------------
-// Phase 7A R0: failing evidence for Mini-Git atomicity. These tests assert the
-// repaired target behavior and fail against the current defect where head moves
-// and merge traversal mutate durable/live state before the full target pipeline
-// is known to succeed.
+// History without same-session document targets must be rejected before WAL publication.
+// Typed merge and cross-session replay are outside the document parameter edit boundary.
 // ---------------------------------------------------------------------------
 
-TEST_F(EditorSessionHistoryPortTest,
-       HeadMoveApplyFailurePreservesHeadRedoPipelineSnapshotAndJournal) {
+TEST_F(EditorSessionHistoryPortTest, UnmappedHeadMovePreservesHeadPipelineSnapshotAndJournal) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
 
-  // Seed one settled exposure edit so the working head and committed snapshot
+  // Commit one settled exposure edit so the working head and committed snapshot
   // are well-defined before the failing move.
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error))
       << error;
@@ -1212,53 +1181,34 @@ TEST_F(EditorSessionHistoryPortTest,
   }
   ASSERT_TRUE(bad_head.has_value()) << "could not locate the inserted bogus commit";
 
-  // Place the working head on the bad commit so a backward move to c1 can put
-  // it on the redo suffix. SnapshotAtHead(c1) succeeds (history rebuild skips
-  // the unmappable tip). Redo back onto the bad tip must then fail.
-  const auto active_version = guard_->commit_graph_->GetActiveVersionId();
-  guard_->commit_graph_->MoveWorkingHead(active_version, bad_head);
-  ASSERT_TRUE(history_.MoveHeadToCommit(handle, c1, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, c1);
-
-  const auto journal_records_before = [&] {
-    alcedo::MiniGitJournal j(journal_path_);
-    std::string            load_error;
-    if (!j.Load(&load_error)) return std::size_t{0};
-    return j.records().size();
-  }();
-
-  // Forward onto the unmappable commit must fail before publish (R4 prepared transition).
-  EXPECT_FALSE(history_.MoveHeadToCommit(handle, *bad_head, &error))
-      << "a head move onto an unmappable commit must fail";
-
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, c1)
-      << "a failed head move must not advance the graph head";
-
-  alcedo::EditorHistorySnapshot snapshot;
-  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
-  const auto future_rows = std::count_if(
-      snapshot.commits.begin(), snapshot.commits.end(),
-      [](const alcedo::EditorHistoryCommit& row) {
-        return row.position == alcedo::EditorHistoryTimelinePosition::Future;
-      });
-  EXPECT_EQ(future_rows, 1) << "failed redo must leave the unmappable tip on the redo suffix";
-
-  const auto journal_records_after = [&] {
-    alcedo::MiniGitJournal j(journal_path_);
-    std::string            load_error;
-    if (!j.Load(&load_error)) return std::size_t{0};
-    return j.records().size();
-  }();
-  EXPECT_EQ(journal_records_after, journal_records_before)
-      << "a failed head move must not append a journal record";
+  guard_->commit_graph_->MoveWorkingHead(guard_->commit_graph_->GetActiveVersionId(), bad_head);
+  const auto                     before_document = guard_->document_->ToJson();
+  const auto                     before_pipeline = guard_->pipeline_->ExportPipelineParams();
+  const auto                     before_head     = guard_->working_head_commit_hash();
+  EditorRenderAdjustmentSnapshot before_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &before_snapshot, &error)) << error;
+  MiniGitJournal before_journal(journal_path_);
+  ASSERT_TRUE(before_journal.Load(&error)) << error;
+  const auto records = before_journal.records().size();
+  EXPECT_FALSE(history_.MoveHeadToCommit(handle, c1, &error));
+  EXPECT_NE(error.find("same-session document target"), std::string::npos);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(guard_->document_->ToJson(), before_document);
+  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), before_pipeline);
+  EditorRenderAdjustmentSnapshot after_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &after_snapshot, &error)) << error;
+  EXPECT_EQ(after_snapshot, before_snapshot);
+  MiniGitJournal after_journal(journal_path_);
+  ASSERT_TRUE(after_journal.Load(&error)) << error;
+  EXPECT_EQ(after_journal.records().size(), records);
 }
 
-TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeReconstructsResolvedFields) {
+TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeWithoutDocumentTargetsPreservesState) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
 
-  // Seed one settled exposure edit (C1) on the active first-parent chain.
+  // Commit one settled exposure edit (C1) on the active first-parent chain.
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error))
       << error;
   const auto c1 = *guard_->working_head_commit_hash();
@@ -1313,22 +1263,25 @@ TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeReconstructsResolvedFields) 
   ASSERT_NE(merge_hash, alcedo::commit_hash_t{}) << "could not locate the merge commit";
   guard_->commit_graph_->MoveWorkingHead(active_version, merge_hash);
 
-  // Move back to C1 (the merge lands in the redo suffix), then forward to the
-  // merge. The forward move must reconstruct the merge's resolved exposure.
-  ASSERT_TRUE(history_.MoveHeadToCommit(handle, c1, &error)) << error;
-  alcedo::EditorRenderAdjustmentSnapshot baseline_snapshot;
-  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &baseline_snapshot, &error)) << error;
-  const auto baseline_exposure = PatchNumber(baseline_snapshot, "exposure");
-  ASSERT_TRUE(baseline_exposure.has_value());
-  EXPECT_NEAR(*baseline_exposure, 0.5, 1e-6);
-
-  ASSERT_TRUE(history_.MoveHeadToCommit(handle, merge_hash, &error)) << error;
-  alcedo::EditorRenderAdjustmentSnapshot resolved_snapshot;
-  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &resolved_snapshot, &error)) << error;
-  const auto resolved_exposure = PatchNumber(resolved_snapshot, "exposure");
-  ASSERT_TRUE(resolved_exposure.has_value());
-  EXPECT_NEAR(*resolved_exposure, 0.9, 1e-6)
-      << "moving forward across a merge must reconstruct the merge-resolved field values";
+  const auto                     before_document = guard_->document_->ToJson();
+  const auto                     before_pipeline = guard_->pipeline_->ExportPipelineParams();
+  const auto                     before_head     = guard_->working_head_commit_hash();
+  EditorRenderAdjustmentSnapshot before_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &before_snapshot, &error)) << error;
+  MiniGitJournal before_journal(journal_path_);
+  ASSERT_TRUE(before_journal.Load(&error)) << error;
+  const auto records = before_journal.records().size();
+  EXPECT_FALSE(history_.MoveHeadToCommit(handle, c1, &error));
+  EXPECT_NE(error.find("same-session document target"), std::string::npos);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(guard_->document_->ToJson(), before_document);
+  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), before_pipeline);
+  EditorRenderAdjustmentSnapshot after_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &after_snapshot, &error)) << error;
+  EXPECT_EQ(after_snapshot, before_snapshot);
+  MiniGitJournal after_journal(journal_path_);
+  ASSERT_TRUE(after_journal.Load(&error)) << error;
+  EXPECT_EQ(after_journal.records().size(), records);
 }
 
 TEST(EditorSessionHistoryPortPersistTest,

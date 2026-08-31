@@ -13,6 +13,7 @@
 
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
 #include "pipeline.hpp"
@@ -58,7 +59,6 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::mutex                                                                  render_lock_;
 
   OperatorParams                                                              global_params_;
-  std::optional<RawRuntimeColorContext> injected_raw_color_context_;
 
   bool                                  is_thumbnail_     = false;
 
@@ -79,7 +79,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   FrameCompletionSubmission           bound_frame_submission_{};
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   std::shared_ptr<PipelineDocument> pipeline_document_;
-  nlohmann::json                    gpu_dag_legacy_snapshot_;
+  // Used only by the existing service load/save boundary, never by Apply.
   bool                              mirror_legacy_stage_adapter_ = false;
 #endif
 #ifdef HAVE_CUDA
@@ -126,9 +126,33 @@ class CPUPipelineExecutor : public PipelineExecutor {
   auto GetRenderLock() -> std::mutex& { return render_lock_; }
 
   auto GetStage(PipelineStageName stage) -> PipelineStage& override;
+  /** @brief Render encoded input using the bound document and current request settings.
+   * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
+   * @throws std::runtime_error for missing document/backend, decode, GPU or presentation failure.
+   * Persistent Model values, nodes and edges are never changed; runtime caches may be updated.
+   */
   auto Apply(std::shared_ptr<ImageBuffer> input) -> std::shared_ptr<ImageBuffer> override;
 
-  /** @brief Select the format-version-2 document used by the GPU DAG product path. */
+  /**
+   * @brief Render using an immutable per-task request. Does not write decode, cache, ROI,
+   *        or host-output onto executor members.
+   * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
+   * @throws std::runtime_error for missing document/backend, decode, GPU, or presentation failure.
+   *         Failures do not switch executor cache/decode mode. Bypass ExactRelease scratch is
+   *         released after GPU last-use or on the failure path.
+   */
+  auto Apply(std::shared_ptr<ImageBuffer> input, const PipelineApplyRequest& request)
+      -> std::shared_ptr<ImageBuffer>;
+
+  /**
+   * @brief Select the format-version-2 document used by the GPU DAG product path.
+   *
+   * @param document Graph owned by the caller; retains shared ownership without changing values.
+   * @param mirror_legacy_stage_adapter Existing service load/save bookkeeping only.
+   *        Apply never reads stage parameters, regardless of this flag or output destination.
+   * @pre Caller holds GetRenderLock() or has exclusive access before publication.
+   * @throws std::invalid_argument when document is null; retains the prior binding.
+   */
   void SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
                            bool                              mirror_legacy_stage_adapter = false);
   [[nodiscard]] auto HasGpuDagDocument() const -> bool;
@@ -176,10 +200,16 @@ class CPUPipelineExecutor : public PipelineExecutor {
    */
   void               ImportPipelineParams(const nlohmann::json& j) override;
 
+  /** @brief Set request ROI in reference-image pixels; does not write persistent parameters.
+   * @pre Caller holds GetRenderLock() or exclusive initialization access.
+   */
   void SetRenderRegion(int x, int y, float scale_factor_x, float scale_factor_y = -1.0f,
                        int reference_width = 0, int reference_height = 0) override;
+  /// Set the request output limit under GetRenderLock(); full_res disables the limit.
   void SetRenderRes(bool full_res, int max_side_length = 2048) override;
+  /// Set the request's resize algorithm under GetRenderLock(); invalid enum values throw.
   void SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) override;
+  /// Select RAW decode resolution for the request under GetRenderLock(), without editing a Model.
   void SetDecodeRes(DecodeRes res);
 
   /// Snapshot of one-shot render parameters that must not leak across Apply calls.
@@ -191,7 +221,9 @@ class CPUPipelineExecutor : public PipelineExecutor {
     std::optional<ViewportRenderRegion> render_request_viewport_ = std::nullopt;
   };
 
+  /// Read runtime request settings under GetRenderLock(); no document state is copied.
   [[nodiscard]] auto CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot;
+  /// Restore runtime request settings and clear cancellation under GetRenderLock(); no Model writes.
   void               RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot);
 
   void               RegisterAllOperators();
@@ -200,9 +232,9 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void               InitDefaultPipeline();
 
   /**
-   * @brief Install image-local raw metadata into the pipeline (transition path).
-   *        Prefer writing inherent RAW params into RawDecodeOp at import so that
-   *        reload and render no longer require a per-frame inject.
+   * @brief Install image-local RAW camera/profile metadata during import or explicit load.
+   * @pre Caller holds GetRenderLock() or exclusive initialization access. A document is bound.
+   * Updates Develop and the existing import-stage fields. Never call from a render task.
    */
   void               InjectRawMetadata(const RawRuntimeColorContext& ctx);
 

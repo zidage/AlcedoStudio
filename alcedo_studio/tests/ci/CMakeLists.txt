@@ -8,6 +8,7 @@ target_link_libraries(CiRawWorkflowTest
     GTest::gtest_main
     ProjectService
     ImportService
+    Image
     EditPipeline
     PipelineScheduler
     ThreadPool

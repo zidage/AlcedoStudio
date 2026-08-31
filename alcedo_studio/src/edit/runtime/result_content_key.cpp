@@ -308,6 +308,13 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   if (document.Drt() != nullptr) {
     drt.MixText(document.Drt()->Params().ToJson().dump());
   }
+  if (plan.output_color_override.has_value()) {
+    drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_space));
+    drt.MixU32(static_cast<std::uint32_t>(plan.output_color_override->encoding_eotf));
+    drt.MixF32(plan.output_color_override->peak_luminance);
+  } else {
+    drt.MixU32(0);
+  }
   drt.MixU32(kDrtImplementationVersion);
   keys.drt_display = drt.Key();
   return keys;

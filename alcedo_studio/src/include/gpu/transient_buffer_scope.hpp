@@ -12,10 +12,11 @@
 namespace alcedo {
 
 /**
- * @brief RAII nested bump scope. Rewinds @ref TransientBufferArena to the per-slab
- * offsets captured at construction. Allocations inside the scope are invalid after Release.
+ * @brief RAII nested bump scope.
  *
- * LIFO only. Appended slabs stay allocated and are rewound to offset 0. Not thread-safe.
+ * SessionPacked rewinds bump offsets. ExactRelease also destroys slabs allocated
+ * after the captured mark. Caller must satisfy GPU last-use before Release.
+ * LIFO only. Not thread-safe.
  */
 template <class Backend>
 class TransientBufferScope {
@@ -45,7 +46,11 @@ class TransientBufferScope {
 
   void Release() noexcept {
     if (arena_ != nullptr) {
-      arena_->RewindToMark(mark_);
+      if (arena_->allocation_policy() == TransientAllocationPolicy::ExactRelease) {
+        arena_->ReleaseSlabsAfterMark(mark_);
+      } else {
+        arena_->RewindToMark(mark_);
+      }
       arena_ = nullptr;
     }
   }

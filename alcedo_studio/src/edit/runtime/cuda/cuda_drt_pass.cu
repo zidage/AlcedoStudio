@@ -19,6 +19,7 @@
 #include "edit/operators/cst/odt_op.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
+#include "edit/runtime/drt_display.hpp"
 
 namespace alcedo {
 namespace {
@@ -30,8 +31,8 @@ auto EnsureDisplayImage(CudaRenderWorkspace& workspace, const GraphValueId& id, 
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
 }
 
-void ResolveRuntime(CudaDrtRuntimeState& state, const DrtParamsModel& model) {
-  ODT_Op descriptor(nlohmann::json{{"odt", model.ToJson()}});
+void ResolveRuntime(CudaDrtRuntimeState& state, const nlohmann::json& drt_json) {
+  ODT_Op descriptor(nlohmann::json{{"odt", drt_json}});
   descriptor.SetGlobalParams(state.cpu_params);
   state.gpu_params = GPUParamsConverter::ConvertFromCPU(state.cpu_params, state.gpu_params);
 }
@@ -75,10 +76,16 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
   const ParameterSlotKey      key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
   const ParameterFieldBinding field{DirtyFieldMask{kDrtDirtyBits}, 0, 0,
                                     sizeof(GPU_TO_OUTPUT_Params)};
-  auto                        pending          = TakePendingParameterPatch(drt->Params());
+  auto                        pending          = plan.output_color_override.has_value()
+                                ? decltype(TakePendingParameterPatch(drt->Params())){}
+                                : TakePendingParameterPatch(drt->Params());
   const bool                  needs_initialize = !arena.Contains(key);
-  if (needs_initialize || pending.has_value()) {
-    ResolveRuntime(device.DrtRuntime(), drt->Params());
+  if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
+    auto drt_json = drt->Params().ToJson();
+    if (plan.output_color_override.has_value()) {
+      OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
+    }
+    ResolveRuntime(device.DrtRuntime(), drt_json);
     const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
     auto       payload = std::make_shared<TypedOperatorParamPayload<GPU_TO_OUTPUT_Params>>(
         drt->Params().Type(), 1, runtime);

@@ -59,4 +59,34 @@ TEST(GpuDagModelGraph, PipelineGraphRejectsMaskConnectedToImageInput) {
   EXPECT_TRUE(HasCode(errors, GraphValidationCode::PortTypeMismatch));
 }
 
+TEST(GpuDagModelGraph, DefaultDocumentSatisfiesImageBackbone) {
+  const auto document = CreateDefaultPipelineDocument();
+  EXPECT_TRUE(document.Graph().Validate().empty());
+  EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
+  const auto path = document.Graph().ImageBackboneNodeIds();
+  ASSERT_EQ(path.size(), 3u);
+  EXPECT_EQ(path[0], NodeId{"develop"});
+  EXPECT_EQ(path[1], NodeId{"grade.primary"});
+  EXPECT_EQ(path[2], NodeId{"drt"});
+}
+
+TEST(GpuDagModelGraph, ValidateImageBackboneRejectsColorGradeOffTheImageBackbone) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.off"}));
+  EXPECT_TRUE(HasCode(document.Graph().Validate(), GraphValidationCode::MissingRequiredInput));
+  const auto errors = document.Graph().ValidateImageBackbone();
+  EXPECT_TRUE(HasCode(errors, GraphValidationCode::ColorGradeNotOnImageBackbone));
+}
+
+TEST(GpuDagModelGraph, ValidateImageBackboneRejectsSceneImageFanOut) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(ColorGradeNodeModel::MakeDefault(NodeId{"grade.b"}));
+  document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"grade.b"},
+                           PortId{"image"});
+  EXPECT_TRUE(document.Graph().Validate().empty());
+  const auto errors = document.Graph().ValidateImageBackbone();
+  EXPECT_TRUE(HasCode(errors, GraphValidationCode::SceneImageFanOut));
+  EXPECT_TRUE(HasCode(errors, GraphValidationCode::BrokenImageBackbone));
+}
+
 }  // namespace alcedo

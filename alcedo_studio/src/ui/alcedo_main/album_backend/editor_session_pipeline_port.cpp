@@ -39,7 +39,7 @@ void EditorSessionPipelinePort::Release(const alcedo::EditorPipelineGuardHandle&
     }
   }
   if (service && loaded_guard) {
-    service->SavePipeline(std::move(loaded_guard));
+    service->ReleasePipelineUse(std::move(loaded_guard));
   }
 }
 

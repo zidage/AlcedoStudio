@@ -203,7 +203,7 @@ TEST(GpuDagModelGraph, ApplyOntoRejectsUnknownTypeWithoutMutatingDocument) {
   const auto* exposure = dynamic_cast<const ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
-  EXPECT_FLOAT_EQ(exposure->Value(), 0.0f);
+  EXPECT_FLOAT_EQ(exposure->Value(), kDefaultPipelineExposureEv);
 }
 
 }  // namespace alcedo

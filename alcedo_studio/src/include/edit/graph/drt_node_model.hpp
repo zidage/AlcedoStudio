@@ -9,6 +9,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -139,6 +140,7 @@ class DrtNodeModel final : public INodeModel {
 
   [[nodiscard]] auto Id() const -> const NodeId& override { return id_; }
   [[nodiscard]] auto Type() const -> const OperatorTypeId& override { return type_ids::DrtNode(); }
+  [[nodiscard]] auto DisplayName() const -> std::string_view override { return "DRT"; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;

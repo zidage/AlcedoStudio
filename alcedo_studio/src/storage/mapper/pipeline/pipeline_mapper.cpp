@@ -39,11 +39,10 @@ auto PipelineMapper::FromParams(PipelineMapperParams&& param)
   pipeline->SetBoundFile(param.file_id);
   if (param.param_json) {
     const auto json = nlohmann::json::parse(std::move(*param.param_json));
-    // Format 2 is executed by the GPU DAG. The nested stage adapter keeps the unchanged
-    // OpenCL/Metal and editor-control paths buildable until G8/G9; it is not the persisted graph.
-    if (json.value("format_version", 0) == 2 && json.contains("legacy_stage_adapter")) {
-      pipeline->ImportPipelineParams(json.at("legacy_stage_adapter"));
-    } else if (json.value("format_version", 0) != 2) {
+    // Format 2 is a document owned by PipelineMgmtService. The mapper must not unpack a stage
+    // representation from that document. Non-document rows remain readable by the existing
+    // executor mapper for callers that explicitly operate on that older table shape.
+    if (json.value("format_version", 0) != 2) {
       pipeline->ImportPipelineParams(json);
     }
     pipeline->SetExecutionStages();

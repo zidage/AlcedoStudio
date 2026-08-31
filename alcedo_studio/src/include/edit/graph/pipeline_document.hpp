@@ -6,12 +6,14 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 
@@ -59,8 +61,19 @@ class PipelineDocument {
   bool                topology_dirty_ = true;
 };
 
+/// Product Default Color Grade exposure, in EV. Baked by @ref CreateDefaultPipelineDocument.
+inline constexpr float kDefaultPipelineExposureEv = 1.5f;
+/// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
+inline constexpr float kDefaultPipelineSaturation = 1.3f;
+
 /**
- * @brief Three-node default: Develop -> Primary Color Grade -> DRT.
+ * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT.
+ *
+ * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with
+ * @ref kDefaultPipelineExposureEv and @ref kDefaultPipelineSaturation applied
+ * in this factory. Does not require legacy stage remirror.
+ *
+ * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
 
@@ -68,6 +81,14 @@ class PipelineDocument {
  * @brief Deep copy via JSON round-trip. The clone does not share Model pointers.
  */
 [[nodiscard]] auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument;
+
+/**
+ * @brief Color Grade nodes on the unique Develop-to-DRT scene-image path, in path order.
+ *
+ * Empty when the backbone cannot be walked. Off-path Color Grades are omitted.
+ */
+[[nodiscard]] auto ColorGradesOnImageBackbone(const PipelineDocument& document)
+    -> std::vector<const ColorGradeNodeModel*>;
 
 /**
  * @brief True when Apply may remirror the legacy stage adapter into this document.

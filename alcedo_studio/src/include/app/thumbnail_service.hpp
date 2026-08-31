@@ -79,20 +79,21 @@ class ThumbnailService {
                     bool pin_if_found = true, CallbackDispatcher dispatcher = nullptr,
                     ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Request a thumbnail and receive a detailed result. Rendering uses an independent pipeline
-  // snapshot, so background filmstrip work never occupies the live editor executor. This
-  // distinguishes cancellation from render/load failures, while GetThumbnail preserves the
+  // Request a thumbnail and receive a detailed result. Rendering uses the live
+  // pipeline handle (same document/executor as the editor) under the scheduler
+  // render lock. Thumbnail work bypasses session GPU caches. This distinguishes
+  // cancellation from render/load failures, while GetThumbnail preserves the
   // legacy guard/null callback behavior.
   void GetThumbnailDetailed(sl_element_id_t id, image_id_t image_id,
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,
                             ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Phase 3: render an analysis rendition from a captured pipeline snapshot. Does
-  // NOT pin the live pipeline guard, does NOT call SavePipeline on the live guard,
-  // and does NOT cache the result in thumbnail_cache_. Disk cache hits/writes use
-  // a separate analysis namespace. One-shot delivery to the single callback. Used
-  // by background image analysis so the editor's live pipeline is never disturbed.
+  // Render an analysis rendition from the live pipeline handle. Pins via
+  // LoadPipeline and releases with ReleasePipelineUse (no SavePipeline). Results
+  // are not stored in thumbnail_cache_. Disk cache hits/writes use a separate
+  // analysis namespace and skip writes when the queued commit label is stale,
+  // the live document is dirty, or an editor preview is unsettled.
   void RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
                                 ThumbnailResolution resolution, ThumbnailResultCallback callback);
   void CancelAnalysisRendition(const ThumbnailCacheKey& key);

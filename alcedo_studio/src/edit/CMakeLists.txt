@@ -48,10 +48,11 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/drt_node_model.cpp
-    ${ALCEDO_SRC_ROOT}/edit/graph/legacy_pipeline_importer.cpp
-    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
-    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
-    ${ALCEDO_SRC_ROOT}/edit/graph/raster_mask_node_model.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/legacy_pipeline_importer.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/raster_mask_node_model.cpp
 )
 
 def_library(EditGraph

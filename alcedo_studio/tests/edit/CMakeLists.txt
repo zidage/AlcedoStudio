@@ -228,13 +228,14 @@ alcedo_register_test_target(EditorJournalFuzzFrameworkTest edit)
 add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/default_pipeline_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/graph_validation_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
 target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph)
+target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
   ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
   ALCEDO_GRAPH_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/graph")
@@ -266,6 +267,15 @@ alcedo_register_test_target(GpuDagMaskStoreTest edit)
 
 # GPU DAG Phase G3: CUDA GeometryResamplePass.
 if(ALCEDO_CUDA_ENABLED)
+  qt_add_executable(PipelineDocumentRenderTest
+    ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_document_render_test.cpp)
+  target_include_directories(PipelineDocumentRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(PipelineDocumentRenderTest PRIVATE
+    GTest::gtest_main EditPipeline EditRuntimeCuda Image ThreadPool)
+  gtest_discover_tests(PipelineDocumentRenderTest TEST_PREFIX "PipelineDocumentRenderTest."
+    PROPERTIES LABELS "gpu;edit;pipeline;product")
+  alcedo_register_test_target(PipelineDocumentRenderTest gpu)
+
   add_executable(GpuDagCudaGeometryTest
     ${ALCEDO_TEST_ROOT}/edit/geometry/cuda_geometry_resample_test.cpp)
   target_include_directories(GpuDagCudaGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})

@@ -9,6 +9,17 @@
 namespace alcedo {
 
 /**
+ * @brief Whether a render may read or publish the editor session result caches.
+ *
+ * Bypass isolates thumbnail/export from editor caches. Chosen per request, not
+ * stored as executor mode state.
+ */
+enum class RenderCachePolicy {
+  UseSessionCache,
+  BypassSessionCache,
+};
+
+/**
  * @brief Document crop and rotation. Viewport and dynamic resolution are not stored here.
  */
 struct ImageGeometryParams {

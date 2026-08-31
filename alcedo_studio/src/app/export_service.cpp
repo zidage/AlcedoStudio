@@ -27,12 +27,6 @@
 namespace alcedo {
 namespace {
 
-auto ResolveExportColorProfileConfig(const OperatorParams& params) -> ExportColorProfileConfig {
-  return ExportColorProfileConfig{params.to_output_params_.encoding_space_,
-                                  params.to_output_params_.eotf_,
-                                  params.to_output_params_.peak_luminance_};
-}
-
 auto HasExportMetadata(const ExifDisplayMetaData& metadata) -> bool {
   return !metadata.make_.empty() || !metadata.model_.empty() || !metadata.lens_.empty() ||
          !metadata.lens_make_.empty() || !metadata.date_time_str_.empty() ||
@@ -103,18 +97,30 @@ void CommitExportFile(const std::filesystem::path& temporary_path,
 
 auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult {
   ExportResult result;
-  ExportRecipe recipe     = task.recipe_.value_or(ExportRecipe::FromLegacyOptions(task.options_));
+  if (!task.recipe_.has_value()) {
+    result.message_      = "ExportService: export recipe is required";
+    result.failed_stage_ = "prepare-recipe";
+    return result;
+  }
+  ExportRecipe recipe = *task.recipe_;
+  try {
+    RequireResolvedExportOutputColor(recipe);
+  } catch (const std::exception& error) {
+    result.message_      = error.what();
+    result.failed_stage_ = "prepare-recipe";
+    return result;
+  }
   auto         final_path = recipe.codec_.export_path_;
   std::filesystem::path temporary_path;
   result.output_path_ = final_path;
   std::error_code                   cleanup_error;
-  std::shared_ptr<PipelineSnapshot> pipeline_snapshot;
-  auto                              release_pipeline_snapshot = [&]() {
-    if (!pipeline_snapshot) {
+  std::shared_ptr<PipelineGuard> pipeline_guard;
+  auto                              release_pipeline_use = [&]() {
+    if (!pipeline_guard) {
       return;
     }
-    pipeline_service_->ReleasePipelineSnapshot(pipeline_snapshot);
-    pipeline_snapshot.reset();
+    pipeline_service_->ReleasePipelineUse(pipeline_guard);
+    pipeline_guard.reset();
   };
 
   std::string stage = "prepare-name";
@@ -139,15 +145,11 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     std::filesystem::remove(temporary_path, cleanup_error);
 
     stage = "load-pipeline";
-    std::string snapshot_error;
-    pipeline_snapshot =
-        pipeline_service_->LoadPipelineSnapshot(task.sleeve_id_, task.image_id_, &snapshot_error);
-    if (!pipeline_snapshot || !pipeline_snapshot->executor_) {
+    pipeline_guard = pipeline_service_->LoadPipeline(task.sleeve_id_);
+    if (!pipeline_guard || !pipeline_guard->pipeline_ || !pipeline_guard->document_) {
       throw std::runtime_error(
-          snapshot_error.empty()
-              ? "[ERROR] ExportService: Failed to snapshot pipeline for sleeve id " +
-                    std::to_string(task.sleeve_id_)
-              : snapshot_error);
+          "[ERROR] ExportService: Failed to load pipeline document for sleeve id " +
+          std::to_string(task.sleeve_id_));
     }
     stage           = "load-source";
     // Get the image from image pool service
@@ -166,19 +168,14 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // To avoid reading too many images into memory at once, we let the pipeline load the image
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
-    render_task.pipeline_executor_    = pipeline_snapshot->executor_;
+    render_task.pipeline_executor_    = pipeline_guard->pipeline_;
     render_task.options_.is_blocking_ = true;
     render_task.options_.is_callback_ = false;
-
-    // Inject pre-extracted raw metadata from the real Image into the pipeline
-    // so downstream operators resolve eagerly.
-    if (source_img->HasRawColorContext()) {
-      PipelineMgmtService::InjectImageRawMetadata(*pipeline_snapshot->executor_, *source_img);
-    }
 
     // Use full res export, even though the task requires resizing,
     // to benefit from the super sampling
     render_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
+    render_task.options_.export_output_color_      = recipe.output_color_;
     // Set export options in the pipeline executor
     auto render_promise = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
     render_task.result_ = render_promise;
@@ -195,17 +192,14 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     }
 
     stage = "prepare-output";
-    // Save pipeline back to storage
-    const auto export_profile =
-        ResolveExportColorProfileConfig(pipeline_snapshot->executor_->GetGlobalParams());
-    const auto effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
+    const auto  effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
                                        ? std::optional<ExportColorProfileConfig>{}
-                                       : export_profile;
-    const bool wrote_ultra_hdr   = ImageWriter::ShouldWriteUltraHdr(recipe.codec_, export_profile);
-    release_pipeline_snapshot();
+                                       : recipe.output_color_;
+    const bool wrote_ultra_hdr   = ImageWriter::ShouldWriteUltraHdr(recipe.codec_, recipe.output_color_);
+    release_pipeline_use();
     stage                      = "encode";
     recipe.codec_.export_path_ = temporary_path;
-    ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, export_profile,
+    ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, recipe.output_color_,
                                   export_metadata);
 
     stage = "verify";
@@ -227,14 +221,14 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     result.resolution_tags_written_ = recipe.resize_.dpi_ > 0.0;
     return result;
   } catch (const std::exception& error) {
-    release_pipeline_snapshot();
+    release_pipeline_use();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);
     result.message_      = error.what();
     return result;
   } catch (...) {
-    release_pipeline_snapshot();
+    release_pipeline_use();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);

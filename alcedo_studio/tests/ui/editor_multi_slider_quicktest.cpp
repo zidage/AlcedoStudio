@@ -47,9 +47,11 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -68,6 +70,8 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
   guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->document_ =
+      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_ = guard->commit_graph_->GetRootId();
@@ -260,6 +264,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
     }
 
     std::string error;
+    patch = alcedo::test::WithColorGradeTarget(std::move(patch));
     // Same order as EditorSessionEditController::HandlePatch.
     if (!history_.CaptureAdjustmentBeforePreview(handle_, patch, &error)) {
       ++history_fail_count_;

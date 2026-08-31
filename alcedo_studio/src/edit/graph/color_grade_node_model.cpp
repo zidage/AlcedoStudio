@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,6 +27,14 @@ auto DefaultAdjustmentTypes() -> std::array<OperatorTypeId, 17> {
           type_ids::Halation(),          type_ids::FilmGrain()};
 }
 
+auto CleanAdjustmentTypes() -> std::array<OperatorTypeId, 13> {
+  return {type_ids::Cat02WhiteBalance(), type_ids::Exposure(), type_ids::Contrast(),
+          type_ids::White(),             type_ids::Black(),    type_ids::Shadows(),
+          type_ids::Highlights(),        type_ids::Curve(),    type_ids::Hls(),
+          type_ids::Saturation(),        type_ids::Vibrance(), type_ids::ColorWheel(),
+          type_ids::Lmt()};
+}
+
 auto InstanceSuffixFor(const OperatorTypeId& type) -> std::string {
   const std::string text{type.Text()};
   const auto        pos = text.rfind('.');
@@ -33,6 +42,25 @@ auto InstanceSuffixFor(const OperatorTypeId& type) -> std::string {
     return text;
   }
   return text.substr(pos + 1);
+}
+
+void PopulateAdjustments(ColorGradeNodeModel& node, std::span<const OperatorTypeId> types) {
+  const auto& catalog = BuiltinAdjustmentCatalog::Instance();
+  const std::string prefix = std::string{node.Id().Value()} + ".";
+  for (const auto& type : types) {
+    auto model = catalog.CreateDefault(type);
+    if (model == nullptr) {
+      throw std::logic_error("Missing default adjustment factory for " + std::string{type.Text()});
+    }
+    std::string suffix = InstanceSuffixFor(type);
+    if (type == type_ids::Cat02WhiteBalance()) {
+      suffix = "cat02_wb";
+    } else if (type == type_ids::Hls()) {
+      suffix = "hls";
+    }
+    node.InsertAdjustment(node.AdjustmentCount(), AdjustmentInstanceId{prefix + suffix},
+                          std::move(model));
+  }
 }
 
 }  // namespace
@@ -56,36 +84,34 @@ auto ColorGradeNodeModel::ToJson() const -> nlohmann::json {
   }
   return {{"id", std::string{id_.Value()}},
           {"type", std::string{Type().Text()}},
+          {"display_name", display_name_},
           {"enabled", enabled_},
           {"mix", mix_},
           {"adjustments", std::move(adjustments)}};
 }
 
 auto ColorGradeNodeModel::MakeDefault(NodeId id) -> std::unique_ptr<ColorGradeNodeModel> {
-  auto        node   = std::make_unique<ColorGradeNodeModel>(std::move(id));
-  const auto  types   = DefaultAdjustmentTypes();
-  const auto& catalog = BuiltinAdjustmentCatalog::Instance();
-  const std::string prefix = std::string{node->Id().Value()} + ".";
-  for (const auto& type : types) {
-    auto model = catalog.CreateDefault(type);
-    if (model == nullptr) {
-      throw std::logic_error("Missing default adjustment factory for " + std::string{type.Text()});
-    }
-    std::string suffix = InstanceSuffixFor(type);
-    if (type == type_ids::Cat02WhiteBalance()) {
-      suffix = "cat02_wb";
-    } else if (type == type_ids::Hls()) {
-      suffix = "hls";
-    }
-    node->InsertAdjustment(node->AdjustmentCount(), AdjustmentInstanceId{prefix + suffix},
-                           std::move(model));
-  }
+  auto       node  = std::make_unique<ColorGradeNodeModel>(std::move(id));
+  const auto types = DefaultAdjustmentTypes();
+  PopulateAdjustments(*node, types);
   return node;
+}
+
+auto ColorGradeNodeModel::MakeClean(NodeId id) -> std::unique_ptr<ColorGradeNodeModel> {
+  auto       node  = std::make_unique<ColorGradeNodeModel>(std::move(id));
+  const auto types = CleanAdjustmentTypes();
+  PopulateAdjustments(*node, types);
+  return node;
+}
+
+auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel> {
+  return ColorGradeNodeModel::MakeClean(std::move(id));
 }
 
 auto ColorGradeNodeModel::FromJson(const nlohmann::json& json) -> std::unique_ptr<ColorGradeNodeModel> {
   auto        node    = std::make_unique<ColorGradeNodeModel>(NodeId{json.at("id").get<std::string>()});
   const auto& catalog = BuiltinAdjustmentCatalog::Instance();
+  node->display_name_ = json.value("display_name", std::string{"Color Grade"});
   node->enabled_      = json.value("enabled", true);
   node->mix_          = json.value("mix", 1.0f);
   if (json.contains("adjustments") && json["adjustments"].is_array()) {
@@ -107,6 +133,8 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json) -> std::unique_pt
 
 void ColorGradeNodeModel::SetEnabled(bool enabled) { enabled_ = enabled; }
 
+void ColorGradeNodeModel::SetDisplayName(std::string name) { display_name_ = std::move(name); }
+
 void ColorGradeNodeModel::SetMix(float mix) { mix_ = std::clamp(mix, 0.0f, 1.0f); }
 
 auto ColorGradeNodeModel::AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId& {
@@ -123,6 +151,16 @@ auto ColorGradeNodeModel::AdjustmentAt(std::size_t index) const -> const IOperat
 
 auto ColorGradeNodeModel::FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel* {
   for (auto& entry : adjustments_) {
+    if (entry.instance_id == id) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
+auto ColorGradeNodeModel::FindAdjustment(const AdjustmentInstanceId& id) const
+    -> const IOperatorModel* {
+  for (const auto& entry : adjustments_) {
     if (entry.instance_id == id) {
       return entry.model.get();
     }

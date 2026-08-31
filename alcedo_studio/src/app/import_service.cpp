@@ -45,7 +45,7 @@ void AssembleImportPipelineParams(CPUPipelineExecutor& exec, const Image& image)
   geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
 
   if (image.HasRawColorContext()) {
-    const auto& ctx = image.GetRawColorContext();
+    const auto ctx = MetadataExtractor::ReadRawColorContextForRender(image);
     auto&       loading_stage = exec.GetStage(PipelineStageName::Image_Loading);
 
     nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
@@ -90,7 +90,7 @@ void AssembleImportPipelineParams(CPUPipelineExecutor& exec, const Image& image)
     loading_stage.EnableOperator(OperatorType::LENS_CALIBRATION,
                                  lens_inner.value("enabled", true), global_params);
 
-    // Seed global raw fields and inherent context so ColorTemp can resolve as-shot CCT/Tint.
+    // Populate import fields and the bound Develop camera profile before any rendering.
     exec.InjectRawMetadata(ctx);
   }
 
@@ -121,14 +121,16 @@ void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
   }
 
   guard->dirty_ = true;
-  pipeline_service.SyncPipeline(element_id);
 
   // Graph bootstrap still uses InitializeImageRoot until later plan items delete root.
-  // Inherent operator params are already in the executor and serialized pipeline JSON.
+  // Inherent image parameters are captured by the immutable history root; the product save below
+  // persists only the document graph.
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
   pipeline_service.InitializeImageRoot(guard, ctx_ptr);
 
+  // Publish the prepared camera/profile data before background tasks can load the document.
+  pipeline_service.SyncPipelineDocument(guard);
   pipeline_service.SavePipeline(guard);
 }
 

@@ -13,6 +13,7 @@
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/pass_kind.hpp"
+#include "io/image/export_color_profile_config.hpp"
 
 namespace alcedo {
 
@@ -149,6 +150,7 @@ struct ExecutionPlan {
   GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
   GraphValueId                    primary_grade_output{NodeId{"grade.primary"}, PortId{"image"}};
   GraphValueId                    display_output{NodeId{"drt"}, PortId{"display"}};
+  std::optional<ExportColorProfileConfig> output_color_override;
 
   [[nodiscard]] auto              Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {

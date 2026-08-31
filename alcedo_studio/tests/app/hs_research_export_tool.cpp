@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -33,6 +34,7 @@
 #include "app/project_service.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/runtime/drt_display.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -357,7 +359,6 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
                                        options.highlight_slider, options.saturation_slider,
                                        default_lut_path);
         pipeline_guard->dirty_ = true;
-        pipeline_service->SavePipeline(pipeline_guard);
 
         ExportTask task;
         task.sleeve_id_              = entry->element_id_;
@@ -368,6 +369,13 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
         task.options_.export_path_   = options.out_dir /
                                      BuildOutputName(raw_path, options.shadow_slider,
                                                      options.highlight_slider);
+        task.recipe_ = ExportRecipe::FromLegacyOptions(task.options_);
+        if (pipeline_guard->document_ && pipeline_guard->document_->Drt()) {
+          std::lock_guard<std::mutex> lock(pipeline_guard->pipeline_->GetRenderLock());
+          task.recipe_->output_color_ =
+              ExportColorProfileFromDrt(pipeline_guard->document_->Drt()->Params().Params());
+        }
+        pipeline_service->SavePipeline(pipeline_guard);
         export_service.EnqueueExportTask(task);
 
         std::cout << "[HsResearchExportTool] queued " << PathToUtf8(raw_path) << " -> "

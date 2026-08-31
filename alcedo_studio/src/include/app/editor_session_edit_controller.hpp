@@ -46,8 +46,9 @@ class EditorSessionEditController final {
   explicit EditorSessionEditController(Dependencies dependencies);
 
   /// Apply an interactive (settled=false) or settled (settled=true) adjustment
-  /// patch. Captures the before-preview state, commits settled patches to
-  /// history, and returns a render command carrying only the current field patch.
+  /// patch. Requires a complete EditorParameterTarget. Captures the
+  /// before-preview state, commits settled patches to history, and returns a
+  /// render command carrying only the current field patch.
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,
                    const EditorHistoryGuardHandle& guard,
                    const EditorSessionIdentity& identity) -> EditorEditOutcome;

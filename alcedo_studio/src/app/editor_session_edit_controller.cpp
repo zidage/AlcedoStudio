@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "app/editor_adjustment_pipeline.hpp"
 #include "edit/history/edit_transaction.hpp"
 
 namespace alcedo {
@@ -24,6 +25,18 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
   if (patch.field_key.empty()) {
     outcome.kind    = EditorEditOutcome::Kind::Rejected;
     outcome.message = "Adjustment patch requires a field key";
+    return outcome;
+  }
+  const auto target_error =
+      DescribeEditorParameterTargetError(patch.target, patch.field_key);
+  if (!target_error.empty()) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = target_error;
+    return outcome;
+  }
+  if (!ResolveEditorAdjustmentField(patch.field_key).has_value()) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "Unknown editor adjustment field: " + patch.field_key;
     return outcome;
   }
   if (!deps_.history || !guard.valid) {

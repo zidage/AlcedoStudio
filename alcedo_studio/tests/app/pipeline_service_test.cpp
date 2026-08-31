@@ -7,19 +7,24 @@
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <format>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "app/project_service.hpp"
+#include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
@@ -97,17 +102,17 @@ TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
     EXPECT_EQ(pipeline_guard->pinned_, true);
     EXPECT_EQ(pipeline_guard->dirty_, false);
 
-    // Modify the pipeline
-    auto&          stage = pipeline_guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-    nlohmann::json exp_params;
-    exp_params["exposure"] = 1.5f;
-    stage.SetOperator(OperatorType::EXPOSURE, exp_params);
+    // Modify the authoritative document.
+    auto* exposure = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
+        type_ids::Exposure());
+    ASSERT_NE(exposure, nullptr);
+    exposure->LoadJson({{"exposure_ev", 2.25f}});
     pipeline_guard->dirty_ = true;
 
     // Save it back
     pipeline_service.SavePipeline(pipeline_guard);
 
-    // Since SavePipeline() will only write back to the cache, we need to call Sync() to write to DB
+    // Sync is idempotent after the explicit save and must not change the document.
     pipeline_service.Sync();
 
     // Load it again and serialize the pipeline to compare
@@ -117,8 +122,8 @@ TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
     EXPECT_EQ(pipeline_guard_2->pinned_, true);
     EXPECT_EQ(pipeline_guard_2->dirty_,
               false);  // We have sync the cache, so it should not be dirty
-    // Serialize it
-    pipeline_param = pipeline_guard_2->pipeline_->ExportPipelineParams().dump(2);
+    // Serialize the document, not the executor's compatibility stages.
+    pipeline_param = pipeline_guard_2->document_->ToJson().dump(2);
   }
   // Leave the scope, reopen and load again
   {
@@ -130,8 +135,8 @@ TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
     EXPECT_EQ(pipeline_guard->id_, 1);
     EXPECT_EQ(pipeline_guard->pinned_, true);
     EXPECT_EQ(pipeline_guard->dirty_, false);  // Not dirty since we just loaded it
-    // Serialize it
-    auto pipeline_param_2 = pipeline_guard->pipeline_->ExportPipelineParams().dump(2);
+    // Serialize the document.
+    auto pipeline_param_2 = pipeline_guard->document_->ToJson().dump(2);
     EXPECT_EQ(pipeline_param, pipeline_param_2);
   }
 }
@@ -352,16 +357,16 @@ TEST_F(PipelineMapperTests, MultiplePipelineTest) {
       EXPECT_NE(pipeline_guard, nullptr);
       EXPECT_EQ(pipeline_guard->id_, i);
 
-      // Modify the pipeline
-      auto& stage = pipeline_guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-      nlohmann::json exp_params;
-      exp_params["contrast"] = static_cast<float>(i) * 0.5f;
-      stage.SetOperator(OperatorType::CONTRAST, exp_params);
+      // Modify the authoritative document.
+      auto* contrast = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
+          type_ids::Contrast());
+      ASSERT_NE(contrast, nullptr);
+      contrast->LoadJson({{"contrast", static_cast<float>(i) * 0.5f}});
       pipeline_guard->dirty_ = true;
 
       // Save it back
       pipeline_service.SavePipeline(pipeline_guard);
-      pipeline_params[i - 1] = pipeline_guard->pipeline_->ExportPipelineParams().dump(2);
+      pipeline_params[i - 1] = pipeline_guard->document_->ToJson().dump(2);
     }
     // Sync to DB
     pipeline_service.Sync();
@@ -377,8 +382,8 @@ TEST_F(PipelineMapperTests, MultiplePipelineTest) {
       EXPECT_NE(pipeline_guard, nullptr);
       EXPECT_EQ(pipeline_guard->id_, i);
 
-      // Serialize it
-      auto pipeline_param_2 = pipeline_guard->pipeline_->ExportPipelineParams().dump(2);
+      // Serialize the document.
+      auto pipeline_param_2 = pipeline_guard->document_->ToJson().dump(2);
       EXPECT_EQ(pipeline_params[i - 1], pipeline_param_2);
     }
   }
@@ -593,126 +598,7 @@ TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
   }
 }
 
-// Phase 3: LoadPipelineSnapshot must clone the current pipeline params into an
-// independent executor WITHOUT pinning the live guard, clearing dirty state, or
-// writing storage. A later user edit must persist through the normal editor path
-// and not be overwritten by the snapshot.
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesParamsAndDoesNotTouchLiveGuard) {
-  nlohmann::json params_v1;
-  nlohmann::json params_v2;
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorage());
-
-    auto                g1 = ps.LoadPipeline(1);
-    ASSERT_NE(g1, nullptr);
-    ASSERT_NE(g1->pipeline_, nullptr);
-
-    // Simulate an unsaved editor edit: exposure = 1.5, guard dirty.
-    auto&          stage = g1->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-    nlohmann::json exp1;
-    exp1["exposure"] = 1.5f;
-    stage.SetOperator(OperatorType::EXPOSURE, exp1);
-    g1->dirty_ = true;
-    params_v1  = g1->pipeline_->ExportPipelineParams();
-
-    // Capture a snapshot of the current (dirty, pinned) live state.
-    std::string err;
-    auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
-    ASSERT_NE(snap, nullptr);
-    ASSERT_NE(snap->executor_, nullptr);
-    EXPECT_NE(snap->executor_, g1->pipeline_);  // independent instance
-    EXPECT_NE(&snap->executor_->GetRenderLock(), &g1->pipeline_->GetRenderLock());
-    EXPECT_EQ(snap->pipeline_params_, params_v1);                   // captured current params
-    EXPECT_EQ(snap->executor_->ExportPipelineParams(), params_v1);  // snapshot holds them
-    EXPECT_TRUE(g1->pipeline_->HasGpuDagDocument());
-    EXPECT_TRUE(snap->executor_->HasGpuDagDocument());
-    EXPECT_NE(snap->executor_->GpuDagDocument(), g1->pipeline_->GpuDagDocument());
-
-    // Acceptance: the live guard is untouched by the capture.
-    EXPECT_EQ(g1->dirty_, true);                                  // dirty NOT cleared
-    EXPECT_EQ(g1->pin_count_, size_t{1});                         // pin NOT changed
-    EXPECT_EQ(g1->pipeline_->ExportPipelineParams(), params_v1);  // live exec unchanged
-
-    ps.ReleasePipelineSnapshot(snap);
-    EXPECT_EQ(g1->dirty_, true);  // release didn't touch live
-    EXPECT_EQ(g1->pin_count_, size_t{1});
-
-    // Later user edit after the snapshot. Must persist, not be overwritten.
-    nlohmann::json exp2;
-    exp2["exposure"] = 2.5f;
-    stage.SetOperator(OperatorType::EXPOSURE, exp2);
-    g1->dirty_ = true;
-    params_v2  = g1->pipeline_->ExportPipelineParams();
-    EXPECT_NE(params_v2, params_v1);  // the later edit took effect
-
-    ps.SavePipeline(g1);  // return to cache (last pin)
-    ps.Sync();            // write the later edit to storage
-  }
-  // Re-open from storage and verify the LATER edit (2.5) persisted, not the
-  // snapshot's 1.5.
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService ps(project.GetStorage());
-    auto                g2 = ps.LoadPipeline(1);
-    ASSERT_NE(g2, nullptr);
-    ASSERT_NE(g2->pipeline_, nullptr);
-    EXPECT_EQ(g2->pipeline_->ExportPipelineParams(), params_v2);
-  }
-}
-
-// Phase 3: cache-miss fallback. When the element is not currently loaded, the
-// snapshot path falls back to LoadPipeline/SavePipeline (net-zero pin) to obtain
-// a coherent, repaired executor. Must not crash or write storage.
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService ps(project.GetStorage());
-
-  // 999 was never loaded → cache-miss fallback inside LoadPipelineSnapshot.
-  std::string         err;
-  auto                snap = ps.LoadPipelineSnapshot(999, 0, &err);
-  ASSERT_NE(snap, nullptr);
-  ASSERT_NE(snap->executor_, nullptr);
-
-  // The fallback guard is in cache unpinned (pin_count_ == 0) — re-loading must
-  // re-pin it cleanly without throwing.
-  auto g = ps.LoadPipeline(999);
-  ASSERT_NE(g, nullptr);
-  EXPECT_EQ(g->pinned_, true);
-  EXPECT_EQ(g->pin_count_, size_t{1});
-  ps.SavePipeline(g);
-
-  EXPECT_NO_THROW(ps.ReleasePipelineSnapshot(snap));
-}
-
-TEST_F(PipelineMapperTests, LoadPipelineSnapshotClonesGpuDagDocumentIndependently) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService ps(project.GetStorage());
-  auto                live = ps.LoadPipeline(1);
-  ASSERT_NE(live, nullptr);
-  ASSERT_NE(live->pipeline_, nullptr);
-  ASSERT_TRUE(live->pipeline_->HasGpuDagDocument());
-  auto* live_lmt = dynamic_cast<LmtModel*>(
-      live->pipeline_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
-  ASSERT_NE(live_lmt, nullptr);
-  live_lmt->SetCubePath("C:/looks/live.cube");
-
-  std::string err;
-  auto        snap = ps.LoadPipelineSnapshot(1, 0, &err);
-  ASSERT_NE(snap, nullptr) << err;
-  ASSERT_NE(snap->executor_, nullptr);
-  ASSERT_TRUE(snap->executor_->HasGpuDagDocument());
-  auto* snap_lmt = dynamic_cast<LmtModel*>(
-      snap->executor_->GpuDagDocument()->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
-  ASSERT_NE(snap_lmt, nullptr);
-  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
-  live_lmt->SetCubePath("C:/looks/changed.cube");
-  EXPECT_EQ(snap_lmt->CubePath(), "C:/looks/live.cube");
-  ps.ReleasePipelineSnapshot(snap);
-  ps.SavePipeline(live);
-}
-
-TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuNeuralEngine) {
+TEST_F(PipelineMapperTests, ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
@@ -720,7 +606,7 @@ TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuN
   ASSERT_NE(initial, nullptr);
   ASSERT_NE(initial->pipeline_, nullptr);
   ASSERT_NE(initial->document_, nullptr);
-  EXPECT_TRUE(initial->pipeline_->MirrorsLegacyStageAdapter());
+  EXPECT_FALSE(initial->pipeline_->MirrorsLegacyStageAdapter());
 
   nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
   raw_params["raw"]["method"] = "neural_engine";
@@ -745,12 +631,214 @@ TEST_F(PipelineMapperTests, ReloadedFormat2GraphWithoutAdapterStillRemirrorsCpuN
   auto                loaded = reopened.LoadEditorPipeline(9102);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->document_, nullptr);
-  EXPECT_TRUE(loaded->pipeline_->MirrorsLegacyStageAdapter());
-  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "neural_engine");
+  EXPECT_FALSE(loaded->pipeline_->MirrorsLegacyStageAdapter());
+  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "default");
   const auto exported = loaded->pipeline_->ExportPipelineParams();
   EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]["method"],
             "neural_engine");
   reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineMapperTests, DocumentSaveReloadPreservesNodesEdgesAndParameters) {
+  constexpr sl_element_id_t element_id = 8501;
+  ProjectService           project(db_path_, meta_path_);
+  PipelineMgmtService      pipeline_service(project.GetStorage());
+
+  auto guard = pipeline_service.LoadPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->document_, nullptr);
+  {
+    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+    ASSERT_TRUE(AddCleanColorGrade(*guard->document_, NodeId{"drt"}, NodeId{"grade.extra"})
+                    .empty());
+    ASSERT_TRUE(ReconnectColorGrade(*guard->document_, NodeId{"grade.primary"},
+                                    NodeId{"grade.extra"}, NodeId{"drt"})
+                    .empty());
+
+    auto* extra = dynamic_cast<ColorGradeNodeModel*>(
+        guard->document_->Graph().FindNode(NodeId{"grade.extra"}));
+    ASSERT_NE(extra, nullptr);
+    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.extra"}, "Document Look")
+                    .empty());
+    ASSERT_TRUE(SetColorGradeEnabled(*guard->document_, NodeId{"grade.extra"}, false).empty());
+    extra->SetMix(0.625f);
+    auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
+    ASSERT_NE(contrast, nullptr);
+    contrast->LoadJson({{"contrast", 12.5f}});
+
+    ASSERT_TRUE(RemoveColorGradeAndBridge(*guard->document_, NodeId{"grade.primary"}).empty());
+  }
+  guard->dirty_ = true;
+  pipeline_service.SavePipeline(guard);
+
+  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_FALSE(stored->contains("stages"));
+  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
+
+  // Force the next service instance through the persisted document boundary.
+  project.GetStorage()->ForgetLivePipeline(element_id);
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                loaded = reopened.LoadPipeline(element_id);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->document_, nullptr);
+  EXPECT_EQ(loaded->document_->Graph().NodeCount(), 3U);
+  EXPECT_EQ(loaded->document_->Graph().Edges().size(), 2U);
+  EXPECT_EQ(loaded->document_->Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.extra"}, NodeId{"drt"}}));
+
+  const auto* extra = dynamic_cast<const ColorGradeNodeModel*>(
+      loaded->document_->Graph().FindNode(NodeId{"grade.extra"}));
+  ASSERT_NE(extra, nullptr);
+  EXPECT_EQ(extra->DisplayName(), "Document Look");
+  EXPECT_FALSE(extra->Enabled());
+  EXPECT_FLOAT_EQ(extra->Mix(), 0.625f);
+  const auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), 12.5f);
+  reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineMapperTests, SavedDocumentContainsNoStageAdapter) {
+  constexpr sl_element_id_t element_id = 8502;
+  ProjectService           project(db_path_, meta_path_);
+  PipelineMgmtService      pipeline_service(project.GetStorage());
+
+  auto guard = pipeline_service.LoadPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  {
+    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.primary"}, "Saved Grade")
+                    .empty());
+    auto& stage = guard->pipeline_->GetStage(PipelineStageName::Image_Loading);
+    auto  raw   = pipeline_defaults::MakeDefaultRawDecodeParams();
+    raw["raw"]["method"] = "neural_engine";
+    stage.SetOperator(OperatorType::RAW_DECODE, raw);
+    guard->pipeline_->SetExecutionStages();
+  }
+  guard->dirty_ = true;
+  pipeline_service.SavePipeline(guard);
+
+  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_FALSE(stored->contains("stages"));
+  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
+  ASSERT_TRUE(stored->contains("nodes"));
+  const auto stored_grade = std::find_if(
+      stored->at("nodes").begin(), stored->at("nodes").end(), [](const nlohmann::json& node) {
+        return node.value("id", std::string{}) == "grade.primary";
+      });
+  ASSERT_NE(stored_grade, stored->at("nodes").end());
+  EXPECT_EQ(stored_grade->value("display_name", std::string{}), "Saved Grade");
+  project.GetStorage()->ForgetLivePipeline(element_id);
+
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                loaded = reopened.LoadPipeline(element_id);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->document_->PrimaryGrade()->DisplayName(), "Saved Grade");
+  reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineMapperTests, InvalidStoredDocumentFailsWithoutReplacement) {
+  ProjectService      project(db_path_, meta_path_);
+  const auto           storage = project.GetStorage();
+  const auto           valid   = CreateDefaultPipelineDocument().ToJson();
+
+  const auto expect_failure = [&](sl_element_id_t element_id, nlohmann::json invalid,
+                                  std::string_view expected_text) {
+    storage->GetElementStore().UpdatePipelineJsonByElementId(element_id, valid);
+    storage->GetElementStore().UpdatePipelineJsonByElementId(element_id, invalid);
+    storage->ForgetLivePipeline(element_id);
+
+    PipelineMgmtService loader(storage);
+    bool                threw = false;
+    std::string         message;
+    try {
+      (void)loader.LoadPipeline(element_id);
+    } catch (const std::exception& error) {
+      threw   = true;
+      message = error.what();
+    }
+    EXPECT_TRUE(threw);
+    EXPECT_NE(message.find(expected_text), std::string::npos) << message;
+    EXPECT_EQ(storage->GetLivePipeline(element_id), nullptr);
+  };
+
+  auto missing_nodes = valid;
+  missing_nodes.erase("nodes");
+  expect_failure(8503, std::move(missing_nodes), "nodes");
+
+  auto invalid_topology = valid;
+  invalid_topology["edges"] = nlohmann::json::array();
+  expect_failure(8504, std::move(invalid_topology), "graph");
+
+  auto corrupt_params = valid;
+  corrupt_params["nodes"][0]["params"] = "corrupt";
+  expect_failure(8505, std::move(corrupt_params), "params");
+}
+
+TEST_F(PipelineMapperTests, FailedDocumentSaveKeepsDirtyStateAndJournal) {
+  constexpr sl_element_id_t element_id = 8506;
+  ProjectService           project(db_path_, meta_path_);
+  PipelineMgmtService      pipeline_service(project.GetStorage());
+
+  auto guard = pipeline_service.LoadEditorPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  guard->dirty_ = true;
+  pipeline_service.SavePipeline(guard);
+  const auto stored_before =
+      project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
+  ASSERT_TRUE(stored_before.has_value());
+
+  guard = pipeline_service.LoadEditorPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  const auto head_before = guard->working_head_commit_hash();
+  guard->serialized_state_needs_writeback_ = true;
+  {
+    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+    guard->document_->Graph().Disconnect(NodeId{"develop"}, PortId{"image"},
+                                         NodeId{"grade.primary"}, PortId{"image"});
+  }
+  guard->dirty_ = true;
+
+  EXPECT_THROW(pipeline_service.SavePipeline(guard), std::runtime_error);
+  EXPECT_TRUE(guard->dirty_);
+  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
+  EXPECT_EQ(guard->working_head_commit_hash(), head_before);
+  EXPECT_EQ(project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id),
+            stored_before);
+  EXPECT_EQ(guard->pin_count_, 0U);
+}
+
+TEST_F(PipelineMapperTests, SaveDoesNotPersistUnsettledPreviewAsCommittedState) {
+  constexpr sl_element_id_t element_id = 8507;
+  ProjectService           project(db_path_, meta_path_);
+  PipelineMgmtService      pipeline_service(project.GetStorage());
+
+  auto guard = pipeline_service.LoadPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  guard->dirty_ = true;
+  pipeline_service.SavePipeline(guard);
+  const auto stored_before =
+      project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
+  ASSERT_TRUE(stored_before.has_value());
+
+  guard = pipeline_service.LoadPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  {
+    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.primary"}, "Preview Only")
+                    .empty());
+    guard->unsettled_preview_ = true;
+  }
+  guard->dirty_ = true;
+
+  EXPECT_THROW(pipeline_service.SavePipeline(guard), std::runtime_error);
+  EXPECT_TRUE(guard->dirty_);
+  EXPECT_EQ(project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id),
+            stored_before);
+  EXPECT_EQ(guard->pin_count_, 0U);
 }
 
 TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
