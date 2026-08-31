@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "cuda_neighbor_grade.hpp"
@@ -325,8 +326,12 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     throw std::runtime_error("ExecuteCudaPrimaryGrade: missing Color Grade scene input");
   }
 
-  auto& arena = workspace.Parameters();
-  arena.Reserve(compiled_grade->adjustments.size() *
+  auto&       arena      = workspace.Parameters();
+  std::size_t slot_count = 0;
+  for (const auto& compiled_node : plan.grade_nodes) {
+    slot_count += compiled_node.adjustments.size();
+  }
+  arena.Reserve(slot_count *
                 (sizeof(CudaAdjustmentParams) + ParameterArena<CudaBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
   std::vector<GradeOp>               ops;
@@ -336,15 +341,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     sizeof(CudaAdjustmentParams)};
 
-  auto                        FlushFused = [&]() -> GradeOp* {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
-    }
-    return &ops.back();
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    auto* model = grade->FindAdjustment(compiled.instance_id);
+  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
+    auto* model = node.FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error(
           "ExecuteCudaPrimaryGrade: compiled adjustment no longer matches graph");
@@ -364,7 +362,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       throw std::runtime_error(
           "ExecuteCudaPrimaryGrade: non-local adjustment was compiled for LLF");
     }
-    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
+    const ParameterSlotKey key{node.Id(), compiled.instance_id};
     const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     auto payload = std::make_shared<TypedOperatorParamPayload<CudaAdjustmentParams>>(
         compiled.type, 1, runtime_params);
@@ -373,11 +371,44 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
       arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
       if (auto first = TakePendingParameterPatch(*model)) pending.push_back(std::move(*first));
     } else if (auto change = TakePendingParameterPatch(*model)) {
-      OperatorParamPatchDto patch{grade->Id(), compiled.instance_id, compiled.type,
+      OperatorParamPatchDto patch{node.Id(), compiled.instance_id, compiled.type,
                                   DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
       arena.ApplyPatch(key, patch);
       pending.push_back(std::move(*change));
     }
+  };
+
+  for (const auto& compiled_node : plan.grade_nodes) {
+    auto* node =
+        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
+    if (node == nullptr) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled Color Grade is missing");
+    }
+    for (const auto& compiled : compiled_node.adjustments) {
+      BindAdjustmentSlot(*node, compiled);
+    }
+  }
+
+  auto FlushFused = [&]() -> GradeOp* {
+    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
+      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
+    }
+    return &ops.back();
+  };
+
+  for (const auto& compiled : compiled_grade->adjustments) {
+    auto* model = grade->FindAdjustment(compiled.instance_id);
+    if (model == nullptr || model->Type() != compiled.type) {
+      throw std::runtime_error(
+          "ExecuteCudaPrimaryGrade: compiled adjustment no longer matches graph");
+    }
+    const auto behavior = TryResolveCudaAdjustmentBehavior(compiled.type);
+    if (!behavior.has_value()) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: unregistered adjustment type '" +
+                               std::string{compiled.type.Text()} + "'");
+    }
+    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
+    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
       if (*behavior == CudaAdjustmentBehavior::Shadows) {
         shadows_slider = runtime_params.values[0];
@@ -514,7 +545,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     } else if (op.kind == GradeOpKind::LlfBarrier) {
       local_tone = ExecuteCudaLocalTone(
           device, current_id, dest_id, grade->Id(), input_width, input_height, shadows_slider,
-          highlights_slider, plan.geometry, HashLlfReferenceKey(plan, prepared, document));
+          highlights_slider, plan.geometry,
+          HashLlfReferenceKey(plan, prepared, document, compiled_grade->node_id));
     } else {
       auto& src  = Resolve(current_id);
       auto& dest = Resolve(dest_id);

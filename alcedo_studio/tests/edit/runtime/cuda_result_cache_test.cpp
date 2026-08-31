@@ -435,6 +435,28 @@ TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditor
   EXPECT_EQ(after_preview.pass.drt_skip, 1U);
 }
 
+TEST_F(CudaResultCacheProductFixture, BackgroundMultiGradeRenderPreservesEditorCache) {
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto resources_before = renderer_->SessionResources();
+  EXPECT_GT(resources_before.published_result_count, 0U);
+  renderer_->ResetStats();
+
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+
+  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
+  EXPECT_EQ(renderer_->SessionResources().published_result_count,
+            resources_before.published_result_count);
+  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+            resources_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer_->OneShotResources().published_result_count, 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
+
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_skip, 1U);
+  EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
+}
+
 TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultCacheKeys) {
   static_assert(std::is_same_v<CudaRenderer, Renderer<CudaBackend>>);
   ASSERT_TRUE(OutputIsFinite(Render()));

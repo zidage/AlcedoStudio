@@ -278,8 +278,12 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing Color Grade scene input");
   }
 
-  auto& arena = workspace.Parameters();
-  arena.Reserve(compiled_grade->adjustments.size() *
+  auto&       arena      = workspace.Parameters();
+  std::size_t slot_count = 0;
+  for (const auto& compiled_node : plan.grade_nodes) {
+    slot_count += compiled_node.adjustments.size();
+  }
+  arena.Reserve(slot_count *
                 (kGradeRuntimeParamBytes + ParameterArena<OpenClBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
   std::vector<GradeOp>               ops;
@@ -289,15 +293,8 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     kGradeRuntimeParamBytes};
 
-  auto                        FlushFused = [&]() -> GradeOp* {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
-    }
-    return &ops.back();
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    auto* model = grade->FindAdjustment(compiled.instance_id);
+  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
+    auto* model = node.FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       throw std::runtime_error(
           "ExecuteOpenClPrimaryGrade: compiled adjustment no longer matches graph");
@@ -317,8 +314,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
       throw std::runtime_error(
           "ExecuteOpenClPrimaryGrade: non-local adjustment was compiled for LLF");
     }
-
-    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
+    const ParameterSlotKey key{node.Id(), compiled.instance_id};
     const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     auto payload = std::make_shared<TypedOperatorParamPayload<GradeAdjustmentParams>>(
         compiled.type, 1, runtime_params);
@@ -329,11 +325,44 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
         pending.push_back(std::move(*first));
       }
     } else if (auto change = TakePendingParameterPatch(*model)) {
-      OperatorParamPatchDto patch{grade->Id(), compiled.instance_id, compiled.type,
+      OperatorParamPatchDto patch{node.Id(), compiled.instance_id, compiled.type,
                                   DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
       arena.ApplyPatch(key, patch);
       pending.push_back(std::move(*change));
     }
+  };
+
+  for (const auto& compiled_node : plan.grade_nodes) {
+    auto* node =
+        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
+    if (node == nullptr) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled Color Grade is missing");
+    }
+    for (const auto& compiled : compiled_node.adjustments) {
+      BindAdjustmentSlot(*node, compiled);
+    }
+  }
+
+  auto FlushFused = [&]() -> GradeOp* {
+    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
+      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
+    }
+    return &ops.back();
+  };
+
+  for (const auto& compiled : compiled_grade->adjustments) {
+    auto* model = grade->FindAdjustment(compiled.instance_id);
+    if (model == nullptr || model->Type() != compiled.type) {
+      throw std::runtime_error(
+          "ExecuteOpenClPrimaryGrade: compiled adjustment no longer matches graph");
+    }
+    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
+    if (!behavior.has_value()) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: unregistered adjustment type '" +
+                               std::string{compiled.type.Text()} + "'");
+    }
+    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
+    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
 
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
       if (*behavior == AdjustmentBehavior::Shadows) {
@@ -493,8 +522,10 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
       auto&      dest = Resolve(dest_slot, dest_scratch);
       const auto local_tone =
           ExecuteOpenClLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                 plan.geometry, HashLlfSourceKey(plan, prepared, document),
-                                 HashLlfReferenceKey(plan, prepared, document));
+                                 plan.geometry,
+                                 HashLlfSourceKey(plan, prepared, document, compiled_grade->node_id),
+                                 HashLlfReferenceKey(plan, prepared, document,
+                                                     compiled_grade->node_id));
       result.local_tone_reference_resource_id       = local_tone.reference_resource_id;
       result.local_tone_rebuilt_reference           = local_tone.rebuilt_reference;
       result.local_tone_sampled_canonical_reference = local_tone.sampled_canonical_reference;

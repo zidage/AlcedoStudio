@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: NM2.1–NM2.2 complete; NM2.3–NM2.5 planned
+Status: NM2.1–NM2.3 complete; NM2.4–NM2.5 planned
 
 Prerequisite: NM1, including NM1.4R and NM1.5.
 
@@ -63,7 +63,7 @@ Check the implementation at the execution revision before you change it.
 | Plan | [execution_plan.hpp](../../../../../alcedo_studio/src/include/edit/runtime/execution_plan.hpp) stores `grade_nodes` in edge order, DRT/Post steps, and explicit pass I/O. [execution_plan.cpp](../../../../../alcedo_studio/src/edit/runtime/execution_plan.cpp) validates those bindings. |
 | Shared execution | [plan_executor.hpp](../../../../../alcedo_studio/src/include/edit/runtime/plan_executor.hpp) controls result reuse, execution, completion, and failure. |
 | Parameter storage | [parameter_binding.hpp](../../../../../alcedo_studio/src/include/edit/runtime/parameter_binding.hpp) defines node and adjustment slot identity. [parameter_arena.hpp](../../../../../alcedo_studio/src/include/edit/runtime/parameter_arena.hpp) owns parameter storage. |
-| Content identity | [result_content_key.cpp](../../../../../alcedo_studio/src/edit/runtime/result_content_key.cpp) currently reads the fixed primary Grade for several keys. |
+| Content identity | [result_content_key.cpp](../../../../../alcedo_studio/src/edit/runtime/result_content_key.cpp) hashes each compiled Grade output and LLF keys by `NodeId`. |
 | GPU resources | [basic_render_workspace.hpp](../../../../../alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp) owns parameters, images, buffers, and temporary storage. |
 | Image results | [graph_image_cache.hpp](../../../../../alcedo_studio/src/include/edit/runtime/graph_image_cache.hpp) separates completed results from unpublished writes. |
 | CUDA Grade | [cuda_primary_grade_pass.cu](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu) executes `FirstGrade()` using that node's compiled `scene_input`. Multi-Grade GPU dispatch is NM2.4. |
@@ -96,10 +96,9 @@ NM2 does not add node selection to the adjustment stack.
 ### 2.3 Existing limits
 
 - The shared executor still records and skips only the first compiled Grade; later Grades wait for NM2.4.
-- Several content keys still read `PrimaryGrade()` instead of each compiled node (NM2.3).
 - Default and Clean Grades contain only Color Grade catalog types (NM2.1).
 - DRT/Post owns Clarity, Sharpen, Halation, and Film Grain with factory defaults (NM2.1).
-- Local tone resources need checks for both node identity and source content.
+- Per-value content keys and LLF source identity follow compiled `NodeId` (NM2.3). GPU still executes `FirstGrade()` until NM2.4.
 
 Existing ID types and workspace interfaces remain useful.
 NM2 must extend these components rather than add another document or renderer.
@@ -463,7 +462,7 @@ Do not weaken product validation to admit it.
 | --- | --- | --- |
 | NM2.1 | complete | Parameter ownership and single-Grade reference behavior. |
 | NM2.2 | complete | Explicit node plans, pass instances, and value dependencies. |
-| NM2.3 | planned | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
+| NM2.3 | complete | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
 | NM2.4 | planned | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
 | NM2.5 | planned | Numerical, resource, failure, and service qualification. |
 
@@ -672,14 +671,87 @@ Keep resource ownership in the workspace or existing lease types.
 
 **Exit conditions**
 
-- [ ] Same-type adjustments on different nodes have independent parameter storage.
-- [ ] Upstream and sibling results remain reusable after an unrelated edit.
-- [ ] Reconnect uses new dependencies instead of stale cached pixels.
-- [ ] Two local tone Grades use the correct independent source histories.
-- [ ] Shared inputs and aliases remain valid through their final GPU reader.
-- [ ] Failed uploads retain retryable dirty state without publishing new results.
-- [ ] Background execution does not retain unused scratch or destroy editor results.
-- [ ] Repeated topology changes do not cause unbounded resource growth.
+- [x] Same-type adjustments on different nodes have independent parameter storage.
+- [x] Upstream and sibling results remain reusable after an unrelated edit.
+- [x] Reconnect uses new dependencies instead of stale cached pixels.
+- [x] Two local tone Grades use the correct independent source histories.
+- [x] Shared inputs and aliases remain valid through their final GPU reader.
+- [x] Failed uploads retain retryable dirty state without publishing new results.
+- [x] Background execution does not retain unused scratch or destroy editor results.
+- [x] Repeated topology changes do not cause unbounded resource growth.
+
+##### Phase NM2.3 completion record (2026-08-31)
+
+**Status:** complete — parameter slots, per-value content keys, LLF identity, alias/consumer tracking, and failed-upload/cache isolation at the shared plan/runtime layer; GPU still executes only `FirstGrade()` until NM2.4.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor::Execute
+  -> BeginRender
+  -> AlignParameterLayout(topology_hash)
+  -> BuildFrameResultContentKeys (values[GraphValueId], GradeScene(node))
+  -> HashLlfSourceKey / HashLlfReferenceKey(..., compiled_grade->node_id)
+  -> CollectParameterSlotKeys / encoder BindSlot for every plan.grade_nodes adjustment
+  -> ParameterArena::UploadDirty
+  -> PassEncoder PrimaryColorGrade for FirstGrade() only
+  -> EndRender / PublishResults
+  -> DRT content key hashes last compiled scene (or Develop when zero Grades)
+```
+
+**Primary failure call chain:**
+
+```text
+ParameterArena::UploadDirty throw
+  -> pending_ ranges restored; HasPendingUpload() true; no new published keys
+
+encode / sink / submit throw
+  -> PlanExecutor CancelRender
+  -> unpublished writes discarded
+  -> previously published ContentKeys remain FindValidResult
+
+RemainingValueConsumers::Consume after remaining == 0
+  -> std::runtime_error
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SameAdjustmentTypeUsesDistinctNodeSlots` (slots + keys) | `GpuDagCudaWorkspaceTest`, `GpuDagRawInputTest` | PASS |
+| `MiddleGradeEditReusesUpstreamResults` | `GpuDagRawInputTest` | PASS |
+| `ReconnectChangesNoncommutingGradeResult` (keys, not GPU pixels) | `GpuDagRawInputTest` | PASS |
+| `TwoLocalToneGradesUseTheirOwnSources` | `GpuDagRawInputTest` | PASS |
+| `LocalToneReferenceRemainsStableAcrossViewportChanges` | `GpuDagRawInputTest` | PASS |
+| `GradeWithoutPrimaryIdSelectsCompiledNodeKeys` | `GpuDagRawInputTest` | PASS |
+| `SharedInputSurvivesBothBranchReaders` (plan consumers + CUDA alias) | `GpuDagRawInputTest`, `GpuDagCudaWorkspaceTest` | PASS |
+| `JoinInputsFollowPortBindings` / `BranchEditPreservesSiblingResult` | `GpuDagRawInputTest` | PASS |
+| `ParameterUploadFailureRestoresPendingDirtyState` | `GpuDagCudaWorkspaceTest` | PASS |
+| `SinkFailurePublishesNoNewResults` | `GpuDagCudaWorkspaceTest` | PASS |
+| `RendererFailureDoesNotPublishUnfinishedContentKeys` | `GpuDagCudaDrtProductTest` | PASS |
+| `BackgroundMultiGradeRenderPreservesEditorCache` (1-Grade session vs one-shot ExactRelease; not a 3-Grade GPU render) | `GpuDagCudaDrtProductTest` | PASS |
+| `OneShotRenderDoesNotReadWriteOrClearEditorSessionCaches` | `GpuDagCudaDrtProductTest` | PASS |
+| `RepeatedNodeRemovalReclaimsUnusedResources` | `GpuDagCudaWorkspaceTest` | PASS |
+| CUDA LLF canonical reuse / ROI samples canonical | `GpuDagCudaPrimaryGradeTest` | PASS |
+| OpenCL LLF 3-arg keys still FirstGrade(); canonical reuse | `GpuDagOpenClGradeTest` | PASS |
+| CUDA mask mix after mask key from compiled Grade | `GpuDagCudaMaskTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest GpuDagCudaWorkspaceTest GpuDagCudaDrtProductTest GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest\."
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaWorkspaceTest\.CudaWorkspaceFixture\.(SameAdjustmentType|ParameterUploadFailure|RepeatedNodeRemoval|SinkFailure|SharedInput)|GpuDagCudaDrtProductTest\.CudaResultCacheProductFixture\.(BackgroundMultiGrade|RendererFailure|OneShotRenderDoesNot|ExposureEditRunsOnly)|GpuDagCudaPrimaryGradeTest\.|GpuDagOpenClGradeTest\."
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest\.|GpuDagCudaWorkspaceTest\.|GpuDagCudaDrtProductTest\.|GpuDagCudaMaskTest\."
+```
+
+Suite totals: `GpuDagRawInputTest` content-key + branch-join names **PASS**. Named CUDA workspace / DRT product / CUDA Grade / OpenCL Grade filter **67/67**. Broader RawInput + CUDA workspace + DRT product + mask **167/169**; the two failures are pre-existing header hygiene (`transient_buffer_arena.hpp` comment token `OpenCL`; `renderer.hpp` comment `CUDA/Metal/OpenCL`). CUDA mask **11/11**.
+
+**Checklist / exit condition:** all eight boxes checked from the tests above. Reconnect and sibling reuse are proven at content-key / plan-fixture layers; GPU still does not compose later Grades.
+
+**LOC note (grill-code-review):** no changed production file exceeds 1000 lines. Largest after this phase: `cuda_primary_grade_pass.cu` 584, `opencl_primary_grade_pass.cpp` 571, `metal_primary_grade_pass.mm` 494, `cuda_local_tone_pass.cu` 479, `result_content_key.cpp` 449, `execution_plan.hpp` 403. New shared helpers: `CollectParameterSlotKeys`, `RemainingValueConsumers`, `HashBoundInputs`. CUDA LLF canonical identity moved from a process-global map into `NodeResultCache::Metadata`. New test file: `branch_join_plan_test.cpp` 126.
+
+**Remaining gaps:** PlanExecutor and Grade encoders still run only `FirstGrade()`. Mask encode still uses the first compiled Grade mask. `RemainingValueConsumers` is proven at the shared plan fixture; ExactRelease in PlanExecutor still follows the linear Develop→FirstGrade→DRT sequence and must not drive multi-consumer release until NM2.4 executes every compiled Grade. `BackgroundMultiGradeRenderPreservesEditorCache` isolates a 1-Grade editor session from one-shot ExactRelease; it is not a multi-Grade GPU render (DRT would read the last Grade output that was never written). Product Grade keys still chain `MixGrade` in edge order; `HashBoundInputs` is the branch-join helper (PortId order). Metal Grade/LLF tests were compiled but not executed on this Windows host.
 
 ### 6.4 NM2.4 — Native multi-Grade execution
 

@@ -300,6 +300,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/branch_join_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)

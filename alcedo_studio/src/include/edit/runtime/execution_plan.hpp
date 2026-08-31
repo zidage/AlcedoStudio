@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
+#include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "io/image/export_color_profile_config.hpp"
 
@@ -358,5 +360,46 @@ struct ExecutionPlan {
  * @throws std::runtime_error when a binding is invalid.
  */
 void ValidateExecutionPlan(const ExecutionPlan& plan);
+
+/**
+ * @brief Parameter slots for every compiled Color Grade adjustment and DRT/Post adjustment.
+ *
+ * Order is backbone Grade order, then DRT/Post. Does not include Develop camera-color.
+ * Duplicate (node, instance) pairs are not expected; the compiler assigns unique instance ids.
+ */
+[[nodiscard]] auto CollectParameterSlotKeys(const ExecutionPlan& plan)
+    -> std::vector<ParameterSlotKey>;
+
+/**
+ * @brief Remaining pass-input consumers for each produced value.
+ *
+ * Built from @ref ExecutionPlan::passes inputs. Branch-and-join fixtures and
+ * ExactRelease callers consume one remaining count per pass-input reader.
+ * Releasing storage is valid only after Remaining() reaches zero and GPU
+ * last-use of that value has finished. PlanExecutor ExactRelease still follows
+ * the linear FirstGrade sequence until NM2.4 executes every compiled Grade.
+ */
+class RemainingValueConsumers {
+ public:
+  /**
+   * @brief Count consumers from pass inputs. Values with no consumers are omitted.
+   */
+  explicit RemainingValueConsumers(const ExecutionPlan& plan);
+
+  /**
+   * @brief Decrement the remaining consumer count for @p id.
+   * @throws std::runtime_error when @p id has no remaining consumer.
+   */
+  void Consume(const GraphValueId& id);
+
+  /** @brief Remaining readers of @p id, or zero when it had none. */
+  [[nodiscard]] auto Remaining(const GraphValueId& id) const -> std::uint32_t;
+
+  /** @brief True when @p id had consumers and none remain. */
+  [[nodiscard]] auto Exhausted(const GraphValueId& id) const -> bool;
+
+ private:
+  std::map<GraphValueId, std::uint32_t> remaining_;
+};
 
 }  // namespace alcedo

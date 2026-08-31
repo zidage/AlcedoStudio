@@ -28,8 +28,10 @@ template <class Backend>
 class NodeResultCache {
  public:
   struct Metadata {
-    ContentKey  content_key{};
-    ImageExtent extent{};
+    ContentKey    content_key{};
+    ImageExtent   extent{};
+    std::uint32_t source_long_edge = 0;
+    bool          canonical        = false;
   };
 
   void Store(GraphValueId id, typename Backend::Buffer buffer) {
@@ -42,12 +44,18 @@ class NodeResultCache {
     }
   }
 
-  /** @brief Attach the content identity used to validate a cached node buffer. */
-  void StoreMetadata(const GraphValueId& id, ContentKey content_key, ImageExtent extent) {
+  /**
+   * @brief Attach the content identity used to validate a cached node buffer.
+   *
+   * @p source_long_edge and @p canonical describe an LLF reference plane. Other
+   * buffers leave them at the defaults.
+   */
+  void StoreMetadata(const GraphValueId& id, ContentKey content_key, ImageExtent extent,
+                     std::uint32_t source_long_edge = 0, bool canonical = false) {
     if (!values_.contains(id)) {
       throw std::runtime_error("NodeResultCache::StoreMetadata: value buffer is missing");
     }
-    metadata_.insert_or_assign(id, Metadata{content_key, extent});
+    metadata_.insert_or_assign(id, Metadata{content_key, extent, source_long_edge, canonical});
   }
 
   /** @brief Return cached identity metadata for a node buffer, when available. */

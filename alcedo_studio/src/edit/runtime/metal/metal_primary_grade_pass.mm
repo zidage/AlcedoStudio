@@ -223,8 +223,12 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
   }
 
-  auto& arena = workspace.Parameters();
-  arena.Reserve(compiled_grade->adjustments.size() *
+  auto&       arena      = workspace.Parameters();
+  std::size_t slot_count = 0;
+  for (const auto& compiled_node : plan.grade_nodes) {
+    slot_count += compiled_node.adjustments.size();
+  }
+  arena.Reserve(slot_count *
                 (kGradeRuntimeParamBytes + ParameterArena<MetalBackend>::kSlotAlignment));
   std::vector<PendingParameterPatch> pending;
   std::vector<GradeOp>               ops;
@@ -234,7 +238,52 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     kGradeRuntimeParamBytes};
 
-  auto                        FlushFused = [&]() -> GradeOp* {
+  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
+    auto* model = node.FindAdjustment(compiled.instance_id);
+    if (model == nullptr || model->Type() != compiled.type) {
+      throw std::runtime_error(
+          "ExecuteMetalPrimaryGrade: compiled adjustment no longer matches graph");
+    }
+    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
+    if (!behavior.has_value()) {
+      throw std::runtime_error("ExecuteMetalPrimaryGrade: unregistered adjustment type '" +
+                               std::string{compiled.type.Text()} + "'");
+    }
+    if (IsLocalToneBehavior(*behavior) &&
+        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
+      throw std::runtime_error(
+          "ExecuteMetalPrimaryGrade: Shadows/Highlights were not compiled for LLF");
+    }
+    const ParameterSlotKey key{node.Id(), compiled.instance_id};
+    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
+    auto payload = std::make_shared<TypedOperatorParamPayload<GradeAdjustmentParams>>(
+        compiled.type, 1, runtime_params);
+    if (!arena.Contains(key)) {
+      arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
+      arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
+      if (auto first = TakePendingParameterPatch(*model)) {
+        pending.push_back(std::move(*first));
+      }
+    } else if (auto change = TakePendingParameterPatch(*model)) {
+      OperatorParamPatchDto patch{node.Id(), compiled.instance_id, compiled.type,
+                                  DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
+      arena.ApplyPatch(key, patch);
+      pending.push_back(std::move(*change));
+    }
+  };
+
+  for (const auto& compiled_node : plan.grade_nodes) {
+    auto* node =
+        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
+    if (node == nullptr) {
+      throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled Color Grade is missing");
+    }
+    for (const auto& compiled : compiled_node.adjustments) {
+      BindAdjustmentSlot(*node, compiled);
+    }
+  }
+
+  auto FlushFused = [&]() -> GradeOp* {
     if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
       ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
     }
@@ -252,27 +301,8 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
       throw std::runtime_error("ExecuteMetalPrimaryGrade: unregistered adjustment type '" +
                                std::string{compiled.type.Text()} + "'");
     }
-    if (IsLocalToneBehavior(*behavior) &&
-        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      throw std::runtime_error(
-          "ExecuteMetalPrimaryGrade: Shadows/Highlights were not compiled for LLF");
-    }
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
     const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
-    auto payload = std::make_shared<TypedOperatorParamPayload<GradeAdjustmentParams>>(
-        compiled.type, 1, runtime_params);
-    if (!arena.Contains(key)) {
-      arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
-      if (auto first = TakePendingParameterPatch(*model)) {
-        pending.push_back(std::move(*first));
-      }
-    } else if (auto change = TakePendingParameterPatch(*model)) {
-      OperatorParamPatchDto patch{grade->Id(), compiled.instance_id, compiled.type,
-                                  DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
-      arena.ApplyPatch(key, patch);
-      pending.push_back(std::move(*change));
-    }
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
       if (*behavior == AdjustmentBehavior::Shadows) {
         shadows_slider = runtime_params.values[0];
@@ -413,8 +443,10 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     if (op.kind == GradeOpKind::LlfBarrier) {
       const auto tone =
           ExecuteMetalLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                plan.geometry, HashLlfSourceKey(plan, prepared, document),
-                                HashLlfReferenceKey(plan, prepared, document));
+                                plan.geometry,
+                                HashLlfSourceKey(plan, prepared, document, compiled_grade->node_id),
+                                HashLlfReferenceKey(plan, prepared, document,
+                                                    compiled_grade->node_id));
       result.local_tone_reference_resource_id       = tone.reference_resource_id;
       result.local_tone_rebuilt_reference           = tone.rebuilt_reference;
       result.local_tone_sampled_canonical_reference = tone.sampled_canonical_reference;

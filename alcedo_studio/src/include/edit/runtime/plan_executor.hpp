@@ -65,6 +65,7 @@ class PlanExecutor {
         workspace.Textures().SetByteBudget(Backend::DefaultTextureBudgetBytes());
       }
       device.BeginRender();
+      workspace.AlignParameterLayout(plan.static_key.topology_hash);
       const auto keys          = BuildFrameResultContentKeys(plan, input, document);
       const auto completed     = workspace.Device().CompletedSubmission();
       auto&      stats         = device.PassStats();
@@ -159,13 +160,14 @@ class PlanExecutor {
 
       const auto* compiled_grade = plan.FirstGrade();
       if (compiled_grade != nullptr && compiled_grade->mask.has_value()) {
-        if (BindOrMiss(workspace, compiled_grade->mask_output, keys.mask, keys.geometry_extent,
+        const auto mask_key = keys.Value(compiled_grade->mask_output);
+        if (BindOrMiss(workspace, compiled_grade->mask_output, mask_key, keys.geometry_extent,
                        completed, TextureFormat::R8)) {
           ++stats.mask_skip;
         } else {
           PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(device, plan, input, document,
                                                                   mask_store);
-          Record(device, compiled_grade->mask_output, keys.mask, keys.geometry_extent,
+          Record(device, compiled_grade->mask_output, mask_key, keys.geometry_extent,
                  TextureFormat::R8);
           ++stats.mask_execute;
         }
@@ -176,13 +178,13 @@ class PlanExecutor {
           compiled_grade != nullptr ? compiled_grade->scene_output : plan.develop_output;
       if (compiled_grade == nullptr) {
         ++stats.primary_grade_skip;
-      } else if (BindOrMiss(workspace, grade_scene, keys.primary_grade, keys.geometry_extent,
+      } else if (BindOrMiss(workspace, grade_scene, keys.Value(grade_scene), keys.geometry_extent,
                             completed)) {
         ++stats.primary_grade_skip;
       } else {
         PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(device, plan, input, document,
                                                                      mask_store);
-        Record(device, grade_scene, keys.primary_grade, keys.geometry_extent);
+        Record(device, grade_scene, keys.Value(grade_scene), keys.geometry_extent);
         ++stats.primary_grade_execute;
       }
       if (exact_release) {

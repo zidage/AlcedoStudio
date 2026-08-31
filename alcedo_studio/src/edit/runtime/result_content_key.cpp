@@ -4,6 +4,11 @@
 
 #include "edit/runtime/result_content_key.hpp"
 
+#include <algorithm>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
 #include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -135,6 +140,8 @@ auto MixDrtPost(ContentHash& hash, const DrtNodeModel& drt) -> void {
 }
 
 auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
+  hash.MixBool(grade.Enabled());
+  hash.MixF32(grade.Mix());
   hash.MixU64(grade.AdjustmentCount());
   for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
     const auto& type = grade.AdjustmentAt(index).Type();
@@ -205,6 +212,48 @@ auto MixLlfSharedIdentity(ContentHash& hash, const ExecutionPlan& plan,
   MixCameraColorParams(hash, develop == nullptr ? DevelopPayload{} : develop->Params().Params());
 }
 
+auto RequireCompiledGrade(const ExecutionPlan& plan, const PipelineDocument& document,
+                          const NodeId& grade_id) -> const ColorGradeNodeModel& {
+  if (plan.FindGrade(grade_id) == nullptr) {
+    throw std::runtime_error("HashLlf: compiled Color Grade '" + std::string{grade_id.Value()} +
+                             "' is missing");
+  }
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    throw std::runtime_error("HashLlf: Color Grade '" + std::string{grade_id.Value()} +
+                             "' is missing from the document");
+  }
+  return *grade;
+}
+
+auto MixLlfGradeChain(ContentHash& hash, const ExecutionPlan& plan,
+                      const PipelineDocument& document, const NodeId& grade_id,
+                      bool include_local_tone_values) -> void {
+  RequireCompiledGrade(plan, document, grade_id);
+  for (const auto& compiled : plan.grade_nodes) {
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
+    if (grade == nullptr) {
+      throw std::runtime_error("HashLlf: Color Grade '" + std::string{compiled.node_id.Value()} +
+                               "' is missing from the document");
+    }
+    hash.MixText(compiled.node_id.Value());
+    if (compiled.mask.has_value()) {
+      MixCompiledMask(hash, document, *compiled.mask);
+    }
+    const bool target = compiled.node_id == grade_id;
+    if (target && !include_local_tone_values) {
+      MixGradeExcludingLocalToneValues(hash, *grade);
+    } else {
+      MixGrade(hash, *grade);
+    }
+    if (target) {
+      return;
+    }
+  }
+}
+
 }  // namespace
 
 auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
@@ -214,24 +263,64 @@ auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
 }
 
 auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
-                         const PipelineDocument& document) -> ContentKey {
+                         const PipelineDocument& document, const NodeId& grade_id) -> ContentKey {
   ContentHash hash;
   MixLlfSharedIdentity(hash, plan, input, document);
-  if (document.PrimaryGrade() != nullptr) {
-    MixGrade(hash, *document.PrimaryGrade());
+  MixLlfGradeChain(hash, plan, document, grade_id, /*include_local_tone_values=*/true);
+  hash.MixU32(kLlfReferenceImplementationVersion);
+  return hash.Key();
+}
+
+auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                         const PipelineDocument& document) -> ContentKey {
+  if (plan.FirstGrade() == nullptr) {
+    ContentHash hash;
+    MixLlfSharedIdentity(hash, plan, input, document);
+    hash.MixU32(kLlfReferenceImplementationVersion);
+    return hash.Key();
   }
+  return HashLlfReferenceKey(plan, input, document, plan.FirstGrade()->node_id);
+}
+
+auto HashLlfSourceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
+                      const PipelineDocument& document, const NodeId& grade_id) -> ContentKey {
+  ContentHash hash;
+  MixLlfSharedIdentity(hash, plan, input, document);
+  MixLlfGradeChain(hash, plan, document, grade_id, /*include_local_tone_values=*/false);
   hash.MixU32(kLlfReferenceImplementationVersion);
   return hash.Key();
 }
 
 auto HashLlfSourceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
                       const PipelineDocument& document) -> ContentKey {
-  ContentHash hash;
-  MixLlfSharedIdentity(hash, plan, input, document);
-  if (document.PrimaryGrade() != nullptr) {
-    MixGradeExcludingLocalToneValues(hash, *document.PrimaryGrade());
+  if (plan.FirstGrade() == nullptr) {
+    ContentHash hash;
+    MixLlfSharedIdentity(hash, plan, input, document);
+    hash.MixU32(kLlfReferenceImplementationVersion);
+    return hash.Key();
   }
-  hash.MixU32(kLlfReferenceImplementationVersion);
+  return HashLlfSourceKey(plan, input, document, plan.FirstGrade()->node_id);
+}
+
+auto HashBoundInputs(std::span<const CompiledPassInput>        inputs,
+                     const std::map<GraphValueId, ContentKey>& produced) -> ContentKey {
+  std::vector<CompiledPassInput> ordered(inputs.begin(), inputs.end());
+  std::sort(ordered.begin(), ordered.end(),
+            [](const CompiledPassInput& lhs, const CompiledPassInput& rhs) {
+              return lhs.port < rhs.port;
+            });
+  ContentHash hash;
+  hash.MixU64(ordered.size());
+  for (const auto& input : ordered) {
+    hash.MixText(input.port.Value());
+    const auto it = produced.find(input.source);
+    if (it == produced.end()) {
+      throw std::runtime_error("HashBoundInputs: missing producer key for " +
+                               std::string{input.source.producer.Value()} + "." +
+                               std::string{input.source.output_port.Value()});
+    }
+    hash.MixKey(it->second);
+  }
   return hash.Key();
 }
 
@@ -294,26 +383,52 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   MixCameraColorParams(camera, params);
   camera.MixU32(kCameraColorImplementationVersion);
   keys.develop_image = camera.Key();
+  keys.values[plan.sensor_linear_output] = keys.sensor_linear;
+  keys.values[plan.geometry_output]      = keys.geometry_scene_source;
+  keys.values[plan.develop_output]       = keys.develop_image;
 
-  if (plan.FirstGrade() != nullptr && plan.FirstGrade()->mask) {
-    ContentHash mask;
-    mask.MixKey(keys.geometry_scene_source);
-    MixCompiledMask(mask, document, *plan.FirstGrade()->mask);
-    mask.MixU32(kMaskImplementationVersion);
-    keys.mask = mask.Key();
+  ContentKey scene = keys.develop_image;
+  for (const auto& compiled : plan.grade_nodes) {
+    ContentKey mask_key{};
+    if (compiled.mask.has_value()) {
+      ContentHash mask;
+      mask.MixKey(keys.geometry_scene_source);
+      MixCompiledMask(mask, document, *compiled.mask);
+      mask.MixU32(kMaskImplementationVersion);
+      mask_key = mask.Key();
+      keys.values[compiled.mask_output] = mask_key;
+      if (keys.mask.Empty()) {
+        keys.mask = mask_key;
+      }
+    }
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
+    if (grade == nullptr) {
+      throw std::runtime_error("BuildFrameResultContentKeys: Color Grade '" +
+                               std::string{compiled.node_id.Value()} +
+                               "' is missing from the document");
+    }
+    ContentHash grade_hash;
+    grade_hash.MixKey(scene);
+    MixGrade(grade_hash, *grade);
+    grade_hash.MixKey(mask_key);
+    grade_hash.MixU32(kPrimaryGradeImplementationVersion);
+    scene = grade_hash.Key();
+    keys.values[compiled.scene_output] = scene;
+    if (keys.primary_grade.Empty()) {
+      keys.primary_grade = scene;
+    }
   }
-
-  ContentHash grade;
-  grade.MixKey(keys.develop_image);
-  if (document.PrimaryGrade() != nullptr) {
-    MixGrade(grade, *document.PrimaryGrade());
+  if (keys.primary_grade.Empty()) {
+    ContentHash grade;
+    grade.MixKey(keys.develop_image);
+    grade.MixKey(keys.mask);
+    grade.MixU32(kPrimaryGradeImplementationVersion);
+    keys.primary_grade = grade.Key();
   }
-  grade.MixKey(keys.mask);
-  grade.MixU32(kPrimaryGradeImplementationVersion);
-  keys.primary_grade = grade.Key();
 
   ContentHash drt;
-  drt.MixKey(keys.primary_grade);
+  drt.MixKey(scene);
   if (document.Drt() != nullptr) {
     drt.MixText(document.Drt()->Params().ToJson().dump());
     MixDrtPost(drt, *document.Drt());
@@ -327,6 +442,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   }
   drt.MixU32(kDrtImplementationVersion);
   keys.drt_display = drt.Key();
+  keys.values[plan.display_output] = keys.drt_display;
   return keys;
 }
 

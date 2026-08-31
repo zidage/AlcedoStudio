@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace alcedo {
 namespace {
@@ -80,6 +81,47 @@ void ValidateExecutionPlan(const ExecutionPlan& plan) {
       defined[output.value] = {index, output.kind};
     }
   }
+}
+
+auto CollectParameterSlotKeys(const ExecutionPlan& plan) -> std::vector<ParameterSlotKey> {
+  std::vector<ParameterSlotKey> keys;
+  for (const auto& grade : plan.grade_nodes) {
+    for (const auto& adjustment : grade.adjustments) {
+      keys.push_back(ParameterSlotKey{grade.node_id, adjustment.instance_id});
+    }
+  }
+  for (const auto& adjustment : plan.drt.post_adjustments) {
+    keys.push_back(ParameterSlotKey{plan.drt.node_id, adjustment.instance_id});
+  }
+  return keys;
+}
+
+RemainingValueConsumers::RemainingValueConsumers(const ExecutionPlan& plan) {
+  for (const auto& pass : plan.passes) {
+    for (const auto& input : pass.inputs) {
+      ++remaining_[input.source];
+    }
+  }
+}
+
+void RemainingValueConsumers::Consume(const GraphValueId& id) {
+  const auto it = remaining_.find(id);
+  if (it == remaining_.end() || it->second == 0) {
+    throw std::runtime_error("RemainingValueConsumers: no remaining consumer for " +
+                             std::string{id.producer.Value()} + "." +
+                             std::string{id.output_port.Value()});
+  }
+  --it->second;
+}
+
+auto RemainingValueConsumers::Remaining(const GraphValueId& id) const -> std::uint32_t {
+  const auto it = remaining_.find(id);
+  return it == remaining_.end() ? 0 : it->second;
+}
+
+auto RemainingValueConsumers::Exhausted(const GraphValueId& id) const -> bool {
+  const auto it = remaining_.find(id);
+  return it != remaining_.end() && it->second == 0;
 }
 
 }  // namespace alcedo
