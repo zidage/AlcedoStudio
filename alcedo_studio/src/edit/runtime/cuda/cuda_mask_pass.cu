@@ -19,6 +19,7 @@
 #include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 
 namespace alcedo {
@@ -255,29 +256,43 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
   output[index] = static_cast<std::uint8_t>(fminf(fmaxf(value * 255.0f + 0.5f, 0.0f), 255.0f));
 }
 
+__global__ void MaskFillZeroKernel(std::uint8_t* output, std::uint32_t pixel_count) {
+  const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixel_count) return;
+  output[index] = 0;
+}
+
+__global__ void MaskUnionMaxKernel(const std::uint8_t* lhs, const std::uint8_t* rhs,
+                                   std::uint8_t* output, std::uint32_t pixel_count) {
+  const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixel_count) return;
+  const auto a = lhs[index];
+  const auto b = rhs[index];
+  output[index] = a > b ? a : b;
+}
+
 }  // namespace
 
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                     MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+                     const CompiledMaskSource& compiled_source, MaskStore* store,
+                     std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> CudaMaskResult {
   if (!device.Workspace().IsRendering())
     throw std::runtime_error("ExecuteCudaMask: BeginRender has not been called");
-  if (!compiled_grade.mask.has_value()) {
-    throw std::runtime_error("ExecuteCudaMask: compiled Color Grade has no mask");
-  }
   if (!active_raster_masks.empty()) {
     ValidateActiveRasterMaskBindings(document, active_raster_masks);
   }
   auto&                   workspace     = device.Workspace();
   auto&                   context       = device.CommandContext();
   const auto              extent        = plan.geometry.render_extent;
-  auto&                   output        = EnsureOutput(workspace, compiled_grade.mask_output, extent);
+  auto&                   output        = EnsureOutput(workspace, compiled_source.effective_output, extent);
   constexpr std::uint32_t block         = 256;
   const auto              render_pixels = extent.width * extent.height;
-  CudaMaskResult          result{compiled_grade.mask_output};
+  CudaMaskResult          result{compiled_source.effective_output};
 
-  const auto& mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  const auto& mask_model =
+      RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
     AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
@@ -287,7 +302,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         LinearGradientParamsFromMask(mask_model));
   } else if (const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source)) {
     const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
-                                                   compiled_grade.mask->mask_id);
+                                                   compiled_source.mask_id);
     const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
                                      bool raster_bytes_changed) {
       result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
@@ -305,10 +320,14 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
             extent.height, sampling.render_to_texture_uv, mask_model.invert);
         return;
       }
-      const GraphValueId distance_id{compiled_grade.node_id, PortId{"signed_distance"}};
-      const GraphValueId horizontal_id{compiled_grade.node_id, PortId{"distance.horizontal"}};
-      const GraphValueId inside_id{compiled_grade.node_id, PortId{"distance.inside"}};
-      const GraphValueId outside_id{compiled_grade.node_id, PortId{"distance.outside"}};
+      const GraphValueId distance_id =
+          MaskSignedDistanceValue(compiled_grade.node_id, compiled_source.mask_id);
+      const GraphValueId horizontal_id =
+          MaskScratchValue(compiled_grade.node_id, compiled_source.mask_id, "distance.horizontal");
+      const GraphValueId inside_id =
+          MaskScratchValue(compiled_grade.node_id, compiled_source.mask_id, "distance.inside");
+      const GraphValueId outside_id =
+          MaskScratchValue(compiled_grade.node_id, compiled_source.mask_id, "distance.outside");
       auto*              distance = workspace.Values().Find(distance_id);
       const auto         distance_bytes =
           static_cast<std::size_t>(raster_descriptor.extent.width) *
@@ -392,7 +411,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
 
     if (active != nullptr) {
       auto& cache = workspace.ActiveRasterTextures();
-      const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_grade.mask->mask_id,
+      const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_source.mask_id,
                                            active->session_generation};
       cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
         return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
@@ -422,8 +441,9 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
       if (store == nullptr)
         throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
       if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
-        throw std::runtime_error("ExecuteCudaMask: Brush Mask has no asset");
-      }
+        MaskFillZeroKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
+            static_cast<std::uint8_t*>(output.Texture().DevicePointer()), render_pixels);
+      } else {
       const auto asset  = store->Load(*brush->asset_key);
       const bool cached = workspace.MaskTextures().Contains(asset->key);
       auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
@@ -432,6 +452,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         upload_full(source, asset->pixels);
       }
       encode_coverage(source, asset->descriptor, !cached);
+      }
     }
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");
@@ -441,13 +462,89 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   return result;
 }
 
+auto ExecuteCudaMaskUnion(CudaRenderDevice& device, const ExecutionPlan& plan,
+                          const PipelineDocument& document,
+                          const CompiledGradeNode& compiled_grade) -> CudaMaskResult {
+  if (!device.Workspace().IsRendering()) {
+    throw std::runtime_error("ExecuteCudaMaskUnion: BeginRender has not been called");
+  }
+  const auto& stack  = RequireMaskStack(compiled_grade);
+  auto&       workspace = device.Workspace();
+  const auto  extent = plan.geometry.render_extent;
+  constexpr std::uint32_t block = 256;
+  const auto render_pixels      = extent.width * extent.height;
+  std::vector<GraphValueId> enabled;
+  enabled.reserve(stack.sources.size());
+  for (const auto& source : stack.sources) {
+    if (MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      enabled.push_back(source.effective_output);
+    }
+  }
+  if (enabled.empty()) {
+    auto& output = EnsureOutput(workspace, stack.union_output, extent);
+    MaskFillZeroKernel<<<(render_pixels + block - 1) / block, block, 0,
+                         device.CommandContext().Stream()>>>(
+        static_cast<std::uint8_t*>(output.Texture().DevicePointer()), render_pixels);
+    if (::cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error("ExecuteCudaMaskUnion: CUDA kernel launch failed");
+    }
+    return CudaMaskResult{stack.union_output};
+  }
+  if (enabled.size() == 1) {
+    (void)workspace.AliasImageFrom(stack.union_output, enabled.front());
+    return CudaMaskResult{stack.union_output};
+  }
+  auto& output = EnsureOutput(workspace, stack.union_output, extent);
+  auto* first  = workspace.Images().Find(enabled.front());
+  if (first == nullptr || first->Empty()) {
+    throw std::runtime_error("ExecuteCudaMaskUnion: missing enabled Mask source");
+  }
+  workspace.Device().CopyTexture2D(first->Texture(), output.Texture(), device.CommandContext());
+  for (std::size_t index = 1; index < enabled.size(); ++index) {
+    auto* next = workspace.Images().Find(enabled[index]);
+    if (next == nullptr || next->Empty()) {
+      throw std::runtime_error("ExecuteCudaMaskUnion: missing enabled Mask source");
+    }
+    MaskUnionMaxKernel<<<(render_pixels + block - 1) / block, block, 0,
+                         device.CommandContext().Stream()>>>(
+        static_cast<const std::uint8_t*>(output.Texture().DevicePointer()),
+        static_cast<const std::uint8_t*>(next->Texture().DevicePointer()),
+        static_cast<std::uint8_t*>(output.Texture().DevicePointer()), render_pixels);
+  }
+  if (::cudaGetLastError() != cudaSuccess) {
+    throw std::runtime_error("ExecuteCudaMaskUnion: CUDA kernel launch failed");
+  }
+  return CudaMaskResult{stack.union_output};
+}
+
+auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> CudaMaskResult {
+  const auto& stack = RequireMaskStack(compiled_grade);
+  CudaMaskResult sources{};
+  for (const auto& source : stack.sources) {
+    if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      continue;
+    }
+    sources = ExecuteCudaMask(device, plan, document, compiled_grade, source, store,
+                              active_raster_masks);
+  }
+  auto unified                              = ExecuteCudaMaskUnion(device, plan, document, compiled_grade);
+  unified.persistent_texture_resource_id    = sources.persistent_texture_resource_id;
+  unified.active_texture_resource_id        = sources.active_texture_resource_id;
+  unified.signed_distance_resource_id       = sources.signed_distance_resource_id;
+  unified.mip_level_count                   = sources.mip_level_count;
+  return unified;
+}
+
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PipelineDocument& document, MaskStore* store,
                      std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> CudaMaskResult {
   const CompiledGradeNode* last = nullptr;
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
+    if (grade.mask_stack.has_value()) {
       last = &grade;
     }
   }
@@ -456,7 +553,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   }
   CudaMaskResult result{};
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
+    if (grade.mask_stack.has_value()) {
       result = ExecuteCudaMask(device, plan, document, grade, store, active_raster_masks);
     }
   }

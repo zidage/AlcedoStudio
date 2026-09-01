@@ -271,13 +271,16 @@ TEST_F(OpenClMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   document.MarkTopologyDirty();
 
   const auto plan = Compile(document);
-  ASSERT_TRUE(plan.grade_nodes[0].mask.has_value());
-  ASSERT_TRUE(plan.grade_nodes[1].mask.has_value());
+  ASSERT_TRUE(plan.grade_nodes[0].mask_stack.has_value());
+  ASSERT_TRUE(plan.grade_nodes[1].mask_stack.has_value());
+  EXPECT_EQ(plan.grade_nodes[0].mask_stack->sources.front().mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(plan.grade_nodes[1].mask_stack->sources.front().mask_id, MaskId{"mask.b"});
   Device().ResetPassStats();
   const auto output = Device().Execute(plan, prepared_, document, &store);
   (void)output;
   Device().WaitIdle();
   EXPECT_EQ(Device().PassStats().mask_execute, 2U);
+  EXPECT_EQ(Device().PassStats().mask_union_execute, 2U);
   EXPECT_EQ(Device().PassStats().primary_grade_execute, 2U);
   const auto develop = Download(Device(), plan.develop_output);
   const auto a       = Download(Device(), plan.grade_nodes[0].scene_output);

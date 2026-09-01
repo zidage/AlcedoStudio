@@ -40,6 +40,8 @@ inline constexpr const char* kMaskBandVerticalKernelName          = "mask_band_v
 inline constexpr const char* kMaskComposeSignedDistanceKernelName = "mask_compose_signed_distance";
 inline constexpr const char* kMaskFeatherSampleKernelName         = "mask_feather_sample";
 inline constexpr const char* kMaskAnalyticKernelName              = "mask_analytic_r8";
+inline constexpr const char* kMaskFillZeroKernelName              = "mask_fill_zero_r8";
+inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_max_r8";
 inline constexpr const char* kDrtKernelName                       = "drt_display_rgba32f";
 
 }  // namespace alcedo::OpenCL::GpuDag

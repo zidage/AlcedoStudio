@@ -237,11 +237,11 @@ auto NextOrdinal(const ExecutionPlan& plan, GpuPassKind kind) -> std::uint32_t {
 void PushPass(ExecutionPlan& plan, GpuPassKind kind, NodeId owner,
               std::vector<CompiledPassInput> inputs, std::vector<CompiledPassOutput> outputs,
               std::optional<AdjustmentInstanceId> adjustment = {},
-              std::vector<AdjustmentInstanceId>   parameters = {}) {
+              std::vector<AdjustmentInstanceId>   parameters = {}, MaskId mask_id = {}) {
   const auto ordinal = NextOrdinal(plan, kind);
   plan.passes.push_back(MakeGpuPass(kind, std::move(owner), ordinal, std::move(inputs),
                                     std::move(outputs), std::move(adjustment),
-                                    std::move(parameters)));
+                                    std::move(parameters), std::move(mask_id)));
 }
 
 auto SceneImageIncoming(const PipelineDocument& document, const NodeId& node_id) -> GraphValueId {
@@ -254,31 +254,53 @@ auto SceneImageIncoming(const PipelineDocument& document, const NodeId& node_id)
                            std::string{node_id.Value()});
 }
 
-auto CompileGradeOwnedMask(const ColorGradeNodeModel& grade, const DevelopCompileSource& source,
-                           ExecutionPlan& plan)
-    -> std::pair<std::optional<CompiledMask>, GraphValueId> {
-  const auto* mask = FirstEnabledMask(grade.Masks());
-  if (mask == nullptr) {
-    return {std::nullopt, GraphValueId{NodeId{""}, PortId{"mask"}}};
+auto CompileGradeOwnedMaskStack(const ColorGradeNodeModel& grade, GraphValueId scene_input,
+                                const DevelopCompileSource& source, ExecutionPlan& plan)
+    -> std::optional<CompiledMaskStack> {
+  if (grade.MaskCount() == 0) {
+    return std::nullopt;
   }
-  const auto kind = std::holds_alternative<BrushMaskSource>(mask->source)
-                        ? CompiledMaskKind::Raster
-                        : CompiledMaskKind::Analytic;
-  const GraphValueId mask_output{grade.Id(), PortId{"mask"}};
-  PushPass(plan, GpuPassKind::MaskEvaluate, grade.Id(),
-           {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage}},
-           {{mask_output, CompiledValueKind::Mask}});
-  PushPass(plan, GpuPassKind::MaskFeather, grade.Id(),
-           {{PortId{"mask"}, mask_output, CompiledValueKind::Mask}},
-           {{mask_output, CompiledValueKind::Mask}});
-  if (kind == CompiledMaskKind::Raster) {
-    const Extent2D mask_extent{
-        std::max(source.full_reference_extent.width, source.host_extent.width),
-        std::max(source.full_reference_extent.height, source.host_extent.height)};
-    plan.peak_transient_bytes =
-        (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
+
+  CompiledMaskStack stack;
+  stack.owner_node_id = grade.Id();
+  stack.union_output  = MaskUnionValue(grade.Id());
+  stack.sources.reserve(grade.MaskCount());
+  for (const auto& mask : grade.Masks()) {
+    CompiledMaskSource compiled;
+    compiled.owner_node_id    = grade.Id();
+    compiled.mask_id          = mask.id;
+    compiled.source_kind      = GetMaskSourceKind(mask.source);
+    compiled.source_output    = MaskSourceValue(grade.Id(), mask.id);
+    compiled.feather_output   = compiled.source_output;
+    compiled.effective_output = compiled.source_output;
+    compiled.range_input      = scene_input;
+    stack.sources.push_back(std::move(compiled));
   }
-  return {CompiledMask{grade.Id(), mask->id, kind}, mask_output};
+  std::sort(stack.sources.begin(), stack.sources.end(),
+            [](const CompiledMaskSource& lhs, const CompiledMaskSource& rhs) {
+              return lhs.mask_id < rhs.mask_id;
+            });
+
+  std::vector<CompiledPassInput> union_inputs;
+  union_inputs.reserve(stack.sources.size());
+  for (const auto& compiled : stack.sources) {
+    PushPass(plan, GpuPassKind::MaskEvaluate, grade.Id(),
+             {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage},
+              {PortId{"range"}, compiled.range_input, CompiledValueKind::SceneImage}},
+             {{compiled.source_output, CompiledValueKind::Mask}}, {}, {}, compiled.mask_id);
+    union_inputs.push_back({PortId{std::string{compiled.mask_id.Value()}}, compiled.effective_output,
+                            CompiledValueKind::Mask});
+    if (compiled.source_kind == MaskSourceKind::Brush) {
+      const Extent2D mask_extent{
+          std::max(source.full_reference_extent.width, source.host_extent.width),
+          std::max(source.full_reference_extent.height, source.host_extent.height)};
+      plan.peak_transient_bytes =
+          (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
+    }
+  }
+  PushPass(plan, GpuPassKind::MaskUnion, grade.Id(), std::move(union_inputs),
+           {{stack.union_output, CompiledValueKind::Mask}});
+  return stack;
 }
 
 auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeModel& grade,
@@ -294,9 +316,10 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
   compiled.node_id      = grade.Id();
   compiled.scene_input  = scene_input;
   compiled.scene_output = GraphValueId{grade.Id(), PortId{"image"}};
-  auto [mask, mask_output] = CompileGradeOwnedMask(grade, source, plan);
-  compiled.mask            = std::move(mask);
-  compiled.mask_output     = mask_output;
+  compiled.mask_stack   = CompileGradeOwnedMaskStack(grade, scene_input, source, plan);
+  if (compiled.mask_stack.has_value()) {
+    compiled.mask_output = compiled.mask_stack->union_output;
+  }
 
   std::vector<AdjustmentInstanceId> parameters;
   parameters.reserve(grade.AdjustmentCount());
@@ -313,7 +336,7 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
 
   std::vector<CompiledPassInput> inputs{
       {PortId{"image"}, compiled.scene_input, CompiledValueKind::SceneImage}};
-  if (compiled.mask.has_value()) {
+  if (compiled.mask_stack.has_value()) {
     inputs.push_back({PortId{"mask"}, compiled.mask_output, CompiledValueKind::Mask});
   }
   PushPass(plan, GpuPassKind::PrimaryColorGrade, grade.Id(), std::move(inputs),

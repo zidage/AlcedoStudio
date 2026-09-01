@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -13,18 +14,22 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "../graph/grade_owned_mask_support.hpp"
+#include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/pass_kind.hpp"
+#include "edit/runtime/result_content_key.hpp"
+#include "multi_grade_runtime_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -158,15 +163,20 @@ TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected)
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskEvaluate));
-  EXPECT_TRUE(plan.Contains(GpuPassKind::MaskFeather));
+  EXPECT_TRUE(plan.Contains(GpuPassKind::MaskUnion));
+  EXPECT_FALSE(plan.Contains(GpuPassKind::MaskFeather));
   ASSERT_NE(plan.FirstGrade(), nullptr);
-  ASSERT_TRUE(plan.FirstGrade()->mask.has_value());
-  EXPECT_EQ(plan.FirstGrade()->mask->owner_id, NodeId{"grade.primary"});
-  EXPECT_EQ(plan.FirstGrade()->mask->mask_id, MaskId{"mask.raster"});
-  EXPECT_EQ(plan.FirstGrade()->mask->kind, CompiledMaskKind::Raster);
+  ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->owner_node_id, NodeId{"grade.primary"});
+  ASSERT_EQ(plan.FirstGrade()->mask_stack->sources.size(), 1U);
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().mask_id, MaskId{"mask.raster"});
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().source_kind, MaskSourceKind::Brush);
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().range_input,
+            plan.FirstGrade()->scene_input);
+  EXPECT_EQ(plan.FirstGrade()->mask_output, plan.FirstGrade()->mask_stack->union_output);
   EXPECT_LT(plan.IndexOf(GpuPassKind::CameraToAp1), plan.IndexOf(GpuPassKind::MaskEvaluate));
-  EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskFeather));
-  EXPECT_LT(plan.IndexOf(GpuPassKind::MaskFeather), plan.IndexOf(GpuPassKind::PrimaryColorGrade));
+  EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskUnion));
+  EXPECT_LT(plan.IndexOf(GpuPassKind::MaskUnion), plan.IndexOf(GpuPassKind::PrimaryColorGrade));
 }
 
 auto Align256(std::size_t value) -> std::size_t { return (value + 255) & ~std::size_t{255}; }
@@ -449,6 +459,174 @@ TEST(GpuDagGraphCompiler, InvalidCompiledBindingsFailBeforeGpuWork) {
   ASSERT_FALSE(wrong_kind.passes.back().inputs.empty());
   wrong_kind.passes.back().inputs.front().expected_kind = CompiledValueKind::Mask;
   EXPECT_THROW(ValidateExecutionPlan(wrong_kind), std::runtime_error);
+}
+
+auto MakeRgbPrepared() -> PreparedRawInput {
+  return RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
+                                       gpu_dag_test::FullSensor(16, 12));
+}
+
+void AddSortedRadialPair(PipelineDocument& document) {
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.z"});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.a"});
+}
+
+TEST(GpuDagGraphCompiler, EmptyMaskListUsesFullGradeCoverage) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  const auto empty_plan =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_FALSE(empty_plan.Contains(GpuPassKind::MaskEvaluate));
+  EXPECT_FALSE(empty_plan.Contains(GpuPassKind::MaskUnion));
+  ASSERT_NE(empty_plan.FirstGrade(), nullptr);
+  EXPECT_FALSE(empty_plan.FirstGrade()->mask_stack.has_value());
+  const auto empty_keys = BuildFrameResultContentKeys(empty_plan, prepared, document);
+  EXPECT_TRUE(empty_keys.mask.Empty());
+
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
+  document.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
+  const auto restored =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_EQ(restored.static_key, empty_plan.static_key);
+  const auto restored_keys = BuildFrameResultContentKeys(restored, prepared, document);
+  EXPECT_EQ(restored_keys.primary_grade, empty_keys.primary_grade);
+  EXPECT_TRUE(restored_keys.mask.Empty());
+}
+
+TEST(GpuDagGraphCompiler, AllDisabledMasksUseZeroGradeCoverage) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  AddSortedRadialPair(document);
+  const auto enabled_plan =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  ASSERT_TRUE(enabled_plan.Contains(GpuPassKind::MaskEvaluate));
+  ASSERT_TRUE(enabled_plan.Contains(GpuPassKind::MaskUnion));
+  const auto enabled_keys = BuildFrameResultContentKeys(enabled_plan, prepared, document);
+
+  document.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.a"}, false);
+  document.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.z"}, false);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(enabled_plan, document, prepared.CompileSource()));
+  const auto disabled_plan =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_EQ(disabled_plan.static_key, enabled_plan.static_key);
+  ASSERT_TRUE(disabled_plan.FirstGrade()->mask_stack.has_value());
+  EXPECT_EQ(disabled_plan.FirstGrade()->mask_stack->sources.size(), 2U);
+  const auto disabled_keys = BuildFrameResultContentKeys(disabled_plan, prepared, document);
+  EXPECT_EQ(disabled_keys.Value(disabled_plan.FirstGrade()->mask_output),
+            AllDisabledMaskUnionKey());
+  EXPECT_FALSE(AllDisabledMaskUnionKey().Empty());
+  EXPECT_NE(disabled_keys.primary_grade, enabled_keys.primary_grade);
+}
+
+TEST(GpuDagGraphCompiler, MaskDisplayReorderKeepsStaticAndPixelKeys) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  AddSortedRadialPair(document);
+  EXPECT_EQ(document.PrimaryGrade()->MaskAt(0).id, MaskId{"mask.z"});
+  EXPECT_EQ(document.PrimaryGrade()->MaskAt(1).id, MaskId{"mask.a"});
+  const auto first = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto first_keys = BuildFrameResultContentKeys(first, prepared, document);
+  ASSERT_TRUE(first.FirstGrade()->mask_stack.has_value());
+  const auto& sources = first.FirstGrade()->mask_stack->sources;
+  ASSERT_EQ(sources.size(), 2U);
+  EXPECT_EQ(sources[0].mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(sources[1].mask_id, MaskId{"mask.z"});
+
+  document.PrimaryGrade()->MoveMaskForDisplay(MaskId{"mask.z"}, 1);
+  EXPECT_EQ(document.PrimaryGrade()->MaskAt(0).id, MaskId{"mask.a"});
+  EXPECT_EQ(document.PrimaryGrade()->MaskAt(1).id, MaskId{"mask.z"});
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(first, document, prepared.CompileSource()));
+  const auto second = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_EQ(second.static_key, first.static_key);
+  const auto second_keys = BuildFrameResultContentKeys(second, prepared, document);
+  EXPECT_EQ(second_keys.Value(sources[0].effective_output),
+            first_keys.Value(sources[0].effective_output));
+  EXPECT_EQ(second_keys.Value(sources[1].effective_output),
+            first_keys.Value(sources[1].effective_output));
+  EXPECT_EQ(second_keys.mask, first_keys.mask);
+  EXPECT_EQ(second_keys.primary_grade, first_keys.primary_grade);
+}
+
+TEST(GpuDagGraphCompiler, RangeInputUsesOwningGradeSceneInput) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.b"});
+  auto* grade_b = multi_grade_test::GradeNode(document, "grade.b");
+  ASSERT_NE(grade_b, nullptr);
+  grade_mask_test::AddMask(*grade_b, grade_mask_test::MakeRadialMask(MaskId{"mask.b"}));
+  document.MarkTopologyDirty();
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto* compiled_b = plan.FindGrade(NodeId{"grade.b"});
+  const auto* compiled_a = plan.FindGrade(NodeId{"grade.primary"});
+  ASSERT_NE(compiled_a, nullptr);
+  ASSERT_NE(compiled_b, nullptr);
+  ASSERT_TRUE(compiled_b->mask_stack.has_value());
+  ASSERT_EQ(compiled_b->mask_stack->sources.size(), 1U);
+  EXPECT_EQ(compiled_b->mask_stack->sources.front().range_input, compiled_b->scene_input);
+  EXPECT_EQ(compiled_b->scene_input, compiled_a->scene_output);
+  EXPECT_NE(compiled_b->mask_stack->sources.front().range_input, compiled_b->scene_output);
+}
+
+TEST(GpuDagGraphCompiler, EnabledMaskSourcesOwnStableMaskIdPasses) {
+  auto document = CreateDefaultPipelineDocument();
+  AddSortedRadialPair(document);
+  const auto plan = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
+  const auto evals = plan.PassesOfKind(GpuPassKind::MaskEvaluate);
+  ASSERT_EQ(evals.size(), 2U);
+  EXPECT_EQ(evals[0]->instance.mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(evals[1]->instance.mask_id, MaskId{"mask.z"});
+  EXPECT_EQ(evals[0]->owner, NodeId{"grade.primary"});
+  const auto unions = plan.PassesOfKind(GpuPassKind::MaskUnion);
+  ASSERT_EQ(unions.size(), 1U);
+  EXPECT_TRUE(unions.front()->instance.mask_id.Empty());
+  RemainingValueConsumers remaining(plan);
+  EXPECT_EQ(remaining.Remaining(plan.FirstGrade()->mask_stack->sources[0].effective_output), 1U);
+  EXPECT_EQ(remaining.Remaining(plan.FirstGrade()->mask_stack->sources[1].effective_output), 1U);
+  EXPECT_EQ(remaining.Remaining(plan.FirstGrade()->mask_output), 1U);
+}
+
+TEST(GpuDagGraphCompiler, MaskAddRemoveAndSourceKindRebuildStaticPlan) {
+  const auto prepared = MakeRgbPrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  const auto empty = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.a"});
+  EXPECT_TRUE(GraphCompiler::NeedsRecompile(empty, document, prepared.CompileSource()));
+  const auto with_radial =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  document.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.4f);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(with_radial, document, prepared.CompileSource()));
+  document.PrimaryGrade()->SetMaskInvert(MaskId{"mask.a"}, true);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(with_radial, document, prepared.CompileSource()));
+  document.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.a"}, LinearGradientMaskSource{});
+  EXPECT_TRUE(GraphCompiler::NeedsRecompile(with_radial, document, prepared.CompileSource()));
+  const auto with_gradient =
+      GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  document.PrimaryGrade()->RemoveMask(MaskId{"mask.a"});
+  EXPECT_TRUE(GraphCompiler::NeedsRecompile(with_gradient, document, prepared.CompileSource()));
+}
+
+TEST(GpuDagGraphCompiler, InvalidMaskStackBindingsFailBeforeGpuWork) {
+  auto document = CreateDefaultPipelineDocument();
+  AddSortedRadialPair(document);
+  auto plan = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
+  ASSERT_EQ(plan.FirstGrade()->mask_stack->sources.size(), 2U);
+
+  auto unsorted = plan;
+  std::swap(unsorted.grade_nodes.front().mask_stack->sources[0],
+            unsorted.grade_nodes.front().mask_stack->sources[1]);
+  EXPECT_THROW(ValidateExecutionPlan(unsorted), std::runtime_error);
+
+  auto wrong_range = plan;
+  wrong_range.grade_nodes.front().mask_stack->sources.front().range_input = plan.geometry_output;
+  EXPECT_THROW(ValidateExecutionPlan(wrong_range), std::runtime_error);
+
+  auto duplicate_union = plan;
+  auto extra           = *duplicate_union.PassesOfKind(GpuPassKind::MaskUnion).front();
+  extra.instance.ordinal = 99;
+  duplicate_union.passes.push_back(extra);
+  EXPECT_THROW(ValidateExecutionPlan(duplicate_union), std::runtime_error);
 }
 
 }  // namespace

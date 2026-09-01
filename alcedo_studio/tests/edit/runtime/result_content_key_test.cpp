@@ -483,5 +483,33 @@ TEST(GpuDagResultContentKey, SameAdjustmentTypeUsesDistinctNodeSlots) {
   EXPECT_NE(edited.GradeScene(NodeId{"grade.b"}), keys.GradeScene(NodeId{"grade.b"}));
 }
 
+TEST(GpuDagResultContentKey, OneMaskEditReusesSiblingAndUpstreamResults) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  RadialMaskSource wide;
+  wide.major_radius = 0.45f;
+  RadialMaskSource narrow;
+  narrow.major_radius = 0.2f;
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.a"}, wide);
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.z"}, narrow);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
+  const auto& sources = plan.FirstGrade()->mask_stack->sources;
+  ASSERT_EQ(sources.size(), 2U);
+  EXPECT_EQ(sources[0].mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(sources[1].mask_id, MaskId{"mask.z"});
+  document.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.35f);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(plan, document, prepared.CompileSource()));
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_NE(edited.Value(sources[0].effective_output), base.Value(sources[0].effective_output));
+  EXPECT_EQ(edited.Value(sources[1].effective_output), base.Value(sources[1].effective_output));
+  EXPECT_NE(edited.mask, base.mask);
+  EXPECT_NE(edited.primary_grade, base.primary_grade);
+}
+
 }  // namespace
 }  // namespace alcedo

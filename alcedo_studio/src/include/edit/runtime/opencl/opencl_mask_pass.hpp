@@ -35,6 +35,28 @@ struct OpenClMaskResult {
  * changing only that radius reuses the distance result. The function only enqueues OpenCL
  * work; failures throw and no CPU or alternate-backend substitute is used.
  */
+/**
+ * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
+ */
+[[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                     const PipelineDocument& document,
+                                     const CompiledGradeNode& compiled_grade,
+                                     const CompiledMaskSource& compiled_source,
+                                     MaskStore* store = nullptr,
+                                     std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+    -> OpenClMaskResult;
+
+/**
+ * @brief Maximum-Union enabled Mask sources into the Grade Union output.
+ */
+[[nodiscard]] auto ExecuteOpenClMaskUnion(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                          const PipelineDocument& document,
+                                          const CompiledGradeNode& compiled_grade)
+    -> OpenClMaskResult;
+
+/**
+ * @brief Evaluate every enabled source on @p compiled_grade and Union into mask_output.
+ */
 [[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                      const PipelineDocument& document,
                                      const CompiledGradeNode& compiled_grade,

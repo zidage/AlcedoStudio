@@ -76,4 +76,13 @@ inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSourc
   return mask;
 }
 
+inline auto AddLinearGradientMask(PipelineDocument& document, MaskId id,
+                                  LinearGradientMaskSource source = {}, bool invert = false)
+    -> MaskModel& {
+  auto& mask = AddMask(*document.PrimaryGrade(),
+                       MakeLinearGradientMask(std::move(id), std::move(source), invert));
+  document.MarkTopologyDirty();
+  return mask;
+}
+
 }  // namespace alcedo::grade_mask_test

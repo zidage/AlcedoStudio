@@ -22,6 +22,7 @@
 #include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "opencl/opencl_api_counters.hpp"
@@ -121,8 +122,8 @@ auto HashSignedDistanceKey(const MaskAssetKey& key, Extent2D extent) -> ContentK
   return hash.Key();
 }
 
-auto SignedDistanceId(const NodeId& node) -> GraphValueId {
-  return {node, PortId{"signed_distance"}};
+auto SignedDistanceId(const NodeId& node, const MaskId& mask_id) -> GraphValueId {
+  return MaskSignedDistanceValue(node, mask_id);
 }
 
 auto EnsureOutput(OpenClRenderWorkspace& workspace, const GraphValueId& id, Extent2D extent)
@@ -397,17 +398,36 @@ void EncodeFeatherSample(OpenClRenderDevice& device, const OpenClBackend::Buffer
   Dispatch2D(device, kernel, output.Width(), output.Height(), "mask feather");
 }
 
+void EncodeFillZero(OpenClRenderDevice& device, OpenClBackend::Texture2D& output) {
+  const auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kMaskProgramName,
+                                                              OpenCL::GpuDag::kMaskFillZeroKernelName);
+  SetMem(kernel, 0, output.Native(), "fill zero output");
+  SetUInt(kernel, 1, output.Width(), "fill zero width");
+  SetUInt(kernel, 2, output.Height(), "fill zero height");
+  Dispatch2D(device, kernel, output.Width(), output.Height(), "mask fill zero");
+}
+
+void EncodeUnionMax(OpenClRenderDevice& device, const OpenClBackend::Texture2D& lhs,
+                    const OpenClBackend::Texture2D& rhs, OpenClBackend::Texture2D& output) {
+  const auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kMaskProgramName,
+                                                              OpenCL::GpuDag::kMaskUnionMaxKernelName);
+  SetMem(kernel, 0, lhs.Native(), "union lhs");
+  SetMem(kernel, 1, rhs.Native(), "union rhs");
+  SetMem(kernel, 2, output.Native(), "union output");
+  SetUInt(kernel, 3, output.Width(), "union width");
+  SetUInt(kernel, 4, output.Height(), "union height");
+  Dispatch2D(device, kernel, output.Width(), output.Height(), "mask union max");
+}
+
 }  // namespace
 
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                        const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                       MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+                       const CompiledMaskSource& compiled_source, MaskStore* store,
+                       std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> OpenClMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMask: BeginRender has not been called");
-  }
-  if (!compiled_grade.mask.has_value()) {
-    throw std::runtime_error("ExecuteOpenClMask: compiled Color Grade has no mask");
   }
   if (!active_raster_masks.empty()) {
     ValidateActiveRasterMaskBindings(document, active_raster_masks);
@@ -418,10 +438,11 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
 
   auto&            workspace = device.Workspace();
-  auto&            output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
-  OpenClMaskResult result{compiled_grade.mask_output};
+  auto&            output    = EnsureOutput(workspace, compiled_source.effective_output, extent);
+  OpenClMaskResult result{compiled_source.effective_output};
 
-  const auto& mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  const auto& mask_model =
+      RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
     EncodeAnalytic(device, output.Texture(), mask_model, plan);
@@ -434,7 +455,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
 
   const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
-                                                 compiled_grade.mask->mask_id);
+                                                 compiled_source.mask_id);
   const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
                                    bool raster_bytes_changed, const MaskAssetKey* persistent_key) {
     result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
@@ -448,7 +469,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                          sampling.render_to_texture_uv, mask_model.invert);
       return;
     }
-    const auto distance_id = SignedDistanceId(compiled_grade.node_id);
+    const auto distance_id = SignedDistanceId(compiled_grade.node_id, compiled_source.mask_id);
     const auto distance_pixels =
         static_cast<std::size_t>(raster_descriptor.extent.width) * raster_descriptor.extent.height;
     const auto  distance_bytes    = distance_pixels * sizeof(float);
@@ -499,7 +520,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
 
   if (active != nullptr) {
     auto& cache = workspace.ActiveRasterTextures();
-    const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_grade.mask->mask_id,
+    const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_source.mask_id,
                                          active->session_generation};
     cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
       return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
@@ -532,7 +553,8 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     throw std::invalid_argument("ExecuteOpenClMask: raster mask needs MaskStore");
   }
   if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
-    throw std::runtime_error("ExecuteOpenClMask: Brush Mask has no asset");
+    EncodeFillZero(device, output.Texture());
+    return result;
   }
   const auto asset = store->Load(*brush->asset_key);
   if (asset == nullptr || asset->descriptor.extent.Empty()) {
@@ -549,23 +571,95 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   return result;
 }
 
+auto ExecuteOpenClMaskUnion(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                            const PipelineDocument& document,
+                            const CompiledGradeNode& compiled_grade) -> OpenClMaskResult {
+  if (!device.Workspace().IsRendering()) {
+    throw std::runtime_error("ExecuteOpenClMaskUnion: BeginRender has not been called");
+  }
+  const auto& stack     = RequireMaskStack(compiled_grade);
+  auto&       workspace = device.Workspace();
+  const auto  extent    = plan.geometry.render_extent;
+  std::vector<GraphValueId> enabled;
+  enabled.reserve(stack.sources.size());
+  for (const auto& source : stack.sources) {
+    if (MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      enabled.push_back(source.effective_output);
+    }
+  }
+  if (enabled.empty()) {
+    auto& output = EnsureOutput(workspace, stack.union_output, extent);
+    EncodeFillZero(device, output.Texture());
+    return OpenClMaskResult{stack.union_output};
+  }
+  if (enabled.size() == 1) {
+    (void)workspace.AliasImageFrom(stack.union_output, enabled.front());
+    return OpenClMaskResult{stack.union_output};
+  }
+  auto& output = EnsureOutput(workspace, stack.union_output, extent);
+  auto* first  = workspace.Images().Find(enabled.front());
+  if (first == nullptr || first->Empty()) {
+    throw std::runtime_error("ExecuteOpenClMaskUnion: missing enabled Mask source");
+  }
+  workspace.Device().CopyTexture2D(first->Texture(), output.Texture(), device.CommandContext());
+  const GraphValueId scratch_id{compiled_grade.node_id, PortId{"mask.union.scratch"}};
+  auto& scratch = EnsureOutput(workspace, scratch_id, extent);
+  for (std::size_t index = 1; index < enabled.size(); ++index) {
+    auto* next = workspace.Images().Find(enabled[index]);
+    auto* cur  = workspace.Images().Find(stack.union_output);
+    if (next == nullptr || cur == nullptr) {
+      throw std::runtime_error("ExecuteOpenClMaskUnion: missing enabled Mask source");
+    }
+    EncodeUnionMax(device, cur->Texture(), next->Texture(), scratch.Texture());
+    auto* scratch_image = workspace.Images().Find(scratch_id);
+    auto* union_image   = workspace.Images().Find(stack.union_output);
+    if (scratch_image == nullptr || union_image == nullptr) {
+      throw std::runtime_error("ExecuteOpenClMaskUnion: Union scratch is missing");
+    }
+    workspace.Device().CopyTexture2D(scratch_image->Texture(), union_image->Texture(),
+                                     device.CommandContext());
+  }
+  return OpenClMaskResult{stack.union_output};
+}
+
+auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                       const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                       MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> OpenClMaskResult {
+  const auto& stack = RequireMaskStack(compiled_grade);
+  OpenClMaskResult sources{};
+  for (const auto& source : stack.sources) {
+    if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      continue;
+    }
+    sources = ExecuteOpenClMask(device, plan, document, compiled_grade, source, store,
+                                active_raster_masks);
+  }
+  auto unified                           = ExecuteOpenClMaskUnion(device, plan, document, compiled_grade);
+  unified.persistent_texture_resource_id = sources.persistent_texture_resource_id;
+  unified.active_texture_resource_id     = sources.active_texture_resource_id;
+  unified.signed_distance_resource_id    = sources.signed_distance_resource_id;
+  unified.mip_level_count                = sources.mip_level_count;
+  unified.transient_bytes                = sources.transient_bytes;
+  return unified;
+}
+
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                        const PipelineDocument& document, MaskStore* store,
                        std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> OpenClMaskResult {
-  bool any_mask = false;
+  const CompiledGradeNode* last = nullptr;
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
-      any_mask = true;
-      break;
+    if (grade.mask_stack.has_value()) {
+      last = &grade;
     }
   }
-  if (!any_mask) {
+  if (last == nullptr) {
     throw std::runtime_error("ExecuteOpenClMask: plan has no mask");
   }
   OpenClMaskResult result{};
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
+    if (grade.mask_stack.has_value()) {
       result = ExecuteOpenClMask(device, plan, document, grade, store, active_raster_masks);
     }
   }

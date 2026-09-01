@@ -15,27 +15,43 @@
 namespace alcedo {
 
 /**
- * @brief Resolve the Grade-owned Mask named by a compiled Color Grade.
+ * @brief Resolve one Grade-owned Mask by @p mask_id.
  *
- * @pre @p compiled.mask is present.
  * @throws std::runtime_error when the Grade or MaskId is missing.
  */
-inline auto RequireCompiledMaskModel(const PipelineDocument& document,
-                                     const CompiledGradeNode& compiled) -> const MaskModel& {
-  if (!compiled.mask.has_value()) {
-    throw std::runtime_error("compiled Color Grade has no mask");
-  }
+inline auto RequireMaskModel(const PipelineDocument& document, const NodeId& grade_id,
+                             const MaskId& mask_id) -> const MaskModel& {
   const auto* grade =
-      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(grade_id));
   if (grade == nullptr) {
     throw std::runtime_error("compiled Color Grade is missing from the document");
   }
-  const auto* mask = grade->FindMask(compiled.mask->mask_id);
+  const auto* mask = grade->FindMask(mask_id);
   if (mask == nullptr) {
-    throw std::runtime_error("compiled MaskId '" + std::string{compiled.mask->mask_id.Value()} +
+    throw std::runtime_error("compiled MaskId '" + std::string{mask_id.Value()} +
                              "' is missing from the Color Grade");
   }
   return *mask;
+}
+
+/**
+ * @brief Live enabled flag for a compiled Mask source. Does not use cached plan fields.
+ */
+inline auto MaskSourceIsEnabled(const PipelineDocument& document, const NodeId& grade_id,
+                                const MaskId& mask_id) -> bool {
+  return RequireMaskModel(document, grade_id, mask_id).enabled;
+}
+
+/**
+ * @brief Compiled Mask stack on @p compiled.
+ *
+ * @throws std::runtime_error when the Color Grade has no Mask stack.
+ */
+inline auto RequireMaskStack(const CompiledGradeNode& compiled) -> const CompiledMaskStack& {
+  if (!compiled.mask_stack.has_value()) {
+    throw std::runtime_error("compiled Color Grade has no Mask stack");
+  }
+  return *compiled.mask_stack;
 }
 
 }  // namespace alcedo

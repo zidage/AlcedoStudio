@@ -200,7 +200,7 @@ class MetalMaskFixture : public ::testing::Test {
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
     ExecuteMetalGeometryResample(device_, plan_);
     ExecuteMetalCameraColor(device_, plan_, document_);
-    if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask) {
+    if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask_stack.has_value()) {
       (void)ExecuteMetalMask(device_, plan_, document_, store_.get());
     }
     auto result = ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);

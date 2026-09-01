@@ -292,20 +292,19 @@ TEST_F(MetalMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   document.MarkTopologyDirty();
 
   const auto plan = Compile(document);
-  ASSERT_TRUE(plan.grade_nodes[0].mask.has_value());
-  ASSERT_TRUE(plan.grade_nodes[1].mask.has_value());
+  ASSERT_TRUE(plan.grade_nodes[0].mask_stack.has_value());
+  ASSERT_TRUE(plan.grade_nodes[1].mask_stack.has_value());
+  EXPECT_EQ(plan.grade_nodes[0].mask_stack->owner_node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(plan.grade_nodes[0].mask_stack->sources.front().mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(plan.grade_nodes[1].mask_stack->owner_node_id, NodeId{"grade.b"});
+  EXPECT_EQ(plan.grade_nodes[1].mask_stack->sources.front().mask_id, MaskId{"mask.b"});
   device_.ResetPassStats();
   const auto output = device_.Execute(plan, prepared_, document, &store);
   (void)output;
   device_.WaitIdle();
   EXPECT_EQ(device_.PassStats().mask_execute, 2U);
+  EXPECT_EQ(device_.PassStats().mask_union_execute, 2U);
   EXPECT_EQ(device_.PassStats().primary_grade_execute, 2U);
-  ASSERT_TRUE(plan.grade_nodes[0].mask.has_value());
-  ASSERT_TRUE(plan.grade_nodes[1].mask.has_value());
-  EXPECT_EQ(plan.grade_nodes[0].mask->owner_id, NodeId{"grade.primary"});
-  EXPECT_EQ(plan.grade_nodes[0].mask->mask_id, MaskId{"mask.a"});
-  EXPECT_EQ(plan.grade_nodes[1].mask->owner_id, NodeId{"grade.b"});
-  EXPECT_EQ(plan.grade_nodes[1].mask->mask_id, MaskId{"mask.b"});
   EXPECT_NE(plan.grade_nodes[0].mask_output, plan.grade_nodes[1].mask_output);
   EXPECT_NE(ResourceIdOf(device_, plan.grade_nodes[0].mask_output),
             ResourceIdOf(device_, plan.grade_nodes[1].mask_output));

@@ -27,6 +27,7 @@
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
@@ -306,7 +307,7 @@ class OpenClMaskFixture : public ::testing::Test {
       ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
       ExecuteOpenClGeometryResample(*device_, plan_);
       ExecuteOpenClCameraColor(*device_, plan_, document_);
-      if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask.has_value()) {
+      if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask_stack.has_value()) {
         (void)ExecuteOpenClMask(*device_, plan_, document_, store_.get());
         device_->Workspace().TransientBuffers().Reset();
       }
@@ -458,14 +459,12 @@ TEST_F(OpenClMaskFixture, OpenClFeatherRadiusEditReusesSignedDistanceResult) {
   auto& node = AttachRaster(asset, 1.0f);
   Compile();
   const auto first = RenderMask();
-  const auto first_metadata =
-      device_->Workspace().Values().GetMetadata(
-          GraphValueId{document_.PrimaryGrade()->Id(), PortId{"signed_distance"}});
+  const auto distance_id =
+      MaskSignedDistanceValue(document_.PrimaryGrade()->Id(), MaskId{"mask.raster"});
+  const auto first_metadata = device_->Workspace().Values().GetMetadata(distance_id);
   std::get<BrushMaskSource>(node.source).feather_radius = 4.0f;
   const auto second = RenderMask();
-  const auto second_metadata =
-      device_->Workspace().Values().GetMetadata(
-          GraphValueId{document_.PrimaryGrade()->Id(), PortId{"signed_distance"}});
+  const auto second_metadata = device_->Workspace().Values().GetMetadata(distance_id);
   ASSERT_TRUE(first_metadata.has_value());
   ASSERT_TRUE(second_metadata.has_value());
   EXPECT_NE(first.signed_distance_resource_id, 0U);

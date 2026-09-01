@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1–NM3.2 complete; NM3.3–NM3.5 planned
+Status: NM3.1–NM3.3 complete; NM3.4–NM3.5 planned
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -699,7 +699,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 | --- | --- | --- |
 | NM3.1 | complete | Grade-owned Mask identities, sources, validation, and document schema. |
 | NM3.2 | complete | Immutable raster assets and task-owned active raster inputs. |
-| NM3.3 | planned | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
+| NM3.3 | complete | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
 | NM3.4 | planned | Native CUDA, OpenCL, and Metal source evaluation and Union execution. |
 | NM3.5 | planned | Model, storage, native, service, failure, and resource qualification. |
 
@@ -1027,15 +1027,81 @@ duplicate compiled value / missing Union input / wrong range input / unknown sou
 
 **Exit conditions**
 
-- [ ] Empty Mask lists compile without a Mask pass and use full Grade coverage.
-- [ ] Nonempty all-disabled lists compile a defined zero-coverage result.
-- [ ] Enabled sources have stable `MaskId` pass ownership.
-- [ ] List reorder changes neither static key nor pixel key.
-- [ ] Add, remove, or source-kind changes rebuild the static plan.
-- [ ] Value changes keep the static plan and update only required content keys.
-- [ ] Range input always equals the owning Grade's scene input.
-- [ ] Failed planning or execution publishes no partial Mask result.
-- [ ] Active and persistent resources live through their final GPU readers.
+- [x] Empty Mask lists compile without a Mask pass and use full Grade coverage.
+- [x] Nonempty all-disabled lists compile a defined zero-coverage result.
+- [x] Enabled sources have stable `MaskId` pass ownership.
+- [x] List reorder changes neither static key nor pixel key.
+- [x] Add, remove, or source-kind changes rebuild the static plan.
+- [x] Value changes keep the static plan and update only required content keys.
+- [x] Range input always equals the owning Grade's scene input.
+- [x] Failed planning or execution publishes no partial Mask result.
+- [x] Active and persistent resources live through their final GPU readers.
+
+##### Phase NM3.3 completion record (2026-09-01)
+
+**Status:** complete — compiled Mask stacks, `MaskUnion` pass, per-source/Union keys, local invalidation, and CUDA/OpenCL execution of empty / all-disabled / N-enabled lists.
+
+**Primary success call chain:**
+
+```text
+GraphCompiler::CompileStatic
+  -> walk Color Grades in backbone order
+  -> read each Grade-owned Mask list
+  -> sort compiled sources by MaskId
+  -> MaskEvaluate per source (geometry + range = Grade scene_input)
+  -> MaskUnion
+  -> ValidateExecutionPlan
+  -> BuildFrameResultContentKeys
+  -> source keys -> Union key -> Grade key -> descendant keys
+```
+
+**Primary failure call chain:**
+
+```text
+duplicate compiled value / missing Union input / wrong range input / unsorted MaskIds
+  -> ValidateExecutionPlan
+  -> fail before GPU work
+  -> retain the prior static plan and published results
+```
+
+```text
+missing asset / upload / kernel
+  -> PlanExecutor CancelRender
+  -> discard unpublished source, Union, and Grade writes
+  -> retain prior valid keys
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `EmptyMaskListUsesFullGradeCoverage` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `AllDisabledMasksUseZeroGradeCoverage` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `MaskDisplayReorderKeepsStaticAndPixelKeys` | `GpuDagRawInputTest` | PASS |
+| `RangeInputUsesOwningGradeSceneInput` | `GpuDagRawInputTest` | PASS |
+| `EnabledMaskSourcesOwnStableMaskIdPasses` | `GpuDagRawInputTest` | PASS |
+| `MaskAddRemoveAndSourceKindRebuildStaticPlan` | `GpuDagRawInputTest` | PASS |
+| `InvalidMaskStackBindingsFailBeforeGpuWork` | `GpuDagRawInputTest` | PASS |
+| `OneMaskEditReusesSiblingAndUpstreamResults` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `MaskFailurePublishesNoSourceUnionOrGradeWrites` | `GpuDagCudaMaskTest` | PASS |
+| `ActiveMaskTexturesReleaseAfterGpuCompletion` | `GpuDagCudaMaskTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest GpuDagCudaMaskTest GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagOpenClGradeTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest GpuDagMaskStoreTest GpuDagModelGraphTest PipelineMapperTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagRawInputTest"
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaMaskTest|GpuDagOpenClGradeTest|GpuDagCudaPrimaryGradeTest"
+ctest --test-dir build/debug --output-on-failure -R "GpuDagCudaDrtProductTest|GpuDagMaskStoreTest|GpuDagModelGraphTest"
+```
+
+Suite totals: `GpuDagRawInputTest` 80/80; `GpuDagCudaMaskTest` + `GpuDagCudaPrimaryGradeTest` + `GpuDagOpenClGradeTest` 102/102; `GpuDagCudaDrtProductTest` + `GpuDagMaskStoreTest` + `GpuDagModelGraphTest` 121/121.
+
+**Checklist / exit condition:** all nine exit-condition boxes checked with executed tests.
+
+**LOC note (grill-code-review):** `compiled_mask_stack.hpp` 109; `compiled_grade_mask.hpp` 57; `execution_plan.hpp` 410; `execution_plan.cpp` 170; `graph_compiler.cpp` 497; `result_content_key.cpp` 531; `plan_executor.hpp` 293; `cuda_mask_pass.cu` 563; `opencl_mask_pass.cpp` 671; `metal_mask_pass.mm` 647; `graph_compiler_test.cpp` 633; `cuda_mask_test.cpp` 556. All under the ~1000-LOC split threshold. Feather GPU work stays fused onto the source `GraphValueId` (`feather_output == source_output == effective_output`) so two producers do not share one value.
+
+**Remaining gaps:** Native numerical Union matrix (`CudaMultiMaskUnionMatchesReference` and OpenCL/Metal peers), distinct feather GPU, opacity-as-separate-pass, and dirty-region Union stay in NM3.4. Metal mask tests were not executed here because `ALCEDO_METAL_ENABLED` is off on this Windows host; Metal fill/max kernels, warmup, pass encoder, and Union alias/copy path were compiled as source only. Section 7 full qualification stays in NM3.5.
 
 ### 6.4 NM3.4 — Native multi-Mask execution
 

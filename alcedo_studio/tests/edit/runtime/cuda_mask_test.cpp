@@ -6,11 +6,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -25,6 +27,9 @@
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
 namespace {
@@ -395,6 +400,156 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   const auto right = 5 * width_ + width_ - 2;
   EXPECT_NEAR(output[left].r, source[left].r, 1.0e-6f);
   EXPECT_NEAR(output[right].r, full[right].r, 1.0e-6f);
+}
+
+TEST_F(CudaMaskFixture, EmptyMaskListUsesFullGradeCoverage) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  Compile();
+  EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto empty_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto empty_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
+
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
+  Compile();
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto masked_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+
+  document_.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
+  Compile();
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto restored_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto restored_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_EQ(empty_grade.size(), restored_grade.size());
+  EXPECT_NEAR(empty_grade.front().r, restored_grade.front().r, 1.0e-5f);
+  EXPECT_EQ(restored_keys.primary_grade, empty_keys.primary_grade);
+  EXPECT_GT(std::abs(empty_grade.front().r - masked_grade.front().r), 1.0e-4f);
+}
+
+TEST_F(CudaMaskFixture, AllDisabledMasksUseZeroGradeCoverage) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"});
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"});
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.a"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.z"}, false);
+  Compile();
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto keys = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_EQ(keys.Value(plan_.FirstGrade()->mask_output), AllDisabledMaskUnionKey());
+  const auto scene = DownloadImage(plan_.FirstGrade()->scene_input);
+  const auto grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  ASSERT_EQ(scene.size(), grade.size());
+  EXPECT_NEAR(grade.front().r, scene.front().r, 1.0e-5f);
+  EXPECT_NEAR(grade[grade.size() / 2].r, scene[scene.size() / 2].r, 1.0e-5f);
+}
+
+TEST_F(CudaMaskFixture, OneMaskEditReusesSiblingAndUpstreamResults) {
+  RadialMaskSource wide;
+  wide.major_radius = 0.45f;
+  RadialMaskSource narrow;
+  narrow.major_radius = 0.2f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"}, wide);
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"}, narrow);
+  Compile();
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto before = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  const auto sibling = plan_.FirstGrade()->mask_stack->sources[1].effective_output;
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.4f);
+  const auto after = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_EQ(after.develop_image, before.develop_image);
+  EXPECT_EQ(after.Value(sibling), before.Value(sibling));
+  EXPECT_NE(after.mask, before.mask);
+  device_.ResetPassStats();
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  EXPECT_GE(device_.PassStats().camera_color_skip, 1U);
+  EXPECT_EQ(device_.PassStats().mask_skip, 1U);
+  EXPECT_EQ(device_.PassStats().mask_execute, 1U);
+  EXPECT_EQ(device_.PassStats().mask_union_execute, 1U);
+  EXPECT_EQ(device_.PassStats().mask_union_skip, 0U);
+}
+
+TEST_F(CudaMaskFixture, MaskFailurePublishesNoSourceUnionOrGradeWrites) {
+  auto first_asset  = MakeRaster(200);
+  auto second_asset = MakeRaster(40);
+  first_asset.key   = store_->Put(first_asset.descriptor, first_asset.pixels);
+  second_asset.key  = store_->Put(second_asset.descriptor, second_asset.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.a"}, first_asset));
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.z"}, second_asset));
+  document_.MarkTopologyDirty();
+  Compile();
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get()), plan_.display_output);
+  device_.WaitIdle();
+  const auto before = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  const auto source_a = plan_.FirstGrade()->mask_stack->sources[0].effective_output;
+  const auto union_id = plan_.FirstGrade()->mask_output;
+  const auto grade_id = plan_.FirstGrade()->scene_output;
+
+  BrushMaskSource missing;
+  missing.asset_key         = MaskAssetKey{"missing.asset"};
+  missing.descriptor.extent = {1, 1};
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.a"}, missing);
+  const auto after = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_NE(after.Value(source_a), before.Value(source_a));
+  EXPECT_THROW((void)device_.Execute(plan_, prepared_, document_, store_.get()),
+               std::runtime_error);
+  device_.WaitIdle();
+  const auto completed = device_.Workspace().Device().CompletedSubmission();
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      source_a, before.Value(source_a), before.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      union_id, before.mask, before.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      grade_id, before.primary_grade, before.geometry_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      source_a, after.Value(source_a), after.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      union_id, after.mask, after.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      grade_id, after.primary_grade, after.geometry_extent, TextureFormat::Rgba32f, completed));
+}
+
+TEST_F(CudaMaskFixture, ActiveMaskTexturesReleaseAfterGpuCompletion) {
+  auto asset = MakeRaster(90);
+  AttachRaster(asset);
+  Compile();
+  const auto first_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                              static_cast<std::int32_t>(height_)},
+                                      1, 1);
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get(), true,
+                            TransientAllocationPolicy::SessionPacked, std::span{&first_input, 1}),
+            plan_.display_output);
+  device_.WaitIdle();
+  const auto first_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 1};
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  const auto second_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                               static_cast<std::int32_t>(height_)},
+                                       1, 2);
+  ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get(), true,
+                            TransientAllocationPolicy::SessionPacked, std::span{&second_input, 1}),
+            plan_.display_output);
+  device_.WaitIdle();
+  const auto second_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
+  EXPECT_FALSE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(second_key));
 }
 
 }  // namespace

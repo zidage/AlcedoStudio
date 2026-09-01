@@ -131,7 +131,7 @@ TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheRecompilesWhenMaskTopologyChan
   StaticExecutionPlanCache cache;
   const auto               first = cache.GetOrCompile(document, prepared.CompileSource());
   ASSERT_NE(first.FirstGrade(), nullptr);
-  EXPECT_FALSE(first.FirstGrade()->mask.has_value());
+  EXPECT_FALSE(first.FirstGrade()->mask_stack.has_value());
 
   grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   const auto second = cache.GetOrCompile(document, prepared.CompileSource());
@@ -139,7 +139,7 @@ TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheRecompilesWhenMaskTopologyChan
   EXPECT_EQ(cache.GetStats().compiles, 2U);
   EXPECT_EQ(cache.GetStats().misses, 2U);
   ASSERT_NE(second.FirstGrade(), nullptr);
-  EXPECT_TRUE(second.FirstGrade()->mask.has_value());
+  EXPECT_TRUE(second.FirstGrade()->mask_stack.has_value());
   EXPECT_TRUE(GraphCompiler::NeedsRecompile(first, document, prepared.CompileSource()));
 }
 

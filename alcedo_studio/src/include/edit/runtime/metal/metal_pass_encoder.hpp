@@ -50,9 +50,19 @@ template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      PipelineDocument& document, MaskStore* mask_store,
-                     const CompiledGradeNode& compiled_grade,
+                     const CompiledGradeNode& compiled_grade, const CompiledMaskSource& source,
                      std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
-    (void)ExecuteMetalMask(device, plan, document, compiled_grade, mask_store, active_raster_masks);
+    (void)ExecuteMetalMask(device, plan, document, compiled_grade, source, mask_store,
+                           active_raster_masks);
+  }
+};
+
+template <>
+struct PassEncoder<MetalBackend, GpuPassKind::MaskUnion> {
+  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     PipelineDocument& document, MaskStore*,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteMetalMaskUnion(device, plan, document, compiled_grade);
   }
 };
 

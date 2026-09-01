@@ -81,6 +81,49 @@ void ValidateExecutionPlan(const ExecutionPlan& plan) {
       defined[output.value] = {index, output.kind};
     }
   }
+
+  for (const auto& grade : plan.grade_nodes) {
+    if (!grade.mask_stack.has_value()) {
+      continue;
+    }
+    const auto& stack = *grade.mask_stack;
+    if (stack.owner_node_id != grade.node_id) {
+      throw std::runtime_error("ExecutionPlan: Mask stack owner does not match Color Grade " +
+                               std::string{grade.node_id.Value()});
+    }
+    if (stack.sources.empty()) {
+      throw std::runtime_error("ExecutionPlan: compiled Mask stack has no sources for " +
+                               std::string{grade.node_id.Value()});
+    }
+    if (stack.union_output != grade.mask_output) {
+      throw std::runtime_error("ExecutionPlan: Mask Union output does not match Grade mask output");
+    }
+    const auto union_def = defined.find(stack.union_output);
+    if (union_def == defined.end() || union_def->second.second != CompiledValueKind::Mask) {
+      throw std::runtime_error("ExecutionPlan: missing Mask Union producer for " +
+                               DescribeValue(stack.union_output));
+    }
+    for (std::size_t index = 0; index < stack.sources.size(); ++index) {
+      const auto& source = stack.sources[index];
+      if (source.owner_node_id != grade.node_id) {
+        throw std::runtime_error("ExecutionPlan: Mask source owner is not the Color Grade");
+      }
+      if (source.mask_id.Empty()) {
+        throw std::runtime_error("ExecutionPlan: compiled Mask source has an empty MaskId");
+      }
+      if (index > 0 && !(stack.sources[index - 1].mask_id < source.mask_id)) {
+        throw std::runtime_error("ExecutionPlan: Mask sources are not sorted by MaskId");
+      }
+      if (source.range_input != grade.scene_input) {
+        throw std::runtime_error("ExecutionPlan: Mask range input is not the owning Grade scene input");
+      }
+      const auto source_def = defined.find(source.effective_output);
+      if (source_def == defined.end() || source_def->second.second != CompiledValueKind::Mask) {
+        throw std::runtime_error("ExecutionPlan: missing Mask source producer for " +
+                                 DescribeValue(source.effective_output));
+      }
+    }
+  }
 }
 
 auto CollectParameterSlotKeys(const ExecutionPlan& plan) -> std::vector<ParameterSlotKey> {

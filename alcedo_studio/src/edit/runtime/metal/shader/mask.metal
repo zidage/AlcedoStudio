@@ -320,3 +320,17 @@ kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
   }
   output.write(float4(QuantizeR8(value), 0.0f, 0.0f, 1.0f), gid);
 }
+
+kernel void mask_fill_zero(texture2d<float, access::write> output [[texture(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+  output.write(float4(0.0f, 0.0f, 0.0f, 1.0f), gid);
+}
+
+kernel void mask_union_max(texture2d<float, access::read> lhs [[texture(0)]],
+                           texture2d<float, access::read> rhs [[texture(1)]],
+                           texture2d<float, access::write> output [[texture(2)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+  const float a = lhs.read(gid).x;
+  const float b = rhs.read(gid).x;
+  output.write(float4(QuantizeR8(max(a, b)), 0.0f, 0.0f, 1.0f), gid);
+}

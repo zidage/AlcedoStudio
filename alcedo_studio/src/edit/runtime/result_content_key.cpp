@@ -7,14 +7,17 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 
 namespace alcedo {
 namespace {
@@ -161,28 +164,26 @@ auto MixNormalizedRect(ContentHash& hash, NormalizedRect rect) -> void {
   hash.MixF32(rect.h);
 }
 
-auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const CompiledMask& mask)
-    -> void {
-  hash.MixText(mask.owner_id.Value());
-  hash.MixText(mask.mask_id.Value());
-  hash.MixU32(static_cast<std::uint32_t>(mask.kind));
-  const auto* grade =
-      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(mask.owner_id));
-  if (grade == nullptr) {
-    return;
-  }
-  const auto* model = grade->FindMask(mask.mask_id);
-  if (model == nullptr) {
-    return;
-  }
-  hash.MixBool(model->enabled);
-  hash.MixF32(model->opacity);
-  hash.MixBool(model->invert);
-  hash.MixU32(static_cast<std::uint32_t>(GetMaskSourceKind(model->source)));
-  hash.MixBool(model->color_range.has_value());
-  hash.MixBool(model->luminance_range.has_value());
-  if (const auto* brush = std::get_if<BrushMaskSource>(&model->source)) {
-    if (brush->asset_key.has_value()) {
+auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
+                        std::span<const ActiveRasterMaskInput> active_raster_masks,
+                        const NodeId& owner_id) -> void {
+  hash.MixText(owner_id.Value());
+  hash.MixText(model.id.Value());
+  hash.MixBool(model.enabled);
+  hash.MixF32(model.opacity);
+  hash.MixBool(model.invert);
+  hash.MixU32(static_cast<std::uint32_t>(GetMaskSourceKind(model.source)));
+  hash.MixBool(model.color_range.has_value());
+  hash.MixBool(model.luminance_range.has_value());
+  if (const auto* brush = std::get_if<BrushMaskSource>(&model.source)) {
+    const auto* active = FindActiveRasterMaskInput(active_raster_masks, owner_id, model.id);
+    if (active != nullptr) {
+      hash.MixU64(active->session_generation);
+      hash.MixU64(active->content_revision);
+      hash.MixU32(active->descriptor.extent.width);
+      hash.MixU32(active->descriptor.extent.height);
+      MixNormalizedRect(hash, active->descriptor.reference_bounds);
+    } else if (brush->asset_key.has_value()) {
       hash.MixText(brush->asset_key->Value());
     }
     hash.MixU32(brush->descriptor.extent.width);
@@ -191,7 +192,7 @@ auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const 
     hash.MixF32(brush->feather_radius);
     return;
   }
-  if (const auto* radial = std::get_if<RadialMaskSource>(&model->source)) {
+  if (const auto* radial = std::get_if<RadialMaskSource>(&model.source)) {
     hash.MixF32(radial->center_x);
     hash.MixF32(radial->center_y);
     hash.MixF32(radial->major_radius);
@@ -201,7 +202,7 @@ auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const 
     hash.MixF32(radial->outer_feather);
     return;
   }
-  if (const auto* gradient = std::get_if<LinearGradientMaskSource>(&model->source)) {
+  if (const auto* gradient = std::get_if<LinearGradientMaskSource>(&model.source)) {
     hash.MixF32(gradient->origin_x);
     hash.MixF32(gradient->origin_y);
     hash.MixF32(gradient->normal_x);
@@ -209,6 +210,25 @@ auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const 
     hash.MixF32(gradient->transition_distance);
     hash.MixF32(gradient->start_value);
     hash.MixF32(gradient->end_value);
+  }
+}
+
+auto MixCompiledMaskStack(ContentHash& hash, const PipelineDocument& document,
+                          const CompiledMaskStack& stack,
+                          std::span<const ActiveRasterMaskInput> active_raster_masks) -> void {
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(stack.owner_node_id));
+  if (grade == nullptr) {
+    return;
+  }
+  hash.MixText(stack.owner_node_id.Value());
+  hash.MixU64(stack.sources.size());
+  for (const auto& source : stack.sources) {
+    const auto* model = grade->FindMask(source.mask_id);
+    if (model == nullptr) {
+      continue;
+    }
+    MixMaskSourceModel(hash, *model, active_raster_masks, stack.owner_node_id);
   }
 }
 
@@ -255,8 +275,8 @@ auto MixLlfGradeChain(ContentHash& hash, const ExecutionPlan& plan,
                                "' is missing from the document");
     }
     hash.MixText(compiled.node_id.Value());
-    if (compiled.mask.has_value()) {
-      MixCompiledMask(hash, document, *compiled.mask);
+    if (compiled.mask_stack.has_value()) {
+      MixCompiledMaskStack(hash, document, *compiled.mask_stack, {});
     }
     const bool target = compiled.node_id == grade_id;
     if (target && !include_local_tone_values) {
@@ -271,6 +291,13 @@ auto MixLlfGradeChain(ContentHash& hash, const ExecutionPlan& plan,
 }
 
 }  // namespace
+
+auto AllDisabledMaskUnionKey() -> ContentKey {
+  ContentHash hash;
+  hash.MixText("mask.union.all_disabled");
+  hash.MixU32(kMaskImplementationVersion);
+  return hash.Key();
+}
 
 auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
   ContentHash hash;
@@ -371,7 +398,9 @@ auto HashResolvedRenderGeometry(const ResolvedRenderGeometry& geometry) -> Conte
 }
 
 auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInput& input,
-                                 const PipelineDocument& document) -> FrameResultContentKeys {
+                                 const PipelineDocument& document,
+                                 std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> FrameResultContentKeys {
   FrameResultContentKeys keys;
   keys.sensor_extent = ImageExtent{plan.source.develop_output_extent.width,
                                    plan.source.develop_output_extent.height};
@@ -406,12 +435,49 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
   ContentKey scene = keys.develop_image;
   for (const auto& compiled : plan.grade_nodes) {
     ContentKey mask_key{};
-    if (compiled.mask.has_value()) {
-      ContentHash mask;
-      mask.MixKey(keys.geometry_scene_source);
-      MixCompiledMask(mask, document, *compiled.mask);
-      mask.MixU32(kMaskImplementationVersion);
-      mask_key = mask.Key();
+    if (compiled.mask_stack.has_value()) {
+      const auto* grade_model =
+          dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
+      if (grade_model == nullptr) {
+        throw std::runtime_error("BuildFrameResultContentKeys: Color Grade '" +
+                                 std::string{compiled.node_id.Value()} +
+                                 "' is missing from the document");
+      }
+      std::vector<std::pair<MaskId, ContentKey>> enabled_source_keys;
+      for (const auto& source : compiled.mask_stack->sources) {
+        const auto* model = grade_model->FindMask(source.mask_id);
+        if (model == nullptr) {
+          throw std::runtime_error("BuildFrameResultContentKeys: MaskId '" +
+                                   std::string{source.mask_id.Value()} +
+                                   "' is missing from the Color Grade");
+        }
+        ContentHash source_hash;
+        source_hash.MixKey(keys.geometry_scene_source);
+        source_hash.MixKey(scene);
+        MixMaskSourceModel(source_hash, *model, active_raster_masks, compiled.node_id);
+        source_hash.MixU32(kMaskImplementationVersion);
+        const auto source_key = source_hash.Key();
+        keys.values[source.effective_output] = source_key;
+        if (model->enabled) {
+          enabled_source_keys.emplace_back(source.mask_id, source_key);
+        }
+      }
+      if (enabled_source_keys.empty()) {
+        mask_key = AllDisabledMaskUnionKey();
+      } else {
+        std::sort(enabled_source_keys.begin(), enabled_source_keys.end(),
+                  [](const std::pair<MaskId, ContentKey>& lhs,
+                     const std::pair<MaskId, ContentKey>& rhs) { return lhs.first < rhs.first; });
+        ContentHash union_hash;
+        union_hash.MixKey(keys.geometry_scene_source);
+        union_hash.MixU64(enabled_source_keys.size());
+        for (const auto& [mask_id, source_key] : enabled_source_keys) {
+          union_hash.MixText(mask_id.Value());
+          union_hash.MixKey(source_key);
+        }
+        union_hash.MixU32(kMaskImplementationVersion);
+        mask_key = union_hash.Key();
+      }
       keys.values[compiled.mask_output] = mask_key;
       if (keys.mask.Empty()) {
         keys.mask = mask_key;

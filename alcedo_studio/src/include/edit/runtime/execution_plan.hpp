@@ -14,6 +14,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/pass_kind.hpp"
@@ -30,9 +31,11 @@ struct PassInstanceId {
   NodeId        owner;
   GpuPassKind   kind    = GpuPassKind::UploadRaw;
   std::uint32_t ordinal = 0;
+  MaskId        mask_id;
 
   friend auto operator==(const PassInstanceId& lhs, const PassInstanceId& rhs) -> bool {
-    return lhs.owner == rhs.owner && lhs.kind == rhs.kind && lhs.ordinal == rhs.ordinal;
+    return lhs.owner == rhs.owner && lhs.kind == rhs.kind && lhs.ordinal == rhs.ordinal &&
+           lhs.mask_id == rhs.mask_id;
   }
   friend auto operator!=(const PassInstanceId& lhs, const PassInstanceId& rhs) -> bool {
     return !(lhs == rhs);
@@ -43,6 +46,9 @@ struct PassInstanceId {
     }
     if (lhs.kind != rhs.kind) {
       return static_cast<std::uint8_t>(lhs.kind) < static_cast<std::uint8_t>(rhs.kind);
+    }
+    if (lhs.mask_id != rhs.mask_id) {
+      return lhs.mask_id < rhs.mask_id;
     }
     return lhs.ordinal < rhs.ordinal;
   }
@@ -88,17 +94,19 @@ struct GpuPassDesc {
  * @param outputs Produced values.
  * @param adjustment Adjustment instance when the pass is one adjustment; empty otherwise.
  * @param parameters Stable parameter slot ids read by this pass; no GPU addresses.
+ * @param mask_id Owning Mask for MaskEvaluate/MaskFeather. Empty for other kinds and Union.
  */
 [[nodiscard]] inline auto MakeGpuPass(GpuPassKind kind, NodeId owner, std::uint32_t ordinal,
                                       std::vector<CompiledPassInput>            inputs,
                                       std::vector<CompiledPassOutput>           outputs,
                                       std::optional<AdjustmentInstanceId>       adjustment = {},
-                                      std::vector<AdjustmentInstanceId>         parameters = {})
+                                      std::vector<AdjustmentInstanceId>         parameters = {},
+                                      MaskId                                    mask_id = {})
     -> GpuPassDesc {
   GpuPassDesc pass;
   pass.kind        = kind;
   pass.owner       = std::move(owner);
-  pass.instance    = PassInstanceId{pass.owner, kind, ordinal};
+  pass.instance    = PassInstanceId{pass.owner, kind, ordinal, std::move(mask_id)};
   pass.adjustment  = std::move(adjustment);
   pass.parameters  = std::move(parameters);
   pass.inputs      = std::move(inputs);
@@ -132,32 +140,21 @@ struct CompiledGradeStage {
   std::uint32_t          count = 0;
 };
 
-enum class CompiledMaskKind : std::uint8_t { Analytic, Raster };
-
-/**
- * @brief One compiled Mask bound to its owning Color Grade.
- *
- * @p owner_id is the Color Grade @ref NodeId. @p mask_id is the Grade-owned @ref MaskId.
- */
-struct CompiledMask {
-  NodeId           owner_id;
-  MaskId           mask_id;
-  CompiledMaskKind kind = CompiledMaskKind::Analytic;
-};
-
 /**
  * @brief Compiled Color Grade node: adjustments, mix/mask bindings, and scene I/O.
  *
  * @ref scene_input is the connected producer value (edge order), not a container index.
+ * @ref mask_stack is omitted when the Mask list is empty. @ref mask_output is the Union
+ * value when a stack is present.
  */
 struct CompiledGradeNode {
-  NodeId                          node_id;
-  GraphValueId                    scene_input{NodeId{""}, PortId{"image"}};
-  GraphValueId                    scene_output{NodeId{""}, PortId{"image"}};
-  std::vector<CompiledAdjustment> adjustments;
-  std::vector<CompiledGradeStage> stages;
-  std::optional<CompiledMask>     mask;
-  GraphValueId                    mask_output{NodeId{""}, PortId{"mask"}};
+  NodeId                           node_id;
+  GraphValueId                     scene_input{NodeId{""}, PortId{"image"}};
+  GraphValueId                     scene_output{NodeId{""}, PortId{"image"}};
+  std::vector<CompiledAdjustment>  adjustments;
+  std::vector<CompiledGradeStage>  stages;
+  std::optional<CompiledMaskStack> mask_stack;
+  GraphValueId                     mask_output{NodeId{""}, PortId{"mask.union"}};
 };
 
 /** @brief One DRT/Post neighborhood adjustment or the display transform. */
@@ -361,7 +358,8 @@ struct ExecutionPlan {
 };
 
 /**
- * @brief Reject missing producers, duplicate outputs, type mismatches, and out-of-order consumers.
+ * @brief Reject missing producers, duplicate outputs, type mismatches, out-of-order consumers,
+ *        and invalid Mask source/Union bindings.
  *
  * @param plan Compiled plan. Does not allocate GPU memory or read parameter values.
  * @throws std::runtime_error when a binding is invalid.
