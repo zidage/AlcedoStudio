@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1–NM3.4 complete; NM3.5 planned
+Status: NM3.1–NM3.5 complete
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -701,7 +701,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 | NM3.2 | complete | Immutable raster assets and task-owned active raster inputs. |
 | NM3.3 | complete | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
 | NM3.4 | complete | Native CUDA, OpenCL, and Metal source evaluation, invert then opacity, Union max, and dirty-region decrease. |
-| NM3.5 | planned | Model, storage, native, service, failure, and resource qualification. |
+| NM3.5 | complete | Model, storage, native, service, failure, and resource qualification. |
 
 Implement these sub-phases in order.
 Keep each interface change buildable on all enabled platforms.
@@ -1399,14 +1399,141 @@ Suite totals: focused Metal NM3.4 PlanExecutor tests 13/13 PASS; `GpuDagMetalGra
 
 **Exit conditions**
 
-- [ ] All Section 7 behavior has executed evidence.
-- [ ] CUDA, OpenCL, and Metal have native numerical evidence.
-- [ ] Active partial upload evidence reports actual transferred bytes.
-- [ ] Resource evidence waits for GPU completion.
-- [ ] Service tasks do not receive active editor raster data.
-- [ ] Persistent assets remain immutable across failure and reopen.
-- [ ] No Mask UI, history payload, Version logic, or range algorithm enters NM3.
-- [ ] Missing hardware or fixtures remain explicit qualification gaps.
+- [x] All Section 7 behavior has executed evidence.
+- [x] CUDA, OpenCL, and Metal have native numerical evidence.
+- [x] Active partial upload evidence reports actual transferred bytes.
+- [x] Resource evidence waits for GPU completion.
+- [x] Service tasks do not receive active editor raster data.
+- [x] Persistent assets remain immutable across failure and reopen.
+- [x] No Mask UI, history payload, Version logic, or range algorithm enters NM3.
+- [x] Missing hardware or fixtures remain explicit qualification gaps.
+
+##### Phase NM3.5 completion record (2026-09-01)
+
+**Status:** complete on CUDA/OpenCL — Section 7 matrix re-executed; request isolation and resource/byte tables added. Metal Union numerical evidence is the NM3.4 macOS record. New Metal isolation/resource tests compile but were not executed (`ALCEDO_METAL_ENABLED` off on this Windows host).
+
+**Primary success call chain:**
+
+```text
+PipelineApplyRequest with settled Brush (no active raster)
+  -> Renderer session cache
+  -> compile Grade-owned Mask stack
+  -> evaluate sources, invert then opacity, Union max
+  -> Grade mix
+  -> sink success / host download
+  -> publish completed results
+
+task-owned ActiveRasterMaskInput on session preview
+  -> validate NodeId, MaskId, revision, dirty rectangle
+  -> active texture (not MaskAssetKey)
+  -> dirty-rectangle upload
+  -> re-evaluate Brush (full SDF when feather_radius > 0)
+  -> Union max
+  -> Interactive Grade result; saved MaskAssetKey unchanged
+
+thumbnail / analysis / export PipelineTask::MakeApplyRequest
+  -> BypassSessionCache
+  -> empty active_raster_masks
+  -> settled assets only
+```
+
+**Primary failure call chain:**
+
+```text
+bypass RenderCachePolicy with active rasters and allow_active_raster_preview == false
+  -> Renderer::Render throws before GPU work
+  -> one-shot device is not created for that request
+
+missing asset / FailNextUpload
+  -> PlanExecutor CancelRender
+  -> WaitIdle
+  -> discard unpublished source, Union, and Grade writes
+  -> retain prior valid keys and published MaskStore bytes
+  -> no CPU or other-backend replacement
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MultipleMasksBelongToOneColorGrade` | `GpuDagModelGraphTest` | PASS |
+| `DuplicateMaskIdLeavesGradeUnchanged` | `GpuDagModelGraphTest` | PASS |
+| `InvalidMaskValuesFailBeforeDocumentMutation` | `GpuDagModelGraphTest` | PASS |
+| `MaskListRoundTripPreservesSourcesOrderAndRangeFields` | `GpuDagModelGraphTest` | PASS |
+| `TopLevelMaskNodesAndEdgesAreRejected` | `GpuDagModelGraphTest` | PASS |
+| `EnabledRangeFailsBeforeGpuWork` | `GpuDagModelGraphTest` | PASS |
+| `EmptyMaskListUsesFullGradeCoverage` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `AllDisabledMasksUseZeroGradeCoverage` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `EnabledMasksUseMaximumCoverage` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `BrushRadialAndLinearGradientShareUnionRules` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `MaskOpacityAndInvertApplyBeforeUnion` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `MaskDisplayReorderKeepsStaticAndPixelKeys` | `GpuDagRawInputTest` | PASS |
+| `OneMaskEditReusesSiblingAndUpstreamResults` | `GpuDagRawInputTest`, `GpuDagCudaMaskTest` | PASS |
+| `RangeInputUsesOwningGradeSceneInput` | `GpuDagRawInputTest` | PASS |
+| `EqualRasterContentReturnsOneAssetKey` | `GpuDagMaskStoreTest` | PASS |
+| `DescriptorOrPixelChangeReturnsDifferentAssetKey` | `GpuDagMaskStoreTest` | PASS |
+| `ExistingAssetBytesCannotBeReplaced` | `GpuDagMaskStoreTest` | PASS |
+| `InterruptedRasterWritePublishesNoAsset` | `GpuDagMaskStoreTest` | PASS |
+| `ConcurrentEqualRasterWritesProduceOneVerifiedAsset` | `GpuDagMaskStoreTest` | PASS |
+| `ActiveRasterUpdateNeverPatchesPersistentTexture` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `ActiveRasterRevisionUploadsOnlyDirtyRectangle` | `GpuDagCudaMaskTest` (`CudaActiveRasterRevisionUploadsOnlyDirtyRectangle`, 16 R8 bytes mask-only; plan path 60 including kernel params) | PASS |
+| `DirtyUnionRegionCanDecreaseCoverage` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `NewActiveRasterGenerationReplacesOldPreviewTexture` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `MaskFailurePublishesNoSourceUnionOrGradeWrites` | `GpuDagCudaMaskTest` | PASS |
+| `ActiveMaskTexturesReleaseAfterGpuCompletion` | `GpuDagCudaMaskTest` | PASS |
+| `BackgroundRenderUsesSettledAssetsOnly` | `GpuDagCudaDrtProductTest`, `GpuDagOpenClDrtProductTest` | PASS |
+| `ThumbnailAnalysisAndExportApplyRequestsOmitActiveRaster` | `PipelineFrameSinkTest` | PASS |
+| `CudaMultiMaskUnionMatchesReference` | `GpuDagCudaMaskTest` | PASS |
+| `OpenClMultiMaskUnionMatchesReference` | `GpuDagOpenClGradeTest` | PASS |
+| `MetalMultiMaskUnionMatchesReference` | `GpuDagMetalGradeTest` | not re-run here — NM3.4 macOS record PASS |
+| `EnabledMaskCountsScaleWithMaskList` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `DisabledMasksSkipSourceEvaluation` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `PartialBrushUploadTransfersOnlyDirtyRectangle` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `FeatheredBrushDirtyUpdateRecomputesFullSignedDistance` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `MaskUploadFailureKeepsPriorPublishedResults` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+
+Device: NVIDIA GeForce RTX 3080 Laptop GPU, driver 610.62. OpenCL used the same NVIDIA device. Shared CPU reference tolerance: `kR8ToleranceCodes = 1`. Source revision: `75064b89`. OpenCL Mask tests live in `GpuDagOpenClGradeTest` (there is no `GpuDagOpenClMaskTest` target).
+
+Resource table (16×12 RGB, Radial sources unless noted; `WaitIdle` before snapshot). `completed` is the device submission counter after that run (monotonic on the reused device object). Times are debug-build wall milliseconds and are not a performance budget.
+
+| Backend | Case | mask_execute / skip | union execute / skip | h2d bytes | active R8 | SDF bytes | published | completed | ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| CUDA | 1 Radial cold | 1 / 0 | 1 / 0 | 7820 | 0 | 0 | 7 | 1 | 24.31 |
+| CUDA | 1 Radial reuse | 0 / 1 | 0 / 1 | 0 | 0 | 0 | 7 | 2 | 0.92 |
+| CUDA | 4 Radial cold | 4 / 0 | 1 / 0 | 7820 | 0 | 0 | 10 | 3 | 5.48 |
+| CUDA | 8 Radial cold | 8 / 0 | 1 / 0 | 7820 | 0 | 0 | 14 | 5 | 5.41 |
+| CUDA | 8 disabled | 0 / 0 | 1 / 0 | 7820 | 0 | 0 | 6 | 1 | 5.27 |
+| CUDA | Brush full active | 1 / 0 | 1 / 0 | 8012 | 255 | 0 | 7 | 1 | 6.43 |
+| CUDA | Brush dirty 4×4 | 1 / 0 | 1 / 0 | 60 | 255 | 0 | 11 | 2 | 1.60 |
+| CUDA | Feather dirty | 1 / 0 | 1 / 0 | 60 | 255 | 3072 | 11 | 2 | 1.64 |
+| OpenCL | 1 Radial cold | 1 / 0 | 1 / 0 | 17812 | 0 | 0 | 7 | 1 | 58.54 |
+| OpenCL | 8 Radial cold | 8 / 0 | 1 / 0 | 17812 | 0 | 0 | 14 | 5 | 6.49 |
+| OpenCL | Brush dirty 4×4 | 1 / 0 | 1 / 0 | 16 | 255 | 0 | 11 | 2 | 1.36 |
+| OpenCL | Feather dirty | 1 / 0 | 1 / 0 | 16 | 255 | 768 | 11 | 2 | 3.21 |
+
+Dirty rectangle is 4×4 = 16 R8 bytes. CUDA plan-path totals include kernel-parameter copies (60). OpenCL transferred exactly 16. Feather keeps the composed signed-distance plane (768 bytes = 16×12×4); CUDA also retains three scratch planes (3072). Pixel change with `feather_radius > 0` recomputes the full SDF; the dirty rectangle still limits host-to-device Brush bytes.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaMaskTest GpuDagCudaDrtProductTest GpuDagOpenClGradeTest GpuDagOpenClDrtProductTest PipelineFrameSinkTest GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagCudaPrimaryGradeTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest PipelineMapperTest
+ctest --test-dir build/debug --output-on-failure -R "GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|GpuDagOpenClWorkspaceTest|PipelineMapperTest|GpuDagCudaDrtProductTest|GpuDagOpenClGradeTest|GpuDagOpenClDrtProductTest|PipelineFrameSinkTest|GpuDagCudaPrimaryGradeTest"
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaMaskTest_runtime\GpuDagCudaMaskTest.exe --gtest_filter=*MultiMaskResource*
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe --gtest_filter=*MultiMaskResource*
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaDrtProductTest_runtime\GpuDagCudaDrtProductTest.exe --gtest_filter=*BackgroundRenderUsesSettledAssetsOnly*
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClDrtProductTest_runtime\GpuDagOpenClDrtProductTest.exe --gtest_filter=*BackgroundRenderUsesSettledAssetsOnly*
+.\build\debug\alcedo_studio\tests\edit\PipelineFrameSinkTest_runtime\PipelineFrameSinkTest.exe
+```
+
+Logs: `build/tmp/multi_mask_runtime/nm35_ctest.log`, `cuda_resource_stdout.txt`, `opencl_resource_stdout.txt`, `cuda_isolation.xml`, `opencl_isolation.xml`, `pipeline_frame_sink_full.xml`.
+
+Suite totals: focused new tests 5/5 CUDA resource, 5/5 OpenCL resource, 1/1 CUDA isolation, 1/1 OpenCL isolation, `PipelineFrameSinkTest` 35/35. CTest regex: 465/468 passed, 2 disabled (`PipelineMapperTest` Fuzz/ThreadSafe). Three failures are pre-existing header-hygiene string matches (`OpenCL` in comments in `renderer.hpp` and `transient_buffer_arena.hpp`), not Mask runtime regressions.
+
+**Checklist / exit condition:** all eight NM3.5 boxes checked. Metal GPU for the new isolation/resource tests is an explicit hardware gap on this host; Metal Union numerical evidence is the NM3.4 macOS record.
+
+**LOC note (grill-code-review):** `multi_mask_runtime_resource_support.hpp` 377; `multi_mask_runtime_request_support.hpp` 111; backend wrappers 35–45 each; `pipeline_frame_sink_test.cpp` 925 (added one test). No changed file exceeds ~1000 LOC. No production Mask code changed in this phase.
+
+**Remaining gaps:** Metal `BackgroundRenderUsesSettledAssetsOnly` and resource-table tests exist in `GpuDagMetalRendererTest` / `GpuDagMetalGradeTest` but were not executed here. `ThumbnailServiceTest` and `ExportRecipeTest` were not re-run as full suites; analysis/thumbnail/export omit active rasters because they build `PipelineTask` with `RenderType::THUMBNAIL` or `FULL_RES_EXPORT`, which `MakeApplyRequest` leaves without `active_raster_masks`. Pre-existing editor-history strings still say Mask targets are rejected until NM3; NM4 owns typed history. No Mask UI, history payload, Version logic, or range algorithm entered this phase.
 
 ## 7. Acceptance matrix
 
@@ -1509,12 +1636,13 @@ Use [app test registration](../../../../../alcedo_studio/tests/app/CMakeLists.tx
 | `GpuDagMaskStoreTest` | Asset validation, persistence, cache behavior, and atomic publication. |
 | `GpuDagModelGraphTest` | Grade-owned Mask model, source validation, and document rules. |
 | `GpuDagRawInputTest` | Compiler, static-plan identity, content keys, and invalidation. |
-| `GpuDagCudaMaskTest` | CUDA source evaluation, feather, Union, and dirty upload. |
-| `GpuDagOpenClMaskTest` | OpenCL source evaluation, feather, Union, and dirty upload. |
-| `GpuDagMetalGradeTest` | Metal Grade integration with Mask coverage. |
+| `GpuDagCudaMaskTest` | CUDA source evaluation, feather, Union, dirty upload, and resource tables. |
+| `GpuDagOpenClGradeTest` | OpenCL source evaluation, feather, Union, dirty upload, and resource tables. OpenCL Mask tests live here; there is no `GpuDagOpenClMaskTest` target. |
+| `GpuDagMetalGradeTest` | Metal Grade integration with Mask coverage and resource tables. |
+| `GpuDagCudaDrtProductTest`, `GpuDagOpenClDrtProductTest`, `GpuDagMetalRendererTest` | Product Renderer request isolation (`BackgroundRenderUsesSettledAssetsOnly`). |
 | `GpuDagCudaWorkspaceTest`, `GpuDagOpenClWorkspaceTest`, `GpuDagMetalWorkspaceTest` | Texture identity, completion, and release. |
 | `PipelineMapperTest` | Current document save and load behavior. |
-| `ThumbnailServiceTest`, `PipelineFrameSinkTest`, `ExportRecipeTest` | Settled-asset request isolation. |
+| `ThumbnailServiceTest`, `PipelineFrameSinkTest`, `ExportRecipeTest` | Settled-asset request isolation. `PipelineFrameSinkTest` covers `MakeApplyRequest` omit-active for thumbnail and export. |
 
 Check the current target list after any rename.
 Register each new test in a purpose-named target.
@@ -1523,8 +1651,8 @@ Run focused Windows checks from the repository root:
 
 ```text
 cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
-cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagCudaMaskTest GpuDagOpenClMaskTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest PipelineMapperTest
-ctest --test-dir build/debug -R "GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagCudaMaskTest|GpuDagOpenClMaskTest|GpuDagCudaWorkspaceTest|GpuDagOpenClWorkspaceTest|PipelineMapperTest" --output-on-failure
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagCudaMaskTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest PipelineMapperTest PipelineFrameSinkTest
+ctest --test-dir build/debug -R "GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagCudaMaskTest|GpuDagOpenClGradeTest|GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|GpuDagCudaWorkspaceTest|GpuDagOpenClWorkspaceTest|PipelineMapperTest|PipelineFrameSinkTest" --output-on-failure
 ```
 
 Run Metal checks on macOS:
@@ -1606,26 +1734,26 @@ upload, kernel, submission, or sink failure
 
 ## 9. NM3 completion criteria
 
-- [ ] Every Color Grade owns an ordered list of stable `MaskId` values.
-- [ ] Brush, Radial, and Linear Gradient use one typed source variant.
-- [ ] Color Range and Luminance Range are direct Mask fields.
-- [ ] The runtime rejects enabled ranges until their algorithms exist.
-- [ ] Top-level Mask nodes and Mask edges are not part of the supported document.
-- [ ] Empty lists, all-disabled lists, and enabled lists use the exact coverage rules.
-- [ ] Multiple enabled Masks combine only with maximum Union.
-- [ ] Display reorder changes neither pixels nor runtime keys.
-- [ ] `MaskStore::Put()` derives immutable keys from descriptor and R8 pixels.
-- [ ] Existing assets cannot be overwritten with different content.
-- [ ] Active Brush pixels and dirty rectangles are task-owned request data.
-- [ ] Active updates never patch persistent asset textures.
-- [ ] Content keys and invalidation stay local to the Mask owner and descendants.
-- [ ] CUDA, OpenCL, and Metal match the independent reference within tolerance.
-- [ ] Failure publishes no partial source, Union, Grade, or asset result.
-- [ ] Resource evidence waits for native GPU completion.
-- [ ] Thumbnail, analysis, and export use settled assets only.
+- [x] Every Color Grade owns an ordered list of stable `MaskId` values.
+- [x] Brush, Radial, and Linear Gradient use one typed source variant.
+- [x] Color Range and Luminance Range are direct Mask fields.
+- [x] The runtime rejects enabled ranges until their algorithms exist.
+- [x] Top-level Mask nodes and Mask edges are not part of the supported document.
+- [x] Empty lists, all-disabled lists, and enabled lists use the exact coverage rules.
+- [x] Multiple enabled Masks combine only with maximum Union.
+- [x] Display reorder changes neither pixels nor runtime keys.
+- [x] `MaskStore::Put()` derives immutable keys from descriptor and R8 pixels.
+- [x] Existing assets cannot be overwritten with different content.
+- [x] Active Brush pixels and dirty rectangles are task-owned request data.
+- [x] Active updates never patch persistent asset textures.
+- [x] Content keys and invalidation stay local to the Mask owner and descendants.
+- [x] CUDA, OpenCL, and Metal match the independent reference within tolerance.
+- [x] Failure publishes no partial source, Union, Grade, or asset result.
+- [x] Resource evidence waits for native GPU completion.
+- [x] Thumbnail, analysis, and export use settled assets only.
 - [ ] No code artifact contains a phase identifier.
-- [ ] NM4 retains typed history, Version, recovery, Paste, and asset reachability work.
-- [ ] NM7 retains viewer input, temporary raster generation, and QSG overlay work.
+- [x] NM4 retains typed history, Version, recovery, Paste, and asset reachability work.
+- [x] NM7 retains viewer input, temporary raster generation, and QSG overlay work.
 
 Record implementation results under the corresponding sub-phase.
 Include source revision, commands, test results, and main call chains.
