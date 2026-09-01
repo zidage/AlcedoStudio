@@ -341,6 +341,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
@@ -431,7 +432,8 @@ if(ALCEDO_METAL_ENABLED)
   alcedo_register_test_target(GpuDagMetalDrtTest gpu ci_metal)
 
   add_executable(GpuDagMetalRendererTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
   target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalRendererTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
@@ -484,7 +486,8 @@ if(ALCEDO_OPENCL_ENABLED)
   alcedo_register_test_target(GpuDagOpenClGradeTest gpu)
 
   add_executable(GpuDagOpenClDrtProductTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp

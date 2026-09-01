@@ -22,6 +22,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_store.hpp"
@@ -34,6 +35,7 @@
 #include "edit/runtime/texture_format.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
+#include "multi_grade_runtime_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -436,6 +438,7 @@ TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditor
 }
 
 TEST_F(CudaResultCacheProductFixture, BackgroundMultiGradeRenderPreservesEditorCache) {
+  multi_grade_test::AddCleanGradesBeforeDrt(*document_, {"grade.b", "grade.c"});
   ASSERT_TRUE(OutputIsFinite(Render()));
   const auto resources_before = renderer_->SessionResources();
   EXPECT_GT(resources_before.published_result_count, 0U);

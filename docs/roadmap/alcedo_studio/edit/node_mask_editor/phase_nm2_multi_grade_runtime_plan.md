@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: NM2.1–NM2.4 complete; NM2.5 planned
+Status: NM2.1–NM2.4 complete; NM2.5 partial (CUDA and OpenCL executed; Metal native numerical unexecuted)
 
 Prerequisite: NM1, including NM1.4R and NM1.5.
 
@@ -463,7 +463,7 @@ Do not weaken product validation to admit it.
 | NM2.2 | complete | Explicit node plans, pass instances, and value dependencies. |
 | NM2.3 | complete | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
 | NM2.4 | complete | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
-| NM2.5 | planned | Numerical, resource, failure, and service qualification. |
+| NM2.5 | partial | Numerical, resource, failure, and service qualification (CUDA/OpenCL executed; Metal pending macOS). |
 
 Implement these phases in order.
 Keep each interface change buildable across the three backends.
@@ -863,12 +863,100 @@ Metal: `GpuDagMetalGradeTest` now includes `metal_multi_grade_test.cpp`. Not com
 
 **Exit conditions**
 
-- [ ] All mandatory behavior has executed test evidence.
-- [ ] CUDA, OpenCL, and Metal have native numerical evidence.
-- [ ] Resource evidence distinguishes logical release from completed GPU release.
-- [ ] Service requests do not modify later requests or shared document settings.
-- [ ] No Nodes UI, structural history, or parallel mixer enters the product scope.
-- [ ] Missing hardware or fixtures remain explicit qualification gaps.
+- [x] All mandatory behavior has executed test evidence on CUDA and OpenCL (Section 7 names mapped below).
+- [ ] CUDA, OpenCL, and Metal have native numerical evidence. Metal Grade/renderer pixels are unexecuted on this Windows host.
+- [x] Resource evidence distinguishes logical release from completed GPU release.
+- [x] Service requests do not modify later requests or shared document settings.
+- [x] No Nodes UI, structural history, or parallel mixer enters the product scope.
+- [x] Missing hardware or fixtures remain explicit qualification gaps.
+
+##### Phase NM2.5 completion record (2026-08-31)
+
+**Status:** partial — CUDA and OpenCL qualification executed (Section 7 matrix, editor/thumbnail/export isolation, save/load, failure injection, resource bytes after `WaitIdle`). Metal sources and tests are registered; Metal native numerical is unexecuted here.
+
+**Primary success call chain:**
+
+```text
+editor / thumbnail / export request
+  -> Renderer::Render (session cache or BypassSessionCache; optional output_color overlay)
+  -> static plan lookup + per-node parameter bindings
+  -> PlanExecutor: Develop -> every compiled Color Grade in backbone order -> DRT/Post
+  -> sink success -> publish session results; one-shot ExactRelease leaves editor cache
+```
+
+**Primary failure call chain:**
+
+```text
+Clarity (or other DRT/Post type) on a Color Grade in stored JSON
+  -> PipelineDocument::FromJson / LoadPipeline throws ("belongs to DRT/Post")
+  -> live cache not replaced
+
+parameter upload FailNextUpload
+  -> UploadDirty throws; pending dirty restored; retry uploads requested values
+
+sink CancelRender / unpublished write
+  -> no new published keys; prior valid results retained
+  -> WaitIdle before asserting pool / QueryDeviceMemory
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ZeroGradesFeedDevelopIntoDrtPost` | `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest`, `GpuDagRawInputTest` | PASS |
+| `GradeWithoutPrimaryIdRendersItsParameters` | CUDA/OpenCL Grade + compiler | PASS |
+| `ThreeGradesComposeInEdgeOrder` | CUDA/OpenCL Grade + compiler | PASS |
+| `ReconnectChangesNoncommutingGradeResult` | CUDA/OpenCL Grade + content keys | PASS |
+| `SameAdjustmentTypeUsesDistinctNodeSlots` | CUDA/OpenCL Grade + arena + content keys | PASS |
+| `RepeatedAdjustmentInstancesKeepTheirOrder` | CUDA/OpenCL Grade + compiler | PASS |
+| `EachGradeMixesAgainstItsOwnInput` | CUDA/OpenCL Grade | PASS |
+| `DisabledGradeAliasesInputUntilFinalReader` | CUDA/OpenCL Grade | PASS |
+| `PostAdjustmentsRejectGradeOwnership` | `GpuDagModelGraphTest` | PASS |
+| `PostControlTargetsDrtAndRestoresOnUndo` | `EditorSessionHistoryPortTest` | PASS |
+| `DrtPostPreservesUnmaskedReferenceOrder` | `GpuDagCudaDrtProductTest` | PASS |
+| `MiddleGradeEditReusesUpstreamResults` | CUDA/OpenCL Grade + content keys | PASS |
+| `ParameterAndViewportEditsKeepStaticPlan` | `GpuDagRawInputTest` | PASS |
+| `TwoLocalToneGradesUseTheirOwnSources` | CUDA/OpenCL Grade + content keys | PASS |
+| `LocalToneReferenceRemainsStableAcrossViewportChanges` | `GpuDagRawInputTest` | PASS |
+| `SharedInputSurvivesBothBranchReaders` | `GpuDagRawInputTest`, `GpuDagCudaWorkspaceTest` | PASS |
+| `BranchEditPreservesSiblingResult` | `GpuDagRawInputTest` | PASS |
+| `JoinInputsFollowPortBindings` | `GpuDagRawInputTest` | PASS |
+| `SinkFailurePublishesNoNewResults` | CUDA/OpenCL workspace | PASS |
+| `ParameterUploadFailureRestoresPendingDirtyState` | CUDA/OpenCL workspace | PASS |
+| `RepeatedNodeRemovalReclaimsUnusedResources` | CUDA/OpenCL workspace | PASS |
+| `BackgroundMultiGradeRenderPreservesEditorCache` | `GpuDagCudaDrtProductTest`, `GpuDagOpenClDrtProductTest` | PASS |
+| `ExportRecipeDoesNotChangeNextEditorRender` | CUDA/OpenCL NM2 qualification | PASS |
+| `MultiGradeDocumentRoundTripPreservesOwnersAndEdges` | CUDA/OpenCL NM2 qualification + `GpuDagModelGraphTest.MultiGradeJsonRoundTripPreservesOwnersAndEdges` | PASS |
+| Clarity/Sharpen on DRT through save/load; malformed Grade Clarity rejected | `PipelineMapperTest` | PASS |
+| Editor routing Clarity/Sharpen to DRT/Post | `EditorPipelineCommandServiceTest` | PASS |
+| `MultiGradeResourceBytesAfterGpuCompletion` (1/2/3 Grades, `WaitIdle`) | CUDA/OpenCL NM2 qualification | PASS |
+| Thumbnail GPU-DAG / analysis live document / export recipe overlay | `ThumbnailServiceTest`, `PipelineFrameSinkTest`, `ExportRecipeTest` | PASS |
+| Metal Section 7 matrix + NM2 qualification | `GpuDagMetalGradeTest`, `GpuDagMetalRendererTest` | unexecuted (`ALCEDO_METAL_ENABLED` off) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest GpuDagCudaMaskTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest GpuDagModelGraphTest GpuDagRawInputTest EditorAdjustmentPipelineTest EditorPipelineCommandServiceTest PipelineMapperTest EditorSessionHistoryPortTest
+ctest --test-dir build/debug -R "GpuDagCudaPrimaryGradeTest|GpuDagOpenClGradeTest|GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest|GpuDagOpenClWorkspaceTest" --output-on-failure
+ctest --test-dir build/debug -R "GpuDagModelGraphTest\.|GpuDagRawInputTest\.|EditorAdjustmentPipelineTest\.|EditorPipelineCommandServiceTest\.|PipelineMapperTest\.|EditorSessionHistoryPortTest\." --output-on-failure
+ctest --test-dir build/debug --verbose -R "Nm2QualificationFixture.MultiGradeResourceBytesAfterGpuCompletion"
+```
+
+Suite totals: GPU filter **164/164**. Graph/service filter **218/218** ran (2 `PipelineMapperTest` cases disabled). Resource snapshots: `build/tmp/nm2/nm25_resource_snapshots.txt`. CUDA pool 46080 / 64512 / 92160 bytes at 1/2/3 Grades; `device_used_bytes` stayed 1360527360. OpenCL same pool sizes; `QueryDeviceMemory` used-bytes 0. After `ReleaseSessionCaches`, session pool used-bytes 0. One-shot export overlay does not write DRT on the live document.
+
+Metal (macOS, not run here):
+
+```text
+cmake --preset macos_debug
+cmake --build --preset macos_debug --target GpuDagMetalWorkspaceTest GpuDagMetalGradeTest GpuDagMetalDrtTest GpuDagMetalRendererTest
+ctest --test-dir build/macos-debug -R "GpuDagMetal" --output-on-failure
+```
+
+**Checklist / exit condition:** five of six boxes checked. Metal native numerical remains unchecked.
+
+**LOC note (grill-code-review):** new helpers `nm2_qualification_support.hpp` 345; thin CUDA/OpenCL/Metal drivers 50–53 each. Touched tests: `cuda_result_cache_test.cpp` 698, `opencl_workspace_test.cpp` 693, `metal_workspace_test.cpp` 318, `json_roundtrip_test.cpp` 114. `pipeline_service_test.cpp` is 1187 lines (pre-existing; this phase added DRT Clarity/Sharpen round-trip and wrong-owner load rejection only). No production files changed.
+
+**Remaining gaps:** Metal Grade and NM2 qualification numerical evidence on macOS. PlanExecutor ExactRelease still releases the previous backbone scene after each Grade rather than `RemainingValueConsumers`. Three-argument `HashLlfSourceKey` / `HashLlfReferenceKey` still default to `FirstGrade()`. Full `ExportServiceTest` DNG encode was not re-run in this phase. `ThumbnailServiceTests.AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` failed once then passed on retry (pin_count_ printed 1 vs 1; likely `EXPECT_EQ` double-read vs a concurrent unpin). NM3 is not started.
 
 ## 7. Acceptance matrix
 

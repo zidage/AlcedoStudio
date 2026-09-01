@@ -4,12 +4,19 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <string>
+#include <vector>
 
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 
@@ -63,6 +70,58 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
   ASSERT_EQ(restored_drt->AdjustmentCount(), 4u);
   EXPECT_EQ(std::string{restored_drt->AdjustmentIdAt(3).Value()}, "drt.film_grain");
   EXPECT_TRUE(restored.Graph().Validate().empty());
+}
+
+TEST(GpuDagModelGraph, MultiGradeJsonRoundTripPreservesOwnersAndEdges) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.c"}).empty());
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  auto* grade_b = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(grade_b, nullptr);
+  auto* contrast = dynamic_cast<ContrastModel*>(grade_b->FindAdjustmentByType(type_ids::Contrast()));
+  auto* clarity = dynamic_cast<ClarityModel*>(
+      document.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  auto* sharpen = dynamic_cast<SharpenModel*>(
+      document.Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(contrast, nullptr);
+  ASSERT_NE(clarity, nullptr);
+  ASSERT_NE(sharpen, nullptr);
+  exposure->SetValue(0.75f);
+  contrast->SetValue(40.0f);
+  clarity->SetValue(25.0f);
+  sharpen->SetAmount(12.0f);
+
+  const auto json = document.ToJson();
+  EXPECT_FALSE(json.contains("stages"));
+  const auto restored = PipelineDocument::FromJson(json);
+  EXPECT_EQ(restored.Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"grade.b"},
+                                 NodeId{"grade.c"}, NodeId{"drt"}}));
+  EXPECT_EQ(restored.PrimaryGrade()->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  EXPECT_NE(restored.Drt()->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<const ExposureModel*>(
+                      restored.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+                      ->Value(),
+                  0.75f);
+  EXPECT_FLOAT_EQ(dynamic_cast<const ClarityModel*>(
+                      restored.Drt()->FindAdjustmentByType(type_ids::Clarity()))
+                      ->Value(),
+                  25.0f);
+
+  auto malformed = json;
+  auto default_clarity =
+      BuiltinAdjustmentCatalog::Instance().CreateDefault(type_ids::Clarity());
+  for (auto& node : malformed["nodes"]) {
+    if (node.at("id") == "grade.primary") {
+      node["adjustments"].push_back({{"id", "grade.primary.clarity"},
+                                     {"type", std::string{type_ids::Clarity().Text()}},
+                                     {"params", default_clarity->ToJson()}});
+    }
+  }
+  EXPECT_THROW((void)PipelineDocument::FromJson(malformed), std::runtime_error);
 }
 
 }  // namespace alcedo
