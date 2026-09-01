@@ -5,10 +5,12 @@
 #pragma once
 
 #include <functional>
+#include <span>
 #include <string_view>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
@@ -111,9 +113,12 @@ class BasicRenderDevice {
                              PipelineDocument& document, MaskStore* mask_store = nullptr,
                              bool publish_on_success = true,
                              TransientAllocationPolicy transient_policy =
-                                 TransientAllocationPolicy::SessionPacked) -> GraphValueId {
+                                 TransientAllocationPolicy::SessionPacked,
+                             std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+      -> GraphValueId {
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, mask_store,
-                                          publish_on_success, transient_policy);
+                                          publish_on_success, transient_policy,
+                                          active_raster_masks);
   }
 
  private:

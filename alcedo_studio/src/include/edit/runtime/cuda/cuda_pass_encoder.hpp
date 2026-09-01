@@ -53,8 +53,9 @@ template <>
 struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      PipelineDocument& document, MaskStore* mask_store,
-                     const CompiledGradeNode& compiled_grade) {
-    (void)ExecuteCudaMask(device, plan, document, compiled_grade, mask_store);
+                     const CompiledGradeNode& compiled_grade,
+                     std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
+    (void)ExecuteCudaMask(device, plan, document, compiled_grade, mask_store, active_raster_masks);
   }
 };
 

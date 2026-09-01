@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
@@ -20,6 +21,7 @@ namespace alcedo {
 struct MetalMaskResult {
   GraphValueId  output;
   std::uint64_t persistent_texture_resource_id = 0;
+  std::uint64_t active_texture_resource_id     = 0;
   std::uint64_t signed_distance_resource_id    = 0;
   std::uint32_t mip_level_count                = 0;
   std::uint32_t transient_bytes                = 0;
@@ -28,16 +30,17 @@ struct MetalMaskResult {
 /**
  * @brief Evaluate @p compiled_grade's optional analytic or raster mask into RenderSpace R8.
  *
- * Raster source textures and mip levels live in workspace MaskTextureCache. Signed-distance
- * intermediates are destroyed after the recorded command buffer completes. The signed-distance
- * result is stored by mask content key so a feather-radius edit can reuse it. Failures throw;
- * there is no CPU substitute.
+ * Raster source textures and mip levels live in workspace MaskTextureCache or the separate
+ * active-raster cache. Persistent assets are never patched. Signed-distance intermediates are
+ * destroyed after the recorded command buffer completes. The signed-distance result is stored
+ * by mask content key so a feather-radius edit can reuse it. Failures throw; there is no CPU
+ * substitute.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document,
                                     const CompiledGradeNode& compiled_grade,
                                     MaskStore* store = nullptr,
-                                    std::span<const RectI> dirty_rectangles = {})
+                                    std::span<const ActiveRasterMaskInput> active_raster_masks = {})
     -> MetalMaskResult;
 
 /**
@@ -47,7 +50,7 @@ struct MetalMaskResult {
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document, MaskStore* store = nullptr,
-                                    std::span<const RectI> dirty_rectangles = {})
+                                    std::span<const ActiveRasterMaskInput> active_raster_masks = {})
     -> MetalMaskResult;
 
 void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines);

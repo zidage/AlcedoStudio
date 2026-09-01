@@ -40,7 +40,8 @@ class BasicRenderWorkspace {
       : parameters_(backend_),
         transients_(backend_),
         textures_(backend_),
-        mask_textures_(backend_) {}
+        mask_textures_(backend_),
+        active_raster_textures_(backend_) {}
 
   BasicRenderWorkspace(const BasicRenderWorkspace&)                                  = delete;
   auto               operator=(const BasicRenderWorkspace&) -> BasicRenderWorkspace& = delete;
@@ -56,6 +57,12 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto Textures() const -> const TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto MaskTextures() -> MaskTextureCache<Backend>& { return mask_textures_; }
+  [[nodiscard]] auto ActiveRasterTextures() -> ActiveRasterTextureCache<Backend>& {
+    return active_raster_textures_;
+  }
+  [[nodiscard]] auto ActiveRasterTextures() const -> const ActiveRasterTextureCache<Backend>& {
+    return active_raster_textures_;
+  }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
@@ -168,6 +175,7 @@ class BasicRenderWorkspace {
     transients_.Reset();
     textures_.BeginFrame();
     mask_textures_.BeginFrame();
+    active_raster_textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
     rendering_ = true;
   }
@@ -181,6 +189,7 @@ class BasicRenderWorkspace {
     }
     textures_.MarkSubmitted(command_context.SubmissionId());
     mask_textures_.MarkSubmitted(command_context.SubmissionId());
+    active_raster_textures_.MarkSubmitted(command_context.SubmissionId());
     backend_.Submit(command_context);
     rendering_ = false;
   }
@@ -208,6 +217,7 @@ class BasicRenderWorkspace {
     images_.Clear();
     values_.Clear();
     mask_textures_.Clear();
+    active_raster_textures_.Clear();
     textures_.ReleaseUnleased();
     transients_.ReleaseDeviceMemory();
     parameters_.Clear();
@@ -236,7 +246,8 @@ class BasicRenderWorkspace {
   ParameterArena<Backend>       parameters_;
   TransientBufferArena<Backend> transients_;
   TexturePool<Backend>          textures_;
-  MaskTextureCache<Backend>     mask_textures_;
+  MaskTextureCache<Backend>         mask_textures_;
+  ActiveRasterTextureCache<Backend> active_raster_textures_;
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   DevelopTransientHighWaterCache develop_high_water_{};

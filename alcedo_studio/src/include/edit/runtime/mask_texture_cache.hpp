@@ -11,32 +11,34 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
 
-template <class Backend>
-class MaskTextureCache;
+template <class Backend, class Key>
+class RasterTextureCache;
 
-/** @brief Move-only pin preventing eviction of a keyed workspace mask texture. */
-template <class Backend>
-class MaskTextureLease {
+/** @brief Move-only pin preventing eviction of a keyed workspace R8 texture. */
+template <class Backend, class Key>
+class RasterTextureLease {
  public:
-  MaskTextureLease() = default;
-  MaskTextureLease(MaskTextureCache<Backend>* cache, MaskAssetKey key)
+  RasterTextureLease() = default;
+  RasterTextureLease(RasterTextureCache<Backend, Key>* cache, Key key)
       : cache_(cache), key_(std::move(key)) {}
-  MaskTextureLease(const MaskTextureLease&)                    = delete;
-  auto operator=(const MaskTextureLease&) -> MaskTextureLease& = delete;
-  MaskTextureLease(MaskTextureLease&& other) noexcept
+  RasterTextureLease(const RasterTextureLease&)                    = delete;
+  auto operator=(const RasterTextureLease&) -> RasterTextureLease& = delete;
+  RasterTextureLease(RasterTextureLease&& other) noexcept
       : cache_(other.cache_), key_(std::move(other.key_)) {
     other.cache_ = nullptr;
   }
-  auto operator=(MaskTextureLease&& other) noexcept -> MaskTextureLease& {
+  auto operator=(RasterTextureLease&& other) noexcept -> RasterTextureLease& {
     if (this != &other) {
       Release();
       cache_       = other.cache_;
@@ -45,28 +47,28 @@ class MaskTextureLease {
     }
     return *this;
   }
-  ~MaskTextureLease() { Release(); }
+  ~RasterTextureLease() { Release(); }
 
   [[nodiscard]] auto Texture() -> typename Backend::Texture2D&;
   [[nodiscard]] auto Texture() const -> const typename Backend::Texture2D&;
   [[nodiscard]] auto Texture(std::size_t mip_level) -> typename Backend::Texture2D&;
   [[nodiscard]] auto MipLevelCount() const -> std::size_t;
-  [[nodiscard]] auto Key() const -> const MaskAssetKey& { return key_; }
+  [[nodiscard]] auto CacheKey() const -> const Key& { return key_; }
   [[nodiscard]] auto Empty() const -> bool { return cache_ == nullptr; }
   void               Release();
 
  private:
-  MaskTextureCache<Backend>* cache_ = nullptr;
-  MaskAssetKey               key_;
+  RasterTextureCache<Backend, Key>* cache_ = nullptr;
+  Key                               key_{};
 };
 
-/** @brief Workspace-only byte-budget LRU keyed by persistent MaskAssetKey. */
-template <class Backend>
-class MaskTextureCache {
+/** @brief Workspace-only byte-budget LRU for persistent or active R8 mask textures. */
+template <class Backend, class Key>
+class RasterTextureCache {
  public:
-  explicit MaskTextureCache(Backend& backend) : backend_(&backend) {}
-  MaskTextureCache(const MaskTextureCache&)                    = delete;
-  auto operator=(const MaskTextureCache&) -> MaskTextureCache& = delete;
+  explicit RasterTextureCache(Backend& backend) : backend_(&backend) {}
+  RasterTextureCache(const RasterTextureCache&)                    = delete;
+  auto operator=(const RasterTextureCache&) -> RasterTextureCache& = delete;
 
   void SetByteBudget(std::size_t bytes) {
     budget_bytes_ = bytes;
@@ -76,7 +78,7 @@ class MaskTextureCache {
   [[nodiscard]] auto EntryCount() const -> std::size_t { return entries_.size(); }
 
   /**
-   * @brief Drop every mask texture. Caller must not hold MaskTextureLease objects.
+   * @brief Drop every mask texture. Caller must not hold RasterTextureLease objects.
    */
   void Clear() {
     entries_.clear();
@@ -87,9 +89,11 @@ class MaskTextureCache {
     for (auto& [key, entry] : entries_) entry.used_this_frame = false;
   }
 
-  [[nodiscard]] auto Acquire(const MaskAssetKey& key, Extent2D extent)
-      -> MaskTextureLease<Backend> {
-    if (key.Empty() || extent.Empty()) throw std::invalid_argument("Invalid mask texture request");
+  [[nodiscard]] auto Acquire(const Key& key, Extent2D extent) -> RasterTextureLease<Backend, Key> {
+    if (extent.Empty()) throw std::invalid_argument("Invalid mask texture request");
+    if constexpr (requires { key.Empty(); }) {
+      if (key.Empty()) throw std::invalid_argument("Invalid mask texture request");
+    }
     if (auto found = entries_.find(key); found != entries_.end()) {
       if (found->second.extent != extent) {
         if (found->second.lease_count != 0 ||
@@ -129,16 +133,14 @@ class MaskTextureCache {
       return;
     }
     for (const auto& [key, entry] : entries_) {
-      std::fprintf(stderr, "[GPU_POOL]   mask %.*s %ux%u mips=%zu %.1f MiB leases=%u\n",
-                   static_cast<int>(key.Value().size()), key.Value().data(), entry.extent.width,
-                   entry.extent.height, entry.mip_levels.size(), GpuPoolMiB(entry.bytes),
-                   entry.lease_count);
+      const auto text = KeyDebugText(key);
+      std::fprintf(stderr, "[GPU_POOL]   mask %s %ux%u mips=%zu %.1f MiB leases=%u\n", text.c_str(),
+                   entry.extent.width, entry.extent.height, entry.mip_levels.size(),
+                   GpuPoolMiB(entry.bytes), entry.lease_count);
     }
   }
 
-  [[nodiscard]] auto Contains(const MaskAssetKey& key) const -> bool {
-    return entries_.contains(key);
-  }
+  [[nodiscard]] auto Contains(const Key& key) const -> bool { return entries_.contains(key); }
 
   void MarkSubmitted(std::uint64_t submission_id) {
     for (auto& [key, entry] : entries_) {
@@ -167,35 +169,64 @@ class MaskTextureCache {
     }
   }
 
-  [[nodiscard]] auto TextureAt(const MaskAssetKey& key) -> typename Backend::Texture2D& {
+  template <class Pred>
+  void EraseIdleIf(Pred pred) {
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      if (!pred(it->first)) {
+        ++it;
+        continue;
+      }
+      const auto& entry = it->second;
+      if (entry.lease_count != 0 || entry.used_this_frame ||
+          backend_->IsResourceBusy(entry.submitted_on)) {
+        ++it;
+        continue;
+      }
+      used_bytes_ -= entry.bytes;
+      it = entries_.erase(it);
+    }
+  }
+
+  [[nodiscard]] auto TextureAt(const Key& key) -> typename Backend::Texture2D& {
     return entries_.at(key).mip_levels.front();
   }
-  [[nodiscard]] auto TextureAt(const MaskAssetKey& key) const -> const
-      typename Backend::Texture2D& {
+  [[nodiscard]] auto TextureAt(const Key& key) const -> const typename Backend::Texture2D& {
     return entries_.at(key).mip_levels.front();
   }
-  [[nodiscard]] auto TextureAt(const MaskAssetKey& key, std::size_t level) ->
-      typename Backend::Texture2D& {
+  [[nodiscard]] auto TextureAt(const Key& key, std::size_t level) -> typename Backend::Texture2D& {
     return entries_.at(key).mip_levels.at(level);
   }
-  [[nodiscard]] auto MipLevelCount(const MaskAssetKey& key) const -> std::size_t {
+  [[nodiscard]] auto MipLevelCount(const Key& key) const -> std::size_t {
     return entries_.at(key).mip_levels.size();
   }
-  void Release(const MaskAssetKey& key) {
+  [[nodiscard]] auto UploadedRevision(const Key& key) const -> std::uint64_t {
+    return entries_.at(key).uploaded_revision;
+  }
+  [[nodiscard]] auto PixelsUploaded(const Key& key) const -> bool {
+    return entries_.at(key).pixels_uploaded;
+  }
+  void SetUploadedPixels(const Key& key, std::uint64_t revision) {
+    auto& entry            = entries_.at(key);
+    entry.uploaded_revision = revision;
+    entry.pixels_uploaded   = true;
+  }
+  void Release(const Key& key) {
     if (auto found = entries_.find(key); found != entries_.end() && found->second.lease_count != 0)
       --found->second.lease_count;
   }
 
  private:
-  friend class MaskTextureLease<Backend>;
+  friend class RasterTextureLease<Backend, Key>;
   struct Entry {
     std::vector<typename Backend::Texture2D> mip_levels;
     Extent2D                                 extent{};
-    std::size_t                              bytes           = 0;
-    std::uint32_t                            lease_count     = 0;
-    std::uint64_t                            submitted_on    = 0;
-    std::uint64_t                            lru_tick        = 0;
-    bool                                     used_this_frame = false;
+    std::size_t                              bytes             = 0;
+    std::uint32_t                            lease_count       = 0;
+    std::uint64_t                            submitted_on      = 0;
+    std::uint64_t                            lru_tick          = 0;
+    std::uint64_t                            uploaded_revision = 0;
+    bool                                     used_this_frame   = false;
+    bool                                     pixels_uploaded   = false;
   };
   static auto MipChainBytes(Extent2D extent) -> std::size_t {
     std::size_t bytes = 0;
@@ -206,41 +237,60 @@ class MaskTextureCache {
       extent.height = std::max<std::uint32_t>(extent.height / 2, 1);
     }
   }
-  auto TakeLease(const MaskAssetKey& key, Entry& entry) -> MaskTextureLease<Backend> {
+  static auto KeyDebugText(const Key& key) -> std::string {
+    if constexpr (requires { key.Value(); }) {
+      return std::string{key.Value()};
+    } else if constexpr (requires { key.DebugText(); }) {
+      return key.DebugText();
+    } else {
+      return {};
+    }
+  }
+  auto TakeLease(const Key& key, Entry& entry) -> RasterTextureLease<Backend, Key> {
     ++entry.lease_count;
     entry.used_this_frame = true;
     entry.lru_tick        = ++lru_clock_;
-    return MaskTextureLease<Backend>{this, key};
+    return RasterTextureLease<Backend, Key>{this, key};
   }
-  Backend*                      backend_ = nullptr;
-  std::map<MaskAssetKey, Entry> entries_;
-  std::size_t                   budget_bytes_ = 0;
-  std::size_t                   used_bytes_   = 0;
-  std::uint64_t                 lru_clock_    = 0;
+  Backend*               backend_ = nullptr;
+  std::map<Key, Entry>   entries_;
+  std::size_t            budget_bytes_ = 0;
+  std::size_t            used_bytes_   = 0;
+  std::uint64_t          lru_clock_    = 0;
 };
 
 template <class Backend>
-auto MaskTextureLease<Backend>::Texture() -> typename Backend::Texture2D& {
-  if (cache_ == nullptr) throw std::runtime_error("MaskTextureLease is empty");
+using MaskTextureCache = RasterTextureCache<Backend, MaskAssetKey>;
+template <class Backend>
+using MaskTextureLease = RasterTextureLease<Backend, MaskAssetKey>;
+template <class Backend>
+using ActiveRasterTextureCache = RasterTextureCache<Backend, ActiveRasterTextureKey>;
+template <class Backend>
+using ActiveRasterTextureLease = RasterTextureLease<Backend, ActiveRasterTextureKey>;
+
+template <class Backend, class Key>
+auto RasterTextureLease<Backend, Key>::Texture() -> typename Backend::Texture2D& {
+  if (cache_ == nullptr) throw std::runtime_error("RasterTextureLease is empty");
   return cache_->TextureAt(key_);
 }
-template <class Backend>
-auto MaskTextureLease<Backend>::Texture() const -> const typename Backend::Texture2D& {
-  if (cache_ == nullptr) throw std::runtime_error("MaskTextureLease is empty");
+template <class Backend, class Key>
+auto RasterTextureLease<Backend, Key>::Texture() const -> const typename Backend::Texture2D& {
+  if (cache_ == nullptr) throw std::runtime_error("RasterTextureLease is empty");
   return cache_->TextureAt(key_);
 }
-template <class Backend>
-auto MaskTextureLease<Backend>::Texture(std::size_t mip_level) -> typename Backend::Texture2D& {
-  if (cache_ == nullptr) throw std::runtime_error("MaskTextureLease is empty");
+template <class Backend, class Key>
+auto RasterTextureLease<Backend, Key>::Texture(std::size_t mip_level) ->
+    typename Backend::Texture2D& {
+  if (cache_ == nullptr) throw std::runtime_error("RasterTextureLease is empty");
   return cache_->TextureAt(key_, mip_level);
 }
-template <class Backend>
-auto MaskTextureLease<Backend>::MipLevelCount() const -> std::size_t {
+template <class Backend, class Key>
+auto RasterTextureLease<Backend, Key>::MipLevelCount() const -> std::size_t {
   if (cache_ == nullptr) return 0;
   return cache_->MipLevelCount(key_);
 }
-template <class Backend>
-void MaskTextureLease<Backend>::Release() {
+template <class Backend, class Key>
+void RasterTextureLease<Backend, Key>::Release() {
   if (cache_ != nullptr) {
     cache_->Release(key_);
     cache_ = nullptr;

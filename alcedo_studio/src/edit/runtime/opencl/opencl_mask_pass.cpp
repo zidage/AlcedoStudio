@@ -11,12 +11,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
+#include "edit/graph/active_raster_mask_validation.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -108,38 +111,6 @@ auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
 
 auto PlaneBytes(std::size_t pixel_count) -> std::size_t {
   return AlignUp(pixel_count * sizeof(float), kAlignment);
-}
-
-auto UnionDirtyRectangles(std::span<const RectI> rectangles, Extent2D extent) -> RectI {
-  if (rectangles.empty() || extent.Empty()) {
-    return {};
-  }
-  std::int32_t x0 = static_cast<std::int32_t>(extent.width);
-  std::int32_t y0 = static_cast<std::int32_t>(extent.height);
-  std::int32_t x1 = 0;
-  std::int32_t y1 = 0;
-  for (const auto& rectangle : rectangles) {
-    if (rectangle.width <= 0 || rectangle.height <= 0) {
-      continue;
-    }
-    x0 = std::min(x0, std::max(rectangle.x, 0));
-    y0 = std::min(y0, std::max(rectangle.y, 0));
-    x1 = std::max(x1, std::min(rectangle.X1(), static_cast<std::int32_t>(extent.width)));
-    y1 = std::max(y1, std::min(rectangle.Y1(), static_cast<std::int32_t>(extent.height)));
-  }
-  return x1 > x0 && y1 > y0 ? RectI{x0, y0, x1 - x0, y1 - y0} : RectI{};
-}
-
-auto CopyRectangle(const MaskAsset& asset, RectI rectangle) -> std::vector<std::byte> {
-  std::vector<std::byte> bytes(static_cast<std::size_t>(rectangle.width) * rectangle.height);
-  for (std::int32_t row = 0; row < rectangle.height; ++row) {
-    const auto source =
-        static_cast<std::size_t>(rectangle.y + row) * asset.descriptor.extent.width +
-        static_cast<std::size_t>(rectangle.x);
-    std::copy_n(reinterpret_cast<const std::byte*>(asset.pixels.data() + source), rectangle.width,
-                bytes.data() + static_cast<std::size_t>(row) * rectangle.width);
-  }
-  return bytes;
 }
 
 auto HashSignedDistanceKey(const MaskAssetKey& key, Extent2D extent) -> ContentKey {
@@ -251,7 +222,8 @@ void Dispatch1D(OpenClRenderDevice& device, cl_kernel kernel, std::uint32_t coun
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
-void GenerateMipChain(OpenClRenderDevice& device, MaskTextureLease<OpenClBackend>& source) {
+template <class Key>
+void GenerateMipChain(OpenClRenderDevice& device, RasterTextureLease<OpenClBackend, Key>& source) {
   for (std::size_t level = 1; level < source.MipLevelCount(); ++level) {
     auto&         previous = source.Texture(level - 1);
     auto&         next     = source.Texture(level);
@@ -429,13 +401,16 @@ void EncodeFeatherSample(OpenClRenderDevice& device, const OpenClBackend::Buffer
 
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                        const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                       MaskStore* store, std::span<const RectI> dirty_rectangles)
+                       MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> OpenClMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMask: BeginRender has not been called");
   }
   if (!compiled_grade.mask.has_value()) {
     throw std::runtime_error("ExecuteOpenClMask: compiled Color Grade has no mask");
+  }
+  if (!active_raster_masks.empty()) {
+    ValidateActiveRasterMaskBindings(document, active_raster_masks);
   }
   const auto extent = plan.geometry.render_extent;
   if (extent.Empty() || plan.geometry.full_reference_extent.Empty()) {
@@ -446,7 +421,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   auto&            output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
   OpenClMaskResult result{compiled_grade.mask_output};
 
-  const auto&      mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  const auto& mask_model = RequireCompiledMaskModel(document, compiled_grade);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
     EncodeAnalytic(device, output.Texture(), mask_model, plan);
@@ -457,6 +432,102 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (brush == nullptr) {
     throw std::runtime_error("ExecuteOpenClMask: compiled mask does not match document");
   }
+
+  const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
+                                                 compiled_grade.mask->mask_id);
+  const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
+                                   bool raster_bytes_changed, const MaskAssetKey* persistent_key) {
+    result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
+    const auto sampling    = MakeRasterMaskSamplingPlan(
+        plan.geometry, raster_descriptor.reference_bounds, raster_descriptor.extent);
+    if (brush->feather_radius <= 0.0f) {
+      const auto selected_level = std::min<std::size_t>(
+          static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
+          source.MipLevelCount() - 1);
+      EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
+                         sampling.render_to_texture_uv, mask_model.invert);
+      return;
+    }
+    const auto distance_id = SignedDistanceId(compiled_grade.node_id);
+    const auto distance_pixels =
+        static_cast<std::size_t>(raster_descriptor.extent.width) * raster_descriptor.extent.height;
+    const auto  distance_bytes    = distance_pixels * sizeof(float);
+    const auto* existing_distance = workspace.Values().Find(distance_id);
+    const auto  metadata          = workspace.Values().GetMetadata(distance_id);
+    const bool  size_matches =
+        existing_distance != nullptr && existing_distance->Bytes() >= distance_bytes;
+    bool key_matches = false;
+    ContentKey distance_key{};
+    if (persistent_key != nullptr) {
+      distance_key = HashSignedDistanceKey(*persistent_key, raster_descriptor.extent);
+      key_matches  = metadata.has_value() && metadata->content_key == distance_key &&
+                    metadata->extent == ImageExtent{raster_descriptor.extent.width,
+                                                    raster_descriptor.extent.height};
+    }
+    auto&      distance     = EnsureValueBuffer(workspace, distance_id, distance_bytes);
+    const bool must_compute = raster_bytes_changed || !size_matches ||
+                              (persistent_key != nullptr && !key_matches);
+    if (must_compute) {
+      result.transient_bytes =
+          EncodeSignedDistance(device, source.Texture(), distance, raster_descriptor.extent);
+    }
+    result.signed_distance_resource_id = distance.ResourceId();
+    const auto& bounds                 = raster_descriptor.reference_bounds;
+    const float x_scale =
+        static_cast<float>(raster_descriptor.extent.width) /
+        (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
+    const float y_scale = static_cast<float>(raster_descriptor.extent.height) /
+                          (static_cast<float>(plan.geometry.full_reference_extent.height) *
+                           std::max(bounds.h, 1.0e-6f));
+    const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
+    EncodeFeatherSample(device, distance, output.Texture(), raster_descriptor.extent,
+                        sampling.render_to_texture_uv, radius_texels, mask_model.invert);
+    if (must_compute && persistent_key != nullptr) {
+      workspace.Values().StoreMetadata(
+          distance_id, distance_key,
+          ImageExtent{raster_descriptor.extent.width, raster_descriptor.extent.height});
+    }
+  };
+
+  auto upload_full = [&](auto& source, std::span<const std::uint8_t> pixels) {
+    workspace.Device().UploadTexture2D(
+        source.Texture(),
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels.data()), pixels.size()),
+        device.CommandContext());
+    GenerateMipChain(device, source);
+  };
+
+  if (active != nullptr) {
+    auto& cache = workspace.ActiveRasterTextures();
+    const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_grade.mask->mask_id,
+                                         active->session_generation};
+    cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
+      return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
+             key.session_generation != tex_key.session_generation;
+    });
+    auto source                         = cache.Acquire(tex_key, active->descriptor.extent);
+    result.active_texture_resource_id   = source.Texture().ResourceId();
+    bool raster_bytes_changed           = false;
+    if (!cache.PixelsUploaded(tex_key)) {
+      upload_full(source, *active->pixels);
+      cache.SetUploadedPixels(tex_key, active->content_revision);
+      raster_bytes_changed = true;
+    } else if (active->content_revision < cache.UploadedRevision(tex_key)) {
+      throw std::runtime_error("ExecuteOpenClMask: active raster revision is stale");
+    } else if (active->content_revision > cache.UploadedRevision(tex_key)) {
+      const auto dirty =
+          ClipRasterDirtyRectangle(active->dirty_rectangle, active->descriptor.extent);
+      const auto bytes = CopyPackedR8Rectangle(*active->pixels, active->descriptor.extent, dirty);
+      workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes,
+                                             device.CommandContext());
+      GenerateMipChain(device, source);
+      cache.SetUploadedPixels(tex_key, active->content_revision);
+      raster_bytes_changed = true;
+    }
+    encode_coverage(source, active->descriptor, raster_bytes_changed, nullptr);
+    return result;
+  }
+
   if (store == nullptr) {
     throw std::invalid_argument("ExecuteOpenClMask: raster mask needs MaskStore");
   }
@@ -467,80 +538,21 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (asset == nullptr || asset->descriptor.extent.Empty()) {
     throw std::runtime_error("ExecuteOpenClMask: MaskStore returned an invalid asset");
   }
-
   auto&      cache                      = workspace.MaskTextures();
   const bool cached                     = cache.Contains(asset->key);
   auto       source                     = cache.Acquire(asset->key, asset->descriptor.extent);
   result.persistent_texture_resource_id = source.Texture().ResourceId();
-  result.mip_level_count                = static_cast<std::uint32_t>(source.MipLevelCount());
-
-  const auto dirty     = UnionDirtyRectangles(dirty_rectangles, asset->descriptor.extent);
-  const bool has_dirty = dirty.width > 0 && dirty.height > 0;
   if (!cached) {
-    workspace.Device().UploadTexture2D(
-        source.Texture(),
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(asset->pixels.data()),
-                                   asset->pixels.size()),
-        device.CommandContext());
-    GenerateMipChain(device, source);
-  } else if (has_dirty) {
-    const auto bytes = CopyRectangle(*asset, dirty);
-    workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, device.CommandContext());
-    GenerateMipChain(device, source);
+    upload_full(source, asset->pixels);
   }
-
-  const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, brush->descriptor.reference_bounds,
-                                                   asset->descriptor.extent);
-  if (brush->feather_radius <= 0.0f) {
-    const auto selected_level = std::min<std::size_t>(
-        static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
-        source.MipLevelCount() - 1);
-    EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
-                       sampling.render_to_texture_uv, mask_model.invert);
-    return result;
-  }
-
-  const auto distance_id  = SignedDistanceId(compiled_grade.node_id);
-  const auto distance_key = HashSignedDistanceKey(asset->key, asset->descriptor.extent);
-  const auto distance_pixels =
-      static_cast<std::size_t>(asset->descriptor.extent.width) * asset->descriptor.extent.height;
-  const auto  distance_bytes    = distance_pixels * sizeof(float);
-  const auto* existing_distance = workspace.Values().Find(distance_id);
-  const auto  metadata          = workspace.Values().GetMetadata(distance_id);
-  const bool  size_matches =
-      existing_distance != nullptr && existing_distance->Bytes() >= distance_bytes;
-  const bool key_matches = metadata.has_value() && metadata->content_key == distance_key &&
-                           metadata->extent == ImageExtent{asset->descriptor.extent.width,
-                                                           asset->descriptor.extent.height};
-  auto&      distance     = EnsureValueBuffer(workspace, distance_id, distance_bytes);
-  const bool must_compute = !cached || has_dirty || !size_matches || !key_matches;
-  if (must_compute) {
-    result.transient_bytes =
-        EncodeSignedDistance(device, source.Texture(), distance, asset->descriptor.extent);
-  }
-
-  result.signed_distance_resource_id = distance.ResourceId();
-  const auto  bounds                 = brush->descriptor.reference_bounds;
-  const float x_scale =
-      static_cast<float>(asset->descriptor.extent.width) /
-      (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
-  const float y_scale = static_cast<float>(asset->descriptor.extent.height) /
-                        (static_cast<float>(plan.geometry.full_reference_extent.height) *
-                         std::max(bounds.h, 1.0e-6f));
-  const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
-  EncodeFeatherSample(device, distance, output.Texture(), asset->descriptor.extent,
-                      sampling.render_to_texture_uv, radius_texels, mask_model.invert);
-  if (must_compute) {
-    workspace.Values().StoreMetadata(
-        distance_id, distance_key,
-        ImageExtent{asset->descriptor.extent.width, asset->descriptor.extent.height});
-  }
+  encode_coverage(source, asset->descriptor, !cached, &asset->key);
   return result;
 }
 
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                        const PipelineDocument& document, MaskStore* store,
-                       std::span<const RectI> dirty_rectangles) -> OpenClMaskResult {
+                       std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> OpenClMaskResult {
   bool any_mask = false;
   for (const auto& grade : plan.grade_nodes) {
     if (grade.mask.has_value()) {
@@ -554,7 +566,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   OpenClMaskResult result{};
   for (const auto& grade : plan.grade_nodes) {
     if (grade.mask.has_value()) {
-      result = ExecuteOpenClMask(device, plan, document, grade, store, dirty_rectangles);
+      result = ExecuteOpenClMask(device, plan, document, grade, store, active_raster_masks);
     }
   }
   return result;

@@ -277,20 +277,18 @@ TEST_F(MetalMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   const auto root = std::filesystem::path{"build/tmp/nm2/metal_multi_grade_mask"} /
                     ::testing::UnitTest::GetInstance()->current_test_info()->name();
   MaskStore store(root);
-  auto make_fill = [&](std::string key, std::uint8_t fill, const char* grade_id,
-                       const char* mask_id) {
+  auto make_fill = [&](std::uint8_t fill, const char* grade_id, const char* mask_id) {
     MaskAsset asset;
-    asset.key                         = MaskAssetKey{std::move(key)};
     asset.descriptor.extent           = {16, 12};
     asset.descriptor.reference_bounds = {};
     asset.pixels.assign(16U * 12U, fill);
-    store.Save(asset);
+    asset.key                         = store.Put(asset.descriptor, asset.pixels);
     auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{grade_id}));
     ASSERT_NE(grade, nullptr);
     grade_mask_test::AddMask(*grade, grade_mask_test::MakeBrushMask(MaskId{mask_id}, asset));
   };
-  make_fill("mask-a", 255, "grade.primary", "mask.a");
-  make_fill("mask-b", 128, "grade.b", "mask.b");
+  make_fill(255, "grade.primary", "mask.a");
+  make_fill(128, "grade.b", "mask.b");
   document.MarkTopologyDirty();
 
   const auto plan = Compile(document);

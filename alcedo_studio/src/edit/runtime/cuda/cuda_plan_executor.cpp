@@ -11,9 +11,12 @@ namespace alcedo {
 auto CudaRenderDevice::Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
                                PipelineDocument& document, MaskStore* mask_store,
                                bool publish_on_success,
-                               TransientAllocationPolicy transient_policy) -> GraphValueId {
+                               TransientAllocationPolicy transient_policy,
+                               std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> GraphValueId {
   return PlanExecutor<CudaBackend>::Execute(*this, plan, input, document, mask_store,
-                                            publish_on_success, transient_policy);
+                                            publish_on_success, transient_policy,
+                                            active_raster_masks);
 }
 
 }  // namespace alcedo

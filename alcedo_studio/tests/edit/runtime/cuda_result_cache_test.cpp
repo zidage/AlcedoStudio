@@ -25,7 +25,9 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_store.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -63,10 +65,9 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
 
 void ConnectFilledRasterMask(PipelineDocument& document, MaskStore& store) {
   MaskAsset asset;
-  asset.key               = MaskAssetKey{"test.raster"};
   asset.descriptor.extent = {32, 32};
   asset.pixels.assign(32U * 32U, 255);
-  store.Save(asset);
+  asset.key = store.Put(asset.descriptor, asset.pixels);
   grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, asset.key, asset.descriptor);
 }
 
@@ -215,6 +216,25 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
   EXPECT_EQ(stats.pass.camera_color_skip, 1U);
   EXPECT_EQ(stats.pass.mask_skip, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture, BypassProductRenderRejectsActiveRasterWithoutPreviewFlag) {
+  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+  ActiveRasterMaskInput input;
+  input.owner_node_id      = document_->PrimaryGrade()->Id();
+  input.mask_id            = MaskId{"mask.raster"};
+  input.session_generation = 1;
+  input.content_revision   = 1;
+  input.descriptor.extent  = {32, 32};
+  input.pixels =
+      std::make_shared<const std::vector<std::uint8_t>>(32U * 32U, std::uint8_t{200});
+  input.dirty_rectangle = {0, 0, 32, 32};
+  PipelineApplyRequest request;
+  request.decode_res          = DecodeRes::FULL;
+  request.require_host_output = true;
+  request.cache_policy        = RenderCachePolicy::BypassSessionCache;
+  request.active_raster_masks.push_back(std::move(input));
+  EXPECT_THROW((void)renderer_->Render(image_, request), std::runtime_error);
 }
 
 TEST_F(CudaResultCacheProductFixture,

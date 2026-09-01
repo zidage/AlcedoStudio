@@ -8,45 +8,21 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <variant>
 #include <vector>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
+#include "edit/graph/active_raster_mask_validation.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 
 namespace alcedo {
 namespace {
-
-auto UnionDirtyRectangles(std::span<const RectI> rectangles, Extent2D extent) -> RectI {
-  if (rectangles.empty()) return {};
-  std::int32_t x0 = static_cast<std::int32_t>(extent.width);
-  std::int32_t y0 = static_cast<std::int32_t>(extent.height);
-  std::int32_t x1 = 0;
-  std::int32_t y1 = 0;
-  for (const auto& rect : rectangles) {
-    if (rect.width <= 0 || rect.height <= 0) continue;
-    x0 = std::min(x0, std::max(rect.x, 0));
-    y0 = std::min(y0, std::max(rect.y, 0));
-    x1 = std::max(x1, std::min(rect.X1(), static_cast<std::int32_t>(extent.width)));
-    y1 = std::max(y1, std::min(rect.Y1(), static_cast<std::int32_t>(extent.height)));
-  }
-  return x1 > x0 && y1 > y0 ? RectI{x0, y0, x1 - x0, y1 - y0} : RectI{};
-}
-
-auto CopyRectangle(const MaskAsset& asset, RectI rectangle) -> std::vector<std::byte> {
-  std::vector<std::byte> bytes(static_cast<std::size_t>(rectangle.width) * rectangle.height);
-  for (std::int32_t row = 0; row < rectangle.height; ++row) {
-    const auto source =
-        static_cast<std::size_t>(rectangle.y + row) * asset.descriptor.extent.width + rectangle.x;
-    std::copy_n(reinterpret_cast<const std::byte*>(asset.pixels.data() + source), rectangle.width,
-                bytes.data() + static_cast<std::size_t>(row) * rectangle.width);
-  }
-  return bytes;
-}
 
 auto EnsureOutput(CudaRenderWorkspace& workspace, const GraphValueId& id, Extent2D extent)
     -> ResourceLease<CudaBackend>& {
@@ -129,7 +105,8 @@ __global__ void GenerateR8MipKernel(const std::uint8_t* source, std::uint32_t so
   destination[index] = static_cast<std::uint8_t>((sum + count / 2) / count);
 }
 
-void GenerateMipChain(MaskTextureLease<CudaBackend>& source, CudaCommandContext& context) {
+template <class Key>
+void GenerateMipChain(RasterTextureLease<CudaBackend, Key>& source, CudaCommandContext& context) {
   constexpr std::uint32_t block = 256;
   for (std::size_t level = 1; level < source.MipLevelCount(); ++level) {
     auto&      previous = source.Texture(level - 1);
@@ -282,11 +259,15 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
 
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                     MaskStore* store, std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
+                     MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> CudaMaskResult {
   if (!device.Workspace().IsRendering())
     throw std::runtime_error("ExecuteCudaMask: BeginRender has not been called");
   if (!compiled_grade.mask.has_value()) {
     throw std::runtime_error("ExecuteCudaMask: compiled Color Grade has no mask");
+  }
+  if (!active_raster_masks.empty()) {
+    ValidateActiveRasterMaskBindings(document, active_raster_masks);
   }
   auto&                   workspace     = device.Workspace();
   auto&                   context       = device.CommandContext();
@@ -296,7 +277,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto              render_pixels = extent.width * extent.height;
   CudaMaskResult          result{compiled_grade.mask_output};
 
-  const auto&             mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  const auto& mask_model = RequireCompiledMaskModel(document, compiled_grade);
   if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
       std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
     AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
@@ -305,60 +286,45 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         AnalyticKindFromMask(mask_model), RadialParamsFromMask(mask_model),
         LinearGradientParamsFromMask(mask_model));
   } else if (const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source)) {
-    if (store == nullptr)
-      throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
-    if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
-      throw std::runtime_error("ExecuteCudaMask: Brush Mask has no asset");
-    }
-    const auto asset  = store->Load(*brush->asset_key);
-    const bool cached = workspace.MaskTextures().Contains(asset->key);
-    auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
-    result.persistent_texture_resource_id = source.Texture().ResourceId();
-    result.mip_level_count                = static_cast<std::uint32_t>(source.MipLevelCount());
-    const auto dirty     = UnionDirtyRectangles(dirty_rectangles, asset->descriptor.extent);
-    const bool has_dirty = dirty.width > 0 && dirty.height > 0;
-    if (!cached) {
-      workspace.Device().UploadTexture2D(
-          source.Texture(),
-          std::span<const std::byte>(reinterpret_cast<const std::byte*>(asset->pixels.data()),
-                                     asset->pixels.size()),
-          context);
-      GenerateMipChain(source, context);
-    } else if (has_dirty) {
-      const auto bytes = CopyRectangle(*asset, dirty);
-      workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
-      GenerateMipChain(source, context);
-    }
-    const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, brush->descriptor.reference_bounds,
-                                                     asset->descriptor.extent);
-    if (brush->feather_radius <= 0.0f) {
-      const auto selected_level = std::min<std::size_t>(
-          static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
-          source.MipLevelCount() - 1);
-      auto& sampled_texture = source.Texture(selected_level);
-      RasterSampleKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
-          static_cast<const std::uint8_t*>(sampled_texture.DevicePointer()),
-          sampled_texture.Width(), sampled_texture.Height(),
-          static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-          sampling.render_to_texture_uv, mask_model.invert);
-    } else {
+    const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
+                                                   compiled_grade.mask->mask_id);
+    const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
+                                     bool raster_bytes_changed) {
+      result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
+      const auto sampling    = MakeRasterMaskSamplingPlan(
+          plan.geometry, raster_descriptor.reference_bounds, raster_descriptor.extent);
+      if (brush->feather_radius <= 0.0f) {
+        const auto selected_level = std::min<std::size_t>(
+            static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
+            source.MipLevelCount() - 1);
+        auto& sampled_texture = source.Texture(selected_level);
+        RasterSampleKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
+            static_cast<const std::uint8_t*>(sampled_texture.DevicePointer()),
+            sampled_texture.Width(), sampled_texture.Height(),
+            static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width,
+            extent.height, sampling.render_to_texture_uv, mask_model.invert);
+        return;
+      }
       const GraphValueId distance_id{compiled_grade.node_id, PortId{"signed_distance"}};
       const GraphValueId horizontal_id{compiled_grade.node_id, PortId{"distance.horizontal"}};
       const GraphValueId inside_id{compiled_grade.node_id, PortId{"distance.inside"}};
       const GraphValueId outside_id{compiled_grade.node_id, PortId{"distance.outside"}};
-      auto*              distance       = workspace.Values().Find(distance_id);
-      const auto         distance_bytes = asset->pixels.size() * sizeof(float);
-      const bool         must_compute =
-          distance == nullptr || distance->Bytes() != distance_bytes || !cached || has_dirty;
+      auto*              distance = workspace.Values().Find(distance_id);
+      const auto         distance_bytes =
+          static_cast<std::size_t>(raster_descriptor.extent.width) *
+          raster_descriptor.extent.height * sizeof(float);
+      const bool must_compute =
+          distance == nullptr || distance->Bytes() != distance_bytes || raster_bytes_changed;
       if (distance == nullptr || distance->Bytes() != distance_bytes) {
         workspace.Values().Store(distance_id, workspace.Device().CreateBuffer(distance_bytes));
         distance = workspace.Values().Find(distance_id);
       }
       if (must_compute) {
-        const auto source_pixels = asset->descriptor.extent.width * asset->descriptor.extent.height;
-        auto*      horizontal    = workspace.Values().Find(horizontal_id);
-        auto*      inside_distance  = workspace.Values().Find(inside_id);
-        auto*      outside_distance = workspace.Values().Find(outside_id);
+        const auto source_pixels =
+            raster_descriptor.extent.width * raster_descriptor.extent.height;
+        auto* horizontal       = workspace.Values().Find(horizontal_id);
+        auto* inside_distance  = workspace.Values().Find(inside_id);
+        auto* outside_distance = workspace.Values().Find(outside_id);
         if (horizontal == nullptr || horizontal->Bytes() != distance_bytes) {
           workspace.Values().Store(horizontal_id, workspace.Device().CreateBuffer(distance_bytes));
           horizontal = workspace.Values().Find(horizontal_id);
@@ -371,26 +337,26 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
           workspace.Values().Store(outside_id, workspace.Device().CreateBuffer(distance_bytes));
           outside_distance = workspace.Values().Find(outside_id);
         }
-        const auto shared_bytes = asset->descriptor.extent.height * sizeof(int) +
-                                  asset->descriptor.extent.height * sizeof(float);
-        ParallelBandHorizontalKernel<<<asset->descriptor.extent.height, 1, 0, context.Stream()>>>(
+        const auto shared_bytes = raster_descriptor.extent.height * sizeof(int) +
+                                  raster_descriptor.extent.height * sizeof(float);
+        ParallelBandHorizontalKernel<<<raster_descriptor.extent.height, 1, 0, context.Stream()>>>(
             static_cast<const std::uint8_t*>(source.Texture().DevicePointer()),
-            static_cast<float*>(horizontal->DevicePointer()), asset->descriptor.extent.width,
-            asset->descriptor.extent.height, true);
-        ParallelBandVerticalKernel<<<asset->descriptor.extent.width, 1, shared_bytes,
+            static_cast<float*>(horizontal->DevicePointer()), raster_descriptor.extent.width,
+            raster_descriptor.extent.height, true);
+        ParallelBandVerticalKernel<<<raster_descriptor.extent.width, 1, shared_bytes,
                                      context.Stream()>>>(
             static_cast<const float*>(horizontal->DevicePointer()),
-            static_cast<float*>(inside_distance->DevicePointer()), asset->descriptor.extent.width,
-            asset->descriptor.extent.height);
-        ParallelBandHorizontalKernel<<<asset->descriptor.extent.height, 1, 0, context.Stream()>>>(
+            static_cast<float*>(inside_distance->DevicePointer()), raster_descriptor.extent.width,
+            raster_descriptor.extent.height);
+        ParallelBandHorizontalKernel<<<raster_descriptor.extent.height, 1, 0, context.Stream()>>>(
             static_cast<const std::uint8_t*>(source.Texture().DevicePointer()),
-            static_cast<float*>(horizontal->DevicePointer()), asset->descriptor.extent.width,
-            asset->descriptor.extent.height, false);
-        ParallelBandVerticalKernel<<<asset->descriptor.extent.width, 1, shared_bytes,
+            static_cast<float*>(horizontal->DevicePointer()), raster_descriptor.extent.width,
+            raster_descriptor.extent.height, false);
+        ParallelBandVerticalKernel<<<raster_descriptor.extent.width, 1, shared_bytes,
                                      context.Stream()>>>(
             static_cast<const float*>(horizontal->DevicePointer()),
-            static_cast<float*>(outside_distance->DevicePointer()), asset->descriptor.extent.width,
-            asset->descriptor.extent.height);
+            static_cast<float*>(outside_distance->DevicePointer()), raster_descriptor.extent.width,
+            raster_descriptor.extent.height);
         ComposeSignedDistanceKernel<<<(source_pixels + block - 1) / block, block, 0,
                                       context.Stream()>>>(
             static_cast<const std::uint8_t*>(source.Texture().DevicePointer()),
@@ -399,19 +365,73 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
             static_cast<float*>(distance->DevicePointer()), source_pixels);
       }
       result.signed_distance_resource_id = distance->ResourceId();
-      const auto  bounds                 = brush->descriptor.reference_bounds;
+      const auto& bounds                 = raster_descriptor.reference_bounds;
       const float x_scale =
-          asset->descriptor.extent.width /
-          (plan.geometry.full_reference_extent.width * std::max(bounds.w, 1.0e-6f));
+          static_cast<float>(raster_descriptor.extent.width) /
+          (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
       const float y_scale =
-          asset->descriptor.extent.height /
-          (plan.geometry.full_reference_extent.height * std::max(bounds.h, 1.0e-6f));
+          static_cast<float>(raster_descriptor.extent.height) /
+          (static_cast<float>(plan.geometry.full_reference_extent.height) *
+           std::max(bounds.h, 1.0e-6f));
       const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
       FeatherSampleKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
-          static_cast<const float*>(distance->DevicePointer()), asset->descriptor.extent.width,
-          asset->descriptor.extent.height,
+          static_cast<const float*>(distance->DevicePointer()), raster_descriptor.extent.width,
+          raster_descriptor.extent.height,
           static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
           sampling.render_to_texture_uv, radius_texels, mask_model.invert);
+    };
+
+    auto upload_full = [&](auto& source, std::span<const std::uint8_t> pixels) {
+      workspace.Device().UploadTexture2D(
+          source.Texture(),
+          std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels.data()),
+                                     pixels.size()),
+          context);
+      GenerateMipChain(source, context);
+    };
+
+    if (active != nullptr) {
+      auto& cache = workspace.ActiveRasterTextures();
+      const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_grade.mask->mask_id,
+                                           active->session_generation};
+      cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
+        return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
+               key.session_generation != tex_key.session_generation;
+      });
+      auto       source               = cache.Acquire(tex_key, active->descriptor.extent);
+      result.active_texture_resource_id = source.Texture().ResourceId();
+      bool raster_bytes_changed         = false;
+      if (!cache.PixelsUploaded(tex_key)) {
+        upload_full(source, *active->pixels);
+        cache.SetUploadedPixels(tex_key, active->content_revision);
+        raster_bytes_changed = true;
+      } else if (active->content_revision < cache.UploadedRevision(tex_key)) {
+        throw std::runtime_error("ExecuteCudaMask: active raster revision is stale");
+      } else if (active->content_revision > cache.UploadedRevision(tex_key)) {
+        const auto dirty =
+            ClipRasterDirtyRectangle(active->dirty_rectangle, active->descriptor.extent);
+        const auto bytes =
+            CopyPackedR8Rectangle(*active->pixels, active->descriptor.extent, dirty);
+        workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
+        GenerateMipChain(source, context);
+        cache.SetUploadedPixels(tex_key, active->content_revision);
+        raster_bytes_changed = true;
+      }
+      encode_coverage(source, active->descriptor, raster_bytes_changed);
+    } else {
+      if (store == nullptr)
+        throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
+      if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
+        throw std::runtime_error("ExecuteCudaMask: Brush Mask has no asset");
+      }
+      const auto asset  = store->Load(*brush->asset_key);
+      const bool cached = workspace.MaskTextures().Contains(asset->key);
+      auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
+      result.persistent_texture_resource_id = source.Texture().ResourceId();
+      if (!cached) {
+        upload_full(source, asset->pixels);
+      }
+      encode_coverage(source, asset->descriptor, !cached);
     }
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");
@@ -423,7 +443,8 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
 
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PipelineDocument& document, MaskStore* store,
-                     std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
+                     std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> CudaMaskResult {
   const CompiledGradeNode* last = nullptr;
   for (const auto& grade : plan.grade_nodes) {
     if (grade.mask.has_value()) {
@@ -436,7 +457,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   CudaMaskResult result{};
   for (const auto& grade : plan.grade_nodes) {
     if (grade.mask.has_value()) {
-      result = ExecuteCudaMask(device, plan, document, grade, store, dirty_rectangles);
+      result = ExecuteCudaMask(device, plan, document, grade, store, active_raster_masks);
     }
   }
   return result;

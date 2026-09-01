@@ -22,6 +22,7 @@
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -204,9 +205,8 @@ class OpenClMaskFixture : public ::testing::Test {
     gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
-  auto MakeRaster(std::string key, std::uint8_t fill = 0) -> MaskAsset {
+  auto MakeRaster(std::uint8_t fill = 0) -> MaskAsset {
     MaskAsset asset;
-    asset.key                         = MaskAssetKey{std::move(key)};
     asset.descriptor.extent           = {width_, height_};
     asset.descriptor.reference_bounds = {};
     asset.pixels.assign(static_cast<std::size_t>(width_) * height_, fill);
@@ -214,12 +214,30 @@ class OpenClMaskFixture : public ::testing::Test {
   }
 
   auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> MaskModel& {
-    store_->Save(asset);
+    asset.key = store_->Put(asset.descriptor, asset.pixels);
     auto& mask = grade_mask_test::AddMask(
         *document_.PrimaryGrade(),
         grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset, feather));
     document_.MarkTopologyDirty();
     return mask;
+  }
+
+  auto AttachedBrushKey() const -> MaskAssetKey {
+    const auto* mask = document_.PrimaryGrade()->FindMask(MaskId{"mask.raster"});
+    return *std::get<BrushMaskSource>(mask->source).asset_key;
+  }
+
+  auto MakeActive(const MaskAsset& asset, RectI dirty, std::uint64_t revision,
+                  std::uint64_t generation = 1) -> ActiveRasterMaskInput {
+    ActiveRasterMaskInput input;
+    input.owner_node_id      = document_.PrimaryGrade()->Id();
+    input.mask_id            = MaskId{"mask.raster"};
+    input.session_generation = generation;
+    input.content_revision   = revision;
+    input.descriptor         = asset.descriptor;
+    input.pixels             = std::make_shared<const std::vector<std::uint8_t>>(asset.pixels);
+    input.dirty_rectangle    = dirty;
+    return input;
   }
 
   auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
@@ -269,10 +287,10 @@ class OpenClMaskFixture : public ::testing::Test {
     return pixels;
   }
 
-  auto RenderMask(std::span<const RectI> dirty = {}) -> OpenClMaskResult {
+  auto RenderMask(std::span<const ActiveRasterMaskInput> active = {}) -> OpenClMaskResult {
     device_->BeginRender();
     try {
-      const auto result = ExecuteOpenClMask(*device_, plan_, document_, store_.get(), dirty);
+      const auto result = ExecuteOpenClMask(*device_, plan_, document_, store_.get(), active);
       device_->EndRender();
       device_->WaitIdle();
       return result;
@@ -282,14 +300,14 @@ class OpenClMaskFixture : public ::testing::Test {
     }
   }
 
-  auto RenderGrade(std::span<const RectI> dirty = {}) -> GradeFrame {
+  auto RenderGrade() -> GradeFrame {
     device_->BeginRender();
     try {
       ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
       ExecuteOpenClGeometryResample(*device_, plan_);
       ExecuteOpenClCameraColor(*device_, plan_, document_);
       if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask.has_value()) {
-        (void)ExecuteOpenClMask(*device_, plan_, document_, store_.get(), dirty);
+        (void)ExecuteOpenClMask(*device_, plan_, document_, store_.get());
         device_->Workspace().TransientBuffers().Reset();
       }
       auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
@@ -317,23 +335,82 @@ class OpenClMaskFixture : public ::testing::Test {
   std::unique_ptr<OpenClRenderDevice> device_;
 };
 
-TEST_F(OpenClMaskFixture, OpenClRasterMaskUploadsOnlyChangedR8Rectangle) {
-  auto asset = MakeRaster("dirty");
+TEST_F(OpenClMaskFixture, OpenClActiveRasterRevisionUploadsOnlyDirtyRectangle) {
+  auto asset = MakeRaster(0);
   AttachRaster(asset);
   Compile();
   (void)RenderMask();
   std::fill(asset.pixels.begin(), asset.pixels.end(), 200);
-  store_->Save(asset);
+  const auto full = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                       static_cast<std::int32_t>(height_)},
+                               1);
+  (void)RenderMask(std::span{&full, 1});
   device_->Workspace().Device().ResetCounters();
-  const RectI dirty[] = {{1, 2, 3, 2}, {3, 1, 2, 4}};
-  (void)RenderMask(dirty);
+  const auto dirty = MakeActive(asset, {1, 1, 4, 4}, 2);
+  (void)RenderMask(std::span{&dirty, 1});
   ASSERT_EQ(device_->Workspace().Device().LastTextureRectangles().size(), 1U);
   EXPECT_EQ(device_->Workspace().Device().LastTextureRectangles().front(), (RectI{1, 1, 4, 4}));
   EXPECT_EQ(device_->Workspace().Device().HostToDeviceBytes(), 16U);
 }
 
+TEST_F(OpenClMaskFixture, OpenClActiveRasterUpdateNeverPatchesPersistentTexture) {
+  auto asset = MakeRaster(17);
+  AttachRaster(asset);
+  Compile();
+  const auto persistent = RenderMask();
+  ASSERT_NE(persistent.persistent_texture_resource_id, 0U);
+  auto& texture = device_->Workspace().MaskTextures().TextureAt(AttachedBrushKey());
+  std::vector<std::uint8_t> before(texture.Bytes());
+  device_->Workspace().Device().DownloadTexture2D(
+      texture, std::span<std::byte>(reinterpret_cast<std::byte*>(before.data()), before.size()),
+      device_->CommandContext());
+  EXPECT_EQ(before, asset.pixels);
+
+  auto preview = asset;
+  std::fill(preview.pixels.begin(), preview.pixels.end(), 200);
+  const auto active = MakeActive(preview, {0, 0, static_cast<std::int32_t>(width_),
+                                           static_cast<std::int32_t>(height_)},
+                                 1);
+  const auto result = RenderMask(std::span{&active, 1});
+  EXPECT_EQ(result.persistent_texture_resource_id, 0U);
+  EXPECT_NE(result.active_texture_resource_id, 0U);
+  EXPECT_NE(result.active_texture_resource_id, persistent.persistent_texture_resource_id);
+  EXPECT_TRUE(device_->Workspace().MaskTextures().Contains(AttachedBrushKey()));
+  auto& still = device_->Workspace().MaskTextures().TextureAt(AttachedBrushKey());
+  std::vector<std::uint8_t> after(still.Bytes());
+  device_->Workspace().Device().DownloadTexture2D(
+      still, std::span<std::byte>(reinterpret_cast<std::byte*>(after.data()), after.size()),
+      device_->CommandContext());
+  EXPECT_EQ(after, before);
+  EXPECT_EQ(after.front(), 17);
+  const auto coverage = DownloadMask();
+  EXPECT_GT(coverage[(height_ / 2) * width_ + width_ / 2], 190);
+}
+
+TEST_F(OpenClMaskFixture, OpenClNewActiveRasterGenerationReplacesOldPreviewTexture) {
+  auto asset = MakeRaster(40);
+  AttachRaster(asset);
+  Compile();
+  const auto first_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                              static_cast<std::int32_t>(height_)},
+                                      1, 1);
+  const auto first       = RenderMask(std::span{&first_input, 1});
+  const auto first_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 1};
+  EXPECT_TRUE(device_->Workspace().ActiveRasterTextures().Contains(first_key));
+  const auto second_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                               static_cast<std::int32_t>(height_)},
+                                       1, 2);
+  const auto second       = RenderMask(std::span{&second_input, 1});
+  const auto second_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
+  EXPECT_NE(first.active_texture_resource_id, second.active_texture_resource_id);
+  EXPECT_FALSE(device_->Workspace().ActiveRasterTextures().Contains(first_key));
+  EXPECT_TRUE(device_->Workspace().ActiveRasterTextures().Contains(second_key));
+}
+
 TEST_F(OpenClMaskFixture, OpenClRasterMaskLevelsUseWorkspaceCache) {
-  AttachRaster(MakeRaster("reuse", 255));
+  AttachRaster(MakeRaster(255));
   Compile();
   const auto first = RenderMask();
   EXPECT_GT(first.mip_level_count, 1U);
@@ -348,7 +425,7 @@ TEST_F(OpenClMaskFixture, OpenClRasterMaskLevelsUseWorkspaceCache) {
 
 TEST_F(OpenClMaskFixture, OpenClMaskFeatherMatchesExactSignedDistanceReference) {
   SetExtent(9, 9);
-  auto asset = MakeRaster("exact");
+  auto asset = MakeRaster();
   for (std::uint32_t y = 3; y <= 5; ++y) {
     for (std::uint32_t x = 3; x <= 5; ++x) {
       asset.pixels[static_cast<std::size_t>(y) * width_ + x] = 255;
@@ -372,7 +449,7 @@ TEST_F(OpenClMaskFixture, OpenClMaskFeatherMatchesExactSignedDistanceReference) 
 }
 
 TEST_F(OpenClMaskFixture, OpenClFeatherRadiusEditReusesSignedDistanceResult) {
-  auto asset = MakeRaster("radius");
+  auto asset = MakeRaster();
   for (std::uint32_t y = 3; y < 9; ++y) {
     for (std::uint32_t x = 4; x < 12; ++x) {
       asset.pixels[static_cast<std::size_t>(y) * width_ + x] = 255;
@@ -428,7 +505,7 @@ TEST_F(OpenClMaskFixture, OpenClMaskSamplingMatchesCudaAtCropRotationAndDynamicR
   (void)RenderMask();
   check_analytic();
 
-  auto asset = MakeRaster("sample");
+  auto asset = MakeRaster();
   for (std::uint32_t y = 0; y < height_; ++y) {
     for (std::uint32_t x = width_ / 2; x < width_; ++x) {
       asset.pixels[static_cast<std::size_t>(y) * width_ + x] = 255;
@@ -518,7 +595,7 @@ TEST_F(OpenClMaskFixture, OpenClDisconnectedMaskUsesConstantOneWithoutImageAlloc
 }
 
 TEST_F(OpenClMaskFixture, OpenClNormalMixMatchesCudaReferenceWithinTolerance) {
-  auto asset = MakeRaster("mix", 255);
+  auto asset = MakeRaster(255);
   AttachRaster(asset);
   auto* exposure = dynamic_cast<ExposureModel*>(
       document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
@@ -531,10 +608,12 @@ TEST_F(OpenClMaskFixture, OpenClNormalMixMatchesCudaReferenceWithinTolerance) {
       asset.pixels[static_cast<std::size_t>(y) * width_ + x] = 0;
     }
   }
-  store_->Save(asset);
-  const RectI dirty{0, 0, static_cast<std::int32_t>(width_ / 2),
-                    static_cast<std::int32_t>(height_)};
-  const auto  mixed = RenderGrade(std::span{&dirty, 1});
+  asset.key = store_->Put(asset.descriptor, asset.pixels);
+  document_.PrimaryGrade()->ReplaceMaskSource(
+      MaskId{"mask.raster"},
+      grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset).source);
+  Compile();
+  const auto mixed = RenderGrade();
   ASSERT_EQ(mixed.source.size(), mixed.output.size());
   const auto left  = static_cast<std::size_t>(5 * width_ + 2);
   const auto right = static_cast<std::size_t>(5 * width_ + width_ - 2);
@@ -582,7 +661,7 @@ TEST_F(OpenClMaskFixture, OpenClMaskLevelsUseSeparateOpenCl12Images) {
 }
 
 TEST_F(OpenClMaskFixture, OpenClRasterMaskRequiresMaskStoreAndReportsTheFailure) {
-  AttachRaster(MakeRaster("missing-store", 255));
+  AttachRaster(MakeRaster(255));
   Compile();
   device_->BeginRender();
   EXPECT_THROW((void)ExecuteOpenClMask(*device_, plan_, document_, nullptr), std::invalid_argument);
@@ -590,7 +669,7 @@ TEST_F(OpenClMaskFixture, OpenClRasterMaskRequiresMaskStoreAndReportsTheFailure)
 }
 
 TEST_F(OpenClMaskFixture, OpenClPlanExecutorRunsRasterMaskBeforePrimaryGrade) {
-  AttachRaster(MakeRaster("plan-mask", 255));
+  AttachRaster(MakeRaster(255));
   auto* exposure = dynamic_cast<ExposureModel*>(
       document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);

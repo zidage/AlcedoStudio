@@ -19,6 +19,7 @@
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
@@ -54,9 +55,8 @@ class CudaMaskFixture : public ::testing::Test {
     gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
-  auto MakeRaster(std::string key, std::uint8_t fill = 0) -> MaskAsset {
+  auto MakeRaster(std::uint8_t fill = 0) -> MaskAsset {
     MaskAsset asset;
-    asset.key                         = MaskAssetKey{std::move(key)};
     asset.descriptor.extent           = {width_, height_};
     asset.descriptor.reference_bounds = {};
     asset.pixels.assign(static_cast<std::size_t>(width_) * height_, fill);
@@ -64,12 +64,30 @@ class CudaMaskFixture : public ::testing::Test {
   }
 
   auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> MaskModel& {
-    store_->Save(asset);
+    asset.key = store_->Put(asset.descriptor, asset.pixels);
     auto& mask = grade_mask_test::AddMask(
         *document_.PrimaryGrade(),
         grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset, feather));
     document_.MarkTopologyDirty();
     return mask;
+  }
+
+  auto AttachedBrushKey() const -> MaskAssetKey {
+    const auto* mask = document_.PrimaryGrade()->FindMask(MaskId{"mask.raster"});
+    return *std::get<BrushMaskSource>(mask->source).asset_key;
+  }
+
+  auto MakeActive(const MaskAsset& asset, RectI dirty, std::uint64_t revision,
+                  std::uint64_t generation = 1) -> ActiveRasterMaskInput {
+    ActiveRasterMaskInput input;
+    input.owner_node_id      = document_.PrimaryGrade()->Id();
+    input.mask_id            = MaskId{"mask.raster"};
+    input.session_generation = generation;
+    input.content_revision   = revision;
+    input.descriptor         = asset.descriptor;
+    input.pixels             = std::make_shared<const std::vector<std::uint8_t>>(asset.pixels);
+    input.dirty_rectangle    = dirty;
+    return input;
   }
 
   auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
@@ -89,9 +107,9 @@ class CudaMaskFixture : public ::testing::Test {
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), request);
   }
 
-  auto RenderMask(std::span<const RectI> dirty = {}) -> CudaMaskResult {
+  auto RenderMask(std::span<const ActiveRasterMaskInput> active = {}) -> CudaMaskResult {
     device_.BeginRender();
-    auto result = ExecuteCudaMask(device_, plan_, document_, store_.get(), dirty);
+    auto result = ExecuteCudaMask(device_, plan_, document_, store_.get(), active);
     device_.EndRender();
     device_.WaitIdle();
     return result;
@@ -149,7 +167,7 @@ class CudaMaskFixture : public ::testing::Test {
 };
 
 TEST_F(CudaMaskFixture, CudaMaskTextureCacheReusesTextureForSameMaskAssetKey) {
-  AttachRaster(MakeRaster("reuse", 255));
+  AttachRaster(MakeRaster(255));
   Compile();
   const auto first = RenderMask();
   EXPECT_GT(first.mip_level_count, 1U);
@@ -176,19 +194,78 @@ TEST_F(CudaMaskFixture, CudaMaskTextureCacheDoesNotEvictTextureUsedByActiveSubmi
   device_.WaitIdle();
 }
 
-TEST_F(CudaMaskFixture, CudaRasterMaskUploadsOnlyUnionedDirtyRectangle) {
-  auto asset = MakeRaster("dirty", 0);
+TEST_F(CudaMaskFixture, CudaActiveRasterRevisionUploadsOnlyDirtyRectangle) {
+  auto asset = MakeRaster(0);
   AttachRaster(asset);
   Compile();
   RenderMask();
   std::fill(asset.pixels.begin(), asset.pixels.end(), 200);
-  store_->Save(asset);
+  const auto full = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                       static_cast<std::int32_t>(height_)},
+                               1);
+  RenderMask(std::span{&full, 1});
   device_.Workspace().Device().ResetCounters();
-  const RectI dirty[] = {{1, 2, 3, 2}, {3, 1, 2, 4}};
-  RenderMask(dirty);
+  const auto dirty = MakeActive(asset, {1, 1, 4, 4}, 2);
+  RenderMask(std::span{&dirty, 1});
   ASSERT_EQ(device_.Workspace().Device().LastTextureRectangles().size(), 1U);
   EXPECT_EQ(device_.Workspace().Device().LastTextureRectangles().front(), (RectI{1, 1, 4, 4}));
   EXPECT_EQ(device_.Workspace().Device().HostToDeviceBytes(), 16U);
+}
+
+TEST_F(CudaMaskFixture, CudaActiveRasterUpdateNeverPatchesPersistentTexture) {
+  auto asset = MakeRaster(17);
+  AttachRaster(asset);
+  Compile();
+  const auto persistent = RenderMask();
+  ASSERT_NE(persistent.persistent_texture_resource_id, 0U);
+  auto&      texture = device_.Workspace().MaskTextures().TextureAt(AttachedBrushKey());
+  std::vector<std::uint8_t> before(texture.Bytes());
+  device_.Workspace().Device().DownloadTexture2D(
+      texture, std::span<std::byte>(reinterpret_cast<std::byte*>(before.data()), before.size()),
+      device_.CommandContext());
+  EXPECT_EQ(before, asset.pixels);
+
+  auto preview = asset;
+  std::fill(preview.pixels.begin(), preview.pixels.end(), 200);
+  const auto active = MakeActive(preview, {0, 0, static_cast<std::int32_t>(width_),
+                                           static_cast<std::int32_t>(height_)},
+                                 1);
+  const auto result = RenderMask(std::span{&active, 1});
+  EXPECT_EQ(result.persistent_texture_resource_id, 0U);
+  EXPECT_NE(result.active_texture_resource_id, 0U);
+  EXPECT_NE(result.active_texture_resource_id, persistent.persistent_texture_resource_id);
+  EXPECT_TRUE(device_.Workspace().MaskTextures().Contains(AttachedBrushKey()));
+  auto& still = device_.Workspace().MaskTextures().TextureAt(AttachedBrushKey());
+  std::vector<std::uint8_t> after(still.Bytes());
+  device_.Workspace().Device().DownloadTexture2D(
+      still, std::span<std::byte>(reinterpret_cast<std::byte*>(after.data()), after.size()),
+      device_.CommandContext());
+  EXPECT_EQ(after, before);
+  EXPECT_EQ(after.front(), 17);
+  const auto coverage = DownloadMask();
+  EXPECT_GT(coverage[(height_ / 2) * width_ + width_ / 2], 190);
+}
+
+TEST_F(CudaMaskFixture, CudaNewActiveRasterGenerationReplacesOldPreviewTexture) {
+  auto asset = MakeRaster(40);
+  AttachRaster(asset);
+  Compile();
+  const auto first_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                              static_cast<std::int32_t>(height_)},
+                                      1, 1);
+  const auto first       = RenderMask(std::span{&first_input, 1});
+  const auto first_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 1};
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  const auto second_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                               static_cast<std::int32_t>(height_)},
+                                       1, 2);
+  const auto second       = RenderMask(std::span{&second_input, 1});
+  const auto second_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
+  EXPECT_NE(first.active_texture_resource_id, second.active_texture_resource_id);
+  EXPECT_FALSE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(second_key));
 }
 
 TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScales) {
@@ -227,7 +304,7 @@ TEST_F(CudaMaskFixture, CudaLinearGradientMaskFollowsReferenceSpaceNormal) {
 }
 
 TEST_F(CudaMaskFixture, CudaFeatherPreservesZeroAndOnePlateaus) {
-  auto asset = MakeRaster("plateaus", 0);
+  auto asset = MakeRaster(0);
   for (std::uint32_t y = 3; y < 9; ++y)
     for (std::uint32_t x = 4; x < 12; ++x) asset.pixels[y * width_ + x] = 255;
   AttachRaster(asset, 1.0f);
@@ -240,7 +317,7 @@ TEST_F(CudaMaskFixture, CudaFeatherPreservesZeroAndOnePlateaus) {
 
 TEST_F(CudaMaskFixture, CudaSignedDistanceFeatherMatchesExactEuclideanReferenceWithinTolerance) {
   SetExtent(9, 9);
-  auto asset = MakeRaster("exact", 0);
+  auto asset = MakeRaster(0);
   for (std::uint32_t y = 3; y <= 5; ++y)
     for (std::uint32_t x = 3; x <= 5; ++x) asset.pixels[y * width_ + x] = 255;
   AttachRaster(asset, 2.0f);
@@ -253,7 +330,7 @@ TEST_F(CudaMaskFixture, CudaSignedDistanceFeatherMatchesExactEuclideanReferenceW
 }
 
 TEST_F(CudaMaskFixture, CudaFeatherPreservesAntialiasedSourceBoundary) {
-  auto asset                   = MakeRaster("antialias", 0);
+  auto asset                   = MakeRaster(0);
   asset.pixels[6 * width_ + 8] = 128;
   AttachRaster(asset, 2.0f);
   Compile();
@@ -263,7 +340,7 @@ TEST_F(CudaMaskFixture, CudaFeatherPreservesAntialiasedSourceBoundary) {
 }
 
 TEST_F(CudaMaskFixture, CudaFeatherRadiusIsStableAcrossDynamicRenderScales) {
-  auto asset = MakeRaster("scale", 0);
+  auto asset = MakeRaster(0);
   for (std::uint32_t y = 0; y < height_; ++y)
     for (std::uint32_t x = 8; x < width_; ++x) asset.pixels[y * width_ + x] = 255;
   AttachRaster(asset, 3.0f);
@@ -281,7 +358,7 @@ TEST_F(CudaMaskFixture, CudaFeatherRadiusIsStableAcrossDynamicRenderScales) {
 }
 
 TEST_F(CudaMaskFixture, ChangingFeatherRadiusReusesSignedDistanceTexture) {
-  auto asset = MakeRaster("radius", 0);
+  auto asset = MakeRaster(0);
   for (std::uint32_t y = 3; y < 9; ++y)
     for (std::uint32_t x = 4; x < 12; ++x) asset.pixels[y * width_ + x] = 255;
   auto& node = AttachRaster(asset, 1.0f);
@@ -294,7 +371,7 @@ TEST_F(CudaMaskFixture, ChangingFeatherRadiusReusesSignedDistanceTexture) {
 }
 
 TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne) {
-  auto asset = MakeRaster("mix", 255);
+  auto asset = MakeRaster(255);
   AttachRaster(asset);
   auto* exposure = dynamic_cast<ExposureModel*>(
       document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
@@ -305,19 +382,14 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   const auto full        = DownloadImage(full_result.output);
   for (std::uint32_t y = 0; y < height_; ++y)
     for (std::uint32_t x = 0; x < width_ / 2; ++x) asset.pixels[y * width_ + x] = 0;
-  store_->Save(asset);
-  device_.BeginRender();
-  (void)ExecuteCudaDevelop(device_, plan_, prepared_, document_);
-  ExecuteCudaGeometryResample(device_, plan_);
-  ExecuteCudaCameraColor(device_, plan_, document_);
-  const RectI dirty{0, 0, static_cast<std::int32_t>(width_ / 2),
-                    static_cast<std::int32_t>(height_)};
-  (void)ExecuteCudaMask(device_, plan_, document_, store_.get(), std::span{&dirty, 1});
-  const auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
-  device_.EndRender();
-  device_.WaitIdle();
+  asset.key = store_->Put(asset.descriptor, asset.pixels);
+  document_.PrimaryGrade()->ReplaceMaskSource(
+      MaskId{"mask.raster"},
+      grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset).source);
+  Compile();
+  const auto mixed  = RenderGrade();
   const auto source = DownloadImage(plan_.develop_output);
-  const auto output = DownloadImage(result.output);
+  const auto output = DownloadImage(mixed.output);
   ASSERT_EQ(source.size(), output.size());
   const auto left  = 5 * width_ + 2;
   const auto right = 5 * width_ + width_ - 2;

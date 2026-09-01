@@ -5,12 +5,14 @@
 #pragma once
 
 #include <exception>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -49,7 +51,8 @@ class PlanExecutor {
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
                       PipelineDocument& document, MaskStore* mask_store, bool publish_on_success,
                       TransientAllocationPolicy transient_policy =
-                          TransientAllocationPolicy::SessionPacked)
+                          TransientAllocationPolicy::SessionPacked,
+                      std::span<const ActiveRasterMaskInput> active_raster_masks = {})
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();
@@ -170,7 +173,7 @@ class PlanExecutor {
             ++stats.mask_skip;
           } else {
             PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
-                device, plan, input, document, mask_store, compiled_grade);
+                device, plan, input, document, mask_store, compiled_grade, active_raster_masks);
             Record(device, compiled_grade.mask_output, mask_key, keys.geometry_extent,
                    TextureFormat::R8);
             ++stats.mask_execute;

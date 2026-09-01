@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1 complete; NM3.2–NM3.5 planned
+Status: NM3.1–NM3.2 complete; NM3.3–NM3.5 planned
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -698,7 +698,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 | Phase | Status | Result |
 | --- | --- | --- |
 | NM3.1 | complete | Grade-owned Mask identities, sources, validation, and document schema. |
-| NM3.2 | planned | Immutable raster assets and task-owned active raster inputs. |
+| NM3.2 | complete | Immutable raster assets and task-owned active raster inputs. |
 | NM3.3 | planned | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
 | NM3.4 | planned | Native CUDA, OpenCL, and Metal source evaluation and Union execution. |
 | NM3.5 | planned | Model, storage, native, service, failure, and resource qualification. |
@@ -884,14 +884,100 @@ invalid active target / duplicate input / stale descriptor
 
 **Exit conditions**
 
-- [ ] Equal descriptors and pixels return one equal key.
-- [ ] Different descriptors or pixels return different keys.
-- [ ] Existing mismatched bytes never get replaced.
-- [ ] Interrupted writes leave no published partial asset.
-- [ ] Concurrent equal writers produce one verified asset.
-- [ ] Host-cache eviction never deletes disk data.
-- [ ] Active pixels travel as immutable task-owned request data.
-- [ ] Active uploads never patch a persistent asset texture.
+- [x] Equal descriptors and pixels return one equal key.
+- [x] Different descriptors or pixels return different keys.
+- [x] Existing mismatched bytes never get replaced.
+- [x] Interrupted writes leave no published partial asset.
+- [x] Concurrent equal writers produce one verified asset.
+- [x] Host-cache eviction never deletes disk data.
+- [x] Active pixels travel as immutable task-owned request data.
+- [x] Active uploads never patch a persistent asset texture.
+
+##### Phase NM3.2 completion record (2026-09-01)
+
+**Status:** complete — content-addressed `MaskStore::Put()`, non-replacing publish, host-cache eviction independent of disk, task-owned `ActiveRasterMaskInput` on `PipelineApplyRequest`, and separate active-raster GPU textures on CUDA, OpenCL, and Metal.
+
+**Primary success call chain:**
+
+```text
+settled R8 pixels + descriptor
+  -> MaskStore::Put
+  -> CanonicalMaskAssetBytes + xxHash3-128 key
+  -> sibling temporary file, flush, close
+  -> non-replacing publish (MoveFileExW / POSIX hard-link)
+  -> verify existing or newly published bytes
+  -> immutable MaskAssetKey
+
+active Brush pixels
+  -> PipelineApplyRequest.active_raster_masks
+  -> Renderer::Render / PlanExecutor
+  -> ValidateActiveRasterMaskBindings
+  -> ExecuteCudaMask / ExecuteOpenClMask / ExecuteMetalMask
+  -> ActiveRasterTextureCache keyed by NodeId + MaskId + session_generation
+  -> full upload on miss, dirty-rectangle upload on higher revision
+```
+
+**Primary failure call chain:**
+
+```text
+invalid pixels / corrupt existing file / digest mismatch / publish failure
+  -> remove only the incomplete temporary file
+  -> preserve every existing published asset
+  -> std::invalid_argument or std::runtime_error
+
+invalid active target / duplicate input / empty dirty rectangle / descriptor mismatch
+  -> ValidateActiveRasterMaskFields / ValidateActiveRasterMaskBindings
+  -> reject before native upload
+  -> persistent MaskAssetKey texture and disk file unchanged
+
+bypass RenderCachePolicy with active rasters and allow_active_raster_preview == false
+  -> Renderer::Render throws before GPU work
+  -> one-shot device is not created for that request
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `EqualRasterContentReturnsOneAssetKey` | `GpuDagMaskStoreTest` | PASS |
+| `DescriptorOrPixelChangeReturnsDifferentAssetKey` | `GpuDagMaskStoreTest` | PASS |
+| `ExistingAssetBytesCannotBeReplaced` | `GpuDagMaskStoreTest` | PASS |
+| `InterruptedRasterWritePublishesNoAsset` | `GpuDagMaskStoreTest` | PASS |
+| `ConcurrentEqualRasterWritesProduceOneVerifiedAsset` | `GpuDagMaskStoreTest` | PASS |
+| `MaskHostCacheEvictsByBytesWithoutDeletingMaskFile` | `GpuDagMaskStoreTest` | PASS |
+| `ActiveRasterInputsTravelAsImmutableSharedPixels` | `GpuDagModelGraphTest` | PASS |
+| `InvalidActiveRasterTargetIsRejectedBeforeNativeUpload` | `GpuDagModelGraphTest` | PASS |
+| `DuplicateActiveRasterIdentityIsRejected` | `GpuDagModelGraphTest` | PASS |
+| `EmptyDirtyRectangleIsRejectedForActiveRaster` | `GpuDagModelGraphTest` | PASS |
+| `ActiveRasterDescriptorMismatchIsRejected` | `GpuDagModelGraphTest` | PASS |
+| `CudaActiveRasterRevisionUploadsOnlyDirtyRectangle` | `GpuDagCudaMaskTest` | PASS |
+| `CudaActiveRasterUpdateNeverPatchesPersistentTexture` | `GpuDagCudaMaskTest` | PASS |
+| `CudaNewActiveRasterGenerationReplacesOldPreviewTexture` | `GpuDagCudaMaskTest` | PASS |
+| `OpenClActiveRasterRevisionUploadsOnlyDirtyRectangle` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClActiveRasterUpdateNeverPatchesPersistentTexture` | `GpuDagOpenClGradeTest` | PASS |
+| `OpenClNewActiveRasterGenerationReplacesOldPreviewTexture` | `GpuDagOpenClGradeTest` | PASS |
+| `BypassProductRenderRejectsActiveRasterWithoutPreviewFlag` | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagCudaMaskTest GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagOpenClGradeTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest GpuDagRawInputTest
+.\build\debug\alcedo_studio\tests\edit\GpuDagMaskStoreTest_runtime\GpuDagMaskStoreTest.exe
+.\build\debug\alcedo_studio\tests\edit\GpuDagModelGraphTest_runtime\GpuDagModelGraphTest.exe --gtest_filter=*ActiveRaster*
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaMaskTest_runtime\GpuDagCudaMaskTest.exe
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe --gtest_filter=*EachGradeMixesAgainstItsOwnInput*
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaDrtProductTest_runtime\GpuDagCudaDrtProductTest.exe --gtest_filter=*Raster*:*BypassProduct*
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe --gtest_filter=OpenClMaskFixture.*
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe --gtest_filter=*EachGradeMixesAgainstItsOwnInput*
+```
+
+Suite totals: MaskStore 8/8 PASS; ActiveRaster host 5/5 PASS; CUDA mask 13/13 PASS; CUDA `EachGradeMixesAgainstItsOwnInput` 1/1 PASS; CUDA raster/bypass product 3/3 PASS; OpenCL mask 14/14 PASS; OpenCL `EachGradeMixesAgainstItsOwnInput` 1/1 PASS.
+
+**Checklist / exit condition:** all NM3.2 boxes checked from executed tests.
+
+**LOC note (grill-code-review):** largest touched production files stay under 1000 lines (`opencl_mask_pass.cpp` ~525, `metal_mask_pass.mm` ~504, `cuda_mask_pass.cu` ~443, `mask_texture_cache.hpp` 277, `mask_store.cpp` 234). Largest test file `opencl_mask_test.cpp` ~650. No responsibility split in this phase. `RasterTextureLease::Key()` was renamed to `CacheKey()` so MSVC does not hide the `Key` template parameter.
+
+**Remaining gaps:** Union compiler, per-Mask values, and keys stay in NM3.3. Native multi-Mask Union stays in NM3.4. Section 7 qualification, including Metal numerical runs, stays in NM3.5. Metal mask tests were not executed here because `ALCEDO_METAL_ENABLED` is off on this Windows host; CUDA and OpenCL native evidence is recorded above.
 
 ### 6.3 NM3.3 — Compiler, keys, Union plan, and lifetime
 
