@@ -376,8 +376,8 @@ void ValidateExecutionPlan(const ExecutionPlan& plan);
  * Built from @ref ExecutionPlan::passes inputs. Branch-and-join fixtures and
  * ExactRelease callers consume one remaining count per pass-input reader.
  * Releasing storage is valid only after Remaining() reaches zero and GPU
- * last-use of that value has finished. PlanExecutor ExactRelease still follows
- * the linear FirstGrade sequence until NM2.4 executes every compiled Grade.
+ * last-use of that value has finished. PlanExecutor ExactRelease follows
+ * backbone Grade order and releases each Grade's scene input after that Grade.
  */
 class RemainingValueConsumers {
  public:

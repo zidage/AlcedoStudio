@@ -306,16 +306,14 @@ __global__ void FinalMixKernel(const float4* source, const float4* adjusted, flo
 }  // namespace
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& prepared, PipelineDocument& document)
+                             const PreparedRawInput& prepared, PipelineDocument& document,
+                             const CompiledGradeNode& compiled_grade_node)
     -> CudaPrimaryGradeResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: BeginRender has not been called");
   }
-  const auto* compiled_grade = plan.FirstGrade();
-  if (compiled_grade == nullptr) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
-  }
+  const auto* compiled_grade = &compiled_grade_node;
   auto* grade =
       dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
   if (grade == nullptr) {
@@ -324,6 +322,11 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   auto* input = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr || input->Empty()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: missing Color Grade scene input");
+  }
+  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
+  if (early_mix == 0.0f) {
+    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
+    return {compiled_grade->scene_output, 0, 0, false, false};
   }
 
   auto&       arena      = workspace.Parameters();
@@ -378,15 +381,8 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     }
   };
 
-  for (const auto& compiled_node : plan.grade_nodes) {
-    auto* node =
-        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
-    if (node == nullptr) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled Color Grade is missing");
-    }
-    for (const auto& compiled : compiled_node.adjustments) {
-      BindAdjustmentSlot(*node, compiled);
-    }
+  for (const auto& compiled : compiled_grade->adjustments) {
+    BindAdjustmentSlot(*grade, compiled);
   }
 
   auto FlushFused = [&]() -> GradeOp* {
@@ -486,9 +482,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   CudaLocalToneResult local_tone;
 
   if (ops.empty()) {
-    auto& output = EnsureImage(workspace, output_id, input_width, input_height);
-    input        = workspace.Images().Find(compiled_grade->scene_input);
-    workspace.Device().CopyTexture2D(input->Texture(), output.Texture(), context);
+    workspace.AliasImageFrom(output_id, compiled_grade->scene_input);
     return {output_id, lut.resource_id, 0, false, false};
   }
 
@@ -561,7 +555,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
 
   if (!skip_mix) {
     const auto dest_id     = AllocateDest();
-    auto&      source      = Resolve(plan.develop_output);
+    auto&      source      = Resolve(compiled_grade->scene_input);
     auto&      adjusted    = Resolve(current_id);
     auto&      destination = Resolve(dest_id);
     FinalMixKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
@@ -579,6 +573,19 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   }
   return {output_id, lut.resource_id, local_tone.reference_resource_id,
           local_tone.rebuilt_reference, local_tone.sampled_canonical_reference};
+}
+
+auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
+                             const PreparedRawInput& prepared, PipelineDocument& document)
+    -> CudaPrimaryGradeResult {
+  if (plan.grade_nodes.empty()) {
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
+  }
+  CudaPrimaryGradeResult last{};
+  for (const auto& compiled_grade : plan.grade_nodes) {
+    last = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade);
+  }
+  return last;
 }
 
 }  // namespace alcedo

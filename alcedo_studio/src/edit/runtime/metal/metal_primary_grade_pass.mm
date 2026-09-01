@@ -203,16 +203,14 @@ void AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines) 
 }
 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                              const PreparedRawInput& prepared, PipelineDocument& document)
+                              const PreparedRawInput& prepared, PipelineDocument& document,
+                              const CompiledGradeNode& compiled_grade_node)
     -> MetalPrimaryGradeResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: BeginRender has not been called");
   }
-  const auto* compiled_grade = plan.FirstGrade();
-  if (compiled_grade == nullptr) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");
-  }
+  const auto* compiled_grade = &compiled_grade_node;
   auto* grade =
       dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
   if (grade == nullptr) {
@@ -221,6 +219,13 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   auto* input = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr || input->Empty()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
+  }
+  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
+  if (early_mix == 0.0f) {
+    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
+    MetalPrimaryGradeResult skipped;
+    skipped.output = compiled_grade->scene_output;
+    return skipped;
   }
 
   auto&       arena      = workspace.Parameters();
@@ -272,15 +277,8 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     }
   };
 
-  for (const auto& compiled_node : plan.grade_nodes) {
-    auto* node =
-        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
-    if (node == nullptr) {
-      throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled Color Grade is missing");
-    }
-    for (const auto& compiled : compiled_node.adjustments) {
-      BindAdjustmentSlot(*node, compiled);
-    }
+  for (const auto& compiled : compiled_grade->adjustments) {
+    BindAdjustmentSlot(*grade, compiled);
   }
 
   auto FlushFused = [&]() -> GradeOp* {
@@ -339,6 +337,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   std::vector<std::uint32_t> fused_starts;
   fused_starts.reserve(ops.size());
   ContentHash topology;
+  topology.MixText(grade->Id().Value());
   for (const auto& op : ops) {
     topology.MixU32(static_cast<std::uint32_t>(op.kind));
     topology.MixU32(static_cast<std::uint32_t>(op.offsets.size()));
@@ -355,9 +354,13 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
   if (!command_offsets.empty()) {
     const auto bytes = command_offsets.size() * sizeof(command_offsets[0]);
-    auto&      command_buffer =
+    const auto* existing_command_buffer = workspace.Values().Find(command_id);
+    const bool command_buffer_needs_upload =
+        existing_command_buffer == nullptr || existing_command_buffer->Bytes() < bytes;
+    auto& command_buffer =
         EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
-    if (workspace.Device().GradeCommandTopologyHash() != topology_hash) {
+    if (command_buffer_needs_upload ||
+        workspace.Device().GradeCommandTopologyHash() != topology_hash) {
       workspace.Device().UploadBufferRange(
           command_buffer, 0,
           std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
@@ -428,9 +431,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   };
 
   if (write_count == 0) {
-    auto& dest   = AcquireRgba(workspace, compiled_grade->scene_output, width, height);
-    auto* source = workspace.Images().Find(compiled_grade->scene_input);
-    workspace.Device().CopyTexture2D(source->Texture(), dest.Texture(), context);
+    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
     return result;
   }
 
@@ -489,6 +490,19 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     DispatchMix(device, source, adjusted, dest, mix, mask_texture, width, height);
   }
   return result;
+}
+
+auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
+                              const PreparedRawInput& prepared, PipelineDocument& document)
+    -> MetalPrimaryGradeResult {
+  if (plan.grade_nodes.empty()) {
+    throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");
+  }
+  MetalPrimaryGradeResult last{};
+  for (const auto& compiled_grade : plan.grade_nodes) {
+    last = ExecuteMetalPrimaryGrade(device, plan, prepared, document, compiled_grade);
+  }
+  return last;
 }
 
 }  // namespace alcedo

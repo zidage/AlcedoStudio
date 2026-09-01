@@ -328,7 +328,8 @@ if(ALCEDO_CUDA_ENABLED)
 endif()
 if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaPrimaryGradeTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_grade_test.cpp)
   target_include_directories(GpuDagCudaPrimaryGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaPrimaryGradeTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
   gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
@@ -403,7 +404,8 @@ if(ALCEDO_METAL_ENABLED)
   add_executable(GpuDagMetalGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_llf_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp)
   target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalGradeTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
@@ -470,7 +472,8 @@ if(ALCEDO_OPENCL_ENABLED)
 
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)

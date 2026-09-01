@@ -158,42 +158,45 @@ class PlanExecutor {
         }
       }
 
-      const auto* compiled_grade = plan.FirstGrade();
-      if (compiled_grade != nullptr && compiled_grade->mask.has_value()) {
-        const auto mask_key = keys.Value(compiled_grade->mask_output);
-        if (BindOrMiss(workspace, compiled_grade->mask_output, mask_key, keys.geometry_extent,
-                       completed, TextureFormat::R8)) {
-          ++stats.mask_skip;
-        } else {
-          PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(device, plan, input, document,
-                                                                  mask_store);
-          Record(device, compiled_grade->mask_output, mask_key, keys.geometry_extent,
-                 TextureFormat::R8);
-          ++stats.mask_execute;
-        }
-        workspace.TransientBuffers().Reset();
+      GraphValueId previous_scene = plan.develop_output;
+      if (plan.grade_nodes.empty()) {
+        ++stats.primary_grade_skip;
       }
+      for (const auto& compiled_grade : plan.grade_nodes) {
+        if (compiled_grade.mask.has_value()) {
+          const auto mask_key = keys.Value(compiled_grade.mask_output);
+          if (BindOrMiss(workspace, compiled_grade.mask_output, mask_key, keys.geometry_extent,
+                         completed, TextureFormat::R8)) {
+            ++stats.mask_skip;
+          } else {
+            PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
+                device, plan, input, document, mask_store, compiled_grade);
+            Record(device, compiled_grade.mask_output, mask_key, keys.geometry_extent,
+                   TextureFormat::R8);
+            ++stats.mask_execute;
+          }
+          workspace.TransientBuffers().Reset();
+        }
 
-      const GraphValueId grade_scene =
-          compiled_grade != nullptr ? compiled_grade->scene_output : plan.develop_output;
-      if (compiled_grade == nullptr) {
-        ++stats.primary_grade_skip;
-      } else if (BindOrMiss(workspace, grade_scene, keys.Value(grade_scene), keys.geometry_extent,
-                            completed)) {
-        ++stats.primary_grade_skip;
-      } else {
-        PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(device, plan, input, document,
-                                                                     mask_store);
-        Record(device, grade_scene, keys.Value(grade_scene), keys.geometry_extent);
-        ++stats.primary_grade_execute;
-      }
-      if (exact_release) {
-        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-        if (compiled_grade != nullptr && compiled_grade->mask.has_value()) {
-          workspace.ReleaseConsumedImage(compiled_grade->mask_output);
+        const GraphValueId grade_scene = compiled_grade.scene_output;
+        if (BindOrMiss(workspace, grade_scene, keys.Value(grade_scene), keys.geometry_extent,
+                       completed)) {
+          ++stats.primary_grade_skip;
+        } else {
+          PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
+              device, plan, input, document, mask_store, compiled_grade);
+          Record(device, grade_scene, keys.Value(grade_scene), keys.geometry_extent);
+          ++stats.primary_grade_execute;
         }
-        if (grade_scene != plan.develop_output) {
-          workspace.ReleaseConsumedImage(plan.develop_output);
+        if (exact_release) {
+          workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+          if (compiled_grade.mask.has_value()) {
+            workspace.ReleaseConsumedImage(compiled_grade.mask_output);
+          }
+          if (grade_scene != previous_scene) {
+            workspace.ReleaseConsumedImage(previous_scene);
+          }
+          previous_scene = grade_scene;
         }
       }
 

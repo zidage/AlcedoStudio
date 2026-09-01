@@ -258,16 +258,14 @@ auto CountGpuWrites(const std::vector<GradeOp>& ops, bool skip_mix) -> std::size
 }  // namespace
 
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                               const PreparedRawInput& prepared, PipelineDocument& document)
+                               const PreparedRawInput& prepared, PipelineDocument& document,
+                               const CompiledGradeNode& compiled_grade_node)
     -> OpenClPrimaryGradeResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: BeginRender has not been called");
   }
-  const auto* compiled_grade = plan.FirstGrade();
-  if (compiled_grade == nullptr) {
-    throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");
-  }
+  const auto* compiled_grade = &compiled_grade_node;
   auto* grade =
       dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
   if (grade == nullptr) {
@@ -276,6 +274,13 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   auto* input = workspace.Images().Find(compiled_grade->scene_input);
   if (input == nullptr || input->Empty()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing Color Grade scene input");
+  }
+  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
+  if (early_mix == 0.0f) {
+    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
+    OpenClPrimaryGradeResult skipped;
+    skipped.output = compiled_grade->scene_output;
+    return skipped;
   }
 
   auto&       arena      = workspace.Parameters();
@@ -332,15 +337,8 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
     }
   };
 
-  for (const auto& compiled_node : plan.grade_nodes) {
-    auto* node =
-        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_node.node_id));
-    if (node == nullptr) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled Color Grade is missing");
-    }
-    for (const auto& compiled : compiled_node.adjustments) {
-      BindAdjustmentSlot(*node, compiled);
-    }
+  for (const auto& compiled : compiled_grade->adjustments) {
+    BindAdjustmentSlot(*grade, compiled);
   }
 
   auto FlushFused = [&]() -> GradeOp* {
@@ -405,6 +403,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   std::vector<std::uint32_t> command_starts;
   command_starts.reserve(ops.size());
   ContentHash topology;
+  topology.MixText(grade->Id().Value());
   for (const auto& op : ops) {
     topology.MixU32(static_cast<std::uint32_t>(op.kind));
     topology.MixU32(static_cast<std::uint32_t>(op.offsets.size()));
@@ -498,12 +497,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   };
 
   if (write_count == 0) {
-    auto& dest   = AcquireRgba(workspace, compiled_grade->scene_output, width, height);
-    auto* source = workspace.Images().Find(compiled_grade->scene_input);
-    if (source == nullptr) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing Color Grade scene input");
-    }
-    workspace.Device().CopyTexture2D(source->Texture(), dest.Texture(), context);
+    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
     return result;
   }
 
@@ -564,6 +558,19 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
     DispatchMix(device, source, adjusted, dest, mix, mask_texture, width, height);
   }
   return result;
+}
+
+auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                               const PreparedRawInput& prepared, PipelineDocument& document)
+    -> OpenClPrimaryGradeResult {
+  if (plan.grade_nodes.empty()) {
+    throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");
+  }
+  OpenClPrimaryGradeResult last{};
+  for (const auto& compiled_grade : plan.grade_nodes) {
+    last = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);
+  }
+  return last;
 }
 
 }  // namespace alcedo

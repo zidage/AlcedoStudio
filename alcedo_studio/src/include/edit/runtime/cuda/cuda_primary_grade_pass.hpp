@@ -14,7 +14,7 @@
 namespace alcedo {
 
 struct CudaPrimaryGradeResult {
-  GraphValueId  output{NodeId{"grade.primary"}, PortId{"image"}};
+  GraphValueId  output{NodeId{""}, PortId{"image"}};
   std::uint64_t lut_resource_id                        = 0;
   std::uint64_t local_tone_reference_resource_id       = 0;
   bool          local_tone_rebuilt_reference           = false;
@@ -22,14 +22,27 @@ struct CudaPrimaryGradeResult {
 };
 
 /**
- * @brief Execute the serialized primary-grade Model order in the AP1/ACEScc working space.
+ * @brief Execute one compiled Color Grade in the AP1/ACEScc working space.
  *
- * CameraColor produces the encoded graph input. This pass keeps every intermediate and its graph
- * output in AP1/ACEScc, including mix, mask application, and the local-Laplacian tone stage.
+ * Consumes @p compiled_grade.scene_input, that node's adjustments, optional mask,
+ * and mix. Mix reads this Grade's scene input, not Develop. Disabled and zero-mix
+ * Grades alias the input onto the logical output without a pixel copy.
  *
- * Must run between CudaRenderDevice::BeginRender and EndRender. Parameters, output images,
- * execution order, and local-tone reference data are owned by the device workspace. A failed
- * parameter transfer restores the affected Model dirty bits. No CPU image-processing fallback.
+ * Must run between CudaRenderDevice::BeginRender and EndRender. Parameters, output
+ * images, execution order, and local-tone reference data are owned by the device
+ * workspace. A failed parameter transfer restores the affected Model dirty bits.
+ * No CPU image-processing fallback.
+ */
+[[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                           const PreparedRawInput& prepared,
+                                           PipelineDocument&       document,
+                                           const CompiledGradeNode& compiled_grade)
+    -> CudaPrimaryGradeResult;
+
+/**
+ * @brief Execute every compiled Color Grade in backbone order.
+ *
+ * @return The last Grade result. @throws std::runtime_error when the plan has no Color Grade.
  */
 [[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                                            const PreparedRawInput& prepared,

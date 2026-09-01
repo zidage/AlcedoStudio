@@ -2,7 +2,7 @@
 
 Date: 2026-08-31
 
-Status: NM2.1–NM2.3 complete; NM2.4–NM2.5 planned
+Status: NM2.1–NM2.4 complete; NM2.5 planned
 
 Prerequisite: NM1, including NM1.4R and NM1.5.
 
@@ -66,9 +66,9 @@ Check the implementation at the execution revision before you change it.
 | Content identity | [result_content_key.cpp](../../../../../alcedo_studio/src/edit/runtime/result_content_key.cpp) hashes each compiled Grade output and LLF keys by `NodeId`. |
 | GPU resources | [basic_render_workspace.hpp](../../../../../alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp) owns parameters, images, buffers, and temporary storage. |
 | Image results | [graph_image_cache.hpp](../../../../../alcedo_studio/src/include/edit/runtime/graph_image_cache.hpp) separates completed results from unpublished writes. |
-| CUDA Grade | [cuda_primary_grade_pass.cu](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu) executes `FirstGrade()` using that node's compiled `scene_input`. Multi-Grade GPU dispatch is NM2.4. |
-| OpenCL Grade | [opencl_primary_grade_pass.cpp](../../../../../alcedo_studio/src/edit/runtime/opencl/opencl_primary_grade_pass.cpp) has the same `FirstGrade()` lookup. |
-| Metal Grade | [metal_primary_grade_pass.mm](../../../../../alcedo_studio/src/edit/runtime/metal/metal_primary_grade_pass.mm) has the same `FirstGrade()` lookup. |
+| CUDA Grade | [cuda_primary_grade_pass.cu](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_primary_grade_pass.cu) executes each compiled Grade from `plan.grade_nodes` using that node's `scene_input`. |
+| OpenCL Grade | [opencl_primary_grade_pass.cpp](../../../../../alcedo_studio/src/edit/runtime/opencl/opencl_primary_grade_pass.cpp) executes the same per-node Grade API. |
+| Metal Grade | [metal_primary_grade_pass.mm](../../../../../alcedo_studio/src/edit/runtime/metal/metal_primary_grade_pass.mm) executes the same per-node Grade API. |
 
 ### 2.2 Primary Grade and current panels
 
@@ -80,8 +80,7 @@ The ID does not define a special node type or permanent execution role.
 `PipelineDocument::PrimaryGrade()` currently finds that fixed ID.
 It does not find the selected Grade or follow image edges.
 The compiler compiles every backbone Grade in edge order.
-Several runtime paths still use the fixed ID or `FirstGrade()` until NM2.3 and NM2.4.
-NM2 must remove this difference.
+GPU execute (NM2.4) follows `plan.grade_nodes`. `PipelineDocument::PrimaryGrade()` still finds the default ID for editor routing. Three-argument LLF hash helpers still default to `FirstGrade()` for tests; GPU encode passes the compiled `NodeId`.
 
 The current editor has no product node editor.
 Its ordinary Grade controls can continue to target the default Grade.
@@ -95,10 +94,10 @@ NM2 does not add node selection to the adjustment stack.
 
 ### 2.3 Existing limits
 
-- The shared executor still records and skips only the first compiled Grade; later Grades wait for NM2.4.
+- The shared executor records, skips, and encodes every compiled Grade in backbone order, then DRT/Post (NM2.4).
 - Default and Clean Grades contain only Color Grade catalog types (NM2.1).
 - DRT/Post owns Clarity, Sharpen, Halation, and Film Grain with factory defaults (NM2.1).
-- Per-value content keys and LLF source identity follow compiled `NodeId` (NM2.3). GPU still executes `FirstGrade()` until NM2.4.
+- Per-value content keys and LLF source identity follow compiled `NodeId` (NM2.3). GPU encode uses that `NodeId` (NM2.4).
 
 Existing ID types and workspace interfaces remain useful.
 NM2 must extend these components rather than add another document or renderer.
@@ -463,7 +462,7 @@ Do not weaken product validation to admit it.
 | NM2.1 | complete | Parameter ownership and single-Grade reference behavior. |
 | NM2.2 | complete | Explicit node plans, pass instances, and value dependencies. |
 | NM2.3 | complete | Parameter bindings, content keys, auxiliary state, and safe resource lifetime. |
-| NM2.4 | planned | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
+| NM2.4 | complete | Complete multi-Grade execution on CUDA, OpenCL, and Metal. |
 | NM2.5 | planned | Numerical, resource, failure, and service qualification. |
 
 Implement these phases in order.
@@ -774,13 +773,81 @@ Do not rename persistent NodeIds as part of this cleanup.
 
 **Exit conditions**
 
-- [ ] Each backend executes every Grade and the final endpoint.
-- [ ] Noncommuting adjustments produce the expected order-dependent pixels.
-- [ ] Every Grade mixes against its own input.
-- [ ] Disabled and zero-mix Grades preserve values and lifetime correctly.
-- [ ] Multiple LLF, LUT, and mask users do not share incorrect state.
-- [ ] No native path reads a fixed primary node to execute an arbitrary Grade.
-- [ ] Required programs load through existing backend registration paths.
+- [x] Each backend executes every Grade and the final endpoint.
+- [x] Noncommuting adjustments produce the expected order-dependent pixels.
+- [x] Every Grade mixes against its own input.
+- [x] Disabled and zero-mix Grades preserve values and lifetime correctly.
+- [x] Multiple LLF, LUT, and mask users do not share incorrect state.
+- [x] No native path reads a fixed primary node to execute an arbitrary Grade.
+- [x] Required programs load through existing backend registration paths.
+
+##### Phase NM2.4 completion record (2026-08-31)
+
+**Status:** complete — PlanExecutor and CUDA/OpenCL/Metal Grade+mask encoders run every compiled Color Grade in backbone order; mix reads that Grade's `scene_input`; last Grade feeds DRT/Post. CUDA and OpenCL pixel matrix executed on this host. Metal sources and tests are registered; Metal numerical is unexecuted here.
+
+**Primary success call chain:**
+
+```text
+CudaRenderDevice::Execute / OpenClRenderDevice::Execute / MetalRenderDevice::Execute
+  -> PlanExecutor::Execute
+  -> Develop + Geometry + CameraColor
+  -> for each plan.grade_nodes:
+       MaskEvaluate Encode(compiled_grade) when mask is present
+       PrimaryColorGrade Encode(compiled_grade)
+         -> Execute*PrimaryGrade(..., compiled_grade)
+         -> bind that node's slots; pointwise / LLF / neighbor
+         -> mix against compiled_grade.scene_input (or AliasImageFrom when mix==0 / disabled)
+  -> DRT Encode once (SceneInputForDrt = last Grade scene, or Develop)
+  -> EndRender / PublishResults
+```
+
+**Primary failure call chain:**
+
+```text
+missing compiled Grade node / missing scene_input / missing mask output
+  -> Execute*PrimaryGrade / Execute*Mask throw
+  -> PlanExecutor CancelRender
+  -> unpublished writes discarded; no CPU or other-backend substitute
+
+zero compiled Grades
+  -> primary_grade_skip += 1; no Grade encode
+  -> DRT reads develop_output
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ZeroGradesFeedDevelopIntoDrtPost` | `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest` | PASS |
+| `GradeWithoutPrimaryIdRendersItsParameters` | same | PASS |
+| `ThreeGradesComposeInEdgeOrder` | same | PASS |
+| `ReconnectChangesNoncommutingGradeResult` | same | PASS |
+| `SameAdjustmentTypeUsesDistinctNodeSlots` | same | PASS |
+| `RepeatedAdjustmentInstancesKeepTheirOrder` | same | PASS |
+| `EachGradeMixesAgainstItsOwnInput` | same | PASS |
+| `DisabledGradeAliasesInputUntilFinalReader` | same | PASS |
+| `ZeroMixGradeAliasesInputUntilFinalReader` | same | PASS |
+| `TwoLocalToneGradesUseTheirOwnSources` | same | PASS |
+| `TwoLutGradesKeepIndependentCubeState` | same | PASS |
+| `MiddleGradeEditReusesUpstreamResults` | same | PASS |
+| Existing single-Grade + DRT product (4-arg wrappers, PlanExecutor) | `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest`, `GpuDagCudaDrtProductTest`, `GpuDagOpenClDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest
+ctest --test-dir build/debug -R "GpuDagCudaPrimaryGradeTest|GpuDagOpenClGradeTest|GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest" --output-on-failure
+```
+
+Suite totals: **137/137** (`GpuDagCudaPrimaryGradeTest` 35, `GpuDagOpenClGradeTest` 47, `GpuDagCudaDrtProductTest` 45, `GpuDagOpenClDrtProductTest` 10). Multi-Grade fixtures: **24/24** (12 CUDA + 12 OpenCL). Logs: `build/tmp/nm2/`.
+
+Metal: `GpuDagMetalGradeTest` now includes `metal_multi_grade_test.cpp`. Not compiled or run on this Windows host (`ALCEDO_METAL_ENABLED` off). Same tests are present for macOS.
+
+**Checklist / exit condition:** all seven boxes checked from CUDA and OpenCL execution plus inspection that encode no longer calls `FirstGrade()`. Program names stay `primary_grade` / `PrimaryColorGrade`; WarmUp still uses `plan.Contains(GpuPassKind::PrimaryColorGrade)`.
+
+**LOC note (grill-code-review):** no changed production file exceeds 1000 lines. After this phase: `cuda_primary_grade_pass.cu` 591, `opencl_primary_grade_pass.cpp` 578, `metal_primary_grade_pass.mm` 508, `opencl_mask_pass.cpp` 561, `metal_mask_pass.mm` 525, `cuda_mask_pass.cu` 439, `plan_executor.hpp` 265. New tests: `cuda_multi_grade_test.cpp` 444, `opencl_multi_grade_test.cpp` 443, `metal_multi_grade_test.cpp` 448, `multi_grade_runtime_test_support.hpp` 120.
+
+**Remaining gaps:** Metal Grade numerical evidence is still macOS / NM2.5. PlanExecutor ExactRelease still releases the previous backbone scene after each Grade rather than driving release from `RemainingValueConsumers` (branch/join). Three-argument `HashLlfSourceKey` / `HashLlfReferenceKey` still default to `FirstGrade()`; GPU encode uses the four-argument form with `compiled_grade->node_id`. NM2.5 still owns export/thumbnail/service isolation, persistence reopen, failure injection, and resource-byte qualification.
 
 ### 6.5 NM2.5 — Qualification
 

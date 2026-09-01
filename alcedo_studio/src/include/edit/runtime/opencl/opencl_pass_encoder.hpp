@@ -69,16 +69,18 @@ struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore* store) {
-    (void)ExecuteOpenClMask(device, plan, document, store);
+                     PipelineDocument& document, MaskStore* store,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, store);
   }
 };
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& prepared, PipelineDocument& document, MaskStore*) {
-    (void)ExecuteOpenClPrimaryGrade(device, plan, prepared, document);
+                     const PreparedRawInput& prepared, PipelineDocument& document, MaskStore*,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);
   }
 };
 

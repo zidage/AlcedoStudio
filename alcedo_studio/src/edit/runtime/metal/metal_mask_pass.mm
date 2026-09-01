@@ -400,21 +400,22 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 }
 
 auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
-                      const PipelineDocument& document, MaskStore* store,
-                      std::span<const RectI> dirty_rectangles) -> MetalMaskResult {
+                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                      MaskStore* store, std::span<const RectI> dirty_rectangles)
+    -> MetalMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMask: BeginRender has not been called");
   }
-  if (plan.FirstGrade() == nullptr || !plan.FirstGrade()->mask) {
-    throw std::runtime_error("ExecuteMetalMask: plan has no mask");
+  if (!compiled_grade.mask.has_value()) {
+    throw std::runtime_error("ExecuteMetalMask: compiled Color Grade has no mask");
   }
   auto&           workspace = device.Workspace();
   auto&           context   = device.CommandContext();
   const auto      extent    = plan.geometry.render_extent;
-  auto&           output    = EnsureOutput(workspace, plan.FirstGrade()->mask_output, extent);
-  MetalMaskResult result{plan.FirstGrade()->mask_output};
+  auto&           output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
+  MetalMaskResult result{compiled_grade.mask_output};
 
-  const auto*     node = document.Graph().FindNode(plan.FirstGrade()->mask->node_id);
+  const auto*     node = document.Graph().FindNode(compiled_grade.mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     EncodeAnalytic(device, output.Texture(), *analytic, plan);
     return result;
@@ -496,6 +497,28 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
   const float radius_texels = raster->FeatherRadius() * 0.5f * (x_scale + y_scale);
   EncodeFeatherSample(device, distance, output.Texture(), asset->descriptor.extent,
                       sampling.render_to_texture_uv, radius_texels, raster->Invert());
+  return result;
+}
+
+auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
+                      const PipelineDocument& document, MaskStore* store,
+                      std::span<const RectI> dirty_rectangles) -> MetalMaskResult {
+  bool any_mask = false;
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      any_mask = true;
+      break;
+    }
+  }
+  if (!any_mask) {
+    throw std::runtime_error("ExecuteMetalMask: plan has no mask");
+  }
+  MetalMaskResult result{};
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      result = ExecuteMetalMask(device, plan, document, grade, store, dirty_rectangles);
+    }
+  }
   return result;
 }
 
