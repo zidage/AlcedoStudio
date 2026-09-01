@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1–NM3.4 complete on CUDA/OpenCL; Metal GPU matrix unchecked; NM3.5 planned
+Status: NM3.1–NM3.4 complete; NM3.5 planned
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -700,7 +700,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 | NM3.1 | complete | Grade-owned Mask identities, sources, validation, and document schema. |
 | NM3.2 | complete | Immutable raster assets and task-owned active raster inputs. |
 | NM3.3 | complete | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
-| NM3.4 | complete (CUDA/OpenCL) | Native source evaluation, invert then opacity, Union max, and dirty-region decrease. Metal shaders updated; Metal GPU matrix not run on Windows. |
+| NM3.4 | complete | Native CUDA, OpenCL, and Metal source evaluation, invert then opacity, Union max, and dirty-region decrease. |
 | NM3.5 | planned | Model, storage, native, service, failure, and resource qualification. |
 
 Implement these sub-phases in order.
@@ -1216,7 +1216,7 @@ missing asset / upload failure / kernel failure / submission failure
 
 - [x] CUDA executes all three source kinds and Union.
 - [x] OpenCL executes all three source kinds and Union.
-- [ ] Metal executes all three source kinds and Union.
+- [x] Metal executes all three source kinds and Union.
 - [x] Empty, all-disabled, and enabled boundaries match the shared reference.
 - [x] Feather, invert, opacity, and Union use the same order on all backends.
 - [x] One Mask edit leaves sibling source results reusable.
@@ -1297,11 +1297,90 @@ Suite totals: `GpuDagCudaMaskTest` 23/23; `GpuDagOpenClGradeTest` 54/54 (includi
 
 Dirty-upload accounting: after a session texture exists, CUDA/OpenCL/Metal record one `LastTextureRectangles` entry equal to the dirty rect. OpenCL plan execution transferred 16 R8 bytes. CUDA plan execution transferred 16 rectangle bytes plus kernel-parameter copies (observed 60 total, still below a full 16×12 R8 raster). Mask-only `CudaActiveRasterRevisionUploadsOnlyDirtyRectangle` still asserts exactly 16 bytes.
 
-**Checklist / exit condition:** eight of nine boxes checked with executed CUDA/OpenCL tests. Metal execute box stays unchecked until a macOS `GpuDagMetalGradeTest` run.
+**Checklist / exit condition:** eight of nine boxes checked with executed CUDA/OpenCL tests. Metal execute box is recorded in the macOS verification record below.
 
 **LOC note (grill-code-review):** `cuda_mask_pass.cu` 577; `opencl_mask_pass.cpp` 678; `metal_mask_pass.mm` 654; `mask.cl` 344; `mask.metal` 340; `mask_model.hpp` 196; `mask_model.cpp` 444; `multi_mask_runtime_test_support.hpp` 241; `cuda_mask_test.cpp` 856; `opencl_mask_test.cpp` 990; `metal_mask_test.cpp` 1009. `metal_mask_test.cpp` is just over the ~1000-line split threshold because the Union matrix is duplicated per backend; extract shared scenario runners if NM3.5 adds more cases. Opacity is fused into evaluate kernels (content keys already included opacity). Feather remains fused onto the source `GraphValueId`. Union kernels were already registered (`mask_union_max` / `mask_union_max_r8`); no new OpenCL program names.
 
-**Remaining gaps:** Metal GPU numerical matrix (`MetalMultiMaskUnionMatchesReference` and peer tests) on macOS. Distinct feather `GraphValueId` and a separate opacity pass are not required for the written invert-then-opacity order. Section 7 full qualification, performance byte tables, request isolation, and service-task boundaries stay in NM3.5. No Mask UI, history payload, Version logic, or range algorithm entered this phase.
+**Remaining gaps:** Metal GPU numerical matrix is recorded in the macOS verification record below. Distinct feather `GraphValueId` and a separate opacity pass are not required for the written invert-then-opacity order. Section 7 full qualification, performance byte tables, request isolation, and service-task boundaries stay in NM3.5. No Mask UI, history payload, Version logic, or range algorithm entered this phase.
+
+##### Phase NM3.4 macOS Metal verification record (2026-09-01)
+
+**Status:** complete — Metal PlanExecutor on Apple M4 matches the shared CPU Union reference within one R8 code. Brush, Radial, and Linear Gradient, invert-then-opacity, dirty-rectangle upload, and coverage decrease all ran on GPU.
+
+**Primary success call chain:**
+
+```text
+GraphCompiler::Compile
+  -> PlanExecutor<MetalBackend>::Execute
+  -> PassEncoder MaskEvaluate / ExecuteMetalMask
+  -> Brush sample or analytic Radial / Linear Gradient
+  -> invert, then opacity, then clamp, then R8 quantize
+  -> PassEncoder MaskUnion / ExecuteMetalMaskUnion
+  -> fill-zero | alias one source | copy + mask_union_max
+  -> Grade mix against the owning Grade scene input
+```
+
+Active Brush dirty update:
+
+```text
+task-owned ActiveRasterMaskInput with dirty rectangle
+  -> ActiveRasterTextureCache (not the persistent MaskAssetKey texture)
+  -> UploadR8TextureRect of the clipped dirty rectangle only
+  -> re-evaluate that Brush source (full signed-distance field when radius > 0)
+  -> Union max over current enabled sources (full render extent)
+  -> Grade mix; saved MaskAssetKey unchanged
+```
+
+**Primary failure call chain:**
+
+```text
+missing Brush asset
+  -> ExecuteMetalMask MaskStore::Load
+  -> PlanExecutor CancelRender
+  -> discard unpublished source, Union, and Grade writes
+  -> WaitIdle; retain prior valid keys
+  -> no CPU or other-backend replacement
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MetalMultiMaskUnionMatchesReference` | `GpuDagMetalGradeTest` | PASS |
+| `BrushRadialAndLinearGradientShareUnionRules` | `GpuDagMetalGradeTest` | PASS |
+| `MaskOpacityAndInvertApplyBeforeUnion` | `GpuDagMetalGradeTest` | PASS |
+| `DirtyUnionRegionCanDecreaseCoverage` | `GpuDagMetalGradeTest` | PASS |
+| `EnabledMasksUseMaximumCoverage` | `GpuDagMetalGradeTest` | PASS |
+| `EmptyMaskListUsesFullGradeCoverage` | `GpuDagMetalGradeTest` | PASS |
+| `AllDisabledMasksUseZeroGradeCoverage` | `GpuDagMetalGradeTest` | PASS |
+| `OneMaskEditReusesSiblingAndUpstreamResults` | `GpuDagMetalGradeTest` | PASS |
+| `MetalActiveRasterRevisionUploadsOnlyDirtyRectangle` | `GpuDagMetalGradeTest` | PASS (exactly 16 R8 bytes) |
+| `MetalActiveRasterUpdateNeverPatchesPersistentTexture` | `GpuDagMetalGradeTest` | PASS |
+| `MetalNewActiveRasterGenerationReplacesOldPreviewTexture` | `GpuDagMetalGradeTest` | PASS |
+| `MaskFailurePublishesNoSourceUnionOrGradeWrites` | `GpuDagMetalGradeTest` | PASS |
+| `ActiveMaskTexturesReleaseAfterGpuCompletion` | `GpuDagMetalGradeTest` | PASS |
+
+Device: Apple M4, Metal 4, arm64. Shared CPU reference: `alcedo_studio/tests/edit/runtime/multi_mask_runtime_test_support.hpp` (`kR8ToleranceCodes = 1`). Source revision: `315213e6`.
+
+Commands:
+
+```text
+cmake --preset macos_debug_tests
+cmake --build --preset macos_debug_tests --parallel 8 --target GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagMetalWorkspaceTest GpuDagMetalGradeTest GpuDagMetalRendererTest PipelineMapperTest
+./build/macos-debug-tests/alcedo_studio/tests/edit/GpuDagMetalGradeTest --gtest_filter='MetalMaskFixture.MetalMultiMaskUnionMatchesReference:MetalMaskFixture.BrushRadialAndLinearGradientShareUnionRules:MetalMaskFixture.MaskOpacityAndInvertApplyBeforeUnion:MetalMaskFixture.DirtyUnionRegionCanDecreaseCoverage:MetalMaskFixture.EnabledMasksUseMaximumCoverage:MetalMaskFixture.EmptyMaskListUsesFullGradeCoverage:MetalMaskFixture.AllDisabledMasksUseZeroGradeCoverage:MetalMaskFixture.OneMaskEditReusesSiblingAndUpstreamResults:MetalMaskFixture.MetalActiveRasterRevisionUploadsOnlyDirtyRectangle:MetalMaskFixture.MaskFailurePublishesNoSourceUnionOrGradeWrites:MetalMaskFixture.MetalActiveRasterUpdateNeverPatchesPersistentTexture:MetalMaskFixture.MetalNewActiveRasterGenerationReplacesOldPreviewTexture:MetalMaskFixture.ActiveMaskTexturesReleaseAfterGpuCompletion'
+./build/macos-debug-tests/alcedo_studio/tests/edit/GpuDagMetalGradeTest
+ctest --test-dir build/macos-debug-tests -R "GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagMetal|PipelineMapperTest" --output-on-failure
+```
+
+Logs: `build/tmp/multi_mask_runtime/metal_nm34_focused.log`, `build/tmp/multi_mask_runtime/metal_grade_full.log`, `build/tmp/multi_mask_runtime/macos_nm34_ctest.log`.
+
+Suite totals: focused Metal NM3.4 PlanExecutor tests 13/13 PASS; `GpuDagMetalGradeTest` 52/52 (`MetalMaskFixture` 22/22); `GpuDagMaskStoreTest` 8/8; `GpuDagModelGraphTest` 63/63; `GpuDagRawInputTest` 77 passed, 4 skipped (missing CI RAW fixtures); `GpuDagMetalWorkspaceTest` 12/12; `GpuDagMetalRendererTest` 11/11; `PipelineMapperTest` 30/30 (2 disabled).
+
+**Checklist / exit condition:** all nine NM3.4 boxes now have Metal GPU evidence in addition to the earlier Windows CUDA/OpenCL runs.
+
+**LOC note (grill-code-review):** this verification did not change production files. `metal_mask_test.cpp` remains 1009 lines (Union matrix duplicated per backend). Feather stays fused onto the source `GraphValueId`. Union uses the full render extent after a dirty Brush upload so erase can decrease coverage; signed-distance recomputes the full raster field when pixels change.
+
+**Remaining gaps:** Section 7 full qualification, performance byte tables, request isolation, and service-task boundaries stay in NM3.5. The documented macOS regex also ran `GpuDagMetalDevelopTest`; `MetalGeometryUsesOneResampleForCropRotationViewportAndScale` failed (`render_extent` 30x25 vs expected 40x30). That is Develop geometry resampling, not Mask evaluate/Union, and is outside NM3.4.
 
 ### 6.5 NM3.5 — Qualification
 
