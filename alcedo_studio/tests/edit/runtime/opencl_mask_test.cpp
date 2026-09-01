@@ -13,14 +13,14 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/geometry/texture_sampling_plan.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_store.hpp"
@@ -70,29 +70,26 @@ auto SampleR8(const std::vector<std::uint8_t>& pixels, std::uint32_t width, std:
   return (a * (1.0f - ty) + b * ty) / 255.0f;
 }
 
-auto CpuAnalytic(const AnalyticMaskNodeModel& node, const ResolvedRenderGeometry& geometry,
-                 std::uint32_t x, std::uint32_t y) -> float {
+auto CpuAnalytic(const MaskModel& mask, const ResolvedRenderGeometry& geometry, std::uint32_t x,
+                 std::uint32_t y) -> float {
   const auto  reference = Transform(geometry.render_to_reference, static_cast<float>(x) + 0.5f,
                                     static_cast<float>(y) + 0.5f);
   const float nx        = reference.x / static_cast<float>(geometry.full_reference_extent.width);
   const float ny        = reference.y / static_cast<float>(geometry.full_reference_extent.height);
   float       value;
-  bool        invert;
-  if (node.Kind() == AnalyticMaskKind::Radial) {
-    const auto& radial = node.Radial();
-    const float c      = std::cos(radial.rotation);
-    const float s      = std::sin(radial.rotation);
-    const float dx     = nx - radial.center_x;
-    const float dy     = ny - radial.center_y;
-    const float rx     = (c * dx + s * dy) / std::max(radial.major_radius, 1.0e-6f);
-    const float ry     = (-s * dx + c * dy) / std::max(radial.minor_radius, 1.0e-6f);
+  if (const auto* radial = std::get_if<RadialMaskSource>(&mask.source)) {
+    const float c      = std::cos(radial->rotation);
+    const float s      = std::sin(radial->rotation);
+    const float dx     = nx - radial->center_x;
+    const float dy     = ny - radial->center_y;
+    const float rx     = (c * dx + s * dy) / std::max(radial->major_radius, 1.0e-6f);
+    const float ry     = (-s * dx + c * dy) / std::max(radial->minor_radius, 1.0e-6f);
     const float radius = std::sqrt(rx * rx + ry * ry);
-    const float inner  = std::max(0.0f, 1.0f - radial.inner_feather);
-    const float outer  = 1.0f + radial.outer_feather;
+    const float inner  = std::max(0.0f, 1.0f - radial->inner_feather);
+    const float outer  = 1.0f + radial->outer_feather;
     value  = 1.0f - std::clamp((radius - inner) / std::max(outer - inner, 1.0e-6f), 0.0f, 1.0f);
-    invert = radial.invert;
   } else {
-    const auto& graduated = node.GraduatedNd();
+    const auto& graduated = std::get<LinearGradientMaskSource>(mask.source);
     const float length    = std::hypot(graduated.normal_x, graduated.normal_y);
     const float normal_x  = graduated.normal_x / std::max(length, 1.0e-6f);
     const float normal_y  = graduated.normal_y / std::max(length, 1.0e-6f);
@@ -100,10 +97,9 @@ auto CpuAnalytic(const AnalyticMaskNodeModel& node, const ResolvedRenderGeometry
         (nx - graduated.origin_x) * normal_x + (ny - graduated.origin_y) * normal_y;
     const float t =
         std::clamp(distance / std::max(graduated.transition_distance, 1.0e-6f) + 0.5f, 0.0f, 1.0f);
-    value  = graduated.start_value + (graduated.end_value - graduated.start_value) * t;
-    invert = graduated.invert;
+    value = graduated.start_value + (graduated.end_value - graduated.start_value) * t;
   }
-  return invert ? 1.0f - value : value;
+  return mask.invert ? 1.0f - value : value;
 }
 
 auto BuildR8MipChain(const std::vector<std::uint8_t>& base, std::uint32_t width,
@@ -217,28 +213,26 @@ class OpenClMaskFixture : public ::testing::Test {
     return asset;
   }
 
-  auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> RasterMaskNodeModel& {
+  auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> MaskModel& {
     store_->Save(asset);
-    auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-    node->SetAssetKey(asset.key);
-    node->SetReferenceBounds({});
-    node->SetFeatherRadius(feather);
-    auto* result = node.get();
-    document_.Graph().AddNode(std::move(node));
-    document_.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                              PortId{"mask"});
+    auto& mask = grade_mask_test::AddMask(
+        *document_.PrimaryGrade(),
+        grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset, feather));
     document_.MarkTopologyDirty();
-    return *result;
+    return mask;
   }
 
-  auto AttachAnalytic(AnalyticMaskKind kind) -> AnalyticMaskNodeModel& {
-    auto  node   = std::make_unique<AnalyticMaskNodeModel>(NodeId{"mask.analytic"}, kind);
-    auto* result = node.get();
-    document_.Graph().AddNode(std::move(node));
-    document_.Graph().Connect(NodeId{"mask.analytic"}, PortId{"mask"}, NodeId{"grade.primary"},
-                              PortId{"mask"});
+  auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
+    MaskModel mask;
+    mask.id = MaskId{"mask.analytic"};
+    if (kind == MaskSourceKind::Radial) {
+      mask.source = RadialMaskSource{};
+    } else {
+      mask.source = LinearGradientMaskSource{};
+    }
+    auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
     document_.MarkTopologyDirty();
-    return *result;
+    return result;
   }
 
   void Compile(RenderRequest request = {}) {
@@ -388,11 +382,13 @@ TEST_F(OpenClMaskFixture, OpenClFeatherRadiusEditReusesSignedDistanceResult) {
   Compile();
   const auto first = RenderMask();
   const auto first_metadata =
-      device_->Workspace().Values().GetMetadata(GraphValueId{node.Id(), PortId{"signed_distance"}});
-  node.SetFeatherRadius(4.0f);
+      device_->Workspace().Values().GetMetadata(
+          GraphValueId{document_.PrimaryGrade()->Id(), PortId{"signed_distance"}});
+  std::get<BrushMaskSource>(node.source).feather_radius = 4.0f;
   const auto second = RenderMask();
   const auto second_metadata =
-      device_->Workspace().Values().GetMetadata(GraphValueId{node.Id(), PortId{"signed_distance"}});
+      device_->Workspace().Values().GetMetadata(
+          GraphValueId{document_.PrimaryGrade()->Id(), PortId{"signed_distance"}});
   ASSERT_TRUE(first_metadata.has_value());
   ASSERT_TRUE(second_metadata.has_value());
   EXPECT_NE(first.signed_distance_resource_id, 0U);
@@ -402,11 +398,11 @@ TEST_F(OpenClMaskFixture, OpenClFeatherRadiusEditReusesSignedDistanceResult) {
 }
 
 TEST_F(OpenClMaskFixture, OpenClMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution) {
-  auto&            node = AttachAnalytic(AnalyticMaskKind::Radial);
-  RadialMaskParams radial;
+  auto&            node = AttachAnalytic(MaskSourceKind::Radial);
+  auto             radial = std::get<RadialMaskSource>(node.source);
   radial.major_radius = 0.35f;
   radial.minor_radius = 0.25f;
-  node.SetRadial(radial);
+  node.source = radial;
   document_.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
   document_.Geometry().SetRotationDegrees(15.0f);
   Compile();
@@ -467,9 +463,9 @@ TEST_F(OpenClMaskFixture, OpenClMaskSamplingMatchesCudaAtCropRotationAndDynamicR
   EXPECT_LT(max_err, 2.0f / 255.0f);
 }
 
-TEST_F(OpenClMaskFixture, OpenClGraduatedNdMaskFollowsReferenceSpaceNormal) {
-  auto&                 node = AttachAnalytic(AnalyticMaskKind::GraduatedNd);
-  GraduatedNdMaskParams params;
+TEST_F(OpenClMaskFixture, OpenClLinearGradientMaskFollowsReferenceSpaceNormal) {
+  auto&                    node = AttachAnalytic(MaskSourceKind::LinearGradient);
+  LinearGradientMaskSource params;
   params.origin_x            = 0.35f;
   params.origin_y            = 0.4f;
   params.normal_x            = 0.6f;
@@ -477,8 +473,8 @@ TEST_F(OpenClMaskFixture, OpenClGraduatedNdMaskFollowsReferenceSpaceNormal) {
   params.transition_distance = 0.7f;
   params.start_value         = 0.9f;
   params.end_value           = 0.1f;
-  params.invert              = true;
-  node.SetGraduatedNd(params);
+  node.source                = params;
+  node.invert                = true;
   document_.Geometry().SetCropRect({0.1f, 0.05f, 0.8f, 0.85f});
   document_.Geometry().SetRotationDegrees(12.0f);
   Compile();

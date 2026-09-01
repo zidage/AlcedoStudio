@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "../graph/grade_owned_mask_support.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -133,9 +133,7 @@ TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheRecompilesWhenMaskTopologyChan
   ASSERT_NE(first.FirstGrade(), nullptr);
   EXPECT_FALSE(first.FirstGrade()->mask.has_value());
 
-  document.Graph().AddNode(std::make_unique<AnalyticMaskNodeModel>(NodeId{"mask.radial"}));
-  document.Graph().Connect(NodeId{"mask.radial"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   const auto second = cache.GetOrCompile(document, prepared.CompileSource());
 
   EXPECT_EQ(cache.GetStats().compiles, 2U);

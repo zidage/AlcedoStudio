@@ -40,6 +40,16 @@ struct MaskAssetDescriptor {
   NormalizedRect reference_bounds{};
 };
 
+inline auto operator==(const MaskAssetDescriptor& a, const MaskAssetDescriptor& b) -> bool {
+  return a.extent == b.extent && a.reference_bounds.x == b.reference_bounds.x &&
+         a.reference_bounds.y == b.reference_bounds.y && a.reference_bounds.w == b.reference_bounds.w &&
+         a.reference_bounds.h == b.reference_bounds.h;
+}
+
+inline auto operator!=(const MaskAssetDescriptor& a, const MaskAssetDescriptor& b) -> bool {
+  return !(a == b);
+}
+
 /** @brief Persistent R8 raster mask value. */
 struct MaskAsset {
   MaskAssetKey              key;

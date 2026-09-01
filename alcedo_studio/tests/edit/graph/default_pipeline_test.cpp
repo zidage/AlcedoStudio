@@ -92,6 +92,7 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
   ASSERT_NE(grade, nullptr);
   EXPECT_TRUE(grade->Enabled());
   EXPECT_FLOAT_EQ(grade->Mix(), 1.0f);
+  EXPECT_EQ(grade->MaskCount(), 0u);
   for (const auto& edge : document.Graph().Edges()) {
     EXPECT_NE(edge.to_port, PortId{"mask"});
   }

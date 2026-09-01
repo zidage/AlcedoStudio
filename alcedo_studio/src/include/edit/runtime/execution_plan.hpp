@@ -12,6 +12,7 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -133,8 +134,14 @@ struct CompiledGradeStage {
 
 enum class CompiledMaskKind : std::uint8_t { Analytic, Raster };
 
+/**
+ * @brief One compiled Mask bound to its owning Color Grade.
+ *
+ * @p owner_id is the Color Grade @ref NodeId. @p mask_id is the Grade-owned @ref MaskId.
+ */
 struct CompiledMask {
-  NodeId           node_id;
+  NodeId           owner_id;
+  MaskId           mask_id;
   CompiledMaskKind kind = CompiledMaskKind::Analytic;
 };
 

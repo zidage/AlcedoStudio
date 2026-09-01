@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1–NM3.5 planned
+Status: NM3.1 complete; NM3.2–NM3.5 planned
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -697,7 +697,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 
 | Phase | Status | Result |
 | --- | --- | --- |
-| NM3.1 | planned | Grade-owned Mask identities, sources, validation, and document schema. |
+| NM3.1 | complete | Grade-owned Mask identities, sources, validation, and document schema. |
 | NM3.2 | planned | Immutable raster assets and task-owned active raster inputs. |
 | NM3.3 | planned | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
 | NM3.4 | planned | Native CUDA, OpenCL, and Metal source evaluation and Union execution. |
@@ -755,14 +755,80 @@ duplicate MaskId / invalid value / old top-level Mask node or edge
 
 **Exit conditions**
 
-- [ ] One Color Grade owns zero, one, or many Masks with stable IDs.
-- [ ] Brush, Radial, and Linear Gradient use one source variant.
-- [ ] Color Range and Luminance Range exist as direct fields.
-- [ ] Enabled range values fail before GPU work.
-- [ ] Duplicate IDs and invalid values leave the model unchanged.
-- [ ] JSON round-trip preserves display order and every supported field.
-- [ ] Top-level Mask nodes and Mask edges fail with an explicit error.
-- [ ] No supported code path retains the old single-Mask graph ownership.
+- [x] One Color Grade owns zero, one, or many Masks with stable IDs.
+- [x] Brush, Radial, and Linear Gradient use one source variant.
+- [x] Color Range and Luminance Range exist as direct fields.
+- [x] Enabled range values fail before GPU work.
+- [x] Duplicate IDs and invalid values leave the model unchanged.
+- [x] JSON round-trip preserves display order and every supported field.
+- [x] Top-level Mask nodes and Mask edges fail with an explicit error.
+- [x] No supported code path retains the old single-Mask graph ownership.
+
+##### Phase NM3.1 completion record (2026-09-01)
+
+**Status:** complete — Grade-owned `MaskModel` list, source variants, range placeholders, document format 3, and first-enabled Mask compile/GPU path.
+
+**Primary success call chain:**
+
+```text
+ColorGradeNodeModel::AddMask
+  -> ValidateMaskModel + unique MaskId
+  -> reserve then insert MaskModel
+  -> HashGraphTopology (MaskId + source kind, sorted by MaskId)
+  -> Color Grade JSON "masks"
+  -> PipelineDocument::FromJson validates and restores the list
+```
+
+**Primary failure call chain:**
+
+```text
+duplicate MaskId / invalid value / enabled range / Analytic or Raster node / "mask" edge
+  -> std::runtime_error at ColorGradeNodeModel or PipelineDocument::FromJson
+  -> live ops leave the original Mask list unchanged; FromJson produces no document
+  -> no render
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MultipleMasksBelongToOneColorGrade` | `GpuDagModelGraphTest` | PASS |
+| `DuplicateMaskIdLeavesGradeUnchanged` | `GpuDagModelGraphTest` | PASS |
+| `InvalidMaskValuesFailBeforeDocumentMutation` | `GpuDagModelGraphTest` | PASS |
+| `MaskListRoundTripPreservesSourcesOrderAndRangeFields` | `GpuDagModelGraphTest` | PASS |
+| `TopLevelMaskNodesAndEdgesAreRejected` | `GpuDagModelGraphTest` | PASS |
+| `EnabledRangeFailsBeforeGpuWork` | `GpuDagModelGraphTest` | PASS |
+| Color Grade has no graph `mask` port | `ColorGradeHasNoMaskInputPort` | PASS |
+| Display reorder keeps `MaskId` | `MoveMaskForDisplayDoesNotChangeMaskIdentity` | PASS |
+| Compiler, static plan cache, content keys | `GpuDagRawInputTest` | 72/72 PASS |
+| Legacy stage JSON vs document format | `PipelineMapperTest` | 30/30 PASS (2 skipped) |
+| CUDA Mask sampling / mix | `GpuDagCudaMaskTest` | 11/11 PASS |
+| CUDA primary + multi-Grade | `GpuDagCudaPrimaryGradeTest` | 35/35 PASS |
+| CUDA DRT product / result cache | `GpuDagCudaDrtProductTest` | 49/49 PASS |
+| OpenCL Grade + Mask + multi-Grade | `GpuDagOpenClGradeTest` | 47/47 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagModelGraphTest GpuDagRawInputTest PipelineMapperTest GpuDagCudaMaskTest GpuDagCudaPrimaryGradeTest GpuDagCudaDrtProductTest GpuDagOpenClGradeTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagModelGraphTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagRawInputTest
+ctest --test-dir build/debug --output-on-failure -R PipelineMapperTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagCudaMaskTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagCudaPrimaryGradeTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R GpuDagOpenClGradeTest
+```
+
+Suite totals: `GpuDagModelGraphTest` 58/58; `GpuDagRawInputTest` 72/72; `PipelineMapperTest` 30/30 (2 skipped); `GpuDagCudaMaskTest` 11/11; `GpuDagCudaPrimaryGradeTest` 35/35; `GpuDagCudaDrtProductTest` 49/49; `GpuDagOpenClGradeTest` 47/47.
+
+Metal Mask / multi-Grade tests were not executed (Windows host). Sources were updated with the same Grade-owned lookup as CUDA and OpenCL.
+
+**Checklist / exit condition:** all NM3.1 boxes checked.
+
+**LOC note (grill-code-review):** `mask_model.cpp` 402, `mask_model.hpp` 155, `color_grade_node_model.cpp` 305, `color_grade_node_model.hpp` 154, `graph_compiler.cpp` 430, `result_content_key.cpp` 430, `pipeline_document.cpp` 238, `color_grade_mask_model_test.cpp` 224. No changed file exceeds ~1000 LOC. Deleted Analytic/Raster Mask node sources after callers moved.
+
+**Remaining gaps:** Union, `MaskUnion`, per-Mask `GraphValueId`s, `MaskStore::Put()`, and active raster request data stay in NM3.2–NM3.4. Empty Mask list and all-disabled list still compile as no `CompiledMask` (full Grade coverage). Product all-disabled zero-coverage is not implemented here.
 
 ### 6.2 NM3.2 — Immutable assets and active raster inputs
 

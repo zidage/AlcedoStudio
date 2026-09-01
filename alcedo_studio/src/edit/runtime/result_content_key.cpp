@@ -7,13 +7,13 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
@@ -163,36 +163,52 @@ auto MixNormalizedRect(ContentHash& hash, NormalizedRect rect) -> void {
 
 auto MixCompiledMask(ContentHash& hash, const PipelineDocument& document, const CompiledMask& mask)
     -> void {
-  hash.MixText(mask.node_id.Value());
+  hash.MixText(mask.owner_id.Value());
+  hash.MixText(mask.mask_id.Value());
   hash.MixU32(static_cast<std::uint32_t>(mask.kind));
-  const auto* node = document.Graph().FindNode(mask.node_id);
-  if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
-    hash.MixU32(static_cast<std::uint32_t>(analytic->Kind()));
-    const auto& radial = analytic->Radial();
-    hash.MixF32(radial.center_x);
-    hash.MixF32(radial.center_y);
-    hash.MixF32(radial.major_radius);
-    hash.MixF32(radial.minor_radius);
-    hash.MixF32(radial.rotation);
-    hash.MixF32(radial.inner_feather);
-    hash.MixF32(radial.outer_feather);
-    hash.MixBool(radial.invert);
-    const auto& graduated = analytic->GraduatedNd();
-    hash.MixF32(graduated.origin_x);
-    hash.MixF32(graduated.origin_y);
-    hash.MixF32(graduated.normal_x);
-    hash.MixF32(graduated.normal_y);
-    hash.MixF32(graduated.transition_distance);
-    hash.MixF32(graduated.start_value);
-    hash.MixF32(graduated.end_value);
-    hash.MixBool(graduated.invert);
+  const auto* grade =
+      dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(mask.owner_id));
+  if (grade == nullptr) {
     return;
   }
-  if (const auto* raster = dynamic_cast<const RasterMaskNodeModel*>(node)) {
-    hash.MixText(raster->AssetKey().Value());
-    MixNormalizedRect(hash, raster->ReferenceBounds());
-    hash.MixF32(raster->FeatherRadius());
-    hash.MixBool(raster->Invert());
+  const auto* model = grade->FindMask(mask.mask_id);
+  if (model == nullptr) {
+    return;
+  }
+  hash.MixBool(model->enabled);
+  hash.MixF32(model->opacity);
+  hash.MixBool(model->invert);
+  hash.MixU32(static_cast<std::uint32_t>(GetMaskSourceKind(model->source)));
+  hash.MixBool(model->color_range.has_value());
+  hash.MixBool(model->luminance_range.has_value());
+  if (const auto* brush = std::get_if<BrushMaskSource>(&model->source)) {
+    if (brush->asset_key.has_value()) {
+      hash.MixText(brush->asset_key->Value());
+    }
+    hash.MixU32(brush->descriptor.extent.width);
+    hash.MixU32(brush->descriptor.extent.height);
+    MixNormalizedRect(hash, brush->descriptor.reference_bounds);
+    hash.MixF32(brush->feather_radius);
+    return;
+  }
+  if (const auto* radial = std::get_if<RadialMaskSource>(&model->source)) {
+    hash.MixF32(radial->center_x);
+    hash.MixF32(radial->center_y);
+    hash.MixF32(radial->major_radius);
+    hash.MixF32(radial->minor_radius);
+    hash.MixF32(radial->rotation);
+    hash.MixF32(radial->inner_feather);
+    hash.MixF32(radial->outer_feather);
+    return;
+  }
+  if (const auto* gradient = std::get_if<LinearGradientMaskSource>(&model->source)) {
+    hash.MixF32(gradient->origin_x);
+    hash.MixF32(gradient->origin_y);
+    hash.MixF32(gradient->normal_x);
+    hash.MixF32(gradient->normal_y);
+    hash.MixF32(gradient->transition_distance);
+    hash.MixF32(gradient->start_value);
+    hash.MixF32(gradient->end_value);
   }
 }
 

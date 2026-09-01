@@ -19,7 +19,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
+#include "../graph/grade_owned_mask_support.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -154,18 +154,15 @@ TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected)
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
-  auto node     = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-  node->SetAssetKey(MaskAssetKey{"test.raster"});
-  document.Graph().AddNode(std::move(node));
-  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{"test.raster"});
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskEvaluate));
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskFeather));
   ASSERT_NE(plan.FirstGrade(), nullptr);
   ASSERT_TRUE(plan.FirstGrade()->mask.has_value());
-  EXPECT_EQ(plan.FirstGrade()->mask->node_id, NodeId{"mask.raster"});
+  EXPECT_EQ(plan.FirstGrade()->mask->owner_id, NodeId{"grade.primary"});
+  EXPECT_EQ(plan.FirstGrade()->mask->mask_id, MaskId{"mask.raster"});
   EXPECT_EQ(plan.FirstGrade()->mask->kind, CompiledMaskKind::Raster);
   EXPECT_LT(plan.IndexOf(GpuPassKind::CameraToAp1), plan.IndexOf(GpuPassKind::MaskEvaluate));
   EXPECT_LT(plan.IndexOf(GpuPassKind::MaskEvaluate), plan.IndexOf(GpuPassKind::MaskFeather));
@@ -233,11 +230,7 @@ TEST(GpuDagGraphCompiler, RasterMaskDoesNotAddMaskSdfOnTopOfDevelopTransientPeak
   auto document = CreateDefaultPipelineDocument();
   const auto without_mask =
       GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-  node->SetAssetKey(MaskAssetKey{"test.raster"});
-  document.Graph().AddNode(std::move(node));
-  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{"test.raster"});
   const auto with_mask =
       GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 

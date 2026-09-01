@@ -10,11 +10,12 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 
 namespace alcedo {
@@ -240,7 +241,7 @@ __global__ void FeatherSampleKernel(const float* distance, std::uint32_t source_
 __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, std::uint32_t height,
                                    Matrix3x3 render_to_reference, Extent2D reference_extent,
                                    AnalyticMaskKind kind, RadialMaskParams radial,
-                                   GraduatedNdMaskParams graduated) {
+                                   LinearGradientMaskParams graduated) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= width * height) return;
   const auto  x         = index % width;
@@ -295,16 +296,21 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto              render_pixels = extent.width * extent.height;
   CudaMaskResult          result{compiled_grade.mask_output};
 
-  const auto*             node = document.Graph().FindNode(compiled_grade.mask->node_id);
-  if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
+  const auto&             mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
+      std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
     AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
         static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-        plan.geometry.render_to_reference, plan.geometry.full_reference_extent, analytic->Kind(),
-        analytic->Radial(), analytic->GraduatedNd());
-  } else if (const auto* raster = dynamic_cast<const RasterMaskNodeModel*>(node)) {
+        plan.geometry.render_to_reference, plan.geometry.full_reference_extent,
+        AnalyticKindFromMask(mask_model), RadialParamsFromMask(mask_model),
+        LinearGradientParamsFromMask(mask_model));
+  } else if (const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source)) {
     if (store == nullptr)
       throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
-    const auto asset  = store->Load(raster->AssetKey());
+    if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
+      throw std::runtime_error("ExecuteCudaMask: Brush Mask has no asset");
+    }
+    const auto asset  = store->Load(*brush->asset_key);
     const bool cached = workspace.MaskTextures().Contains(asset->key);
     auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
     result.persistent_texture_resource_id = source.Texture().ResourceId();
@@ -323,9 +329,9 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
       workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
       GenerateMipChain(source, context);
     }
-    const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, raster->ReferenceBounds(),
+    const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, brush->descriptor.reference_bounds,
                                                      asset->descriptor.extent);
-    if (raster->FeatherRadius() <= 0.0f) {
+    if (brush->feather_radius <= 0.0f) {
       const auto selected_level = std::min<std::size_t>(
           static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
           source.MipLevelCount() - 1);
@@ -334,12 +340,12 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
           static_cast<const std::uint8_t*>(sampled_texture.DevicePointer()),
           sampled_texture.Width(), sampled_texture.Height(),
           static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-          sampling.render_to_texture_uv, raster->Invert());
+          sampling.render_to_texture_uv, mask_model.invert);
     } else {
-      const GraphValueId distance_id{raster->Id(), PortId{"signed_distance"}};
-      const GraphValueId horizontal_id{raster->Id(), PortId{"distance.horizontal"}};
-      const GraphValueId inside_id{raster->Id(), PortId{"distance.inside"}};
-      const GraphValueId outside_id{raster->Id(), PortId{"distance.outside"}};
+      const GraphValueId distance_id{compiled_grade.node_id, PortId{"signed_distance"}};
+      const GraphValueId horizontal_id{compiled_grade.node_id, PortId{"distance.horizontal"}};
+      const GraphValueId inside_id{compiled_grade.node_id, PortId{"distance.inside"}};
+      const GraphValueId outside_id{compiled_grade.node_id, PortId{"distance.outside"}};
       auto*              distance       = workspace.Values().Find(distance_id);
       const auto         distance_bytes = asset->pixels.size() * sizeof(float);
       const bool         must_compute =
@@ -393,22 +399,22 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
             static_cast<float*>(distance->DevicePointer()), source_pixels);
       }
       result.signed_distance_resource_id = distance->ResourceId();
-      const auto  bounds                 = raster->ReferenceBounds();
+      const auto  bounds                 = brush->descriptor.reference_bounds;
       const float x_scale =
           asset->descriptor.extent.width /
           (plan.geometry.full_reference_extent.width * std::max(bounds.w, 1.0e-6f));
       const float y_scale =
           asset->descriptor.extent.height /
           (plan.geometry.full_reference_extent.height * std::max(bounds.h, 1.0e-6f));
-      const float radius_texels = raster->FeatherRadius() * 0.5f * (x_scale + y_scale);
+      const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
       FeatherSampleKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
           static_cast<const float*>(distance->DevicePointer()), asset->descriptor.extent.width,
           asset->descriptor.extent.height,
           static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-          sampling.render_to_texture_uv, radius_texels, raster->Invert());
+          sampling.render_to_texture_uv, radius_texels, mask_model.invert);
     }
   } else {
-    throw std::runtime_error("ExecuteCudaMask: compiled mask node does not match document");
+    throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");
   }
   if (::cudaGetLastError() != cudaSuccess)
     throw std::runtime_error("ExecuteCudaMask: CUDA kernel launch failed");

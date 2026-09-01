@@ -10,9 +10,9 @@
 #include <span>
 #include <vector>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -114,9 +114,7 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
   EXPECT_EQ(renderer.Stats().plan_compile_count, 2U);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 1U);
 
-  document->Graph().AddNode(std::make_unique<AnalyticMaskNodeModel>(NodeId{"mask.radial"}));
-  document->Graph().Connect(NodeId{"mask.radial"}, PortId{"mask"}, NodeId{"grade.primary"},
-                            PortId{"mask"});
+  grade_mask_test::AddRadialMask(*document, MaskId{"mask.radial"});
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
 

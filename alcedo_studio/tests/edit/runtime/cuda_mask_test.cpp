@@ -11,12 +11,13 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string>
+#include <variant>
 #include <vector>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
@@ -62,28 +63,26 @@ class CudaMaskFixture : public ::testing::Test {
     return asset;
   }
 
-  auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> RasterMaskNodeModel& {
+  auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> MaskModel& {
     store_->Save(asset);
-    auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-    node->SetAssetKey(asset.key);
-    node->SetReferenceBounds({});
-    node->SetFeatherRadius(feather);
-    auto* result = node.get();
-    document_.Graph().AddNode(std::move(node));
-    document_.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                              PortId{"mask"});
+    auto& mask = grade_mask_test::AddMask(
+        *document_.PrimaryGrade(),
+        grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset, feather));
     document_.MarkTopologyDirty();
-    return *result;
+    return mask;
   }
 
-  auto AttachAnalytic(AnalyticMaskKind kind) -> AnalyticMaskNodeModel& {
-    auto  node   = std::make_unique<AnalyticMaskNodeModel>(NodeId{"mask.analytic"}, kind);
-    auto* result = node.get();
-    document_.Graph().AddNode(std::move(node));
-    document_.Graph().Connect(NodeId{"mask.analytic"}, PortId{"mask"}, NodeId{"grade.primary"},
-                              PortId{"mask"});
+  auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
+    MaskModel mask;
+    mask.id = MaskId{"mask.analytic"};
+    if (kind == MaskSourceKind::Radial) {
+      mask.source = RadialMaskSource{};
+    } else {
+      mask.source = LinearGradientMaskSource{};
+    }
+    auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
     document_.MarkTopologyDirty();
-    return *result;
+    return result;
   }
 
   void Compile(RenderRequest request = {}) {
@@ -193,11 +192,11 @@ TEST_F(CudaMaskFixture, CudaRasterMaskUploadsOnlyUnionedDirtyRectangle) {
 }
 
 TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScales) {
-  auto&            node = AttachAnalytic(AnalyticMaskKind::Radial);
-  RadialMaskParams radial;
+  auto&            node = AttachAnalytic(MaskSourceKind::Radial);
+  auto             radial = std::get<RadialMaskSource>(node.source);
   radial.major_radius = 0.3f;
   radial.minor_radius = 0.2f;
-  node.SetRadial(radial);
+  node.source = radial;
   Compile();
   RenderMask();
   const auto full = DownloadMask();
@@ -214,13 +213,13 @@ TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScale
   EXPECT_LT(preview.front(), 20);
 }
 
-TEST_F(CudaMaskFixture, CudaGraduatedNdMaskFollowsReferenceSpaceNormal) {
-  auto&                 node = AttachAnalytic(AnalyticMaskKind::GraduatedNd);
-  GraduatedNdMaskParams params;
+TEST_F(CudaMaskFixture, CudaLinearGradientMaskFollowsReferenceSpaceNormal) {
+  auto&                    node = AttachAnalytic(MaskSourceKind::LinearGradient);
+  LinearGradientMaskSource params;
   params.normal_x            = 0.0f;
   params.normal_y            = 1.0f;
   params.transition_distance = 1.0f;
-  node.SetGraduatedNd(params);
+  node.source = params;
   Compile();
   RenderMask();
   const auto pixels = DownloadMask();
@@ -288,7 +287,7 @@ TEST_F(CudaMaskFixture, ChangingFeatherRadiusReusesSignedDistanceTexture) {
   auto& node = AttachRaster(asset, 1.0f);
   Compile();
   const auto first = RenderMask();
-  node.SetFeatherRadius(4.0f);
+  std::get<BrushMaskSource>(node.source).feather_radius = 4.0f;
   const auto second = RenderMask();
   EXPECT_NE(first.signed_distance_resource_id, 0U);
   EXPECT_EQ(first.signed_distance_resource_id, second.signed_distance_resource_id);

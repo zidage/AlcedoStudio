@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 
 namespace alcedo {
 
@@ -50,13 +49,12 @@ TEST(GpuDagModelGraph, PipelineGraphRejectsDisplayImageConnectedToSceneInput) {
   EXPECT_TRUE(HasCode(errors, GraphValidationCode::PortTypeMismatch));
 }
 
-TEST(GpuDagModelGraph, PipelineGraphRejectsMaskConnectedToImageInput) {
+TEST(GpuDagModelGraph, PipelineGraphRejectsUnknownMaskPortOnColorGrade) {
   auto document = CreateDefaultPipelineDocument();
-  document.Graph().AddNode(std::make_unique<RasterMaskNodeModel>(NodeId{"mask.1"}));
-  document.Graph().Connect(NodeId{"mask.1"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"image"});
+  document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
+                           PortId{"mask"});
   const auto errors = document.Graph().Validate();
-  EXPECT_TRUE(HasCode(errors, GraphValidationCode::PortTypeMismatch));
+  EXPECT_TRUE(HasCode(errors, GraphValidationCode::UnknownPort));
 }
 
 TEST(GpuDagModelGraph, DefaultDocumentSatisfiesImageBackbone) {

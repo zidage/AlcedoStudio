@@ -8,10 +8,12 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 
 namespace alcedo {
@@ -43,7 +45,6 @@ auto PresentTypes(const std::vector<AdjustmentModelEntry>& adjustments)
 
 ColorGradeNodeModel::ColorGradeNodeModel(NodeId id) : id_(std::move(id)) {
   inputs_[0]  = PortDescriptor{PortId{"image"}, PortDataType::SceneImage, true};
-  inputs_[1]  = PortDescriptor{PortId{"mask"}, PortDataType::Mask, false};
   outputs_[0] = PortDescriptor{PortId{"image"}, PortDataType::SceneImage, true};
 }
 
@@ -61,12 +62,17 @@ auto ColorGradeNodeModel::ToJson() const -> nlohmann::json {
                            {"type", std::string{entry.model->Type().Text()}},
                            {"params", entry.model->ToJson()}});
   }
+  nlohmann::json masks = nlohmann::json::array();
+  for (const auto& mask : masks_) {
+    masks.push_back(MaskModelToJson(mask));
+  }
   return {{"id", std::string{id_.Value()}},
           {"type", std::string{Type().Text()}},
           {"display_name", display_name_},
           {"enabled", enabled_},
           {"mix", mix_},
-          {"adjustments", std::move(adjustments)}};
+          {"adjustments", std::move(adjustments)},
+          {"masks", std::move(masks)}};
 }
 
 auto ColorGradeNodeModel::MakeDefault(NodeId id) -> std::unique_ptr<ColorGradeNodeModel> {
@@ -111,6 +117,18 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json)
                              std::move(model));
     }
   }
+  if (!json.contains("masks") || !json["masks"].is_array()) {
+    throw std::runtime_error("ColorGrade FromJson: missing masks array");
+  }
+  std::vector<MaskModel> masks;
+  masks.reserve(json["masks"].size());
+  for (const auto& item : json["masks"]) {
+    masks.push_back(MaskModelFromJson(item));
+  }
+  if (HasDuplicateOrEmptyMaskId(masks)) {
+    throw std::runtime_error("ColorGrade FromJson: empty or duplicate MaskId");
+  }
+  node->masks_ = std::move(masks);
   return node;
 }
 
@@ -220,6 +238,113 @@ void ColorGradeNodeModel::MoveAdjustment(const AdjustmentInstanceId& id, std::si
     index = adjustments_.size();
   }
   adjustments_.insert(adjustments_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
+}
+
+namespace {
+
+[[noreturn]] void FailMask(std::string_view message) {
+  throw std::runtime_error(std::string{message});
+}
+
+auto RequireMaskIterator(std::vector<MaskModel>& masks, const MaskId& mask_id)
+    -> std::vector<MaskModel>::iterator {
+  const auto it = std::find_if(masks.begin(), masks.end(),
+                               [&mask_id](const MaskModel& mask) { return mask.id == mask_id; });
+  if (it == masks.end()) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  return it;
+}
+
+}  // namespace
+
+void ColorGradeNodeModel::AddMask(MaskModel mask, std::size_t index) {
+  ValidateMaskModel(mask);
+  if (FindMask(mask.id) != nullptr) {
+    FailMask("Duplicate MaskId: " + std::string{mask.id.Value()});
+  }
+  masks_.reserve(masks_.size() + 1);
+  if (index > masks_.size()) {
+    index = masks_.size();
+  }
+  masks_.insert(masks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(mask));
+}
+
+void ColorGradeNodeModel::RemoveMask(const MaskId& mask_id) {
+  const auto it = RequireMaskIterator(masks_, mask_id);
+  masks_.erase(it);
+}
+
+void ColorGradeNodeModel::ReplaceMaskSource(const MaskId& mask_id, MaskSource source) {
+  auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  MaskModel candidate = *mask;
+  candidate.source    = std::move(source);
+  ValidateMaskModel(candidate);
+  mask->source = std::move(candidate.source);
+}
+
+void ColorGradeNodeModel::SetMaskEnabled(const MaskId& mask_id, bool enabled) {
+  auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  mask->enabled = enabled;
+}
+
+void ColorGradeNodeModel::SetMaskOpacity(const MaskId& mask_id, float opacity) {
+  auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  MaskModel candidate = *mask;
+  candidate.opacity   = opacity;
+  ValidateMaskModel(candidate);
+  mask->opacity = candidate.opacity;
+}
+
+void ColorGradeNodeModel::SetMaskInvert(const MaskId& mask_id, bool invert) {
+  auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  mask->invert = invert;
+}
+
+void ColorGradeNodeModel::MoveMaskForDisplay(const MaskId& mask_id, std::size_t index) {
+  auto      it    = RequireMaskIterator(masks_, mask_id);
+  MaskModel entry = std::move(*it);
+  masks_.erase(it);
+  if (index > masks_.size()) {
+    index = masks_.size();
+  }
+  masks_.insert(masks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
+}
+
+auto ColorGradeNodeModel::MaskAt(std::size_t index) -> MaskModel& { return masks_.at(index); }
+
+auto ColorGradeNodeModel::MaskAt(std::size_t index) const -> const MaskModel& {
+  return masks_.at(index);
+}
+
+auto ColorGradeNodeModel::FindMask(const MaskId& mask_id) -> MaskModel* {
+  for (auto& mask : masks_) {
+    if (mask.id == mask_id) {
+      return &mask;
+    }
+  }
+  return nullptr;
+}
+
+auto ColorGradeNodeModel::FindMask(const MaskId& mask_id) const -> const MaskModel* {
+  for (const auto& mask : masks_) {
+    if (mask.id == mask_id) {
+      return &mask;
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace alcedo

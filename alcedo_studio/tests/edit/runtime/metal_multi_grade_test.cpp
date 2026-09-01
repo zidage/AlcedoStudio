@@ -12,10 +12,10 @@
 #include <string>
 #include <vector>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_store.hpp"
@@ -277,23 +277,20 @@ TEST_F(MetalMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   const auto root = std::filesystem::path{"build/tmp/nm2/metal_multi_grade_mask"} /
                     ::testing::UnitTest::GetInstance()->current_test_info()->name();
   MaskStore store(root);
-  auto make_fill = [&](std::string key, std::uint8_t fill, const char* node_id) {
+  auto make_fill = [&](std::string key, std::uint8_t fill, const char* grade_id,
+                       const char* mask_id) {
     MaskAsset asset;
     asset.key                         = MaskAssetKey{std::move(key)};
     asset.descriptor.extent           = {16, 12};
     asset.descriptor.reference_bounds = {};
     asset.pixels.assign(16U * 12U, fill);
     store.Save(asset);
-    auto node = std::make_unique<RasterMaskNodeModel>(NodeId{node_id});
-    node->SetAssetKey(asset.key);
-    node->SetReferenceBounds({});
-    document.Graph().AddNode(std::move(node));
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{grade_id}));
+    ASSERT_NE(grade, nullptr);
+    grade_mask_test::AddMask(*grade, grade_mask_test::MakeBrushMask(MaskId{mask_id}, asset));
   };
-  make_fill("mask-a", 255, "mask.a");
-  make_fill("mask-b", 128, "mask.b");
-  document.Graph().Connect(NodeId{"mask.a"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
-  document.Graph().Connect(NodeId{"mask.b"}, PortId{"mask"}, NodeId{"grade.b"}, PortId{"mask"});
+  make_fill("mask-a", 255, "grade.primary", "mask.a");
+  make_fill("mask-b", 128, "grade.b", "mask.b");
   document.MarkTopologyDirty();
 
   const auto plan = Compile(document);
@@ -307,8 +304,10 @@ TEST_F(MetalMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   EXPECT_EQ(device_.PassStats().primary_grade_execute, 2U);
   ASSERT_TRUE(plan.grade_nodes[0].mask.has_value());
   ASSERT_TRUE(plan.grade_nodes[1].mask.has_value());
-  EXPECT_EQ(plan.grade_nodes[0].mask->node_id, NodeId{"mask.a"});
-  EXPECT_EQ(plan.grade_nodes[1].mask->node_id, NodeId{"mask.b"});
+  EXPECT_EQ(plan.grade_nodes[0].mask->owner_id, NodeId{"grade.primary"});
+  EXPECT_EQ(plan.grade_nodes[0].mask->mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(plan.grade_nodes[1].mask->owner_id, NodeId{"grade.b"});
+  EXPECT_EQ(plan.grade_nodes[1].mask->mask_id, MaskId{"mask.b"});
   EXPECT_NE(plan.grade_nodes[0].mask_output, plan.grade_nodes[1].mask_output);
   EXPECT_NE(ResourceIdOf(device_, plan.grade_nodes[0].mask_output),
             ResourceIdOf(device_, plan.grade_nodes[1].mask_output));

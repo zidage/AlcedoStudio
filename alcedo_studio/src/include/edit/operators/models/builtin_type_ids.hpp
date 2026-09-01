@@ -93,10 +93,12 @@ inline auto DrtNode() -> const OperatorTypeId& {
   static const OperatorTypeId id{"alcedo.node.drt"};
   return id;
 }
+/// Historical type text. Documents that still use this node type are rejected.
 inline auto AnalyticMaskNode() -> const OperatorTypeId& {
   static const OperatorTypeId id{"alcedo.node.analytic_mask"};
   return id;
 }
+/// Historical type text. Documents that still use this node type are rejected.
 inline auto RasterMaskNode() -> const OperatorTypeId& {
   static const OperatorTypeId id{"alcedo.node.raster_mask"};
   return id;

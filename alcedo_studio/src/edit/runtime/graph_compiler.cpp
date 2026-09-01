@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
@@ -18,6 +19,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
@@ -146,6 +148,21 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
         hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
         hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
       }
+      std::vector<const MaskModel*> masks;
+      masks.reserve(grade->MaskCount());
+      for (const auto& mask : grade->Masks()) {
+        masks.push_back(&mask);
+      }
+      std::sort(masks.begin(), masks.end(), [](const MaskModel* a, const MaskModel* b) {
+        return a->id < b->id;
+      });
+      hash = MixU64(hash, masks.size());
+      for (const auto* mask : masks) {
+        hash = MixText(hash, mask->id.Value());
+        hash = MixText(hash, MaskSourceKindText(GetMaskSourceKind(mask->source)));
+        hash = MixU64(hash, mask->color_range.has_value() ? 1 : 0);
+        hash = MixU64(hash, mask->luminance_range.has_value() ? 1 : 0);
+      }
       continue;
     }
     const auto* drt = dynamic_cast<const DrtNodeModel*>(node);
@@ -200,8 +217,7 @@ void RequireValidGraph(const PipelineDocument& document) {
   for (const auto& node : document.Graph().Nodes()) {
     const auto& type = node->Type();
     if (type == type_ids::DevelopNode() || type == type_ids::ColorGradeNode() ||
-        type == type_ids::DrtNode() || type == type_ids::AnalyticMaskNode() ||
-        type == type_ids::RasterMaskNode()) {
+        type == type_ids::DrtNode()) {
       continue;
     }
     throw std::runtime_error("GraphCompiler: unsupported GPU DAG node");
@@ -238,36 +254,31 @@ auto SceneImageIncoming(const PipelineDocument& document, const NodeId& node_id)
                            std::string{node_id.Value()});
 }
 
-auto CompileIncomingMask(const PipelineDocument& document, const NodeId& grade_id,
-                         const DevelopCompileSource& source, ExecutionPlan& plan)
+auto CompileGradeOwnedMask(const ColorGradeNodeModel& grade, const DevelopCompileSource& source,
+                           ExecutionPlan& plan)
     -> std::pair<std::optional<CompiledMask>, GraphValueId> {
-  for (const auto& edge : document.Graph().Edges()) {
-    if (edge.to_node != grade_id || edge.to_port != PortId{"mask"}) {
-      continue;
-    }
-    const auto* mask = document.Graph().FindNode(edge.from_node);
-    if (mask == nullptr) {
-      throw std::runtime_error("GraphCompiler: mask edge has no source");
-    }
-    const auto kind = mask->Type() == type_ids::RasterMaskNode() ? CompiledMaskKind::Raster
-                                                                 : CompiledMaskKind::Analytic;
-    const GraphValueId mask_output{mask->Id(), PortId{"mask"}};
-    PushPass(plan, GpuPassKind::MaskEvaluate, mask->Id(),
-             {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage}},
-             {{mask_output, CompiledValueKind::Mask}});
-    PushPass(plan, GpuPassKind::MaskFeather, mask->Id(),
-             {{PortId{"mask"}, mask_output, CompiledValueKind::Mask}},
-             {{mask_output, CompiledValueKind::Mask}});
-    if (kind == CompiledMaskKind::Raster) {
-      const Extent2D mask_extent{
-          std::max(source.full_reference_extent.width, source.host_extent.width),
-          std::max(source.full_reference_extent.height, source.host_extent.height)};
-      plan.peak_transient_bytes =
-          (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
-    }
-    return {CompiledMask{mask->Id(), kind}, mask_output};
+  const auto* mask = FirstEnabledMask(grade.Masks());
+  if (mask == nullptr) {
+    return {std::nullopt, GraphValueId{NodeId{""}, PortId{"mask"}}};
   }
-  return {std::nullopt, GraphValueId{NodeId{""}, PortId{"mask"}}};
+  const auto kind = std::holds_alternative<BrushMaskSource>(mask->source)
+                        ? CompiledMaskKind::Raster
+                        : CompiledMaskKind::Analytic;
+  const GraphValueId mask_output{grade.Id(), PortId{"mask"}};
+  PushPass(plan, GpuPassKind::MaskEvaluate, grade.Id(),
+           {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage}},
+           {{mask_output, CompiledValueKind::Mask}});
+  PushPass(plan, GpuPassKind::MaskFeather, grade.Id(),
+           {{PortId{"mask"}, mask_output, CompiledValueKind::Mask}},
+           {{mask_output, CompiledValueKind::Mask}});
+  if (kind == CompiledMaskKind::Raster) {
+    const Extent2D mask_extent{
+        std::max(source.full_reference_extent.width, source.host_extent.width),
+        std::max(source.full_reference_extent.height, source.host_extent.height)};
+    plan.peak_transient_bytes =
+        (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
+  }
+  return {CompiledMask{grade.Id(), mask->id, kind}, mask_output};
 }
 
 auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeModel& grade,
@@ -283,7 +294,7 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
   compiled.node_id      = grade.Id();
   compiled.scene_input  = scene_input;
   compiled.scene_output = GraphValueId{grade.Id(), PortId{"image"}};
-  auto [mask, mask_output] = CompileIncomingMask(document, grade.Id(), source, plan);
+  auto [mask, mask_output] = CompileGradeOwnedMask(grade, source, plan);
   compiled.mask            = std::move(mask);
   compiled.mask_output     = mask_output;
 

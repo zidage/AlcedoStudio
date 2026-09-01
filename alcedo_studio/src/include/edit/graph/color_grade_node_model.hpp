@@ -14,16 +14,18 @@
 
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/i_node_model.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 
 namespace alcedo {
 
 /**
- * @brief Color grade node with an ordered adjustment list, mix, and optional mask input.
+ * @brief Color grade node with an ordered adjustment list, mix, and Grade-owned Masks.
  *
  * Adjustment list order is user data. GraphCompiler must not reorder Models.
- * Clarity, Sharpen, Halation, and Film Grain are DRT/Post-owned and are rejected here.
+ * Mask list order is display order only. Clarity, Sharpen, Halation, and Film Grain
+ * are DRT/Post-owned and are rejected here. This node has a scene-image input only.
  */
 class ColorGradeNodeModel final : public INodeModel {
  public:
@@ -96,13 +98,63 @@ class ColorGradeNodeModel final : public INodeModel {
   void RemoveAdjustment(const AdjustmentInstanceId& id);
   void MoveAdjustment(const AdjustmentInstanceId& id, std::size_t index);
 
+  /**
+   * @brief Insert a validated Mask at @p index. Display order only; not pixel order.
+   *
+   * @param mask Owned Mask value. @ref MaskId must be unique in this Grade.
+   * @param index Insertion index. Values past the end append.
+   * @throws std::runtime_error when identity, values, or duplicate @ref MaskId fail.
+   *         The Mask list is left unchanged.
+   */
+  void AddMask(MaskModel mask, std::size_t index);
+  /**
+   * @brief Remove the Mask with @p mask_id.
+   * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
+   */
+  void RemoveMask(const MaskId& mask_id);
+  /**
+   * @brief Replace the source variant of an existing Mask.
+   * @throws std::runtime_error when @p mask_id is missing or @p source is invalid.
+   *         The Mask list is unchanged.
+   */
+  void ReplaceMaskSource(const MaskId& mask_id, MaskSource source);
+  /**
+   * @brief Set enabled. Does not change @ref MaskId or display order.
+   * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
+   */
+  void SetMaskEnabled(const MaskId& mask_id, bool enabled);
+  /**
+   * @brief Set opacity in `[0, 1]`.
+   * @throws std::runtime_error when @p mask_id is missing or @p opacity is invalid.
+   *         The Mask list is unchanged.
+   */
+  void SetMaskOpacity(const MaskId& mask_id, float opacity);
+  /**
+   * @brief Set invert. Applied after source feather and before range fields.
+   * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
+   */
+  void SetMaskInvert(const MaskId& mask_id, bool invert);
+  /**
+   * @brief Move a Mask in display order. Does not change pixel identity.
+   * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
+   */
+  void MoveMaskForDisplay(const MaskId& mask_id, std::size_t index);
+
+  [[nodiscard]] auto MaskCount() const -> std::size_t { return masks_.size(); }
+  [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return masks_; }
+  [[nodiscard]] auto MaskAt(std::size_t index) -> MaskModel&;
+  [[nodiscard]] auto MaskAt(std::size_t index) const -> const MaskModel&;
+  [[nodiscard]] auto FindMask(const MaskId& mask_id) -> MaskModel*;
+  [[nodiscard]] auto FindMask(const MaskId& mask_id) const -> const MaskModel*;
+
  private:
   NodeId id_;
   std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
+  std::vector<MaskModel>            masks_;
   bool  enabled_ = true;
   float mix_     = 1.0f;
-  std::array<PortDescriptor, 2> inputs_;
+  std::array<PortDescriptor, 1> inputs_;
   std::array<PortDescriptor, 1> outputs_;
 };
 

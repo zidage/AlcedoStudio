@@ -60,8 +60,8 @@ class PipelineGraph {
    * @brief Scene-image backbone rules on top of @ref Validate.
    *
    * Rejects scene-image fan-out, a path that does not run Develop to DRT, Color
-   * Grades off that path, and non-image node types on the path. Mask edges are
-   * ignored. Does not replace @ref Validate.
+   * Grades off that path, and non-image node types on the path. Color Grade has
+   * no Mask graph port. Does not replace @ref Validate.
    */
   [[nodiscard]] auto ValidateImageBackbone() const -> std::vector<GraphValidationError>;
   /**

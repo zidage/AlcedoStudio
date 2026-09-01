@@ -18,7 +18,7 @@ enum class PortDataType {
  * @brief Static description of one node port.
  *
  * @param required Incoming required ports must have exactly one edge. Optional
- *        ports (ColorGrade mask) may have zero or one edge.
+ *        ports may have zero or one edge.
  */
 struct PortDescriptor {
   PortId       id;

@@ -6,32 +6,31 @@
 
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 
 namespace alcedo {
 
-TEST(GpuDagModelGraph, RasterMaskRoundTripPreservesMaskAssetKey) {
+TEST(GpuDagModelGraph, BrushMaskRoundTripPreservesMaskAssetKey) {
   auto document = CreateDefaultPipelineDocument();
-  auto mask     = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.persisted"});
-  mask->SetAssetKey(MaskAssetKey{"asset_01"});
-  document.Graph().AddNode(std::move(mask));
-  document.Graph().Connect(NodeId{"mask.persisted"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.persisted"}, MaskAssetKey{"asset_01"});
   const auto  restored = PipelineDocument::FromJson(document.ToJson());
-  const auto* restored_mask =
-      dynamic_cast<const RasterMaskNodeModel*>(restored.Graph().FindNode("mask.persisted"));
+  const auto* restored_mask = restored.PrimaryGrade()->FindMask(MaskId{"mask.persisted"});
   ASSERT_NE(restored_mask, nullptr);
-  EXPECT_EQ(restored_mask->AssetKey(), MaskAssetKey{"asset_01"});
+  const auto* brush = std::get_if<BrushMaskSource>(&restored_mask->source);
+  ASSERT_NE(brush, nullptr);
+  ASSERT_TRUE(brush->asset_key.has_value());
+  EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
 }
 
 TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder) {
@@ -43,7 +42,7 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
   document.PrimaryGrade()->MoveAdjustment(AdjustmentInstanceId{"grade.primary.lmt"}, 8);
 
   const auto json = document.ToJson();
-  EXPECT_EQ(json["format_version"], 2);
+  EXPECT_EQ(json["format_version"], 3);
   EXPECT_FALSE(json.dump().find("stage") != std::string::npos && json.contains("stage"));
   EXPECT_FALSE(json.contains("priority"));
   const std::string dumped = json.dump();

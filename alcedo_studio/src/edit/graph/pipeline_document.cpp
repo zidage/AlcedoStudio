@@ -8,8 +8,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "edit/graph/analytic_mask_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
@@ -37,11 +35,9 @@ auto NodeFromJson(const nlohmann::json& json) -> std::unique_ptr<INodeModel> {
   if (type == type_ids::DrtNode().Text()) {
     return DrtNodeModel::FromJson(json);
   }
-  if (type == type_ids::AnalyticMaskNode().Text()) {
-    return AnalyticMaskNodeModel::FromJson(json);
-  }
-  if (type == type_ids::RasterMaskNode().Text()) {
-    return RasterMaskNodeModel::FromJson(json);
+  if (type == type_ids::AnalyticMaskNode().Text() || type == type_ids::RasterMaskNode().Text()) {
+    throw std::runtime_error(
+        "Unsupported pipeline document: top-level Mask nodes are not allowed");
   }
   throw std::runtime_error("Unknown node type: " + type);
 }
@@ -91,6 +87,10 @@ void ValidateDocumentShape(const nlohmann::json& json) {
     }
 
     const auto type = node["type"].get<std::string>();
+    if (type == type_ids::AnalyticMaskNode().Text() || type == type_ids::RasterMaskNode().Text()) {
+      throw std::runtime_error(
+          "Unsupported pipeline document: top-level Mask nodes are not allowed");
+    }
     if (type == type_ids::ColorGradeNode().Text() || type == type_ids::DrtNode().Text()) {
       if (type == type_ids::DrtNode().Text() &&
           (!node.contains("params") || !node["params"].is_object())) {
@@ -116,6 +116,11 @@ void ValidateDocumentShape(const nlohmann::json& json) {
                                    adjustment_path);
         }
       }
+      if (type == type_ids::ColorGradeNode().Text() &&
+          (!node.contains("masks") || !node["masks"].is_array())) {
+        throw std::runtime_error("Pipeline document ColorGrade is missing a masks array at " +
+                                 path);
+      }
     } else if (!node.contains("params") || !node["params"].is_object()) {
       throw std::runtime_error("Pipeline document node is missing object params at " + path);
     }
@@ -130,6 +135,11 @@ void ValidateDocumentShape(const nlohmann::json& json) {
         !edge["from"][0].is_string() || !edge["from"][1].is_string() ||
         !edge["to"][0].is_string() || !edge["to"][1].is_string()) {
       throw std::runtime_error("Pipeline document has an invalid edge at " + path);
+    }
+    const auto from_port = edge["from"][1].get<std::string>();
+    const auto to_port   = edge["to"][1].get<std::string>();
+    if (from_port == "mask" || to_port == "mask") {
+      throw std::runtime_error("Unsupported pipeline document: Mask edges are not allowed");
     }
   }
 

@@ -13,12 +13,12 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
-#include "edit/graph/i_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "opencl/opencl_api_counters.hpp"
@@ -270,7 +270,7 @@ void GenerateMipChain(OpenClRenderDevice& device, MaskTextureLease<OpenClBackend
 }
 
 void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output,
-                    const AnalyticMaskNodeModel& analytic, const ExecutionPlan& plan) {
+                    const MaskModel& mask, const ExecutionPlan& plan) {
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
   MaskAnalyticParams params;
@@ -279,9 +279,9 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
   params.height              = output.Height();
   params.reference_width     = plan.geometry.full_reference_extent.width;
   params.reference_height    = plan.geometry.full_reference_extent.height;
-  params.kind                = analytic.Kind() == AnalyticMaskKind::Radial ? 0u : 1u;
+  params.kind                = AnalyticKindFromMask(mask) == AnalyticMaskKind::Radial ? 0u : 1u;
 
-  const auto& radial         = analytic.Radial();
+  const auto radial          = RadialParamsFromMask(mask);
   params.center_x            = radial.center_x;
   params.center_y            = radial.center_y;
   params.major_radius        = radial.major_radius;
@@ -291,7 +291,7 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
   params.outer_feather       = radial.outer_feather;
   params.radial_invert       = radial.invert ? 1u : 0u;
 
-  const auto& graduated      = analytic.GraduatedNd();
+  const auto graduated       = LinearGradientParamsFromMask(mask);
   params.origin_x            = graduated.origin_x;
   params.origin_y            = graduated.origin_y;
   params.normal_x            = graduated.normal_x;
@@ -446,20 +446,24 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   auto&            output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
   OpenClMaskResult result{compiled_grade.mask_output};
 
-  const auto*      node = document.Graph().FindNode(compiled_grade.mask->node_id);
-  if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
-    EncodeAnalytic(device, output.Texture(), *analytic, plan);
+  const auto&      mask_model = RequireCompiledMaskModel(document, compiled_grade);
+  if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
+      std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
+    EncodeAnalytic(device, output.Texture(), mask_model, plan);
     return result;
   }
 
-  const auto* raster = dynamic_cast<const RasterMaskNodeModel*>(node);
-  if (raster == nullptr) {
-    throw std::runtime_error("ExecuteOpenClMask: compiled mask node does not match document");
+  const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source);
+  if (brush == nullptr) {
+    throw std::runtime_error("ExecuteOpenClMask: compiled mask does not match document");
   }
   if (store == nullptr) {
     throw std::invalid_argument("ExecuteOpenClMask: raster mask needs MaskStore");
   }
-  const auto asset = store->Load(raster->AssetKey());
+  if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
+    throw std::runtime_error("ExecuteOpenClMask: Brush Mask has no asset");
+  }
+  const auto asset = store->Load(*brush->asset_key);
   if (asset == nullptr || asset->descriptor.extent.Empty()) {
     throw std::runtime_error("ExecuteOpenClMask: MaskStore returned an invalid asset");
   }
@@ -485,18 +489,18 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     GenerateMipChain(device, source);
   }
 
-  const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, raster->ReferenceBounds(),
+  const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, brush->descriptor.reference_bounds,
                                                    asset->descriptor.extent);
-  if (raster->FeatherRadius() <= 0.0f) {
+  if (brush->feather_radius <= 0.0f) {
     const auto selected_level = std::min<std::size_t>(
         static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
         source.MipLevelCount() - 1);
     EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
-                       sampling.render_to_texture_uv, raster->Invert());
+                       sampling.render_to_texture_uv, mask_model.invert);
     return result;
   }
 
-  const auto distance_id  = SignedDistanceId(raster->Id());
+  const auto distance_id  = SignedDistanceId(compiled_grade.node_id);
   const auto distance_key = HashSignedDistanceKey(asset->key, asset->descriptor.extent);
   const auto distance_pixels =
       static_cast<std::size_t>(asset->descriptor.extent.width) * asset->descriptor.extent.height;
@@ -516,16 +520,16 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
 
   result.signed_distance_resource_id = distance.ResourceId();
-  const auto  bounds                 = raster->ReferenceBounds();
+  const auto  bounds                 = brush->descriptor.reference_bounds;
   const float x_scale =
       static_cast<float>(asset->descriptor.extent.width) /
       (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
   const float y_scale = static_cast<float>(asset->descriptor.extent.height) /
                         (static_cast<float>(plan.geometry.full_reference_extent.height) *
                          std::max(bounds.h, 1.0e-6f));
-  const float radius_texels = raster->FeatherRadius() * 0.5f * (x_scale + y_scale);
+  const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
   EncodeFeatherSample(device, distance, output.Texture(), asset->descriptor.extent,
-                      sampling.render_to_texture_uv, radius_texels, raster->Invert());
+                      sampling.render_to_texture_uv, radius_texels, mask_model.invert);
   if (must_compute) {
     workspace.Values().StoreMetadata(
         distance_id, distance_key,
