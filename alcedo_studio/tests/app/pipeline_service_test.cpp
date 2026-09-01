@@ -81,13 +81,13 @@ TEST_F(PipelineMapperTests, PipelineMgmtServiceBuildsDefaultGpuDagForNewImage) {
   ASSERT_NE(guard->document_, nullptr);
   EXPECT_EQ(guard->document_->Graph().Nodes().size(), 3U);
   EXPECT_EQ(guard->document_->Graph().Edges().size(), 2U);
-  EXPECT_EQ(guard->document_->ToJson().at("format_version"), 2);
+  EXPECT_EQ(guard->document_->ToJson().at("format_version"), 3);
 
   guard->dirty_ = true;
   pipeline_service.SavePipeline(guard);
   const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9001);
   ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), 2);
+  EXPECT_EQ(stored->at("format_version"), 3);
   EXPECT_EQ(stored->at("nodes").size(), 3U);
   EXPECT_FALSE(stored->contains("stages"));
 }
@@ -625,7 +625,7 @@ TEST_F(PipelineMapperTests, ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree)
   first.SyncPipelineDocument(initial);
   const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9102);
   ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), 2);
+  EXPECT_EQ(stored->at("format_version"), 3);
   EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
 
   initial->serialized_state_needs_writeback_ = true;

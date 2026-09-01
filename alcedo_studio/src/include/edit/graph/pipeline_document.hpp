@@ -17,7 +17,7 @@
 
 namespace alcedo {
 
-inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 2;
+inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 3;
 
 /**
  * @brief Serializable pipeline: geometry plus DAG. Does not own a GPU workspace.

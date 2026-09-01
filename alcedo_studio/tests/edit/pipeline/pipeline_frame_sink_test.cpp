@@ -556,6 +556,35 @@ TEST_F(PipelineFrameSinkTest, FullResExportPreservesHighlightShadowSourceDetail)
   EXPECT_FALSE(exec->GetGlobalParams().render_hs_preserve_source_detail_);
 }
 
+TEST_F(PipelineFrameSinkTest, ThumbnailAnalysisAndExportApplyRequestsOmitActiveRaster) {
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+
+  PipelineTask preview;
+  preview.pipeline_executor_                 = exec;
+  preview.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+  const auto preview_request                 = preview.MakeApplyRequest();
+  EXPECT_TRUE(preview_request.active_raster_masks.empty());
+  EXPECT_FALSE(preview_request.allow_active_raster_preview);
+  EXPECT_EQ(preview_request.cache_policy, RenderCachePolicy::UseSessionCache);
+
+  PipelineTask thumbnail;
+  thumbnail.pipeline_executor_                 = exec;
+  thumbnail.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
+  thumbnail.options_.render_desc_.max_edge_    = 256;
+  const auto thumbnail_request                 = thumbnail.MakeApplyRequest();
+  EXPECT_TRUE(thumbnail_request.active_raster_masks.empty());
+  EXPECT_FALSE(thumbnail_request.allow_active_raster_preview);
+  EXPECT_EQ(thumbnail_request.cache_policy, RenderCachePolicy::BypassSessionCache);
+
+  PipelineTask export_task;
+  export_task.pipeline_executor_                 = exec;
+  export_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
+  const auto export_request                      = export_task.MakeApplyRequest();
+  EXPECT_TRUE(export_request.active_raster_masks.empty());
+  EXPECT_FALSE(export_request.allow_active_raster_preview);
+  EXPECT_EQ(export_request.cache_policy, RenderCachePolicy::BypassSessionCache);
+}
+
 TEST_F(PipelineFrameSinkTest, ThumbnailAndExportTasksDisableSessionCache) {
   auto exec = std::make_shared<CPUPipelineExecutor>();
   exec->SetEnableCache(true);

@@ -463,7 +463,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   const auto          input_width  = input->Texture().Width();
   const auto          input_height = input->Texture().Height();
   const std::uint8_t* mask_pointer = nullptr;
-  if (compiled_grade->mask) {
+  if (compiled_grade->mask_stack) {
     auto* mask = workspace.Images().Find(compiled_grade->mask_output);
     if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
         mask->Texture().Width() != input_width || mask->Texture().Height() != input_height) {
@@ -487,7 +487,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   }
 
   const float        grade_mix        = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool         skip_mix         = grade_mix == 1.0f && !compiled_grade->mask.has_value();
+  const bool         skip_mix         = grade_mix == 1.0f && !compiled_grade->mask_stack.has_value();
   std::size_t        remaining_writes = ops.size() + (skip_mix ? 0U : 1U);
   const GraphValueId ping_id{grade->Id(), PortId{"runtime.ping"}};
   const GraphValueId pong_id{grade->Id(), PortId{"runtime.pong"}};

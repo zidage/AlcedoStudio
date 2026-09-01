@@ -10,13 +10,17 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <alcedo/metal/Metal.hpp>
 
 #include "edit/geometry/texture_sampling_plan.hpp"
-#include "edit/graph/analytic_mask_node_model.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
+#include "edit/graph/active_raster_mask_validation.hpp"
+#include "edit/mask/active_raster_mask.hpp"
+#include "edit/mask/mask_model.hpp"
+#include "edit/runtime/compiled_grade_mask.hpp"
+#include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
@@ -45,7 +49,7 @@ struct alignas(16) MaskSampleParams {
   std::uint32_t output_width  = 0;
   std::uint32_t output_height = 0;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
   std::uint32_t pad1          = 0;
 };
 
@@ -57,7 +61,7 @@ struct alignas(16) MaskFeatherParams {
   std::uint32_t output_height = 0;
   float         radius_texels = 0.0f;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
 };
 
 struct alignas(16) MaskAnalyticParams {
@@ -82,7 +86,7 @@ struct alignas(16) MaskAnalyticParams {
   float         transition_distance = 0.0f;
   float         start_value         = 0.0f;
   float         end_value           = 0.0f;
-  std::uint32_t graduated_invert    = 0;
+  float         opacity             = 1.0f;
 };
 
 struct alignas(16) MaskBandParams {
@@ -103,37 +107,6 @@ auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
-auto UnionDirtyRectangles(std::span<const RectI> rectangles, Extent2D extent) -> RectI {
-  if (rectangles.empty()) {
-    return {};
-  }
-  std::int32_t x0 = static_cast<std::int32_t>(extent.width);
-  std::int32_t y0 = static_cast<std::int32_t>(extent.height);
-  std::int32_t x1 = 0;
-  std::int32_t y1 = 0;
-  for (const auto& rect : rectangles) {
-    if (rect.width <= 0 || rect.height <= 0) {
-      continue;
-    }
-    x0 = std::min(x0, std::max(rect.x, 0));
-    y0 = std::min(y0, std::max(rect.y, 0));
-    x1 = std::max(x1, std::min(rect.X1(), static_cast<std::int32_t>(extent.width)));
-    y1 = std::max(y1, std::min(rect.Y1(), static_cast<std::int32_t>(extent.height)));
-  }
-  return x1 > x0 && y1 > y0 ? RectI{x0, y0, x1 - x0, y1 - y0} : RectI{};
-}
-
-auto CopyRectangle(const MaskAsset& asset, RectI rectangle) -> std::vector<std::byte> {
-  std::vector<std::byte> bytes(static_cast<std::size_t>(rectangle.width) * rectangle.height);
-  for (std::int32_t row = 0; row < rectangle.height; ++row) {
-    const auto source =
-        static_cast<std::size_t>(rectangle.y + row) * asset.descriptor.extent.width + rectangle.x;
-    std::copy_n(reinterpret_cast<const std::byte*>(asset.pixels.data() + source), rectangle.width,
-                bytes.data() + static_cast<std::size_t>(row) * rectangle.width);
-  }
-  return bytes;
-}
-
 auto HashSignedDistanceKey(const MaskAssetKey& key, Extent2D extent) -> ContentKey {
   ContentHash hash;
   hash.MixText(key.Value());
@@ -142,10 +115,12 @@ auto HashSignedDistanceKey(const MaskAssetKey& key, Extent2D extent) -> ContentK
   return hash.Key();
 }
 
-auto DistanceId(const NodeId& node) -> GraphValueId { return {node, PortId{"signed_distance"}}; }
+auto DistanceId(const NodeId& node, const MaskId& mask_id) -> GraphValueId {
+  return MaskSignedDistanceValue(node, mask_id);
+}
 
-auto DistanceMetaId(const NodeId& node) -> GraphValueId {
-  return {node, PortId{"signed_distance.meta"}};
+auto DistanceMetaId(const NodeId& node, const MaskId& mask_id) -> GraphValueId {
+  return MaskScratchValue(node, mask_id, "signed_distance.meta");
 }
 
 auto Pipeline(const char* function, const char* label) -> NS::SharedPtr<MTL::ComputePipelineState> {
@@ -214,7 +189,8 @@ auto AllocateTransientPlane(MetalRenderWorkspace& workspace, std::size_t bytes) 
   return plane;
 }
 
-void GenerateMipChain(MetalRenderDevice& device, MaskTextureLease<MetalBackend>& source) {
+template <class Key>
+void GenerateMipChain(MetalRenderDevice& device, RasterTextureLease<MetalBackend, Key>& source) {
   for (std::size_t level = 1; level < source.MipLevelCount(); ++level) {
     auto&         previous = source.Texture(level - 1);
     auto&         next     = source.Texture(level);
@@ -235,7 +211,7 @@ void GenerateMipChain(MetalRenderDevice& device, MaskTextureLease<MetalBackend>&
 }
 
 void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
-                    const AnalyticMaskNodeModel& analytic, const ExecutionPlan& plan) {
+                    const MaskModel& mask, const ExecutionPlan& plan) {
   auto*              encoder  = Encoder(device);
   auto               pipeline = Pipeline("mask_analytic", "Metal Mask analytic");
   MaskAnalyticParams params;
@@ -244,8 +220,8 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   params.height              = output.Height();
   params.reference_width     = plan.geometry.full_reference_extent.width;
   params.reference_height    = plan.geometry.full_reference_extent.height;
-  params.kind                = analytic.Kind() == AnalyticMaskKind::Radial ? 0u : 1u;
-  const auto& radial         = analytic.Radial();
+  params.kind                = AnalyticKindFromMask(mask) == AnalyticMaskKind::Radial ? 0u : 1u;
+  const auto radial          = RadialParamsFromMask(mask);
   params.center_x            = radial.center_x;
   params.center_y            = radial.center_y;
   params.major_radius        = radial.major_radius;
@@ -254,15 +230,15 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   params.inner_feather       = radial.inner_feather;
   params.outer_feather       = radial.outer_feather;
   params.radial_invert       = radial.invert ? 1u : 0u;
-  const auto& graduated      = analytic.GraduatedNd();
-  params.origin_x            = graduated.origin_x;
-  params.origin_y            = graduated.origin_y;
-  params.normal_x            = graduated.normal_x;
-  params.normal_y            = graduated.normal_y;
-  params.transition_distance = graduated.transition_distance;
-  params.start_value         = graduated.start_value;
-  params.end_value           = graduated.end_value;
-  params.graduated_invert    = graduated.invert ? 1u : 0u;
+  const auto linear_gradient       = LinearGradientParamsFromMask(mask);
+  params.origin_x            = linear_gradient.origin_x;
+  params.origin_y            = linear_gradient.origin_y;
+  params.normal_x            = linear_gradient.normal_x;
+  params.normal_y            = linear_gradient.normal_y;
+  params.transition_distance = linear_gradient.transition_distance;
+  params.start_value         = linear_gradient.start_value;
+  params.end_value           = linear_gradient.end_value;
+  params.opacity             = mask.opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 0);
@@ -272,7 +248,7 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
 
 void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
                         MetalBackend::Texture2D& output, const Matrix3x3& render_to_uv,
-                        bool invert) {
+                        bool invert, float opacity) {
   auto*            encoder  = Encoder(device);
   auto             pipeline = Pipeline("mask_raster_sample", "Metal Mask raster sample");
   MaskSampleParams params;
@@ -282,6 +258,7 @@ void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D
   params.output_width  = output.Width();
   params.output_height = output.Height();
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(source.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
@@ -357,7 +334,8 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
 
 void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& distance,
                          MetalBackend::Texture2D& output, Extent2D source_extent,
-                         const Matrix3x3& render_to_uv, float radius_texels, bool invert) {
+                         const Matrix3x3& render_to_uv, float radius_texels, bool invert,
+                         float opacity) {
   auto*             encoder  = Encoder(device);
   auto              pipeline = Pipeline("mask_feather_sample", "Metal Mask feather");
   MaskFeatherParams params;
@@ -368,10 +346,32 @@ void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& 
   params.output_height = output.Height();
   params.radius_texels = radius_texels;
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setBuffer(static_cast<MTL::Buffer*>(distance.Native()), 0, 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 1);
+  Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
+}
+
+void EncodeFillZero(MetalRenderDevice& device, MetalBackend::Texture2D& output) {
+  auto* encoder  = Encoder(device);
+  auto  pipeline = Pipeline("mask_fill_zero", "Metal Mask fill zero");
+  encoder->setComputePipelineState(pipeline.get());
+  encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
+  Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
+}
+
+void EncodeUnionMax(MetalRenderDevice& device, const MetalBackend::Texture2D& lhs,
+                    const MetalBackend::Texture2D& rhs, MetalBackend::Texture2D& output) {
+  auto* encoder  = Encoder(device);
+  auto  pipeline = Pipeline("mask_union_max", "Metal Mask union max");
+  encoder->setComputePipelineState(pipeline.get());
+  encoder->setTexture(static_cast<MTL::Texture*>(lhs.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(rhs.Native()), 1);
+  encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 2);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
@@ -394,6 +394,10 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
                                           "Metal Mask feather"});
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_analytic", "Metal Mask analytic"});
+  pipelines.push_back(
+      MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_fill_zero", "Metal Mask fill zero"});
+  pipelines.push_back(
+      MetalPipelineWarmup{ALCEDO_METAL_MASK_METALLIB_PATH, "mask_union_max", "Metal Mask union max"});
 #else
   (void)pipelines;
 #endif
@@ -401,122 +405,247 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 
 auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                       const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
-                      MaskStore* store, std::span<const RectI> dirty_rectangles)
+                      const CompiledMaskSource& compiled_source, MaskStore* store,
+                      std::span<const ActiveRasterMaskInput> active_raster_masks)
     -> MetalMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMask: BeginRender has not been called");
   }
-  if (!compiled_grade.mask.has_value()) {
-    throw std::runtime_error("ExecuteMetalMask: compiled Color Grade has no mask");
+  if (!active_raster_masks.empty()) {
+    ValidateActiveRasterMaskBindings(document, active_raster_masks);
   }
   auto&           workspace = device.Workspace();
   auto&           context   = device.CommandContext();
   const auto      extent    = plan.geometry.render_extent;
-  auto&           output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
-  MetalMaskResult result{compiled_grade.mask_output};
+  auto&           output    = EnsureOutput(workspace, compiled_source.effective_output, extent);
+  MetalMaskResult result{compiled_source.effective_output};
 
-  const auto*     node = document.Graph().FindNode(compiled_grade.mask->node_id);
-  if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
-    EncodeAnalytic(device, output.Texture(), *analytic, plan);
+  const auto& mask_model =
+      RequireMaskModel(document, compiled_grade.node_id, compiled_source.mask_id);
+  if (std::holds_alternative<RadialMaskSource>(mask_model.source) ||
+      std::holds_alternative<LinearGradientMaskSource>(mask_model.source)) {
+    EncodeAnalytic(device, output.Texture(), mask_model, plan);
     return result;
   }
-  const auto* raster = dynamic_cast<const RasterMaskNodeModel*>(node);
-  if (raster == nullptr) {
-    throw std::runtime_error("ExecuteMetalMask: compiled mask node does not match document");
+  const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source);
+  if (brush == nullptr) {
+    throw std::runtime_error("ExecuteMetalMask: compiled mask does not match document");
   }
+
+  const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
+                                                 compiled_source.mask_id);
+  const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
+                                   bool raster_bytes_changed, const MaskAssetKey* persistent_key) {
+    result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
+    const auto sampling    = MakeRasterMaskSamplingPlan(
+        plan.geometry, raster_descriptor.reference_bounds, raster_descriptor.extent);
+    if (brush->feather_radius <= 0.0f) {
+      const auto selected_level = std::min<std::size_t>(
+          static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
+          source.MipLevelCount() - 1);
+      EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
+                         sampling.render_to_texture_uv, mask_model.invert, mask_model.opacity);
+      return;
+    }
+    const auto distance_id    = DistanceId(compiled_grade.node_id, compiled_source.mask_id);
+    const auto meta_id        = DistanceMetaId(compiled_grade.node_id, compiled_source.mask_id);
+    const auto distance_bytes = static_cast<std::size_t>(raster_descriptor.extent.width) *
+                                raster_descriptor.extent.height * sizeof(float);
+    auto& distance = EnsureValueBuffer(workspace, distance_id, distance_bytes);
+    bool  key_matches = false;
+    ContentKey distance_key{};
+    if (persistent_key != nullptr) {
+      distance_key      = HashSignedDistanceKey(*persistent_key, raster_descriptor.extent);
+      auto& meta_buf    = EnsureValueBuffer(workspace, meta_id, sizeof(SignedDistanceMeta));
+      SignedDistanceMeta meta{};
+      if (meta_buf.DevicePointer() != nullptr && meta_buf.Bytes() >= sizeof(SignedDistanceMeta)) {
+        std::memcpy(&meta, meta_buf.DevicePointer(), sizeof(meta));
+      }
+      key_matches = meta.content_hash == distance_key.hash &&
+                    meta.width == raster_descriptor.extent.width &&
+                    meta.height == raster_descriptor.extent.height;
+      const bool must_compute =
+          raster_bytes_changed || !key_matches || distance.Bytes() < distance_bytes;
+      if (must_compute) {
+        result.transient_bytes = EncodeSignedDistance(
+            device, source.Texture(), distance, raster_descriptor.extent.width,
+            raster_descriptor.extent.height);
+        meta.content_hash = distance_key.hash;
+        meta.width        = raster_descriptor.extent.width;
+        meta.height       = raster_descriptor.extent.height;
+        workspace.Device().UploadBufferRange(
+            meta_buf, 0,
+            std::span<const std::byte>(reinterpret_cast<const std::byte*>(&meta), sizeof(meta)),
+            context);
+      }
+    } else if (raster_bytes_changed || distance.Bytes() < distance_bytes) {
+      result.transient_bytes = EncodeSignedDistance(device, source.Texture(), distance,
+                                                    raster_descriptor.extent.width,
+                                                    raster_descriptor.extent.height);
+    }
+    result.signed_distance_resource_id = distance.ResourceId();
+    const auto& bounds                 = raster_descriptor.reference_bounds;
+    const float x_scale =
+        static_cast<float>(raster_descriptor.extent.width) /
+        (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
+    const float y_scale = static_cast<float>(raster_descriptor.extent.height) /
+                          (static_cast<float>(plan.geometry.full_reference_extent.height) *
+                           std::max(bounds.h, 1.0e-6f));
+    const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
+    EncodeFeatherSample(device, distance, output.Texture(), raster_descriptor.extent,
+                        sampling.render_to_texture_uv, radius_texels, mask_model.invert,
+                        mask_model.opacity);
+  };
+
+  auto upload_full = [&](auto& source, std::span<const std::uint8_t> pixels) {
+    workspace.Device().UploadTexture2D(
+        source.Texture(),
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels.data()), pixels.size()),
+        context);
+    GenerateMipChain(device, source);
+  };
+
+  if (active != nullptr) {
+    auto& cache = workspace.ActiveRasterTextures();
+    const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_source.mask_id,
+                                         active->session_generation};
+    cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
+      return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
+             key.session_generation != tex_key.session_generation;
+    });
+    auto source                       = cache.Acquire(tex_key, active->descriptor.extent);
+    result.active_texture_resource_id = source.Texture().ResourceId();
+    bool raster_bytes_changed         = false;
+    if (!cache.PixelsUploaded(tex_key)) {
+      upload_full(source, *active->pixels);
+      cache.SetUploadedPixels(tex_key, active->content_revision);
+      raster_bytes_changed = true;
+    } else if (active->content_revision < cache.UploadedRevision(tex_key)) {
+      throw std::runtime_error("ExecuteMetalMask: active raster revision is stale");
+    } else if (active->content_revision > cache.UploadedRevision(tex_key)) {
+      const auto dirty =
+          ClipRasterDirtyRectangle(active->dirty_rectangle, active->descriptor.extent);
+      const auto bytes = CopyPackedR8Rectangle(*active->pixels, active->descriptor.extent, dirty);
+      workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
+      GenerateMipChain(device, source);
+      cache.SetUploadedPixels(tex_key, active->content_revision);
+      raster_bytes_changed = true;
+    }
+    encode_coverage(source, active->descriptor, raster_bytes_changed, nullptr);
+    return result;
+  }
+
   if (store == nullptr) {
     throw std::invalid_argument("ExecuteMetalMask: raster mask needs MaskStore");
   }
-  const auto asset  = store->Load(raster->AssetKey());
+  if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
+    EncodeFillZero(device, output.Texture());
+    return result;
+  }
+  const auto asset  = store->Load(*brush->asset_key);
   const bool cached = workspace.MaskTextures().Contains(asset->key);
   auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
   result.persistent_texture_resource_id = source.Texture().ResourceId();
-  result.mip_level_count                = static_cast<std::uint32_t>(source.MipLevelCount());
-  const auto dirty     = UnionDirtyRectangles(dirty_rectangles, asset->descriptor.extent);
-  const bool has_dirty = dirty.width > 0 && dirty.height > 0;
   if (!cached) {
-    workspace.Device().UploadTexture2D(
-        source.Texture(),
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(asset->pixels.data()),
-                                   asset->pixels.size()),
-        context);
-    GenerateMipChain(device, source);
-  } else if (has_dirty) {
-    const auto bytes = CopyRectangle(*asset, dirty);
-    workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
-    GenerateMipChain(device, source);
+    upload_full(source, asset->pixels);
   }
-
-  const auto sampling = MakeRasterMaskSamplingPlan(plan.geometry, raster->ReferenceBounds(),
-                                                   asset->descriptor.extent);
-  if (raster->FeatherRadius() <= 0.0f) {
-    const auto selected_level = std::min<std::size_t>(
-        static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
-        source.MipLevelCount() - 1);
-    EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
-                       sampling.render_to_texture_uv, raster->Invert());
-    return result;
-  }
-
-  const auto distance_id    = DistanceId(raster->Id());
-  const auto meta_id        = DistanceMetaId(raster->Id());
-  const auto distance_key   = HashSignedDistanceKey(asset->key, asset->descriptor.extent);
-  const auto distance_bytes = static_cast<std::size_t>(asset->descriptor.extent.width) *
-                              asset->descriptor.extent.height * sizeof(float);
-  auto&              distance = EnsureValueBuffer(workspace, distance_id, distance_bytes);
-  auto&              meta_buf = EnsureValueBuffer(workspace, meta_id, sizeof(SignedDistanceMeta));
-  SignedDistanceMeta meta{};
-  if (meta_buf.DevicePointer() != nullptr && meta_buf.Bytes() >= sizeof(SignedDistanceMeta)) {
-    std::memcpy(&meta, meta_buf.DevicePointer(), sizeof(meta));
-  }
-  const bool key_matches = meta.content_hash == distance_key.hash &&
-                           meta.width == asset->descriptor.extent.width &&
-                           meta.height == asset->descriptor.extent.height;
-  const bool must_compute =
-      !cached || has_dirty || !key_matches || distance.Bytes() < distance_bytes;
-  if (must_compute) {
-    result.transient_bytes =
-        EncodeSignedDistance(device, source.Texture(), distance, asset->descriptor.extent.width,
-                             asset->descriptor.extent.height);
-    meta.content_hash = distance_key.hash;
-    meta.width        = asset->descriptor.extent.width;
-    meta.height       = asset->descriptor.extent.height;
-    workspace.Device().UploadBufferRange(
-        meta_buf, 0,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(&meta), sizeof(meta)),
-        context);
-  }
-  result.signed_distance_resource_id = distance.ResourceId();
-  const auto  bounds                 = raster->ReferenceBounds();
-  const float x_scale =
-      static_cast<float>(asset->descriptor.extent.width) /
-      (static_cast<float>(plan.geometry.full_reference_extent.width) * std::max(bounds.w, 1.0e-6f));
-  const float y_scale = static_cast<float>(asset->descriptor.extent.height) /
-                        (static_cast<float>(plan.geometry.full_reference_extent.height) *
-                         std::max(bounds.h, 1.0e-6f));
-  const float radius_texels = raster->FeatherRadius() * 0.5f * (x_scale + y_scale);
-  EncodeFeatherSample(device, distance, output.Texture(), asset->descriptor.extent,
-                      sampling.render_to_texture_uv, radius_texels, raster->Invert());
+  encode_coverage(source, asset->descriptor, !cached, &asset->key);
   return result;
+}
+
+auto ExecuteMetalMaskUnion(MetalRenderDevice& device, const ExecutionPlan& plan,
+                           const PipelineDocument& document,
+                           const CompiledGradeNode& compiled_grade) -> MetalMaskResult {
+  // Union writes the full render extent from current enabled sources. Brush dirty
+  // rectangles limit host-to-device upload only. Signed-distance feather uses the
+  // full raster because the Euclidean field is global.
+  if (!device.Workspace().IsRendering()) {
+    throw std::runtime_error("ExecuteMetalMaskUnion: BeginRender has not been called");
+  }
+  const auto& stack     = RequireMaskStack(compiled_grade);
+  auto&       workspace = device.Workspace();
+  const auto  extent    = plan.geometry.render_extent;
+  std::vector<GraphValueId> enabled;
+  enabled.reserve(stack.sources.size());
+  for (const auto& source : stack.sources) {
+    if (MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      enabled.push_back(source.effective_output);
+    }
+  }
+  if (enabled.empty()) {
+    auto& output = EnsureOutput(workspace, stack.union_output, extent);
+    EncodeFillZero(device, output.Texture());
+    return MetalMaskResult{stack.union_output};
+  }
+  if (enabled.size() == 1) {
+    (void)workspace.AliasImageFrom(stack.union_output, enabled.front());
+    return MetalMaskResult{stack.union_output};
+  }
+  auto& output = EnsureOutput(workspace, stack.union_output, extent);
+  auto* first  = workspace.Images().Find(enabled.front());
+  if (first == nullptr || first->Empty()) {
+    throw std::runtime_error("ExecuteMetalMaskUnion: missing enabled Mask source");
+  }
+  workspace.Device().CopyTexture2D(first->Texture(), output.Texture(), device.CommandContext());
+  const GraphValueId scratch_id{compiled_grade.node_id, PortId{"mask.union.scratch"}};
+  auto& scratch = EnsureOutput(workspace, scratch_id, extent);
+  for (std::size_t index = 1; index < enabled.size(); ++index) {
+    auto* next = workspace.Images().Find(enabled[index]);
+    auto* cur  = workspace.Images().Find(stack.union_output);
+    if (next == nullptr || cur == nullptr) {
+      throw std::runtime_error("ExecuteMetalMaskUnion: missing enabled Mask source");
+    }
+    EncodeUnionMax(device, cur->Texture(), next->Texture(), scratch.Texture());
+    auto* scratch_image = workspace.Images().Find(scratch_id);
+    auto* union_image   = workspace.Images().Find(stack.union_output);
+    if (scratch_image == nullptr || union_image == nullptr) {
+      throw std::runtime_error("ExecuteMetalMaskUnion: Union scratch is missing");
+    }
+    workspace.Device().CopyTexture2D(scratch_image->Texture(), union_image->Texture(),
+                                     device.CommandContext());
+  }
+  return MetalMaskResult{stack.union_output};
+}
+
+auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
+                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                      MaskStore* store, std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> MetalMaskResult {
+  const auto& stack = RequireMaskStack(compiled_grade);
+  MetalMaskResult sources{};
+  for (const auto& source : stack.sources) {
+    if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+      continue;
+    }
+    sources = ExecuteMetalMask(device, plan, document, compiled_grade, source, store,
+                               active_raster_masks);
+  }
+  auto unified                           = ExecuteMetalMaskUnion(device, plan, document, compiled_grade);
+  unified.persistent_texture_resource_id = sources.persistent_texture_resource_id;
+  unified.active_texture_resource_id     = sources.active_texture_resource_id;
+  unified.signed_distance_resource_id    = sources.signed_distance_resource_id;
+  unified.mip_level_count                = sources.mip_level_count;
+  unified.transient_bytes                = sources.transient_bytes;
+  return unified;
 }
 
 auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                       const PipelineDocument& document, MaskStore* store,
-                      std::span<const RectI> dirty_rectangles) -> MetalMaskResult {
-  bool any_mask = false;
+                      std::span<const ActiveRasterMaskInput> active_raster_masks)
+    -> MetalMaskResult {
+  const CompiledGradeNode* last = nullptr;
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
-      any_mask = true;
-      break;
+    if (grade.mask_stack.has_value()) {
+      last = &grade;
     }
   }
-  if (!any_mask) {
+  if (last == nullptr) {
     throw std::runtime_error("ExecuteMetalMask: plan has no mask");
   }
   MetalMaskResult result{};
   for (const auto& grade : plan.grade_nodes) {
-    if (grade.mask.has_value()) {
-      result = ExecuteMetalMask(device, plan, document, grade, store, dirty_rectangles);
+    if (grade.mask_stack.has_value()) {
+      result = ExecuteMetalMask(device, plan, document, grade, store, active_raster_masks);
     }
   }
   return result;

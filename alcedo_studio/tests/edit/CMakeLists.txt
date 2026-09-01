@@ -232,6 +232,8 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/active_raster_mask_request_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
@@ -239,7 +241,8 @@ target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
   ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
-  ALCEDO_GRAPH_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/graph")
+  ALCEDO_GRAPH_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/graph"
+  ALCEDO_MASK_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/mask")
 gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
@@ -342,6 +345,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_qualification_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
@@ -351,7 +355,8 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
 
   add_executable(GpuDagCudaMaskTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_resource_test.cpp)
   target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaMaskTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
   gtest_discover_tests(GpuDagCudaMaskTest TEST_PREFIX "GpuDagCudaMaskTest."
@@ -406,7 +411,8 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_llf_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_mask_resource_test.cpp)
   target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalGradeTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
@@ -433,7 +439,8 @@ if(ALCEDO_METAL_ENABLED)
 
   add_executable(GpuDagMetalRendererTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_mask_qualification_test.cpp)
   target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalRendererTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
@@ -475,7 +482,8 @@ if(ALCEDO_OPENCL_ENABLED)
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_mask_resource_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)
@@ -487,7 +495,8 @@ if(ALCEDO_OPENCL_ENABLED)
 
   add_executable(GpuDagOpenClDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_mask_qualification_test.cpp)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp

@@ -55,6 +55,7 @@ TEST(GpuDagModelGraph, ModelAndGraphHeadersDoNotIncludeGpuOrImageBuffer) {
   std::vector<std::string> hits;
   ScanDirectory(std::filesystem::path{ALCEDO_MODEL_HEADER_ROOT}, &hits);
   ScanDirectory(std::filesystem::path{ALCEDO_GRAPH_HEADER_ROOT}, &hits);
+  ScanDirectory(std::filesystem::path{ALCEDO_MASK_HEADER_ROOT}, &hits);
   EXPECT_TRUE(hits.empty()) << (hits.empty() ? "" : hits.front());
 }
 

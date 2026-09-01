@@ -5,15 +5,18 @@
 #pragma once
 
 #include <exception>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -49,7 +52,8 @@ class PlanExecutor {
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
                       PipelineDocument& document, MaskStore* mask_store, bool publish_on_success,
                       TransientAllocationPolicy transient_policy =
-                          TransientAllocationPolicy::SessionPacked)
+                          TransientAllocationPolicy::SessionPacked,
+                      std::span<const ActiveRasterMaskInput> active_raster_masks = {})
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();
@@ -66,7 +70,8 @@ class PlanExecutor {
       }
       device.BeginRender();
       workspace.AlignParameterLayout(plan.static_key.topology_hash);
-      const auto keys          = BuildFrameResultContentKeys(plan, input, document);
+      const auto keys          = BuildFrameResultContentKeys(plan, input, document,
+                                                            active_raster_masks);
       const auto completed     = workspace.Device().CompletedSubmission();
       auto&      stats         = device.PassStats();
       const auto hits_before   = workspace.Images().ContentHitCount();
@@ -163,17 +168,34 @@ class PlanExecutor {
         ++stats.primary_grade_skip;
       }
       for (const auto& compiled_grade : plan.grade_nodes) {
-        if (compiled_grade.mask.has_value()) {
-          const auto mask_key = keys.Value(compiled_grade.mask_output);
-          if (BindOrMiss(workspace, compiled_grade.mask_output, mask_key, keys.geometry_extent,
+        if (compiled_grade.mask_stack.has_value()) {
+          for (const auto& source : compiled_grade.mask_stack->sources) {
+            if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
+              continue;
+            }
+            const auto source_key = keys.Value(source.effective_output);
+            if (BindOrMiss(workspace, source.effective_output, source_key, keys.geometry_extent,
+                           completed, TextureFormat::R8)) {
+              ++stats.mask_skip;
+            } else {
+              PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
+                  device, plan, input, document, mask_store, compiled_grade, source,
+                  active_raster_masks);
+              Record(device, source.effective_output, source_key, keys.geometry_extent,
+                     TextureFormat::R8);
+              ++stats.mask_execute;
+            }
+          }
+          const auto union_key = keys.Value(compiled_grade.mask_output);
+          if (BindOrMiss(workspace, compiled_grade.mask_output, union_key, keys.geometry_extent,
                          completed, TextureFormat::R8)) {
-            ++stats.mask_skip;
+            ++stats.mask_union_skip;
           } else {
-            PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
-                device, plan, input, document, mask_store, compiled_grade);
-            Record(device, compiled_grade.mask_output, mask_key, keys.geometry_extent,
+            PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
+                                                                 mask_store, compiled_grade);
+            Record(device, compiled_grade.mask_output, union_key, keys.geometry_extent,
                    TextureFormat::R8);
-            ++stats.mask_execute;
+            ++stats.mask_union_execute;
           }
           workspace.TransientBuffers().Reset();
         }
@@ -190,7 +212,13 @@ class PlanExecutor {
         }
         if (exact_release) {
           workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-          if (compiled_grade.mask.has_value()) {
+          if (compiled_grade.mask_stack.has_value()) {
+            for (const auto& source : compiled_grade.mask_stack->sources) {
+              if (workspace.Images().Find(source.effective_output) != nullptr &&
+                  source.effective_output != compiled_grade.mask_output) {
+                workspace.ReleaseConsumedImage(source.effective_output);
+              }
+            }
             workspace.ReleaseConsumedImage(compiled_grade.mask_output);
           }
           if (grade_scene != previous_scene) {

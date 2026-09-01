@@ -202,6 +202,10 @@ In the chat reply, include:
 - **No fake modularity:** splitting methods across files without owned state does not satisfy
   decomposition criteria from `grill-code-review`.
 - **No banned project terms** in first-party names/docs when the repo forbids them.
+- **No phase identifiers in code:** never put a phase number or phase ID in production code,
+  test code, filenames, target names, identifiers, comments, strings, or generated code. Name each
+  artifact for its specific purpose or behavior. Phase IDs can appear only in roadmap plans and
+  their completion records.
 - **No root-level temp dumps;** use the project's designated temp location (often `build/tmp/`).
 
 ## Relationship to Other Skills

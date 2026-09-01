@@ -787,7 +787,7 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
     bool needs_masked_mix = false;
     bool needs_llf        = false;
     for (const auto& grade : plan.grade_nodes) {
-      if (grade.mask.has_value()) {
+      if (grade.mask_stack.has_value()) {
         needs_masked_mix = true;
       }
       for (const auto& stage : grade.stages) {
@@ -814,7 +814,8 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneApplyKernelName);
     }
   }
-  if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskFeather)) {
+  if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskFeather) ||
+      plan.Contains(GpuPassKind::MaskUnion)) {
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskMipKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterSampleKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskBandHorizontalKernelName);
@@ -823,6 +824,8 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
         OpenCL::GpuDag::kMaskComposeSignedDistanceKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFeatherSampleKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFillZeroKernelName);
+    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskUnionMaxKernelName);
   }
   if (plan.Contains(GpuPassKind::Drt)) {
     add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDrtKernelName);

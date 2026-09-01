@@ -11,7 +11,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/graph/active_raster_mask_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -64,17 +66,36 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
                                bool require_host_output, RenderCachePolicy cache_policy,
                                const std::optional<ExportColorProfileConfig>& output_color)
     -> std::shared_ptr<ImageBuffer> {
+  PipelineApplyRequest apply;
+  apply.geometry            = request;
+  apply.decode_res          = decode_res;
+  apply.cache_policy        = cache_policy;
+  apply.require_host_output = require_host_output;
+  apply.sink                = sink;
+  apply.submission          = submission;
+  apply.output_color        = output_color;
+  return Render(input, apply);
+}
+
+template <class Backend>
+auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
+                               const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer> {
   if (!document_) {
     throw std::runtime_error("Renderer: PipelineDocument is not configured");
   }
   if (!input || !input->buffer_valid_) {
     throw std::runtime_error("Renderer: product path requires encoded image bytes");
   }
+  ValidateActiveRasterMaskBindings(*document_, request.active_raster_masks);
+  const bool use_session_cache = request.cache_policy == RenderCachePolicy::UseSessionCache;
+  if (!use_session_cache && !request.active_raster_masks.empty() &&
+      !request.allow_active_raster_preview) {
+    throw std::runtime_error("Renderer: bypass renders cannot use active raster inputs");
+  }
 
   auto&      encoded       = input->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  const bool use_session_cache = cache_policy == RenderCachePolicy::UseSessionCache;
   if (use_session_cache) {
     EnsureSessionDevice();
   } else {
@@ -86,17 +107,17 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
   ExecutionPlan                             plan;
   RenderDevice*                             render_device = device_.get();
   if (use_session_cache) {
-    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, decode_res));
+    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
     plan = plan_cache_.GetOrCompile(*document_, prepared_lease->Get().CompileSource());
   } else {
-    one_shot_prepared.emplace(unpack_(encoded_bytes, decode_res));
+    one_shot_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
     plan          = GraphCompiler::CompileStatic(*document_, one_shot_prepared->CompileSource(),
                                                  Backend::kCapabilityVersion);
     render_device = one_shot_device_.get();
   }
-  GraphCompiler::BindFrameGeometry(plan, *document_, request);
-  plan.output_color_override = output_color;
-  detail::TraceGpuDagGeometry<Backend>(plan, request, submission);
+  GraphCompiler::BindFrameGeometry(plan, *document_, request.geometry);
+  plan.output_color_override = request.output_color;
+  detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
   if (document_->TopologyDirty()) {
     document_->ClearTopologyDirty();
   }
@@ -104,7 +125,8 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
   const auto  output_id = render_device->Execute(
       plan, prepared, *document_, mask_store_.get(), false,
       use_session_cache ? TransientAllocationPolicy::SessionPacked
-                        : TransientAllocationPolicy::ExactRelease);
+                        : TransientAllocationPolicy::ExactRelease,
+      request.active_raster_masks);
   const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;
@@ -116,20 +138,20 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
   };
 
   ViewerDisplayConfig display_config{};
-  if (output_color.has_value()) {
-    display_config.encoding_space = output_color->encoding_space;
-    display_config.encoding_eotf  = output_color->encoding_eotf;
-    display_config.peak_luminance = output_color->peak_luminance;
+  if (request.output_color.has_value()) {
+    display_config.encoding_space = request.output_color->encoding_space;
+    display_config.encoding_eotf  = request.output_color->encoding_eotf;
+    display_config.peak_luminance = request.output_color->peak_luminance;
   } else if (const auto* drt = document_->Drt()) {
     display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
   }
 
   try {
-    if (sink != nullptr) {
-      FramePresenter<Backend>::Present(*render_device, output_id, *sink, submission,
+    if (request.sink != nullptr) {
+      FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, request.submission,
                                        display_config);
     }
-    if (require_host_output) {
+    if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
       if (use_session_cache) {
         render_device->PublishResults();

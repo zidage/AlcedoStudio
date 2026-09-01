@@ -6,10 +6,12 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <string_view>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -97,7 +99,9 @@ class CudaRenderDevice {
                              PipelineDocument& document, MaskStore* mask_store = nullptr,
                              bool publish_on_success = true,
                              TransientAllocationPolicy transient_policy =
-                                 TransientAllocationPolicy::SessionPacked) -> GraphValueId;
+                                 TransientAllocationPolicy::SessionPacked,
+                             std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+      -> GraphValueId;
 
  private:
   CudaRenderWorkspace                              workspace_;

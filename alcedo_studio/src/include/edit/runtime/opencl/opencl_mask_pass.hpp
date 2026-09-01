@@ -10,6 +10,7 @@
 #include <span>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
@@ -19,6 +20,7 @@ namespace alcedo {
 struct OpenClMaskResult {
   GraphValueId  output;
   std::uint64_t persistent_texture_resource_id = 0;
+  std::uint64_t active_texture_resource_id     = 0;
   std::uint64_t signed_distance_resource_id    = 0;
   std::uint32_t mip_level_count                = 0;
   std::uint32_t transient_bytes                = 0;
@@ -27,16 +29,46 @@ struct OpenClMaskResult {
 /**
  * @brief Evaluate @p compiled_grade's analytic or raster mask into a RenderSpace R8 image.
  *
- * Raster source levels are owned by the workspace mask cache. Feathering uses an exact
- * signed Euclidean distance field whose node-buffer metadata omits the feather radius, so
+ * Raster source levels are owned by the workspace mask cache. Persistent assets are never
+ * patched. Active Brush pixels use a separate session-generation texture. Feathering uses an
+ * exact signed Euclidean distance field whose node-buffer metadata omits the feather radius, so
  * changing only that radius reuses the distance result. The function only enqueues OpenCL
  * work; failures throw and no CPU or alternate-backend substitute is used.
+ */
+/**
+ * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
+ *
+ * Feather (when present), invert, and opacity run in that order. Failures throw;
+ * there is no CPU or other-backend substitute.
+ */
+[[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                     const PipelineDocument& document,
+                                     const CompiledGradeNode& compiled_grade,
+                                     const CompiledMaskSource& compiled_source,
+                                     MaskStore* store = nullptr,
+                                     std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+    -> OpenClMaskResult;
+
+/**
+ * @brief Maximum-Union enabled Mask sources into the Grade Union output.
+ *
+ * Zero enabled sources fill zeros. One enabled source aliases the source texture.
+ * Two or more fold a native R8 maximum over the full render extent so an erasing
+ * Brush dirty update can decrease coverage. Failures throw; there is no CPU substitute.
+ */
+[[nodiscard]] auto ExecuteOpenClMaskUnion(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                          const PipelineDocument& document,
+                                          const CompiledGradeNode& compiled_grade)
+    -> OpenClMaskResult;
+
+/**
+ * @brief Evaluate every enabled source on @p compiled_grade and Union into mask_output.
  */
 [[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                      const PipelineDocument& document,
                                      const CompiledGradeNode& compiled_grade,
                                      MaskStore* store = nullptr,
-                                     std::span<const RectI> dirty_rectangles = {})
+                                     std::span<const ActiveRasterMaskInput> active_raster_masks = {})
     -> OpenClMaskResult;
 
 /**
@@ -46,7 +78,7 @@ struct OpenClMaskResult {
  */
 [[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                      const PipelineDocument& document, MaskStore* store = nullptr,
-                                     std::span<const RectI> dirty_rectangles = {})
+                                     std::span<const ActiveRasterMaskInput> active_raster_masks = {})
     -> OpenClMaskResult;
 
 }  // namespace alcedo

@@ -87,17 +87,13 @@ auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewpor
 template <class ProductRenderer>
 auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
                         const std::shared_ptr<PipelineDocument>&     document,
-                        const std::shared_ptr<ImageBuffer>&          input, DecodeRes decode_res,
-                        const RenderRequest& request, IFrameSink* sink,
-                        const FrameCompletionSubmission& submission, bool require_host_output,
-                        RenderCachePolicy cache_policy,
-                        const std::optional<ExportColorProfileConfig>& output_color)
+                        const std::shared_ptr<ImageBuffer>&          input,
+                        const PipelineApplyRequest&                  request)
     -> std::shared_ptr<ImageBuffer> {
   if (!renderer) {
     renderer = std::make_shared<ProductRenderer>(document);
   }
-  return renderer->Render(input, decode_res, request, sink, submission, require_host_output,
-                          cache_policy, output_color);
+  return renderer->Render(input, request);
 }
 #endif
 
@@ -258,26 +254,17 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
     SetCancelRequested(request.cancel_requested);
 #ifdef HAVE_CUDA
     if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input,
-                                request.decode_res, request.geometry, request.sink,
-                                request.submission, request.require_host_output,
-                                request.cache_policy, request.output_color);
+      return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input, request);
     }
 #endif
 #ifdef HAVE_METAL
     if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input,
-                                request.decode_res, request.geometry, request.sink,
-                                request.submission, request.require_host_output,
-                                request.cache_policy, request.output_color);
+      return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input, request);
     }
 #endif
 #ifdef HAVE_OPENCL
     if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input,
-                                request.decode_res, request.geometry, request.sink,
-                                request.submission, request.require_host_output,
-                                request.cache_policy, request.output_color);
+      return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input, request);
     }
 #endif
   }

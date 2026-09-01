@@ -7,14 +7,15 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <variant>
 
+#include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -28,12 +29,7 @@ auto MakePrepared() -> PreparedRawInput {
 }
 
 void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test.raster") {
-  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-  node->SetAssetKey(std::move(asset_key));
-  document.Graph().AddNode(std::move(node));
-  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
-  document.MarkTopologyDirty();
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{std::move(asset_key)});
 }
 
 TEST(GpuDagResultContentKey, GraphCompilerAssignsDistinctSensorGeometryAndDevelopValueIds) {
@@ -207,9 +203,9 @@ TEST(GpuDagResultContentKey, RasterMaskParamChangeInvalidatesMaskAndGradeNotSens
   auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
 
-  auto* mask = dynamic_cast<RasterMaskNodeModel*>(document.Graph().FindNode(NodeId{"mask.raster"}));
+  auto* mask = document.PrimaryGrade()->FindMask(MaskId{"mask.raster"});
   ASSERT_NE(mask, nullptr);
-  mask->SetFeatherRadius(1.25f);
+  std::get<BrushMaskSource>(mask->source).feather_radius = 1.25f;
   const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
   EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
   EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
@@ -485,6 +481,34 @@ TEST(GpuDagResultContentKey, SameAdjustmentTypeUsesDistinctNodeSlots) {
   const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
   EXPECT_EQ(edited.GradeScene(NodeId{"grade.primary"}), keys.GradeScene(NodeId{"grade.primary"}));
   EXPECT_NE(edited.GradeScene(NodeId{"grade.b"}), keys.GradeScene(NodeId{"grade.b"}));
+}
+
+TEST(GpuDagResultContentKey, OneMaskEditReusesSiblingAndUpstreamResults) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  RadialMaskSource wide;
+  wide.major_radius = 0.45f;
+  RadialMaskSource narrow;
+  narrow.major_radius = 0.2f;
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.a"}, wide);
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.z"}, narrow);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
+  const auto& sources = plan.FirstGrade()->mask_stack->sources;
+  ASSERT_EQ(sources.size(), 2U);
+  EXPECT_EQ(sources[0].mask_id, MaskId{"mask.a"});
+  EXPECT_EQ(sources[1].mask_id, MaskId{"mask.z"});
+  document.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.35f);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(plan, document, prepared.CompileSource()));
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_NE(edited.Value(sources[0].effective_output), base.Value(sources[0].effective_output));
+  EXPECT_EQ(edited.Value(sources[1].effective_output), base.Value(sources[1].effective_output));
+  EXPECT_NE(edited.mask, base.mask);
+  EXPECT_NE(edited.primary_grade, base.primary_grade);
 }
 
 }  // namespace

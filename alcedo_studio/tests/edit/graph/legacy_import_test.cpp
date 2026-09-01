@@ -8,11 +8,11 @@
 
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "grade_owned_mask_support.hpp"
 #include "test_camera_profile.hpp"
 
 namespace alcedo {
@@ -62,12 +62,7 @@ auto MakeLegacyStageJson() -> nlohmann::json {
 }
 
 void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test.raster") {
-  auto node = std::make_unique<RasterMaskNodeModel>(NodeId{"mask.raster"});
-  node->SetAssetKey(std::move(asset_key));
-  document.Graph().AddNode(std::move(node));
-  document.Graph().Connect(NodeId{"mask.raster"}, PortId{"mask"}, NodeId{"grade.primary"},
-                           PortId{"mask"});
-  document.MarkTopologyDirty();
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{std::move(asset_key)});
 }
 
 }  // namespace
@@ -167,9 +162,9 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) 
       {"type", 2}, {"enable", true}, {"params", {{"exposure", 2.25}}}};
   EXPECT_TRUE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
 
-  EXPECT_EQ(document.Graph().NodeCount(), 4u);
+  EXPECT_EQ(document.Graph().NodeCount(), 3u);
   EXPECT_FALSE(document.TopologyDirty());
-  EXPECT_NE(document.Graph().FindNode(NodeId{"mask.raster"}), nullptr);
+  EXPECT_NE(document.PrimaryGrade()->FindMask(MaskId{"mask.raster"}), nullptr);
   EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
   EXPECT_EQ(document.Develop()->Params().Params().camera_profile, profile_before);
   EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, method_before);

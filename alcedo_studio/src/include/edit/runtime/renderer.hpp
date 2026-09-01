@@ -22,6 +22,7 @@
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_store.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/render_device_type.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
@@ -104,6 +105,15 @@ class Renderer {
                             RenderCachePolicy cache_policy = RenderCachePolicy::UseSessionCache,
                             const std::optional<ExportColorProfileConfig>& output_color = {})
       -> std::shared_ptr<ImageBuffer>;
+
+  /**
+   * @brief Render one frame from a task-owned request, including active Brush pixels.
+   *
+   * Active raster inputs are not stored on this renderer. Bypass renders reject them
+   * unless @ref PipelineApplyRequest::allow_active_raster_preview is true.
+   */
+  [[nodiscard]] auto Render(const std::shared_ptr<ImageBuffer>& input,
+                            const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
 
   /** @brief Snapshot of source and static-plan cache counters since construction or ResetStats. */
   [[nodiscard]] auto Stats() const -> RenderSessionStats;

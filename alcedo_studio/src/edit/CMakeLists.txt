@@ -31,7 +31,11 @@ def_library(EditGeometry
 def_library(EditMaskStore
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_store.cpp
-    PUBLIC_DEPS EditGeometry
+        ${ALCEDO_SRC_ROOT}/edit/mask/mask_asset.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/mask_model.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
+    PUBLIC_DEPS EditGeometry JSON
+    PRIVATE_DEPS xxHash
 )
 
 # GPU DAG document/graph/models. No ImageBuffer, Operators, or GPU backends.
@@ -43,7 +47,6 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/hls_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lmt_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
-    ${ALCEDO_SRC_ROOT}/edit/graph/analytic_mask_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
@@ -53,7 +56,7 @@ set(EDIT_GRAPH_SRCS
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/raster_mask_node_model.cpp
+        ${ALCEDO_SRC_ROOT}/edit/graph/active_raster_mask_validation.cpp
 )
 
 def_library(EditGraph

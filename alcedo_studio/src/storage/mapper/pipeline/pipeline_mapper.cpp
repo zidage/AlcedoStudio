@@ -39,10 +39,10 @@ auto PipelineMapper::FromParams(PipelineMapperParams&& param)
   pipeline->SetBoundFile(param.file_id);
   if (param.param_json) {
     const auto json = nlohmann::json::parse(std::move(*param.param_json));
-    // Format 2 is a document owned by PipelineMgmtService. The mapper must not unpack a stage
+    // Format 2+ is a document owned by PipelineMgmtService. The mapper must not unpack a stage
     // representation from that document. Non-document rows remain readable by the existing
     // executor mapper for callers that explicitly operate on that older table shape.
-    if (json.value("format_version", 0) != 2) {
+    if (json.value("format_version", 0) < 2) {
       pipeline->ImportPipelineParams(json);
     }
     pipeline->SetExecutionStages();

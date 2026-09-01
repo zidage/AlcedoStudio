@@ -70,8 +70,19 @@ template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      PipelineDocument& document, MaskStore* store,
+                     const CompiledGradeNode& compiled_grade, const CompiledMaskSource& source,
+                     std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
+    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source, store,
+                            active_raster_masks);
+  }
+};
+
+template <>
+struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
+  static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     PipelineDocument& document, MaskStore*,
                      const CompiledGradeNode& compiled_grade) {
-    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, store);
+    (void)ExecuteOpenClMaskUnion(device, plan, document, compiled_grade);
   }
 };
 

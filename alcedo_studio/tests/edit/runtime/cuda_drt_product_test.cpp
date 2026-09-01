@@ -93,7 +93,7 @@ TEST(GpuDagCudaDrtProduct, DefaultCudaPipelineBuildsThreeVisibleNodes) {
   ASSERT_NE(document.Develop(), nullptr);
   ASSERT_NE(document.PrimaryGrade(), nullptr);
   ASSERT_NE(document.Drt(), nullptr);
-  EXPECT_EQ(document.ToJson().at("format_version"), 2);
+  EXPECT_EQ(document.ToJson().at("format_version"), 3);
 }
 
 TEST_F(CudaDrtProductFixture, CudaDrtOpenDrtProducesFiniteDisplayReferredOutput) {

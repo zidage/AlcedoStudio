@@ -382,7 +382,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   const auto  width       = input->Texture().Width();
   const auto  height      = input->Texture().Height();
   const float mix         = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool  skip_mix    = mix == 1.0f && !compiled_grade->mask.has_value();
+  const bool  skip_mix    = mix == 1.0f && !compiled_grade->mask_stack.has_value();
   const auto  write_count = CountGpuWrites(ops, skip_mix);
 
   std::vector<MetalBackend::Texture2D*> scratches;
@@ -478,7 +478,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     auto&                          adjusted     = Resolve(current_slot, current_scratch);
     auto&                          dest         = Resolve(dest_slot, dest_scratch);
     const MetalBackend::Texture2D* mask_texture = nullptr;
-    if (compiled_grade->mask) {
+    if (compiled_grade->mask_stack) {
       auto* mask = workspace.Images().Find(compiled_grade->mask_output);
       if (mask == nullptr || mask->Texture().Native() == nullptr ||
           mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
