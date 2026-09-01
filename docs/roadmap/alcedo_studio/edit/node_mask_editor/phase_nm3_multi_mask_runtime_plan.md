@@ -1101,7 +1101,70 @@ Suite totals: `GpuDagRawInputTest` 80/80; `GpuDagCudaMaskTest` + `GpuDagCudaPrim
 
 **LOC note (grill-code-review):** `compiled_mask_stack.hpp` 109; `compiled_grade_mask.hpp` 57; `execution_plan.hpp` 410; `execution_plan.cpp` 170; `graph_compiler.cpp` 497; `result_content_key.cpp` 531; `plan_executor.hpp` 293; `cuda_mask_pass.cu` 563; `opencl_mask_pass.cpp` 671; `metal_mask_pass.mm` 647; `graph_compiler_test.cpp` 633; `cuda_mask_test.cpp` 556. All under the ~1000-LOC split threshold. Feather GPU work stays fused onto the source `GraphValueId` (`feather_output == source_output == effective_output`) so two producers do not share one value.
 
-**Remaining gaps:** Native numerical Union matrix (`CudaMultiMaskUnionMatchesReference` and OpenCL/Metal peers), distinct feather GPU, opacity-as-separate-pass, and dirty-region Union stay in NM3.4. Metal mask tests were not executed here because `ALCEDO_METAL_ENABLED` is off on this Windows host; Metal fill/max kernels, warmup, pass encoder, and Union alias/copy path were compiled as source only. Section 7 full qualification stays in NM3.5.
+**Remaining gaps:** Native numerical Union matrix (`CudaMultiMaskUnionMatchesReference` and OpenCL/Metal peers), distinct feather GPU, opacity-as-separate-pass, and dirty-region Union stay in NM3.4. Metal fill/max kernels, warmup, pass encoder, and Union alias/copy execution are recorded in the macOS verification record below. Section 7 full qualification stays in NM3.5.
+
+##### Phase NM3.3 macOS Metal verification record (2026-09-01)
+
+**Status:** complete — Metal PlanExecutor runs the NM3.3 compiler, Union, cache, and lifetime rules on macOS. `mask_fill_zero`, `mask_union_max`, warmup, pass encoder, and Union alias/copy are executed, not source-only.
+
+**Primary success call chain:**
+
+```text
+GraphCompiler::Compile
+  -> PlanExecutor<MetalBackend>::Execute
+  -> WarmUpMetalDagPlan / AppendMetalMaskWarmup (mask_fill_zero, mask_union_max)
+  -> PassEncoder<MetalBackend, MaskEvaluate> / ExecuteMetalMask
+  -> PassEncoder<MetalBackend, MaskUnion> / ExecuteMetalMaskUnion
+  -> fill-zero | alias one source | copy + native R8 max
+  -> publish source, Union, and Grade keys after GPU completion
+```
+
+**Primary failure call chain:**
+
+```text
+missing Brush asset
+  -> ExecuteMetalMask MaskStore::Load
+  -> PlanExecutor CancelRender
+  -> discard unpublished source, Union, and Grade writes
+  -> retain prior valid keys after WaitIdle
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `EmptyMaskListUsesFullGradeCoverage` | `GpuDagRawInputTest`, `GpuDagMetalGradeTest` | PASS |
+| `AllDisabledMasksUseZeroGradeCoverage` | `GpuDagRawInputTest`, `GpuDagMetalGradeTest` | PASS |
+| `MaskDisplayReorderKeepsStaticAndPixelKeys` | `GpuDagRawInputTest` | PASS |
+| `RangeInputUsesOwningGradeSceneInput` | `GpuDagRawInputTest` | PASS |
+| `EnabledMaskSourcesOwnStableMaskIdPasses` | `GpuDagRawInputTest` | PASS |
+| `MaskAddRemoveAndSourceKindRebuildStaticPlan` | `GpuDagRawInputTest` | PASS |
+| `InvalidMaskStackBindingsFailBeforeGpuWork` | `GpuDagRawInputTest` | PASS |
+| `OneMaskEditReusesSiblingAndUpstreamResults` | `GpuDagRawInputTest`, `GpuDagMetalGradeTest` | PASS |
+| `MaskFailurePublishesNoSourceUnionOrGradeWrites` | `GpuDagMetalGradeTest` | PASS |
+| `ActiveMaskTexturesReleaseAfterGpuCompletion` | `GpuDagMetalGradeTest` | PASS |
+| `MetalMaskWarmupCachesFillZeroAndUnionMax` | `GpuDagMetalGradeTest` | PASS |
+| `SingleEnabledMaskUnionAliasesSourceTexture` | `GpuDagMetalGradeTest` | PASS |
+| `EnabledMasksUseMaximumCoverage` | `GpuDagMetalGradeTest` | PASS |
+
+Commands:
+
+```text
+cmake --preset macos_debug_tests
+cmake --build --preset macos_debug_tests --parallel 8 --target GpuDagMaskStoreTest GpuDagModelGraphTest GpuDagRawInputTest GpuDagMetalWorkspaceTest GpuDagMetalGradeTest GpuDagMetalRendererTest PipelineMapperTest
+./build/macos-debug-tests/alcedo_studio/tests/edit/GpuDagMetalGradeTest --gtest_filter='MetalMaskFixture.MetalMaskWarmupCachesFillZeroAndUnionMax:MetalMaskFixture.EmptyMaskListUsesFullGradeCoverage:MetalMaskFixture.AllDisabledMasksUseZeroGradeCoverage:MetalMaskFixture.SingleEnabledMaskUnionAliasesSourceTexture:MetalMaskFixture.EnabledMasksUseMaximumCoverage:MetalMaskFixture.OneMaskEditReusesSiblingAndUpstreamResults:MetalMaskFixture.MaskFailurePublishesNoSourceUnionOrGradeWrites:MetalMaskFixture.ActiveMaskTexturesReleaseAfterGpuCompletion'
+ctest --test-dir build/macos-debug-tests -R "GpuDagMaskStoreTest|GpuDagModelGraphTest|GpuDagRawInputTest|GpuDagMetal|PipelineMapperTest" --output-on-failure
+```
+
+Logs: `build/tmp/multi_mask_runtime/metal_nm33_new_tests.log`, `build/tmp/multi_mask_runtime/macos_nm33_ctest.log`.
+
+Suite totals: `GpuDagMaskStoreTest` 8/8; `GpuDagModelGraphTest` 63/63; `GpuDagRawInputTest` 77 passed, 4 skipped (missing CI RAW fixtures); `GpuDagMetalGradeTest` 48/48; `GpuDagMetalWorkspaceTest` 12/12; `GpuDagMetalRendererTest` 11/11; `PipelineMapperTest` 30/30 (2 disabled). Focused Metal NM3.3 PlanExecutor tests 8/8 PASS.
+
+**Checklist / exit condition:** all nine NM3.3 boxes now have macOS Metal GPU evidence in addition to the earlier Windows CUDA/OpenCL runs.
+
+**LOC note (grill-code-review):** `metal_mask_test.cpp` 760. No split.
+
+**Remaining gaps:** Native numerical Union matrix (`CudaMultiMaskUnionMatchesReference` and OpenCL/Metal peers), distinct feather GPU, opacity-as-separate-pass, and dirty-region Union stay in NM3.4. Section 7 full qualification stays in NM3.5. The documented macOS regex also ran `GpuDagMetalDevelopTest`; `MetalGeometryUsesOneResampleForCropRotationViewportAndScale` failed (`render_extent` 30x25 vs expected 40x30). That is Develop geometry resampling, not Mask compile/Union/lifetime, and is outside NM3.3.
 
 ### 6.4 NM3.4 — Native multi-Mask execution
 

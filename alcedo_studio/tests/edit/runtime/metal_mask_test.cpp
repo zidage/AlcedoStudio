@@ -10,7 +10,9 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -26,7 +28,11 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
+#include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
+#include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
 namespace {
@@ -144,7 +150,7 @@ class MetalMaskFixture : public ::testing::Test {
   }
 
   auto AttachRaster(MaskAsset asset, float feather = 0.0f) -> MaskModel& {
-    asset.key = store_->Put(asset.descriptor, asset.pixels);
+    asset.key  = store_->Put(asset.descriptor, asset.pixels);
     auto& mask = grade_mask_test::AddMask(
         *document_.PrimaryGrade(),
         grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset, feather));
@@ -209,8 +215,21 @@ class MetalMaskFixture : public ::testing::Test {
     return result;
   }
 
-  auto DownloadMask() -> std::vector<std::uint8_t> {
-    auto* lease = device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output);
+  void ExecutePlan(std::span<const ActiveRasterMaskInput> active = {}) {
+    ASSERT_EQ(device_.Execute(plan_, prepared_, document_, store_.get(), true,
+                              TransientAllocationPolicy::SessionPacked, active),
+              plan_.display_output);
+    device_.WaitIdle();
+  }
+
+  auto ResourceIdOf(const GraphValueId& id) -> std::uint64_t {
+    auto* lease = device_.Workspace().Images().Find(id);
+    EXPECT_NE(lease, nullptr);
+    return lease == nullptr ? 0 : lease->Texture().ResourceId();
+  }
+
+  auto DownloadR8(const GraphValueId& id) -> std::vector<std::uint8_t> {
+    auto* lease = device_.Workspace().Images().Find(id);
     EXPECT_NE(lease, nullptr);
     if (lease == nullptr) {
       return {};
@@ -221,6 +240,10 @@ class MetalMaskFixture : public ::testing::Test {
         std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size()),
         device_.CommandContext());
     return pixels;
+  }
+
+  auto DownloadMask() -> std::vector<std::uint8_t> {
+    return DownloadR8(plan_.FirstGrade()->mask_output);
   }
 
   auto DownloadImage(const GraphValueId& id) -> std::vector<Rgba> {
@@ -255,9 +278,8 @@ TEST_F(MetalMaskFixture, MetalActiveRasterRevisionUploadsOnlyDirtyRectangle) {
   Compile();
   RenderMask();
   std::fill(asset.pixels.begin(), asset.pixels.end(), 200);
-  const auto full = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
-                                       static_cast<std::int32_t>(height_)},
-                               1);
+  const auto full = MakeActive(
+      asset, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1);
   RenderMask(std::span{&full, 1});
   device_.Workspace().Device().ResetCounters();
   const auto dirty = MakeActive(asset, {1, 1, 4, 4}, 2);
@@ -282,9 +304,8 @@ TEST_F(MetalMaskFixture, MetalActiveRasterUpdateNeverPatchesPersistentTexture) {
 
   auto preview = asset;
   std::fill(preview.pixels.begin(), preview.pixels.end(), 200);
-  const auto active = MakeActive(preview, {0, 0, static_cast<std::int32_t>(width_),
-                                           static_cast<std::int32_t>(height_)},
-                                 1);
+  const auto active = MakeActive(
+      preview, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1);
   const auto result = RenderMask(std::span{&active, 1});
   EXPECT_EQ(result.persistent_texture_resource_id, 0U);
   EXPECT_NE(result.active_texture_resource_id, 0U);
@@ -305,17 +326,15 @@ TEST_F(MetalMaskFixture, MetalNewActiveRasterGenerationReplacesOldPreviewTexture
   auto asset = MakeRaster(40);
   AttachRaster(asset);
   Compile();
-  const auto first_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
-                                              static_cast<std::int32_t>(height_)},
-                                      1, 1);
-  const auto first       = RenderMask(std::span{&first_input, 1});
+  const auto first_input = MakeActive(
+      asset, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1, 1);
+  const auto first = RenderMask(std::span{&first_input, 1});
   const auto first_key =
       ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 1};
   EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
-  const auto second_input = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
-                                               static_cast<std::int32_t>(height_)},
-                                       1, 2);
-  const auto second       = RenderMask(std::span{&second_input, 1});
+  const auto second_input = MakeActive(
+      asset, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1, 2);
+  const auto second = RenderMask(std::span{&second_input, 1});
   const auto second_key =
       ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
   EXPECT_NE(first.active_texture_resource_id, second.active_texture_resource_id);
@@ -362,20 +381,20 @@ TEST_F(MetalMaskFixture, MetalFeatherRadiusEditReusesSignedDistanceResult) {
   }
   auto& node = AttachRaster(asset, 1.0f);
   Compile();
-  const auto first = RenderMask();
+  const auto first                                      = RenderMask();
   std::get<BrushMaskSource>(node.source).feather_radius = 4.0f;
-  const auto second = RenderMask();
+  const auto second                                     = RenderMask();
   EXPECT_NE(first.signed_distance_resource_id, 0U);
   EXPECT_EQ(first.signed_distance_resource_id, second.signed_distance_resource_id);
   EXPECT_EQ(second.transient_bytes, 0U);
 }
 
 TEST_F(MetalMaskFixture, MetalMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution) {
-  auto& node   = AttachAnalytic(MaskSourceKind::Radial);
-  auto  radial = std::get<RadialMaskSource>(node.source);
+  auto& node          = AttachAnalytic(MaskSourceKind::Radial);
+  auto  radial        = std::get<RadialMaskSource>(node.source);
   radial.major_radius = 0.35f;
   radial.minor_radius = 0.25f;
-  node.source = radial;
+  node.source         = radial;
   document_.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
   document_.Geometry().SetRotationDegrees(15.0f);
   Compile();
@@ -473,8 +492,7 @@ TEST_F(MetalMaskFixture, MetalNormalMixMatchesCudaReferenceWithinTolerance) {
   }
   asset.key = store_->Put(asset.descriptor, asset.pixels);
   document_.PrimaryGrade()->ReplaceMaskSource(
-      MaskId{"mask.raster"},
-      grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset).source);
+      MaskId{"mask.raster"}, grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, asset).source);
   Compile();
   const auto mixed  = RenderGrade();
   const auto source = DownloadImage(plan_.develop_output);
@@ -500,6 +518,242 @@ TEST_F(MetalMaskFixture, MetalMaskCacheDoesNotEvictBusyTextures) {
   EXPECT_TRUE(cache.Contains(MaskAssetKey{"active"}));
   EXPECT_TRUE(cache.Contains(MaskAssetKey{"next"}));
   device_.WaitIdle();
+}
+
+TEST_F(MetalMaskFixture, MetalMaskWarmupCachesFillZeroAndUnionMax) {
+  std::vector<MetalPipelineWarmup> pipelines;
+  AppendMetalMaskWarmup(pipelines);
+  bool has_fill_zero = false;
+  bool has_union_max = false;
+  for (const auto& pipeline : pipelines) {
+    const auto name =
+        std::string_view{pipeline.function_name == nullptr ? "" : pipeline.function_name};
+    has_fill_zero = has_fill_zero || name == "mask_fill_zero";
+    has_union_max = has_union_max || name == "mask_union_max";
+  }
+  EXPECT_TRUE(has_fill_zero);
+  EXPECT_TRUE(has_union_max);
+  ASSERT_FALSE(pipelines.empty());
+
+  auto& backend = device_.Workspace().Device();
+  backend.ResetCounters();
+  backend.WarmUpPipelines(pipelines);
+  EXPECT_EQ(backend.PipelineCreateCount() + backend.PipelineHitCount(), pipelines.size());
+  backend.ResetCounters();
+  backend.WarmUpPipelines(pipelines);
+  EXPECT_EQ(backend.PipelineCreateCount(), 0U);
+  EXPECT_EQ(backend.PipelineHitCount(), pipelines.size());
+}
+
+TEST_F(MetalMaskFixture, EmptyMaskListUsesFullGradeCoverage) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  Compile();
+  EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
+  EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskUnion));
+  ExecutePlan();
+  const auto empty_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto empty_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_TRUE(empty_keys.mask.Empty());
+  EXPECT_EQ(device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output), nullptr);
+
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
+  Compile();
+  ExecutePlan();
+  const auto masked_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+
+  document_.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
+  Compile();
+  ExecutePlan();
+  const auto restored_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto restored_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_EQ(empty_grade.size(), restored_grade.size());
+  EXPECT_NEAR(empty_grade.front().r, restored_grade.front().r, 1.0e-5f);
+  EXPECT_EQ(restored_keys.primary_grade, empty_keys.primary_grade);
+  EXPECT_GT(std::abs(empty_grade.front().r - masked_grade.front().r), 1.0e-4f);
+}
+
+TEST_F(MetalMaskFixture, AllDisabledMasksUseZeroGradeCoverage) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(1.0f);
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"});
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"});
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.a"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.z"}, false);
+  Compile();
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  ASSERT_TRUE(plan_.Contains(GpuPassKind::MaskUnion));
+  device_.ResetPassStats();
+  ExecutePlan();
+  EXPECT_EQ(device_.PassStats().mask_execute, 0U);
+  EXPECT_EQ(device_.PassStats().mask_union_execute, 1U);
+  const auto keys = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_EQ(keys.Value(plan_.FirstGrade()->mask_output), AllDisabledMaskUnionKey());
+  const auto coverage = DownloadMask();
+  ASSERT_FALSE(coverage.empty());
+  EXPECT_TRUE(
+      std::all_of(coverage.begin(), coverage.end(), [](std::uint8_t value) { return value == 0; }));
+  const auto scene = DownloadImage(plan_.FirstGrade()->scene_input);
+  const auto grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  ASSERT_EQ(scene.size(), grade.size());
+  EXPECT_NEAR(grade.front().r, scene.front().r, 1.0e-5f);
+  EXPECT_NEAR(grade[grade.size() / 2].r, scene[scene.size() / 2].r, 1.0e-5f);
+}
+
+TEST_F(MetalMaskFixture, SingleEnabledMaskUnionAliasesSourceTexture) {
+  auto asset = MakeRaster(180);
+  asset.key  = store_->Put(asset.descriptor, asset.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.a"}, asset));
+  document_.MarkTopologyDirty();
+  Compile();
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  ExecutePlan();
+  const auto source_id = plan_.FirstGrade()->mask_stack->sources.front().effective_output;
+  const auto union_id  = plan_.FirstGrade()->mask_output;
+  EXPECT_EQ(ResourceIdOf(union_id), ResourceIdOf(source_id));
+  const auto coverage = DownloadR8(union_id);
+  ASSERT_EQ(coverage.size(), asset.pixels.size());
+  EXPECT_EQ(coverage, asset.pixels);
+}
+
+TEST_F(MetalMaskFixture, EnabledMasksUseMaximumCoverage) {
+  auto left_high  = MakeRaster(0);
+  auto right_high = MakeRaster(0);
+  for (std::uint32_t y = 0; y < height_; ++y) {
+    for (std::uint32_t x = 0; x < width_; ++x) {
+      const auto index = y * width_ + x;
+      if (x < width_ / 2) {
+        left_high.pixels[index] = 180;
+      } else {
+        right_high.pixels[index] = 200;
+      }
+    }
+  }
+  left_high.key  = store_->Put(left_high.descriptor, left_high.pixels);
+  right_high.key = store_->Put(right_high.descriptor, right_high.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.a"}, left_high));
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.z"}, right_high));
+  document_.MarkTopologyDirty();
+  Compile();
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  ASSERT_EQ(plan_.FirstGrade()->mask_stack->sources.size(), 2U);
+  device_.ResetPassStats();
+  ExecutePlan();
+  EXPECT_EQ(device_.PassStats().mask_execute, 2U);
+  EXPECT_EQ(device_.PassStats().mask_union_execute, 1U);
+  const auto source_a = plan_.FirstGrade()->mask_stack->sources[0].effective_output;
+  const auto source_z = plan_.FirstGrade()->mask_stack->sources[1].effective_output;
+  const auto union_id = plan_.FirstGrade()->mask_output;
+  EXPECT_NE(ResourceIdOf(union_id), ResourceIdOf(source_a));
+  EXPECT_NE(ResourceIdOf(union_id), ResourceIdOf(source_z));
+  EXPECT_NE(ResourceIdOf(source_a), ResourceIdOf(source_z));
+  const auto a       = DownloadR8(source_a);
+  const auto z       = DownloadR8(source_z);
+  const auto unified = DownloadR8(union_id);
+  ASSERT_EQ(a.size(), z.size());
+  ASSERT_EQ(unified.size(), a.size());
+  for (std::size_t i = 0; i < unified.size(); ++i) {
+    EXPECT_EQ(unified[i], std::max(a[i], z[i]));
+  }
+  const auto left  = 5 * width_ + 2;
+  const auto right = 5 * width_ + width_ - 2;
+  EXPECT_EQ(unified[left], 180);
+  EXPECT_EQ(unified[right], 200);
+  EXPECT_NE(unified[left], static_cast<std::uint8_t>(180 + 200));
+}
+
+TEST_F(MetalMaskFixture, OneMaskEditReusesSiblingAndUpstreamResults) {
+  RadialMaskSource wide;
+  wide.major_radius = 0.45f;
+  RadialMaskSource narrow;
+  narrow.major_radius = 0.2f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"}, wide);
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"}, narrow);
+  Compile();
+  ExecutePlan();
+  const auto before = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  const auto sibling = plan_.FirstGrade()->mask_stack->sources[1].effective_output;
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.4f);
+  const auto after = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_EQ(after.develop_image, before.develop_image);
+  EXPECT_EQ(after.Value(sibling), before.Value(sibling));
+  EXPECT_NE(after.mask, before.mask);
+  device_.ResetPassStats();
+  ExecutePlan();
+  EXPECT_GE(device_.PassStats().camera_color_skip, 1U);
+  EXPECT_EQ(device_.PassStats().mask_skip, 1U);
+  EXPECT_EQ(device_.PassStats().mask_execute, 1U);
+  EXPECT_EQ(device_.PassStats().mask_union_execute, 1U);
+  EXPECT_EQ(device_.PassStats().mask_union_skip, 0U);
+}
+
+TEST_F(MetalMaskFixture, MaskFailurePublishesNoSourceUnionOrGradeWrites) {
+  auto first_asset  = MakeRaster(200);
+  auto second_asset = MakeRaster(40);
+  first_asset.key   = store_->Put(first_asset.descriptor, first_asset.pixels);
+  second_asset.key  = store_->Put(second_asset.descriptor, second_asset.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.a"}, first_asset));
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.z"}, second_asset));
+  document_.MarkTopologyDirty();
+  Compile();
+  ExecutePlan();
+  const auto before = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
+  const auto      source_a = plan_.FirstGrade()->mask_stack->sources[0].effective_output;
+  const auto      union_id = plan_.FirstGrade()->mask_output;
+  const auto      grade_id = plan_.FirstGrade()->scene_output;
+
+  BrushMaskSource missing;
+  missing.asset_key         = MaskAssetKey{"missing.asset"};
+  missing.descriptor.extent = {1, 1};
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.a"}, missing);
+  const auto after = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  EXPECT_NE(after.Value(source_a), before.Value(source_a));
+  EXPECT_THROW((void)device_.Execute(plan_, prepared_, document_, store_.get()),
+               std::runtime_error);
+  device_.WaitIdle();
+  const auto completed = device_.Workspace().Device().CompletedSubmission();
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      source_a, before.Value(source_a), before.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      union_id, before.mask, before.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
+      grade_id, before.primary_grade, before.geometry_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      source_a, after.Value(source_a), after.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      union_id, after.mask, after.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
+      grade_id, after.primary_grade, after.geometry_extent, TextureFormat::Rgba32f, completed));
+}
+
+TEST_F(MetalMaskFixture, ActiveMaskTexturesReleaseAfterGpuCompletion) {
+  auto asset = MakeRaster(90);
+  AttachRaster(asset);
+  Compile();
+  const auto first_input = MakeActive(
+      asset, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1, 1);
+  ExecutePlan(std::span{&first_input, 1});
+  const auto first_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 1};
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  const auto second_input = MakeActive(
+      asset, {0, 0, static_cast<std::int32_t>(width_), static_cast<std::int32_t>(height_)}, 1, 2);
+  ExecutePlan(std::span{&second_input, 1});
+  const auto second_key =
+      ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
+  EXPECT_FALSE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
+  EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(second_key));
 }
 
 }  // namespace
