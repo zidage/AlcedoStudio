@@ -420,7 +420,8 @@ auto RadialParamsFromMask(const MaskModel& mask) -> RadialMaskParams {
     params.inner_feather = radial->inner_feather;
     params.outer_feather = radial->outer_feather;
   }
-  params.invert = mask.invert;
+  params.invert  = mask.invert;
+  params.opacity = mask.opacity;
   return params;
 }
 
@@ -435,7 +436,8 @@ auto LinearGradientParamsFromMask(const MaskModel& mask) -> LinearGradientMaskPa
     params.start_value         = gradient->start_value;
     params.end_value           = gradient->end_value;
   }
-  params.invert = mask.invert;
+  params.invert  = mask.invert;
+  params.opacity = mask.opacity;
   return params;
 }
 

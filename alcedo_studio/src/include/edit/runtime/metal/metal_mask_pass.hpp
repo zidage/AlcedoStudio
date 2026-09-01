@@ -33,8 +33,8 @@ struct MetalMaskResult {
  * Raster source textures and mip levels live in workspace MaskTextureCache or the separate
  * active-raster cache. Persistent assets are never patched. Signed-distance intermediates are
  * destroyed after the recorded command buffer completes. The signed-distance result is stored
- * by Mask content key so a feather-radius edit can reuse it. Failures throw; there is no CPU
- * substitute.
+ * by Mask content key so a feather-radius edit can reuse it. Feather (when present),
+ * invert, and opacity run in that order. Failures throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document,
@@ -48,7 +48,8 @@ struct MetalMaskResult {
  * @brief Maximum-Union enabled Mask sources into the Grade Union output.
  *
  * Zero enabled sources fill zeros. One enabled source aliases the source texture.
- * Two or more fold a native R8 maximum. Failures throw; there is no CPU substitute.
+ * Two or more fold a native R8 maximum over the full render extent so an erasing Brush
+ * dirty update can decrease coverage. Failures throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteMetalMaskUnion(MetalRenderDevice& device, const ExecutionPlan& plan,
                                          const PipelineDocument& document,

@@ -49,7 +49,7 @@ struct alignas(16) MaskSampleParams {
   std::uint32_t output_width  = 0;
   std::uint32_t output_height = 0;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
   std::uint32_t pad1          = 0;
 };
 
@@ -61,7 +61,7 @@ struct alignas(16) MaskFeatherParams {
   std::uint32_t output_height = 0;
   float         radius_texels = 0.0f;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
 };
 
 struct alignas(16) MaskAnalyticParams {
@@ -86,7 +86,7 @@ struct alignas(16) MaskAnalyticParams {
   float         transition_distance = 0.0f;
   float         start_value         = 0.0f;
   float         end_value           = 0.0f;
-  std::uint32_t graduated_invert    = 0;
+  float         opacity             = 1.0f;
 };
 
 struct alignas(16) MaskBandParams {
@@ -230,15 +230,15 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   params.inner_feather       = radial.inner_feather;
   params.outer_feather       = radial.outer_feather;
   params.radial_invert       = radial.invert ? 1u : 0u;
-  const auto graduated       = LinearGradientParamsFromMask(mask);
-  params.origin_x            = graduated.origin_x;
-  params.origin_y            = graduated.origin_y;
-  params.normal_x            = graduated.normal_x;
-  params.normal_y            = graduated.normal_y;
-  params.transition_distance = graduated.transition_distance;
-  params.start_value         = graduated.start_value;
-  params.end_value           = graduated.end_value;
-  params.graduated_invert    = graduated.invert ? 1u : 0u;
+  const auto linear_gradient       = LinearGradientParamsFromMask(mask);
+  params.origin_x            = linear_gradient.origin_x;
+  params.origin_y            = linear_gradient.origin_y;
+  params.normal_x            = linear_gradient.normal_x;
+  params.normal_y            = linear_gradient.normal_y;
+  params.transition_distance = linear_gradient.transition_distance;
+  params.start_value         = linear_gradient.start_value;
+  params.end_value           = linear_gradient.end_value;
+  params.opacity             = mask.opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 0);
@@ -248,7 +248,7 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
 
 void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
                         MetalBackend::Texture2D& output, const Matrix3x3& render_to_uv,
-                        bool invert) {
+                        bool invert, float opacity) {
   auto*            encoder  = Encoder(device);
   auto             pipeline = Pipeline("mask_raster_sample", "Metal Mask raster sample");
   MaskSampleParams params;
@@ -258,6 +258,7 @@ void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D
   params.output_width  = output.Width();
   params.output_height = output.Height();
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(source.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
@@ -333,7 +334,8 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
 
 void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& distance,
                          MetalBackend::Texture2D& output, Extent2D source_extent,
-                         const Matrix3x3& render_to_uv, float radius_texels, bool invert) {
+                         const Matrix3x3& render_to_uv, float radius_texels, bool invert,
+                         float opacity) {
   auto*             encoder  = Encoder(device);
   auto              pipeline = Pipeline("mask_feather_sample", "Metal Mask feather");
   MaskFeatherParams params;
@@ -344,6 +346,7 @@ void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& 
   params.output_height = output.Height();
   params.radius_texels = radius_texels;
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setBuffer(static_cast<MTL::Buffer*>(distance.Native()), 0, 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
@@ -441,7 +444,7 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
           static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
           source.MipLevelCount() - 1);
       EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
-                         sampling.render_to_texture_uv, mask_model.invert);
+                         sampling.render_to_texture_uv, mask_model.invert, mask_model.opacity);
       return;
     }
     const auto distance_id    = DistanceId(compiled_grade.node_id, compiled_source.mask_id);
@@ -490,7 +493,8 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                            std::max(bounds.h, 1.0e-6f));
     const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
     EncodeFeatherSample(device, distance, output.Texture(), raster_descriptor.extent,
-                        sampling.render_to_texture_uv, radius_texels, mask_model.invert);
+                        sampling.render_to_texture_uv, radius_texels, mask_model.invert,
+                        mask_model.opacity);
   };
 
   auto upload_full = [&](auto& source, std::span<const std::uint8_t> pixels) {
@@ -552,6 +556,9 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
 auto ExecuteMetalMaskUnion(MetalRenderDevice& device, const ExecutionPlan& plan,
                            const PipelineDocument& document,
                            const CompiledGradeNode& compiled_grade) -> MetalMaskResult {
+  // Union writes the full render extent from current enabled sources. Brush dirty
+  // rectangles limit host-to-device upload only. Signed-distance feather uses the
+  // full raster because the Euclidean field is global.
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMaskUnion: BeginRender has not been called");
   }

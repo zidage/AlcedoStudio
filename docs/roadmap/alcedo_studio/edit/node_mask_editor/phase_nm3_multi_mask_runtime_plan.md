@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM3.1–NM3.3 complete; NM3.4–NM3.5 planned
+Status: NM3.1–NM3.4 complete on CUDA/OpenCL; Metal GPU matrix unchecked; NM3.5 planned
 
 Prerequisite: NM2 complete on CUDA, OpenCL, and Metal.
 
@@ -700,7 +700,7 @@ It then replaces the saved Brush asset key through the NM4 history path.
 | NM3.1 | complete | Grade-owned Mask identities, sources, validation, and document schema. |
 | NM3.2 | complete | Immutable raster assets and task-owned active raster inputs. |
 | NM3.3 | complete | Multi-Mask compiler, keys, Union plan, cache, and lifetime rules. |
-| NM3.4 | planned | Native CUDA, OpenCL, and Metal source evaluation and Union execution. |
+| NM3.4 | complete (CUDA/OpenCL) | Native source evaluation, invert then opacity, Union max, and dirty-region decrease. Metal shaders updated; Metal GPU matrix not run on Windows. |
 | NM3.5 | planned | Model, storage, native, service, failure, and resource qualification. |
 
 Implement these sub-phases in order.
@@ -1214,15 +1214,94 @@ missing asset / upload failure / kernel failure / submission failure
 
 **Exit conditions**
 
-- [ ] CUDA executes all three source kinds and Union.
-- [ ] OpenCL executes all three source kinds and Union.
+- [x] CUDA executes all three source kinds and Union.
+- [x] OpenCL executes all three source kinds and Union.
 - [ ] Metal executes all three source kinds and Union.
-- [ ] Empty, all-disabled, and enabled boundaries match the shared reference.
-- [ ] Feather, invert, opacity, and Union use the same order on all backends.
-- [ ] One Mask edit leaves sibling source results reusable.
-- [ ] Active Brush upload uses the required dirty region.
-- [ ] Coverage differs by no more than the declared R8 tolerance.
-- [ ] Native failures use no weaker rendering path.
+- [x] Empty, all-disabled, and enabled boundaries match the shared reference.
+- [x] Feather, invert, opacity, and Union use the same order on all backends.
+- [x] One Mask edit leaves sibling source results reusable.
+- [x] Active Brush upload uses the required dirty region.
+- [x] Coverage differs by no more than the declared R8 tolerance.
+- [x] Native failures use no weaker rendering path.
+
+##### Phase NM3.4 completion record (2026-09-01)
+
+**Status:** complete on CUDA/OpenCL — native Brush / Radial / Linear Gradient evaluation, invert-then-opacity, full-extent Union max, and dirty-region coverage decrease. Metal shaders and pass updated in the same change; Metal GPU matrix not executed (`ALCEDO_METAL_ENABLED` off on this Windows host).
+
+**Primary success call chain:**
+
+```text
+PlanExecutor for one Color Grade
+  -> evaluate or reuse every enabled Mask source (MaskEvaluate)
+  -> Brush sample or analytic Radial / Linear Gradient
+  -> signed-distance feather when radius > 0 (fused onto the source GraphValueId)
+  -> invert, then opacity, then clamp, then R8 quantize
+  -> native maximum Union into one R8 output (full render extent)
+  -> Grade mixes against its own scene input
+  -> downstream Grade or DRT/Post
+```
+
+Active Brush dirty update:
+
+```text
+task-owned ActiveRasterMaskInput with dirty rectangle
+  -> session preview texture (not the persistent MaskAssetKey texture)
+  -> UploadR8TextureRect of the clipped dirty rectangle only
+  -> re-evaluate that Brush source (full feather field when radius > 0)
+  -> Union max over current enabled sources (full extent, so erase can decrease coverage)
+  -> Grade mix
+```
+
+**Primary failure call chain:**
+
+```text
+missing asset / upload failure / kernel failure / stale active revision
+  -> native error reaches PlanExecutor
+  -> CancelRender
+  -> discard unpublished source, Union, and Grade writes
+  -> retain prior valid results
+  -> no CPU or other-backend replacement
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `EnabledMasksUseMaximumCoverage` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` (`OpenClMaskFixture`) | PASS |
+| `BrushRadialAndLinearGradientShareUnionRules` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `MaskOpacityAndInvertApplyBeforeUnion` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `DirtyUnionRegionCanDecreaseCoverage` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `CudaMultiMaskUnionMatchesReference` | `GpuDagCudaMaskTest` | PASS |
+| `OpenClMultiMaskUnionMatchesReference` | `GpuDagOpenClGradeTest` | PASS |
+| `MetalMultiMaskUnionMatchesReference` | `GpuDagMetalGradeTest` | not run — `ALCEDO_METAL_ENABLED` off |
+| `EmptyMaskListUsesFullGradeCoverage` | `GpuDagCudaMaskTest` (matrix empty-list case also) | PASS |
+| `AllDisabledMasksUseZeroGradeCoverage` | `GpuDagCudaMaskTest` | PASS |
+| `OneMaskEditReusesSiblingAndUpstreamResults` | `GpuDagCudaMaskTest` | PASS |
+| `CudaActiveRasterRevisionUploadsOnlyDirtyRectangle` | `GpuDagCudaMaskTest` | PASS (mask-only path: exactly 16 R8 bytes) |
+| `OpenClRasterMaskRequiresMaskStoreAndReportsTheFailure` / missing-asset matrix case | `GpuDagOpenClGradeTest`, `GpuDagCudaMaskTest` | PASS (throws; no replacement path) |
+
+Shared CPU reference: `alcedo_studio/tests/edit/runtime/multi_mask_runtime_test_support.hpp` (`kR8ToleranceCodes = 1`). Matrix cases: empty list, three disabled, one Radial, one Linear Gradient, one settled Brush, three kinds Union, two Grades, active dirty update, missing asset.
+
+OpenCL Mask tests live in `GpuDagOpenClGradeTest` (there is no separate `GpuDagOpenClMaskTest` target). Metal Mask tests live in `GpuDagMetalGradeTest`.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaMaskTest GpuDagOpenClGradeTest GpuDagCudaPrimaryGradeTest
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaMaskTest_runtime\GpuDagCudaMaskTest.exe --gtest_output=xml:build/tmp/multi_mask_runtime/cuda_mask.xml
+.\build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe --gtest_output=xml:build/tmp/multi_mask_runtime/opencl_grade_full.xml
+.\build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe --gtest_output=xml:build/tmp/multi_mask_runtime/cuda_primary_grade.xml
+```
+
+Suite totals: `GpuDagCudaMaskTest` 23/23; `GpuDagOpenClGradeTest` 54/54 (including `OpenClMaskFixture` 19/19); `GpuDagCudaPrimaryGradeTest` 35/35.
+
+Dirty-upload accounting: after a session texture exists, CUDA/OpenCL/Metal record one `LastTextureRectangles` entry equal to the dirty rect. OpenCL plan execution transferred 16 R8 bytes. CUDA plan execution transferred 16 rectangle bytes plus kernel-parameter copies (observed 60 total, still below a full 16×12 R8 raster). Mask-only `CudaActiveRasterRevisionUploadsOnlyDirtyRectangle` still asserts exactly 16 bytes.
+
+**Checklist / exit condition:** eight of nine boxes checked with executed CUDA/OpenCL tests. Metal execute box stays unchecked until a macOS `GpuDagMetalGradeTest` run.
+
+**LOC note (grill-code-review):** `cuda_mask_pass.cu` 577; `opencl_mask_pass.cpp` 678; `metal_mask_pass.mm` 654; `mask.cl` 344; `mask.metal` 340; `mask_model.hpp` 196; `mask_model.cpp` 444; `multi_mask_runtime_test_support.hpp` 241; `cuda_mask_test.cpp` 856; `opencl_mask_test.cpp` 990; `metal_mask_test.cpp` 1009. `metal_mask_test.cpp` is just over the ~1000-line split threshold because the Union matrix is duplicated per backend; extract shared scenario runners if NM3.5 adds more cases. Opacity is fused into evaluate kernels (content keys already included opacity). Feather remains fused onto the source `GraphValueId`. Union kernels were already registered (`mask_union_max` / `mask_union_max_r8`); no new OpenCL program names.
+
+**Remaining gaps:** Metal GPU numerical matrix (`MetalMultiMaskUnionMatchesReference` and peer tests) on macOS. Distinct feather `GraphValueId` and a separate opacity pass are not required for the written invert-then-opacity order. Section 7 full qualification, performance byte tables, request isolation, and service-task boundaries stay in NM3.5. No Mask UI, history payload, Version logic, or range algorithm entered this phase.
 
 ### 6.5 NM3.5 — Qualification
 

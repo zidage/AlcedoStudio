@@ -11,7 +11,7 @@ typedef struct {
   uint  output_width;
   uint  output_height;
   uint  invert;
-  uint  pad0;
+  float opacity;
   uint  pad1;
 } MaskSampleParams;
 
@@ -23,7 +23,7 @@ typedef struct {
   uint  output_height;
   float radius_texels;
   uint  invert;
-  uint  pad0;
+  float opacity;
 } MaskFeatherParams;
 
 typedef struct {
@@ -48,7 +48,7 @@ typedef struct {
   float transition_distance;
   float start_value;
   float end_value;
-  uint  graduated_invert;
+  float opacity;
 } MaskAnalyticParams;
 
 typedef struct {
@@ -110,6 +110,13 @@ static inline float SampleF32(__global const float* pixels, uint offset, uint wi
   return a * (1.0f - ty) + b * ty;
 }
 
+static inline float FinishEffectiveCoverage(float value, uint invert, float opacity) {
+  if (invert != 0u) {
+    value = 1.0f - value;
+  }
+  return min(max(value * opacity, 0.0f), 1.0f);
+}
+
 static inline float QuantizeR8(float value) {
   return (float)((uint)min(max(value * 255.0f + 0.5f, 0.0f), 255.0f)) / 255.0f;
 }
@@ -146,10 +153,9 @@ __kernel void mask_raster_sample_r8(__read_only image2d_t source, __write_only i
   }
   const float2 uv = Transform(params.render_to_uv, (float)gid.x + 0.5f, (float)gid.y + 0.5f);
   float        value = SampleR8(source, params.source_width, params.source_height, uv.x, uv.y);
-  if (params.invert != 0u) {
-    value = 1.0f - value;
-  }
-  write_imagef(output, (int2)(gid.x, gid.y), (float4)(QuantizeR8(value), 0.0f, 0.0f, 1.0f));
+  write_imagef(output, (int2)(gid.x, gid.y),
+               (float4)(QuantizeR8(FinishEffectiveCoverage(value, params.invert, params.opacity)),
+                        0.0f, 0.0f, 1.0f));
 }
 
 __kernel void mask_band_horizontal(__read_only image2d_t source,
@@ -271,10 +277,9 @@ __kernel void mask_feather_sample(__global const float* distance, __write_only i
                     ? (d >= 0.0f ? 1.0f : 0.0f)
                     : min(max(0.5f + d / (2.0f * params.radius_texels), 0.0f), 1.0f);
   value = value * value * (3.0f - 2.0f * value);
-  if (params.invert != 0u) {
-    value = 1.0f - value;
-  }
-  write_imagef(output, (int2)(gid.x, gid.y), (float4)(QuantizeR8(value), 0.0f, 0.0f, 1.0f));
+  write_imagef(output, (int2)(gid.x, gid.y),
+               (float4)(QuantizeR8(FinishEffectiveCoverage(value, params.invert, params.opacity)),
+                        0.0f, 0.0f, 1.0f));
 }
 
 __kernel void mask_analytic_r8(__write_only image2d_t output, MaskAnalyticParams params) {
@@ -311,12 +316,11 @@ __kernel void mask_analytic_r8(__write_only image2d_t output, MaskAnalyticParams
                              0.0f),
                         1.0f);
     value  = params.start_value + (params.end_value - params.start_value) * t;
-    invert = params.graduated_invert;
+    invert = params.radial_invert;
   }
-  if (invert != 0u) {
-    value = 1.0f - value;
-  }
-  write_imagef(output, (int2)(gid.x, gid.y), (float4)(QuantizeR8(value), 0.0f, 0.0f, 1.0f));
+  write_imagef(output, (int2)(gid.x, gid.y),
+               (float4)(QuantizeR8(FinishEffectiveCoverage(value, invert, params.opacity)), 0.0f,
+                        0.0f, 1.0f));
 }
 
 __kernel void mask_fill_zero_r8(__write_only image2d_t output, uint width, uint height) {

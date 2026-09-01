@@ -46,7 +46,7 @@ struct MaskSampleParams {
   std::uint32_t output_width  = 0;
   std::uint32_t output_height = 0;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
   std::uint32_t pad1          = 0;
 };
 
@@ -58,7 +58,7 @@ struct MaskFeatherParams {
   std::uint32_t output_height = 0;
   float         radius_texels = 0.0f;
   std::uint32_t invert        = 0;
-  std::uint32_t pad0          = 0;
+  float         opacity       = 1.0f;
 };
 
 struct MaskAnalyticParams {
@@ -83,7 +83,7 @@ struct MaskAnalyticParams {
   float         transition_distance = 0.0f;
   float         start_value         = 0.0f;
   float         end_value           = 0.0f;
-  std::uint32_t graduated_invert    = 0;
+  float         opacity             = 1.0f;
 };
 
 struct MaskBandParams {
@@ -264,15 +264,15 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
   params.outer_feather       = radial.outer_feather;
   params.radial_invert       = radial.invert ? 1u : 0u;
 
-  const auto graduated       = LinearGradientParamsFromMask(mask);
-  params.origin_x            = graduated.origin_x;
-  params.origin_y            = graduated.origin_y;
-  params.normal_x            = graduated.normal_x;
-  params.normal_y            = graduated.normal_y;
-  params.transition_distance = graduated.transition_distance;
-  params.start_value         = graduated.start_value;
-  params.end_value           = graduated.end_value;
-  params.graduated_invert    = graduated.invert ? 1u : 0u;
+  const auto linear_gradient       = LinearGradientParamsFromMask(mask);
+  params.origin_x            = linear_gradient.origin_x;
+  params.origin_y            = linear_gradient.origin_y;
+  params.normal_x            = linear_gradient.normal_x;
+  params.normal_y            = linear_gradient.normal_y;
+  params.transition_distance = linear_gradient.transition_distance;
+  params.start_value         = linear_gradient.start_value;
+  params.end_value           = linear_gradient.end_value;
+  params.opacity             = mask.opacity;
 
   SetMem(kernel, 0, output.Native(), "analytic mask output");
   SetParams(kernel, 1, params, "analytic mask parameters");
@@ -281,7 +281,7 @@ void EncodeAnalytic(OpenClRenderDevice& device, OpenClBackend::Texture2D& output
 
 void EncodeRasterSample(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
                         OpenClBackend::Texture2D& output, const Matrix3x3& render_to_uv,
-                        bool invert) {
+                        bool invert, float opacity) {
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterSampleKernelName);
   MaskSampleParams params;
@@ -291,6 +291,7 @@ void EncodeRasterSample(OpenClRenderDevice& device, const OpenClBackend::Texture
   params.output_width  = output.Width();
   params.output_height = output.Height();
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   SetMem(kernel, 0, source.Native(), "raster mask source");
   SetMem(kernel, 1, output.Native(), "raster mask output");
   SetParams(kernel, 2, params, "raster mask parameters");
@@ -379,7 +380,8 @@ auto EncodeSignedDistance(OpenClRenderDevice& device, const OpenClBackend::Textu
 
 void EncodeFeatherSample(OpenClRenderDevice& device, const OpenClBackend::Buffer& distance,
                          OpenClBackend::Texture2D& output, Extent2D source_extent,
-                         const Matrix3x3& render_to_uv, float radius_texels, bool invert) {
+                         const Matrix3x3& render_to_uv, float radius_texels, bool invert,
+                         float opacity) {
   const auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFeatherSampleKernelName);
   MaskFeatherParams params;
@@ -390,6 +392,7 @@ void EncodeFeatherSample(OpenClRenderDevice& device, const OpenClBackend::Buffer
   params.output_height = output.Height();
   params.radius_texels = radius_texels;
   params.invert        = invert ? 1u : 0u;
+  params.opacity       = opacity;
   SetMem(kernel, 0, distance.Native(), "feather distance");
   SetMem(kernel, 1, output.Native(), "feather output");
   SetParams(kernel, 2, params, "feather parameters");
@@ -466,7 +469,7 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
           static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
           source.MipLevelCount() - 1);
       EncodeRasterSample(device, source.Texture(selected_level), output.Texture(),
-                         sampling.render_to_texture_uv, mask_model.invert);
+                         sampling.render_to_texture_uv, mask_model.invert, mask_model.opacity);
       return;
     }
     const auto distance_id = SignedDistanceId(compiled_grade.node_id, compiled_source.mask_id);
@@ -502,7 +505,8 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                            std::max(bounds.h, 1.0e-6f));
     const float radius_texels = brush->feather_radius * 0.5f * (x_scale + y_scale);
     EncodeFeatherSample(device, distance, output.Texture(), raster_descriptor.extent,
-                        sampling.render_to_texture_uv, radius_texels, mask_model.invert);
+                        sampling.render_to_texture_uv, radius_texels, mask_model.invert,
+                        mask_model.opacity);
     if (must_compute && persistent_key != nullptr) {
       workspace.Values().StoreMetadata(
           distance_id, distance_key,
@@ -574,6 +578,9 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
 auto ExecuteOpenClMaskUnion(OpenClRenderDevice& device, const ExecutionPlan& plan,
                             const PipelineDocument& document,
                             const CompiledGradeNode& compiled_grade) -> OpenClMaskResult {
+  // Union writes the full render extent from current enabled sources. Brush dirty
+  // rectangles limit host-to-device upload only. Signed-distance feather uses the
+  // full raster because the Euclidean field is global.
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMaskUnion: BeginRender has not been called");
   }

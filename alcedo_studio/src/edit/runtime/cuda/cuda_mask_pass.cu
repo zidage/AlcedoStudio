@@ -51,6 +51,15 @@ __device__ auto SampleR8(const std::uint8_t* pixels, std::uint32_t width, std::u
   return (a * (1.0f - ty) + b * ty) / 255.0f;
 }
 
+__device__ auto FinishEffectiveCoverage(float value, bool invert, float opacity) -> float {
+  if (invert) value = 1.0f - value;
+  return fminf(fmaxf(value * opacity, 0.0f), 1.0f);
+}
+
+__device__ auto QuantizeR8(float value) -> std::uint8_t {
+  return static_cast<std::uint8_t>(fminf(fmaxf(value * 255.0f + 0.5f, 0.0f), 255.0f));
+}
+
 __device__ auto SampleF32(const float* pixels, std::uint32_t width, std::uint32_t height, float u,
                           float v) -> float {
   if (u < 0.0f || v < 0.0f || u > 1.0f || v > 1.0f) return -1.0e6f;
@@ -70,15 +79,14 @@ __device__ auto SampleF32(const float* pixels, std::uint32_t width, std::uint32_
 __global__ void RasterSampleKernel(const std::uint8_t* source, std::uint32_t source_width,
                                    std::uint32_t source_height, std::uint8_t* output,
                                    std::uint32_t output_width, std::uint32_t output_height,
-                                   Matrix3x3 render_to_uv, bool invert) {
+                                   Matrix3x3 render_to_uv, bool invert, float opacity) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= output_width * output_height) return;
   const auto x     = index % output_width;
   const auto y     = index / output_width;
   const auto uv    = Transform(render_to_uv.m, x + 0.5f, y + 0.5f);
   float      value = SampleR8(source, source_width, source_height, uv.x, uv.y);
-  if (invert) value = 1.0f - value;
-  output[index] = static_cast<std::uint8_t>(fminf(fmaxf(value * 255.0f + 0.5f, 0.0f), 255.0f));
+  output[index]    = QuantizeR8(FinishEffectiveCoverage(value, invert, opacity));
 }
 
 __global__ void GenerateR8MipKernel(const std::uint8_t* source, std::uint32_t source_width,
@@ -202,7 +210,8 @@ __global__ void ComposeSignedDistanceKernel(const std::uint8_t* source,
 __global__ void FeatherSampleKernel(const float* distance, std::uint32_t source_width,
                                     std::uint32_t source_height, std::uint8_t* output,
                                     std::uint32_t output_width, std::uint32_t output_height,
-                                    Matrix3x3 render_to_uv, float radius_texels, bool invert) {
+                                    Matrix3x3 render_to_uv, float radius_texels, bool invert,
+                                    float opacity) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= output_width * output_height) return;
   const auto  x     = index % output_width;
@@ -212,14 +221,13 @@ __global__ void FeatherSampleKernel(const float* distance, std::uint32_t source_
   float       value = radius_texels <= 0.0f ? (d >= 0.0f ? 1.0f : 0.0f)
                                             : fminf(fmaxf(0.5f + d / (2.0f * radius_texels), 0.0f), 1.0f);
   value             = value * value * (3.0f - 2.0f * value);
-  if (invert) value = 1.0f - value;
-  output[index] = static_cast<std::uint8_t>(value * 255.0f + 0.5f);
+  output[index]     = QuantizeR8(FinishEffectiveCoverage(value, invert, opacity));
 }
 
 __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, std::uint32_t height,
                                    Matrix3x3 render_to_reference, Extent2D reference_extent,
                                    AnalyticMaskKind kind, RadialMaskParams radial,
-                                   LinearGradientMaskParams graduated) {
+                                   LinearGradientMaskParams linear_gradient) {
   const auto index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= width * height) return;
   const auto  x         = index % width;
@@ -229,6 +237,7 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
   const float ny        = reference.y / reference_extent.height;
   float       value     = 0.0f;
   bool        invert    = false;
+  float       opacity   = 1.0f;
   if (kind == AnalyticMaskKind::Radial) {
     const float c      = cosf(radial.rotation);
     const float s      = sinf(radial.rotation);
@@ -239,21 +248,22 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
     const float radius = sqrtf(rx * rx + ry * ry);
     const float inner  = fmaxf(0.0f, 1.0f - radial.inner_feather);
     const float outer  = 1.0f + radial.outer_feather;
-    value  = 1.0f - fminf(fmaxf((radius - inner) / fmaxf(outer - inner, 1.0e-6f), 0.0f), 1.0f);
-    invert = radial.invert;
+    value              = 1.0f - fminf(fmaxf((radius - inner) / fmaxf(outer - inner, 1.0e-6f), 0.0f), 1.0f);
+    invert             = radial.invert;
+    opacity            = radial.opacity;
   } else {
-    const float normal_length = hypotf(graduated.normal_x, graduated.normal_y);
-    const float normal_x      = graduated.normal_x / fmaxf(normal_length, 1.0e-6f);
-    const float normal_y      = graduated.normal_y / fmaxf(normal_length, 1.0e-6f);
-    const float distance =
-        (nx - graduated.origin_x) * normal_x + (ny - graduated.origin_y) * normal_y;
-    const float t =
-        fminf(fmaxf(distance / fmaxf(graduated.transition_distance, 1.0e-6f) + 0.5f, 0.0f), 1.0f);
-    value  = graduated.start_value + (graduated.end_value - graduated.start_value) * t;
-    invert = graduated.invert;
+    const float normal_length = hypotf(linear_gradient.normal_x, linear_gradient.normal_y);
+    const float normal_x      = linear_gradient.normal_x / fmaxf(normal_length, 1.0e-6f);
+    const float normal_y      = linear_gradient.normal_y / fmaxf(normal_length, 1.0e-6f);
+    const float distance      = (nx - linear_gradient.origin_x) * normal_x +
+                           (ny - linear_gradient.origin_y) * normal_y;
+    const float t = fminf(
+        fmaxf(distance / fmaxf(linear_gradient.transition_distance, 1.0e-6f) + 0.5f, 0.0f), 1.0f);
+    value   = linear_gradient.start_value + (linear_gradient.end_value - linear_gradient.start_value) * t;
+    invert  = linear_gradient.invert;
+    opacity = linear_gradient.opacity;
   }
-  if (invert) value = 1.0f - value;
-  output[index] = static_cast<std::uint8_t>(fminf(fmaxf(value * 255.0f + 0.5f, 0.0f), 255.0f));
+  output[index] = QuantizeR8(FinishEffectiveCoverage(value, invert, opacity));
 }
 
 __global__ void MaskFillZeroKernel(std::uint8_t* output, std::uint32_t pixel_count) {
@@ -317,7 +327,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
             static_cast<const std::uint8_t*>(sampled_texture.DevicePointer()),
             sampled_texture.Width(), sampled_texture.Height(),
             static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width,
-            extent.height, sampling.render_to_texture_uv, mask_model.invert);
+            extent.height, sampling.render_to_texture_uv, mask_model.invert, mask_model.opacity);
         return;
       }
       const GraphValueId distance_id =
@@ -397,7 +407,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
           static_cast<const float*>(distance->DevicePointer()), raster_descriptor.extent.width,
           raster_descriptor.extent.height,
           static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
-          sampling.render_to_texture_uv, radius_texels, mask_model.invert);
+          sampling.render_to_texture_uv, radius_texels, mask_model.invert, mask_model.opacity);
     };
 
     auto upload_full = [&](auto& source, std::span<const std::uint8_t> pixels) {
@@ -465,6 +475,10 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
 auto ExecuteCudaMaskUnion(CudaRenderDevice& device, const ExecutionPlan& plan,
                           const PipelineDocument& document,
                           const CompiledGradeNode& compiled_grade) -> CudaMaskResult {
+  // Union writes the full render extent from current enabled sources. Brush dirty
+  // rectangles limit host-to-device upload only. Signed-distance feather uses the
+  // full raster because the Euclidean field is global. Reading every enabled source
+  // lets an erasing Brush update decrease coverage.
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteCudaMaskUnion: BeginRender has not been called");
   }

@@ -37,6 +37,9 @@ struct OpenClMaskResult {
  */
 /**
  * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
+ *
+ * Feather (when present), invert, and opacity run in that order. Failures throw;
+ * there is no CPU or other-backend substitute.
  */
 [[nodiscard]] auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                      const PipelineDocument& document,
@@ -48,6 +51,10 @@ struct OpenClMaskResult {
 
 /**
  * @brief Maximum-Union enabled Mask sources into the Grade Union output.
+ *
+ * Zero enabled sources fill zeros. One enabled source aliases the source texture.
+ * Two or more fold a native R8 maximum over the full render extent so an erasing
+ * Brush dirty update can decrease coverage. Failures throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteOpenClMaskUnion(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                           const PipelineDocument& document,

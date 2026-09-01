@@ -28,8 +28,9 @@ struct CudaMaskResult {
  *
  * Persistent Brush textures are keyed by MaskAssetKey and are never patched. Active Brush
  * pixels use a separate session-generation texture and dirty-rectangle upload. Changing
- * only feather radius reuses signed distance when the raster bytes are unchanged. No CPU
- * image processing fallback is used.
+ * only feather radius reuses signed distance when the raster bytes are unchanged. Feather
+ * (when present), invert, and opacity run in that order. No CPU image processing fallback
+ * is used.
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document,
@@ -43,7 +44,8 @@ struct CudaMaskResult {
  * @brief Maximum-Union enabled Mask sources into the Grade Union output.
  *
  * Zero enabled sources fill zeros. One enabled source aliases the source texture.
- * Two or more fold a native R8 maximum. Failures throw; there is no CPU substitute.
+ * Two or more fold a native R8 maximum over the full render extent so an erasing Brush
+ * dirty update can decrease coverage. Failures throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteCudaMaskUnion(CudaRenderDevice& device, const ExecutionPlan& plan,
                                         const PipelineDocument& document,

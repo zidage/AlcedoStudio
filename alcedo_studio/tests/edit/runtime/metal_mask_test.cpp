@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -30,9 +31,12 @@
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
+#include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
+#include "multi_grade_runtime_test_support.hpp"
+#include "multi_mask_runtime_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -220,6 +224,19 @@ class MetalMaskFixture : public ::testing::Test {
                               TransientAllocationPolicy::SessionPacked, active),
               plan_.display_output);
     device_.WaitIdle();
+  }
+
+  void ExpectPrimaryUnionMatchesReference(
+      std::span<const multi_mask_test::BrushRasterView> rasters = {}) {
+    const auto loaded = rasters.empty()
+                            ? multi_mask_test::LoadBrushRasters(*store_, document_.PrimaryGrade()->Masks())
+                            : multi_mask_test::LoadedBrushRasters{};
+    const auto views =
+        rasters.empty() ? std::span<const multi_mask_test::BrushRasterView>(loaded.views)
+                        : rasters;
+    const auto expected = multi_mask_test::EvaluateEnabledUnionR8(
+        document_.PrimaryGrade()->Masks(), views, plan_.geometry);
+    multi_mask_test::ExpectR8WithinTolerance(DownloadMask(), expected);
   }
 
   auto ResourceIdOf(const GraphValueId& id) -> std::uint64_t {
@@ -667,6 +684,7 @@ TEST_F(MetalMaskFixture, EnabledMasksUseMaximumCoverage) {
   EXPECT_EQ(unified[left], 180);
   EXPECT_EQ(unified[right], 200);
   EXPECT_NE(unified[left], static_cast<std::uint8_t>(180 + 200));
+  ExpectPrimaryUnionMatchesReference();
 }
 
 TEST_F(MetalMaskFixture, OneMaskEditReusesSiblingAndUpstreamResults) {
@@ -754,6 +772,237 @@ TEST_F(MetalMaskFixture, ActiveMaskTexturesReleaseAfterGpuCompletion) {
       ActiveRasterTextureKey{document_.PrimaryGrade()->Id(), MaskId{"mask.raster"}, 2};
   EXPECT_FALSE(device_.Workspace().ActiveRasterTextures().Contains(first_key));
   EXPECT_TRUE(device_.Workspace().ActiveRasterTextures().Contains(second_key));
+}
+
+TEST_F(MetalMaskFixture, BrushRadialAndLinearGradientShareUnionRules) {
+  auto brush = MakeRaster(0);
+  for (std::uint32_t y = 0; y < height_; ++y) {
+    for (std::uint32_t x = 0; x < width_ / 2; ++x) {
+      brush.pixels[y * width_ + x] = 220;
+    }
+  }
+  brush.key = store_->Put(brush.descriptor, brush.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.brush"}, brush));
+  RadialMaskSource radial;
+  radial.major_radius = 0.25f;
+  radial.minor_radius = 0.25f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"}, radial);
+  LinearGradientMaskSource gradient;
+  gradient.transition_distance = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, gradient);
+  Compile();
+  ExecutePlan();
+  const auto combined = DownloadMask();
+  ExpectPrimaryUnionMatchesReference();
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.radial"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.linear"}, false);
+  Compile();
+  ExecutePlan();
+  const auto brush_only = DownloadMask();
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.brush"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.radial"}, true);
+  Compile();
+  ExecutePlan();
+  const auto radial_only = DownloadMask();
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.radial"}, false);
+  document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.linear"}, true);
+  Compile();
+  ExecutePlan();
+  const auto linear_only = DownloadMask();
+  ASSERT_EQ(combined.size(), brush_only.size());
+  for (std::size_t i = 0; i < combined.size(); ++i) {
+    const auto separate_max =
+        static_cast<std::uint8_t>(std::max({brush_only[i], radial_only[i], linear_only[i]}));
+    EXPECT_NEAR(combined[i], separate_max, multi_mask_test::kR8ToleranceCodes) << "index " << i;
+  }
+}
+
+TEST_F(MetalMaskFixture, MaskOpacityAndInvertApplyBeforeUnion) {
+  RadialMaskSource radial;
+  radial.major_radius = 0.45f;
+  radial.minor_radius = 0.45f;
+  auto& inverted = grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
+  inverted.opacity = 0.25f;
+  auto fill        = MakeRaster(128);
+  fill.key         = store_->Put(fill.descriptor, fill.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.flat"}, fill));
+  Compile();
+  ExecutePlan();
+  ExpectPrimaryUnionMatchesReference();
+  EXPECT_NEAR(DownloadMask().front(), 128, multi_mask_test::kR8ToleranceCodes);
+}
+
+TEST_F(MetalMaskFixture, DirtyUnionRegionCanDecreaseCoverage) {
+  auto high = MakeRaster(255);
+  auto low  = MakeRaster(80);
+  high.key  = store_->Put(high.descriptor, high.pixels);
+  low.key   = store_->Put(low.descriptor, low.pixels);
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.raster"}, high));
+  grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                           grade_mask_test::MakeBrushMask(MaskId{"mask.low"}, low));
+  document_.MarkTopologyDirty();
+  Compile();
+  ExecutePlan();
+  const auto full = MakeActive(high, {0, 0, static_cast<std::int32_t>(width_),
+                                      static_cast<std::int32_t>(height_)},
+                               1);
+  ExecutePlan(std::span{&full, 1});
+  const auto before = DownloadMask();
+  EXPECT_EQ(before[2 * width_ + 2], 255);
+  for (std::uint32_t y = 1; y < 5; ++y) {
+    for (std::uint32_t x = 1; x < 5; ++x) {
+      high.pixels[y * width_ + x] = 0;
+    }
+  }
+  device_.Workspace().Device().ResetCounters();
+  const auto dirty = MakeActive(high, {1, 1, 4, 4}, 2);
+  ExecutePlan(std::span{&dirty, 1});
+  multi_mask_test::ExpectDirtyR8RectangleUpload(
+      device_.Workspace().Device().LastTextureRectangles(), {1, 1, 4, 4},
+      device_.Workspace().Device().HostToDeviceBytes(), width_, height_);
+  const auto after = DownloadMask();
+  EXPECT_EQ(after[2 * width_ + 2], 80);
+  EXPECT_LT(after[2 * width_ + 2], before[2 * width_ + 2]);
+  std::vector<multi_mask_test::BrushRasterView> views{
+      {MaskId{"mask.raster"}, high.pixels, high.descriptor.extent},
+      {MaskId{"mask.low"}, low.pixels, low.descriptor.extent},
+  };
+  multi_mask_test::ExpectR8WithinTolerance(
+      after, multi_mask_test::EvaluateEnabledUnionR8(document_.PrimaryGrade()->Masks(), views,
+                                                    plan_.geometry));
+}
+
+TEST_F(MetalMaskFixture, MetalMultiMaskUnionMatchesReference) {
+  {
+    SCOPED_TRACE("empty list");
+    Compile();
+    EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
+    ExecutePlan();
+  }
+  {
+    SCOPED_TRACE("three disabled");
+    SetExtent(16, 12);
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"});
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.b"});
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.c"});
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.a"}, false);
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.b"}, false);
+    document_.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.c"}, false);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("one radial");
+    SetExtent(16, 12);
+    RadialMaskSource radial;
+    radial.major_radius = 0.35f;
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"}, radial);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("one linear gradient");
+    SetExtent(16, 12);
+    LinearGradientMaskSource gradient;
+    gradient.transition_distance = 0.8f;
+    grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"}, gradient);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("one settled brush");
+    SetExtent(16, 12);
+    auto asset = MakeRaster(0);
+    asset.pixels[(height_ / 2) * width_ + width_ / 2] = 200;
+    AttachRaster(asset);
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("three source kinds");
+    SetExtent(16, 12);
+    auto asset = MakeRaster(40);
+    asset.key  = store_->Put(asset.descriptor, asset.pixels);
+    grade_mask_test::AddMask(*document_.PrimaryGrade(),
+                             grade_mask_test::MakeBrushMask(MaskId{"mask.brush"}, asset));
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
+    grade_mask_test::AddLinearGradientMask(document_, MaskId{"mask.linear"});
+    Compile();
+    ExecutePlan();
+    ExpectPrimaryUnionMatchesReference();
+  }
+  {
+    SCOPED_TRACE("two grades");
+    SetExtent(16, 12);
+    multi_grade_test::AddCleanGradesBeforeDrt(document_, {"grade.b"});
+    RadialMaskSource wide;
+    wide.major_radius = 0.4f;
+    grade_mask_test::AddRadialMask(document_, MaskId{"mask.primary"}, wide);
+    auto* extra = multi_grade_test::GradeNode(document_, "grade.b");
+    ASSERT_NE(extra, nullptr);
+    LinearGradientMaskSource gradient;
+    gradient.transition_distance = 1.0f;
+    grade_mask_test::AddMask(
+        *extra, grade_mask_test::MakeLinearGradientMask(MaskId{"mask.second"}, gradient));
+    document_.MarkTopologyDirty();
+    Compile();
+    ExecutePlan();
+    ASSERT_EQ(plan_.grade_nodes.size(), 2U);
+    multi_mask_test::ExpectR8WithinTolerance(
+        DownloadR8(plan_.grade_nodes[0].mask_output),
+        multi_mask_test::EvaluateEnabledUnionR8(document_.PrimaryGrade()->Masks(), {},
+                                                plan_.geometry));
+    multi_mask_test::ExpectR8WithinTolerance(
+        DownloadR8(plan_.grade_nodes[1].mask_output),
+        multi_mask_test::EvaluateEnabledUnionR8(extra->Masks(), {}, plan_.geometry));
+  }
+  {
+    SCOPED_TRACE("active dirty update");
+    SetExtent(16, 12);
+    auto asset = MakeRaster(30);
+    AttachRaster(asset);
+    Compile();
+    ExecutePlan();
+    std::fill(asset.pixels.begin(), asset.pixels.end(), 210);
+    const auto full = MakeActive(asset, {0, 0, static_cast<std::int32_t>(width_),
+                                         static_cast<std::int32_t>(height_)},
+                                 1);
+    ExecutePlan(std::span{&full, 1});
+    device_.Workspace().Device().ResetCounters();
+    for (std::uint32_t y = 2; y < 6; ++y) {
+      for (std::uint32_t x = 2; x < 6; ++x) {
+        asset.pixels[y * width_ + x] = 10;
+      }
+    }
+    const auto dirty = MakeActive(asset, {2, 2, 4, 4}, 2);
+    ExecutePlan(std::span{&dirty, 1});
+    multi_mask_test::ExpectDirtyR8RectangleUpload(
+        device_.Workspace().Device().LastTextureRectangles(), {2, 2, 4, 4},
+        device_.Workspace().Device().HostToDeviceBytes(), width_, height_);
+    std::vector<multi_mask_test::BrushRasterView> views{
+        {MaskId{"mask.raster"}, asset.pixels, asset.descriptor.extent}};
+    ExpectPrimaryUnionMatchesReference(views);
+  }
+  {
+    SCOPED_TRACE("missing asset fails without replacement");
+    SetExtent(16, 12);
+    BrushMaskSource missing;
+    missing.descriptor.extent = {1, 1};
+    grade_mask_test::AddMask(
+        *document_.PrimaryGrade(),
+        grade_mask_test::MakeBrushMask(MaskId{"mask.missing"}, MaskAssetKey{"missing.asset"},
+                                       missing.descriptor));
+    document_.MarkTopologyDirty();
+    Compile();
+    EXPECT_THROW(ExecutePlan(), std::runtime_error);
+  }
 }
 
 }  // namespace

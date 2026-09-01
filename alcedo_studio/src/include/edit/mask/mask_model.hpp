@@ -149,7 +149,12 @@ void ValidateMaskModel(const MaskModel& mask);
  */
 [[nodiscard]] auto FirstEnabledMask(std::span<const MaskModel> masks) -> const MaskModel*;
 
-/** @brief Packed Radial parameters for native analytic evaluators. Invert is copied from the Mask. */
+/**
+ * @brief Packed Radial parameters for native analytic evaluators.
+ *
+ * Invert and opacity are copied from the Mask. Evaluators apply invert, then opacity,
+ * then clamp to `[0, 1]` before R8 quantization.
+ */
 struct RadialMaskParams {
   float center_x      = 0.5f;
   float center_y      = 0.5f;
@@ -159,9 +164,14 @@ struct RadialMaskParams {
   float inner_feather = 0.0f;
   float outer_feather = 0.0f;
   bool  invert        = false;
+  float opacity       = 1.0f;
 };
 
-/** @brief Packed Linear Gradient parameters for native analytic evaluators. */
+/**
+ * @brief Packed Linear Gradient parameters for native analytic evaluators.
+ *
+ * Invert and opacity follow the same Mask-level order as Radial.
+ */
 struct LinearGradientMaskParams {
   float origin_x            = 0.5f;
   float origin_y            = 0.5f;
@@ -171,6 +181,7 @@ struct LinearGradientMaskParams {
   float start_value         = 1.0f;
   float end_value           = 0.0f;
   bool  invert              = false;
+  float opacity             = 1.0f;
 };
 
 enum class AnalyticMaskKind : std::uint8_t {

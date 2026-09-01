@@ -13,7 +13,7 @@ struct MaskSampleParams {
   uint  output_width;
   uint  output_height;
   uint  invert;
-  uint  pad0;
+  float opacity;
   uint  pad1;
 };
 
@@ -25,7 +25,7 @@ struct MaskFeatherParams {
   uint  output_height;
   float radius_texels;
   uint  invert;
-  uint  pad0;
+  float opacity;
 };
 
 struct MaskAnalyticParams {
@@ -50,7 +50,7 @@ struct MaskAnalyticParams {
   float transition_distance;
   float start_value;
   float end_value;
-  uint  graduated_invert;
+  float opacity;
 };
 
 struct MaskBandParams {
@@ -113,6 +113,13 @@ static inline float SampleF32(device const float* pixels, uint width, uint heigh
   return a * (1.0f - ty) + b * ty;
 }
 
+static inline float FinishEffectiveCoverage(float value, uint invert, float opacity) {
+  if (invert != 0u) {
+    value = 1.0f - value;
+  }
+  return min(max(value * opacity, 0.0f), 1.0f);
+}
+
 static inline float QuantizeR8(float value) {
   return float(uint(min(max(value * 255.0f + 0.5f, 0.0f), 255.0f))) / 255.0f;
 }
@@ -151,10 +158,9 @@ kernel void mask_raster_sample(texture2d<float, access::read> source [[texture(0
   }
   const float2 uv    = Transform(params.render_to_uv, float(gid.x) + 0.5f, float(gid.y) + 0.5f);
   float        value = SampleR8(source, params.source_width, params.source_height, uv.x, uv.y);
-  if (params.invert != 0u) {
-    value = 1.0f - value;
-  }
-  output.write(float4(QuantizeR8(value), 0.0f, 0.0f, 1.0f), gid);
+  output.write(float4(QuantizeR8(FinishEffectiveCoverage(value, params.invert, params.opacity)),
+                      0.0f, 0.0f, 1.0f),
+               gid);
 }
 
 kernel void mask_band_horizontal(texture2d<float, access::read> source [[texture(0)]],
@@ -274,10 +280,9 @@ kernel void mask_feather_sample(device const float* distance [[buffer(0)]],
       params.radius_texels <= 0.0f ? (d >= 0.0f ? 1.0f : 0.0f)
                                    : min(max(0.5f + d / (2.0f * params.radius_texels), 0.0f), 1.0f);
   value = value * value * (3.0f - 2.0f * value);
-  if (params.invert != 0u) {
-    value = 1.0f - value;
-  }
-  output.write(float4(QuantizeR8(value), 0.0f, 0.0f, 1.0f), gid);
+  output.write(float4(QuantizeR8(FinishEffectiveCoverage(value, params.invert, params.opacity)),
+                      0.0f, 0.0f, 1.0f),
+               gid);
 }
 
 kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
@@ -313,12 +318,11 @@ kernel void mask_analytic(texture2d<float, access::write> output [[texture(0)]],
     const float t =
         min(max(distance / max(params.transition_distance, 1.0e-6f) + 0.5f, 0.0f), 1.0f);
     value  = params.start_value + (params.end_value - params.start_value) * t;
-    invert = params.graduated_invert;
+    invert = params.radial_invert;
   }
-  if (invert != 0u) {
-    value = 1.0f - value;
-  }
-  output.write(float4(QuantizeR8(value), 0.0f, 0.0f, 1.0f), gid);
+  output.write(float4(QuantizeR8(FinishEffectiveCoverage(value, invert, params.opacity)), 0.0f,
+                      0.0f, 1.0f),
+               gid);
 }
 
 kernel void mask_fill_zero(texture2d<float, access::write> output [[texture(0)]],
