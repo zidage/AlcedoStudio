@@ -100,7 +100,7 @@ TEST(GpuDagGraphCompiler, GraphCompilerBindsFrameGeometryWithoutChangingStaticPl
   EXPECT_GT(plan.geometry.render_extent.width, 0U);
 }
 
-TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheCompilesOnceForRepeatedParameterAndViewportEdits) {
+TEST(GpuDagGraphCompiler, ParameterAndViewportEditsKeepStaticPlan) {
   auto                      document = CreateDefaultPipelineDocument();
   const auto                prepared = MakePrepared();
   StaticExecutionPlanCache  cache;
@@ -130,7 +130,8 @@ TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheRecompilesWhenMaskTopologyChan
   const auto               prepared = MakePrepared();
   StaticExecutionPlanCache cache;
   const auto               first = cache.GetOrCompile(document, prepared.CompileSource());
-  EXPECT_FALSE(first.primary_grade_mask.has_value());
+  ASSERT_NE(first.FirstGrade(), nullptr);
+  EXPECT_FALSE(first.FirstGrade()->mask.has_value());
 
   document.Graph().AddNode(std::make_unique<AnalyticMaskNodeModel>(NodeId{"mask.radial"}));
   document.Graph().Connect(NodeId{"mask.radial"}, PortId{"mask"}, NodeId{"grade.primary"},
@@ -139,7 +140,8 @@ TEST(GpuDagGraphCompiler, StaticExecutionPlanCacheRecompilesWhenMaskTopologyChan
 
   EXPECT_EQ(cache.GetStats().compiles, 2U);
   EXPECT_EQ(cache.GetStats().misses, 2U);
-  EXPECT_TRUE(second.primary_grade_mask.has_value());
+  ASSERT_NE(second.FirstGrade(), nullptr);
+  EXPECT_TRUE(second.FirstGrade()->mask.has_value());
   EXPECT_TRUE(GraphCompiler::NeedsRecompile(first, document, prepared.CompileSource()));
 }
 

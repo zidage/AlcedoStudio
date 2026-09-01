@@ -428,13 +428,14 @@ void EncodeFeatherSample(OpenClRenderDevice& device, const OpenClBackend::Buffer
 }  // namespace
 
 auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                       const PipelineDocument& document, MaskStore* store,
-                       std::span<const RectI> dirty_rectangles) -> OpenClMaskResult {
+                       const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                       MaskStore* store, std::span<const RectI> dirty_rectangles)
+    -> OpenClMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteOpenClMask: BeginRender has not been called");
   }
-  if (!plan.primary_grade_mask.has_value()) {
-    throw std::runtime_error("ExecuteOpenClMask: plan has no mask");
+  if (!compiled_grade.mask.has_value()) {
+    throw std::runtime_error("ExecuteOpenClMask: compiled Color Grade has no mask");
   }
   const auto extent = plan.geometry.render_extent;
   if (extent.Empty() || plan.geometry.full_reference_extent.Empty()) {
@@ -442,10 +443,10 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
   }
 
   auto&            workspace = device.Workspace();
-  auto&            output    = EnsureOutput(workspace, plan.mask_output, extent);
-  OpenClMaskResult result{plan.mask_output};
+  auto&            output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
+  OpenClMaskResult result{compiled_grade.mask_output};
 
-  const auto*      node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*      node = document.Graph().FindNode(compiled_grade.mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     EncodeAnalytic(device, output.Texture(), *analytic, plan);
     return result;
@@ -529,6 +530,28 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     workspace.Values().StoreMetadata(
         distance_id, distance_key,
         ImageExtent{asset->descriptor.extent.width, asset->descriptor.extent.height});
+  }
+  return result;
+}
+
+auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                       const PipelineDocument& document, MaskStore* store,
+                       std::span<const RectI> dirty_rectangles) -> OpenClMaskResult {
+  bool any_mask = false;
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      any_mask = true;
+      break;
+    }
+  }
+  if (!any_mask) {
+    throw std::runtime_error("ExecuteOpenClMask: plan has no mask");
+  }
+  OpenClMaskResult result{};
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      result = ExecuteOpenClMask(device, plan, document, grade, store, dirty_rectangles);
+    }
   }
   return result;
 }

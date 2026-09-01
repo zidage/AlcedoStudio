@@ -141,18 +141,12 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  const auto target_error =
-      alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
-  if (!target_error.empty()) {
-    if (error) *error = target_error;
+  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
     return false;
   }
   if (!alcedo::ResolveEditorAdjustmentField(patch.field_key).has_value()) {
     if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
-    return false;
-  }
-  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
     return false;
   }
 
@@ -177,7 +171,20 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   const auto sequence    = state->pending_document_sequence.find(patch.field_key);
   HistoryWorkingState::DocumentFieldEdit edit;
   if (sequence == state->pending_document_sequence.end()) {
-    edit.target = patch.target;
+    if (patch.target.owner_kind == alcedo::EditorParameterOwnerKind::Unspecified) {
+      auto filled = alcedo::CompleteCurrentPanelParameterTarget(*state->pipeline_guard->document_,
+                                                                patch.field_key, error);
+      if (!filled.has_value()) return false;
+      edit.target = std::move(*filled);
+    } else {
+      const auto target_error =
+          alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
+      if (!target_error.empty()) {
+        if (error) *error = target_error;
+        return false;
+      }
+      edit.target = patch.target;
+    }
     if (!ReadEditorParameterJson(*state->pipeline_guard->document_, edit.target,
                                  &edit.before_model_json, error))
       return false;
@@ -205,11 +212,13 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  const auto target_error =
-      alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
-  if (!target_error.empty()) {
-    if (error) *error = target_error;
-    return false;
+  if (patch.target.owner_kind != alcedo::EditorParameterOwnerKind::Unspecified) {
+    const auto target_error =
+        alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
+    if (!target_error.empty()) {
+      if (error) *error = target_error;
+      return false;
+    }
   }
   const auto spec = alcedo::ResolveEditorAdjustmentField(patch.field_key);
   if (!spec) {

@@ -682,5 +682,97 @@ TEST_F(OpenClWorkspaceFixture, OpenClCommandContextReleasesEveryRetainedEvent) {
   EXPECT_EQ(device.CommandContext().TrackedEventCount(), 0U);
 }
 
+TEST_F(OpenClWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
+  OpenClRenderDevice device;
+  ParameterSlotKey   key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ExposureModel      model;
+  const auto         fields = ExposureFieldBindings();
+  device.Workspace().Parameters().BindSlot(key, 4, fields);
+  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+
+  model.SetValue(0.75f);
+  auto pending = TakePendingParameterPatch(model);
+  ASSERT_TRUE(pending.has_value());
+  device.Workspace().Device().FailNextUpload();
+  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
+  EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
+               std::runtime_error);
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
+
+  device.Workspace().Parameters().UploadDirty(device.CommandContext());
+  device.WaitIdle();
+  pending->Commit();
+  EXPECT_FALSE(model.IsDirty());
+  EXPECT_FALSE(device.Workspace().Parameters().HasPendingUpload());
+
+  float     gpu_value = 0.0f;
+  std::byte storage[4];
+  device.Workspace().Parameters().Download(device.Workspace().Parameters().Binding(key).offset,
+                                           std::span<std::byte>(storage, 4),
+                                           device.CommandContext());
+  std::memcpy(&gpu_value, storage, sizeof(gpu_value));
+  EXPECT_FLOAT_EQ(gpu_value, 0.75f);
+}
+
+TEST_F(OpenClWorkspaceFixture, SinkFailurePublishesNoNewResults) {
+  OpenClRenderDevice device;
+  auto&              workspace = device.Workspace();
+  const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const ContentKey   first{81};
+  const ContentKey   second{82};
+  constexpr std::uint32_t kWidth  = 8;
+  constexpr std::uint32_t kHeight = 8;
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(id, first, ImageExtent{kWidth, kHeight},
+                                       TextureFormat::Rgba32f, device.CommandContext().SubmissionId());
+  device.EndRender();
+  device.PublishResults();
+  device.WaitIdle();
+  ASSERT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f,
+                                                 workspace.Device().CompletedSubmission()));
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(id, second, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  device.CancelRender();
+  device.WaitIdle();
+  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                                 workspace.Device().CompletedSubmission()));
+  EXPECT_FALSE(workspace.Images().FindValidResult(id, second, {kWidth, kHeight},
+                                                  TextureFormat::Rgba32f,
+                                                  workspace.Device().CompletedSubmission()));
+  EXPECT_EQ(workspace.Images().UnpublishedCount(), 0U);
+}
+
+TEST_F(OpenClWorkspaceFixture, RepeatedNodeRemovalReclaimsUnusedResources) {
+  OpenClRenderDevice device;
+  const auto         fields = ExposureFieldBindings();
+  device.Workspace().AlignParameterLayout(1);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.a"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.b"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.c"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  const auto used_three = device.Workspace().Parameters().used_bytes();
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 3U);
+  EXPECT_GT(used_three, 0U);
+
+  device.WaitIdle();
+  device.Workspace().AlignParameterLayout(2);
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 0U);
+  EXPECT_EQ(device.Workspace().Parameters().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().ParameterLayoutHash(), 2U);
+
+  device.Workspace().Parameters().BindSlot({NodeId{"grade.a"}, AdjustmentInstanceId{"exposure"}}, 4,
+                                           fields);
+  EXPECT_EQ(device.Workspace().Parameters().SlotCount(), 1U);
+  EXPECT_LT(device.Workspace().Parameters().used_bytes(), used_three);
+}
+
 }  // namespace
 }  // namespace alcedo

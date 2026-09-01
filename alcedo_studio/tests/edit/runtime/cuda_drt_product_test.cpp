@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -19,8 +20,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "nm2_unmasked_drt_post_reference.hpp"
 
 namespace alcedo {
 namespace {
@@ -308,6 +311,72 @@ TEST_F(CudaDrtProductFixture, CudaDefaultPipelineSecondRenderCreatesNoGpuAllocat
   Render(document);
   EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
+}
+
+// NM2.1: mix 1, no mask, non-default DRT/Post then DRT display. Matches the captured
+// CUDA reference taken from the pre-move Grade-owned neighborhood order.
+void ApplyUnmaskedReferencePostAndDrt(PipelineDocument& document) {
+  auto* grade = document.PrimaryGrade();
+  auto* drt   = document.Drt();
+  ASSERT_NE(grade, nullptr);
+  ASSERT_NE(drt, nullptr);
+  EXPECT_TRUE(grade->Enabled());
+  EXPECT_FLOAT_EQ(grade->Mix(), 1.0f);
+  auto* clarity = dynamic_cast<ClarityModel*>(drt->FindAdjustmentByType(type_ids::Clarity()));
+  auto* sharpen = dynamic_cast<SharpenModel*>(drt->FindAdjustmentByType(type_ids::Sharpen()));
+  auto* halo    = dynamic_cast<HalationModel*>(drt->FindAdjustmentByType(type_ids::Halation()));
+  auto* grain   = dynamic_cast<FilmGrainModel*>(drt->FindAdjustmentByType(type_ids::FilmGrain()));
+  ASSERT_NE(clarity, nullptr);
+  ASSERT_NE(sharpen, nullptr);
+  ASSERT_NE(halo, nullptr);
+  ASSERT_NE(grain, nullptr);
+  clarity->SetValue(40.0f);
+  sharpen->SetAmount(55.0f);
+  sharpen->SetRadius(3.0f);
+  sharpen->SetThreshold(0.0f);
+  halo->SetValue(0.65f);
+  grain->SetValue(0.35f);
+  auto params           = drt->Params().Params();
+  params.peak_luminance = 250.0f;
+  drt->Params().ReplaceParams(params);
+}
+
+TEST_F(CudaDrtProductFixture, DrtPostPreservesUnmaskedReferenceOrder) {
+  auto document = CreateDefaultPipelineDocument();
+  ApplyUnmaskedReferencePostAndDrt(document);
+  const auto pixels = Render(document);
+  ASSERT_TRUE(AllFiniteDisplayValues(pixels));
+  ASSERT_EQ(pixels.size(), static_cast<std::size_t>(test::kNm2UnmaskedDrtPostReferenceWidth) *
+                               test::kNm2UnmaskedDrtPostReferenceHeight);
+  for (std::size_t i = 0; i < pixels.size(); ++i) {
+    const float* ref = &test::kNm2UnmaskedDrtPostReferenceRgba[i * 4];
+    EXPECT_NEAR(pixels[i].r, ref[0], test::kNm2UnmaskedDrtPostReferenceAbsTol) << i;
+    EXPECT_NEAR(pixels[i].g, ref[1], test::kNm2UnmaskedDrtPostReferenceAbsTol) << i;
+    EXPECT_NEAR(pixels[i].b, ref[2], test::kNm2UnmaskedDrtPostReferenceAbsTol) << i;
+    EXPECT_NEAR(pixels[i].a, ref[3], test::kNm2UnmaskedDrtPostReferenceAbsTol) << i;
+  }
+
+  auto mix_off_clarity = CreateDefaultPipelineDocument();
+  mix_off_clarity.PrimaryGrade()->SetMix(0.0f);
+  auto* on = dynamic_cast<ClarityModel*>(
+      mix_off_clarity.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(on, nullptr);
+  on->SetValue(40.0f);
+  auto mix_off_identity = CreateDefaultPipelineDocument();
+  mix_off_identity.PrimaryGrade()->SetMix(0.0f);
+  const auto on_pixels  = Render(mix_off_clarity);
+  const auto off_pixels = Render(mix_off_identity);
+  ASSERT_EQ(on_pixels.size(), off_pixels.size());
+  bool differ = false;
+  for (std::size_t i = 0; i < on_pixels.size(); ++i) {
+    if (std::abs(on_pixels[i].r - off_pixels[i].r) > 1.0e-4f ||
+        std::abs(on_pixels[i].g - off_pixels[i].g) > 1.0e-4f ||
+        std::abs(on_pixels[i].b - off_pixels[i].b) > 1.0e-4f) {
+      differ = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(differ);
 }
 
 }  // namespace

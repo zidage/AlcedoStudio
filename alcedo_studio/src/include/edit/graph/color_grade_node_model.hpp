@@ -12,21 +12,18 @@
 #include <string_view>
 #include <vector>
 
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 
 namespace alcedo {
 
-struct AdjustmentModelEntry {
-  AdjustmentInstanceId           instance_id;
-  std::unique_ptr<IOperatorModel> model;
-};
-
 /**
  * @brief Color grade node with an ordered adjustment list, mix, and optional mask input.
  *
  * Adjustment list order is user data. GraphCompiler must not reorder Models.
+ * Clarity, Sharpen, Halation, and Film Grain are DRT/Post-owned and are rejected here.
  */
 class ColorGradeNodeModel final : public INodeModel {
  public:
@@ -48,22 +45,22 @@ class ColorGradeNodeModel final : public INodeModel {
   void SetDisplayName(std::string name);
 
   /**
-   * @brief Catalog Color Grade: CAT02 through Film Grain in the documented order.
+   * @brief Catalog Color Grade: CAT02 through LMT in the documented order.
    *
    * Adjustment values are catalog identity (exposure 0 EV, saturation 1.0). Product
    * Default look (+1.5 EV, saturation 1.3) is applied by
-   * @ref CreateDefaultPipelineDocument, not by this factory.
+   * @ref CreateDefaultPipelineDocument, not by this factory. Clarity, Sharpen,
+   * Halation, and Film Grain belong to DRT/Post and are omitted.
    *
    * @param id Node id, typically "grade.primary" for the Default document.
    */
   static auto MakeDefault(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
 
   /**
-   * @brief Identity Color Grade: catalog-default params and no post adjustments.
+   * @brief Identity Color Grade: the same 13 catalog types as @ref MakeDefault.
    *
-   * Exposure is 0 EV, saturation is 1.0, mix is 1, enabled is true. Clarity,
-   * Sharpen, Halation, and Film Grain are omitted. Does not copy or patch
-   * @ref MakeDefault.
+   * Exposure is 0 EV, saturation is 1.0, mix is 1, enabled is true. Does not copy
+   * or patch @ref MakeDefault. Product look stays on @ref CreateDefaultPipelineDocument.
    *
    * @param id Stable NodeId for the new node.
    * @return Owned node. Caller inserts it into a graph.
@@ -86,9 +83,13 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel*;
+  [[nodiscard]] auto FindAdjustmentIdByType(const OperatorTypeId& type) const
+      -> const AdjustmentInstanceId*;
 
   /**
-   * @brief Insert an adjustment instance. Caller must mark topology_dirty on the document.
+   * @brief Insert a Color Grade-owned adjustment. Caller must mark topology_dirty.
+   *
+   * @throws std::runtime_error when @p model is DRT/Post-owned or unsupported.
    */
   void InsertAdjustment(std::size_t index, AdjustmentInstanceId id,
                         std::unique_ptr<IOperatorModel> model);
@@ -112,8 +113,8 @@ class ColorGradeNodeModel final : public INodeModel {
  * Default look on @ref CreateDefaultPipelineDocument.
  *
  * @param id Stable NodeId.
- * @return Owned node with identity params and no Clarity, Sharpen, Halation, or
- *         Film Grain. The caller owns insertion into a graph.
+ * @return Owned node with identity params and the 13 Color Grade catalog types.
+ *         The caller owns insertion into a graph.
  */
 [[nodiscard]] auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel>;
 

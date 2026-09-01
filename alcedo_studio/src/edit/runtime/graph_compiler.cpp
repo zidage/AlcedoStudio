@@ -13,7 +13,9 @@
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -111,17 +113,17 @@ auto StageKindFor(CompiledAdjustmentAlgorithm algorithm) -> CompiledGradeStageKi
   return CompiledGradeStageKind::Pointwise;
 }
 
-void AppendGradeStage(ExecutionPlan& plan, CompiledAdjustmentAlgorithm algorithm) {
+void AppendGradeStage(CompiledGradeNode& grade, CompiledAdjustmentAlgorithm algorithm) {
   const auto kind  = StageKindFor(algorithm);
-  const auto index = static_cast<std::uint32_t>(plan.primary_grade_adjustments.size() - 1);
-  if (!plan.primary_grade_stages.empty()) {
-    auto& last = plan.primary_grade_stages.back();
+  const auto index = static_cast<std::uint32_t>(grade.adjustments.size() - 1);
+  if (!grade.stages.empty()) {
+    auto& last = grade.stages.back();
     if (last.kind == kind && kind != CompiledGradeStageKind::Neighborhood) {
       ++last.count;
       return;
     }
   }
-  plan.primary_grade_stages.push_back(CompiledGradeStage{kind, index, 1});
+  grade.stages.push_back(CompiledGradeStage{kind, index, 1});
 }
 
 auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
@@ -138,13 +140,22 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
     hash              = MixText(hash, node->Id().Value());
     hash              = MixText(hash, node->Type().Text());
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
-    if (grade == nullptr) {
+    if (grade != nullptr) {
+      hash = MixU64(hash, grade->AdjustmentCount());
+      for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+        hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
+        hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
+      }
       continue;
     }
-    hash = MixU64(hash, grade->AdjustmentCount());
-    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
-      hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
+    const auto* drt = dynamic_cast<const DrtNodeModel*>(node);
+    if (drt == nullptr) {
+      continue;
+    }
+    hash = MixU64(hash, drt->AdjustmentCount());
+    for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
+      hash = MixText(hash, drt->AdjustmentIdAt(index).Value());
+      hash = MixText(hash, drt->AdjustmentAt(index).Type().Text());
     }
   }
 
@@ -197,6 +208,177 @@ void RequireValidGraph(const PipelineDocument& document) {
   }
 }
 
+auto NextOrdinal(const ExecutionPlan& plan, GpuPassKind kind) -> std::uint32_t {
+  std::uint32_t ordinal = 0;
+  for (const auto& pass : plan.passes) {
+    if (pass.kind == kind) {
+      ++ordinal;
+    }
+  }
+  return ordinal;
+}
+
+void PushPass(ExecutionPlan& plan, GpuPassKind kind, NodeId owner,
+              std::vector<CompiledPassInput> inputs, std::vector<CompiledPassOutput> outputs,
+              std::optional<AdjustmentInstanceId> adjustment = {},
+              std::vector<AdjustmentInstanceId>   parameters = {}) {
+  const auto ordinal = NextOrdinal(plan, kind);
+  plan.passes.push_back(MakeGpuPass(kind, std::move(owner), ordinal, std::move(inputs),
+                                    std::move(outputs), std::move(adjustment),
+                                    std::move(parameters)));
+}
+
+auto SceneImageIncoming(const PipelineDocument& document, const NodeId& node_id) -> GraphValueId {
+  for (const auto& edge : document.Graph().Edges()) {
+    if (edge.to_node == node_id && edge.to_port == PortId{"image"}) {
+      return GraphValueId{edge.from_node, edge.from_port};
+    }
+  }
+  throw std::runtime_error("GraphCompiler: missing scene-image incoming edge for " +
+                           std::string{node_id.Value()});
+}
+
+auto CompileIncomingMask(const PipelineDocument& document, const NodeId& grade_id,
+                         const DevelopCompileSource& source, ExecutionPlan& plan)
+    -> std::pair<std::optional<CompiledMask>, GraphValueId> {
+  for (const auto& edge : document.Graph().Edges()) {
+    if (edge.to_node != grade_id || edge.to_port != PortId{"mask"}) {
+      continue;
+    }
+    const auto* mask = document.Graph().FindNode(edge.from_node);
+    if (mask == nullptr) {
+      throw std::runtime_error("GraphCompiler: mask edge has no source");
+    }
+    const auto kind = mask->Type() == type_ids::RasterMaskNode() ? CompiledMaskKind::Raster
+                                                                 : CompiledMaskKind::Analytic;
+    const GraphValueId mask_output{mask->Id(), PortId{"mask"}};
+    PushPass(plan, GpuPassKind::MaskEvaluate, mask->Id(),
+             {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage}},
+             {{mask_output, CompiledValueKind::Mask}});
+    PushPass(plan, GpuPassKind::MaskFeather, mask->Id(),
+             {{PortId{"mask"}, mask_output, CompiledValueKind::Mask}},
+             {{mask_output, CompiledValueKind::Mask}});
+    if (kind == CompiledMaskKind::Raster) {
+      const Extent2D mask_extent{
+          std::max(source.full_reference_extent.width, source.host_extent.width),
+          std::max(source.full_reference_extent.height, source.host_extent.height)};
+      plan.peak_transient_bytes =
+          (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
+    }
+    return {CompiledMask{mask->Id(), kind}, mask_output};
+  }
+  return {std::nullopt, GraphValueId{NodeId{""}, PortId{"mask"}}};
+}
+
+auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeModel& grade,
+                       GraphValueId scene_input, const DevelopCompileSource& source,
+                       ExecutionPlan& plan) -> CompiledGradeNode {
+  const auto incoming = SceneImageIncoming(document, grade.Id());
+  if (incoming != scene_input) {
+    throw std::runtime_error(
+        "GraphCompiler: Color Grade scene input does not follow the image backbone");
+  }
+
+  CompiledGradeNode compiled;
+  compiled.node_id      = grade.Id();
+  compiled.scene_input  = scene_input;
+  compiled.scene_output = GraphValueId{grade.Id(), PortId{"image"}};
+  auto [mask, mask_output] = CompileIncomingMask(document, grade.Id(), source, plan);
+  compiled.mask            = std::move(mask);
+  compiled.mask_output     = mask_output;
+
+  std::vector<AdjustmentInstanceId> parameters;
+  parameters.reserve(grade.AdjustmentCount());
+  compiled.adjustments.reserve(grade.AdjustmentCount());
+  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+    const auto& type = grade.AdjustmentAt(index).Type();
+    RequireAdjustmentOwner(type, AdjustmentParameterOwner::ColorGrade, "GraphCompiler Color Grade");
+    const auto algorithm = CompileAdjustmentAlgorithm(type);
+    const auto instance  = grade.AdjustmentIdAt(index);
+    compiled.adjustments.push_back({instance, type, algorithm});
+    AppendGradeStage(compiled, algorithm);
+    parameters.push_back(instance);
+  }
+
+  std::vector<CompiledPassInput> inputs{
+      {PortId{"image"}, compiled.scene_input, CompiledValueKind::SceneImage}};
+  if (compiled.mask.has_value()) {
+    inputs.push_back({PortId{"mask"}, compiled.mask_output, CompiledValueKind::Mask});
+  }
+  PushPass(plan, GpuPassKind::PrimaryColorGrade, grade.Id(), std::move(inputs),
+           {{compiled.scene_output, CompiledValueKind::SceneImage}}, {}, std::move(parameters));
+  return compiled;
+}
+
+auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan& plan)
+    -> CompiledDrtNode {
+  CompiledDrtNode compiled;
+  compiled.node_id        = drt.Id();
+  compiled.scene_input    = scene_input;
+  compiled.scene_output   = GraphValueId{drt.Id(), PortId{"runtime.scene_post"}};
+  compiled.display_output = GraphValueId{drt.Id(), PortId{"display"}};
+
+  std::vector<OperatorTypeId>         drt_types;
+  std::vector<AdjustmentInstanceId>   parameters;
+  drt_types.reserve(drt.AdjustmentCount());
+  parameters.reserve(drt.AdjustmentCount());
+  compiled.post_adjustments.reserve(drt.AdjustmentCount());
+  GraphValueId step_input = scene_input;
+  for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
+    const auto& type = drt.AdjustmentAt(index).Type();
+    drt_types.push_back(type);
+    const auto algorithm = CompileAdjustmentAlgorithm(type);
+    if (algorithm != CompiledAdjustmentAlgorithm::Neighborhood) {
+      throw std::runtime_error("GraphCompiler: DRT/Post adjustment is not a neighborhood operation");
+    }
+    const auto instance = drt.AdjustmentIdAt(index);
+    compiled.post_adjustments.push_back({instance, type, algorithm});
+    parameters.push_back(instance);
+    const GraphValueId step_output{drt.Id(), PortId{"runtime.post." + std::to_string(index)}};
+    compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::Neighborhood, instance, type,
+                                             step_input, step_output});
+    step_input = step_output;
+  }
+  RequireCompleteDrtPostTypes(drt_types, "GraphCompiler DRT");
+  compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform, {},
+                                           OperatorTypeId{}, compiled.scene_output,
+                                           compiled.display_output});
+  if (!compiled.steps.empty() && compiled.steps.size() >= 2) {
+    compiled.steps[compiled.steps.size() - 2].output = compiled.scene_output;
+    compiled.steps.back().input                      = compiled.scene_output;
+  }
+
+  PushPass(plan, GpuPassKind::Drt, drt.Id(),
+           {{PortId{"image"}, compiled.scene_input, CompiledValueKind::SceneImage}},
+           {{compiled.scene_output, CompiledValueKind::SceneImage},
+            {compiled.display_output, CompiledValueKind::DisplayImage}},
+           {}, std::move(parameters));
+  return compiled;
+}
+
+void CompileDevelopPasses(ExecutionPlan& plan, const NodeId& develop_id,
+                          const DevelopCompileSource& source) {
+  const CompiledPassInput  sensor_in{PortId{"sensor_linear"}, plan.sensor_linear_output,
+                                    CompiledValueKind::SceneImage};
+  const CompiledPassOutput sensor_out{plan.sensor_linear_output, CompiledValueKind::SceneImage};
+  if (source.kind == DevelopInputKind::DirectRgb) {
+    PushPass(plan, GpuPassKind::UploadRgb, develop_id, {}, {sensor_out});
+  } else {
+    PushPass(plan, GpuPassKind::UploadRaw, develop_id, {}, {sensor_out});
+    PushPass(plan, GpuPassKind::Linearize, develop_id, {sensor_in}, {sensor_out});
+    PushPass(plan, GpuPassKind::CfaClamp, develop_id, {sensor_in}, {sensor_out});
+    PushPass(plan, GpuPassKind::Demosaic, develop_id, {sensor_in}, {sensor_out});
+    PushPass(plan, GpuPassKind::HighlightRecover, develop_id, {sensor_in}, {sensor_out});
+    PushPass(plan, GpuPassKind::InverseCamMulPack, develop_id, {sensor_in}, {sensor_out});
+  }
+  PushPass(plan, GpuPassKind::Lens, develop_id, {sensor_in}, {sensor_out});
+  PushPass(plan, GpuPassKind::GeometryResample, NodeId{"geometry"}, {sensor_in},
+           {{plan.geometry_output, CompiledValueKind::SceneImage}});
+  PushPass(plan, GpuPassKind::CameraToAp1, develop_id,
+           {{PortId{"scene_source"}, plan.geometry_output, CompiledValueKind::SceneImage}},
+           {{plan.develop_output, CompiledValueKind::SceneImage}});
+}
+
 }  // namespace
 
 auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument&     document,
@@ -221,61 +403,37 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
   ExecutionPlan plan;
   plan.static_key           = MakeStaticPlanKey(document, source, backend_capability_version);
   plan.source               = source;
-  plan.sensor_linear_output = GraphValueId{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const auto* develop       = document.Develop();
+  plan.sensor_linear_output = GraphValueId{develop->Id(), PortId{"sensor_linear"}};
   plan.geometry_output      = GraphValueId{NodeId{"geometry"}, PortId{"scene_source"}};
-  plan.develop_output       = GraphValueId{NodeId{"develop"}, PortId{"image"}};
-  const auto grades         = ColorGradesOnImageBackbone(document);
-  const ColorGradeNodeModel* grade = grades.empty() ? nullptr : grades.front();
+  plan.develop_output       = GraphValueId{develop->Id(), PortId{"image"}};
   plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
 
-  if (source.kind == DevelopInputKind::DirectRgb) {
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::UploadRgb});
-  } else {
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::UploadRaw});
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::Linearize});
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::CfaClamp});
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::Demosaic});
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::HighlightRecover});
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::InverseCamMulPack});
-  }
-  plan.passes.push_back(GpuPassDesc{GpuPassKind::Lens});
-  plan.passes.push_back(GpuPassDesc{GpuPassKind::GeometryResample});
-  plan.passes.push_back(GpuPassDesc{GpuPassKind::CameraToAp1});
-  if (grade != nullptr) {
-    for (const auto& edge : document.Graph().Edges()) {
-      if (edge.to_node == grade->Id() && edge.to_port == PortId{"mask"}) {
-        const auto* mask = document.Graph().FindNode(edge.from_node);
-        if (mask == nullptr) throw std::runtime_error("GraphCompiler: mask edge has no source");
-        const auto kind = mask->Type() == type_ids::RasterMaskNode() ? CompiledMaskKind::Raster
-                                                                     : CompiledMaskKind::Analytic;
-        plan.primary_grade_mask = CompiledMask{mask->Id(), kind};
-        plan.mask_output        = GraphValueId{mask->Id(), PortId{"mask"}};
-        plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskEvaluate});
-        plan.passes.push_back(GpuPassDesc{GpuPassKind::MaskFeather});
-        if (kind == CompiledMaskKind::Raster) {
-          const Extent2D mask_extent{
-              std::max(source.full_reference_extent.width, source.host_extent.width),
-              std::max(source.full_reference_extent.height, source.host_extent.height)};
-          plan.peak_transient_bytes =
-              (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
-        }
-        break;
-      }
-    }
-    plan.passes.push_back(GpuPassDesc{GpuPassKind::PrimaryColorGrade});
-    plan.primary_grade_output = GraphValueId{grade->Id(), PortId{"image"}};
-    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      const auto& type      = grade->AdjustmentAt(index).Type();
-      const auto  algorithm = CompileAdjustmentAlgorithm(type);
-      plan.primary_grade_adjustments.push_back({grade->AdjustmentIdAt(index), type, algorithm});
-      AppendGradeStage(plan, algorithm);
-    }
-  } else {
-    plan.primary_grade_output = plan.develop_output;
-  }
-  plan.display_output = GraphValueId{document.Drt()->Id(), PortId{"display"}};
-  plan.passes.push_back(GpuPassDesc{GpuPassKind::Drt});
+  CompileDevelopPasses(plan, develop->Id(), source);
 
+  GraphValueId scene = plan.develop_output;
+  for (const auto& id : document.Graph().ImageBackboneNodeIds()) {
+    const auto* node = document.Graph().FindNode(id);
+    if (node == nullptr) {
+      throw std::runtime_error("GraphCompiler: backbone node is missing");
+    }
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+    if (grade == nullptr) {
+      continue;
+    }
+    auto compiled = CompileColorGrade(document, *grade, scene, source, plan);
+    scene         = compiled.scene_output;
+    plan.grade_nodes.push_back(std::move(compiled));
+  }
+
+  const auto* drt    = document.Drt();
+  plan.drt           = CompileDrt(*drt, scene, plan);
+  plan.display_output = plan.drt.display_output;
+  if (plan.drt.scene_input != plan.SceneInputForDrt()) {
+    throw std::runtime_error("GraphCompiler: DRT scene input is not the last backbone scene value");
+  }
+
+  ValidateExecutionPlan(plan);
   return plan;
 }
 

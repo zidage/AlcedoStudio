@@ -49,16 +49,27 @@ Read repository `AGENTS.md` / `CLAUDE.md` / project rules before coding. Honor p
 1. Open the plan document. Treat it as the source of truth for that phase's checklist, files,
    acceptance criteria, required tests, and exit conditions.
 2. Locate the exact heading for the requested phase (and sub-phases if the user named a parent).
-3. Extract into a working checklist:
+3. Read the plan's background, design rationale, ownership rules, call chains, and prerequisite
+   completion records. Do not read only the phase checklist.
+4. Read the relevant context in linked master plans, design documents, and related phase plans.
+   Follow further references when they explain a dependency or a decision that affects this phase.
+   Resolve the relevant context before implementation; do not collect unrelated documents.
+5. Check documented responsibilities against current declarations, callers, and tests. Do not guess
+   another component's purpose from its name or one code fragment. Search the supplied context
+   first when its role is unclear, then trace the code. Distinguish documented intent from observed
+   behavior. Use explicit authority and revision notes to resolve conflicts; do not invent a reason
+   for unexplained behavior or silently override a documented constraint.
+6. Extract into a working checklist:
    - target files / modules;
    - behavioral acceptance criteria;
    - required tests and assertion goals;
    - explicit non-goals and dependencies on prior phases;
+   - relevant context sources and the ownership or behavior rules they establish;
    - any “phase is complete when …” exit condition.
-4. If prior phases are incomplete and the requested phase depends on them, stop and report the
+7. If prior phases are incomplete and the requested phase depends on them, stop and report the
    concrete blocker. If the plan says the prior work is already implemented, verify lightly and
    proceed.
-5. Do **not** redesign the phase unless the plan is inconsistent with the codebase. Prefer the
+8. Do **not** redesign the phase unless the plan is inconsistent with the codebase. Prefer the
    closest viable implementation that satisfies the written criteria.
 
 ### 2. Build to grill-code-review standards (during implementation)

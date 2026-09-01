@@ -22,6 +22,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/mask/mask_store.hpp"
@@ -34,6 +35,7 @@
 #include "edit/runtime/texture_format.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
+#include "multi_grade_runtime_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -435,6 +437,29 @@ TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditor
   EXPECT_EQ(after_preview.pass.drt_skip, 1U);
 }
 
+TEST_F(CudaResultCacheProductFixture, BackgroundMultiGradeRenderPreservesEditorCache) {
+  multi_grade_test::AddCleanGradesBeforeDrt(*document_, {"grade.b", "grade.c"});
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto resources_before = renderer_->SessionResources();
+  EXPECT_GT(resources_before.published_result_count, 0U);
+  renderer_->ResetStats();
+
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+
+  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
+  EXPECT_EQ(renderer_->SessionResources().published_result_count,
+            resources_before.published_result_count);
+  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+            resources_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer_->OneShotResources().published_result_count, 0U);
+  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
+
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_skip, 1U);
+  EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
+}
+
 TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultCacheKeys) {
   static_assert(std::is_same_v<CudaRenderer, Renderer<CudaBackend>>);
   ASSERT_TRUE(OutputIsFinite(Render()));
@@ -469,7 +494,8 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
   EXPECT_EQ(images.PublishedContentKey(plan.sensor_linear_output), keys.sensor_linear);
   EXPECT_EQ(images.PublishedContentKey(plan.geometry_output), keys.geometry_scene_source);
   EXPECT_EQ(images.PublishedContentKey(plan.develop_output), keys.develop_image);
-  EXPECT_EQ(images.PublishedContentKey(plan.primary_grade_output), keys.primary_grade);
+  ASSERT_NE(plan.FirstGrade(), nullptr);
+  EXPECT_EQ(images.PublishedContentKey(plan.FirstGrade()->scene_output), keys.primary_grade);
   EXPECT_EQ(images.PublishedContentKey(plan.display_output), keys.drt_display);
   EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, keys.sensor_linear,
                                      keys.sensor_extent, TextureFormat::Rgba32f, completed));
@@ -477,7 +503,7 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
                                      keys.geometry_extent, TextureFormat::Rgba32f, completed));
   EXPECT_TRUE(images.FindValidResult(plan.develop_output, keys.develop_image, keys.geometry_extent,
                                      TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.primary_grade_output, keys.primary_grade,
+  EXPECT_TRUE(images.FindValidResult(plan.FirstGrade()->scene_output, keys.primary_grade,
                                      keys.geometry_extent, TextureFormat::Rgba32f, completed));
   EXPECT_TRUE(images.FindValidResult(plan.display_output, keys.drt_display, keys.geometry_extent,
                                      TextureFormat::Rgba32f, completed));

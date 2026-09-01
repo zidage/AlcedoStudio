@@ -6,6 +6,8 @@
 
 #ifdef HAVE_METAL
 
+#include <cstdint>
+
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -14,16 +16,17 @@
 namespace alcedo {
 
 struct MetalDrtResult {
-  GraphValueId output{NodeId{"drt"}, PortId{"display"}};
+  GraphValueId  output{NodeId{"drt"}, PortId{"display"}};
+  GraphValueId  scene_post{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  std::uint32_t post_neighborhood_count = 0;
 };
 
 /**
- * @brief Encode ACES 2.0 or OpenDRT on the current Metal command buffer.
+ * @brief Run DRT/Post neighborhood ops in ACEScc, then ACES 2.0 or OpenDRT.
  *
- * Input is the compiled primary-grade AP1/ACEScc image. The pass decodes ACEScc
- * to AP1 scene-linear, runs the selected display transform, and writes a workspace
- * RGBA32F display texture. Parameters live in ParameterArena. Failures throw; there
- * is no CPU or fused-pipeline substitute.
+ * Input is the compiled DRT scene-input AP1/ACEScc image. Neighborhood ops write
+ * @ref ExecutionPlan::drt.scene_output. The display kernel then decodes ACEScc
+ * to AP1 scene-linear. Grade mix and masks do not suppress these operations.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
                                    PipelineDocument& document) -> MetalDrtResult;

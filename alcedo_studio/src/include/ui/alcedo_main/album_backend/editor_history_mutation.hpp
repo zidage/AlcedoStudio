@@ -25,8 +25,8 @@ class EditorHistoryMutation {
   explicit EditorHistoryMutation(EditorHistoryState& state);
 
   /// Capture the target Model value once and apply preview under the render lock.
-  /// @pre @p patch.target is a complete production target. Incomplete targets are
-  ///      rejected; this path does not fill owner_kind or node_id.
+  /// Unspecified current-panel targets are completed from the live document.
+  /// Explicit incomplete targets are rejected.
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool;

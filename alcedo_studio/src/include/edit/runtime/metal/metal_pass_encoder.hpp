@@ -49,16 +49,18 @@ struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore* mask_store) {
-    (void)ExecuteMetalMask(device, plan, document, mask_store);
+                     PipelineDocument& document, MaskStore* mask_store,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteMetalMask(device, plan, document, compiled_grade, mask_store);
   }
 };
 
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*) {
-    (void)ExecuteMetalPrimaryGrade(device, plan, input, document);
+                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade);
   }
 };
 

@@ -91,9 +91,16 @@ void ValidateDocumentShape(const nlohmann::json& json) {
     }
 
     const auto type = node["type"].get<std::string>();
-    if (type == type_ids::ColorGradeNode().Text()) {
+    if (type == type_ids::ColorGradeNode().Text() || type == type_ids::DrtNode().Text()) {
+      if (type == type_ids::DrtNode().Text() &&
+          (!node.contains("params") || !node["params"].is_object())) {
+        throw std::runtime_error("Pipeline document DRT is missing object params at " + path);
+      }
       if (!node.contains("adjustments") || !node["adjustments"].is_array()) {
-        throw std::runtime_error("Pipeline document ColorGrade is missing adjustments at " + path);
+        throw std::runtime_error("Pipeline document " +
+                                 (type == type_ids::DrtNode().Text() ? std::string{"DRT"}
+                                                                     : std::string{"ColorGrade"}) +
+                                 " is missing adjustments at " + path);
       }
       for (std::size_t adjustment_index = 0; adjustment_index < node["adjustments"].size();
            ++adjustment_index) {
@@ -219,7 +226,7 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
   ApplyDefaultPipelineLook(*grade);
   document.Graph().AddNode(std::move(grade));
-  document.Graph().AddNode(std::make_unique<DrtNodeModel>(NodeId{"drt"}));
+  document.Graph().AddNode(DrtNodeModel::MakeDefault(NodeId{"drt"}));
   document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
                            PortId{"image"});
   document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});

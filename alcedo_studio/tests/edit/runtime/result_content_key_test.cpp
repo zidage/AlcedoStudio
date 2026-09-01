@@ -10,8 +10,10 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/raster_mask_node_model.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -266,6 +268,223 @@ TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMaskWi
   EXPECT_EQ(edited.mask, base.mask);
   EXPECT_NE(edited.primary_grade, base.primary_grade);
   EXPECT_NE(edited.drt_display, base.drt_display);
+}
+
+TEST(GpuDagResultContentKey, ClarityOnDrtChangesDisplayKeyNotGradeKey) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base     = BuildFrameResultContentKeys(plan, prepared, document);
+
+  auto* clarity = dynamic_cast<ClarityModel*>(
+      document.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(clarity, nullptr);
+  clarity->SetValue(40.0f);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_EQ(edited.primary_grade, base.primary_grade);
+  EXPECT_NE(edited.drt_display, base.drt_display);
+}
+
+TEST(GpuDagResultContentKey, MiddleGradeEditReusesUpstreamResults) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.c"}).empty());
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_EQ(plan.grade_nodes.size(), 3U);
+  EXPECT_EQ(base.GradeScene(NodeId{"grade.primary"}), base.primary_grade);
+  EXPECT_NE(base.GradeScene(NodeId{"grade.b"}), base.primary_grade);
+  EXPECT_EQ(base.Value(plan.drt.scene_input), base.GradeScene(NodeId{"grade.c"}));
+
+  auto* middle = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(middle, nullptr);
+  auto* exposure = dynamic_cast<ExposureModel*>(middle->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.75f);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
+  EXPECT_EQ(edited.develop_image, base.develop_image);
+  EXPECT_EQ(edited.GradeScene(NodeId{"grade.primary"}), base.GradeScene(NodeId{"grade.primary"}));
+  EXPECT_NE(edited.GradeScene(NodeId{"grade.b"}), base.GradeScene(NodeId{"grade.b"}));
+  EXPECT_NE(edited.GradeScene(NodeId{"grade.c"}), base.GradeScene(NodeId{"grade.c"}));
+  EXPECT_NE(edited.drt_display, base.drt_display);
+}
+
+TEST(GpuDagResultContentKey, ReconnectChangesNoncommutingGradeResult) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.z"}).empty());
+  auto* primary = document.PrimaryGrade();
+  auto* extra   = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.z"}));
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(extra, nullptr);
+  auto* primary_exposure =
+      dynamic_cast<ExposureModel*>(primary->FindAdjustmentByType(type_ids::Exposure()));
+  auto* extra_exposure =
+      dynamic_cast<ExposureModel*>(extra->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(primary_exposure, nullptr);
+  ASSERT_NE(extra_exposure, nullptr);
+  primary_exposure->SetValue(1.5f);
+  extra_exposure->SetValue(-0.5f);
+
+  auto       before_plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto before      = BuildFrameResultContentKeys(before_plan, prepared, document);
+  EXPECT_EQ(before_plan.grade_nodes.front().node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(before_plan.grade_nodes.back().node_id, NodeId{"grade.z"});
+
+  ASSERT_TRUE(ReconnectColorGrade(document, NodeId{"grade.z"}, NodeId{"develop"},
+                                  NodeId{"grade.primary"})
+                  .empty());
+  auto       after_plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto after      = BuildFrameResultContentKeys(after_plan, prepared, document);
+  EXPECT_EQ(after_plan.grade_nodes.front().node_id, NodeId{"grade.z"});
+  EXPECT_EQ(after.develop_image, before.develop_image);
+  EXPECT_EQ(after.GradeScene(NodeId{"grade.z"}), after.primary_grade);
+  EXPECT_NE(after.GradeScene(NodeId{"grade.z"}), before.GradeScene(NodeId{"grade.z"}));
+  EXPECT_NE(after.GradeScene(NodeId{"grade.primary"}), before.GradeScene(NodeId{"grade.primary"}));
+  EXPECT_NE(after.drt_display, before.drt_display);
+}
+
+TEST(GpuDagResultContentKey, TwoLocalToneGradesUseTheirOwnSources) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  auto* primary = document.PrimaryGrade();
+  auto* second  = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(second, nullptr);
+  auto* primary_shadows =
+      dynamic_cast<ShadowsModel*>(primary->FindAdjustmentByType(type_ids::Shadows()));
+  auto* second_shadows =
+      dynamic_cast<ShadowsModel*>(second->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(primary_shadows, nullptr);
+  ASSERT_NE(second_shadows, nullptr);
+  primary_shadows->SetValue(20.0f);
+  second_shadows->SetValue(40.0f);
+
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto primary_source =
+      HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"});
+  const auto second_source = HashLlfSourceKey(plan, prepared, document, NodeId{"grade.b"});
+  const auto primary_ref =
+      HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.primary"});
+  const auto second_ref = HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.b"});
+  EXPECT_NE(primary_source, second_source);
+  EXPECT_NE(primary_ref, second_ref);
+
+  auto* exposure =
+      dynamic_cast<ExposureModel*>(primary->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(-0.25f);
+  EXPECT_NE(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_source);
+  EXPECT_NE(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.b"}), second_source);
+
+  exposure->SetValue(kDefaultPipelineExposureEv);
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_source);
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.b"}), second_source);
+
+  primary_shadows->SetValue(55.0f);
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_source);
+  EXPECT_NE(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.b"}), second_source);
+  EXPECT_NE(HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_ref);
+}
+
+TEST(GpuDagResultContentKey, LocalToneReferenceRemainsStableAcrossViewportChanges) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto primary_ref =
+      HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.primary"});
+  const auto second_ref = HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.b"});
+  const auto primary_source =
+      HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"});
+  const auto base_geometry = BuildFrameResultContentKeys(plan, prepared, document).geometry_scene_source;
+
+  RenderRequest viewport;
+  viewport.view.visible_rect_in_edit_space = {0.2f, 0.2f, 0.5f, 0.5f};
+  viewport.view.viewport_extent            = {10, 8};
+  GraphCompiler::BindFrameGeometry(plan, document, viewport);
+  EXPECT_EQ(HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_ref);
+  EXPECT_EQ(HashLlfReferenceKey(plan, prepared, document, NodeId{"grade.b"}), second_ref);
+  EXPECT_EQ(HashLlfSourceKey(plan, prepared, document, NodeId{"grade.primary"}), primary_source);
+  EXPECT_NE(BuildFrameResultContentKeys(plan, prepared, document).geometry_scene_source,
+            base_geometry);
+}
+
+TEST(GpuDagResultContentKey, GradeWithoutPrimaryIdSelectsCompiledNodeKeys) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  ASSERT_EQ(document.PrimaryGrade(), nullptr);
+  auto* remaining =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(remaining, nullptr);
+  auto* exposure =
+      dynamic_cast<ExposureModel*>(remaining->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.4f);
+
+  auto       plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto keys = BuildFrameResultContentKeys(plan, prepared, document);
+  ASSERT_EQ(plan.grade_nodes.size(), 1U);
+  EXPECT_EQ(plan.grade_nodes.front().node_id, NodeId{"grade.b"});
+  EXPECT_EQ(keys.primary_grade, keys.GradeScene(NodeId{"grade.b"}));
+  EXPECT_TRUE(keys.GradeScene(NodeId{"grade.primary"}).Empty());
+  EXPECT_EQ(keys.Value(plan.SceneInputForDrt()), keys.GradeScene(NodeId{"grade.b"}));
+}
+
+TEST(GpuDagResultContentKey, SameAdjustmentTypeUsesDistinctNodeSlots) {
+  auto prepared = MakePrepared();
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  auto* primary = document.PrimaryGrade();
+  auto* extra = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(extra, nullptr);
+  AdjustmentInstanceId primary_exposure;
+  AdjustmentInstanceId extra_exposure;
+  for (std::size_t i = 0; i < primary->AdjustmentCount(); ++i) {
+    if (primary->AdjustmentAt(i).Type() == type_ids::Exposure()) {
+      primary_exposure = primary->AdjustmentIdAt(i);
+    }
+  }
+  for (std::size_t i = 0; i < extra->AdjustmentCount(); ++i) {
+    if (extra->AdjustmentAt(i).Type() == type_ids::Exposure()) {
+      extra_exposure = extra->AdjustmentIdAt(i);
+    }
+  }
+  EXPECT_FALSE(primary_exposure.Empty());
+  EXPECT_FALSE(extra_exposure.Empty());
+  EXPECT_NE(primary_exposure, extra_exposure);
+
+  const auto plan  = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  const auto slots = CollectParameterSlotKeys(plan);
+  bool       saw_primary = false;
+  bool       saw_extra   = false;
+  for (const auto& slot : slots) {
+    if (slot.node_id == NodeId{"grade.primary"} && slot.adjustment_id == primary_exposure) {
+      saw_primary = true;
+    }
+    if (slot.node_id == NodeId{"grade.b"} && slot.adjustment_id == extra_exposure) {
+      saw_extra = true;
+    }
+  }
+  EXPECT_TRUE(saw_primary);
+  EXPECT_TRUE(saw_extra);
+
+  const auto keys = BuildFrameResultContentKeys(plan, prepared, document);
+  auto* exposure = dynamic_cast<ExposureModel*>(extra->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.9f);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_EQ(edited.GradeScene(NodeId{"grade.primary"}), keys.GradeScene(NodeId{"grade.primary"}));
+  EXPECT_NE(edited.GradeScene(NodeId{"grade.b"}), keys.GradeScene(NodeId{"grade.b"}));
 }
 
 }  // namespace

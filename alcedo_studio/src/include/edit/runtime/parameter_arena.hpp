@@ -118,15 +118,20 @@ class ParameterArena {
     if (pending_.empty()) {
       return;
     }
-    const auto merged = MergeAdjacentRanges(std::move(pending_));
+    auto merged = MergeAdjacentRanges(std::move(pending_));
     pending_.clear();
-    for (const auto& range : merged) {
-      if (range.size == 0) {
-        continue;
+    try {
+      for (const auto& range : merged) {
+        if (range.size == 0) {
+          continue;
+        }
+        backend_->UploadBufferRange(
+            device_, range.offset,
+            std::span<const std::byte>(host_.data() + range.offset, range.size), command_context);
       }
-      backend_->UploadBufferRange(
-          device_, range.offset,
-          std::span<const std::byte>(host_.data() + range.offset, range.size), command_context);
+    } catch (...) {
+      pending_.insert(pending_.end(), merged.begin(), merged.end());
+      throw;
     }
   }
 
@@ -138,6 +143,8 @@ class ParameterArena {
   [[nodiscard]] auto HostSpan() const -> std::span<const std::byte> { return host_; }
   [[nodiscard]] auto capacity_bytes() const -> std::size_t { return capacity_; }
   [[nodiscard]] auto used_bytes() const -> std::size_t { return used_; }
+  [[nodiscard]] auto SlotCount() const -> std::size_t { return slots_.size(); }
+  [[nodiscard]] auto HasPendingUpload() const -> bool { return !pending_.empty(); }
   [[nodiscard]] auto DeviceBuffer() const -> const typename Backend::Buffer& { return device_; }
 
   /**

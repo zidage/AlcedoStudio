@@ -230,7 +230,7 @@ void GenerateMipChain(MetalRenderDevice& device, MaskTextureLease<MetalBackend>&
     encoder->setTexture(static_cast<MTL::Texture*>(next.Native()), 1);
     encoder->setBytes(&params, sizeof(params), 0);
     Dispatch2D(encoder, pipeline.get(), next.Width(), next.Height());
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   }
 }
 
@@ -267,7 +267,7 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
@@ -287,7 +287,7 @@ void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
@@ -316,7 +316,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
     encoder->setBuffer(dest.native, dest.offset, 0);
     encoder->setBytes(&params, sizeof(params), 1);
     Dispatch1D(encoder, pipeline.get(), height);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   };
   auto dispatch_vertical = [&](const Plane& src, const Plane& dest) {
     auto*          encoder  = Encoder(device);
@@ -331,7 +331,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
     encoder->setBuffer(bound_plane.native, bound_plane.offset, 3);
     encoder->setBytes(&params, sizeof(params), 4);
     Dispatch1D(encoder, pipeline.get(), width);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   };
 
   dispatch_horizontal(true, horizontal);
@@ -351,7 +351,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
   encoder->setBuffer(static_cast<MTL::Buffer*>(distance.Native()), 0, 2);
   encoder->setBytes(&params, sizeof(params), 3);
   Dispatch2D(encoder, pipeline.get(), width, height);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   return static_cast<std::uint32_t>(workspace.Device().RecordedWorkScratchBufferBytes() - mark);
 }
 
@@ -373,7 +373,7 @@ void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& 
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 1);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 }  // namespace
@@ -400,21 +400,22 @@ void AppendMetalMaskWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 }
 
 auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
-                      const PipelineDocument& document, MaskStore* store,
-                      std::span<const RectI> dirty_rectangles) -> MetalMaskResult {
+                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                      MaskStore* store, std::span<const RectI> dirty_rectangles)
+    -> MetalMaskResult {
   if (!device.Workspace().IsRendering()) {
     throw std::runtime_error("ExecuteMetalMask: BeginRender has not been called");
   }
-  if (!plan.primary_grade_mask) {
-    throw std::runtime_error("ExecuteMetalMask: plan has no mask");
+  if (!compiled_grade.mask.has_value()) {
+    throw std::runtime_error("ExecuteMetalMask: compiled Color Grade has no mask");
   }
   auto&           workspace = device.Workspace();
   auto&           context   = device.CommandContext();
   const auto      extent    = plan.geometry.render_extent;
-  auto&           output    = EnsureOutput(workspace, plan.mask_output, extent);
-  MetalMaskResult result{plan.mask_output};
+  auto&           output    = EnsureOutput(workspace, compiled_grade.mask_output, extent);
+  MetalMaskResult result{compiled_grade.mask_output};
 
-  const auto*     node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*     node = document.Graph().FindNode(compiled_grade.mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     EncodeAnalytic(device, output.Texture(), *analytic, plan);
     return result;
@@ -496,6 +497,28 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
   const float radius_texels = raster->FeatherRadius() * 0.5f * (x_scale + y_scale);
   EncodeFeatherSample(device, distance, output.Texture(), asset->descriptor.extent,
                       sampling.render_to_texture_uv, radius_texels, raster->Invert());
+  return result;
+}
+
+auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
+                      const PipelineDocument& document, MaskStore* store,
+                      std::span<const RectI> dirty_rectangles) -> MetalMaskResult {
+  bool any_mask = false;
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      any_mask = true;
+      break;
+    }
+  }
+  if (!any_mask) {
+    throw std::runtime_error("ExecuteMetalMask: plan has no mask");
+  }
+  MetalMaskResult result{};
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      result = ExecuteMetalMask(device, plan, document, grade, store, dirty_rectangles);
+    }
+  }
   return result;
 }
 

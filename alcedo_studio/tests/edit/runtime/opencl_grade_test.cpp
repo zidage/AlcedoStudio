@@ -23,6 +23,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
@@ -30,6 +31,7 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -521,6 +523,17 @@ void WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, f
   }
 }
 
+void ResetProductLookToIdentity(PipelineDocument& document) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  auto* saturation = dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  exposure->SetValue(0.0f);
+  saturation->SetValue(1.0f);
+}
+
 auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
   auto* lease = device.Workspace().Images().Find(id);
   EXPECT_NE(lease, nullptr);
@@ -579,6 +592,7 @@ class OpenClGradeFixture : public ::testing::Test {
                                               gpu_dag_test::FullSensor(16, 12));
     document_ = CreateDefaultPipelineDocument();
     gpu_dag_test::EnsureTestCameraProfile(document_);
+    ResetProductLookToIdentity(document_);
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
@@ -596,9 +610,29 @@ class OpenClGradeFixture : public ::testing::Test {
     return result;
   }
 
+  auto RenderThroughDrtPost() -> OpenClDrtResult {
+    device_->BeginRender();
+    ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+    ExecuteOpenClGeometryResample(*device_, plan_);
+    ExecuteOpenClCameraColor(*device_, plan_, document_);
+    auto grade  = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
+    auto result = ExecuteOpenClDrt(*device_, plan_, document_);
+    device_->EndRender();
+    device_->WaitIdle();
+    last_develop_pixels_ = Download(*device_, plan_.develop_output);
+    last_grade_pixels_   = Download(*device_, grade.output);
+    last_output_pixels_  = Download(*device_, result.scene_post);
+    device_->PublishResults();
+    return result;
+  }
+
   template <class Model>
   auto ModelByType(const OperatorTypeId& type) -> Model& {
-    auto* model = dynamic_cast<Model*>(document_.PrimaryGrade()->FindAdjustmentByType(type));
+    IOperatorModel* found = document_.PrimaryGrade()->FindAdjustmentByType(type);
+    if (found == nullptr && document_.Drt() != nullptr) {
+      found = document_.Drt()->FindAdjustmentByType(type);
+    }
+    auto* model = dynamic_cast<Model*>(found);
     EXPECT_NE(model, nullptr);
     return *model;
   }
@@ -616,16 +650,18 @@ class OpenClGradeFixture : public ::testing::Test {
   ExecutionPlan                       plan_;
   std::unique_ptr<OpenClRenderDevice> device_;
   std::vector<Rgba>                   last_develop_pixels_;
+  std::vector<Rgba>                   last_grade_pixels_;
   std::vector<Rgba>                   last_output_pixels_;
 };
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
-  ASSERT_FALSE(plan_.primary_grade_adjustments.empty());
-  ASSERT_EQ(plan_.primary_grade_adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
-  for (std::size_t i = 0; i < plan_.primary_grade_adjustments.size(); ++i) {
-    EXPECT_EQ(plan_.primary_grade_adjustments[i].instance_id,
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  ASSERT_FALSE(plan_.FirstGrade()->adjustments.empty());
+  ASSERT_EQ(plan_.FirstGrade()->adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
+  for (std::size_t i = 0; i < plan_.FirstGrade()->adjustments.size(); ++i) {
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].instance_id,
               document_.PrimaryGrade()->AdjustmentIdAt(i));
-    EXPECT_EQ(plan_.primary_grade_adjustments[i].type,
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type,
               document_.PrimaryGrade()->AdjustmentAt(i).Type());
   }
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
@@ -728,12 +764,12 @@ TEST_F(OpenClGradeFixture, OpenClDetailPassesAcquireAllResourcesFromWorkspace) {
   ModelByType<SharpenModel>(type_ids::Sharpen()).SetAmount(10.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(0.4f);
   ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(0.3f);
-  const auto first = RenderGrade();
-  EXPECT_EQ(first.detail_pass_count, 4U);
+  const auto first = RenderThroughDrtPost();
+  EXPECT_EQ(first.post_neighborhood_count, 4U);
   EXPECT_GT(device_->Workspace().Textures().EntryCount(), 0U);
   device_->Workspace().Device().ResetCounters();
-  const auto second = RenderGrade();
-  EXPECT_EQ(second.detail_pass_count, 4U);
+  const auto second = RenderThroughDrtPost();
+  EXPECT_EQ(second.post_neighborhood_count, 4U);
   EXPECT_EQ(device_->Workspace().Device().TextureCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().KernelCreateCount(), 0U);
@@ -749,14 +785,14 @@ TEST_F(OpenClGradeFixture, OpenClSharpenUsesSurroundingPixelsForUnsharpMask) {
   sharpen.SetRadius(3.0f);
   sharpen.SetThreshold(0.0f);
 
-  const auto  result         = RenderGrade();
-  const auto& input          = last_develop_pixels_;
+  const auto  result         = RenderThroughDrtPost();
+  const auto& input          = last_grade_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
   const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 2;
   ASSERT_EQ(input.size(), output.size());
-  EXPECT_EQ(result.detail_pass_count, 1U);
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   EXPECT_GT(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
@@ -773,10 +809,10 @@ TEST_F(OpenClGradeFixture, OpenClSharpenDarkRingFollowsPreviewResolution) {
 
   UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
   sharpen.SetAmount(0.0f);
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto full_identity = last_output_pixels_;
   sharpen.SetAmount(100.0f);
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto full_sharpened = last_output_pixels_;
   const auto full_near =
       static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
@@ -787,13 +823,13 @@ TEST_F(OpenClGradeFixture, OpenClSharpenDarkRingFollowsPreviewResolution) {
   half_request.resolution.render_scale = 0.5f;
   UseNeighborhoodPlane(width, height, 0.18f, 0.55f, half_request);
   sharpen.SetAmount(0.0f);
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto half_identity = last_output_pixels_;
   sharpen.SetAmount(100.0f);
-  const auto half_result    = RenderGrade();
+  const auto half_result    = RenderThroughDrtPost();
   const auto half_sharpened = last_output_pixels_;
   ASSERT_EQ(half_identity.size(), static_cast<std::size_t>(64) * 64);
-  EXPECT_EQ(half_result.detail_pass_count, 1U);
+  EXPECT_EQ(half_result.post_neighborhood_count, 1U);
   const auto half_near = static_cast<std::size_t>(32) * 64U + 32U + 1U;
   const auto half_far  = static_cast<std::size_t>(32) * 64U + 32U + 10U;
   EXPECT_GT(half_identity[half_near].r - half_sharpened[half_near].r, 1.0e-5f);
@@ -806,14 +842,14 @@ TEST_F(OpenClGradeFixture, OpenClClarityUsesLargeRadiusLocalContrast) {
   UseNeighborhoodPlane(width, height, 0.22f, 0.48f);
   ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(80.0f);
 
-  const auto  result         = RenderGrade();
-  const auto& input          = last_develop_pixels_;
+  const auto  result         = RenderThroughDrtPost();
+  const auto& input          = last_grade_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
   const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 1;
   ASSERT_EQ(input.size(), output.size());
-  EXPECT_EQ(result.detail_pass_count, 1U);
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   EXPECT_GT(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
@@ -825,14 +861,14 @@ TEST_F(OpenClGradeFixture, OpenClHalationSpreadsRedLightIntoDarkNeighbors) {
   UseNeighborhoodPlane(width, height, 0.02f, 1.0f);
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(1.0f);
 
-  const auto  result         = RenderGrade();
-  const auto& input          = last_develop_pixels_;
+  const auto  result         = RenderThroughDrtPost();
+  const auto& input          = last_grade_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
   const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 2;
   ASSERT_EQ(input.size(), output.size());
-  EXPECT_EQ(result.detail_pass_count, 1U);
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
   const float red_spill   = output[neighbor_index].r - input[neighbor_index].r;
   const float green_spill = output[neighbor_index].g - input[neighbor_index].g;
   EXPECT_GT(red_spill, 1.0e-4f);
@@ -847,13 +883,13 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVari
   auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
 
   grain.SetValue(0.25f);
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto low   = last_output_pixels_;
-  const auto input = last_develop_pixels_;
+  const auto input = last_grade_pixels_;
   grain.SetValue(0.75f);
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto high = last_output_pixels_;
-  (void)RenderGrade();
+  (void)RenderThroughDrtPost();
   const auto high_again = last_output_pixels_;
   ASSERT_EQ(input.size(), high.size());
 
@@ -883,7 +919,8 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
 
   std::vector<GradeAdjustmentParams> params;
   auto*                              grade = document_.PrimaryGrade();
-  for (const auto& compiled : plan_.primary_grade_adjustments) {
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  for (const auto& compiled : plan_.FirstGrade()->adjustments) {
     auto* model = grade->FindAdjustment(compiled.instance_id);
     ASSERT_NE(model, nullptr);
     const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
@@ -910,20 +947,13 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
   EXPECT_LT(max_err, 2.0e-4f);
 }
 
-TEST_F(OpenClGradeFixture, OpenClUnknownAdjustmentReturnsExplicitBackendError) {
-  document_.InsertAdjustment(
-      document_.PrimaryGrade()->Id(), document_.PrimaryGrade()->AdjustmentCount(),
-      AdjustmentInstanceId{"grade.primary.tint"}, std::make_unique<TintModel>());
-  plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
-  try {
-    (void)RenderGrade();
-    FAIL() << "expected unregistered adjustment to throw";
-  } catch (const std::runtime_error& error) {
-    const std::string message = error.what();
-    EXPECT_NE(message.find("unregistered adjustment type"), std::string::npos);
-    EXPECT_NE(message.find("alcedo.adjustment.tint"), std::string::npos);
-    device_->CancelRender();
-  }
+TEST_F(OpenClGradeFixture, OpenClUnknownAdjustmentIsRejectedAtInsert) {
+  EXPECT_THROW(
+      document_.InsertAdjustment(document_.PrimaryGrade()->Id(),
+                                 document_.PrimaryGrade()->AdjustmentCount(),
+                                 AdjustmentInstanceId{"grade.primary.tint"},
+                                 std::make_unique<TintModel>()),
+      std::runtime_error);
 }
 
 TEST_F(OpenClGradeFixture, OpenClStableGradeCreatesNoDummyLutOrStageParameterBuffer) {

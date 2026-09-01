@@ -4,8 +4,15 @@
 
 #include "edit/graph/drt_node_model.hpp"
 
+#include <cstddef>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include "edit/graph/adjustment_ownership.hpp"
+#include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/json_read.hpp"
 
 namespace alcedo {
@@ -242,17 +249,143 @@ auto DrtNodeModel::InputPorts() const -> std::span<const PortDescriptor> { retur
 auto DrtNodeModel::OutputPorts() const -> std::span<const PortDescriptor> { return outputs_; }
 
 auto DrtNodeModel::ToJson() const -> nlohmann::json {
+  std::vector<OperatorTypeId> types;
+  types.reserve(adjustments_.size());
+  for (const auto& entry : adjustments_) {
+    types.push_back(entry.model->Type());
+  }
+  RequireCompleteDrtPostTypes(types, "DrtNode ToJson");
+  nlohmann::json adjustments = nlohmann::json::array();
+  for (const auto& entry : adjustments_) {
+    adjustments.push_back({{"id", std::string{entry.instance_id.Value()}},
+                           {"type", std::string{entry.model->Type().Text()}},
+                           {"params", entry.model->ToJson()}});
+  }
   return {{"id", std::string{id_.Value()}},
           {"type", std::string{Type().Text()}},
-          {"params", params_.ToJson()}};
+          {"params", params_.ToJson()},
+          {"adjustments", std::move(adjustments)}};
+}
+
+auto DrtNodeModel::MakeDefault(NodeId id) -> std::unique_ptr<DrtNodeModel> {
+  auto        node    = std::make_unique<DrtNodeModel>(std::move(id));
+  const auto& catalog = BuiltinAdjustmentCatalog::Instance();
+  const auto  types   = DrtPostAdjustmentTypes();
+  for (const auto& type : types) {
+    auto model = catalog.CreateDefault(type);
+    if (model == nullptr) {
+      throw std::logic_error("Missing default DRT/Post adjustment factory for " +
+                             std::string{type.Text()});
+    }
+    node->InsertAdjustment(node->AdjustmentCount(), MakeAdjustmentInstanceId(node->Id(), type),
+                           std::move(model));
+  }
+  return node;
 }
 
 auto DrtNodeModel::FromJson(const nlohmann::json& json) -> std::unique_ptr<DrtNodeModel> {
-  auto node = std::make_unique<DrtNodeModel>(NodeId{json.at("id").get<std::string>()});
-  if (json.contains("params") && json["params"].is_object()) {
-    node->params_.LoadJson(json["params"]);
+  auto        node    = std::make_unique<DrtNodeModel>(NodeId{json.at("id").get<std::string>()});
+  const auto& catalog = BuiltinAdjustmentCatalog::Instance();
+  if (!json.contains("params") || !json["params"].is_object()) {
+    throw std::runtime_error("DrtNode FromJson: missing params object");
   }
+  node->params_.LoadJson(json["params"]);
+  if (!json.contains("adjustments") || !json["adjustments"].is_array()) {
+    throw std::runtime_error("DrtNode FromJson: missing adjustments array");
+  }
+  for (const auto& item : json["adjustments"]) {
+    const auto type_text = item.at("type").get<std::string>();
+    auto       model     = catalog.CreateDefault(OperatorTypeId{type_text});
+    if (model == nullptr) {
+      throw std::runtime_error("Unknown DRT/Post adjustment type: " + type_text);
+    }
+    if (item.contains("params") && item["params"].is_object()) {
+      model->LoadJson(item["params"]);
+    }
+    node->InsertAdjustment(node->AdjustmentCount(),
+                           AdjustmentInstanceId{item.at("id").get<std::string>()}, std::move(model));
+  }
+  std::vector<OperatorTypeId> types;
+  types.reserve(node->AdjustmentCount());
+  for (std::size_t index = 0; index < node->AdjustmentCount(); ++index) {
+    types.push_back(node->AdjustmentAt(index).Type());
+  }
+  RequireCompleteDrtPostTypes(types, "DrtNode FromJson");
   return node;
+}
+
+auto DrtNodeModel::AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId& {
+  return adjustments_.at(index).instance_id;
+}
+
+auto DrtNodeModel::AdjustmentAt(std::size_t index) -> IOperatorModel& {
+  return *adjustments_.at(index).model;
+}
+
+auto DrtNodeModel::AdjustmentAt(std::size_t index) const -> const IOperatorModel& {
+  return *adjustments_.at(index).model;
+}
+
+auto DrtNodeModel::FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel* {
+  for (auto& entry : adjustments_) {
+    if (entry.instance_id == id) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
+auto DrtNodeModel::FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel* {
+  for (const auto& entry : adjustments_) {
+    if (entry.instance_id == id) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
+auto DrtNodeModel::FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel* {
+  for (auto& entry : adjustments_) {
+    if (entry.model->Type() == type) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
+auto DrtNodeModel::FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel* {
+  for (const auto& entry : adjustments_) {
+    if (entry.model->Type() == type) {
+      return entry.model.get();
+    }
+  }
+  return nullptr;
+}
+
+auto DrtNodeModel::FindAdjustmentIdByType(const OperatorTypeId& type) const
+    -> const AdjustmentInstanceId* {
+  for (const auto& entry : adjustments_) {
+    if (entry.model->Type() == type) {
+      return &entry.instance_id;
+    }
+  }
+  return nullptr;
+}
+
+void DrtNodeModel::InsertAdjustment(std::size_t index, AdjustmentInstanceId id,
+                                    std::unique_ptr<IOperatorModel> model) {
+  if (model == nullptr) {
+    throw std::invalid_argument("DrtNode InsertAdjustment requires a Model");
+  }
+  RequireAdjustmentOwner(model->Type(), AdjustmentParameterOwner::DrtPost,
+                         "DrtNode InsertAdjustment");
+  if (index > adjustments_.size()) {
+    index = adjustments_.size();
+  }
+  AdjustmentModelEntry entry;
+  entry.instance_id = std::move(id);
+  entry.model       = std::move(model);
+  adjustments_.insert(adjustments_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
 }
 
 }  // namespace alcedo

@@ -193,5 +193,70 @@ TEST_F(CudaWorkspaceFixture, BackgroundIntermediateImagesReleaseAfterLastConsume
   device.CancelRender();
 }
 
+TEST_F(CudaWorkspaceFixture, SinkFailurePublishesNoNewResults) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId id     = Value();
+  const ContentKey   first{81};
+  const ContentKey   second{82};
+  PublishWrite(device, id, first);
+  const auto completed = workspace.Device().CompletedSubmission();
+  ASSERT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(id, second, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  device.CancelRender();
+  device.WaitIdle();
+  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                                 workspace.Device().CompletedSubmission()));
+  EXPECT_FALSE(workspace.Images().FindValidResult(id, second, {kWidth, kHeight},
+                                                  TextureFormat::Rgba32f,
+                                                  workspace.Device().CompletedSubmission()));
+  EXPECT_EQ(workspace.Images().UnpublishedCount(), 0U);
+}
+
+TEST_F(CudaWorkspaceFixture, SharedInputSurvivesBothBranchReaders) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId develop{NodeId{"develop"}, PortId{"image"}};
+  const GraphValueId grade_a{NodeId{"grade.a"}, PortId{"image"}};
+  const GraphValueId grade_b{NodeId{"grade.b"}, PortId{"image"}};
+  const ContentKey   develop_key{91};
+  const ContentKey   a_key{92};
+  const ContentKey   b_key{93};
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(develop, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(develop, develop_key, {kWidth, kHeight},
+                                       TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  const auto develop_id = workspace.Images().Find(develop)->Texture().ResourceId();
+  (void)workspace.AliasImageFrom(grade_a, develop);
+  workspace.Images().RecordUnpublished(grade_a, a_key, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  (void)workspace.AliasImageFrom(grade_b, develop);
+  workspace.Images().RecordUnpublished(grade_b, b_key, {kWidth, kHeight}, TextureFormat::Rgba32f,
+                                       device.CommandContext().SubmissionId());
+  EXPECT_EQ(workspace.Images().Find(grade_a)->Texture().ResourceId(), develop_id);
+  EXPECT_EQ(workspace.Images().Find(grade_b)->Texture().ResourceId(), develop_id);
+  device.EndRender();
+  device.PublishResults();
+  device.WaitIdle();
+
+  const auto completed = workspace.Device().CompletedSubmission();
+  EXPECT_TRUE(workspace.Images().FindValidResult(develop, develop_key, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(workspace.Images().FindValidResult(grade_a, a_key, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(workspace.Images().FindValidResult(grade_b, b_key, {kWidth, kHeight},
+                                                 TextureFormat::Rgba32f, completed));
+  EXPECT_EQ(workspace.Images().Find(grade_a)->Texture().ResourceId(),
+            workspace.Images().Find(develop)->Texture().ResourceId());
+  EXPECT_EQ(workspace.Textures().EntryCount(), 1U);
+}
+
 }  // namespace
 }  // namespace alcedo

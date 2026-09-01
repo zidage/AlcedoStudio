@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 
@@ -209,7 +211,25 @@ class BasicRenderWorkspace {
     textures_.ReleaseUnleased();
     transients_.ReleaseDeviceMemory();
     parameters_.Clear();
+    parameter_layout_hash_ = 0;
   }
+
+  /**
+   * @brief Drop parameter slots when compiled topology identity changes.
+   *
+   * Call after GPU idle (BeginRender waits). Encoders rebind slots from full DTOs.
+   * Same @p topology_hash is a no-op so offsets stay stable across parameter edits.
+   */
+  void AlignParameterLayout(std::uint64_t topology_hash) {
+    if (parameter_layout_hash_ == topology_hash) {
+      return;
+    }
+    parameters_.Clear();
+    parameter_layout_hash_ = topology_hash;
+  }
+
+  /** @brief Topology hash of the last @ref AlignParameterLayout, or 0 before the first align. */
+  [[nodiscard]] auto ParameterLayoutHash() const -> std::uint64_t { return parameter_layout_hash_; }
 
  private:
   Backend                       backend_{};
@@ -220,7 +240,8 @@ class BasicRenderWorkspace {
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   DevelopTransientHighWaterCache develop_high_water_{};
-  bool                           rendering_ = false;
+  std::uint64_t                  parameter_layout_hash_ = 0;
+  bool                           rendering_             = false;
 };
 
 }  // namespace alcedo

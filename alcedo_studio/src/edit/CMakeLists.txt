@@ -44,6 +44,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lmt_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/analytic_mask_node_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_node_model.cpp
@@ -75,6 +76,7 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_lut.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
@@ -147,6 +149,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_neighbor_grade.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_local_tone_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_plan_executor.cpp

@@ -111,7 +111,7 @@ class CudaMaskFixture : public ::testing::Test {
   }
 
   auto DownloadMask() -> std::vector<std::uint8_t> {
-    auto* lease = device_.Workspace().Images().Find(plan_.mask_output);
+    auto* lease = device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output);
     EXPECT_NE(lease, nullptr);
     if (lease == nullptr) return {};
     std::vector<std::uint8_t> pixels(lease->Texture().Bytes());

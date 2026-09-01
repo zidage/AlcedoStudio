@@ -52,16 +52,18 @@ struct PassEncoder<CudaBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore* mask_store) {
-    (void)ExecuteCudaMask(device, plan, document, mask_store);
+                     PipelineDocument& document, MaskStore* mask_store,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteCudaMask(device, plan, document, compiled_grade, mask_store);
   }
 };
 
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*) {
-    (void)ExecuteCudaPrimaryGrade(device, plan, input, document);
+                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*,
+                     const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade);
   }
 };
 

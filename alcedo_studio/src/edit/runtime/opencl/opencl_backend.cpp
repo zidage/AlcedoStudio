@@ -784,15 +784,26 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
     add(OpenCL::GpuDag::kPrimaryGradeProgramName,
         OpenCL::GpuDag::kPrimaryGradeNeighborApplyKernelName);
     add(OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradeMixKernelName);
-    if (plan.primary_grade_mask.has_value()) {
+    bool needs_masked_mix = false;
+    bool needs_llf        = false;
+    for (const auto& grade : plan.grade_nodes) {
+      if (grade.mask.has_value()) {
+        needs_masked_mix = true;
+      }
+      for (const auto& stage : grade.stages) {
+        if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
+          needs_llf = true;
+        }
+      }
+    }
+    if (needs_masked_mix) {
       add(OpenCL::GpuDag::kPrimaryGradeProgramName,
           OpenCL::GpuDag::kPrimaryGradeMixMaskedKernelName);
     }
     // The grade shader always receives a valid LUT argument. Keep the identity
     // resource with the device so a frame does not create one on its encode path.
     (void)DummyLut();
-    for (const auto& stage : plan.primary_grade_stages) {
-      if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
+    if (needs_llf) {
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneExtractKernelName);
         add(OpenCL::GpuDag::kLocalToneProgramName,
             OpenCL::GpuDag::kLocalToneExtractReferenceKernelName);
@@ -801,8 +812,6 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneSelectKernelName);
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneCollapseKernelName);
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneApplyKernelName);
-        break;
-      }
     }
   }
   if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskFeather)) {

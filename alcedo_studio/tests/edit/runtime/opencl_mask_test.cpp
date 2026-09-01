@@ -246,7 +246,7 @@ class OpenClMaskFixture : public ::testing::Test {
   }
 
   auto DownloadMask() -> std::vector<std::uint8_t> {
-    auto* lease = device_->Workspace().Images().Find(plan_.mask_output);
+    auto* lease = device_->Workspace().Images().Find(plan_.FirstGrade()->mask_output);
     EXPECT_NE(lease, nullptr);
     if (lease == nullptr) {
       return {};
@@ -294,7 +294,7 @@ class OpenClMaskFixture : public ::testing::Test {
       ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
       ExecuteOpenClGeometryResample(*device_, plan_);
       ExecuteOpenClCameraColor(*device_, plan_, document_);
-      if (plan_.primary_grade_mask.has_value()) {
+      if (plan_.FirstGrade() != nullptr && plan_.FirstGrade()->mask.has_value()) {
         (void)ExecuteOpenClMask(*device_, plan_, document_, store_.get(), dirty);
         device_->Workspace().TransientBuffers().Reset();
       }
@@ -505,7 +505,7 @@ TEST_F(OpenClMaskFixture, OpenClDisconnectedMaskUsesConstantOneWithoutImageAlloc
   Compile();
   const auto mixed = RenderGrade();
   EXPECT_EQ(device_->Workspace().MaskTextures().EntryCount(), 0U);
-  EXPECT_EQ(device_->Workspace().Images().Find(plan_.mask_output), nullptr);
+  EXPECT_EQ(device_->Workspace().Images().Find(plan_.FirstGrade()->mask_output), nullptr);
   document_.PrimaryGrade()->SetMix(1.0f);
   const auto full = RenderGrade();
   ASSERT_EQ(mixed.source.size(), mixed.output.size());
@@ -608,7 +608,8 @@ TEST_F(OpenClMaskFixture, OpenClPlanExecutorRunsRasterMaskBeforePrimaryGrade) {
                              plan_.geometry.render_extent.height);
   EXPECT_TRUE(
       std::all_of(mask.begin(), mask.end(), [](std::uint8_t value) { return value == 255; }));
-  const auto output = DownloadImage(plan_.primary_grade_output);
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  const auto output = DownloadImage(plan_.FirstGrade()->scene_output);
   EXPECT_FALSE(output.empty());
 }
 

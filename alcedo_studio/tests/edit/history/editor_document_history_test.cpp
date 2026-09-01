@@ -14,6 +14,7 @@
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -23,7 +24,9 @@ namespace alcedo::ui {
 namespace {
 
 using test::ColorGradeFieldTarget;
+using test::DrtPostFieldTarget;
 using test::WithColorGradeTarget;
+using test::WithDrtPostTarget;
 
 /// Real document, executor, history and WAL; no project/storage/UI fixture is needed.
 class EditorDocumentHistoryTest : public ::testing::Test {
@@ -72,6 +75,14 @@ auto DocumentExposureEv(const alcedo::PipelineDocument& document, const std::str
   return json.at("exposure_ev").get<float>();
 }
 
+auto DocumentClarity(const alcedo::PipelineDocument& document) -> float {
+  nlohmann::json json;
+  std::string    error;
+  EXPECT_TRUE(alcedo::ReadEditorParameterJson(document, DrtPostFieldTarget("clarity"), &json, &error))
+      << error;
+  return json.at("clarity").get<float>();
+}
+
 TEST_F(EditorDocumentHistoryTest, SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
@@ -91,21 +102,14 @@ TEST_F(EditorDocumentHistoryTest,
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  alcedo::EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure_ev":3.0})";
-  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
-  EXPECT_EQ(error, "Editor parameter target requires owner_kind");
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
-                  alcedo::kDefaultPipelineExposureEv);
-
-  auto missing_node           = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
+  auto       missing_node = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
   missing_node.target.node_id = alcedo::NodeId{};
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, missing_node, &error));
   EXPECT_EQ(error, "Editor parameter target requires node_id");
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+                  alcedo::kDefaultPipelineExposureEv);
 }
 
 TEST_F(EditorDocumentHistoryTest, ProvisionalSequenceReusesTargetResolvedAtFirstPatch) {
@@ -163,11 +167,10 @@ TEST_F(EditorDocumentHistoryTest, IncompleteLaterPatchRejectedLeavesLockedDocume
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
 
-  alcedo::EditorAdjustmentPatch incomplete;
-  incomplete.field_key   = "exposure";
-  incomplete.params_json = R"({"exposure_ev":4.0})";
-  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, incomplete, &error));
-  EXPECT_EQ(error, "Editor parameter target requires owner_kind");
+  auto missing_node = WithColorGradeTarget({"contrast", R"({"contrast":40.0})", false});
+  missing_node.target.node_id = alcedo::NodeId{};
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, missing_node, &error));
+  EXPECT_EQ(error, "Editor parameter target requires node_id");
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
   EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
 }
@@ -345,6 +348,42 @@ TEST_F(EditorDocumentHistoryTest, UnrecordedHistoryTargetIsRejectedBeforeJournal
   EXPECT_NE(error.find("same-session document target"), std::string::npos);
   EXPECT_EQ(guard_->working_head_commit_hash(), head);
   EXPECT_EQ(guard_->document_->ToJson(), before);
+}
+
+TEST_F(EditorDocumentHistoryTest, PostControlTargetsDrtAndRestoresOnUndo) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_NE(guard_->document_, nullptr);
+  const auto filled =
+      alcedo::CompleteCurrentPanelParameterTarget(*guard_->document_, "clarity", &error);
+  ASSERT_TRUE(filled.has_value()) << error;
+  EXPECT_EQ(filled->owner_kind, alcedo::EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(filled->node_id, alcedo::NodeId{"drt"});
+  EXPECT_EQ(filled->adjustment_instance_id, alcedo::AdjustmentInstanceId{"drt.clarity"});
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 0.0f);
+
+  alcedo::EditorAdjustmentPatch unspecified;
+  unspecified.field_key   = "clarity";
+  unspecified.params_json = R"({"clarity":25.0})";
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, unspecified, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 25.0f);
+
+  auto preview = WithDrtPostTarget({"clarity", R"({"clarity":40.0})", false});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+
+  auto settled = WithDrtPostTarget({"clarity", R"({"clarity":40.0})", true});
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 0.0f);
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+
+  const auto restored = alcedo::PipelineDocument::FromJson(guard_->document_->ToJson());
+  EXPECT_FLOAT_EQ(DocumentClarity(restored), 40.0f);
+  EXPECT_EQ(restored.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Clarity()), nullptr);
 }
 
 }  // namespace

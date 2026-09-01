@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -21,6 +22,7 @@
 
 #include "app/project_service.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -30,6 +32,8 @@
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/operators/models/lmt_model.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -665,6 +669,14 @@ TEST_F(PipelineMapperTests, DocumentSaveReloadPreservesNodesEdgesAndParameters) 
     auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
     ASSERT_NE(contrast, nullptr);
     contrast->LoadJson({{"contrast", 12.5f}});
+    auto* clarity = dynamic_cast<ClarityModel*>(
+        guard->document_->Drt()->FindAdjustmentByType(type_ids::Clarity()));
+    auto* sharpen = dynamic_cast<SharpenModel*>(
+        guard->document_->Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+    ASSERT_NE(clarity, nullptr);
+    ASSERT_NE(sharpen, nullptr);
+    clarity->SetValue(25.0f);
+    sharpen->SetAmount(12.0f);
 
     ASSERT_TRUE(RemoveColorGradeAndBridge(*guard->document_, NodeId{"grade.primary"}).empty());
   }
@@ -696,6 +708,15 @@ TEST_F(PipelineMapperTests, DocumentSaveReloadPreservesNodesEdgesAndParameters) 
   const auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
   ASSERT_NE(contrast, nullptr);
   EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), 12.5f);
+  EXPECT_EQ(extra->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  const auto* clarity = dynamic_cast<const ClarityModel*>(
+      loaded->document_->Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  const auto* sharpen = dynamic_cast<const SharpenModel*>(
+      loaded->document_->Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+  ASSERT_NE(clarity, nullptr);
+  ASSERT_NE(sharpen, nullptr);
+  EXPECT_FLOAT_EQ(clarity->Value(), 25.0f);
+  EXPECT_FLOAT_EQ(sharpen->Amount(), 12.0f);
   reopened.SavePipeline(loaded);
 }
 
@@ -775,6 +796,17 @@ TEST_F(PipelineMapperTests, InvalidStoredDocumentFailsWithoutReplacement) {
   auto corrupt_params = valid;
   corrupt_params["nodes"][0]["params"] = "corrupt";
   expect_failure(8505, std::move(corrupt_params), "params");
+
+  auto wrong_owner = valid;
+  for (auto& node : wrong_owner["nodes"]) {
+    if (node.at("id") != "grade.primary") {
+      continue;
+    }
+    node["adjustments"].push_back({{"id", "grade.primary.clarity"},
+                                   {"type", std::string{type_ids::Clarity().Text()}},
+                                   {"params", {{"clarity", 10.0f}}}});
+  }
+  expect_failure(8520, std::move(wrong_owner), "belongs to DRT/Post");
 }
 
 TEST_F(PipelineMapperTests, FailedDocumentSaveKeepsDirtyStateAndJournal) {

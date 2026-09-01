@@ -280,20 +280,22 @@ __global__ void AnalyticMaskKernel(std::uint8_t* output, std::uint32_t width, st
 }  // namespace
 
 auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
-                     const PipelineDocument& document, MaskStore* store,
-                     std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     MaskStore* store, std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
   if (!device.Workspace().IsRendering())
     throw std::runtime_error("ExecuteCudaMask: BeginRender has not been called");
-  if (!plan.primary_grade_mask) throw std::runtime_error("ExecuteCudaMask: plan has no mask");
+  if (!compiled_grade.mask.has_value()) {
+    throw std::runtime_error("ExecuteCudaMask: compiled Color Grade has no mask");
+  }
   auto&                   workspace     = device.Workspace();
   auto&                   context       = device.CommandContext();
   const auto              extent        = plan.geometry.render_extent;
-  auto&                   output        = EnsureOutput(workspace, plan.mask_output, extent);
+  auto&                   output        = EnsureOutput(workspace, compiled_grade.mask_output, extent);
   constexpr std::uint32_t block         = 256;
   const auto              render_pixels = extent.width * extent.height;
-  CudaMaskResult          result{plan.mask_output};
+  CudaMaskResult          result{compiled_grade.mask_output};
 
-  const auto*             node = document.Graph().FindNode(plan.primary_grade_mask->node_id);
+  const auto*             node = document.Graph().FindNode(compiled_grade.mask->node_id);
   if (const auto* analytic = dynamic_cast<const AnalyticMaskNodeModel*>(node)) {
     AnalyticMaskKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
         static_cast<std::uint8_t*>(output.Texture().DevicePointer()), extent.width, extent.height,
@@ -410,6 +412,27 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   }
   if (::cudaGetLastError() != cudaSuccess)
     throw std::runtime_error("ExecuteCudaMask: CUDA kernel launch failed");
+  return result;
+}
+
+auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
+                     const PipelineDocument& document, MaskStore* store,
+                     std::span<const RectI> dirty_rectangles) -> CudaMaskResult {
+  const CompiledGradeNode* last = nullptr;
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      last = &grade;
+    }
+  }
+  if (last == nullptr) {
+    throw std::runtime_error("ExecuteCudaMask: plan has no mask");
+  }
+  CudaMaskResult result{};
+  for (const auto& grade : plan.grade_nodes) {
+    if (grade.mask.has_value()) {
+      result = ExecuteCudaMask(device, plan, document, grade, store, dirty_rectangles);
+    }
+  }
   return result;
 }
 

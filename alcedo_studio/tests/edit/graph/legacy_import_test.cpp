@@ -145,9 +145,9 @@ TEST(GpuDagModelGraph, LegacyPercentStrengthMapsAcrossFullHalationAndFilmGrainRa
   const auto result = LegacyPipelineImporter::Import(json);
   ASSERT_TRUE(result.Ok()) << result.error;
   const auto* grain = dynamic_cast<const FilmGrainModel*>(
-      result.document->PrimaryGrade()->FindAdjustmentByType(type_ids::FilmGrain()));
+      result.document->Drt()->FindAdjustmentByType(type_ids::FilmGrain()));
   const auto* halo = dynamic_cast<const HalationModel*>(
-      result.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Halation()));
+      result.document->Drt()->FindAdjustmentByType(type_ids::Halation()));
   ASSERT_NE(grain, nullptr);
   ASSERT_NE(halo, nullptr);
   EXPECT_FLOAT_EQ(grain->Value(), 0.25f);

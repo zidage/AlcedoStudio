@@ -245,7 +245,7 @@ void BuildSourcePyramid(MetalRenderDevice& device, std::array<Plane, kMaxLevels>
     BindPlane(encoder, source[level], 1);
     encoder->setBytes(&params, sizeof(params), 2);
     DispatchThreads(encoder, pipeline.get(), layout.widths[level], layout.heights[level]);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   }
 }
 
@@ -267,7 +267,7 @@ void BuildRemapPyramid(MetalRenderDevice& device, const Plane& source0,
   BindPlane(encoder, levels[0], 1);
   encoder->setBytes(&params, sizeof(params), 2);
   DispatchThreads(encoder, pipeline.get(), layout.widths[0], layout.heights[0]);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   BuildSourcePyramid(device, levels, layout);
 }
 
@@ -290,7 +290,7 @@ void ApplyAdjusted(MetalRenderDevice& device, const MetalBackend::Texture2D& inp
   BindPlane(encoder, adjusted, 1);
   encoder->setBytes(&params, sizeof(params), 2);
   DispatchThreads(encoder, pipeline.get(), static_cast<int>(width), static_cast<int>(height));
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 }  // namespace
@@ -434,7 +434,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
       encoder->setBytes(&params, sizeof(params), 1);
       DispatchThreads(encoder, pipeline.get(), layout.widths[0], layout.heights[0]);
     }
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
     BuildSourcePyramid(device, source, layout);
   } else if (layout.count > 1) {
     BuildSourcePyramid(device, source, layout);
@@ -474,7 +474,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
       BindPlane(encoder, result[level], 5);
       encoder->setBytes(&params, sizeof(params), 6);
       DispatchThreads(encoder, pipeline.get(), layout.widths[level], layout.heights[level]);
-      device.Workspace().Device().NoteComputeDispatch();
+      device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
     }
     if (pair + 2 < samples.size()) {
       std::swap(remap_a, remap_b);
@@ -495,7 +495,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
     BindPlane(encoder, remap_a[level], 2);
     encoder->setBytes(&params, sizeof(params), 3);
     DispatchThreads(encoder, pipeline.get(), layout.widths[level], layout.heights[level]);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
     std::swap(result[level], remap_a[level]);
   }
 

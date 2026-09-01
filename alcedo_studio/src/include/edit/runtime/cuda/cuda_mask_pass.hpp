@@ -22,11 +22,22 @@ struct CudaMaskResult {
 };
 
 /**
- * @brief Evaluate the optional compiled analytic or raster mask into RenderSpace R8.
+ * @brief Evaluate @p compiled_grade's optional analytic or raster mask into RenderSpace R8.
  *
  * Raster source textures and signed-distance buffers are workspace resources. Dirty rectangles
  * are unioned before upload. Changing only feather radius reuses signed distance. No CPU image
  * processing fallback is used.
+ */
+[[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                   const PipelineDocument& document,
+                                   const CompiledGradeNode& compiled_grade,
+                                   MaskStore* store = nullptr,
+                                   std::span<const RectI> dirty_rectangles = {}) -> CudaMaskResult;
+
+/**
+ * @brief Evaluate every compiled Color Grade mask in backbone order.
+ *
+ * @return The last mask result. @throws std::runtime_error when no compiled Grade has a mask.
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document, MaskStore* store = nullptr,

@@ -17,7 +17,7 @@
 namespace alcedo {
 
 struct MetalPrimaryGradeResult {
-  GraphValueId  output{NodeId{"grade.primary"}, PortId{"image"}};
+  GraphValueId  output{NodeId{""}, PortId{"image"}};
   std::uint32_t pointwise_dispatch_count               = 0;
   std::uint32_t detail_pass_count                      = 0;
   std::uint32_t command_upload_bytes                   = 0;
@@ -29,11 +29,23 @@ struct MetalPrimaryGradeResult {
 };
 
 /**
- * @brief Encode Primary Grade on the current Metal command buffer.
+ * @brief Encode one compiled Color Grade on the current Metal command buffer.
  *
- * Pointwise adjustments fuse into one dispatch per LLF segment. Clarity, Sharpen,
- * Halation, and Film Grain are explicit TexturePool passes. Parameters live in
- * ParameterArena. Failures throw; there is no CPU or old fused-pipeline substitute.
+ * Consumes @p compiled_grade.scene_input, that node's adjustments, optional mask,
+ * and mix. Mix reads this Grade's scene input. Disabled and zero-mix Grades alias
+ * the input onto the logical output. Parameters live in ParameterArena. Failures
+ * throw; there is no CPU substitute.
+ */
+[[nodiscard]] auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                            const PreparedRawInput& prepared,
+                                            PipelineDocument& document,
+                                            const CompiledGradeNode& compiled_grade)
+    -> MetalPrimaryGradeResult;
+
+/**
+ * @brief Encode every compiled Color Grade in backbone order.
+ *
+ * @return The last Grade result. @throws std::runtime_error when the plan has no Color Grade.
  */
 [[nodiscard]] auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
                                             const PreparedRawInput& prepared,

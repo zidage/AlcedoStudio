@@ -26,12 +26,24 @@ struct MetalMaskResult {
 };
 
 /**
- * @brief Evaluate the optional compiled analytic or raster mask into RenderSpace R8.
+ * @brief Evaluate @p compiled_grade's optional analytic or raster mask into RenderSpace R8.
  *
  * Raster source textures and mip levels live in workspace MaskTextureCache. Signed-distance
  * intermediates are destroyed after the recorded command buffer completes. The signed-distance
  * result is stored by mask content key so a feather-radius edit can reuse it. Failures throw;
  * there is no CPU substitute.
+ */
+[[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                    const PipelineDocument& document,
+                                    const CompiledGradeNode& compiled_grade,
+                                    MaskStore* store = nullptr,
+                                    std::span<const RectI> dirty_rectangles = {})
+    -> MetalMaskResult;
+
+/**
+ * @brief Evaluate every compiled Color Grade mask in backbone order.
+ *
+ * @return The last mask result. @throws std::runtime_error when no compiled Grade has a mask.
  */
 [[nodiscard]] auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
                                     const PipelineDocument& document, MaskStore* store = nullptr,

@@ -5,12 +5,15 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -133,6 +136,9 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
 /**
  * @brief Display-referred endpoint. One scene-image input; display output is not
  * a scene graph port.
+ *
+ * Owns output-transform parameters and the four DRT/Post adjustments (Clarity,
+ * Sharpen, Halation, Film Grain) that run in ACEScc before the display transform.
  */
 class DrtNodeModel final : public INodeModel {
  public:
@@ -148,13 +154,39 @@ class DrtNodeModel final : public INodeModel {
   [[nodiscard]] auto Params() -> DrtParamsModel& { return params_; }
   [[nodiscard]] auto Params() const -> const DrtParamsModel& { return params_; }
 
+  /**
+   * @brief DRT endpoint with default ODT params and the four catalog post adjustments.
+   *
+   * Instance ids are `drt.clarity`, `drt.sharpen`, `drt.halation`, and `drt.film_grain`
+   * when @p id is `drt`.
+   */
+  static auto MakeDefault(NodeId id) -> std::unique_ptr<DrtNodeModel>;
   static auto FromJson(const nlohmann::json& json) -> std::unique_ptr<DrtNodeModel>;
 
+  [[nodiscard]] auto AdjustmentCount() const -> std::size_t { return adjustments_.size(); }
+  [[nodiscard]] auto AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId&;
+  [[nodiscard]] auto AdjustmentAt(std::size_t index) -> IOperatorModel&;
+  [[nodiscard]] auto AdjustmentAt(std::size_t index) const -> const IOperatorModel&;
+  [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
+  [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel*;
+  [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel*;
+  [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel*;
+  [[nodiscard]] auto FindAdjustmentIdByType(const OperatorTypeId& type) const
+      -> const AdjustmentInstanceId*;
+
+  /**
+   * @brief Insert a DRT/Post-owned adjustment.
+   * @throws std::runtime_error when @p model is Color Grade-owned or unsupported.
+   */
+  void InsertAdjustment(std::size_t index, AdjustmentInstanceId id,
+                        std::unique_ptr<IOperatorModel> model);
+
  private:
-  NodeId         id_;
-  DrtParamsModel params_;
-  std::array<PortDescriptor, 1> inputs_;
-  std::array<PortDescriptor, 1> outputs_;
+  NodeId                            id_;
+  DrtParamsModel                    params_;
+  std::vector<AdjustmentModelEntry> adjustments_;
+  std::array<PortDescriptor, 1>     inputs_;
+  std::array<PortDescriptor, 1>     outputs_;
 };
 
 }  // namespace alcedo

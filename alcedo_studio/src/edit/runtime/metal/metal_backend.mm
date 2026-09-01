@@ -24,8 +24,13 @@ void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
 namespace alcedo {
 namespace {
 
-constexpr std::size_t kMinHeapPageBytes = 16ull << 20;
-constexpr std::size_t kBlitRowAlign     = 256;
+constexpr std::size_t kMinHeapPageBytes     = 16ull << 20;
+constexpr std::size_t kBlitRowAlign         = 256;
+constexpr std::size_t kMinStagingPageBytes  = 64ull << 10;
+
+auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
 
 auto                  ThrowIfNull(const void* pointer, const char* message) {
   if (pointer == nullptr) {
@@ -162,13 +167,24 @@ struct LiveBuffer {
   std::size_t   bytes       = 0;
 };
 
+struct StagingPage {
+  NS::SharedPtr<MTL::Buffer> buffer;
+  std::size_t                capacity = 0;
+  std::size_t                used     = 0;
+};
+
+struct StagingSlice {
+  MTL::Buffer* buffer = nullptr;
+  std::size_t  offset = 0;
+  void*        cpu    = nullptr;
+};
+
 class MetalBackend::Gpu {
  public:
   MTL::Device*                     device = nullptr;
   MTL::CommandQueue*               queue  = nullptr;
   std::vector<HeapPage>            heaps;
-  NS::SharedPtr<MTL::Buffer>       staging;
-  std::size_t                      staging_bytes = 0;
+  std::vector<StagingPage>         staging_pages;
   NS::SharedPtr<MTL::SamplerState> linear_clamp;
   NS::SharedPtr<MTL::SamplerState> nearest_clamp;
   std::vector<LiveBuffer>          live_buffers;
@@ -323,16 +339,55 @@ class MetalBackendImpl {
     }
   }
 
-  static void EnsureStaging(MetalBackend& backend, MetalBackend::Gpu& gpu, std::size_t bytes) {
-    if (bytes <= gpu.staging_bytes && gpu.staging) {
+  /**
+   * @brief Reserve host-visible blit source/destination bytes that stay unique until GPU
+   * completion.
+   *
+   * Encoded copies read the shared staging buffer later. Reusing offset 0 for a second
+   * upload in the same command buffer would replace the first blit’s source bytes.
+   */
+  static auto ReserveStaging(MetalBackend& backend, MetalBackend::Gpu& gpu, std::size_t bytes)
+      -> StagingSlice {
+    if (bytes == 0) {
+      throw std::runtime_error("MetalBackend: staging reservation is empty");
+    }
+    const auto aligned = AlignUp(bytes, kBlitRowAlign);
+    if (gpu.staging_pages.empty() ||
+        gpu.staging_pages.back().used + aligned > gpu.staging_pages.back().capacity) {
+      const auto capacity =
+          std::max(aligned, gpu.staging_pages.empty() ? kMinStagingPageBytes : aligned);
+      auto buffer =
+          NS::TransferPtr(gpu.device->newBuffer(capacity, MTL::ResourceStorageModeShared));
+      ThrowIfNull(buffer.get(), "MetalBackend: failed to allocate staging buffer");
+      StagingPage page;
+      page.buffer   = std::move(buffer);
+      page.capacity = capacity;
+      page.used     = 0;
+      gpu.staging_pages.push_back(std::move(page));
+      backend.NoteBufferCreate();
+    }
+    auto&        page = gpu.staging_pages.back();
+    StagingSlice slice;
+    slice.buffer = page.buffer.get();
+    slice.offset = page.used;
+    slice.cpu    = static_cast<std::byte*>(page.buffer->contents()) + page.used;
+    page.used += aligned;
+    return slice;
+  }
+
+  static void RecycleStaging(MetalBackend::Gpu& gpu) {
+    if (gpu.staging_pages.empty()) {
       return;
     }
-    ThrowIfHeapBusy(backend);
-    auto buffer = NS::TransferPtr(gpu.device->newBuffer(bytes, MTL::ResourceStorageModeShared));
-    ThrowIfNull(buffer.get(), "MetalBackend: failed to allocate staging buffer");
-    gpu.staging       = std::move(buffer);
-    gpu.staging_bytes = bytes;
-    backend.NoteBufferCreate();
+    StagingPage keep = std::move(gpu.staging_pages.front());
+    for (std::size_t i = 1; i < gpu.staging_pages.size(); ++i) {
+      if (gpu.staging_pages[i].capacity > keep.capacity) {
+        keep = std::move(gpu.staging_pages[i]);
+      }
+    }
+    keep.used = 0;
+    gpu.staging_pages.clear();
+    gpu.staging_pages.push_back(std::move(keep));
   }
 
   static void MarkDidModifyIfManaged(MTL::Buffer* buffer, std::uint32_t offset, std::size_t bytes) {
@@ -528,10 +583,10 @@ void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
     MetalBackendImpl::MarkDidModifyIfManaged(native, offset, bytes.size());
   } else {
     MetalBackendImpl::AttachGpu(*gpu_);
-    MetalBackendImpl::EnsureStaging(*this, *gpu_, bytes.size());
-    std::memcpy(gpu_->staging->contents(), bytes.data(), bytes.size());
+    const auto staging = MetalBackendImpl::ReserveStaging(*this, *gpu_, bytes.size());
+    std::memcpy(staging.cpu, bytes.data(), bytes.size());
     MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
-    command_context.gpu_->blit->copyFromBuffer(gpu_->staging.get(), 0, native, offset,
+    command_context.gpu_->blit->copyFromBuffer(staging.buffer, staging.offset, native, offset,
                                                bytes.size());
   }
   ++h2d_copy_count_;
@@ -573,14 +628,14 @@ void MetalBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte
     return;
   }
   MetalBackendImpl::AttachGpu(*gpu_);
-  const auto row_bytes = AlignedRowBytes(texture.Width(), texture.Format());
-  const auto staging   = row_bytes * texture.Height();
-  MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
-  CopyPackedToAligned(bytes, texture.Width(), texture.Height(), texture.Format(),
-                      gpu_->staging->contents());
+  const auto row_bytes     = AlignedRowBytes(texture.Width(), texture.Format());
+  const auto staging_bytes = row_bytes * texture.Height();
+  const auto staging       = MetalBackendImpl::ReserveStaging(*this, *gpu_, staging_bytes);
+  CopyPackedToAligned(bytes, texture.Width(), texture.Height(), texture.Format(), staging.cpu);
   MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromBuffer(
-      gpu_->staging.get(), 0, row_bytes, staging, MTL::Size{texture.Width(), texture.Height(), 1},
+      staging.buffer, staging.offset, row_bytes, staging_bytes,
+      MTL::Size{texture.Width(), texture.Height(), 1},
       static_cast<MTL::Texture*>(texture.Native()), 0, 0, MTL::Origin{0, 0, 0});
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -618,15 +673,15 @@ void MetalBackend::UploadR8TextureRect(Texture2D& texture, RectI rectangle,
     throw std::runtime_error("MetalBackend::UploadR8TextureRect: injected failure");
   }
   MetalBackendImpl::AttachGpu(*gpu_);
-  const auto width     = static_cast<std::uint32_t>(rectangle.width);
-  const auto height    = static_cast<std::uint32_t>(rectangle.height);
-  const auto row_bytes = AlignedRowBytes(width, TextureFormat::R8);
-  const auto staging   = row_bytes * height;
-  MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
-  CopyPackedToAligned(bytes, width, height, TextureFormat::R8, gpu_->staging->contents());
+  const auto width         = static_cast<std::uint32_t>(rectangle.width);
+  const auto height        = static_cast<std::uint32_t>(rectangle.height);
+  const auto row_bytes     = AlignedRowBytes(width, TextureFormat::R8);
+  const auto staging_bytes = row_bytes * height;
+  const auto staging       = MetalBackendImpl::ReserveStaging(*this, *gpu_, staging_bytes);
+  CopyPackedToAligned(bytes, width, height, TextureFormat::R8, staging.cpu);
   MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromBuffer(
-      gpu_->staging.get(), 0, row_bytes, staging, MTL::Size{width, height, 1},
+      staging.buffer, staging.offset, row_bytes, staging_bytes, MTL::Size{width, height, 1},
       static_cast<MTL::Texture*>(texture.Native()), 0, 0,
       MTL::Origin{static_cast<NS::UInteger>(rectangle.x), static_cast<NS::UInteger>(rectangle.y),
                   0});
@@ -650,21 +705,22 @@ void MetalBackend::DownloadTexture2D(const Texture2D& texture, std::span<std::by
     Wait(command_context);
   }
   MetalBackendImpl::AttachGpu(*gpu_);
-  const auto row_bytes = AlignedRowBytes(texture.Width(), texture.Format());
-  const auto staging   = row_bytes * texture.Height();
-  MetalBackendImpl::EnsureStaging(*this, *gpu_, staging);
+  const auto row_bytes     = AlignedRowBytes(texture.Width(), texture.Format());
+  const auto staging_bytes = row_bytes * texture.Height();
+  const auto staging       = MetalBackendImpl::ReserveStaging(*this, *gpu_, staging_bytes);
   MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
   command_context.gpu_->blit->copyFromTexture(
       static_cast<MTL::Texture*>(texture.Native()), 0, 0, MTL::Origin{0, 0, 0},
-      MTL::Size{texture.Width(), texture.Height(), 1}, gpu_->staging.get(), 0, row_bytes, staging);
+      MTL::Size{texture.Width(), texture.Height(), 1}, staging.buffer, staging.offset, row_bytes,
+      staging_bytes);
   command_context.gpu_->EndEncoders();
   if (command_context.gpu_->buffer) {
     command_context.gpu_->buffer->commit();
     command_context.gpu_->buffer->waitUntilCompleted();
     command_context.gpu_->buffer.reset();
   }
-  CopyAlignedToPacked(gpu_->staging->contents(), texture.Width(), texture.Height(),
-                      texture.Format(), out);
+  CopyAlignedToPacked(staging.cpu, texture.Width(), texture.Height(), texture.Format(), out);
+  MetalBackendImpl::RecycleStaging(*gpu_);
 }
 
 void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> bytes,
@@ -697,11 +753,11 @@ void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byte
                 bytes.size());
     MetalBackendImpl::MarkDidModifyIfManaged(found->native, offset, bytes.size());
   } else {
-    MetalBackendImpl::EnsureStaging(*this, *gpu_, bytes.size());
-    std::memcpy(gpu_->staging->contents(), bytes.data(), bytes.size());
+    const auto staging = MetalBackendImpl::ReserveStaging(*this, *gpu_, bytes.size());
+    std::memcpy(staging.cpu, bytes.data(), bytes.size());
     MetalBackendImpl::EnsureBlitEncoder(*this, *gpu_, command_context);
-    command_context.gpu_->blit->copyFromBuffer(gpu_->staging.get(), 0, found->native, offset,
-                                               bytes.size());
+    command_context.gpu_->blit->copyFromBuffer(staging.buffer, staging.offset, found->native,
+                                               offset, bytes.size());
   }
   ++h2d_copy_count_;
   h2d_bytes_ += bytes.size();
@@ -765,6 +821,15 @@ void MetalBackend::CopyDeviceMemoryToBuffer(void* src, Buffer& dst, std::uint32_
       static_cast<MTL::Buffer*>(dst.Native()), dst_offset, bytes);
 }
 
+void MetalBackend::NoteComputeDispatch(CommandContext& command_context) {
+  ++compute_dispatch_count_;
+  if (command_context.gpu_ == nullptr || !command_context.gpu_->compute) {
+    return;
+  }
+  command_context.gpu_->compute->memoryBarrier(MTL::BarrierScopeBuffers |
+                                               MTL::BarrierScopeTextures);
+}
+
 auto MetalBackend::EnsureComputeCommandEncoder(CommandContext& command_context) -> void* {
   MetalBackendImpl::AttachGpu(*gpu_);
   MetalBackendImpl::EnsureComputeEncoder(*this, *gpu_, command_context);
@@ -809,9 +874,11 @@ void MetalBackend::CompleteCurrentCommandBuffer(CommandContext& command_context)
       }
     }
     command_context.gpu_->Reset();
+    MetalBackendImpl::RecycleStaging(*gpu_);
     throw std::runtime_error(message);
   }
   command_context.gpu_->Reset();
+  MetalBackendImpl::RecycleStaging(*gpu_);
 }
 
 void MetalBackend::SynchronizeRecordedWork(CommandContext& command_context) {
@@ -829,6 +896,9 @@ void MetalBackend::Wait(CommandContext& command_context) {
     if (command_context.gpu_) {
       command_context.gpu_->Reset();
     }
+    if (gpu_) {
+      MetalBackendImpl::RecycleStaging(*gpu_);
+    }
     ReleaseRecordedWorkScratchResources();
     return;
   }
@@ -845,6 +915,7 @@ void MetalBackend::Wait(CommandContext& command_context) {
       }
       command_context.gpu_->Reset();
       in_flight_submission_ = 0;
+      MetalBackendImpl::RecycleStaging(*gpu_);
       ReleaseRecordedWorkScratchResources();
       throw std::runtime_error(message);
     }
@@ -854,6 +925,7 @@ void MetalBackend::Wait(CommandContext& command_context) {
   if (command_context.gpu_) {
     command_context.gpu_->Reset();
   }
+  MetalBackendImpl::RecycleStaging(*gpu_);
   ReleaseRecordedWorkScratchResources();
 }
 

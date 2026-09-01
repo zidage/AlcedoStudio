@@ -16,6 +16,7 @@
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -170,8 +171,10 @@ TEST(GpuDagCudaDrtProduct,
   request.view.viewport_extent            = {40, 24};
   const auto cropped                      = RenderHost(renderer, image, DecodeRes::FULL, request);
   ASSERT_NE(cropped, nullptr);
-  EXPECT_EQ(cropped->GetCPUData().cols, 40);
-  EXPECT_EQ(cropped->GetCPUData().rows, 24);
+  // Full-frame may upsample (48x32 from 24x24 develop). A visible subregion must
+  // not manufacture a larger patch: 0.8 * 24 native ROI rounds to 19x19.
+  EXPECT_EQ(cropped->GetCPUData().cols, 19);
+  EXPECT_EQ(cropped->GetCPUData().rows, 19);
 }
 
 TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnregisteredType) {
@@ -183,12 +186,13 @@ TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnre
   auto imported = LegacyPipelineImporter::Import(legacy);
   ASSERT_TRUE(imported.Ok()) << imported.error;
   ASSERT_EQ(imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
+  const auto* cat02 = dynamic_cast<const Cat02WhiteBalanceModel*>(
+      imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()));
+  ASSERT_NE(cat02, nullptr);
+  EXPECT_FLOAT_EQ(cat02->TintOffset(), 18.0f);
 
   auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  document->InsertAdjustment(NodeId{"grade.primary"}, document->PrimaryGrade()->AdjustmentCount(),
-                             AdjustmentInstanceId{"grade.primary.tint"},
-                             std::make_unique<TintModel>());
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(41);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, RenderRequest{}), nullptr);

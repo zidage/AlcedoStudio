@@ -6,8 +6,10 @@
 
 #include <cmath>
 #include <exception>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,6 +17,8 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/graph_validation.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
 namespace {
@@ -120,6 +124,57 @@ auto ColorGradeOf(const PipelineDocument& document, const NodeId& id, std::strin
   return grade;
 }
 
+auto IsDrtPostAdjustmentField(std::string_view field) -> bool {
+  return field == "clarity" || field == "sharpen" || field == "halation" || field == "film_grain";
+}
+
+auto OperatorTypeForCurrentPanelField(std::string_view field) -> const OperatorTypeId* {
+  if (field == "exposure") return &type_ids::Exposure();
+  if (field == "contrast") return &type_ids::Contrast();
+  if (field == "white" || field == "whites") return &type_ids::White();
+  if (field == "black" || field == "blacks") return &type_ids::Black();
+  if (field == "shadows") return &type_ids::Shadows();
+  if (field == "highlights") return &type_ids::Highlights();
+  if (field == "curve") return &type_ids::Curve();
+  if (field == "saturation") return &type_ids::Saturation();
+  if (field == "vibrance") return &type_ids::Vibrance();
+  if (field == "tint") return &type_ids::Cat02WhiteBalance();
+  if (field == "hls" || field == "HLS") return &type_ids::Hls();
+  if (field == "color_wheel") return &type_ids::ColorWheel();
+  if (field == "lut" || field == "ocio_lmt") return &type_ids::Lmt();
+  if (field == "clarity") return &type_ids::Clarity();
+  if (field == "sharpen") return &type_ids::Sharpen();
+  if (field == "halation") return &type_ids::Halation();
+  if (field == "film_grain") return &type_ids::FilmGrain();
+  return nullptr;
+}
+
+auto CurrentPanelColorGrade(const PipelineDocument& document) -> const ColorGradeNodeModel* {
+  if (const auto* primary = document.PrimaryGrade(); primary != nullptr) {
+    return primary;
+  }
+  const auto grades = ColorGradesOnImageBackbone(document);
+  return grades.empty() ? nullptr : grades.front();
+}
+
+auto DrtPostModel(DrtNodeModel& drt, const AdjustmentInstanceId& id, std::string* error)
+    -> IOperatorModel* {
+  auto* model = drt.FindAdjustment(id);
+  if (model == nullptr) {
+    SetError(error, "Adjustment instance is missing: " + std::string(id.Value()));
+  }
+  return model;
+}
+
+auto DrtPostModel(const DrtNodeModel& drt, const AdjustmentInstanceId& id, std::string* error)
+    -> const IOperatorModel* {
+  const auto* model = drt.FindAdjustment(id);
+  if (model == nullptr) {
+    SetError(error, "Adjustment instance is missing: " + std::string(id.Value()));
+  }
+  return model;
+}
+
 }  // namespace
 
 auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameterTarget& target,
@@ -167,6 +222,14 @@ auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameter
         auto* drt = document.Drt();
         if (drt == nullptr || drt->Id() != target.node_id) {
           return SetError(error, "DRT node is missing: " + std::string(target.node_id.Value()));
+        }
+        if (IsDrtPostAdjustmentField(target.field_key)) {
+          auto* model = DrtPostModel(*drt, target.adjustment_instance_id, error);
+          if (model == nullptr) {
+            return false;
+          }
+          ApplyModelPatch(*model, patch);
+          return true;
         }
         ApplyModelPatch(drt->Params(), patch);
         return true;
@@ -219,6 +282,14 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
         if (drt == nullptr || drt->Id() != target.node_id) {
           return SetError(error, "DRT node is missing: " + std::string(target.node_id.Value()));
         }
+        if (IsDrtPostAdjustmentField(target.field_key)) {
+          const auto* model = DrtPostModel(*drt, target.adjustment_instance_id, error);
+          if (model == nullptr) {
+            return false;
+          }
+          *json = model->ToJson();
+          return true;
+        }
         *json = drt->Params().ToJson();
         return true;
       }
@@ -248,6 +319,73 @@ auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::str
 auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
                                  const nlohmann::json& params, std::string* error) -> bool {
   return ApplyEditorParameterPatch(live, target, params, error);
+}
+
+auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::string field_key,
+                                         std::string* error)
+    -> std::optional<EditorParameterTarget> {
+  EditorParameterTarget target;
+  target.field_key = std::move(field_key);
+  if (target.field_key == "crop_rotate") {
+    target.owner_kind = EditorParameterOwnerKind::Document;
+    return target;
+  }
+  if (target.field_key == "raw_decode" || target.field_key == "lens_calib" ||
+      target.field_key == "color_temp") {
+    const auto* develop = document.Develop();
+    if (develop == nullptr) {
+      SetError(error, "Develop node is missing");
+      return std::nullopt;
+    }
+    target.owner_kind = EditorParameterOwnerKind::Develop;
+    target.node_id    = develop->Id();
+    return target;
+  }
+  if (target.field_key == "odt") {
+    const auto* drt = document.Drt();
+    if (drt == nullptr) {
+      SetError(error, "DRT node is missing");
+      return std::nullopt;
+    }
+    target.owner_kind = EditorParameterOwnerKind::DrtPost;
+    target.node_id    = drt->Id();
+    return target;
+  }
+  const auto* type = OperatorTypeForCurrentPanelField(target.field_key);
+  if (type == nullptr) {
+    SetError(error, "Unknown editor adjustment field: " + target.field_key);
+    return std::nullopt;
+  }
+  if (IsDrtPostAdjustmentField(target.field_key)) {
+    const auto* drt = document.Drt();
+    if (drt == nullptr) {
+      SetError(error, "DRT node is missing");
+      return std::nullopt;
+    }
+    const auto* instance = drt->FindAdjustmentIdByType(*type);
+    if (instance == nullptr) {
+      SetError(error, "DRT/Post adjustment is missing: " + std::string{type->Text()});
+      return std::nullopt;
+    }
+    target.owner_kind             = EditorParameterOwnerKind::DrtPost;
+    target.node_id                = drt->Id();
+    target.adjustment_instance_id = *instance;
+    return target;
+  }
+  const auto* grade = CurrentPanelColorGrade(document);
+  if (grade == nullptr) {
+    SetError(error, "Color Grade node is missing");
+    return std::nullopt;
+  }
+  const auto* instance = grade->FindAdjustmentIdByType(*type);
+  if (instance == nullptr) {
+    SetError(error, "Color Grade adjustment is missing: " + std::string{type->Text()});
+    return std::nullopt;
+  }
+  target.owner_kind             = EditorParameterOwnerKind::ColorGrade;
+  target.node_id                = grade->Id();
+  target.adjustment_instance_id = *instance;
+  return target;
 }
 
 }  // namespace alcedo
