@@ -115,7 +115,7 @@ void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D&
   encoder->setBytes(&dispatch, sizeof(dispatch), 2);
   encoder->setBuffer(static_cast<MTL::Buffer*>(lut.native), 0, 3);
   DispatchThreads(encoder, pipeline.get(), width, height);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
@@ -138,7 +138,7 @@ void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& sourc
   }
   encoder->setBytes(&mix, sizeof(mix), 0);
   DispatchThreads(encoder, pipeline.get(), width, height);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {

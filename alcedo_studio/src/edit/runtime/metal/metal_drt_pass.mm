@@ -98,7 +98,7 @@ void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D&
   encoder->setBytes(&dispatch, sizeof(dispatch), 2);
   encoder->setBuffer(static_cast<MTL::Buffer*>(lut.native), 0, 3);
   DispatchThreads(encoder, pipeline.get(), width, height);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 auto Pipeline() -> NS::SharedPtr<MTL::ComputePipelineState> {
@@ -128,7 +128,7 @@ void DispatchDrt(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
       std::max<NS::UInteger>(1, pipeline->maxTotalThreadsPerThreadgroup() / thread_width);
   encoder->dispatchThreads(MTL::Size{src.Width(), src.Height(), 1},
                            MTL::Size{thread_width, thread_height, 1});
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 }  // namespace

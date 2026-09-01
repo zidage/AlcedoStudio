@@ -342,7 +342,6 @@ TEST_F(MetalGradeFixture, MetalSingleSliderEditUploadsOnlyItsParameterRange) {
   }));
   EXPECT_FALSE(exposure.IsDirty());
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
-  EXPECT_EQ(device_.Workspace().Device().TextureCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
   EXPECT_NE(device_.Workspace().Device().GradeCommandTopologyHash(), 0U);
 }

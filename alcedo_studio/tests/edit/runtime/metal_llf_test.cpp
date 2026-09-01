@@ -134,6 +134,17 @@ auto RenderPreparedGrade(MetalRenderDevice& device, PipelineDocument& document,
   return result;
 }
 
+void ResetProductLookToIdentity(PipelineDocument& document) {
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  auto* saturation = dynamic_cast<SaturationModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(saturation, nullptr);
+  exposure->SetValue(0.0f);
+  saturation->SetValue(1.0f);
+}
+
 auto AcesccEncode(float value) -> float {
   constexpr float kA          = 9.72f;
   constexpr float kB          = 17.52f;
@@ -580,6 +591,7 @@ TEST(GpuDagMetalGrade, MetalLlfRoiSamplesCanonicalReferenceWithSharedGeometryPla
                                                 gpu_dag_test::FullSensor(kWidth, kHeight));
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
+  ResetProductLookToIdentity(document);
   auto* shadows = dynamic_cast<ShadowsModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
   ASSERT_NE(shadows, nullptr);
@@ -645,6 +657,7 @@ TEST(GpuDagMetalGrade, MetalLlfMatchesCudaReferenceWithinTolerance) {
                                                 gpu_dag_test::FullSensor(kWidth, kHeight));
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
+  ResetProductLookToIdentity(document);
   auto* shadows = dynamic_cast<ShadowsModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
   ASSERT_NE(shadows, nullptr);
@@ -671,11 +684,13 @@ TEST(GpuDagMetalGrade, MetalLlfMatchesCudaReferenceWithinTolerance) {
                                                        gpu_dag_test::FullSensor(64, 64));
   auto dark_document   = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(dark_document);
+  ResetProductLookToIdentity(dark_document);
   dynamic_cast<ShadowsModel*>(
       dark_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()))
       ->SetValue(80.0f);
   auto bright_document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(bright_document);
+  ResetProductLookToIdentity(bright_document);
   dynamic_cast<HighlightsModel*>(
       bright_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Highlights()))
       ->SetValue(0.0f);

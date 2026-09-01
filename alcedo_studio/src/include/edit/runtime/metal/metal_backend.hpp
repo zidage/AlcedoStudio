@@ -167,6 +167,12 @@ class MetalBackend {
                          CommandContext& command_context);
   void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
                            CommandContext& command_context);
+  /**
+   * @brief Copy packed host texels into a private texture through command-buffer staging.
+   *
+   * Each call reserves a distinct host-visible range. A later upload in the same
+   * command buffer must not overwrite bytes still referenced by an encoded blit.
+   */
   void UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
                        CommandContext& command_context);
   void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
@@ -211,7 +217,14 @@ class MetalBackend {
       -> MetalLutBinding;
   [[nodiscard]] auto DummyLut() -> MetalLutBinding;
   void               SetLutByteBudget(std::size_t bytes);
-  void               NoteComputeDispatch() noexcept { ++compute_dispatch_count_; }
+  /**
+   * @brief Count a compute dispatch and order later kernels after its writes.
+   *
+   * Metal does not imply a texture or buffer barrier between dispatches in one
+   * encoder. Heap resources stay tracked; this still serializes write-then-read
+   * so a later Grade mix cannot observe another Grade's mask or scratch.
+   */
+  void NoteComputeDispatch(CommandContext& command_context);
   void SetGradeCommandTopologyHash(std::uint64_t hash) { grade_command_topology_hash_ = hash; }
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }

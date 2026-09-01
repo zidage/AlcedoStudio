@@ -230,7 +230,7 @@ void GenerateMipChain(MetalRenderDevice& device, MaskTextureLease<MetalBackend>&
     encoder->setTexture(static_cast<MTL::Texture*>(next.Native()), 1);
     encoder->setBytes(&params, sizeof(params), 0);
     Dispatch2D(encoder, pipeline.get(), next.Width(), next.Height());
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   }
 }
 
@@ -267,7 +267,7 @@ void EncodeAnalytic(MetalRenderDevice& device, MetalBackend::Texture2D& output,
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
@@ -287,7 +287,7 @@ void EncodeRasterSample(MetalRenderDevice& device, const MetalBackend::Texture2D
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
   encoder->setBytes(&params, sizeof(params), 0);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
@@ -316,7 +316,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
     encoder->setBuffer(dest.native, dest.offset, 0);
     encoder->setBytes(&params, sizeof(params), 1);
     Dispatch1D(encoder, pipeline.get(), height);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   };
   auto dispatch_vertical = [&](const Plane& src, const Plane& dest) {
     auto*          encoder  = Encoder(device);
@@ -331,7 +331,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
     encoder->setBuffer(bound_plane.native, bound_plane.offset, 3);
     encoder->setBytes(&params, sizeof(params), 4);
     Dispatch1D(encoder, pipeline.get(), width);
-    device.Workspace().Device().NoteComputeDispatch();
+    device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   };
 
   dispatch_horizontal(true, horizontal);
@@ -351,7 +351,7 @@ auto EncodeSignedDistance(MetalRenderDevice& device, const MetalBackend::Texture
   encoder->setBuffer(static_cast<MTL::Buffer*>(distance.Native()), 0, 2);
   encoder->setBytes(&params, sizeof(params), 3);
   Dispatch2D(encoder, pipeline.get(), width, height);
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   return static_cast<std::uint32_t>(workspace.Device().RecordedWorkScratchBufferBytes() - mark);
 }
 
@@ -373,7 +373,7 @@ void EncodeFeatherSample(MetalRenderDevice& device, const MetalBackend::Buffer& 
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 0);
   encoder->setBytes(&params, sizeof(params), 1);
   Dispatch2D(encoder, pipeline.get(), output.Width(), output.Height());
-  device.Workspace().Device().NoteComputeDispatch();
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
 }  // namespace

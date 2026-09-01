@@ -113,6 +113,31 @@ TEST_F(MetalWorkspaceFixture, MetalTexturePoolReusesMatchingPrivateTextures) {
   EXPECT_FLOAT_EQ(r32_back[63], 2.5f);
 }
 
+TEST_F(MetalWorkspaceFixture, SequentialTextureUploadsKeepDistinctTexels) {
+  MetalRenderDevice device;
+  auto&             textures = device.Workspace().Textures();
+  device.BeginRender();
+  auto first  = textures.Acquire({8, 8, TextureFormat::R8});
+  auto second = textures.Acquire({8, 8, TextureFormat::R8});
+  ASSERT_FALSE(first.Empty());
+  ASSERT_FALSE(second.Empty());
+  std::vector<std::byte> fill_first(64, std::byte{255});
+  std::vector<std::byte> fill_second(64, std::byte{128});
+  auto&                  backend = device.Workspace().Device();
+  backend.UploadTexture2D(first.Texture(), fill_first, device.CommandContext());
+  backend.UploadTexture2D(second.Texture(), fill_second, device.CommandContext());
+  device.EndRender();
+  device.WaitIdle();
+  std::vector<std::byte> back_first(64, std::byte{0});
+  std::vector<std::byte> back_second(64, std::byte{0});
+  backend.DownloadTexture2D(first.Texture(), back_first, device.CommandContext());
+  backend.DownloadTexture2D(second.Texture(), back_second, device.CommandContext());
+  EXPECT_EQ(back_first.front(), std::byte{255});
+  EXPECT_EQ(back_first.back(), std::byte{255});
+  EXPECT_EQ(back_second.front(), std::byte{128});
+  EXPECT_EQ(back_second.back(), std::byte{128});
+}
+
 TEST_F(MetalWorkspaceFixture, MetalTexturePoolDoesNotEvictBusySubmissionResources) {
   MetalRenderDevice       device;
   auto&                   textures = device.Workspace().Textures();

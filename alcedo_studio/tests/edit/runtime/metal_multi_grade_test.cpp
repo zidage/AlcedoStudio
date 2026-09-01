@@ -67,6 +67,21 @@ auto ResourceIdOf(MetalRenderDevice& device, const GraphValueId& id) -> std::uin
   return lease == nullptr ? 0 : lease->Texture().ResourceId();
 }
 
+auto DownloadR8(MetalRenderDevice& device, const GraphValueId& id) -> std::vector<std::uint8_t> {
+  auto* lease = device.Workspace().Images().Find(id);
+  EXPECT_NE(lease, nullptr);
+  if (lease == nullptr) {
+    return {};
+  }
+  const auto& texture = lease->Texture();
+  EXPECT_EQ(texture.Format(), TextureFormat::R8);
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+  device.Workspace().Device().DownloadTexture2D(
+      texture, std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size()),
+      device.CommandContext());
+  return pixels;
+}
+
 class MetalMultiGradeFixture : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -290,6 +305,21 @@ TEST_F(MetalMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   device_.WaitIdle();
   EXPECT_EQ(device_.PassStats().mask_execute, 2U);
   EXPECT_EQ(device_.PassStats().primary_grade_execute, 2U);
+  ASSERT_TRUE(plan.grade_nodes[0].mask.has_value());
+  ASSERT_TRUE(plan.grade_nodes[1].mask.has_value());
+  EXPECT_EQ(plan.grade_nodes[0].mask->node_id, NodeId{"mask.a"});
+  EXPECT_EQ(plan.grade_nodes[1].mask->node_id, NodeId{"mask.b"});
+  EXPECT_NE(plan.grade_nodes[0].mask_output, plan.grade_nodes[1].mask_output);
+  EXPECT_NE(ResourceIdOf(device_, plan.grade_nodes[0].mask_output),
+            ResourceIdOf(device_, plan.grade_nodes[1].mask_output));
+  const auto mask_a = DownloadR8(device_, plan.grade_nodes[0].mask_output);
+  const auto mask_b = DownloadR8(device_, plan.grade_nodes[1].mask_output);
+  ASSERT_FALSE(mask_a.empty());
+  ASSERT_FALSE(mask_b.empty());
+  EXPECT_EQ(mask_a.front(), 255);
+  EXPECT_EQ(mask_b.front(), 128);
+  EXPECT_FLOAT_EQ(grade_a->Mix(), 0.5f);
+  EXPECT_FLOAT_EQ(grade_b->Mix(), 0.25f);
   const auto develop = Download(device_, plan.develop_output);
   const auto a       = Download(device_, plan.grade_nodes[0].scene_output);
   const auto b       = Download(device_, plan.grade_nodes[1].scene_output);

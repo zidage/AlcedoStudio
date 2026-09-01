@@ -19,6 +19,8 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/cst/odt_op.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
@@ -279,6 +281,94 @@ TEST_F(MetalDrtFixture, MetalDrtAcesMatchesCudaReferenceWithinTolerance) {
   EXPECT_TRUE(differ);
   EXPECT_TRUE(AllFinite(low_pixels));
   EXPECT_TRUE(AllFinite(high_pixels));
+}
+
+// NM2.1/NM2.5: mix 1, no mask, non-default DRT/Post then DRT display. Metal neighborhood
+// operators are not the CUDA-captured golden; this asserts endpoint order on Metal:
+// non-default DRT/Post changes display, and Grade mix 0 does not suppress DRT Clarity.
+void ApplyUnmaskedReferencePostAndDrt(PipelineDocument& document) {
+  auto* grade = document.PrimaryGrade();
+  auto* drt   = document.Drt();
+  ASSERT_NE(grade, nullptr);
+  ASSERT_NE(drt, nullptr);
+  EXPECT_TRUE(grade->Enabled());
+  EXPECT_FLOAT_EQ(grade->Mix(), 1.0f);
+  auto* clarity = dynamic_cast<ClarityModel*>(drt->FindAdjustmentByType(type_ids::Clarity()));
+  auto* sharpen = dynamic_cast<SharpenModel*>(drt->FindAdjustmentByType(type_ids::Sharpen()));
+  auto* halo    = dynamic_cast<HalationModel*>(drt->FindAdjustmentByType(type_ids::Halation()));
+  auto* grain   = dynamic_cast<FilmGrainModel*>(drt->FindAdjustmentByType(type_ids::FilmGrain()));
+  ASSERT_NE(clarity, nullptr);
+  ASSERT_NE(sharpen, nullptr);
+  ASSERT_NE(halo, nullptr);
+  ASSERT_NE(grain, nullptr);
+  clarity->SetValue(40.0f);
+  sharpen->SetAmount(55.0f);
+  sharpen->SetRadius(3.0f);
+  sharpen->SetThreshold(0.0f);
+  halo->SetValue(0.65f);
+  grain->SetValue(0.35f);
+  auto params           = drt->Params().Params();
+  params.peak_luminance = 250.0f;
+  drt->Params().ReplaceParams(params);
+}
+
+TEST_F(MetalDrtFixture, DrtPostPreservesUnmaskedReferenceOrder) {
+  MetalRenderDevice baseline_device;
+  auto              baseline_document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(baseline_document);
+  const auto baseline = Download(
+      baseline_device,
+      baseline_device.Execute(GraphCompiler::Compile(baseline_document, input_.CompileSource(),
+                                                     RenderRequest{}),
+                              input_, baseline_document));
+
+  ApplyUnmaskedReferencePostAndDrt(document_);
+  const auto pixels = Download(device_, Render());
+  ASSERT_TRUE(AllFinite(pixels));
+  ASSERT_EQ(pixels.size(), baseline.size());
+  bool post_changes_display = false;
+  for (std::size_t i = 0; i < pixels.size(); ++i) {
+    if (std::abs(pixels[i].r - baseline[i].r) > 1.0e-4f ||
+        std::abs(pixels[i].g - baseline[i].g) > 1.0e-4f ||
+        std::abs(pixels[i].b - baseline[i].b) > 1.0e-4f) {
+      post_changes_display = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(post_changes_display);
+
+  auto mix_off_clarity = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(mix_off_clarity);
+  mix_off_clarity.PrimaryGrade()->SetMix(0.0f);
+  auto* on = dynamic_cast<ClarityModel*>(
+      mix_off_clarity.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(on, nullptr);
+  on->SetValue(40.0f);
+  auto mix_off_identity = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(mix_off_identity);
+  mix_off_identity.PrimaryGrade()->SetMix(0.0f);
+  MetalRenderDevice on_device;
+  MetalRenderDevice off_device;
+  const auto on_pixels = Download(
+      on_device, on_device.Execute(GraphCompiler::Compile(mix_off_clarity, input_.CompileSource(),
+                                                          RenderRequest{}),
+                                   input_, mix_off_clarity));
+  const auto off_pixels = Download(
+      off_device,
+      off_device.Execute(GraphCompiler::Compile(mix_off_identity, input_.CompileSource(),
+                                                RenderRequest{}),
+                         input_, mix_off_identity));
+  ASSERT_EQ(on_pixels.size(), off_pixels.size());
+  bool differ = false;
+  for (std::size_t i = 0; i < on_pixels.size(); ++i) {
+    if (std::abs(on_pixels[i].r - off_pixels[i].r) > 1.0e-4f ||
+        std::abs(on_pixels[i].g - off_pixels[i].g) > 1.0e-4f ||
+        std::abs(on_pixels[i].b - off_pixels[i].b) > 1.0e-4f) {
+      differ = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(differ);
 }
 
 TEST_F(MetalDrtFixture, MetalDrtEditRunsOnlyDrtPass) {
