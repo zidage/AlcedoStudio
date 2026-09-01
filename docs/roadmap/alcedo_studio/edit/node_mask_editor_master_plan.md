@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: NM0 complete；NM1 in progress；NM2–NM8 planned。NML cancelled (2026-08-30).
+Status: NM0 and NM2 complete；NM1 in progress；NM3–NM8 planned。NML cancelled (2026-08-30).
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
 executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
@@ -1153,8 +1153,8 @@ Adjustment Transfer Paste
 | NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
 | NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | 单 live document；共享 executor；R 修复任务请求、后台资源占用、使用权与导出 recipe；随后统一 document I/O |
 | NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
-| NM2 — Multi-Grade Runtime and Ownership | planned | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
-| NM3 — Multi-Mask Model and Runtime | planned | `node_mask_editor/phase_nm3_multi_mask_runtime_plan.md` | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
+| NM2 — Multi-Grade Runtime and Ownership | complete | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
+| NM3 — Multi-Mask Model and Runtime | planned | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
 | NM4 — History, Version, Recovery, and Paste | planned | `node_mask_editor/phase_nm4_history_version_paste_plan.md` | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
 | NM5 — QuickQanava Nodes Panel | planned | `node_mask_editor/phase_nm5_nodes_panel_plan.md` | 左侧 Nodes 面板连接真实 command/history/render 路径 |
 | NM6 — Node-aware Adjustment Stack | planned | `node_mask_editor/phase_nm6_node_aware_adjustments_plan.md` | 右侧参数面板按 Develop/Color Grade/DRT/Post context 工作 |
@@ -1333,6 +1333,8 @@ node 及下游失效；中间 node 无法保存或编译 DRT/Post 专属调整�
 panel。
 
 ### 21.4 Phase NM3 — Multi-Mask Model and Runtime
+
+执行方案：[Phase NM3 Multi-Mask model and runtime](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md)。
 
 **为什么排在 history 改造前：** History payload 必须引用最终 MaskId、Mask schema 和
 MaskAssetKey 行为。先按旧单 mask 模型写 history 会造成第二次数据格式切换。
