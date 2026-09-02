@@ -737,6 +737,14 @@ auto PresentEditorHistoryCommit(const std::string& field_key, const std::string&
   }
   if (!after.is_object()) after = nlohmann::json::object();
   if (!before.is_object()) before = nlohmann::json::object();
+  if (field_key == "exposure") {
+    if (!after.contains("exposure") && after.contains("exposure_ev")) {
+      after["exposure"] = after.at("exposure_ev");
+    }
+    if (!before.contains("exposure") && before.contains("exposure_ev")) {
+      before["exposure"] = before.at("exposure_ev");
+    }
+  }
   const CommitSummary summary = BuildSummary(op, after, before);
   out.before_text             = summary.before_text;
   out.after_text              = summary.after_text;

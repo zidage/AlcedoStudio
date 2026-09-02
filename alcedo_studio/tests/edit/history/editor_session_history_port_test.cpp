@@ -907,6 +907,33 @@ TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureKeepsWorkingHeadAtRoot)
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
 }
 
+TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureRestoresDocumentHeadAndProjection) {
+  history_.SetServices(
+      EditorSessionHistoryPort::Services{[bad = journal_path_.parent_path() / "not-a-directory"](
+                                             sl_element_id_t) { return bad / "image-42.wal"; }});
+  {
+    std::ofstream blocker(journal_path_.parent_path() / "not-a-directory", std::ios::binary);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "block";
+  }
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_head = guard_->working_head_commit_hash();
+  const auto settled     = WithColorGradeTarget({"exposure", R"({"exposure":1.25})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  EXPECT_FALSE(history_.CommitAdjustment(handle, settled, &error));
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  alcedo::EditorHistorySnapshot snapshot;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
+  EXPECT_TRUE(snapshot.commits.empty());
+  EXPECT_FALSE(snapshot.can_undo);
+  std::error_code ec;
+  std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
+}
+
 TEST_F(EditorSessionHistoryPortTest, ReopenReplaysJournalIntoWorkingPipeline) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
@@ -974,8 +1001,12 @@ TEST_F(EditorSessionHistoryPortTest, HistoryProjectionPublishesDisplayNameBefore
   const auto& head = snapshot.commits.front();
   EXPECT_EQ(head.field_key, "exposure");
   EXPECT_EQ(head.position, alcedo::EditorHistoryTimelinePosition::Current);
-  const auto before_exposure = ReadJsonNumber(head.before_value_json, "exposure");
-  const auto after_exposure  = ReadJsonNumber(head.after_value_json, "exposure");
+  const auto before_exposure = ReadJsonNumber(head.before_value_json, "exposure_ev").has_value()
+                                   ? ReadJsonNumber(head.before_value_json, "exposure_ev")
+                                   : ReadJsonNumber(head.before_value_json, "exposure");
+  const auto after_exposure  = ReadJsonNumber(head.after_value_json, "exposure_ev").has_value()
+                                   ? ReadJsonNumber(head.after_value_json, "exposure_ev")
+                                   : ReadJsonNumber(head.after_value_json, "exposure");
   ASSERT_TRUE(before_exposure.has_value());
   ASSERT_TRUE(after_exposure.has_value());
   EXPECT_NEAR(*before_exposure, 0.35, 1e-6);

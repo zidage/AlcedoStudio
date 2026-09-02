@@ -8,10 +8,12 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -447,6 +449,31 @@ auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const Commi
                                       std::string* error) -> bool {
   try {
     if (commit.GetKind() == EditCommitKind::kEdit) {
+      if (IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+        const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+        for (const auto& change : batch.changes) {
+          const auto* parameter = std::get_if<SetParameterChange>(&change);
+          if (parameter == nullptr) {
+            continue;
+          }
+          const auto spec = FieldSpec(parameter->target.field_key);
+          if (!spec.has_value()) {
+            continue;
+          }
+          EditorAdjustmentOperatorState state;
+          auto params = use_after_value ? parameter->after_value : parameter->before_value;
+          if (parameter->target.field_key == "exposure" && params.contains("exposure_ev")) {
+            params["exposure"] = params.at("exposure_ev");
+            params.erase("exposure_ev");
+          }
+          state.params  = std::move(params);
+          state.enabled = use_after_value ? parameter->after_enabled : parameter->before_enabled;
+          if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
+            return false;
+          }
+        }
+        return true;
+      }
       return ApplyOrdinaryPayloadToLive(
           executor, OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON()), use_after_value, error);
     }

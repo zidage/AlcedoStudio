@@ -454,6 +454,30 @@ void MiniGitWorkingHistory::PublishWorkingSelection(MiniGitWorkingSelection sele
   redo_stack_ = std::move(selection.redo_suffix);
 }
 
+auto MiniGitWorkingHistory::PrepareAppendEdit(PipelineEditBatch payload) const
+    -> MiniGitPreparedEdit {
+  MiniGitPreparedEdit prepared;
+  const auto          source_head  = working_head();
+  const auto          source_chain = transaction_chain_hash();
+  try {
+    prepared.commit =
+        EditCommit::MakePipelineEdit(graph_->GetRootId(), source_head, std::move(payload));
+  } catch (const std::exception& e) {
+    prepared.error = e.what();
+    return prepared;
+  }
+
+  prepared.target_chain = FoldTransactionChainHash(source_chain, prepared.commit.GetCommitHash());
+  prepared.journal_record.kind                       = MiniGitJournalRecordKind::kEditCommit;
+  prepared.journal_record.expected_source_head       = source_head;
+  prepared.journal_record.expected_source_chain_hash = source_chain;
+  prepared.journal_record.target_head                = prepared.commit.GetCommitHash();
+  prepared.journal_record.target_chain_hash          = prepared.target_chain;
+  prepared.journal_record.edit_commit                = prepared.commit;
+  prepared.ready                                     = true;
+  return prepared;
+}
+
 auto MiniGitWorkingHistory::PrepareAppendEdit(OrdinaryEditPayload payload) const
     -> MiniGitPreparedEdit {
   MiniGitPreparedEdit prepared;
@@ -525,7 +549,14 @@ auto MiniGitWorkingHistory::PublishPreparedEdit(const MiniGitPreparedEdit& prepa
     return result;
   }
   try {
-    (void)graph_->InsertCommit(prepared.commit);
+    if (!graph_->InsertCommit(prepared.commit)) {
+      if (auto* durable = dynamic_cast<MiniGitJournal*>(journal_.get())) {
+        std::string revoke_error;
+        (void)durable->RevokeLastRecord(&revoke_error);
+      }
+      result.error = "mini-Git commit is already in the graph";
+      return result;
+    }
     graph_->MoveWorkingHead(graph_->GetActiveVersionId(), prepared.commit.GetCommitHash());
     redo_stack_.clear();
     result.committed = true;
@@ -575,6 +606,10 @@ auto MiniGitWorkingHistory::AbandonPublishedEdit(const MiniGitPreparedEdit& prep
     SetError(error, e.what());
   }
   return false;
+}
+
+auto MiniGitWorkingHistory::AppendEdit(PipelineEditBatch payload) -> MiniGitEditAppendResult {
+  return PublishPreparedEdit(PrepareAppendEdit(std::move(payload)));
 }
 
 auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult {

@@ -498,6 +498,34 @@ auto SnapshotFieldForPayload(const alcedo::OrdinaryEditPayload& payload,
   return field_key;
 }
 
+auto PanelSnapshotParams(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
+  if (field_key == "exposure" && params.contains("exposure_ev")) {
+    params["exposure"] = params.at("exposure_ev");
+    params.erase("exposure_ev");
+  }
+  return params;
+}
+
+auto ApplyTypedBatchToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                               const alcedo::PipelineEditBatch& batch, bool use_after_value,
+                               std::string* error) -> bool {
+  for (const auto& change : batch.changes) {
+    const auto* parameter = std::get_if<alcedo::SetParameterChange>(&change);
+    if (parameter == nullptr) {
+      continue;
+    }
+    alcedo::EditorAdjustmentOperatorState state;
+    state.params  = PanelSnapshotParams(parameter->target.field_key,
+                                       use_after_value ? parameter->after_value
+                                                       : parameter->before_value);
+    state.enabled = use_after_value ? parameter->after_enabled : parameter->before_enabled;
+    if (!ApplySnapshotState(snapshot, parameter->target.field_key, state, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 auto ApplyCommittedPayloadToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
@@ -523,6 +551,11 @@ auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapsh
   if (snapshot == nullptr || !IsCompleteAdjustmentSnapshot(*snapshot, error)) return false;
   try {
     if (commit.GetKind() == alcedo::EditCommitKind::kEdit) {
+      if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+        return ApplyTypedBatchToSnapshot(
+            snapshot, alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON()), use_after_value,
+            error);
+      }
       return ApplyCommittedPayloadToSnapshot(
           snapshot, alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON()), use_after_value,
           error);

@@ -393,6 +393,15 @@ def_library(EditorPipelineCommandService
     PUBLIC_DEPS EditGraph JSON
 )
 
+def_library(PipelineHistoryApplier
+    SOURCES
+        "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"
+        "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditHistory EditGraph EditMaskStore
+)
+
 def_library(EditorSessionService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_service.cpp"

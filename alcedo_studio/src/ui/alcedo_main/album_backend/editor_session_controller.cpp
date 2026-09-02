@@ -994,6 +994,10 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "CropRotate";
     case R::ScopeRefresh:
       return "ScopeRefresh";
+    case R::GraphTopologyChanged:
+      return "GraphTopologyChanged";
+    case R::SettledMaskEdit:
+      return "SettledMaskEdit";
   }
   return "Unknown";
 }

@@ -36,6 +36,8 @@ enum class EditorRenderReason : std::uint8_t {
   // A newly selected scope needs a fresh final-display frame, using the
   // current viewport region just like the deprecated QWidget scope switch.
   ScopeRefresh,
+  GraphTopologyChanged,
+  SettledMaskEdit,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -147,6 +149,8 @@ struct EditorRenderResult {
     case EditorRenderReason::UndoRedo:
     case EditorRenderReason::CropRotate:
     case EditorRenderReason::ScopeRefresh:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -159,6 +163,8 @@ struct EditorRenderResult {
       return EditorRenderQuality::Detail;
     case EditorRenderReason::SettledAdjustment:
     case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -203,6 +209,8 @@ struct EditorRenderResult {
     case EditorRenderReason::ImageSwitch:
     case EditorRenderReason::Retry:
     case EditorRenderReason::CropRotate:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
       return true;
   }
   return true;

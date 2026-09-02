@@ -76,6 +76,14 @@ class IEditorHistoryPort {
   }
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
+  /// Render reason published by the last successful history mutation. Default
+  /// UndoRedo keeps fakes rendering. Production returns nullopt for rename-only
+  /// batches so the session can skip a pipeline render while still bumping the
+  /// history revision.
+  [[nodiscard]] virtual auto LastPublishedRenderReason() const
+      -> std::optional<EditorRenderReason> {
+    return EditorRenderReason::UndoRedo;
+  }
   /// Move the working head to an explicit commit in one operation. The target
   /// must be an ancestor of the working head (backward) or a member of the
   /// in-memory redo suffix (forward); otherwise the call fails without moving.

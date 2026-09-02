@@ -36,6 +36,10 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "CropRotate";
     case EditorRenderReason::ScopeRefresh:
       return "ScopeRefresh";
+    case EditorRenderReason::GraphTopologyChanged:
+      return "GraphTopologyChanged";
+    case EditorRenderReason::SettledMaskEdit:
+      return "SettledMaskEdit";
   }
   return "?";
 }

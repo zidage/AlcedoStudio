@@ -1256,7 +1256,9 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   const auto undo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
+  if (outcome.schedule_render) {
+    render_.RouteInitialRender(outcome.render_command, undo_identity, load_request);
+  }
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -1288,7 +1290,9 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   const auto redo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
+  if (outcome.schedule_render) {
+    render_.RouteInitialRender(outcome.render_command, redo_identity, load_request);
+  }
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -1322,7 +1326,9 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> E
   const auto move_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
-  render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
+  if (outcome.schedule_render) {
+    render_.RouteInitialRender(outcome.render_command, move_identity, load_request);
+  }
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();

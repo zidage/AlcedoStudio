@@ -188,11 +188,12 @@ add_executable(EditorSessionHistoryPortTest
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
 target_include_directories(EditorSessionHistoryPortTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
   EditorAdjustmentPipeline
   EditorPipelineCommandService
+  PipelineHistoryApplier
   EditGraph
   EditorMiniGitMaterializer
   PipelineMgmtService

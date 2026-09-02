@@ -278,4 +278,16 @@ auto EditorHistoryState::JournalPathResolver() const
   return services_.mini_git_journal_path;
 }
 
+void EditorHistoryState::RecordPublishedRenderReason(
+    std::optional<alcedo::EditorRenderReason> reason) {
+  std::scoped_lock lock(mutex_);
+  last_published_render_reason_ = reason;
+}
+
+auto EditorHistoryState::LastPublishedRenderReason() const
+    -> std::optional<alcedo::EditorRenderReason> {
+  std::scoped_lock lock(mutex_);
+  return last_published_render_reason_;
+}
+
 }  // namespace alcedo::ui

@@ -56,6 +56,17 @@ gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
 
+add_executable(PipelineHistoryApplierTest
+    ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
+target_include_directories(PipelineHistoryApplierTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PipelineHistoryApplierTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskStore)
+gtest_discover_tests(PipelineHistoryApplierTest
+    TEST_PREFIX "PipelineHistoryApplierTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineHistoryApplierTest app)
+
 # Geometry overlay preview: crop disable + bilinear GPU resize path that the
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
 add_executable(EditorGeometryOverlayPipelineTest

@@ -93,10 +93,12 @@ auto EditorSessionEditController::HandleUndoRedo(bool undo,
     return outcome;
   }
 
-  outcome.kind                  = EditorEditOutcome::Kind::Accepted;
-  outcome.reason                = EditorRenderReason::UndoRedo;
-  outcome.message               = undo ? "Undo applied" : "Redo applied";
-  outcome.render_command.reason = EditorRenderReason::UndoRedo;
+  const auto published            = deps_.history->LastPublishedRenderReason();
+  outcome.kind                    = EditorEditOutcome::Kind::Accepted;
+  outcome.schedule_render         = published.has_value();
+  outcome.reason                  = published.value_or(EditorRenderReason::UndoRedo);
+  outcome.message                 = undo ? "Undo applied" : "Redo applied";
+  outcome.render_command.reason   = outcome.reason;
   return outcome;
 }
 
@@ -119,10 +121,12 @@ auto EditorSessionEditController::HandleMoveHeadToCommit(const commit_hash_t& ta
     return outcome;
   }
 
+  const auto published          = deps_.history->LastPublishedRenderReason();
   outcome.kind                  = EditorEditOutcome::Kind::Accepted;
-  outcome.reason                = EditorRenderReason::UndoRedo;
+  outcome.schedule_render       = published.has_value();
+  outcome.reason                = published.value_or(EditorRenderReason::UndoRedo);
   outcome.message               = "Editor head moved";
-  outcome.render_command.reason = EditorRenderReason::UndoRedo;
+  outcome.render_command.reason = outcome.reason;
   return outcome;
 }
 

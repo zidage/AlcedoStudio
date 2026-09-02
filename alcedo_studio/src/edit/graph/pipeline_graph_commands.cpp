@@ -4,6 +4,7 @@
 
 #include "edit/graph/pipeline_graph_commands.hpp"
 
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -12,9 +13,10 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
-namespace {
 
 const PortId kImagePort{"image"};
+
+namespace {
 
 auto Error(GraphValidationCode code, std::string message) -> GraphValidationError {
   return {code, std::move(message)};
@@ -46,7 +48,9 @@ auto RequireColorGrade(const PipelineDocument& document, const NodeId& node_id)
   return {};
 }
 
-auto SceneImagePredecessor(const PipelineGraph& graph, const NodeId& node_id)
+}  // namespace
+
+auto FindSceneImagePredecessor(const PipelineGraph& graph, const NodeId& node_id)
     -> const GraphEdge* {
   const auto* node = graph.FindNode(node_id);
   if (node == nullptr) {
@@ -76,7 +80,8 @@ auto SceneImagePredecessor(const PipelineGraph& graph, const NodeId& node_id)
   return found;
 }
 
-auto SceneImageSuccessor(const PipelineGraph& graph, const NodeId& node_id) -> const GraphEdge* {
+auto FindSceneImageSuccessor(const PipelineGraph& graph, const NodeId& node_id)
+    -> const GraphEdge* {
   const auto* node = graph.FindNode(node_id);
   if (node == nullptr) {
     return nullptr;
@@ -116,8 +121,6 @@ auto FindSceneImageEdge(const PipelineGraph& graph, const NodeId& from, const No
   return nullptr;
 }
 
-}  // namespace
-
 auto AddCleanColorGrade(PipelineDocument& document, const NodeId& before_node_id, NodeId new_id)
     -> std::vector<GraphValidationError> {
   if (new_id.Empty()) {
@@ -135,7 +138,7 @@ auto AddCleanColorGrade(PipelineDocument& document, const NodeId& before_node_id
   if (before->Type() == type_ids::DevelopNode()) {
     return {Error(GraphValidationCode::ProtectedEndpoint, "Cannot insert a Color Grade before Develop")};
   }
-  const auto* incoming = SceneImagePredecessor(document.Graph(), before_node_id);
+  const auto* incoming = FindSceneImagePredecessor(document.Graph(), before_node_id);
   if (incoming == nullptr) {
     return {Error(GraphValidationCode::BrokenImageBackbone,
                   "Insert point has no scene-image predecessor: " +
@@ -157,8 +160,8 @@ auto RemoveColorGradeAndBridge(PipelineDocument& document, const NodeId& node_id
   if (!errors.empty()) {
     return errors;
   }
-  const auto* incoming = SceneImagePredecessor(document.Graph(), node_id);
-  const auto* outgoing = SceneImageSuccessor(document.Graph(), node_id);
+  const auto* incoming = FindSceneImagePredecessor(document.Graph(), node_id);
+  const auto* outgoing = FindSceneImageSuccessor(document.Graph(), node_id);
   if (incoming == nullptr || outgoing == nullptr) {
     return {Error(GraphValidationCode::BrokenImageBackbone,
                   "Color Grade is not on a scene-image edge pair: " +
@@ -192,8 +195,8 @@ auto ReconnectColorGrade(PipelineDocument& document, const NodeId& node_id,
     return {Error(GraphValidationCode::UnknownNode,
                   "Unknown successor: " + std::string{new_successor_id.Value()})};
   }
-  const auto* incoming = SceneImagePredecessor(document.Graph(), node_id);
-  const auto* outgoing = SceneImageSuccessor(document.Graph(), node_id);
+  const auto* incoming = FindSceneImagePredecessor(document.Graph(), node_id);
+  const auto* outgoing = FindSceneImageSuccessor(document.Graph(), node_id);
   if (incoming == nullptr || outgoing == nullptr) {
     return {Error(GraphValidationCode::BrokenImageBackbone,
                   "Color Grade is not on a scene-image edge pair: " +
@@ -247,6 +250,51 @@ auto SetColorGradeEnabled(PipelineDocument& document, const NodeId& node_id, boo
   }
   grade->SetEnabled(enabled);
   return {};
+}
+
+auto SetColorGradeMix(PipelineDocument& document, const NodeId& node_id, float mix)
+    -> std::vector<GraphValidationError> {
+  auto errors = RequireColorGrade(document, node_id);
+  if (!errors.empty()) {
+    return errors;
+  }
+  if (!std::isfinite(mix) || mix < 0.0f || mix > 1.0f) {
+    return {Error(GraphValidationCode::InvalidNodeValue, "Color Grade mix must stay in [0, 1]")};
+  }
+  auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(node_id));
+  if (grade == nullptr) {
+    return {Error(GraphValidationCode::NotAColorGrade,
+                  "Node is not a Color Grade: " + std::string{node_id.Value()})};
+  }
+  grade->SetMix(mix);
+  return {};
+}
+
+auto InsertColorGradeFromJson(PipelineDocument& document, nlohmann::json node_json,
+                              const GraphEdge& incoming, const GraphEdge& outgoing)
+    -> std::vector<GraphValidationError> {
+  std::unique_ptr<ColorGradeNodeModel> node;
+  try {
+    node = ColorGradeNodeModel::FromJson(node_json);
+  } catch (const std::exception& ex) {
+    return {Error(GraphValidationCode::UnknownNode,
+                  std::string{"InsertColorGradeFromJson: "} + ex.what())};
+  }
+  if (node == nullptr) {
+    return {Error(GraphValidationCode::UnknownNode, "InsertColorGradeFromJson requires a node")};
+  }
+  if (incoming.to_node != node->Id() || outgoing.from_node != node->Id()) {
+    return {Error(GraphValidationCode::BrokenImageBackbone,
+                  "InsertColorGradeFromJson edges must attach to the stored node")};
+  }
+  if (document.Graph().FindNode(node->Id()) != nullptr) {
+    return {Error(GraphValidationCode::DuplicateNodeId,
+                  "Duplicate node id: " + std::string{node->Id().Value()})};
+  }
+  const GraphEdge previous{incoming.from_node, incoming.from_port, outgoing.to_node,
+                           outgoing.to_port};
+  return FinishEdit(document, document.Graph().ApplyBackboneEdit(
+                                  {previous}, {incoming, outgoing}, std::move(node)));
 }
 
 }  // namespace alcedo

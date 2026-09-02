@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1 complete; NM4.2–4.6 planned
+Status: NM4.1–4.2 complete; NM4.3–4.6 planned
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -890,7 +890,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | Phase | Status | Result |
 | --- | --- | --- |
 | NM4.1 | complete | Typed batch schema, canonical encoding, commit identity, and presentation data. |
-| NM4.2 | planned | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
+| NM4.2 | complete | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
 | NM4.3 | planned | Immutable root document, unified format cutover, and full-document checkpoint. |
 | NM4.4 | planned | Version branch, checkout, recovery, materialization, and reopen. |
 | NM4.5 | planned | Paste-only transfer, merge-path removal, and Mask asset reachability. |
@@ -1138,13 +1138,96 @@ domain apply / graph validation / WAL append / head publication fails
 
 **Exit conditions**
 
-- [ ] Active editor commits use typed batches only.
-- [ ] Forward then inverse restores the canonical document hash.
-- [ ] Inverse then forward restores the same hash.
-- [ ] Add, remove, reconnect, parameter, and Mask changes Undo and Redo correctly.
-- [ ] One user action creates one commit and one chain fold.
-- [ ] Failed changes preserve document, head, redo, projection, and render state.
-- [ ] Preview does not enter WAL or history.
+- [x] Active editor commits use typed batches only.
+- [x] Forward then inverse restores the canonical document hash.
+- [x] Inverse then forward restores the same hash.
+- [x] Add, remove, reconnect, parameter, and Mask changes Undo and Redo correctly.
+- [x] One user action creates one commit and one chain fold.
+- [x] Failed changes preserve document, head, redo, projection, and render state.
+- [x] Preview does not enter WAL or history.
+
+##### Phase NM4.2 completion record (2026-09-02)
+
+**Status:** complete — typed `PipelineEditBatch` is the live-document history payload for settled parameters, graph, and Mask; WAL, Undo/Redo, and head moves apply stored batches.
+
+**Primary success call chain:**
+
+```text
+settled parameter (preview already wrote after JSON)
+  -> EditorHistoryMutation::CommitAdjustment
+  -> MakeSetParameterBatch
+  -> MiniGitWorkingHistory::PrepareAppendEdit / PublishPreparedEdit
+     (journal append, InsertCommit, MoveWorkingHead)
+  -> ApplyHistoryCommitToLivePipeline (panel snapshot remirror)
+  -> ProjectDocumentEdit + RecordPublishedRenderReason(SettledAdjustment)
+
+graph / Mask command
+  -> Capture* / Make*Batch
+  -> ApplyPipelineEditBatch Forward under render lock
+  -> PublishPreparedEdit
+  -> RecordPublishedRenderReason(GraphTopologyChanged | SettledMaskEdit | nullopt for rename)
+```
+
+**Undo / Redo / head-move call chain:**
+
+```text
+Undo | Redo | MoveHeadToCommit
+  -> PrepareUndo / PrepareRedo / PrepareMoveHeadToCommit
+  -> PublishPreparedHeadMove (WAL first)
+  -> ApplyPipelineEditBatch Inverse or Forward from commit payload
+  -> ApplyHistoryCommitToLivePipeline for SetParameter panel snapshot
+  -> RecordPublishedRenderReason(RenderReasonForHeadMove)
+```
+
+**Primary failure call chain:**
+
+```text
+domain apply / later-change hook / WAL append / InsertCommit / CPU remirror fails
+  -> inverse-apply already mutated document changes
+  -> RevokeLastRecord or AbandonPublishedEdit / AbandonPublishedHeadMove
+  -> restore prior head and redo selection
+  -> no RecordPublishedRenderReason
+  -> report the actual error
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ParameterForwardInverseRestoresDocumentHash` | `PipelineHistoryApplierTest` | PASS |
+| `LaterChangeFailureReversesEarlierBatchChanges` | `PipelineHistoryApplierTest` | PASS |
+| `ConcurrentRenderCannotObservePartialTypedBatch` | `PipelineHistoryApplierTest` | PASS |
+| `HeadPublishFailureRevokesOnlyNewJournalTail` | `PipelineHistoryApplierTest` | PASS |
+| `AddGradeUndoRedoPreservesStableIdsAndCleanValues` | `EditorSessionHistoryPortTest` | PASS |
+| `DeleteGradeUndoRestoresNodeMasksAndExactEdges` | `EditorSessionHistoryPortTest` | PASS |
+| `ReconnectUndoRedoRestoresBackboneOrder` | `EditorSessionHistoryPortTest` | PASS |
+| `RenameCreatesHistoryWithoutRenderIntent` | `EditorSessionHistoryPortTest` | PASS |
+| `MaskAddRemoveUndoRestoresValueAndDisplayIndex` | `EditorSessionHistoryPortTest` | PASS |
+| `MaskSourceUndoRestoresExactVariantValues` | `EditorSessionHistoryPortTest` | PASS |
+| `BrushAssetUndoSwitchesImmutableKeysWithoutChangingFiles` | `EditorSessionHistoryPortTest` | PASS |
+| `MultiChangeActionCreatesOneCommitAndOneChainFold` | `EditorSessionHistoryPortTest` | PASS |
+| `UndoRedoAppliesTypedBatchesInRequiredOrder` | `EditorSessionHistoryPortTest` | PASS |
+| `MoveToAncestorAndRedoChildUsesStoredDirections` | `EditorSessionHistoryPortTest` | PASS |
+| `TypedUndoAfterHistoryReleaseRestoresDocumentFromStoredBatch` | `EditorSessionHistoryPortTest` | PASS |
+| `JournalAppendFailureRestoresDocumentHeadAndProjection` | `EditorSessionHistoryPortTest` | PASS |
+
+Name mapping: plan `UnrecordedHistoryTargetIsRejected...` → `TypedUndoAfterHistoryReleaseRestoresDocumentFromStoredBatch` (typed Undo after `Release`/`Acquire` uses the stored batch, not a same-session map).
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineHistoryApplierTest EditorSessionHistoryPortTest
+build\debug\alcedo_studio\tests\app\PipelineHistoryApplierTest_runtime\PipelineHistoryApplierTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+```
+
+Suite totals: `PipelineHistoryApplierTest` 4/4 PASS; `EditorSessionHistoryPortTest` 61/61 PASS.
+
+**Checklist / exit condition:** all boxes checked.
+
+**LOC note (grill-code-review):** `pipeline_history_applier.cpp` 466 lines (apply + rollback). `pipeline_document_history.cpp` 345 lines (batch builders + render-reason mapping). `editor_history_mutation.cpp` 963 lines — one mutation owner (preview, typed publish, graph/Mask commands, head moves); still under the ~1000-line split threshold. `editor_session_history_port_test.cpp` 1665 lines is a pre-existing integration file; new NM4.2 cases live there and in `editor_document_history_test.cpp` (653). `PipelineHistoryApplierTest` is a focused 165-line binary.
+
+**Remaining gaps:** NM4.3 format/root/checkpoint cutover. Dual ordinary path remains for merge and Paste until NM4.5. Recovery and Version checkout still remirror CPU stage snapshots rather than replaying the full DAG (NM4.4). Panel snapshot maps Color Grade `SetParameter` onto the current-panel operator; extra-grade exposure does not get a separate CPU stage. `OrdinaryEditPayload` remains on `EditCommit` for those leftover paths.
 
 ### 6.3 NM4.3 — Root, formats, and checkpoint document
 
