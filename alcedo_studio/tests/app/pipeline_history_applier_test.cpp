@@ -18,6 +18,7 @@
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -86,6 +87,37 @@ auto TwoFieldPaste(const PipelineDocument& document) -> PipelineEditBatch {
 }
 
 }  // namespace
+
+TEST(PipelineHistoryApplierTest, FirstChangeMismatchLeavesDocumentUnchanged) {
+  auto        document = CreateDefaultPipelineDocument();
+  const auto  start    = CanonicalPipelineDocumentJson(document);
+  const auto  target   = test::ColorGradeFieldTarget("exposure");
+  const auto  batch =
+      MakeSetParameterBatch(target, nlohmann::json{{"exposure_ev", 99.0}},
+                            nlohmann::json{{"exposure_ev", 2.0}}, true, true, "Grade");
+  std::string error;
+  EXPECT_FALSE(ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, &error));
+  EXPECT_NE(error.find("expected current side"), std::string::npos);
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), start);
+}
+
+TEST(PipelineHistoryApplierTest, GraphFinalValidationRestoresExactNodesAndEdges) {
+  auto        document = CreateDefaultPipelineDocument();
+  const auto  start    = CanonicalPipelineDocumentJson(document);
+  auto        change =
+      CaptureAddColorGradeChange(document, NodeId{"drt"}, NodeId{"grade.look"});
+  auto        batch = MakeAddColorGradeBatch(std::move(change));
+  std::string error;
+  PipelineHistoryApplyContext context;
+  context.after_successful_change = [&](std::size_t) {
+    document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});
+  };
+  EXPECT_FALSE(ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, &error,
+                                      context));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), start);
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.look"}), nullptr);
+}
 
 TEST(PipelineHistoryApplierTest, ParameterForwardInverseRestoresDocumentHash) {
   auto        document = CreateDefaultPipelineDocument();

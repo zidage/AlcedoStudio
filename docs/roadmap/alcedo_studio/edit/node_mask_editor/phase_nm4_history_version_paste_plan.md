@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1–4.5 complete; NM4.6 planned
+Status: NM4.1–4.6 complete
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -894,7 +894,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | NM4.3 | complete | Immutable root document, unified format cutover, and full-document checkpoint. |
 | NM4.4 | complete | Version branch, checkout, recovery, materialization, and reopen. |
 | NM4.5 | complete | Paste-only transfer, merge-path removal, and Mask asset reachability. |
-| NM4.6 | planned | Failure, concurrency, service, storage, and project qualification. |
+| NM4.6 | complete | Failure, concurrency, service, storage, and project qualification. |
 
 Implement these phases in order.
 Keep each sub-phase buildable and testable.
@@ -1826,13 +1826,141 @@ injected apply / WAL / DuckDB / truncate / replay / asset / Paste failure
 
 **Exit conditions**
 
-- [ ] Every required behavior has executed evidence on the current host.
-- [ ] Storage crash windows do not duplicate or lose a committed edit.
-- [ ] Reopen produces the same canonical document and history labels.
-- [ ] Paste and asset reachability pass complete service integration tests.
-- [ ] Old formats fail at their owning boundaries.
-- [ ] Repository scans find no active old payload or product merge creation path.
-- [ ] Missing package, native render, or real-RAW UI evidence remains explicit for NM8.
+- [x] Every required behavior has executed evidence on the current host.
+- [x] Storage crash windows do not duplicate or lose a committed edit.
+- [x] Reopen produces the same canonical document and history labels.
+- [x] Paste and asset reachability pass complete service integration tests.
+- [x] Old formats fail at their owning boundaries.
+- [x] Repository scans find no active old payload or product merge creation path.
+- [x] Missing package, native render, or real-RAW UI evidence remains explicit for NM8.
+
+##### Phase NM4.6 completion record (2026-09-02)
+
+**Status:** complete — Section 7 matrix re-executed on this Windows host; graph final-validation restore added; concurrent save/checkout/edit admission proven; leftover merge/ordinary paths remain reject-or-replay only.
+
+**Primary success call chain:**
+
+```text
+fresh supported project
+  -> immutable root document
+  -> typed parameter, graph, and Mask commits
+  -> Undo, Redo, branch, and Version checkout
+  -> checkpoint and close
+  -> reopen with exact DAG and assets
+  -> Paste into a second image Version
+  -> final save and clean-exit asset scan
+```
+
+**Primary failure call chain:**
+
+```text
+injected apply / WAL / DuckDB / truncate / replay / asset / Paste failure
+  -> one explicit error
+  -> prior document, head, refs, assets, and displayed frame remain valid
+  -> no legacy or reduced replacement path
+```
+
+**Concurrent save / checkout / edit chain:**
+
+```text
+Interactive image + in-flight save checkpoint
+  -> EditorSessionState::Saving + SaveCheckpoint lease
+  -> CommitAdjustment / CheckoutVersion / PasteAdjustments rejected
+  -> history commit and checkout counts unchanged
+  -> checkpoint completion
+  -> Interactive on the saved target; edit and checkout allowed again
+```
+
+**Graph final-validation restore chain:**
+
+```text
+structural typed batch applies locally
+  -> PipelineDocumentPassesValidation fails
+  -> restore pre-call document clone
+  -> no commit, no WAL, no render
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `TypedBatchGoldenBytesAndHashRemainStable` | `PipelineEditBatchTest` | PASS |
+| `ChangingTypedChangeOrderChangesCommitIdentity` | `PipelineEditBatchTest` | PASS |
+| `UnknownOrMissingTypedPayloadFieldsAreRejected` | `PipelineEditBatchTest` | PASS |
+| `ParameterHistoryRequiresCompleteOwnerNodeAndInstance` | `PipelineEditBatchTest` | PASS |
+| `TypedHistoryRowsUseSavedIdentityAndLocalizationData` | `PipelineEditBatchTest` | PASS |
+| `ParameterForwardInverseRestoresDocumentHash` | `PipelineHistoryApplierTest` | PASS |
+| `FirstChangeMismatchLeavesDocumentUnchanged` (domain change 1) | `PipelineHistoryApplierTest` | PASS |
+| `LaterChangeFailureReversesEarlierBatchChanges` | `PipelineHistoryApplierTest` | PASS |
+| `GraphFinalValidationRestoresExactNodesAndEdges` | `PipelineHistoryApplierTest` | PASS |
+| `ConcurrentRenderCannotObservePartialTypedBatch` | `PipelineHistoryApplierTest` | PASS |
+| `HeadPublishFailureRevokesOnlyNewJournalTail` | `PipelineHistoryApplierTest` | PASS |
+| `AddGradeUndoRedoPreservesStableIdsAndCleanValues` | `EditorSessionHistoryPortTest` | PASS |
+| `DeleteGradeUndoRestoresNodeMasksAndExactEdges` | `EditorSessionHistoryPortTest` | PASS |
+| `ReconnectUndoRedoRestoresBackboneOrder` | `EditorSessionHistoryPortTest` | PASS |
+| `InvalidReconnectLeavesDocumentHashAndHistoryHeadUnchanged` | `EditorSessionHistoryPortTest` | PASS |
+| `RenameCreatesHistoryWithoutRenderIntent` | `EditorSessionHistoryPortTest` | PASS |
+| `MaskAddRemoveUndoRestoresValueAndDisplayIndex` | `EditorSessionHistoryPortTest` | PASS |
+| `MaskSourceUndoRestoresExactVariantValues` | `EditorSessionHistoryPortTest` | PASS |
+| `BrushAssetUndoSwitchesImmutableKeysWithoutChangingFiles` | `EditorSessionHistoryPortTest` | PASS |
+| `MultiChangeActionCreatesOneCommitAndOneChainFold` | `EditorSessionHistoryPortTest` | PASS |
+| `UndoRedoAppliesTypedBatchesInRequiredOrder` | `EditorSessionHistoryPortTest` | PASS |
+| `MoveToAncestorAndRedoChildUsesStoredDirections` | `EditorSessionHistoryPortTest` | PASS |
+| `JournalAppendFailureRestoresDocumentHeadAndProjection` | `EditorSessionHistoryPortTest` | PASS |
+| `ImageRootStoresCompleteDefaultDocumentAndDevelopData` | `PipelineDocumentCheckpointTest`, `PipelineMapperTest` | PASS |
+| `DifferentImageDevelopDataProducesDifferentRootIdentity` | `PipelineDocumentCheckpointTest` | PASS |
+| `OldDocumentCommitRootCheckpointAndWalFormatsFail` | `PipelineDocumentCheckpointTest` | PASS |
+| `MatchingDocumentCheckpointSkipsFirstParentReplay` | `PipelineMapperTest` | PASS |
+| `StaleDocumentCheckpointReplaysHistoryAndNeedsWriteback` | `PipelineMapperTest` | PASS |
+| `CheckpointForAnotherImageNeverLoads` | `PipelineMapperTest` | PASS |
+| `OldProjectMetadataFailsBeforeHistoryLoad` | `CommitGraphTest` | PASS |
+| `RootVersionAlwaysRebuildsExactImmutableDocument` (Document, Develop, Grade, DRT/Post, Mask) | `EditorSessionHistoryPortTest` | PASS |
+| `BranchVersionSharesCommitsAndKeepsIndependentHead` | `EditorSessionHistoryPortTest` | PASS |
+| `VersionCheckoutReplacesTheDagOnTheSameLiveGuard` | `EditorSessionHistoryPortTest` | PASS |
+| `FailedCheckoutRestoresPriorVersionAndDocument` | `EditorSessionHistoryPortTest` | PASS |
+| `MissingReachableMaskAssetFailsBeforeHeadPublication` | `EditorSessionHistoryPortTest` | PASS |
+| `RecoveryAppliesCommittedTypedSuffixExactlyOnce` | `EditorSessionHistoryPortTest` | PASS |
+| `ProjectReopenPreservesDagVersionsHistoryAndMaskAssets` | `EditorSessionHistoryPortTest` | PASS |
+| `MissingReachableTypedCommitFailsClosed` | `EditorSessionHistoryPortTest` | PASS |
+| `CoveredWalAfterDatabaseCommitDoesNotDuplicateHistory` | `EditorMiniGitMaterializerTest` | PASS |
+| `DuckDbCommittedButTruncateFailedRetriesWithoutDuplicateCommit` | `EditorMiniGitMaterializerTest` | PASS |
+| `OldSessionCheckpointCompletionCannotPublishIntoNewVersion` | `EditorSessionNavigationControllerTest` | PASS |
+| `CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage` | `EditorSessionNavigationControllerTest` | PASS |
+| `CaptureFailureKeepsAAndNeverStartsSave` | `EditorSessionNavigationControllerTest` | PASS |
+| `SavingCheckpointRejectsSettledEditCheckoutAndPaste` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `PasteKeepsTargetDevelopRawDataAndGeometry` | `DocumentTransferTest` | PASS |
+| `PasteRemapsEveryNodeAdjustmentAndMaskId` | `DocumentTransferTest` | PASS |
+| `PasteCreatesOneRootRelativeVersionAndOneTypedCommit` | `EditorSessionHistoryPortTest` | PASS |
+| `FailedPasteCreatesNoVersionCommitHeadMoveOrRender` | `EditorSessionHistoryPortTest` | PASS |
+| `FailedPasteWalAppendCreatesNoVersionCommitHeadMoveOrRender` | `EditorSessionHistoryPortTest` | PASS |
+| `TransferSurfaceHasNoPipelineMergeOperation` | several transfer/history/QML binaries | PASS |
+| `InactiveVersionAndWalKeepReferencedMaskAssets` | `MaskAssetReachabilityTest` | PASS |
+| `MaintenanceRemovesOnlyUnreferencedExactMaskAssetFiles` | `MaskAssetReachabilityTest` | PASS |
+| `PastedPipelineDocument` snapshot invalidation | `EditorRenderCoordinatorTest` | PASS |
+| `GraphCommandFailureRestoresAffectedNodesAndEdges` | `GpuDagModelGraphTest` | PASS |
+
+Name mapping: Section 7.2 “domain change 1” is `FirstChangeMismatchLeavesDocumentUnchanged`. “Graph final validation” is `GraphFinalValidationRestoresExactNodesAndEdges` (pre-call clone restore). Concurrent save/checkout/edit is `SavingCheckpointRejectsSettledEditCheckoutAndPaste` plus the existing save-lock, journal snapshot, and checkout-after-save cases. `GpuDagModelGraph.RemovePrimaryGradeKeepsRemainingGradesAndValidBackbone` now asserts `PrimaryGrade()` falls back to the remaining backbone Grade; that matches `PipelineDocument::PrimaryGrade()`.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineHistoryApplierTest EditorSessionHistoryPortTest MaskAssetReachabilityTest EditorRenderCoordinatorTest EditorSessionActionPolicyCq3Test CommitGraphTest PipelineEditBatchTest PipelineDocumentCheckpointTest EditorMiniGitJournalRecoveryTest EditorMiniGitMaterializerTest EditorSaveCheckpointServiceTest EditorSessionNavigationControllerTest PipelineMapperTest AdjustmentTransferServiceMiniGitTest ProjectServiceTest GpuDagModelGraphTest GpuDagMaskStoreTest DocumentTransferTest AdjustmentTransferServiceTest EditorSaveCheckpointCaptureTest EditorMiniGitCommitWriterTest EditorSessionCheckpointStoreTest
+<each target>_runtime\<target>.exe --gtest_brief=1
+```
+
+Run as whole binaries (not parallel `ctest` discovery). `PipelineMapperTest` / `ProjectServiceTest` share fixed temp DB paths.
+
+Suite totals: `PipelineEditBatchTest` 16/16; `PipelineHistoryApplierTest` 12/12; `EditorSessionHistoryPortTest` 70/70; `PipelineDocumentCheckpointTest` 15/15; `CommitGraphTest` 35/35; `EditorMiniGitJournalRecoveryTest` 10/10; `EditorMiniGitMaterializerTest` 14/14; `EditorMiniGitCommitWriterTest` 6/6; `EditorSaveCheckpointCaptureTest` 13/13; `EditorSessionCheckpointStoreTest` 7/7; `EditorSaveCheckpointServiceTest` 14/14; `EditorSessionNavigationControllerTest` 25/25; `DocumentTransferTest` 6/6; `AdjustmentTransferServiceTest` 3/3; `AdjustmentTransferServiceMiniGitTest` 15/15; `GpuDagModelGraphTest` 63/63; `GpuDagMaskStoreTest` 8/8; `PipelineMapperTest` 31/31 (2 disabled, pre-existing); `ProjectServiceTest` 6/6; `MaskAssetReachabilityTest` 2/2; `EditorRenderCoordinatorTest` 34/34; `EditorSessionActionPolicyCq3Test` 11/11; `EditorSessionCq5QualificationTest` 5/5. `EditorSessionCommandQueueBaselineTest` 15/16 (`RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` still expects queued C after B; command-queue selection promotion, not history/Paste).
+
+Source revision: `587d8995` plus this qualification change.
+
+**Checklist / exit condition:** all NM4.6 boxes checked from executed tests and scans above.
+
+**LOC note (grill-code-review):** `pipeline_history_applier.cpp` 644 (apply, inverse, clone restore on graph validation failure). Header 110. Tests stay in existing behavior files: `pipeline_history_applier_test.cpp` 285; `editor_document_history_test.cpp` 673; `editor_version_checkout_test.cpp` 506; `editor_session_action_policy_cq3_test.cpp` 362; `pipeline_graph_command_test.cpp` 264. No new phase-named helper.
+
+**Repository scan:** no `NM4` identifiers in production or test code. New-project mutation publishes `PipelineEditBatch` only (`PrepareAppendEdit(batch)` from history mutation and Paste). `BeginLiveMerge` / `CompleteLiveMerge` still exist so CQ5 can reject them; they return `"Pipeline merge is not supported"`. `PrepareAppendMerge` / `MakeMerge` remain as leftover APIs and are not called from the live editor mutation path. Leftover ordinary/merge replay still maps current-format WAL payloads onto the document; it is not a reader for old project or `pipeline_params` checkpoints. Unregistered `EditorMerge*.qml` files remain on disk. Pre-existing input comments and one transfer-doc wording issue sit outside this history/Paste surface. Unrelated image-analysis live-environment tests remain, not NM4.
+
+**Remaining gaps:** no test forces `restore_prior` itself to throw (fatal session prefix is implemented). MSVC `std::filesystem::remove` clears read-only, so OS-denied Mask deletion was not injected; corrupt-file preservation still reports failure and keeps the file. Panel snapshots still remirror current-panel CPU stages after document replay. No packaged-product or real-RAW UI evidence (NM8). `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` remains failing.
 
 ## 7. Acceptance matrix
 
@@ -2103,34 +2231,34 @@ typed apply / WAL / replay / storage / asset / Paste failure
 
 ## 9. NM4 completion criteria
 
-- [ ] `PipelineEditBatch` is the only new-project edit commit payload.
-- [ ] Every typed change stores complete identity and before/after data.
-- [ ] Canonical payload, commit, and chain hashes have independent golden evidence.
-- [ ] Parameter, node, graph, Mask, and raster-key changes support exact Undo and Redo.
-- [ ] One user action creates one commit and one chain fold.
-- [ ] The active Version head remains the only working history head.
-- [ ] The live guard keeps one writable document and one shared executor.
-- [ ] The immutable root stores the complete image-specific default document.
-- [ ] Checkpoints store a full document with matching root, head, and chain labels.
-- [ ] Matching checkpoints skip replay; stale checkpoints rebuild from history.
-- [ ] Every Version rebuilds its own DAG from root and first-parent typed commits.
-- [ ] Checkout failure restores the prior Version and document.
-- [ ] WAL recovery applies each missing typed commit exactly once.
-- [ ] Reopen preserves nodes, edges, parameters, Masks, refs, heads, and assets.
-- [ ] The new project format rejects all older project and history shapes.
-- [ ] No old stage or ordinary payload conversion path remains active.
-- [ ] Paste creates one new Version and preserves target Develop, RAW data, and geometry.
-- [ ] Paste remaps all node, adjustment, and Mask identities.
-- [ ] Paste failure creates no partial Version, commit, head move, or render.
-- [ ] No product path creates or presents a pipeline merge operation.
-- [ ] Mask asset reachability covers roots, Versions, live state, redo, WAL, checkpoints, and active authoring input.
-- [ ] Asset maintenance removes only exact unreachable files and reports failures.
-- [ ] Typed history rows use saved identity and localization data.
-- [ ] Failure and concurrency evidence preserves prior valid state with no substitute path.
-- [ ] NM5 retains QuickQanava UI work.
-- [ ] NM6 retains selected-node panel routing.
-- [ ] NM7 retains viewer input and provisional raster work.
-- [ ] NM8 retains full packaged native and real-RAW qualification.
+- [x] `PipelineEditBatch` is the only new-project edit commit payload.
+- [x] Every typed change stores complete identity and before/after data.
+- [x] Canonical payload, commit, and chain hashes have independent golden evidence.
+- [x] Parameter, node, graph, Mask, and raster-key changes support exact Undo and Redo.
+- [x] One user action creates one commit and one chain fold.
+- [x] The active Version head remains the only working history head.
+- [x] The live guard keeps one writable document and one shared executor.
+- [x] The immutable root stores the complete image-specific default document.
+- [x] Checkpoints store a full document with matching root, head, and chain labels.
+- [x] Matching checkpoints skip replay; stale checkpoints rebuild from history.
+- [x] Every Version rebuilds its own DAG from root and first-parent typed commits.
+- [x] Checkout failure restores the prior Version and document.
+- [x] WAL recovery applies each missing typed commit exactly once.
+- [x] Reopen preserves nodes, edges, parameters, Masks, refs, heads, and assets.
+- [x] The new project format rejects all older project and history shapes.
+- [x] No old stage or ordinary payload conversion path remains active.
+- [x] Paste creates one new Version and preserves target Develop, RAW data, and geometry.
+- [x] Paste remaps all node, adjustment, and Mask identities.
+- [x] Paste failure creates no partial Version, commit, head move, or render.
+- [x] No product path creates or presents a pipeline merge operation.
+- [x] Mask asset reachability covers roots, Versions, live state, redo, WAL, checkpoints, and active authoring input.
+- [x] Asset maintenance removes only exact unreachable files and reports failures.
+- [x] Typed history rows use saved identity and localization data.
+- [x] Failure and concurrency evidence preserves prior valid state with no substitute path.
+- [x] NM5 retains QuickQanava UI work.
+- [x] NM6 retains selected-node panel routing.
+- [x] NM7 retains viewer input and provisional raster work.
+- [x] NM8 retains full packaged native and real-RAW qualification.
 
 Record implementation results under the corresponding sub-phase.
 Include source revision, commands, test results, and main success and failure call chains.

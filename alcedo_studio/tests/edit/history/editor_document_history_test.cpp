@@ -493,6 +493,25 @@ TEST_F(EditorDocumentHistoryTest, ReconnectUndoRedoRestoresBackboneOrder) {
   EXPECT_EQ(BackboneNodeIds(*guard_->document_), moved);
 }
 
+TEST_F(EditorDocumentHistoryTest, InvalidReconnectLeavesDocumentHashAndHistoryHeadUnchanged) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"},
+                                     &error))
+      << error;
+  const auto before_hash  = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_count = guard_->commit_graph_->CommitCount();
+  const auto before_head  = guard_->working_head_commit_hash();
+  EXPECT_FALSE(history_.ReconnectColorGrade(handle, alcedo::NodeId{"grade.primary"},
+                                            alcedo::NodeId{"develop"}, alcedo::NodeId{"drt"},
+                                            &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+}
+
 TEST_F(EditorDocumentHistoryTest, RenameCreatesHistoryWithoutRenderIntent) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

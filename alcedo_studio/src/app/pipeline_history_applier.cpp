@@ -463,19 +463,28 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
   }
+  auto snapshot = ClonePipelineDocument(document);
   const auto ordered = OrderedChangesForApply(batch, direction);
   std::vector<PipelineEditChange> applied;
   applied.reserve(ordered.size());
+  auto restore_pre_call_document = [&] {
+    document = std::move(snapshot);
+  };
   for (const auto& change : ordered) {
     if (!ApplyOneChange(document, change, direction, error, context)) {
       std::string restore_error;
+      bool        inverse_ok = true;
       for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
         if (!ApplyOneChange(document, *it, Opposite(direction), &restore_error, context)) {
+          inverse_ok = false;
           if (error != nullptr) {
             *error += "; inverse restoration failed: " + restore_error;
           }
-          return false;
+          break;
         }
+      }
+      if (!inverse_ok) {
+        restore_pre_call_document();
       }
       return false;
     }
@@ -484,10 +493,11 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
       try {
         context.after_successful_change(applied.size());
       } catch (const std::exception& ex) {
-        std::string restore_error;
+        std::string       restore_error;
         const std::string injected = ex.what();
         for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
           if (!ApplyOneChange(document, *it, Opposite(direction), &restore_error, context)) {
+            restore_pre_call_document();
             return SetError(error, injected + "; inverse restoration failed: " + restore_error);
           }
         }
@@ -495,8 +505,9 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
       }
     }
   }
-  if (StructuralBatch(batch)) {
-    return PipelineDocumentPassesValidation(document, error);
+  if (StructuralBatch(batch) && !PipelineDocumentPassesValidation(document, error)) {
+    restore_pre_call_document();
+    return false;
   }
   return true;
 }

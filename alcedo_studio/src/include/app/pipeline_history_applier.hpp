@@ -48,7 +48,9 @@ struct PipelineHistoryApplyContext {
  * @param error Optional failure detail, including restoration errors.
  * @param context Optional Mask store and apply observer.
  * @return false when validation, apply, or rollback fails. On false the document
- *         matches the pre-call hash unless inverse restoration itself fails.
+ *         matches the pre-call hash: failed changes are inverse-applied when
+ *         possible, and a pre-call clone is restored when graph validation fails
+ *         after a structural batch.
  * @pre Caller holds the shared executor render lock.
  */
 auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch& batch,

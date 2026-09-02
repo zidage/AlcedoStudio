@@ -14,12 +14,14 @@
 #include <string>
 #include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 namespace {
@@ -168,6 +170,46 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
   EXPECT_TRUE(Decision(EditorAction::PreviewAdjustment).allowed);
   EXPECT_TRUE(Decision(EditorAction::ApplyPaste).allowed);
+}
+
+TEST_F(EditorSessionActionPolicyCq3Test, SavingCheckpointRejectsSettledEditCheckoutAndPaste) {
+  openInteractive();
+  service_->SetCopiedPackageAvailable(true);
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
+  const auto started                   = service_->Switch(30, 40);
+  ASSERT_EQ(started.kind, EditorSessionResultKind::SaveStarted);
+  drainQueue();
+  ASSERT_EQ(service_->state(), EditorSessionState::Saving);
+  const int commits_before   = history_->commit_count;
+  const int checkouts_before = history_->checkout_count;
+
+  auto       patch = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", true});
+  const auto edit  = service_->CommitAdjustment(patch);
+  EXPECT_EQ(edit.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::CommitAdjustment).allowed);
+
+  const auto checkout = service_->CheckoutVersion(Hash128{0x11ULL, 0x22ULL});
+  EXPECT_EQ(checkout.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::CheckoutVersion).allowed);
+
+  AdjustmentTransferPackage package;
+  const auto                paste = service_->PasteAdjustments(package, "Pasted");
+  EXPECT_EQ(paste.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(Decision(EditorAction::ApplyPaste).allowed);
+
+  EXPECT_EQ(history_->commit_count, commits_before);
+  EXPECT_EQ(history_->checkout_count, checkouts_before);
+  EXPECT_EQ(service_->identity().element_id, 10u);
+
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  presentFirstFrame();
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().element_id, 30u);
+  EXPECT_TRUE(Decision(EditorAction::CommitAdjustment).allowed);
+  EXPECT_TRUE(Decision(EditorAction::CheckoutVersion).allowed);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test, RejectedCommandDoesNotChangeAvailability) {

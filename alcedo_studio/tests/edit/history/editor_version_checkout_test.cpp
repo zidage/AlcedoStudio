@@ -85,6 +85,15 @@ auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGu
   return port.CommitAdjustment(handle, settled, error);
 }
 
+auto CommitPanelField(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
+                      const std::string& field, const std::string& after_json, std::string* error)
+    -> bool {
+  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
+  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
+  if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
+  return port.CommitAdjustment(handle, settled, error);
+}
+
 auto DocumentHash(const alcedo::PipelineGuard& guard) -> std::string {
   return alcedo::CanonicalPipelineDocumentJson(*guard.document_);
 }
@@ -128,7 +137,15 @@ TEST_F(EditorVersionCheckoutTest, RootVersionAlwaysRebuildsExactImmutableDocumen
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   const auto root_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->root_document_);
+  ASSERT_TRUE(CommitPanelField(history_, handle, "crop_rotate", R"({"rotation_degrees":12.0})",
+                               &error))
+      << error;
+  ASSERT_TRUE(CommitPanelField(history_, handle, "color_temp",
+                               R"({"custom_cct":7200.0,"wb_mode":"custom"})", &error))
+      << error;
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":2.25})", &error)) << error;
+  ASSERT_TRUE(CommitPanelField(history_, handle, "clarity", R"({"clarity":18.0})", &error))
+      << error;
   ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.look"},
                                      &error))
       << error;

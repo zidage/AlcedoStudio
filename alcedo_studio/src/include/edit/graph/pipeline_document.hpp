@@ -39,6 +39,12 @@ class PipelineDocument {
 
   [[nodiscard]] auto Develop() -> DevelopNodeModel*;
   [[nodiscard]] auto Develop() const -> const DevelopNodeModel*;
+  /**
+   * @brief First Color Grade used for current-panel routing.
+   *
+   * Prefers the default `grade.primary` node. When that ID is absent, returns the
+   * first Color Grade on the image backbone. Null when the backbone has no Grade.
+   */
   [[nodiscard]] auto PrimaryGrade() -> ColorGradeNodeModel*;
   [[nodiscard]] auto PrimaryGrade() const -> const ColorGradeNodeModel*;
   [[nodiscard]] auto Drt() -> DrtNodeModel*;
