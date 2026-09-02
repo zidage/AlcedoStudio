@@ -16,8 +16,11 @@
 #include "app/pipeline_document_history.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_store.hpp"
+
+#include <set>
 
 namespace alcedo {
 namespace {
@@ -618,6 +621,55 @@ auto ReplayPipelineDocumentFromRoot(const PipelineDocument&             root_doc
   } catch (const std::exception& ex) {
     SetError(error, ex.what());
     return std::nullopt;
+  }
+}
+
+auto FirstParentCommitsForHead(const CommitGraph& graph, head_commit_hash_t head)
+    -> std::vector<EditCommit> {
+  std::vector<EditCommit> commits;
+  for (const auto& hash : graph.FirstParentChain(head)) {
+    commits.push_back(graph.GetCommit(hash));
+  }
+  return commits;
+}
+
+auto CollectPersistentMaskAssetKeys(const PipelineDocument& document) -> std::vector<MaskAssetKey> {
+  std::set<MaskAssetKey> unique;
+  for (const auto& node : document.Graph().Nodes()) {
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node.get());
+    if (grade == nullptr) {
+      continue;
+    }
+    for (const auto& mask : grade->Masks()) {
+      const auto* brush = std::get_if<BrushMaskSource>(&mask.source);
+      if (brush == nullptr || !brush->asset_key.has_value() || brush->asset_key->Empty()) {
+        continue;
+      }
+      unique.insert(*brush->asset_key);
+    }
+  }
+  return {unique.begin(), unique.end()};
+}
+
+auto VerifyPersistentMaskAssets(const PipelineDocument& document, MaskStore* mask_store,
+                                std::string* error) -> bool {
+  const auto keys = CollectPersistentMaskAssetKeys(document);
+  if (keys.empty()) {
+    return true;
+  }
+  if (mask_store == nullptr) {
+    return SetError(error, "Mask store is required to verify referenced Mask assets");
+  }
+  try {
+    for (const auto& key : keys) {
+      const auto asset = mask_store->Load(key);
+      if (!asset) {
+        return SetError(error, "Mask asset is missing: " + std::string{key.Value()});
+      }
+    }
+    return true;
+  } catch (const std::exception& ex) {
+    return SetError(error, std::string{"Mask asset verification failed: "} + ex.what());
   }
 }
 

@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/editor_history_version_refs.hpp"
 
 #include <ctime>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -13,8 +14,10 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -30,6 +33,8 @@ struct NamedRefPriorState {
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending;
   bool recovered = false;
+  std::optional<alcedo::PipelineDocument> document;
+  nlohmann::json params;
 };
 
 auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
@@ -42,6 +47,11 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
   prior.root_snapshot = state.root_snapshot;
   prior.pending = state.pending_before;
   prior.recovered = state.recovered_head;
+  if (state.pipeline_guard->pipeline_ && state.pipeline_guard->document_) {
+    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+    prior.document   = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
+    prior.params     = state.pipeline_guard->pipeline_->ExportPipelineParams();
+  }
   return prior;
 }
 
@@ -54,18 +64,14 @@ void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& 
   state.root_snapshot = prior.root_snapshot;
   state.pending_before = prior.pending;
   state.recovered_head = prior.recovered;
-}
-
-auto ApplyNamedRefHeadToLivePipeline(HistoryWorkingState& state,
-                                     const alcedo::head_commit_hash_t& head,
-                                     std::string* error) -> bool {
-  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_ ||
-      !state.pipeline_guard->commit_graph_) {
-    return true;
+  if (!prior.document.has_value() || !state.pipeline_guard->pipeline_) {
+    return;
   }
   auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-  return alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
-                                                *state.pipeline_guard->commit_graph_, head, error);
+  alcedo::BindLivePipelineDocument(*state.pipeline_guard,
+                                   alcedo::ClonePipelineDocument(*prior.document));
+  state.pipeline_guard->pipeline_->ImportPipelineParams(prior.params);
+  state.pipeline_guard->pipeline_->SetExecutionStages();
 }
 
 auto RefreshNamedRefSnapshotFromLive(HistoryWorkingState& state, std::string* error) -> bool {
@@ -118,26 +124,48 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  // Graph active Version is already the new root Version (logical head = nullopt).
-  if (!ApplyNamedRefHeadToLivePipeline(*state, std::nullopt, error)) {
-    RestoreNamedRefPrior(*state, prior);
+  if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, std::nullopt, error)) {
+    try {
+      RestoreNamedRefPrior(*state, prior);
+    } catch (const std::exception& ex) {
+      if (error) {
+        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
+                 "; prior Version restoration failed: " + ex.what();
+      }
+    }
     return false;
   }
   if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
-    RestoreNamedRefPrior(*state, prior);
+    try {
+      RestoreNamedRefPrior(*state, prior);
+    } catch (const std::exception& ex) {
+      if (error) {
+        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
+                 "; prior Version restoration failed: " + ex.what();
+      }
+    }
     return false;
   }
   if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {
-      RestoreNamedRefPrior(*state, prior);
+      try {
+        RestoreNamedRefPrior(*state, prior);
+      } catch (const std::exception& ex) {
+        if (error) {
+          *error = std::string("fatal editor session: ") + persistence_error +
+                   "; prior Version restoration failed: " + ex.what();
+        }
+        return false;
+      }
       if (error) *error = persistence_error;
       return false;
     }
   }
   if (version_id) *version_id = new_id;
   PublishNamedRefSuccess(*state);
+  state_.RecordPublishedRenderReason(alcedo::EditorRenderReason::VersionDocumentChanged);
   return true;
 }
 
@@ -170,26 +198,48 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  // Graph active Version is already the new branch; apply that head to live pipeline.
-  if (!ApplyNamedRefHeadToLivePipeline(*state, commit_id, error)) {
-    RestoreNamedRefPrior(*state, prior);
+  if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, commit_id, error)) {
+    try {
+      RestoreNamedRefPrior(*state, prior);
+    } catch (const std::exception& ex) {
+      if (error) {
+        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
+                 "; prior Version restoration failed: " + ex.what();
+      }
+    }
     return false;
   }
   if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
-    RestoreNamedRefPrior(*state, prior);
+    try {
+      RestoreNamedRefPrior(*state, prior);
+    } catch (const std::exception& ex) {
+      if (error) {
+        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
+                 "; prior Version restoration failed: " + ex.what();
+      }
+    }
     return false;
   }
   if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
                                                      &persistence_error)) {
-      RestoreNamedRefPrior(*state, prior);
+      try {
+        RestoreNamedRefPrior(*state, prior);
+      } catch (const std::exception& ex) {
+        if (error) {
+          *error = std::string("fatal editor session: ") + persistence_error +
+                   "; prior Version restoration failed: " + ex.what();
+        }
+        return false;
+      }
       if (error) *error = persistence_error;
       return false;
     }
   }
   if (version_id) *version_id = new_id;
   PublishNamedRefSuccess(*state);
+  state_.RecordPublishedRenderReason(alcedo::EditorRenderReason::VersionDocumentChanged);
   return true;
 }
 

@@ -162,6 +162,37 @@ TEST_F(EditorMiniGitMaterializerTest, CrashAfterDuckDBBeforeTruncateDoesNotRepla
   EXPECT_TRUE(records.empty()) << error;
 }
 
+TEST_F(EditorMiniGitMaterializerTest, CoveredWalAfterDatabaseCommitDoesNotDuplicateHistory) {
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 0.75f));
+  auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.75f);
+
+  std::string error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture, &error).accepted) << error;
+
+  {
+    MiniGitJournal leftover(
+        project_.journal_path(test::EditorMiniGitProjectFixture::kElementA));
+    for (const auto& record : capture.journal_records) {
+      ASSERT_TRUE(leftover.Append(record, &error)) << error;
+    }
+  }
+
+  const auto recovered = project_.materializer().RecoverAndMaterialize(
+      test::EditorMiniGitProjectFixture::kElementA,
+      project_.journal_path(test::EditorMiniGitProjectFixture::kElementA), &error);
+  ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
+  EXPECT_FALSE(recovered.head_moved);
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+
+  project_.CloseAndReopenProject();
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  project_.CloseAndReopenProject();
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  const auto records =
+      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
+  EXPECT_TRUE(records.empty()) << error;
+}
+
 TEST_F(EditorMiniGitMaterializerTest, DistinctRootsKeepImageAAndImageBIsolated) {
   ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 1.0f));
   ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementB, 0.0f, 2.0f));

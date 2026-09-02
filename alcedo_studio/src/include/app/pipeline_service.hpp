@@ -30,6 +30,8 @@
 
 namespace alcedo {
 
+class MaskStore;
+
 /// Live editor handle: one pipeline executor (parameter table + run state) plus a
 /// pointer to the image's CommitGraph.
 ///
@@ -67,6 +69,9 @@ struct PipelineGuard {
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
+  /// Immutable replay start for Version checkout and recovery. Loaded with the
+  /// stored root document; never mutated after the image enters history.
+  std::shared_ptr<const PipelineDocument> root_document_;
   bool                                 serialized_state_needs_writeback_ = false;
 
   /// Sole live CommitGraph for this element. Active Version head is the only logical
@@ -192,25 +197,31 @@ class PipelineMgmtService final {
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
-  /// Switch the live editor parameter table to another Version on the same image.
+  /// Switch the live editor document to another Version on the same image.
   ///
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: sets the active Version on the CommitGraph (history-owned head moves here), then
-  /// rebuilds the executor params from the immutable root plus the first-parent chain under the
-  /// render lock (or imports a matching checkpoint if present). On any failure the prior Version
-  /// remains active and the prior pipeline is restored — never publishes a partially reconstructed
-  /// pipeline. Does not invent a second head on the guard.
+  /// Behavior: resolves the target first-parent chain and Mask assets, then rebuilds the same live
+  /// document from the immutable root plus typed batches under the render lock. On any failure the
+  /// prior Version remains active and the prior document is restored. Does not invent a second head
+  /// on the guard.
   ///
-  /// @return true when the Version tip and pipeline params both match the checked-out head.
+  /// @param mask_store Persistent Mask store used to verify Brush keys before the new head is
+  ///        published. Null is accepted when the target document references no Mask assets.
+  /// @return true when the Version tip and live document both match the checked-out head.
   auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                     const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+                                     const version_ref_id_t& version_id, std::string* error = nullptr,
+                                     MaskStore* mask_store = nullptr) -> bool;
 
-  /// Rebuild the executor params from the immutable root and the first-parent chain of the
+  /// Rebuild the live document from the immutable root and the first-parent chain of the
   /// currently active Version tip. Used when the checkpoint label does not match history.
+  ///
+  /// @param mask_store Persistent Mask store used to verify Brush keys. Null is accepted when
+  ///        the rebuilt document references no Mask assets.
   auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                                 std::string*                          error = nullptr) -> bool;
+                                                 std::string*                          error = nullptr,
+                                                 MaskStore* mask_store = nullptr) -> bool;
 
   /// Clean project-exit garbage collection: mark from every Version head through both parents and
   /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
@@ -245,5 +256,16 @@ struct PipelineCheckpointIdentity {
                                                 head_commit_hash_t              logical_head,
                                                 const transaction_chain_hash_t& logical_chain)
     -> bool;
+
+/**
+ * @brief Replace the guard's writable document and bind it to the existing executor.
+ *
+ * Does not clone @p document again. Does not take the render lock.
+ *
+ * @pre Caller holds the executor render lock when @p guard is live.
+ * @param guard Loaded editor guard that already owns an executor.
+ * @param document Complete DAG that becomes the only writable document.
+ */
+void BindLivePipelineDocument(PipelineGuard& guard, PipelineDocument document);
 
 }  // namespace alcedo

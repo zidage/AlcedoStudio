@@ -38,6 +38,9 @@ enum class EditorRenderReason : std::uint8_t {
   ScopeRefresh,
   GraphTopologyChanged,
   SettledMaskEdit,
+  // Same-image Version checkout / root / branch: one Quality rebuild of the
+  // live DAG. Distinct from InitialFrame so the session stays Interactive.
+  VersionDocumentChanged,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -151,6 +154,7 @@ struct EditorRenderResult {
     case EditorRenderReason::ScopeRefresh:
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -165,6 +169,7 @@ struct EditorRenderResult {
     case EditorRenderReason::UndoRedo:
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -211,6 +216,7 @@ struct EditorRenderResult {
     case EditorRenderReason::CropRotate:
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
       return true;
   }
   return true;

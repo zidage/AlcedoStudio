@@ -22,8 +22,10 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
+#include "grade_owned_mask_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
 
 namespace alcedo {
@@ -221,6 +223,57 @@ TEST(PipelineHistoryApplierTest, ReplayAppliesLeftoverLutOrdinaryPayloadOntoDefa
   ASSERT_NE(lmt, nullptr);
   ASSERT_TRUE(lmt->ToJson().contains("cube_path"));
   EXPECT_EQ(lmt->ToJson().at("cube_path").get<std::string>(), "D:/luts/teal_orange.cube");
+}
+
+TEST(PipelineHistoryApplierTest, CollectPersistentMaskAssetKeysOmitsRadialAndEmptyBrushKeys) {
+  auto document = CreateDefaultPipelineDocument();
+  EXPECT_TRUE(CollectPersistentMaskAssetKeys(document).empty());
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
+  EXPECT_TRUE(CollectPersistentMaskAssetKeys(document).empty());
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.empty"}, MaskAssetKey{});
+  EXPECT_TRUE(CollectPersistentMaskAssetKeys(document).empty());
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, MaskAssetKey{"asset_01"});
+  const auto keys = CollectPersistentMaskAssetKeys(document);
+  ASSERT_EQ(keys.size(), 1u);
+  EXPECT_EQ(keys.front(), MaskAssetKey{"asset_01"});
+}
+
+TEST(PipelineHistoryApplierTest, VerifyPersistentMaskAssetsAcceptsEmptyKeysWithNullStore) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  EXPECT_TRUE(VerifyPersistentMaskAssets(document, nullptr, &error)) << error;
+}
+
+TEST(PipelineHistoryApplierTest, VerifyPersistentMaskAssetsRejectsMissingFileAndNullStoreWithKeys) {
+  auto document = CreateDefaultPipelineDocument();
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, MaskAssetKey{"asset_01"});
+  std::string error;
+  EXPECT_FALSE(VerifyPersistentMaskAssets(document, nullptr, &error));
+  EXPECT_NE(error.find("Mask store is required"), std::string::npos);
+
+  const auto root = std::filesystem::path{"build/tmp/node_history"} / "mask_verify_missing";
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  MaskStore store(root);
+  error.clear();
+  EXPECT_FALSE(VerifyPersistentMaskAssets(document, &store, &error));
+  EXPECT_FALSE(error.empty());
+}
+
+TEST(PipelineHistoryApplierTest, VerifyPersistentMaskAssetsLoadsPublishedBrushKey) {
+  const auto root = std::filesystem::path{"build/tmp/node_history"} / "mask_verify_ok";
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  MaskStore store(root);
+  MaskAssetDescriptor descriptor;
+  descriptor.extent           = {4, 4};
+  descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
+  const std::vector<std::uint8_t> pixels(16, 40);
+  const auto                      key = store.Put(descriptor, pixels);
+  auto                            document = CreateDefaultPipelineDocument();
+  grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, key, descriptor);
+  std::string error;
+  EXPECT_TRUE(VerifyPersistentMaskAssets(document, &store, &error)) << error;
 }
 
 }  // namespace alcedo

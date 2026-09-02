@@ -918,17 +918,40 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
 
-  auto& graph              = *state->pipeline_guard->commit_graph_;
-  const auto graph_before  = graph;
-  const auto prior_select = state->history->WorkingSelection();
-  const bool prior_dirty  = state->pipeline_guard->dirty_;
+  auto& graph = *state->pipeline_guard->commit_graph_;
+  if (graph.GetActiveVersionId() == version_id) {
+    return true;
+  }
+
+  alcedo::head_commit_hash_t target_head;
+  try {
+    target_head = graph.GetVersionRef(version_id).head_commit_hash;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+
+  const auto graph_before     = graph;
+  const auto prior_select     = state->history->WorkingSelection();
+  const bool prior_dirty      = state->pipeline_guard->dirty_;
   const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
-  const auto prior_snapshot = state->committed_snapshot;
-  const auto prior_pending  = state->pending_before;
-  const bool prior_recovered = state->recovered_head;
+  const auto prior_snapshot   = state->committed_snapshot;
+  const auto prior_pending    = state->pending_before;
+  const bool prior_recovered  = state->recovered_head;
+  std::optional<alcedo::PipelineDocument> prior_document;
+  nlohmann::json                          prior_params;
+  if (state->pipeline_guard->pipeline_ && state->pipeline_guard->document_) {
+    try {
+      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+      prior_document   = alcedo::ClonePipelineDocument(*state->pipeline_guard->document_);
+      prior_params     = state->pipeline_guard->pipeline_->ExportPipelineParams();
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return false;
+    }
+  }
 
   auto restore_prior = [&] {
-    // Graph restore rewinds logical head; no separate head field on the guard.
     graph = graph_before;
     state->history->PublishWorkingSelection(prior_select);
     state->pipeline_guard->dirty_ = prior_dirty;
@@ -936,75 +959,69 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     state->committed_snapshot = prior_snapshot;
     state->pending_before = prior_pending;
     state->recovered_head = prior_recovered;
+    if (!prior_document.has_value() || !state->pipeline_guard->pipeline_) {
+      return;
+    }
+    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+    alcedo::BindLivePipelineDocument(*state->pipeline_guard,
+                                     alcedo::ClonePipelineDocument(*prior_document));
+    state->pipeline_guard->pipeline_->ImportPipelineParams(prior_params);
+    state->pipeline_guard->pipeline_->SetExecutionStages();
+  };
+
+  auto restore_or_report = [&](std::string original) {
+    try {
+      restore_prior();
+      if (error) *error = std::move(original);
+    } catch (const std::exception& ex) {
+      if (error) {
+        *error = std::string("fatal editor session: ") + original +
+                 "; prior Version restoration failed: " + ex.what();
+      }
+    }
   };
 
   try {
-    graph.SetActiveVersionId(version_id);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-  if (!state->history->SelectVersion(version_id, error)) {
-    restore_prior();
-    return false;
-  }
-
-  // Logical head is graph.GetActiveVersionRef().head after SelectVersion above.
-
-  nlohmann::json prior_pipeline;
-  if (state->pipeline_guard->pipeline_) {
-    try {
-      // Sole ownership: queue on render_lock until the current frame (incl.
-      // present) releases the live pipeline, then rebuild under that lock.
-      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-      prior_pipeline   = state->pipeline_guard->pipeline_->ExportPipelineParams();
-      if (!alcedo::ApplyVersionHeadToLivePipeline(
-              *state->pipeline_guard->pipeline_, graph,
-              graph.GetActiveVersionRef().head_commit_hash, error)) {
-        state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
-        state->pipeline_guard->pipeline_->SetExecutionStages();
-        restore_prior();
+    if (auto pipeline_service = state_.PipelineMapper()) {
+      std::string checkout_error;
+      if (!pipeline_service->CheckoutVersion(state->pipeline_guard, version_id, &checkout_error,
+                                             state->mask_store)) {
+        if (error) *error = checkout_error;
         return false;
       }
-    } catch (const std::exception& ex) {
-      if (error) *error = ex.what();
-      restore_prior();
+    } else if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, target_head, error)) {
+      return false;
+    } else {
+      graph.SetActiveVersionId(version_id);
+    }
+
+    if (!state->history->SelectVersion(version_id, error)) {
+      const auto select_error = error ? *error : std::string{"Version selection failed"};
+      restore_or_report(select_error);
       return false;
     }
-  }
 
-  if (!RefreshCommittedSnapshotFromLive(*state, error, false)) {
-    try {
-      if (state->pipeline_guard->pipeline_) {
-        auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-        state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
-        state->pipeline_guard->pipeline_->SetExecutionStages();
-      }
-    } catch (...) {
+    if (!RefreshCommittedSnapshotFromLive(*state, error, false)) {
+      const auto snapshot_error = error ? *error : std::string{"Committed snapshot refresh failed"};
+      restore_or_report(snapshot_error);
+      return false;
     }
-    restore_prior();
+
+    if (auto pipeline_service = state_.PipelineMapper()) {
+      std::string persistence_error;
+      if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
+                                                       graph_before.GetImageEditState(),
+                                                       &persistence_error)) {
+        restore_or_report(persistence_error);
+        return false;
+      }
+    }
+  } catch (const std::exception& ex) {
+    restore_or_report(ex.what());
     return false;
   }
 
-  if (auto pipeline_service = state_.PipelineMapper()) {
-    std::string persistence_error;
-    if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
-                                                     graph_before.GetImageEditState(),
-                                                     &persistence_error)) {
-      try {
-        if (state->pipeline_guard->pipeline_) {
-          auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-          state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
-          state->pipeline_guard->pipeline_->SetExecutionStages();
-        }
-      } catch (...) {
-      }
-      restore_prior();
-      if (error) *error = persistence_error;
-      return false;
-    }
-  }
-
+  state_.RecordPublishedRenderReason(alcedo::EditorRenderReason::VersionDocumentChanged);
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();

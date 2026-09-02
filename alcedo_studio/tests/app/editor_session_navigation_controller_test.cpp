@@ -132,8 +132,9 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.history().checkout_count, 1);
   EXPECT_EQ(fixture_.history().last_checkout_version, target_version);
   EXPECT_EQ(fixture_.history().release_count, 0);
-  // Same-image Version checkout must route a fresh render request.
+  // Same-image Version checkout must route a fresh Quality document render.
   EXPECT_GT(fixture_.render_submit().submit_count, prior_submit_count);
+  EXPECT_EQ(fixture_.render_submit().last_reason, EditorRenderReason::VersionDocumentChanged);
 }
 
 /// Phase 7A P0: failed checkout rebuild keeps the image and does not expose a
@@ -454,6 +455,30 @@ TEST_F(EditorSessionNavigationControllerTest,
 
   EXPECT_TRUE(fixture_.nav().has_pending_action());
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Saving);
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       OldSessionCheckpointCompletionCannotPublishIntoNewVersion) {
+  fixture_.OpenA();
+  const auto target_version = Hash128{0xaaaabbbbULL, 0xccccddddULL};
+  const auto result         = fixture_.RequestCheckoutVersion(target_version);
+  ASSERT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_EQ(fixture_.history().checkout_count, 0);
+
+  SaveCheckpointResult stale;
+  stale.request_id            = 1;
+  stale.image_load_request_id = ImageLoadRequestId{99};
+  stale.checkpoint_completed  = true;
+  fixture_.nav().OnCheckpointFinished(stale);
+
+  EXPECT_EQ(fixture_.history().checkout_count, 0);
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Saving);
+
+  fixture_.CompleteCheckpoint();
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.history().checkout_count, 1);
+  EXPECT_EQ(fixture_.history().last_checkout_version, target_version);
 }
 
 /// Phase 4B: duplicate/stale completions must not resume B or finish the task twice.

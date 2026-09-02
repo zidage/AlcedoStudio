@@ -102,6 +102,15 @@ class EditorHistoryState {
   /// Last successful mutation's render reason. Nullopt means no pipeline render.
   [[nodiscard]] auto LastPublishedRenderReason() const -> std::optional<alcedo::EditorRenderReason>;
 
+  /// Rebuild @p state's live document from the cached immutable root and @p head.
+  ///
+  /// Replays onto a clone, verifies Mask assets, then binds the same live guard
+  /// under the render lock. Does not move the Version ref. On failure the live
+  /// document is left unchanged.
+  auto ReplayWorkingDocumentFromImmutableRoot(HistoryWorkingState& state,
+                                              const alcedo::head_commit_hash_t& head,
+                                              std::string* error) -> bool;
+
  private:
   Services services_{};
   mutable std::mutex mutex_;

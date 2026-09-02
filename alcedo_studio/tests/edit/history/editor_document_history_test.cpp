@@ -57,6 +57,8 @@ class EditorDocumentHistoryTest : public ::testing::Test {
     guard_->document_     = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     guard_->commit_graph_ = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(42));
     guard_->root_id_      = guard_->commit_graph_->GetRootId();
+    guard_->root_document_ =
+        std::make_shared<PipelineDocument>(ClonePipelineDocument(*guard_->document_));
     pipeline_             = std::make_shared<EditorSessionPipelinePort>();
     pipeline_->SetServices(
         EditorSessionPipelineMappers{{}, [this](sl_element_id_t) { return guard_; }});

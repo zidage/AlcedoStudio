@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1–4.3 complete; NM4.4–4.6 planned
+Status: NM4.1–4.4 complete; NM4.5–4.6 planned
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -892,7 +892,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | NM4.1 | complete | Typed batch schema, canonical encoding, commit identity, and presentation data. |
 | NM4.2 | complete | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
 | NM4.3 | complete | Immutable root document, unified format cutover, and full-document checkpoint. |
-| NM4.4 | planned | Version branch, checkout, recovery, materialization, and reopen. |
+| NM4.4 | complete | Version branch, checkout, recovery, materialization, and reopen. |
 | NM4.5 | planned | Paste-only transfer, merge-path removal, and Mask asset reachability. |
 | NM4.6 | planned | Failure, concurrency, service, storage, and project qualification. |
 
@@ -1507,13 +1507,94 @@ target commit / batch / asset / graph validation fails
 
 **Exit conditions**
 
-- [ ] Every Version reconstructs one full DAG from root and typed commits.
-- [ ] Root Version always equals the immutable root document.
-- [ ] Checkout uses one live document and no candidate document.
-- [ ] Checkout failure restores the prior Version and document.
-- [ ] Recovery produces one agreeing head, chain, and document.
-- [ ] Reopen preserves nodes, edges, parameters, Masks, refs, and asset keys.
-- [ ] Missing data fails with no stage or checkpoint substitution.
+- [x] Every Version reconstructs one full DAG from root and typed commits.
+- [x] Root Version always equals the immutable root document.
+- [x] Checkout uses one live document and no candidate document.
+- [x] Checkout failure restores the prior Version and document.
+- [x] Recovery produces one agreeing head, chain, and document.
+- [x] Reopen preserves nodes, edges, parameters, Masks, refs, and asset keys.
+- [x] Missing data fails with no stage or checkpoint substitution.
+
+##### Phase NM4.4 completion record (2026-09-02)
+
+**Status:** complete — Version checkout, named-ref creation, WAL recovery, and project reopen rebuild one live DAG from the immutable root plus first-parent typed batches, verify Mask assets before head publication, and restore the prior Version on failure.
+
+**Primary success call chain:**
+
+```text
+Version selected / CreateRoot / Branch
+  -> finish provisional / save checkpoint barrier
+  -> resolve target first-parent (FirstParentCommitsForHead)
+  -> ReplayPipelineDocumentFromRoot (clone from immutable root)
+  -> VerifyPersistentMaskAssets
+  -> render lock: BindLivePipelineDocument + leftover CPU remirror
+  -> SetActiveVersionId + SelectVersion
+  -> PersistEditorHistoryState / snapshot
+  -> VersionDocumentChanged Quality render
+```
+
+**Recovery call chain:**
+
+```text
+LoadEditorPipeline (matching checkpoint or root replay)
+  -> AlignJournalWithStoredHead
+  -> MiniGitWorkingHistory::Replay missing suffix onto graph
+  -> RebuildActiveEditorPipeline / ReplayWorkingDocumentFromImmutableRoot
+  -> PersistEditorHistoryState + SavePipeline
+  -> truncate only materialized WAL records
+```
+
+**Primary failure call chain:**
+
+```text
+missing commit / invalid batch / missing Mask asset / verify failure
+  -> fail before live bind when possible
+  -> restore prior Version + document under render lock
+  -> keep prior projections and displayed frame
+  -> no VersionDocumentChanged render
+  -> report the target error
+  -> restore throw -> "fatal editor session:" + lifecycle_.Fail
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RootVersionAlwaysRebuildsExactImmutableDocument` | `EditorSessionHistoryPortTest` | PASS |
+| `BranchVersionSharesCommitsAndKeepsIndependentHead` | `EditorSessionHistoryPortTest` | PASS |
+| `VersionCheckoutReplacesTheDagOnTheSameLiveGuard` | `EditorSessionHistoryPortTest` | PASS |
+| `FailedCheckoutRestoresPriorVersionAndDocument` (dangling first-parent hash and invalid batch) | `EditorSessionHistoryPortTest` | PASS |
+| `MissingReachableMaskAssetFailsBeforeHeadPublication` | `EditorSessionHistoryPortTest` | PASS |
+| `RecoveryAppliesCommittedTypedSuffixExactlyOnce` | `EditorSessionHistoryPortTest` | PASS |
+| `ProjectReopenPreservesDagVersionsHistoryAndMaskAssets` | `EditorSessionHistoryPortTest` | PASS |
+| `MissingReachableTypedCommitFailsClosed` | `EditorSessionHistoryPortTest` | PASS |
+| `CoveredWalAfterDatabaseCommitDoesNotDuplicateHistory` | `EditorMiniGitMaterializerTest` | PASS |
+| `OldSessionCheckpointCompletionCannotPublishIntoNewVersion` | `EditorSessionNavigationControllerTest` | PASS |
+| `CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage` (`VersionDocumentChanged`) | `EditorSessionNavigationControllerTest` | PASS |
+| `VerifyPersistentMaskAssets*` | `PipelineHistoryApplierTest` | PASS |
+| Matching / stale checkpoint reopen (NM4.3 path still used) | `PipelineMapperTest` | PASS |
+
+Name mapping: `CreateVersionRefAtHead` refuses a missing hash (graph invariant). Checkout-time missing commit is injected by pointing an existing Version ref at a missing first-parent after a valid create. Missing published Mask file is `MissingReachableMaskAssetFailsBeforeHeadPublication`, not the invalid-batch case inside `FailedCheckoutRestoresPriorVersionAndDocument`.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest PipelineHistoryApplierTest EditorMiniGitMaterializerTest EditorSessionNavigationControllerTest EditorRenderCoordinatorTest PipelineMapperTest
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\PipelineHistoryApplierTest_runtime\PipelineHistoryApplierTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\edit\EditorMiniGitMaterializerTest_runtime\EditorMiniGitMaterializerTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\EditorSessionNavigationControllerTest_runtime\EditorSessionNavigationControllerTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\EditorRenderCoordinatorTest_runtime\EditorRenderCoordinatorTest.exe --gtest_filter=*EditorRenderIntentPolicyTest* --gtest_brief=1
+build\debug\alcedo_studio\tests\app\PipelineMapperTest_runtime\PipelineMapperTest.exe --gtest_brief=1
+```
+
+Suite totals: `EditorSessionHistoryPortTest` 69/69; `PipelineHistoryApplierTest` 10/10; `EditorMiniGitMaterializerTest` 14/14; `EditorSessionNavigationControllerTest` 25/25; `EditorRenderIntentPolicyTest` 1/1; `PipelineMapperTest` 31/31 (2 disabled, pre-existing).
+
+**Checklist / exit condition:** all NM4.4 boxes checked from executed tests above.
+
+**LOC note (grill-code-review):** `pipeline_service.cpp` 1174 (above 1000, pre-existing PipelineMgmtService size; checkout/rebuild stay here because they own the live guard bind). `pipeline_history_applier.cpp` 633 (replay, first-parent walk, Mask verify). `editor_history_mutation.cpp` 978; `editor_history_state_detail.cpp` 337; `editor_history_version_refs.cpp` 273; `editor_session_navigation_controller.cpp` 904. New tests live in `editor_version_checkout_test.cpp` 490 on `EditorSessionHistoryPortTest` rather than growing `editor_session_history_port_test.cpp` 1695 further.
+
+**Remaining gaps:** NM4.5 still owns typed Paste packages, merge-path removal, and Mask reachability. After document replay, leftover ordinary/Paste commits still remirror CPU stage snapshots via `ApplyVersionHeadToLivePipeline`. Session `MaskStore*` is attached through `ReplaceMaskAsset` until a dedicated editor Mask store exists. The restore-throw `fatal editor session` prefix is implemented; no test forces `restore_prior` itself to throw. Root Version evidence covers Color Grade parameter, extra Grade node, and Radial Mask, not Develop / DRT / geometry owners. No packaged-product or real-RAW UI evidence (NM8).
 
 ### 6.5 NM4.5 — Paste-only and asset reachability
 

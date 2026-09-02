@@ -389,6 +389,7 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
  public:
   int cancel_count = 0;
   int submit_count = 0;
+  EditorRenderReason last_reason = EditorRenderReason::InitialFrame;
   bool defer_idle_completion = false;
   SessionIdleCallback pending_idle_completion;
   std::uint64_t pending_idle_epoch = 0;
@@ -412,8 +413,9 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
       callback(pending_idle_epoch);
     }
   }
-  auto Submit(const EditorRenderIntent&) -> EditorRenderResult override {
+  auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override {
     ++submit_count;
+    last_reason = intent.reason;
     EditorRenderResult result;
     result.kind       = EditorRenderResultKind::RequestAccepted;
     result.request_id = static_cast<std::uint64_t>(submit_count);

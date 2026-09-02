@@ -998,6 +998,8 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "GraphTopologyChanged";
     case R::SettledMaskEdit:
       return "SettledMaskEdit";
+    case R::VersionDocumentChanged:
+      return "VersionDocumentChanged";
   }
   return "Unknown";
 }

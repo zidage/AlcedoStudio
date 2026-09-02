@@ -177,6 +177,7 @@ alcedo_register_test_target(UiFuzzAutomationTest ui)
 add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp

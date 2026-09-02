@@ -40,6 +40,8 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "GraphTopologyChanged";
     case EditorRenderReason::SettledMaskEdit:
       return "SettledMaskEdit";
+    case EditorRenderReason::VersionDocumentChanged:
+      return "VersionDocumentChanged";
   }
   return "?";
 }

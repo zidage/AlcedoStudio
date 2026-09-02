@@ -22,6 +22,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
+#include "edit/mask/mask_store.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/metadata_extractor.hpp"
@@ -226,10 +227,11 @@ auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
 }
 
 void BindLiveDocument(PipelineGuard& guard, PipelineDocument document) {
-  guard.document_ = std::make_shared<PipelineDocument>(std::move(document));
-  if (guard.pipeline_) {
-    guard.pipeline_->SetPipelineDocument(guard.document_, false);
-  }
+  BindLivePipelineDocument(guard, std::move(document));
+}
+
+void CacheRootDocument(PipelineGuard& guard, const PipelineDocument& document) {
+  guard.root_document_ = std::make_shared<PipelineDocument>(ClonePipelineDocument(document));
 }
 
 void BindDevelopData(PipelineDocument& document, const RawRuntimeColorContext& raw_color_context) {
@@ -247,11 +249,7 @@ void BindDevelopData(PipelineDocument& document, const RawRuntimeColorContext& r
 
 auto FirstParentCommits(const CommitGraph& graph, head_commit_hash_t head)
     -> std::vector<EditCommit> {
-  std::vector<EditCommit> commits;
-  for (const auto& hash : graph.FirstParentChain(head)) {
-    commits.push_back(graph.GetCommit(hash));
-  }
-  return commits;
+  return FirstParentCommitsForHead(graph, head);
 }
 
 void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
@@ -277,19 +275,23 @@ void ImportSerializedPipelineState(CPUPipelineExecutor& exec, const nlohmann::js
 }
 
 auto ReplayLiveDocumentFromRoot(PipelineGuard& guard, const CommitGraph& graph,
-                                const LoadedRootState& root_state, std::string* error) -> bool {
-  const auto commits = FirstParentCommits(graph, graph.GetActiveVersionRef().head_commit_hash);
-  auto replayed =
-      ReplayPipelineDocumentFromRoot(root_state.document, commits, error);
+                                const LoadedRootState& root_state, head_commit_hash_t head,
+                                MaskStore* mask_store, std::string* error) -> bool {
+  const auto commits = FirstParentCommits(graph, head);
+  PipelineHistoryApplyContext context;
+  context.mask_store = mask_store;
+  auto replayed = ReplayPipelineDocumentFromRoot(root_state.document, commits, error, context);
   if (!replayed.has_value()) {
+    return false;
+  }
+  if (!VerifyPersistentMaskAssets(*replayed, mask_store, error)) {
     return false;
   }
   BindLiveDocument(guard, std::move(*replayed));
   if (root_state.raw_color_context.has_value()) {
     guard.pipeline_->InjectRawMetadata(*root_state.raw_color_context);
   }
-  if (!ApplyVersionHeadToLivePipeline(*guard.pipeline_, graph,
-                                      graph.GetActiveVersionRef().head_commit_hash, error)) {
+  if (!ApplyVersionHeadToLivePipeline(*guard.pipeline_, graph, head, error)) {
     return false;
   }
   guard.pipeline_->SetExecutionStages();
@@ -297,6 +299,13 @@ auto ReplayLiveDocumentFromRoot(PipelineGuard& guard, const CommitGraph& graph,
 }
 
 }  // namespace
+
+void BindLivePipelineDocument(PipelineGuard& guard, PipelineDocument document) {
+  guard.document_ = std::make_shared<PipelineDocument>(std::move(document));
+  if (guard.pipeline_) {
+    guard.pipeline_->SetPipelineDocument(guard.document_, false);
+  }
+}
 
 void PipelineMgmtService::InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image) {
   if (image.HasRawColorContext()) {
@@ -643,6 +652,7 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
     auto graph = graph_service.CreateRootPipelinePersisted(
         pipeline->id_, *pipeline->document_, raw_json);
     SetPipelineHistoryState(*pipeline, graph);
+    CacheRootDocument(*pipeline, *pipeline->document_);
     return;
   }
 
@@ -664,6 +674,7 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
                              std::to_string(pipeline->id_));
   }
   SetPipelineHistoryState(*pipeline, *graph);
+  CacheRootDocument(*pipeline, root_state->document);
 }
 
 auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
@@ -708,6 +719,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
     // History tip is sole authority. A checkpoint is used only when its root, head,
     // and chain labels match the active Version.
     SetPipelineHistoryState(*pipeline, *graph);
+    CacheRootDocument(*pipeline, root_state->document);
     const auto& state                     = graph->GetImageEditState();
     const auto  expected_head             = graph->GetActiveVersionRef().head_commit_hash;
     const auto  expected_chain            = graph->ChainHashForHead(expected_head);
@@ -737,7 +749,9 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
       ++editor_pipeline_history_rebuild_count_;
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
       std::string                  replay_error;
-      if (!ReplayLiveDocumentFromRoot(*pipeline, *graph, *root_state, &replay_error)) {
+      if (!ReplayLiveDocumentFromRoot(*pipeline, *graph, *root_state,
+                                      graph->GetActiveVersionRef().head_commit_hash, nullptr,
+                                      &replay_error)) {
         throw std::runtime_error(replay_error);
       }
       pipeline->serialized_state_needs_writeback_ = true;
@@ -920,9 +934,9 @@ auto PipelineMgmtService::PersistEditorHistoryState(
 }
 
 auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                          const version_ref_id_t& version_id, std::string* error)
-    -> bool {
-  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
+                                          const version_ref_id_t& version_id, std::string* error,
+                                          MaskStore* mask_store) -> bool {
+  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_ || !pipeline->document_) {
     if (error != nullptr) {
       *error =
           "PipelineMgmtService: checkout requires a loaded editor pipeline with a commit graph";
@@ -933,12 +947,13 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   auto&      graph            = *pipeline->commit_graph_;
   const auto prior_version_id = graph.GetActiveVersionId();
   if (prior_version_id == version_id) {
-    // Already on the requested Version: logical head is the graph active head.
     return true;
   }
 
+  head_commit_hash_t target_head;
   try {
-    (void)graph.GetVersionRef(version_id);
+    target_head = graph.GetVersionRef(version_id).head_commit_hash;
+    (void)FirstParentCommits(graph, target_head);
   } catch (const std::exception& ex) {
     if (error != nullptr) {
       *error = ex.what();
@@ -967,6 +982,25 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
       return false;
     }
   }
+  CacheRootDocument(*pipeline, root_state->document);
+
+  PipelineHistoryApplyContext context;
+  context.mask_store = mask_store;
+  std::string replay_error;
+  auto        replayed = ReplayPipelineDocumentFromRoot(
+      root_state->document, FirstParentCommits(graph, target_head), &replay_error, context);
+  if (!replayed.has_value()) {
+    if (error != nullptr) {
+      *error = replay_error.empty() ? "PipelineMgmtService: checkout replay failed" : replay_error;
+    }
+    return false;
+  }
+  if (!VerifyPersistentMaskAssets(*replayed, mask_store, &replay_error)) {
+    if (error != nullptr) {
+      *error = replay_error;
+    }
+    return false;
+  }
 
   PipelineDocument prior_document;
   nlohmann::json   prior_params;
@@ -975,8 +1009,6 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     prior_document = ClonePipelineDocument(*pipeline->document_);
     prior_params   = pipeline->pipeline_->ExportPipelineParams();
   }
-
-  graph.SetActiveVersionId(version_id);
 
   auto restore_prior = [&]() {
     graph.SetActiveVersionId(prior_version_id);
@@ -987,38 +1019,64 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     pipeline->pipeline_->SetExecutionStages();
   };
 
+  graph.SetActiveVersionId(version_id);
   try {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    std::string                  replay_error;
-    if (!ReplayLiveDocumentFromRoot(*pipeline, graph, *root_state, &replay_error)) {
+    BindLiveDocument(*pipeline, std::move(*replayed));
+    if (root_state->raw_color_context.has_value()) {
+      pipeline->pipeline_->InjectRawMetadata(*root_state->raw_color_context);
+    }
+    if (!ApplyVersionHeadToLivePipeline(*pipeline->pipeline_, graph, target_head, &replay_error)) {
       throw std::runtime_error(replay_error);
     }
+    pipeline->pipeline_->SetExecutionStages();
     pipeline->serialized_state_needs_writeback_ = true;
     pipeline->dirty_                            = true;
     return true;
   } catch (const std::exception& ex) {
+    std::string restore_error;
     try {
       restore_prior();
+    } catch (const std::exception& restore_ex) {
+      restore_error = restore_ex.what();
     } catch (...) {
+      restore_error = "unknown restore error";
     }
     if (error != nullptr) {
-      *error = std::string("PipelineMgmtService: checkout rebuild failed: ") + ex.what();
+      if (restore_error.empty()) {
+        *error = std::string("PipelineMgmtService: checkout rebuild failed: ") + ex.what();
+      } else {
+        *error = std::string("fatal editor session: checkout rebuild failed: ") + ex.what() +
+                 "; prior Version restoration failed: " + restore_error;
+      }
     }
     return false;
   } catch (...) {
+    std::string restore_error;
     try {
       restore_prior();
+    } catch (const std::exception& restore_ex) {
+      restore_error = restore_ex.what();
     } catch (...) {
+      restore_error = "unknown restore error";
     }
     if (error != nullptr) {
-      *error = "PipelineMgmtService: checkout rebuild failed with an unknown error";
+      if (restore_error.empty()) {
+        *error = "PipelineMgmtService: checkout rebuild failed with an unknown error";
+      } else {
+        *error =
+            std::string("fatal editor session: checkout rebuild failed with an unknown error; "
+                        "prior Version restoration failed: ") +
+            restore_error;
+      }
     }
     return false;
   }
 }
 
 auto PipelineMgmtService::RebuildActiveEditorPipeline(
-    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error) -> bool {
+    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error, MaskStore* mask_store)
+    -> bool {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
     if (error != nullptr) {
       *error =
@@ -1050,6 +1108,7 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
       return false;
     }
   }
+  CacheRootDocument(*pipeline, root_state->document);
 
   PipelineDocument prior_document;
   nlohmann::json   prior_params;
@@ -1070,7 +1129,10 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
   try {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     std::string                  replay_error;
-    if (!ReplayLiveDocumentFromRoot(*pipeline, graph, *root_state, &replay_error)) {
+    ++editor_pipeline_history_rebuild_count_;
+    if (!ReplayLiveDocumentFromRoot(*pipeline, graph, *root_state,
+                                    graph.GetActiveVersionRef().head_commit_hash, mask_store,
+                                    &replay_error)) {
       throw std::runtime_error(replay_error);
     }
     pipeline->serialized_state_needs_writeback_ = true;

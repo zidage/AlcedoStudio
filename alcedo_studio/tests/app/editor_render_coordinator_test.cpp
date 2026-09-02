@@ -555,6 +555,9 @@ TEST(EditorRenderIntentPolicyTest, ViewDependentReasonsDoNotReplayAdjustmentSnap
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ImageSwitch));
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Retry));
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::CropRotate));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::GraphTopologyChanged));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledMaskEdit));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::VersionDocumentChanged));
 }
 
 TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {

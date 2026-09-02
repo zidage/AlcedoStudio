@@ -50,6 +50,8 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_                  = guard->commit_graph_->GetRootId();
+  guard->root_document_ =
+      std::make_shared<alcedo::PipelineDocument>(alcedo::ClonePipelineDocument(*guard->document_));
   return guard;
 }
 
@@ -1514,7 +1516,9 @@ TEST(EditorSessionHistoryPortProjectTest,
 
     alcedo::EditorRenderAdjustmentSnapshot recovered;
     ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &recovered, &error)) << error;
-    EXPECT_EQ(PatchValue(recovered, "exposure"), R"({"exposure":1.15})");
+    const auto recovered_exposure = PatchNumber(recovered, "exposure");
+    ASSERT_TRUE(recovered_exposure.has_value());
+    EXPECT_NEAR(*recovered_exposure, 1.15, 1e-5);
 
     {
       std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
@@ -1605,7 +1609,9 @@ TEST(EditorSessionHistoryPortProjectTest,
 
     alcedo::EditorRenderAdjustmentSnapshot recovered;
     ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &recovered, &error)) << error;
-    EXPECT_EQ(PatchValue(recovered, "exposure"), R"({"exposure":1.45})");
+    const auto recovered_exposure = PatchNumber(recovered, "exposure");
+    ASSERT_TRUE(recovered_exposure.has_value());
+    EXPECT_NEAR(*recovered_exposure, 1.45, 1e-5);
 
     // EnsureWorkingState attaches the WAL then syncs the live pipeline when the
     // checkpoint identity no longer matches the logical head.

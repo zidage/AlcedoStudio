@@ -10,12 +10,15 @@
 #include <string>
 #include <vector>
 
+#include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/mask_asset.hpp"
 
 namespace alcedo {
 
+class CommitGraph;
 class MaskStore;
 
 /**
@@ -83,5 +86,36 @@ auto ApplyLeftoverOrdinaryPayloadToDocument(PipelineDocument& document,
     const PipelineDocument& root_document, const std::vector<EditCommit>& first_parent_commits,
     std::string* error, const PipelineHistoryApplyContext& context = {})
     -> std::optional<PipelineDocument>;
+
+/**
+ * @brief First-parent commits from the image root to @p head, oldest first.
+ *
+ * @throws std::runtime_error when a reachable commit is missing from @p graph.
+ */
+[[nodiscard]] auto FirstParentCommitsForHead(const CommitGraph& graph, head_commit_hash_t head)
+    -> std::vector<EditCommit>;
+
+/**
+ * @brief Persistent Brush keys referenced by Color Grade Masks on @p document.
+ *
+ * Radial and Linear Gradient sources are omitted. Empty optional keys are omitted.
+ */
+[[nodiscard]] auto CollectPersistentMaskAssetKeys(const PipelineDocument& document)
+    -> std::vector<MaskAssetKey>;
+
+/**
+ * @brief Load every persistent Mask key referenced by @p document.
+ *
+ * Empty key sets succeed even when @p mask_store is null. A non-empty set with a
+ * null store is an error. A missing or corrupt file is an error. Does not delete
+ * files or consult GPU caches.
+ *
+ * @param document Replayed or live DAG whose Brush keys must resolve.
+ * @param mask_store Persistent Mask store, or null when the document has no keys.
+ * @param error Optional failure detail.
+ * @return false when a referenced asset cannot be loaded.
+ */
+auto VerifyPersistentMaskAssets(const PipelineDocument& document, MaskStore* mask_store,
+                                std::string* error) -> bool;
 
 }  // namespace alcedo
