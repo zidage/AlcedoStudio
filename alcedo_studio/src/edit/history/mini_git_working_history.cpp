@@ -13,6 +13,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/history/pipeline_history_format.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -34,7 +36,7 @@ auto DecodeHead(const nlohmann::json& value) -> head_commit_hash_t {
 }
 
 auto RecordToJSON(const MiniGitJournalRecord& record) -> nlohmann::json {
-  nlohmann::json j{{"format_version", 2},
+  nlohmann::json j{{"format_version", kMiniGitJournalRecordFormatVersion},
                    {"sequence", record.sequence},
                    {"kind", static_cast<int>(record.kind)},
                    {"expected_source_head", EncodeHead(record.expected_source_head)},
@@ -52,19 +54,17 @@ auto RecordFromJSON(const nlohmann::json& j) -> MiniGitJournalRecord {
       !j.contains("target_chain_hash") || !j.contains("edit_commit")) {
     throw std::runtime_error("mini-Git journal record has an incompatible shape");
   }
-  const int format_version = j.value("format_version", 0);
-  if (format_version != 1 && format_version != 2) {
+  const auto format_version = j.value("format_version", 0u);
+  if (format_version != kMiniGitJournalRecordFormatVersion) {
     throw std::runtime_error("mini-Git journal record has an incompatible format version");
   }
   MiniGitJournalRecord record;
-  if (format_version >= 2) {
-    if (!j.contains("sequence") || !j.at("sequence").is_number_unsigned()) {
-      throw std::runtime_error("mini-Git journal record is missing a sequence number");
-    }
-    record.sequence = j.at("sequence").get<std::uint64_t>();
-    if (record.sequence == 0) {
-      throw std::runtime_error("mini-Git journal record sequence must be non-zero");
-    }
+  if (!j.contains("sequence") || !j.at("sequence").is_number_unsigned()) {
+    throw std::runtime_error("mini-Git journal record is missing a sequence number");
+  }
+  record.sequence = j.at("sequence").get<std::uint64_t>();
+  if (record.sequence == 0) {
+    throw std::runtime_error("mini-Git journal record sequence must be non-zero");
   }
   const int kind = j.at("kind").get<int>();
   if (kind == static_cast<int>(MiniGitJournalRecordKind::kEditCommit)) {
@@ -227,7 +227,6 @@ auto MiniGitJournal::Load(std::string* error) -> bool {
     std::string                       line;
     std::size_t                       line_number    = 0;
     std::uint64_t                     next_sequence  = 1;
-    std::uint64_t                     fallback_index = 0;
     while (std::getline(input, line)) {
       ++line_number;
       if (line.empty()) {
@@ -245,10 +244,9 @@ auto MiniGitJournal::Load(std::string* error) -> bool {
                                  std::to_string(line_number));
       }
       auto record = RecordFromJSON(frame.at("record"));
-      // format_version 1 files predate durable sequence numbers; assign a
-      // stable load-time sequence so capture/truncate still have a range.
       if (record.sequence == 0) {
-        record.sequence = ++fallback_index;
+        throw std::runtime_error("mini-Git journal record sequence must be non-zero at line " +
+                                 std::to_string(line_number));
       }
       if (!loaded.empty() && record.sequence <= loaded.back().sequence) {
         throw std::runtime_error("mini-Git journal sequence is not strictly increasing at line " +

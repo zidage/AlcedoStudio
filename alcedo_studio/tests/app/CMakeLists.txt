@@ -123,8 +123,9 @@ gtest_discover_tests(SearchQueryClassifierTest TEST_PREFIX "SearchQueryClassifie
 alcedo_register_test_target(SearchQueryClassifierTest app)
 
 add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
-target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineMapperTest ProjectService PipelineMgmtService GTest::gtest_main)
+target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineMapperTest
+  ProjectService PipelineMgmtService PipelineHistoryApplier GTest::gtest_main)
 gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
@@ -185,6 +186,7 @@ target_link_libraries(EditorSessionTestSupport
     EditorMiniGitMaterializer
     ProjectService
     EditHistory
+    EditGraph
     Storage
     GTest::gtest
 )

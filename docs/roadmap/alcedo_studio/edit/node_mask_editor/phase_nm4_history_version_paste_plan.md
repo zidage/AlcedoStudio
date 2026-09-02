@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1–4.2 complete; NM4.3–4.6 planned
+Status: NM4.1–4.3 complete; NM4.4–4.6 planned
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -891,7 +891,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | --- | --- | --- |
 | NM4.1 | complete | Typed batch schema, canonical encoding, commit identity, and presentation data. |
 | NM4.2 | complete | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
-| NM4.3 | planned | Immutable root document, unified format cutover, and full-document checkpoint. |
+| NM4.3 | complete | Immutable root document, unified format cutover, and full-document checkpoint. |
 | NM4.4 | planned | Version branch, checkout, recovery, materialization, and reopen. |
 | NM4.5 | planned | Paste-only transfer, merge-path removal, and Mask asset reachability. |
 | NM4.6 | planned | Failure, concurrency, service, storage, and project qualification. |
@@ -1321,13 +1321,100 @@ checkpoint label or document validation failure
 
 **Exit conditions**
 
-- [ ] One published format table identifies every new version constant.
-- [ ] Root and checkpoint store full documents, not CPU parameter tables.
-- [ ] One capture provides checkpoint head and chain labels.
-- [ ] New projects create only the new history shape.
-- [ ] Old projects fail before history or pipeline load.
-- [ ] No old payload or stage conversion path remains active.
-- [ ] Save failure preserves the prior durable state and WAL.
+- [x] One published format table identifies every new version constant.
+- [x] Root and checkpoint store full documents, not CPU parameter tables.
+- [x] One capture provides checkpoint head and chain labels.
+- [x] New projects create only the new history shape.
+- [x] Old projects fail before history or pipeline load.
+- [x] No old payload or stage conversion path remains active.
+- [x] Save failure preserves the prior durable state and WAL.
+
+##### Phase NM4.3 completion record (2026-09-02)
+
+**Status:** complete — project `0.4.0` cutover, immutable root document, labeled full-document checkpoint, leftover ordinary Paste replay onto that document
+
+**Primary success call chain:**
+
+```text
+new project / imported image
+  -> PipelineMgmtService::InitializeImageRoot
+  -> CommitGraphStore::CreateRootPipelinePersisted
+  -> ComputeRootId + EncodePipelineRootState
+  -> typed edits or leftover Paste change the live document and Version head
+  -> CaptureSaveCheckpoint / MakeEditorSerializedPipelineState
+  -> EncodePipelineDocumentCheckpoint (root, head, chain, document)
+  -> one DuckDB Materialize of graph, refs, image state, and checkpoint
+  -> WAL file clear after commit; live journal drops only the captured prefix
+```
+
+**Matching checkpoint load chain:**
+
+```text
+supported 0.4.0 project metadata
+  -> load graph + DecodePipelineRootState
+  -> checkpoint root/head/chain labels match the active Version
+  -> BindLiveDocument from the checkpoint document
+  -> skip first-parent replay
+```
+
+**Primary failure call chain:**
+
+```text
+0.3.0 metadata / old document / root / checkpoint / WAL identity
+  -> reject at the owning reader
+  -> no conversion and no partial history load
+
+checkpoint label mismatch or invalid document checkpoint
+  -> history remains authoritative
+  -> ReplayPipelineDocumentFromRoot (typed batches and leftover ordinary/merge)
+  -> serialized_state_needs_writeback_
+
+DuckDB write failure before commit
+  -> prior durable graph and WAL records remain
+WAL truncate failure after DuckDB commit
+  -> database_committed, materialized false
+  -> RecoverAndMaterialize does not duplicate the commit
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PublishedConstantsIdentifyTheDocumentHistoryCutover` / project metadata golden | `PipelineDocumentCheckpointTest` | PASS |
+| `FullDocumentGoldenWithGradesAndMasksRemainsStable` | `PipelineDocumentCheckpointTest` | PASS |
+| `RootGoldenBindsOwnerDocumentAndDevelopIdentity` | `PipelineDocumentCheckpointTest` | PASS |
+| `CheckpointGoldenCarriesRootHeadChainAndDocument` | `PipelineDocumentCheckpointTest` | PASS |
+| `ImageRootStoresCompleteDefaultDocumentAndDevelopData` | `PipelineDocumentCheckpointTest`, `PipelineMapperTest` | PASS |
+| `DifferentImageDevelopDataProducesDifferentRootIdentity` | `PipelineDocumentCheckpointTest` | PASS |
+| `OldDocumentCommitRootCheckpointAndWalFormatsFail` | `PipelineDocumentCheckpointTest` | PASS |
+| `MatchingDocumentCheckpointSkipsFirstParentReplay` | `PipelineMapperTest` | PASS |
+| `StaleDocumentCheckpointReplaysHistoryAndNeedsWriteback` | `PipelineMapperTest` | PASS |
+| `CheckpointForAnotherImageNeverLoads` | `PipelineMapperTest` | PASS |
+| `OldProjectMetadataFailsBeforeHistoryLoad` | `CommitGraphTest` | PASS |
+| DuckDB pre-commit failure keeps WAL | `EditorMiniGitMaterializerTest` | PASS |
+| `DuckDbCommittedButTruncateFailedRetriesWithoutDuplicateCommit` | `EditorMiniGitMaterializerTest` | PASS |
+| `EditAppendedAfterCaptureIsNotDeletedWithCapturedRecords` | `EditorSaveCheckpointCaptureTest` | PASS |
+| `ReplayAppliesLeftoverOrdinaryExposureOntoDefaultDocument` | `PipelineHistoryApplierTest` | PASS |
+| `ReplayAppliesLeftoverLutOrdinaryPayloadOntoDefaultDocument` | `PipelineHistoryApplierTest` | PASS |
+| `LibraryPasteOfLutRestoresLutFieldInAdjustmentSnapshotOnEditorReopen` | `EditorSessionHistoryPortTest` | PASS |
+| `PublishedPasteCaptureReopensWithExactVersionHeadChainAndAdjustment` | `EditorSessionHistoryPortTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineHistoryApplierTest EditorSessionHistoryPortTest EditorSaveCheckpointCaptureTest EditorMiniGitMaterializerTest EditorMiniGitCommitWriterTest EditorMiniGitJournalRecoveryTest EditorSessionCheckpointStoreTest PipelineMapperTest PipelineDocumentCheckpointTest CommitGraphTest ProjectServiceTest
+<each target>_runtime\<target>.exe --gtest_brief=1
+```
+
+Run as whole binaries (not parallel `ctest` discovery). `PipelineMapperTest` / `ProjectServiceTest` share fixed temp DB paths and fail under parallel per-case processes on Windows.
+
+Suite totals: `PipelineHistoryApplierTest` 6/6; `PipelineDocumentCheckpointTest` 15/15; `PipelineMapperTest` 31/31 (2 disabled); `CommitGraphTest` 35/35; `ProjectServiceTest` 6/6; `EditorSaveCheckpointCaptureTest` 13/13; `EditorMiniGitMaterializerTest` 13/13; `EditorMiniGitJournalRecoveryTest` 10/10; `EditorMiniGitCommitWriterTest` 6/6; `EditorSessionCheckpointStoreTest` 7/7; `EditorSessionHistoryPortTest` 61/61.
+
+**Checklist / exit condition:** all boxes checked. Leftover ordinary/merge apply maps current-format Paste payloads onto the document; it is not a reader for old project or `pipeline_params` checkpoints.
+
+**LOC note (grill-code-review):** `pipeline_document_checkpoint.cpp` 195; `pipeline_history_format.hpp` 55; `pipeline_history_applier.cpp` 585; `editor_history_checkpoint.cpp` 105; `editor_mini_git_materializer.cpp` 243; `pipeline_service.cpp` 1114 (above 1000, pre-existing PipelineMgmtService size; NM4.4 checkout/recovery is the next reason to split). Tests: `pipeline_document_checkpoint_test.cpp` 304; `pipeline_service_test.cpp` 1251; `editor_session_history_port_test.cpp` 1689 (pre-existing mixed port coverage).
+
+**Remaining gaps:** NM4.4 Version checkout, recovery, and project reopen as a product path still remirror CPU stages for leftover ordinary commits after document replay. NM4.5 still owns typed Paste packages, merge-path removal, and Mask reachability. Transfer package *content* remains an operator list; only the schema string is `alcedo.adjustment_transfer.v2`. `OrdinaryEditPayload` remains on `EditCommit` for those leftover paths. Materializer still truncates the on-disk WAL file after DuckDB commit; the live journal then drops only the captured prefix so later appends survive.
 
 ### 6.4 NM4.4 — Version, recovery, and reopen
 

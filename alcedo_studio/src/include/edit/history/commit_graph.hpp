@@ -53,9 +53,12 @@ class CommitGraph {
   CommitGraph() = default;
 
   /// Infrastructure helper: one empty image edit state, root identity, and default Version at root.
-  /// Production immutable-root creation after import metadata remains a later package.
   static auto CreateEmpty(sl_element_id_t element_id, std::string default_display_name = "Default")
       -> CommitGraph;
+
+  /// Empty graph whose `root_id` is the content-addressed identity of a stored root document.
+  static auto CreateEmptyWithRootId(sl_element_id_t element_id, root_id_t root_id,
+                                    std::string default_display_name = "Default") -> CommitGraph;
 
   /// Rebuild from stored parts with full structural and materialized-state validation.
   static auto FromParts(ImageEditState state, std::vector<VersionRef> version_refs,

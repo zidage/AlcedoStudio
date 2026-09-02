@@ -24,10 +24,11 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/history/commit_graph.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -675,6 +676,25 @@ TEST_F(EditorSessionHistoryPortTest,
                                      capture->materialization.version_refs,
                                      capture->materialization.commits));
   reopened_guard->root_id_                = capture->materialization.image_state.root_id;
+  ASSERT_TRUE(capture->materialization.image_state.serialized_pipeline_state.has_value());
+  const auto checkpoint = alcedo::DecodePipelineDocumentCheckpoint(
+      *capture->materialization.image_state.serialized_pipeline_state);
+  nlohmann::json captured_exposure;
+  ASSERT_TRUE(alcedo::ReadEditorParameterJson(
+      checkpoint.document, ColorGradeTargetForField("exposure"), &captured_exposure, &error))
+      << error;
+  ASSERT_TRUE(captured_exposure.contains("exposure_ev"));
+  EXPECT_NEAR(captured_exposure.at("exposure_ev").get<double>(), 0.85, 1e-5);
+  reopened_guard->document_ = std::make_shared<alcedo::PipelineDocument>(
+      alcedo::ClonePipelineDocument(checkpoint.document));
+  reopened_guard->pipeline_->SetPipelineDocument(reopened_guard->document_, false);
+  {
+    std::unique_lock<std::mutex> render_lock(reopened_guard->pipeline_->GetRenderLock());
+    ASSERT_TRUE(alcedo::ApplyVersionHeadToLivePipeline(
+        *reopened_guard->pipeline_, *reopened_guard->commit_graph_,
+        reopened_guard->commit_graph_->GetActiveVersionRef().head_commit_hash, &error))
+        << error;
+  }
   auto reopened_pipeline = std::make_shared<EditorSessionPipelinePort>();
   reopened_pipeline->SetServices(EditorSessionPipelineMappers{
       {}, [reopened_guard](sl_element_id_t) { return reopened_guard; }});
@@ -691,8 +711,11 @@ TEST_F(EditorSessionHistoryPortTest,
   alcedo::EditorRenderAdjustmentSnapshot reopened_snapshot;
   ASSERT_TRUE(reopened.ReadAdjustmentSnapshot(reopened_handle, &reopened_snapshot, &error))
       << error;
-  EXPECT_EQ(PatchValue(reopened_snapshot, "exposure"),
-            PatchValue(published_snapshot, "exposure"));
+  const auto published_exposure = PatchNumber(published_snapshot, "exposure");
+  const auto reopened_exposure  = PatchNumber(reopened_snapshot, "exposure");
+  ASSERT_TRUE(published_exposure.has_value());
+  ASSERT_TRUE(reopened_exposure.has_value());
+  EXPECT_NEAR(*reopened_exposure, *published_exposure, 1e-5);
   EXPECT_EQ(reopened_guard->commit_graph_->CommitCount(),
             capture->materialization.commits.size());
   reopened.Release(reopened_handle);
@@ -742,7 +765,7 @@ TEST_F(EditorSessionHistoryPortTest,
 }
 
 TEST_F(EditorSessionHistoryPortTest,
-       SaveCaptureReturnsWhilePipelineRenderLockIsHeld) {
+       SaveCaptureWaitsForPipelineRenderLockThenReadsLiveDocument) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -766,13 +789,14 @@ TEST_F(EditorSessionHistoryPortTest,
     std::string capture_error;
     return history_.CaptureSaveCheckpoint(handle, &capture_error);
   });
-  EXPECT_EQ(capture_future.wait_for(std::chrono::milliseconds(250)), std::future_status::ready)
-      << "save capture waited on the worker render lock";
+  EXPECT_EQ(capture_future.wait_for(std::chrono::milliseconds(250)), std::future_status::timeout)
+      << "save capture must wait for the live document render lock";
 
   release_worker.store(true);
   if (worker.joinable()) {
     worker.join();
   }
+  EXPECT_EQ(capture_future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
   ASSERT_TRUE(capture_future.get());
 }
 
@@ -1826,7 +1850,7 @@ TEST(EditorSessionHistoryPortPersistTest,
     alcedo::PipelineMgmtService pipeline_service(project.GetStorage());
     std::string                 error;
     // Old library-paste path: Persist clears the checkpoint and leaves writeback
-    // false, so SavePipeline does not store pipeline_params.
+    // false, so SavePipeline does not store a document checkpoint.
     ASSERT_TRUE(LibraryPasteThenRelease(pipeline_service, element_id, MakeLutTransferPackage(lut_path),
                                         false, &error))
         << error;

@@ -46,8 +46,8 @@ void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
 /// parameter objects are explicit defaults; a missing supported field is never inferred later.
 auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnapshot;
 
-/// Decode the pipeline parameter document stored by a save checkpoint into the complete editor
-/// snapshot used by queue reductions. This parser is pure and never touches an executor.
+/// Decode a CPU-parameter JSON object into the complete editor snapshot.
+/// Not used by the product checkpoint path; retained for ordinary-payload tests.
 auto MakeAdjustmentSnapshotFromPipelineParams(
     const nlohmann::json& pipeline_params, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool;

@@ -13,7 +13,9 @@
 #include "app/adjustment_transfer_service.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/op_base.hpp"
@@ -42,6 +44,7 @@ struct LivePastePriorState {
   alcedo::EditorRenderAdjustmentSnapshot snapshot;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending;
   bool recovered = false;
+  std::optional<alcedo::PipelineDocument> document;
 };
 
 auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
@@ -53,6 +56,9 @@ auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
   prior.snapshot = state.committed_snapshot;
   prior.pending = state.pending_before;
   prior.recovered = state.recovered_head;
+  if (state.pipeline_guard->document_) {
+    prior.document = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
+  }
   return prior;
 }
 
@@ -64,6 +70,15 @@ void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState
   state.committed_snapshot = prior.snapshot;
   state.pending_before = prior.pending;
   state.recovered_head = prior.recovered;
+  if (prior.document.has_value() && state.pipeline_guard->document_) {
+    if (state.pipeline_guard->pipeline_) {
+      std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+      *state.pipeline_guard->document_ = alcedo::ClonePipelineDocument(*prior.document);
+      state.pipeline_guard->pipeline_->SetPipelineDocument(state.pipeline_guard->document_, false);
+    } else {
+      *state.pipeline_guard->document_ = alcedo::ClonePipelineDocument(*prior.document);
+    }
+  }
 }
 
 /// Append paste package entries to the live CommitGraph + WAL only. Do not
@@ -98,6 +113,30 @@ auto AppendPackageEntriesToLiveHistory(HistoryWorkingState& state,
   return true;
 }
 
+auto ApplyPackageEntriesToLiveDocument(alcedo::PipelineDocument& document,
+                                       const alcedo::AdjustmentTransferPackage& package,
+                                       std::string* error) -> bool {
+  for (const auto& entry : package.operators_) {
+    if (entry.stage_ == alcedo::PipelineStageName::Stage_Count ||
+        entry.operator_type_ == alcedo::OperatorType::UNKNOWN ||
+        entry.operator_type_ == alcedo::OperatorType::RESIZE) {
+      continue;
+    }
+    alcedo::OrdinaryEditPayload payload;
+    payload.operator_type  = entry.operator_type_;
+    payload.stage_name     = entry.stage_;
+    payload.field_name     = "$operator_params";
+    payload.before_value   = nlohmann::json(nullptr);
+    payload.before_enabled = false;
+    payload.after_value    = entry.params_;
+    payload.after_enabled  = entry.enabled_;
+    if (!alcedo::ApplyLeftoverOrdinaryPayloadToDocument(document, payload, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
@@ -115,6 +154,9 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
   }
   if (!state->pipeline_guard->pipeline_) {
     return SetError(error, "Editor live paste requires a live pipeline executor");
+  }
+  if (!state->pipeline_guard->document_) {
+    return SetError(error, "Editor live paste requires a live pipeline document");
   }
 
   auto& graph = *state->pipeline_guard->commit_graph_;
@@ -154,9 +196,17 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return false;
   }
 
+  bool document_apply_failed = false;
   {
     std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
     (void)alcedo::AdjustmentTransferService::Apply(*state->pipeline_guard->pipeline_, package);
+    if (!ApplyPackageEntriesToLiveDocument(*state->pipeline_guard->document_, package, error)) {
+      document_apply_failed = true;
+    }
+  }
+  if (document_apply_failed) {
+    RestoreLivePastePrior(*state, prior);
+    return false;
   }
 
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;

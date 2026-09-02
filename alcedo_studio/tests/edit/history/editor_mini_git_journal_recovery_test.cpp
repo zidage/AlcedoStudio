@@ -14,8 +14,10 @@
 
 #include "app/editor_mini_git_commit_writer.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -242,9 +244,11 @@ TEST_F(EditorMiniGitJournalRecoveryTest, NormalSaveCaptureDoesNotRequireJournalF
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
 
+  const auto logical_head  = graph_->GetActiveVersionRef().head_commit_hash;
+  const auto logical_chain = graph_->ChainHashForHead(logical_head);
   auto materialization = graph_->CaptureMaterializationWithSerializedPipelineState(
-      nlohmann::json{{"state_format_version", 1},
-                     {"pipeline_params", nlohmann::json{{"exposure", 1.0f}}}});
+      EncodePipelineDocumentCheckpoint(graph_->GetRootId(), logical_head, logical_chain,
+                                       CreateDefaultPipelineDocument()));
   EditorMiniGitCommitWriter writer(storage_);
   std::string               write_error;
   auto                      write_result = writer.Write(materialization, &write_error);

@@ -5,6 +5,7 @@
 #include "edit/history/version_ref.hpp"
 
 #include <chrono>
+#include <stdexcept>
 #include <utility>
 
 #include "edit/history/edit_commit.hpp"
@@ -37,6 +38,31 @@ auto NewRootId(sl_element_id_t element_id, std::time_t created_at, std::uint64_t
 auto NewNonce() -> std::uint64_t {
   return static_cast<std::uint64_t>(
       std::chrono::high_resolution_clock::now().time_since_epoch().count());
+}
+
+auto MakeDefaultVersionRef(sl_element_id_t element_id, std::string default_display_name,
+                           std::time_t now, std::uint64_t nonce) -> VersionRef {
+  VersionRef default_ref;
+  default_ref.version_id       = NewVersionRefId(element_id, now, nonce);
+  default_ref.element_id       = element_id;
+  default_ref.display_name     = std::move(default_display_name);
+  default_ref.head_commit_hash = std::nullopt;
+  default_ref.created_at       = now;
+  default_ref.updated_at       = now;
+  return default_ref;
+}
+
+auto MakeImageEditState(sl_element_id_t element_id, root_id_t root_id,
+                        const version_ref_id_t& active_version_id) -> ImageEditState {
+  ImageEditState state;
+  state.element_id                          = element_id;
+  state.root_id                             = root_id;
+  state.active_version_id                   = active_version_id;
+  state.materialized_head_commit_hash       = std::nullopt;
+  state.materialized_transaction_chain_hash = ComputeRootChainHash(root_id);
+  state.serialized_pipeline_state           = std::nullopt;
+  state.project_schema_version              = kImageEditSchemaVersion;
+  return state;
 }
 
 }  // namespace
@@ -87,7 +113,10 @@ auto ImageEditState::FromJSON(const nlohmann::json& j) -> ImageEditState {
       HeadCommitHashFromStorage(j.value("materialized_head_commit_hash", std::string{}));
   state.materialized_transaction_chain_hash =
       Hash128::FromString(j.at("materialized_transaction_chain_hash").get<std::string>());
-  state.project_schema_version = j.value("project_schema_version", kImageEditSchemaVersion);
+  state.project_schema_version = j.at("project_schema_version").get<std::uint32_t>();
+  if (state.project_schema_version != kImageEditSchemaVersion) {
+    throw std::runtime_error("ImageEditState: unsupported project_schema_version");
+  }
   if (j.contains("serialized_pipeline_state")) {
     state.serialized_pipeline_state = j.at("serialized_pipeline_state");
   }
@@ -98,24 +127,21 @@ auto CreateEmptyImageEditState(sl_element_id_t element_id, std::string default_d
     -> std::pair<ImageEditState, VersionRef> {
   const auto now   = NowTime();
   const auto nonce = NewNonce();
+  auto       default_ref =
+      MakeDefaultVersionRef(element_id, std::move(default_display_name), now, nonce);
+  auto state =
+      MakeImageEditState(element_id, NewRootId(element_id, now, nonce), default_ref.version_id);
+  return {std::move(state), std::move(default_ref)};
+}
 
-  VersionRef default_ref;
-  default_ref.version_id       = NewVersionRefId(element_id, now, nonce);
-  default_ref.element_id       = element_id;
-  default_ref.display_name     = std::move(default_display_name);
-  default_ref.head_commit_hash = std::nullopt;
-  default_ref.created_at       = now;
-  default_ref.updated_at       = now;
-
-  ImageEditState state;
-  state.element_id                           = element_id;
-  state.root_id                              = NewRootId(element_id, now, nonce);
-  state.active_version_id                    = default_ref.version_id;
-  state.materialized_head_commit_hash        = std::nullopt;
-  state.materialized_transaction_chain_hash  = ComputeRootChainHash(state.root_id);
-  state.serialized_pipeline_state            = std::nullopt;
-  state.project_schema_version               = kImageEditSchemaVersion;
-
+auto CreateImageEditStateWithRoot(sl_element_id_t element_id, root_id_t root_id,
+                                  std::string default_display_name)
+    -> std::pair<ImageEditState, VersionRef> {
+  const auto now   = NowTime();
+  const auto nonce = NewNonce();
+  auto       default_ref =
+      MakeDefaultVersionRef(element_id, std::move(default_display_name), now, nonce);
+  auto state = MakeImageEditState(element_id, root_id, default_ref.version_id);
   return {std::move(state), std::move(default_ref)};
 }
 

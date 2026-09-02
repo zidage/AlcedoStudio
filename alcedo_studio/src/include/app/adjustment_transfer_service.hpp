@@ -34,7 +34,7 @@ class AdjustmentTransferService final {
       -> AdjustmentTransferPackage;
 
   // Accepts stable external JSON, for example:
-  // {"schema":"alcedo.adjustment_transfer.v1","operators":[{"operator":"exposure",
+  // {"schema":"alcedo.adjustment_transfer.v2","operators":[{"operator":"exposure",
   // "params":{"exposure":2.0}}]}
   [[nodiscard]] static auto ImportPackage(const nlohmann::json& package_json)
       -> AdjustmentTransferPackage;

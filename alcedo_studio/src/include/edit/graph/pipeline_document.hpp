@@ -13,11 +13,10 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "json.hpp"
 
 namespace alcedo {
-
-inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 3;
 
 /**
  * @brief Serializable pipeline: geometry plus DAG. Does not own a GPU workspace.

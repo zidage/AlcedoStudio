@@ -11,6 +11,7 @@ set(HISTORY_SRCS
     ${ALCEDO_SRC_ROOT}/edit/history/editor_journal_recovery.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/version_ref.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/edit_commit.cpp
+    ${ALCEDO_SRC_ROOT}/edit/history/pipeline_document_checkpoint.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/pipeline_edit_batch.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/commit_graph.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/mini_git_working_history.cpp

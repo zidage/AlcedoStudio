@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <stdexcept>
 
 #include "edit/history/mini_git_working_history.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -48,10 +49,7 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
     EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
     EXPECT_EQ(stored->CommitCount(), 0u);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     0.0f);
   }
 
@@ -64,10 +62,7 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
     EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
     EXPECT_EQ(stored->CommitCount(), 0u);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     0.0f);
   }
 }
@@ -106,10 +101,7 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
     EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     captured_exposure);
   }
 
@@ -122,10 +114,7 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
     EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
     ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-    EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                        .serialized_pipeline_state->at("pipeline_params")
-                        .at("exposure")
-                        .get<float>(),
+    EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     captured_exposure);
   }
 }
@@ -269,11 +258,7 @@ TEST_F(EditorMiniGitMaterializerTest,
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, final_head);
   EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, final_chain);
   ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
-                  2.0f);
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state), 2.0f);
 }
 
 /// Repeated exposure edits with identical before/after values must produce
@@ -517,10 +502,7 @@ TEST_F(EditorMiniGitMaterializerTest,
   EXPECT_EQ(stored_a->GetActiveVersionRef().head_commit_hash, head_a);
   EXPECT_EQ(stored_a->GetImageEditState().materialized_transaction_chain_hash, chain_a);
   ASSERT_TRUE(stored_a->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored_a->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored_a->GetImageEditState().serialized_pipeline_state),
                   1.5f);
 
   // B remains independent.

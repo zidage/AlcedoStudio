@@ -12,14 +12,11 @@
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "json.hpp"
 
 namespace alcedo {
-
-/// Payload schema stored inside typed pipeline-edit commits. Independent of
-/// @ref kCommitFormatVersion, which versions the commit hash input layout.
-inline constexpr std::uint32_t kPipelineEditBatchFormatVersion = 1;
 
 /// User-action kind recorded on one batch. Distinct from the typed change list.
 enum class PipelineEditOperationKind : std::uint8_t {

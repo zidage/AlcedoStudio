@@ -15,6 +15,8 @@
 
 #include <duckdb.h>
 
+#include "edit/history/pipeline_history_format.hpp"
+
 class QString;
 namespace alcedo {
 class ProjectService;
@@ -25,13 +27,15 @@ namespace alcedo::project_pack {
 constexpr std::wstring_view kPackedProjectExtension = L".alcd";
 constexpr std::array<char, 8> kPackedProjectMagic{
     {'P', 'U', 'E', 'R', 'H', 'P', 'K', '1'}};
-constexpr uint32_t kPackedProjectVersion = 3;
+constexpr uint32_t kPackedProjectVersion = kPackedProjectFormatVersion;
 constexpr uint64_t kMaxPackedComponentBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
-// 0.3.0 is a destructive history-format cutover: mini-Git commit graph replaces the
-// array-and-cursor Version timeline. Older project packages are rejected with no migration.
-constexpr std::string_view kProjectFileVersion = "0.3.0";
-constexpr std::string_view kMinSupportedProjectFileVersion = "0.3.0";
-constexpr std::string_view kMaxSupportedProjectFileVersion = "0.3.0";
+// 0.4.0 is a destructive cutover: full PipelineDocument root and checkpoint replace
+// CPU-parameter snapshots. Older project packages are rejected with no migration.
+constexpr std::string_view kProjectFileVersion = ::alcedo::kProjectFileVersion;
+constexpr std::string_view kMinSupportedProjectFileVersion =
+    ::alcedo::kMinSupportedProjectFileVersion;
+constexpr std::string_view kMaxSupportedProjectFileVersion =
+    ::alcedo::kMaxSupportedProjectFileVersion;
 
 auto IsMetadataJsonPath(const std::filesystem::path& path) -> bool;
 auto IsPackedProjectPath(const std::filesystem::path& path) -> bool;

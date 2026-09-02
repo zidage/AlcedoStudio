@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <stdexcept>
 #include <format>
 #include <memory>
 #include <mutex>
@@ -20,9 +21,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "app/pipeline_document_history.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -81,13 +86,13 @@ TEST_F(PipelineMapperTests, PipelineMgmtServiceBuildsDefaultGpuDagForNewImage) {
   ASSERT_NE(guard->document_, nullptr);
   EXPECT_EQ(guard->document_->Graph().Nodes().size(), 3U);
   EXPECT_EQ(guard->document_->Graph().Edges().size(), 2U);
-  EXPECT_EQ(guard->document_->ToJson().at("format_version"), 3);
+  EXPECT_EQ(guard->document_->ToJson().at("format_version"), kPipelineDocumentFormatVersion);
 
   guard->dirty_ = true;
   pipeline_service.SavePipeline(guard);
   const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9001);
   ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), 3);
+  EXPECT_EQ(stored->at("format_version"), kPipelineDocumentFormatVersion);
   EXPECT_EQ(stored->at("nodes").size(), 3U);
   EXPECT_FALSE(stored->contains("stages"));
 }
@@ -625,7 +630,7 @@ TEST_F(PipelineMapperTests, ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree)
   first.SyncPipelineDocument(initial);
   const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9102);
   ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), 3);
+  EXPECT_EQ(stored->at("format_version"), kPipelineDocumentFormatVersion);
   EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
 
   initial->serialized_state_needs_writeback_ = true;
@@ -900,13 +905,25 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineMapperTests, LoadWithMatchingCheckpointSkipsFullReplay) {
+TEST_F(PipelineMapperTests, MatchingDocumentCheckpointSkipsFirstParentReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
   auto                initial = first.LoadEditorPipeline(731);
   ASSERT_NE(initial, nullptr);
   first.SavePipeline(initial);
+
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       stored = graph_service.LoadGraph(731);
+    ASSERT_TRUE(stored.has_value());
+    ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_TRUE(IsPipelineDocumentCheckpointJson(
+        *stored->GetImageEditState().serialized_pipeline_state));
+    EXPECT_FALSE(stored->GetImageEditState().serialized_pipeline_state->contains("pipeline_params"));
+  }
 
   PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
@@ -983,7 +1000,23 @@ TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOn
   EXPECT_TRUE(graph_service.GetRootSerializedPipelineState(712, retained_root).has_value());
 }
 
-TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
+auto DocumentExposure(const PipelineDocument& document) -> float {
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  if (exposure == nullptr) {
+    throw std::runtime_error("document is missing exposure");
+  }
+  return exposure->Value();
+}
+
+auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
+  nlohmann::json before_json{{"exposure_ev", before}};
+  nlohmann::json after_json{{"exposure_ev", after}};
+  return MakeSetParameterBatch(test::ColorGradeFieldTarget("exposure"), std::move(before_json),
+                               std::move(after_json), true, true, "Default");
+}
+
+TEST_F(PipelineMapperTests, StaleDocumentCheckpointReplaysHistoryAndNeedsWriteback) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
@@ -1001,22 +1034,14 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
     auto             graph = graph_service.LoadGraph(702);
     ASSERT_TRUE(graph.has_value());
 
-    OrdinaryEditPayload payload;
-    payload.operator_type  = OperatorType::EXPOSURE;
-    payload.stage_name     = PipelineStageName::Basic_Adjustment;
-    payload.field_name     = "exposure";
-    payload.before_value   = 1.5f;
-    payload.after_value    = 2.0f;
-    payload.before_enabled = true;
-    payload.after_enabled  = true;
-    auto commit   = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    auto commit = EditCommit::MakePipelineEdit(graph->GetRootId(), std::nullopt,
+                                               MakeExposureBatch(1.5f, 2.0f));
     expected_head = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
     expected_chain = graph->ChainHashForHead(expected_head);
 
-    // This is an untagged serialized state. Its graph state remains valid, but the editor must
-    // reject it and replay the new first-parent commit from the immutable root.
+    // Untagged checkpoint JSON. History remains authoritative and must replay.
     graph_service.Materialize(
         graph->CaptureMaterializationWithSerializedPipelineState(nlohmann::json{{"legacy", true}}));
   }
@@ -1028,9 +1053,7 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
   EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
   EXPECT_TRUE(rebuilt->serialized_state_needs_writeback_);
-  EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                                      ["exposure"]["params"]["exposure"],
-            2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt->document_), 2.0f);
   reopened.SavePipeline(rebuilt);
 
   PipelineMgmtService after_writeback(project.GetStorage());
@@ -1039,10 +1062,54 @@ TEST_F(PipelineMapperTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   EXPECT_FALSE(matched->serialized_state_needs_writeback_);
   EXPECT_EQ(matched->working_head_commit_hash(), expected_head);
   EXPECT_EQ(matched->transaction_chain_hash(), expected_chain);
-  EXPECT_EQ(matched->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                                      ["exposure"]["params"]["exposure"],
-            2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposure(*matched->document_), 2.0f);
   after_writeback.SavePipeline(matched);
+}
+
+TEST_F(PipelineMapperTests, CheckpointForAnotherImageNeverLoads) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorage());
+
+  auto target = first.LoadEditorPipeline(801);
+  auto donor  = first.LoadEditorPipeline(802);
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(donor, nullptr);
+  first.SavePipeline(target);
+
+  {
+    std::unique_lock<std::mutex> render_lock(donor->pipeline_->GetRenderLock());
+    dynamic_cast<ExposureModel*>(
+        donor->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+        ->SetValue(3.25f);
+  }
+  donor->serialized_state_needs_writeback_ = true;
+  first.SavePipeline(donor);
+
+  nlohmann::json donor_checkpoint;
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    auto             donor_graph = graph_service.LoadGraph(802);
+    ASSERT_TRUE(donor_graph.has_value());
+    ASSERT_TRUE(donor_graph->GetImageEditState().serialized_pipeline_state.has_value());
+    donor_checkpoint = *donor_graph->GetImageEditState().serialized_pipeline_state;
+    EXPECT_TRUE(IsPipelineDocumentCheckpointJson(donor_checkpoint));
+
+    auto target_graph = graph_service.LoadGraph(801);
+    ASSERT_TRUE(target_graph.has_value());
+    graph_service.Materialize(
+        target_graph->CaptureMaterializationWithSerializedPipelineState(donor_checkpoint));
+  }
+
+  PipelineMgmtService reopened(project.GetStorage());
+  reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
+  auto loaded = reopened.LoadEditorPipeline(801);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_GE(reopened.EditorPipelineHistoryRebuildCount(), 1u);
+  EXPECT_FLOAT_EQ(DocumentExposure(*loaded->document_), kDefaultPipelineExposureEv);
+  EXPECT_NE(loaded->document_->ToJson().dump(), donor_checkpoint.at("pipeline_document").dump());
+  reopened.SavePipeline(loaded);
 }
 
 TEST_F(PipelineMapperTests,
@@ -1062,22 +1129,19 @@ TEST_F(PipelineMapperTests,
     auto             graph = graph_service.LoadGraph(732);
     ASSERT_TRUE(graph.has_value());
 
-    OrdinaryEditPayload payload;
-    payload.operator_type  = OperatorType::EXPOSURE;
-    payload.stage_name     = PipelineStageName::Basic_Adjustment;
-    payload.field_name     = "exposure";
-    payload.before_value   = 0.0f;
-    payload.after_value    = 3.25f;
-    payload.before_enabled = true;
-    payload.after_enabled  = true;
-    auto commit   = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    auto commit = EditCommit::MakePipelineEdit(graph->GetRootId(), std::nullopt,
+                                               MakeExposureBatch(1.5f, 3.25f));
     expected_head = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
 
-    // Deliberately wrong params under a non-matching checkpoint identity.
+    auto stale_document = CreateDefaultPipelineDocument();
+    dynamic_cast<ExposureModel*>(stale_document.PrimaryGrade()->FindAdjustmentByType(
+                                     type_ids::Exposure()))
+        ->SetValue(0.0f);
     graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
-        nlohmann::json{{"legacy", true}, {"stale_exposure", 0.0f}}));
+        EncodePipelineDocumentCheckpoint(Hash128{1, 2}, std::nullopt,
+                                         ComputeRootChainHash(Hash128{1, 2}), stale_document)));
   }
 
   PipelineMgmtService reopened(project.GetStorage());
@@ -1086,10 +1150,8 @@ TEST_F(PipelineMapperTests,
   ASSERT_NE(rebuilt, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
   EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
-  EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
-                                                      ["exposure"]["params"]["exposure"],
-            3.25f)
-      << "rebuild must follow history, not stale checkpoint JSON values";
+  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt->document_), 3.25f)
+      << "rebuild must follow history, not a wrong-root checkpoint document";
   reopened.SavePipeline(rebuilt);
 }
 
@@ -1226,7 +1288,7 @@ TEST_F(PipelineMapperTests,
   pipeline_service.SavePipeline(guard);
 }
 
-TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
+TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData) {
   ProjectService         project(db_path_, meta_path_);
   PipelineMgmtService    first(project.GetStorage());
 
@@ -1248,8 +1310,14 @@ TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   ASSERT_NE(initial, nullptr);
   initial->pipeline_->InjectRawMetadata(raw_context);
   first.InitializeImageRoot(initial, &raw_context);
-  const auto root_id = initial->root_id_;
+  const auto root_id         = initial->root_id_;
+  const auto persisted_dump  = initial->document_->ToJson().dump();
   first.SavePipeline(initial);
+
+  auto changed_defaults = CreateDefaultPipelineDocument();
+  dynamic_cast<ExposureModel*>(
+      changed_defaults.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+      ->SetValue(9.0f);
 
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -1257,7 +1325,12 @@ TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
     ASSERT_TRUE(encoded.has_value());
-    ASSERT_TRUE(encoded->contains("raw_color_context"));
+    EXPECT_FALSE(encoded->contains("pipeline_params"));
+    const auto root = DecodePipelineRootState(*encoded);
+    EXPECT_EQ(root.document.ToJson().dump(), persisted_dump);
+    EXPECT_NE(root.document.ToJson().dump(), changed_defaults.ToJson().dump());
+    EXPECT_EQ(root.document.ToJson().at("format_version"), kPipelineDocumentFormatVersion);
+    EXPECT_EQ(root.document.ToJson().at("nodes").size(), 3U);
     EXPECT_EQ((*encoded)["raw_color_context"]["CameraModel"], "Root State Test");
     EXPECT_TRUE((*encoded)["raw_color_context"]["DngWarpRectilinearPresent"]);
     EXPECT_TRUE((*encoded)["raw_color_context"]["DngWarpRectilinearApplied"]);
@@ -1266,6 +1339,7 @@ TEST_F(PipelineMapperTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   PipelineMgmtService reopened(project.GetStorage());
   auto                loaded = reopened.LoadEditorPipeline(704);
   ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->document_->ToJson().dump(), persisted_dump);
   const auto& global = loaded->pipeline_->GetGlobalParams();
   EXPECT_TRUE(global.raw_runtime_valid_);
   EXPECT_EQ(global.raw_camera_make_, "Alcedo Camera Co");

@@ -9,6 +9,8 @@
 #include <string_view>
 #include <utility>
 
+#include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 
 namespace alcedo {
@@ -18,23 +20,6 @@ auto MakeStringPtr(std::string value) -> std::unique_ptr<std::string> {
   // Always allocate a string (possibly empty). DuckORM's select path constructs
   // std::string from duckdb_value_varchar without a null check, so SQL NULL is unsafe.
   return std::make_unique<std::string>(std::move(value));
-}
-
-auto MakeSerializedPipelineState(const root_id_t& root_id, const nlohmann::json& pipeline_params)
-    -> nlohmann::json {
-  return nlohmann::json{{"state_format_version", 1},
-                        {"root_id", root_id.ToString()},
-                        {"head_commit_hash", ""},
-                        {"transaction_chain_hash", ComputeRootChainHash(root_id).ToString()},
-                        {"pipeline_params", pipeline_params}};
-}
-
-auto MakeRootSerializedPipelineState(const nlohmann::json&                pipeline_params,
-                                     const std::optional<nlohmann::json>& raw_color_context)
-    -> nlohmann::json {
-  nlohmann::json state{{"state_format_version", 1}, {"pipeline_params", pipeline_params}};
-  state["raw_color_context"] = raw_color_context.value_or(nullptr);
-  return state;
 }
 
 auto SqlQuote(std::string_view value) -> std::string {
@@ -405,23 +390,28 @@ auto CommitGraphStore::CreateEmptyPersisted(sl_element_id_t element_id,
 }
 
 auto CommitGraphStore::CreateRootPipelinePersisted(
-    sl_element_id_t element_id, const nlohmann::json& root_pipeline_params,
+    sl_element_id_t element_id, const PipelineDocument& root_document,
     std::optional<nlohmann::json> raw_color_context, std::string default_display_name)
     -> CommitGraph {
   if (GetImageEditState(element_id).has_value()) {
     throw std::runtime_error("CommitGraphStore: image root already exists");
   }
 
-  auto graph           = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
-  auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
-      MakeSerializedPipelineState(graph.GetRootId(), root_pipeline_params));
+  const auto root_id =
+      ComputeRootId(element_id, root_document, raw_color_context);
+  auto graph = CommitGraph::CreateEmptyWithRootId(element_id, root_id,
+                                                  std::move(default_display_name));
+  const auto checkpoint = EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), root_document);
+  auto materialization =
+      graph.CaptureMaterializationWithSerializedPipelineState(checkpoint);
   materialization.Validate();
 
   duckorm::begin_transaction(conn_);
   try {
     InsertRootSerializedPipelineState(
         graph.GetRootId(), element_id,
-        MakeRootSerializedPipelineState(root_pipeline_params, raw_color_context));
+        EncodePipelineRootState(element_id, root_document, raw_color_context));
     for (const auto& ref : materialization.version_refs) {
       UpsertVersionRef(ref);
     }

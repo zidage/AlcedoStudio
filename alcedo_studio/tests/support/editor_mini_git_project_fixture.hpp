@@ -68,7 +68,7 @@ class EditorMiniGitProjectFixture {
   /// Capture the immutable working state used by a save checkpoint for one image.
   ///
   /// @param element_id  Must be kElementA or kElementB.
-  /// @param exposure    Serialized pipeline exposure value stored with the capture.
+  /// @param exposure    Exposure written into the captured checkpoint document.
   /// @return Populated capture; journal_records empty when no edits were appended.
   auto CaptureWorkingState(sl_element_id_t element_id, float exposure) -> EditorMiniGitSaveCapture;
 
@@ -110,6 +110,9 @@ class EditorMiniGitProjectFixture {
   [[nodiscard]] auto working_history(sl_element_id_t element_id) -> MiniGitWorkingHistory&;
   [[nodiscard]] auto journal(sl_element_id_t element_id) -> MiniGitJournal&;
   [[nodiscard]] auto root_id(sl_element_id_t element_id) const -> root_id_t;
+
+  /// Read Default Color Grade exposure from a labeled document checkpoint envelope.
+  [[nodiscard]] static auto CheckpointDocumentExposure(const nlohmann::json& checkpoint) -> float;
 
  private:
   struct ImageRuntime {

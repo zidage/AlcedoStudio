@@ -62,6 +62,16 @@ auto CommitGraph::CreateEmpty(sl_element_id_t element_id, std::string default_di
   return graph;
 }
 
+auto CommitGraph::CreateEmptyWithRootId(sl_element_id_t element_id, root_id_t root_id,
+                                        std::string default_display_name) -> CommitGraph {
+  auto [state, default_ref] =
+      CreateImageEditStateWithRoot(element_id, root_id, std::move(default_display_name));
+  CommitGraph graph;
+  graph.state_ = std::move(state);
+  graph.version_refs_.emplace(default_ref.version_id, std::move(default_ref));
+  return graph;
+}
+
 auto CommitGraph::FromParts(ImageEditState state, std::vector<VersionRef> version_refs,
                             std::vector<EditCommit> commits) -> CommitGraph {
   if (version_refs.empty()) {

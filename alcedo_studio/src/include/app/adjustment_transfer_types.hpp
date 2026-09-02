@@ -12,6 +12,7 @@
 
 #include "app/editor_adjustment_types.hpp"
 #include "edit/history/commit_types.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "edit/operators/op_base.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "json.hpp"
@@ -28,7 +29,7 @@ struct AdjustmentTransferEntry {
 };
 
 struct AdjustmentTransferPackage {
-  std::string                          schema_ = "alcedo.adjustment_transfer.v1";
+  std::string                          schema_ = std::string{kAdjustmentTransferSchema};
   std::vector<AdjustmentTransferEntry> operators_;
 
   [[nodiscard]] auto                   Empty() const -> bool { return operators_.empty(); }

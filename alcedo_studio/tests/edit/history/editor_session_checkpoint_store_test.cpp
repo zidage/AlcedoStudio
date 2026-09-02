@@ -18,8 +18,12 @@
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 
@@ -85,8 +89,15 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     const auto snapshot      = journal->Snapshot();
     const auto logical_head  = graph_->GetActiveVersionRef().head_commit_hash;
     const auto logical_chain = graph_->ChainHashForHead(logical_head);
+    auto document = alcedo::CreateDefaultPipelineDocument();
+    auto* exposure = dynamic_cast<alcedo::ExposureModel*>(
+        document.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Exposure()));
+    if (exposure == nullptr) {
+      throw std::runtime_error("default document missing exposure");
+    }
+    exposure->SetValue(1.25f);
     const auto serialized    = alcedo::MakeEditorSerializedPipelineState(
-        graph_->GetRootId(), logical_head, logical_chain, nlohmann::json{{"exposure", 1.25f}});
+        graph_->GetRootId(), logical_head, logical_chain, document);
     alcedo::EditorMiniGitSaveCapture capture;
     capture.journal_records        = snapshot.records;
     capture.journal_path           = journal_path_;

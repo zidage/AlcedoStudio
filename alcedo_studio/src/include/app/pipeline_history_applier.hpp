@@ -6,8 +6,11 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/graph/pipeline_document.hpp"
 
@@ -48,5 +51,37 @@ struct PipelineHistoryApplyContext {
 auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch& batch,
                             PipelineEditApplyDirection direction, std::string* error,
                             const PipelineHistoryApplyContext& context = {}) -> bool;
+
+/**
+ * @brief Apply one leftover ordinary payload onto the current-panel document Models.
+ *
+ * Maps CPU operator JSON aliases (`exposure` → `exposure_ev`, `ocio_lmt` →
+ * `cube_path`) and keeps only keys the live Model already owns. Does not convert
+ * old project, document, root, checkpoint, or WAL format versions.
+ *
+ * @pre Caller holds the shared executor render lock when @p document is live.
+ */
+auto ApplyLeftoverOrdinaryPayloadToDocument(PipelineDocument& document,
+                                            const OrdinaryEditPayload& payload,
+                                            std::string* error) -> bool;
+
+/**
+ * @brief Clone @p root_document and apply first-parent commits in order.
+ *
+ * Typed batches use @ref ApplyPipelineEditBatch. Leftover ordinary and merge
+ * payloads (Paste/merge until that path is replaced) apply onto the document
+ * Models. A failed change leaves the returned document unset; the clone is
+ * discarded. Does not take the render lock.
+ *
+ * @param root_document Immutable image root DAG.
+ * @param first_parent_commits Root-to-head first-parent commits, oldest first.
+ * @param error Optional failure detail.
+ * @param context Optional Mask store and apply observer.
+ * @return The replayed document, or nullopt when a commit cannot be applied.
+ */
+[[nodiscard]] auto ReplayPipelineDocumentFromRoot(
+    const PipelineDocument& root_document, const std::vector<EditCommit>& first_parent_commits,
+    std::string* error, const PipelineHistoryApplyContext& context = {})
+    -> std::optional<PipelineDocument>;
 
 }  // namespace alcedo

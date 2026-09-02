@@ -24,6 +24,8 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/op_base.hpp"
@@ -871,16 +873,19 @@ TEST_F(CommitGraphPersistenceTests,
   auto               lock  = guard.Lock();
   CommitGraphStore service(guard.conn_);
 
-  auto deleted = service.CreateRootPipelinePersisted(5005, {{"exposure", 0.0f}});
+  auto deleted = service.CreateRootPipelinePersisted(5005, CreateDefaultPipelineDocument());
   auto commit = MakeEditAt(deleted.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
                            MakeExposurePayload(0.0f, 0.75f));
   ASSERT_TRUE(deleted.InsertCommit(commit));
   deleted.MoveWorkingHead(deleted.GetActiveVersionId(), commit.GetCommitHash());
   const auto deleted_root = deleted.GetRootId();
   service.Materialize(
-      deleted.CaptureMaterializationWithSerializedPipelineState({{"exposure", 0.75f}}));
+      deleted.CaptureMaterializationWithSerializedPipelineState(
+          EncodePipelineDocumentCheckpoint(deleted_root, commit.GetCommitHash(),
+                                           deleted.ChainHashForHead(commit.GetCommitHash()),
+                                           CreateDefaultPipelineDocument())));
 
-  auto retained = service.CreateRootPipelinePersisted(5006, {{"contrast", 0.0f}});
+  auto retained = service.CreateRootPipelinePersisted(5006, CreateDefaultPipelineDocument());
   const auto retained_root = retained.GetRootId();
 
   ASSERT_NO_THROW(service.DeleteGraphForElement(5005));
@@ -917,10 +922,11 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.3.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.4.0");
 }
 
-TEST_F(ProjectSchemaBoundaryTests, OldProjectFailsBeforeLoadingHistoryOrPipeline) {
+TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 
@@ -935,10 +941,16 @@ TEST_F(ProjectSchemaBoundaryTests, OldProjectFailsBeforeLoadingHistoryOrPipeline
     nlohmann::json metadata;
     in >> metadata;
     in.close();
-    metadata["project_file_version"] = "0.2.5";
+    metadata["project_file_version"] = "0.3.0";
     std::ofstream out(meta_path_);
     ASSERT_TRUE(out.is_open());
     out << metadata.dump(4);
+  }
+
+  {
+    std::ofstream garbage(db_path_, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(garbage.is_open());
+    garbage << "not-a-duckdb-history-file";
   }
 
   try {
@@ -947,7 +959,9 @@ TEST_F(ProjectSchemaBoundaryTests, OldProjectFailsBeforeLoadingHistoryOrPipeline
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
     EXPECT_NE(message.find("Incompatible project format"), std::string::npos);
-    EXPECT_NE(message.find("0.2.5"), std::string::npos);
+    EXPECT_NE(message.find("0.3.0"), std::string::npos);
+    EXPECT_EQ(message.find("not-a-duckdb-history-file"), std::string::npos);
+    EXPECT_EQ(message.find("DuckDB"), std::string::npos);
   }
 }
 

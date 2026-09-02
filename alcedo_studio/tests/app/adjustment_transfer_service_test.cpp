@@ -159,7 +159,7 @@ TEST_F(AdjustmentTransferServiceTest, ImportsExternalJsonWithStableOperatorNames
   CPUPipelineExecutor  target;
 
   const nlohmann::json external_package = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "exposure"}, {"enabled", true}, {"params", {{"exposure", -0.75f}}}},
         {{"operator", "saturation"}, {"params", {{"saturation", 44.0f}}}}}}};
@@ -196,7 +196,7 @@ TEST_F(AdjustmentTransferServiceTest, MergeParamsUpdatesOnlyNestedRawSetting) {
   loading.SetOperator(OperatorType::RAW_DECODE, raw_params, target.GetGlobalParams());
 
   const nlohmann::json external_package = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "raw_decode"},
          {"enabled", true},
@@ -274,7 +274,7 @@ TEST_F(AdjustmentTransferServiceTest, VersionedApplyCreatesActiveCheckoutVersion
   }
 
   const nlohmann::json external_package = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "exposure"}, {"enabled", true}, {"params", {{"exposure", 1.5f}}}},
         {{"operator", "contrast"}, {"enabled", true}, {"params", {{"contrast", 2.25f}}}}}}};
@@ -329,7 +329,7 @@ TEST_F(AdjustmentTransferServiceTest, VersionedApplyCreatesActiveCheckoutVersion
   history_service.SaveHistory(history);
 
   const nlohmann::json second_external_package = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "exposure"}, {"enabled", true}, {"params", {{"exposure", 2.0f}}}},
         {{"operator", "contrast"}, {"enabled", true}, {"params", {{"contrast", 3.0f}}}}}}};
@@ -359,7 +359,7 @@ TEST_F(AdjustmentTransferServiceTest, VersionedMergeMaterializesCombinedParamsWi
 
   const sl_element_id_t ids[] = {target_id};
   const nlohmann::json  initial_package_json = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "exposure"}, {"enabled", true}, {"params", {{"exposure", 0.5f}}}},
         {{"operator", "contrast"}, {"enabled", true}, {"params", {{"contrast", 2.0f}}}},
@@ -380,7 +380,7 @@ TEST_F(AdjustmentTransferServiceTest, VersionedMergeMaterializesCombinedParamsWi
   history_service.SaveHistory(pasted_history);
 
   const nlohmann::json merge_package_json = {
-      {"schema", "alcedo.adjustment_transfer.v1"},
+      {"schema", "alcedo.adjustment_transfer.v2"},
       {"operators",
        {{{"operator", "exposure"}, {"enabled", true}, {"params", {{"exposure", 1.5f}}}},
         {{"operator", "contrast"}, {"enabled", true}, {"params", {{"contrast", -0.25f}}}}}}};

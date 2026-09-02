@@ -8,8 +8,13 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
+#include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -26,6 +31,17 @@ auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
   payload.before_enabled = true;
   payload.after_enabled  = true;
   return payload;
+}
+
+auto DocumentWithExposure(float exposure) -> PipelineDocument {
+  auto document = CreateDefaultPipelineDocument();
+  auto* model   = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  if (model == nullptr) {
+    throw std::runtime_error("EditorMiniGitProjectFixture: default document missing exposure");
+  }
+  model->SetValue(exposure);
+  return document;
 }
 
 }  // namespace
@@ -76,6 +92,23 @@ auto EditorMiniGitProjectFixture::root_id(sl_element_id_t element_id) const -> r
   return RuntimeFor(element_id).root_id;
 }
 
+auto EditorMiniGitProjectFixture::CheckpointDocumentExposure(const nlohmann::json& checkpoint)
+    -> float {
+  const auto& nodes = checkpoint.at("pipeline_document").at("nodes");
+  for (const auto& node : nodes) {
+    if (node.at("id") != "grade.primary") {
+      continue;
+    }
+    for (const auto& adjustment : node.at("adjustments")) {
+      if (adjustment.at("type").get<std::string>() == type_ids::Exposure().Text()) {
+        return adjustment.at("params").at("exposure_ev").get<float>();
+      }
+    }
+  }
+  throw std::runtime_error(
+      "EditorMiniGitProjectFixture: checkpoint is missing Default Color Grade exposure");
+}
+
 auto EditorMiniGitProjectFixture::AppendExposureEdit(sl_element_id_t element_id, float before,
                                                      float after, std::string* error) -> bool {
   auto& runtime = RuntimeFor(element_id);
@@ -98,8 +131,7 @@ auto EditorMiniGitProjectFixture::CaptureWorkingState(sl_element_id_t element_id
   const auto logical_head  = runtime.graph->GetActiveVersionRef().head_commit_hash;
   const auto logical_chain = runtime.graph->ChainHashForHead(logical_head);
   const auto serialized    = MakeEditorSerializedPipelineState(
-      runtime.graph->GetRootId(), logical_head, logical_chain,
-      nlohmann::json{{"exposure", exposure}});
+      runtime.graph->GetRootId(), logical_head, logical_chain, DocumentWithExposure(exposure));
   EditorMiniGitSaveCapture capture;
   capture.journal_records        = snapshot.records;
   capture.journal_path           = runtime.journal_path;
@@ -204,14 +236,19 @@ auto EditorMiniGitProjectFixture::MaterializeUnderSaveLock(const EditorMiniGitSa
     return result;
   }
   auto result = materializer_->Materialize(capture, error);
-  // Match production: after durable full WAL clear, drop the live MiniGitJournal
-  // so same-session captures stay consistent with the on-disk file.
+  // Match production EditorSessionService: after DuckDB commit the materializer
+  // truncates the on-disk WAL file, then DiscardMaterializedJournalThrough drops
+  // only the captured prefix from the live journal and rewrites any later
+  // appends. TruncateMaterialized would also wipe those later records.
   if (result.accepted && result.materialized) {
     std::string discard_error;
-    if (!RuntimeFor(capture.element_id).journal->TruncateMaterialized(&discard_error)) {
-      if (error != nullptr && error->empty()) {
-        *error = discard_error;
-      }
+    auto&       journal = *RuntimeFor(capture.element_id).journal;
+    const bool discarded =
+        capture.last_journal_sequence.has_value() && *capture.last_journal_sequence != 0
+            ? journal.TruncateThroughSequence(*capture.last_journal_sequence, &discard_error)
+            : journal.TruncateMaterialized(&discard_error);
+    if (!discarded && error != nullptr && error->empty()) {
+      *error = discard_error;
     }
   }
   return result;
@@ -225,7 +262,8 @@ void EditorMiniGitProjectFixture::CreatePersistedImage(ImageRuntime&       runti
   auto guard           = storage_->GetDatabase().GetConnectionGuard();
   auto lock            = guard.Lock();
   CommitGraphStore graph_service(guard.conn_);
-  auto               graph = graph_service.CreateEmptyPersisted(element_id, version_name);
+  auto               graph = graph_service.CreateRootPipelinePersisted(
+      element_id, CreateDefaultPipelineDocument(), std::nullopt, version_name);
   runtime.root_id          = graph.GetRootId();
   runtime.graph            = std::make_shared<CommitGraph>(std::move(graph));
 }

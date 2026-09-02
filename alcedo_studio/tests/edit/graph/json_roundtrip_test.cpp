@@ -42,7 +42,7 @@ TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustme
   document.PrimaryGrade()->MoveAdjustment(AdjustmentInstanceId{"grade.primary.lmt"}, 8);
 
   const auto json = document.ToJson();
-  EXPECT_EQ(json["format_version"], 3);
+  EXPECT_EQ(json["format_version"], kPipelineDocumentFormatVersion);
   EXPECT_FALSE(json.dump().find("stage") != std::string::npos && json.contains("stage"));
   EXPECT_FALSE(json.contains("priority"));
   const std::string dumped = json.dump();

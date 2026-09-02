@@ -43,11 +43,11 @@ namespace alcedo {
 /// - On commit (including merge), history advances head once and folds chain hash once.
 ///   Applying that commit to the table may call SetOperator many times; those calls are
 ///   not separate chain-hash steps.
-/// - Serialized checkpoint identity is (head, chain, params). Load compares that label
-///   to the history tip; match skips first-parent replay.
+/// - Serialized checkpoint identity is (root, head, chain, document). Load compares
+///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
-  /// Authoritative format-version-2 graph used by the CUDA product renderer.
+  /// Authoritative pipeline DAG used by the CUDA product renderer.
   std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
@@ -82,7 +82,7 @@ struct PipelineGuard {
   }
 
   /// First-parent chain fold for the active tip. Same algorithm history uses when
-  /// recording commits; used as the checkpoint label next to exported params.
+  /// recording commits; used as the checkpoint label next to the saved document.
   [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t {
     if (!commit_graph_) {
       return {};
@@ -168,13 +168,13 @@ class PipelineMgmtService final {
     pipeline_load_count_      = 0;
   }
 
-  /** @brief Save the guard's authoritative GPU DAG document as format version 2. */
+  /** @brief Save the guard's authoritative GPU DAG document. */
   void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
 
-  /// Load editor params for `id` using history tip as authority.
-  /// If checkpoint (params + head/chain label) matches active Version tip, import params
-  /// (skip first-parent replay). Otherwise rebuild from root + first-parent chain and mark
-  /// write-back. Thumbnail/export must use LoadPipeline (no editor history validation).
+  /// Load editor document for `id` using history tip as authority.
+  /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
+  /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
+  /// batches and mark write-back. Thumbnail/export must use LoadPipeline.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
@@ -186,7 +186,7 @@ class PipelineMgmtService final {
     editor_pipeline_history_rebuild_count_ = 0;
   }
 
-  /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
+  /// Persist the current metadata-resolved document as the immutable root for a newly imported
   /// image. Calling this again for an image that already has a root verifies and loads that root;
   /// it never replaces the stored root state.
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
@@ -232,8 +232,8 @@ class PipelineMgmtService final {
   void SyncPipeline(sl_element_id_t id);
 };
 
-/// Checkpoint label: which history tip the serialized params claim to match.
-/// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
+/// Checkpoint label: which history tip the serialized document claims to match.
+/// Not a pipeline-owned head — only a tag stored next to the document blob.
 struct PipelineCheckpointIdentity {
   head_commit_hash_t       head = std::nullopt;
   transaction_chain_hash_t chain{};

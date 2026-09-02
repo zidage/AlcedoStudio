@@ -15,13 +15,14 @@
 #include <unordered_set>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo {
 namespace {
 
-constexpr std::string_view kSchema = "alcedo.adjustment_transfer.v1";
+constexpr std::string_view kSchema = kAdjustmentTransferSchema;
 
 constexpr auto             kStages = std::array{
     PipelineStageName::Image_Loading,    PipelineStageName::Geometry_Adjustment,

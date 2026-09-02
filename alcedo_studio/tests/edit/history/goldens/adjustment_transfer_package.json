@@ -1,0 +1,1 @@
+{"operators":[{"enabled":true,"mergeParams":false,"operator":"exposure","params":{"exposure":0.5},"stage":"Basic Adjustment"}],"schema":"alcedo.adjustment_transfer.v2"}

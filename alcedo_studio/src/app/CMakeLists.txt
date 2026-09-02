@@ -399,8 +399,11 @@ def_library(PipelineHistoryApplier
         "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
-    PUBLIC_DEPS EditorPipelineCommandService EditHistory EditGraph EditMaskStore
+    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline EditHistory EditGraph
+                EditMaskStore
 )
+
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
 
 def_library(EditorSessionService
     SOURCES
