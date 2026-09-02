@@ -1202,9 +1202,8 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
         } else if constexpr (std::is_same_v<Typed, AddColorGradeChange> ||
                              std::is_same_v<Typed, RemoveColorGradeChange>) {
           row.node_id = std::string{typed.node_id.Value()};
-          if (row.node_display_name.empty() && typed.node.contains("display_name") &&
-              typed.node.at("display_name").is_string()) {
-            row.node_display_name = typed.node.at("display_name").get<std::string>();
+          if (row.node_display_name.empty()) {
+            row.node_display_name = StringArg(typed.node, "display_name");
           }
           row.after_display_value = typed.node;
         } else if constexpr (std::is_same_v<Typed, ReconnectColorGradeChange>) {
@@ -1213,9 +1212,8 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
                              std::is_same_v<Typed, RemoveMaskChange>) {
           row.node_id = std::string{typed.node_id.Value()};
           row.mask_id = std::string{typed.mask_id.Value()};
-          if (row.mask_display_name.empty() && typed.mask.contains("display_name") &&
-              typed.mask.at("display_name").is_string()) {
-            row.mask_display_name = typed.mask.at("display_name").get<std::string>();
+          if (row.mask_display_name.empty()) {
+            row.mask_display_name = StringArg(typed.mask, "display_name");
           }
           row.after_display_value = typed.mask;
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskSourceChange> ||
