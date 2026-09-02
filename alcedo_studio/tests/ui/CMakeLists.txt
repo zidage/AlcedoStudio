@@ -177,6 +177,8 @@ alcedo_register_test_target(UiFuzzAutomationTest ui)
 add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp
@@ -188,12 +190,14 @@ add_executable(EditorSessionHistoryPortTest
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
 target_include_directories(EditorSessionHistoryPortTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
   EditorAdjustmentPipeline
   EditorPipelineCommandService
+  PipelineHistoryApplier
   EditGraph
+  EditMaskStore
   EditorMiniGitMaterializer
   PipelineMgmtService
   ProjectService
@@ -907,7 +911,7 @@ alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 # Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
 add_executable(EditorGeometryOverlayDraftRoutingTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorGeometryOverlayDraftRoutingTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -1025,9 +1029,8 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
 
-# Paste/Merge strategy switcher dialog: verifies the real AdjustmentTransferDialog
-# loads in paste mode, exposes the SegmentedCardSwitcher, toggles the merge
-# notice with pasteStrategy, and reflects the strategy on the accept button.
+# Paste-only transfer dialog: verifies the real AdjustmentTransferDialog loads
+# in paste mode without a merge strategy switcher or merge accept label.
 add_executable(AdjustmentTransferDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

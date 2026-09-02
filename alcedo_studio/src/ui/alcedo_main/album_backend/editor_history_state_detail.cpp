@@ -10,9 +10,12 @@
 #include <vector>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
@@ -67,40 +70,22 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   state->pipeline_guard = guard;
   state->journal = journal;
   const auto& image_state = guard->commit_graph_->GetImageEditState();
-  const bool have_serialized_params =
-      image_state.serialized_pipeline_state.has_value() &&
-      image_state.serialized_pipeline_state->is_object() &&
-      image_state.serialized_pipeline_state->contains("pipeline_params");
-  // A matching checkpoint can be scraped as JSON. After a history rebuild
-  // (library Paste, stale/missing checkpoint) LoadEditorPipeline has already
-  // applied the Version tip to the live executor — that table is the panel
-  // authority. Using an empty/stale snapshot here leaves LUT on the image
-  // while LUTPanel highlights None.
-  if (have_serialized_params && !guard->serialized_state_needs_writeback_) {
-    if (!MakeAdjustmentSnapshotFromPipelineParams(
-            image_state.serialized_pipeline_state->at("pipeline_params"),
-            &state->committed_snapshot, error)) {
+  // LoadEditorPipeline already installed the live document from a matching
+  // checkpoint or from first-parent replay. Panel state is read from that
+  // executor, never from a stored CPU-parameter checkpoint blob.
+  if (!guard->pipeline_) {
+    if (error) *error = "Mini-Git working state requires a live pipeline executor";
+    return nullptr;
+  }
+  try {
+    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+    if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
+                                                error)) {
       return nullptr;
     }
-  } else if (guard->serialized_state_needs_writeback_ && guard->pipeline_) {
-    try {
-      std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-      if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
-                                                  error)) {
-        return nullptr;
-      }
-    } catch (const std::exception& ex) {
-      if (error) *error = ex.what();
-      return nullptr;
-    }
-  } else if (have_serialized_params) {
-    if (!MakeAdjustmentSnapshotFromPipelineParams(
-            image_state.serialized_pipeline_state->at("pipeline_params"),
-            &state->committed_snapshot, error)) {
-      return nullptr;
-    }
-  } else {
-    state->committed_snapshot = MakeEmptyCompleteAdjustmentSnapshot();
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return nullptr;
   }
   if (!RootSnapshotFromMaterialized(
           state->committed_snapshot, *guard->commit_graph_,
@@ -138,6 +123,25 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
       const auto prior_graph = *guard->commit_graph_;
       const auto prior_snap  = state->committed_snapshot;
       const auto expected_materialized = prior_graph.GetImageEditState();
+      alcedo::PipelineDocument prior_document;
+      nlohmann::json           prior_params;
+      if (guard->pipeline_ && guard->document_) {
+        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+        prior_document = alcedo::ClonePipelineDocument(*guard->document_);
+        prior_params   = guard->pipeline_->ExportPipelineParams();
+      }
+
+      auto restore_recovery = [&]() {
+        *guard->commit_graph_ = prior_graph;
+        state->committed_snapshot = prior_snap;
+        if (!guard->pipeline_ || !guard->document_) {
+          return;
+        }
+        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+        alcedo::BindLivePipelineDocument(*guard, alcedo::ClonePipelineDocument(prior_document));
+        guard->pipeline_->ImportPipelineParams(prior_params);
+        guard->pipeline_->SetExecutionStages();
+      };
 
       std::vector<alcedo::MiniGitJournalRecord> missing(
           journal_records.begin() +
@@ -146,30 +150,43 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
 
       std::string replay_error;
       if (!alcedo::MiniGitWorkingHistory::Replay(*guard->commit_graph_, missing, &replay_error)) {
-        *guard->commit_graph_ = prior_graph;
+        restore_recovery();
         if (error) *error = replay_error;
         std::string isolate_error;
         (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
         return nullptr;
       }
 
-      alcedo::EditorRenderAdjustmentSnapshot derived;
-      if (!SnapshotAtHead(state->root_snapshot, *guard->commit_graph_,
-                          guard->commit_graph_->GetActiveVersionRef().head_commit_hash, &derived,
-                          error)) {
-        *guard->commit_graph_ = prior_graph;
+      const auto recovered_head = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
+      if (auto pipeline_service = PipelineMapper()) {
+        if (!pipeline_service->RebuildActiveEditorPipeline(guard, error, state->mask_store)) {
+          restore_recovery();
+          std::string isolate_error;
+          (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
+          return nullptr;
+        }
+      } else if (!ReplayWorkingDocumentFromImmutableRoot(*state, recovered_head, error)) {
+        restore_recovery();
+        std::string isolate_error;
+        (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
         return nullptr;
       }
 
       if (guard->pipeline_) {
-        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-        if (!alcedo::ApplyEditorAdjustmentSnapshot(*guard->pipeline_, derived, error)) {
-          *guard->commit_graph_ = prior_graph;
+        try {
+          std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+          if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
+                                                      error)) {
+            restore_recovery();
+            return nullptr;
+          }
+        } catch (const std::exception& ex) {
+          restore_recovery();
+          if (error) *error = ex.what();
           return nullptr;
         }
       }
 
-      state->committed_snapshot = std::move(derived);
       guard->dirty_ = true;
       guard->serialized_state_needs_writeback_ = true;
       state->recovered_head = true;
@@ -195,8 +212,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
             }
           }
           if (!journal->TruncateMaterialized(error)) {
-            *guard->commit_graph_ = prior_graph;
-            state->committed_snapshot = prior_snap;
             return nullptr;
           }
           guard->dirty_ = false;
@@ -218,17 +233,10 @@ attach_history:
       std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
   // After WAL attach, if checkpoint identity still disagrees with logical head,
-  // install the derived adjustment snapshot on the unique live executor.
+  // history remains authoritative and a new checkpoint writeback is required.
   const auto& post_wal_state = guard->commit_graph_->GetImageEditState();
   if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash(),
                                             guard->transaction_chain_hash())) {
-    if (guard->pipeline_) {
-      std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-      if (!alcedo::ApplyEditorAdjustmentSnapshot(*guard->pipeline_, state->committed_snapshot,
-                                                 error)) {
-        return nullptr;
-      }
-    }
     guard->serialized_state_needs_writeback_ = true;
   }
 
@@ -276,6 +284,90 @@ auto EditorHistoryState::JournalPathResolver() const
     -> std::function<std::filesystem::path(sl_element_id_t)> {
   std::scoped_lock lock(mutex_);
   return services_.mini_git_journal_path;
+}
+
+void EditorHistoryState::RecordPublishedRenderReason(
+    std::optional<alcedo::EditorRenderReason> reason) {
+  std::scoped_lock lock(mutex_);
+  last_published_render_reason_ = reason;
+}
+
+auto EditorHistoryState::LastPublishedRenderReason() const
+    -> std::optional<alcedo::EditorRenderReason> {
+  std::scoped_lock lock(mutex_);
+  return last_published_render_reason_;
+}
+
+auto EditorHistoryState::ReplayWorkingDocumentFromImmutableRoot(
+    HistoryWorkingState& state, const alcedo::head_commit_hash_t& head, std::string* error)
+    -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_ ||
+      !state.pipeline_guard->document_ || !state.pipeline_guard->commit_graph_) {
+    if (error) *error = "Live pipeline document is unavailable for Version replay";
+    return false;
+  }
+  if (!state.pipeline_guard->root_document_) {
+    if (error) *error = "Immutable root document is missing for Version replay";
+    return false;
+  }
+
+  std::vector<alcedo::EditCommit> commits;
+  try {
+    commits = alcedo::FirstParentCommitsForHead(*state.pipeline_guard->commit_graph_, head);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+
+  alcedo::PipelineDocument prior_document;
+  nlohmann::json           prior_params;
+  try {
+    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+    prior_document   = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
+    prior_params     = state.pipeline_guard->pipeline_->ExportPipelineParams();
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+
+  alcedo::PipelineHistoryApplyContext context;
+  context.mask_store = state.mask_store;
+  auto replayed      = alcedo::ReplayPipelineDocumentFromRoot(
+      *state.pipeline_guard->root_document_, commits, error, context);
+  if (!replayed.has_value()) {
+    return false;
+  }
+  if (!alcedo::VerifyPersistentMaskAssets(*replayed, state.mask_store, error)) {
+    return false;
+  }
+
+  auto restore_live = [&]() {
+    alcedo::BindLivePipelineDocument(*state.pipeline_guard,
+                                     alcedo::ClonePipelineDocument(prior_document));
+    state.pipeline_guard->pipeline_->ImportPipelineParams(prior_params);
+    state.pipeline_guard->pipeline_->SetExecutionStages();
+  };
+
+  try {
+    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+    alcedo::BindLivePipelineDocument(*state.pipeline_guard, std::move(*replayed));
+    if (!alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
+                                                *state.pipeline_guard->commit_graph_, head,
+                                                error)) {
+      restore_live();
+      return false;
+    }
+    state.pipeline_guard->pipeline_->SetExecutionStages();
+    return true;
+  } catch (const std::exception& ex) {
+    try {
+      auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+      restore_live();
+    } catch (...) {
+    }
+    if (error) *error = ex.what();
+    return false;
+  }
 }
 
 }  // namespace alcedo::ui

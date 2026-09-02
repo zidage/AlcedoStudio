@@ -224,7 +224,7 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, FinishTask_ClearsLocks) {
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests,
-       EditorSaveLocksDisableFilmstripWorkspaceCheckoutPasteAndMergeWithReason) {
+       EditorSaveLocksDisableFilmstripWorkspaceCheckoutAndPasteWithReason) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               reason = QStringLiteral("Saving editor changes");
@@ -234,24 +234,20 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
                          Lock(InteractionCapability::SwitchWorkspace, 0, reason),
                          Lock(InteractionCapability::CheckoutVersion, 0, reason),
                          Lock(InteractionCapability::PasteAdjustments, 0, reason),
-                         Lock(InteractionCapability::MergeAdjustments, 0, reason),
                      });
 
   EXPECT_FALSE(policy.CanSelectEditorImage());
   EXPECT_FALSE(policy.CanSwitchWorkspace());
   EXPECT_FALSE(policy.CanCheckoutVersion());
   EXPECT_FALSE(policy.CanPasteAdjustments());
-  EXPECT_FALSE(policy.CanMergeAdjustments());
   EXPECT_EQ(policy.SelectEditorImageReason(), reason);
   EXPECT_EQ(policy.SwitchWorkspaceReason(), reason);
   EXPECT_EQ(policy.CheckoutVersionReason(), reason);
   EXPECT_EQ(policy.PasteAdjustmentsReason(), reason);
-  EXPECT_EQ(policy.MergeAdjustmentsReason(), reason);
   EXPECT_EQ(policy.EvaluateSelectEditorImage().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluateSwitchWorkspace().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluateCheckoutVersion().value("reason").toString(), reason);
   EXPECT_EQ(policy.EvaluatePasteAdjustments().value("reason").toString(), reason);
-  EXPECT_EQ(policy.EvaluateMergeAdjustments().value("reason").toString(), reason);
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, PolicyChanged_FiresOnlyOnLockSetChange) {
@@ -321,14 +317,14 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, NaturalLanguageSearchGate_Di
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests,
-       ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks) {
+       ProductionEditorSaveTaskPublishesAndClearsFourCheckpointLocks) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   EditorSessionTaskPort       task_port(&registry);
   constexpr uint64_t          kElementA = 101;
   const QString               expected_reason = QStringLiteral("Saving editor changes");
 
-  // ── Begin task publishes all five checkpoint locks ──
+  // ── Begin task publishes all four checkpoint locks ──
   const auto task_id = task_port.BeginTask("editor_save", kElementA);
   EXPECT_NE(task_id, 0u);
 
@@ -336,24 +332,21 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_FALSE(policy.CanSwitchWorkspace());
   EXPECT_FALSE(policy.CanCheckoutVersion());
   EXPECT_FALSE(policy.CanPasteAdjustments());
-  EXPECT_FALSE(policy.CanMergeAdjustments());
   EXPECT_EQ(policy.SelectEditorImageReason(), expected_reason);
   EXPECT_EQ(policy.SwitchWorkspaceReason(), expected_reason);
   EXPECT_EQ(policy.CheckoutVersionReason(), expected_reason);
   EXPECT_EQ(policy.PasteAdjustmentsReason(), expected_reason);
-  EXPECT_EQ(policy.MergeAdjustmentsReason(), expected_reason);
 
   // Non-checkpoint capabilities remain enabled.
   EXPECT_TRUE(policy.CanChangeSemanticModel());
   EXPECT_TRUE(policy.CanRunSemanticGeneration());
 
-  // ── End task as success clears all five locks ──
+  // ── End task as success clears all four locks ──
   task_port.EndTask(task_id, true, "");
   EXPECT_TRUE(policy.CanSelectEditorImage());
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanCheckoutVersion());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // ── Failure also clears locks ──
   const auto task2 = task_port.BeginTask("editor_save", kElementA);
@@ -363,7 +356,6 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanCheckoutVersion());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // ── Cancellation (task removed from registry) clears locks ──
   task_port.BeginTask("editor_save", kElementA);
@@ -389,7 +381,6 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests,
   EXPECT_TRUE(policy.CanSelectEditorImage());
   EXPECT_TRUE(policy.CanSwitchWorkspace());
   EXPECT_TRUE(policy.CanPasteAdjustments());
-  EXPECT_TRUE(policy.CanMergeAdjustments());
 
   // General editor capabilities are not affected by a CheckoutVersion-only lock.
   policy.SetFocusedElementId(42);

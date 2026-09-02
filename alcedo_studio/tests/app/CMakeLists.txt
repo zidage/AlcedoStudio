@@ -56,6 +56,40 @@ gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
 
+add_executable(PipelineHistoryApplierTest
+    ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
+target_include_directories(PipelineHistoryApplierTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PipelineHistoryApplierTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskStore)
+gtest_discover_tests(PipelineHistoryApplierTest
+    TEST_PREFIX "PipelineHistoryApplierTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineHistoryApplierTest app)
+
+add_executable(DocumentTransferTest
+    ${ALCEDO_TEST_ROOT}/app/document_transfer_test.cpp)
+target_include_directories(DocumentTransferTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(DocumentTransferTest
+    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService EditGraph EditMaskStore)
+gtest_discover_tests(DocumentTransferTest
+    TEST_PREFIX "DocumentTransferTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(DocumentTransferTest app)
+
+add_executable(MaskAssetReachabilityTest
+    ${ALCEDO_TEST_ROOT}/app/mask_asset_reachability_test.cpp)
+target_include_directories(MaskAssetReachabilityTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(MaskAssetReachabilityTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier EditMaskStore EditGraph EditHistory)
+gtest_discover_tests(MaskAssetReachabilityTest
+    TEST_PREFIX "MaskAssetReachabilityTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(MaskAssetReachabilityTest app)
+
 # Geometry overlay preview: crop disable + bilinear GPU resize path that the
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
 add_executable(EditorGeometryOverlayPipelineTest
@@ -112,8 +146,9 @@ gtest_discover_tests(SearchQueryClassifierTest TEST_PREFIX "SearchQueryClassifie
 alcedo_register_test_target(SearchQueryClassifierTest app)
 
 add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
-target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineMapperTest ProjectService PipelineMgmtService GTest::gtest_main)
+target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineMapperTest
+  ProjectService PipelineMgmtService PipelineHistoryApplier GTest::gtest_main)
 gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
@@ -126,17 +161,36 @@ target_include_directories(AdjustmentTransferServiceMiniGitTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(AdjustmentTransferServiceMiniGitTest
   AdjustmentTransferService
+  EditorPipelineCommandService
   EditorSessionTestSupport
   ProjectService
   PipelineMgmtService
   EditHistoryMgmtService
   EditHistory
+  EditGraph
   GTest::gtest_main
 )
 gtest_discover_tests(AdjustmentTransferServiceMiniGitTest
   TEST_PREFIX "AdjustmentTransferServiceMiniGitTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(AdjustmentTransferServiceMiniGitTest app ci_core)
+
+add_executable(AdjustmentTransferServiceTest
+  ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_test.cpp)
+target_include_directories(AdjustmentTransferServiceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AdjustmentTransferServiceTest
+  AdjustmentTransferService
+  EditorPipelineCommandService
+  EditorSessionTestSupport
+  EditGraph
+  EditHistory
+  GTest::gtest_main
+)
+gtest_discover_tests(AdjustmentTransferServiceTest
+  TEST_PREFIX "AdjustmentTransferServiceTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(AdjustmentTransferServiceTest app ci_core)
 
 add_executable(EditHistoryMgmtServiceTest ${ALCEDO_TEST_ROOT}/app/history_mgmt_service_test.cpp)
 target_include_directories(EditHistoryMgmtServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -174,6 +228,7 @@ target_link_libraries(EditorSessionTestSupport
     EditorMiniGitMaterializer
     ProjectService
     EditHistory
+    EditGraph
     Storage
     GTest::gtest
 )

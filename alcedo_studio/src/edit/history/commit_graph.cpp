@@ -62,6 +62,16 @@ auto CommitGraph::CreateEmpty(sl_element_id_t element_id, std::string default_di
   return graph;
 }
 
+auto CommitGraph::CreateEmptyWithRootId(sl_element_id_t element_id, root_id_t root_id,
+                                        std::string default_display_name) -> CommitGraph {
+  auto [state, default_ref] =
+      CreateImageEditStateWithRoot(element_id, root_id, std::move(default_display_name));
+  CommitGraph graph;
+  graph.state_ = std::move(state);
+  graph.version_refs_.emplace(default_ref.version_id, std::move(default_ref));
+  return graph;
+}
+
 auto CommitGraph::FromParts(ImageEditState state, std::vector<VersionRef> version_refs,
                             std::vector<EditCommit> commits) -> CommitGraph {
   if (version_refs.empty()) {
@@ -122,24 +132,6 @@ void CommitGraph::ValidateCommitAgainstGraph(const EditCommit& commit) const {
     if (parent->GetRootId() != state_.root_id) {
       throw std::runtime_error("CommitGraph: first parent belongs to another root");
     }
-  }
-  if (commit.GetKind() == EditCommitKind::kEdit) {
-    if (commit.GetSecondParentHash().has_value()) {
-      throw std::runtime_error("CommitGraph: Edit commit must not have a second parent");
-    }
-  } else if (commit.GetKind() == EditCommitKind::kMerge) {
-    if (!commit.GetSecondParentHash().has_value()) {
-      throw std::runtime_error("CommitGraph: Merge commit requires a second parent");
-    }
-    const auto* parent = FindCommit(*commit.GetSecondParentHash());
-    if (parent == nullptr) {
-      throw std::runtime_error("CommitGraph: second parent commit is missing");
-    }
-    if (parent->GetRootId() != state_.root_id) {
-      throw std::runtime_error("CommitGraph: second parent belongs to another root");
-    }
-  } else {
-    throw std::runtime_error("CommitGraph: unknown commit kind");
   }
 }
 
@@ -323,9 +315,6 @@ auto CommitGraph::CollectReachableCommitHashes() const -> std::unordered_set<com
     }
     if (commit->GetFirstParentHash().has_value()) {
       stack.push_back(*commit->GetFirstParentHash());
-    }
-    if (commit->GetSecondParentHash().has_value()) {
-      stack.push_back(*commit->GetSecondParentHash());
     }
   }
   return reachable;

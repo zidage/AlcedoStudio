@@ -85,8 +85,6 @@ class InteractionPolicyController final : public QObject {
   Q_PROPERTY(QString checkoutVersionReason READ CheckoutVersionReason NOTIFY PolicyChanged)
   Q_PROPERTY(bool canPasteAdjustments READ CanPasteAdjustments NOTIFY PolicyChanged)
   Q_PROPERTY(QString pasteAdjustmentsReason READ PasteAdjustmentsReason NOTIFY PolicyChanged)
-  Q_PROPERTY(bool canMergeAdjustments READ CanMergeAdjustments NOTIFY PolicyChanged)
-  Q_PROPERTY(QString mergeAdjustmentsReason READ MergeAdjustmentsReason NOTIFY PolicyChanged)
 
  public:
   explicit InteractionPolicyController(BackgroundTaskController* registry = nullptr,
@@ -125,8 +123,6 @@ class InteractionPolicyController final : public QObject {
   QString CheckoutVersionReason() const;
   bool    CanPasteAdjustments() const;
   QString PasteAdjustmentsReason() const;
-  bool    CanMergeAdjustments() const;
-  QString MergeAdjustmentsReason() const;
 
   // ── Q_INVOKABLE one-shot queries (return {allowed, reason, blockingTaskIds}) ─
   // Named `Evaluate*` (not `Can*`) so they do not collide with the no-arg
@@ -145,7 +141,6 @@ class InteractionPolicyController final : public QObject {
   Q_INVOKABLE QVariantMap EvaluateSwitchWorkspace() const;
   Q_INVOKABLE QVariantMap EvaluateCheckoutVersion() const;
   Q_INVOKABLE QVariantMap EvaluatePasteAdjustments() const;
-  Q_INVOKABLE QVariantMap EvaluateMergeAdjustments() const;
 
  signals:
   void PolicyChanged();

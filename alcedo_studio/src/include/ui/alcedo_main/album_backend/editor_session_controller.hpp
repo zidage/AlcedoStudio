@@ -232,12 +232,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   auto               PasteAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
                                             const QString& versionDisplayName) -> alcedo::EditorSessionResult;
-  auto               BeginMergeAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
-                                                 alcedo::AdjustmentMergePreview*          preview)
-      -> alcedo::EditorSessionResult;
-  auto CompleteMergeAdjustments(const std::vector<alcedo::AdjustmentMergeResolution>& resolutions)
-      -> alcedo::EditorSessionResult;
-  auto               CancelMergeAdjustments() -> alcedo::EditorSessionResult;
 
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;

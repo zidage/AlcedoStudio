@@ -277,9 +277,12 @@ def_library(PipelineMgmtService
 )
 
 def_library(AdjustmentTransferService
-    SOURCES "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
-    PUBLIC_DEPS PipelineMgmtService EditPipeline
-    PRIVATE_DEPS EditorAdjustmentPipeline
+    SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
+        "${ALCEDO_APP_ROOT}/document_transfer.cpp"
+    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskStore EditHistory
+                PipelineHistoryApplier
+    PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
 def_library(EditHistoryMgmtService
@@ -383,7 +386,7 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline EditHistory JSON
+    PUBLIC_DEPS EditPipeline EditHistory JSON EditorPipelineCommandService
 )
 
 def_library(EditorPipelineCommandService
@@ -392,6 +395,20 @@ def_library(EditorPipelineCommandService
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
     PUBLIC_DEPS EditGraph JSON
 )
+
+def_library(PipelineHistoryApplier
+    SOURCES
+        "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"
+        "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
+        "${ALCEDO_APP_ROOT}/mask_asset_reachability.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_asset_reachability.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline EditHistory EditGraph
+                EditMaskStore
+)
+
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
 
 def_library(EditorSessionService
     SOURCES

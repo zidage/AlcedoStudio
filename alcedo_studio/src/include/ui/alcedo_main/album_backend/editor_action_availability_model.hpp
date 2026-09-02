@@ -26,9 +26,6 @@ class EditorActionAvailabilityModel final : public QObject {
   Q_PROPERTY(bool canRenameVersion READ can_rename_version NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canRemoveVersion READ can_remove_version NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canPaste READ can_paste NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canBeginMerge READ can_begin_merge NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canCompleteMerge READ can_complete_merge NOTIFY AvailabilityChanged)
-  Q_PROPERTY(bool canCancelMerge READ can_cancel_merge NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canRetrySave READ can_retry_save NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canDiscardAndContinue READ can_discard_and_continue NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canCancelPendingNavigation READ can_cancel_pending_navigation NOTIFY
@@ -80,13 +77,6 @@ class EditorActionAvailabilityModel final : public QObject {
     return Allowed(alcedo::EditorAction::RemoveVersion);
   }
   [[nodiscard]] bool can_paste() const { return Allowed(alcedo::EditorAction::ApplyPaste); }
-  [[nodiscard]] bool can_begin_merge() const { return Allowed(alcedo::EditorAction::BeginMerge); }
-  [[nodiscard]] bool can_complete_merge() const {
-    return Allowed(alcedo::EditorAction::CompleteMerge);
-  }
-  [[nodiscard]] bool can_cancel_merge() const {
-    return Allowed(alcedo::EditorAction::CancelMerge);
-  }
   [[nodiscard]] bool can_retry_save() const { return Allowed(alcedo::EditorAction::RetrySave); }
   [[nodiscard]] bool can_discard_and_continue() const {
     return Allowed(alcedo::EditorAction::DiscardAndContinue);

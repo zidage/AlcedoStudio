@@ -183,8 +183,7 @@ Dialog {
 
     function acceptText() {
         if (!copyMode) {
-            return pasteStrategy === "merge" ? qsTr("Merge Adjustments")
-                                              : qsTr("Paste Adjustments")
+            return qsTr("Paste Adjustments")
         }
         return qsTr("Copy %1 Settings").arg(selectedCount)
     }
@@ -507,54 +506,7 @@ Dialog {
                         anchors.fill: parent
                         spacing: 0
 
-                        // Strategy switcher (paste mode only). Paste starts from a
-                        // fresh root-relative Version; Merge brings incoming
-                        // adjustments in as a two-parent merge commit. Merge in a
-                        // batch resolves every conflict as "use all incoming" —
-                        // per-field conflict resolution does not scale to many
-                        // targets, so it is not offered here.
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.leftMargin: appTheme.spaceLg
-                            Layout.rightMargin: appTheme.spaceLg
-                            Layout.topMargin: appTheme.spaceMd
-                            Layout.bottomMargin: appTheme.spaceSm
-                            spacing: appTheme.spaceXs
-                            visible: !dialog.copyMode
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: qsTr("Transfer Strategy")
-                                color: appTheme.textMutedColor
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: appTheme.fontWeightStrong
-                            }
-
-                            SegmentedCardSwitcher {
-                                objectName: "adjustmentTransferStrategySwitcher"
-                                Layout.fillWidth: true
-                                entries: [
-                                    { value: "paste", label: qsTr("Paste") },
-                                    { value: "merge", label: qsTr("Merge") }
-                                ]
-                                currentValue: dialog.pasteStrategy
-                                onSelected: function(index, value) {
-                                    dialog.pasteStrategy = value
-                                }
-                            }
-
-                            Label {
-                                objectName: "adjustmentTransferMergeNotice"
-                                Layout.fillWidth: true
-                                visible: dialog.pasteStrategy === "merge"
-                                text: qsTr("Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn't available when transferring to multiple images.")
-                                color: appTheme.textMutedColor
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                wrapMode: Text.WordWrap
-                            }
-                        }
+                        // Paste always creates a new root-relative Version. Merge is not offered.
 
                         Rectangle {
                             Layout.fillWidth: true

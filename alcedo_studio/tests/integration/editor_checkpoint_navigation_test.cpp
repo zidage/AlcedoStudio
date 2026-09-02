@@ -35,7 +35,7 @@ void SpinEventLoop(int ms) {
   loop.exec();
 }
 
-/// Register an EditorSave task holding the five checkpoint locks. Returns the
+/// Register an EditorSave task holding the four checkpoint locks. Returns the
 /// task id for later FinishTask control.
 auto RegisterEditorSaveTask(BackgroundTaskController& registry) -> QString {
   BackgroundTaskSnapshot snap;
@@ -51,7 +51,6 @@ auto RegisterEditorSaveTask(BackgroundTaskController& registry) -> QString {
       {InteractionCapability::SwitchWorkspace, 0, QStringLiteral("Saving editor changes")},
       {InteractionCapability::CheckoutVersion, 0, QStringLiteral("Saving editor changes")},
       {InteractionCapability::PasteAdjustments, 0, QStringLiteral("Saving editor changes")},
-      {InteractionCapability::MergeAdjustments, 0, QStringLiteral("Saving editor changes")},
   };
   return registry.RegisterTask(snap);
 }
@@ -80,7 +79,6 @@ TEST_F(EditorCheckpointNavigationTest,
   EXPECT_TRUE(policy->CanSwitchWorkspace());
   EXPECT_TRUE(policy->CanCheckoutVersion());
   EXPECT_TRUE(policy->CanPasteAdjustments());
-  EXPECT_TRUE(policy->CanMergeAdjustments());
 
   // ── Simulate a save starting (the real path begins when the user requests
   //     navigation away from A). The EditorSessionTaskPort publishes this
@@ -89,19 +87,17 @@ TEST_F(EditorCheckpointNavigationTest,
   EXPECT_FALSE(task_id.isEmpty());
   SpinEventLoop(100);
 
-  // ── While save is active, all five checkpoint capabilities are blocked ──
+  // ── While save is active, all four checkpoint capabilities are blocked ──
   EXPECT_FALSE(policy->CanSelectEditorImage());
   EXPECT_FALSE(policy->CanSwitchWorkspace());
   EXPECT_FALSE(policy->CanCheckoutVersion());
   EXPECT_FALSE(policy->CanPasteAdjustments());
-  EXPECT_FALSE(policy->CanMergeAdjustments());
 
-  // ── The reason is non-empty for all five ──
+  // ── The reason is non-empty for all four ──
   EXPECT_FALSE(policy->SelectEditorImageReason().isEmpty());
   EXPECT_FALSE(policy->SwitchWorkspaceReason().isEmpty());
   EXPECT_FALSE(policy->CheckoutVersionReason().isEmpty());
   EXPECT_FALSE(policy->PasteAdjustmentsReason().isEmpty());
-  EXPECT_FALSE(policy->MergeAdjustmentsReason().isEmpty());
 
   // ── Non-checkpoint capabilities remain available ──
   EXPECT_TRUE(policy->CanChangeSemanticModel());
@@ -122,19 +118,18 @@ TEST_F(EditorCheckpointNavigationTest,
   }
   if (points.transfer_actions) {
     EXPECT_FALSE(points.transfer_actions->property("pasteEnabled").toBool());
-    EXPECT_FALSE(points.transfer_actions->property("mergeEnabled").toBool());
+    EXPECT_FALSE(HasProperty(points.transfer_actions, "mergeEnabled"));
   }
 
   // ── Finish the save (DuckDB commit + journal truncate simulated) ──
   tasks->FinishTask(task_id, BackgroundTaskState::Succeeded);
   SpinEventLoop(100);
 
-  // ── All five recover; B can now be loaded ──
+  // ── All four recover; B can now be loaded ──
   EXPECT_TRUE(policy->CanSelectEditorImage());
   EXPECT_TRUE(policy->CanSwitchWorkspace());
   EXPECT_TRUE(policy->CanCheckoutVersion());
   EXPECT_TRUE(policy->CanPasteAdjustments());
-  EXPECT_TRUE(policy->CanMergeAdjustments());
 
   // ── QML surfaces recover ──
   if (points.filmstrip) {
@@ -149,9 +144,7 @@ TEST_F(EditorCheckpointNavigationTest,
   }
   if (points.transfer_actions) {
     EXPECT_TRUE(points.transfer_actions->property("pasteEnabled").toBool());
-    if (HasProperty(points.transfer_actions, "mergeEnabled")) {
-      EXPECT_TRUE(points.transfer_actions->property("mergeEnabled").toBool());
-    }
+    EXPECT_FALSE(HasProperty(points.transfer_actions, "mergeEnabled"));
   }
 }
 
@@ -183,7 +176,6 @@ TEST_F(EditorCheckpointNavigationTest,
   EXPECT_TRUE(policy->CanSwitchWorkspace());
   EXPECT_TRUE(policy->CanCheckoutVersion());
   EXPECT_TRUE(policy->CanPasteAdjustments());
-  EXPECT_TRUE(policy->CanMergeAdjustments());
 
   // ── QML surfaces recover; no thumbnail invalidation or B load occurred ──
   auto points = FindGuardedEntrypoints(*loaded);
@@ -198,9 +190,7 @@ TEST_F(EditorCheckpointNavigationTest,
   }
   if (points.transfer_actions) {
     EXPECT_TRUE(points.transfer_actions->property("pasteEnabled").toBool());
-    if (HasProperty(points.transfer_actions, "mergeEnabled")) {
-      EXPECT_TRUE(points.transfer_actions->property("mergeEnabled").toBool());
-    }
+    EXPECT_FALSE(HasProperty(points.transfer_actions, "mergeEnabled"));
   }
 
   // ── PolicyChanged fires on failure just as it does on success ──

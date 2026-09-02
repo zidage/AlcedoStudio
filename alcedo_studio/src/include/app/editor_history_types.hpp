@@ -36,32 +36,34 @@ enum class EditorHistoryTimelinePosition : std::uint8_t {
 };
 
 /// Read-only projection of one immutable commit on the active Version's
-/// first-parent path or in-memory redo suffix. A merge row keeps its ordered
-/// second parent and resolved field keys visible.
+/// first-parent path or in-memory redo suffix.
 ///
-/// The projection carries the semantic ordinary-edit payload (before/after
-/// values and enabled state) so the UI presentation helper can format
-/// user-facing text without parsing commit JSON. The port fills raw projection
-/// data only; display text is derived by the presentation helper on the UI side.
+/// Typed pipeline batches fill owner identity, saved display names, and
+/// localization data from the stored batch. The port never infers a target
+/// from a live selection or a stage name.
 struct EditorHistoryCommit {
   commit_hash_t                commit_hash{};
   head_commit_hash_t           first_parent_hash = std::nullopt;
-  std::optional<commit_hash_t> second_parent_hash;
-  EditCommitKind               kind          = EditCommitKind::kEdit;
   std::uint64_t                created_at_ns = 0;
-  /// Stable editor field key (e.g. "exposure"); "merge" for merge commits.
+  /// Stable editor field key (e.g. "exposure").
   std::string                  field_key;
-  /// Ordinary-edit semantic payload, serialized JSON (the operator params
-  /// before and after the settled edit). Empty for merge commits. Carried as a
-  /// string so the projection header has no JSON dependency; the UI
-  /// presentation helper parses it in a focused, testable module.
+  /// Semantic payload serialized JSON.
   std::string                  before_value_json;
   std::string                  after_value_json;
   bool                         before_enabled = false;
   bool                         after_enabled  = true;
-  /// Ordered resolved field keys carried by a merge commit; empty for edits.
-  std::vector<std::string>     merge_field_keys;
   EditorHistoryTimelinePosition position = EditorHistoryTimelinePosition::Applied;
+  /// Saved typed-batch operation kind text.
+  std::string                  operation_kind;
+  /// Stable localization key from the typed batch. Empty when unused.
+  std::string                  presentation_key;
+  /// Localization arguments JSON object from the typed batch. Empty when unused.
+  std::string                  presentation_args_json;
+  std::string                  node_id;
+  std::string                  node_display_name;
+  std::string                  adjustment_instance_id;
+  std::string                  mask_id;
+  std::string                  mask_display_name;
 };
 
 /// Stable, typed history projection consumed by QML models. Recovery journal

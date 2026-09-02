@@ -8,10 +8,14 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "app/editor_pipeline_command_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -387,24 +391,22 @@ auto DefaultEnabledForField(std::string_view field_key) -> bool {
   return true;
 }
 
-auto ApplyOrdinaryPayloadToLive(CPUPipelineExecutor& executor, const OrdinaryEditPayload& payload,
-                                bool use_after_value, std::string* error) -> bool {
-  const auto field_key =
-      EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
-  if (!field_key.has_value()) {
-    if (error) *error = "Unknown operator in history payload";
-    return false;
+constexpr const char* kCurrentPanelFields[] = {
+    "exposure", "contrast", "white",   "black",     "shadows",    "highlights", "curve",
+    "saturation", "vibrance", "tint", "hls",       "color_wheel", "lut",
+    "clarity",    "sharpen",  "odt",  "film_grain", "halation",   "crop_rotate", "raw_decode",
+    "lens_calib", "color_temp"};
+
+auto CpuParamsFromModelJson(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
+  if (field_key == "exposure" && params.contains("exposure_ev")) {
+    params["exposure"] = params.at("exposure_ev");
+    params.erase("exposure_ev");
   }
-  const auto spec = FieldSpec(*field_key);
-  if (!spec.has_value()) {
-    if (error) *error = "Unknown editor field for history payload: " + *field_key;
-    return false;
+  if (field_key == "lut" && params.contains("cube_path") && !params.contains("ocio_lmt")) {
+    params["ocio_lmt"] = params.at("cube_path");
+    params.erase("cube_path");
   }
-  EditorAdjustmentOperatorState state;
-  const auto& value = use_after_value ? payload.after_value : payload.before_value;
-  state.params      = value.is_null() ? nlohmann::json::object() : value;
-  state.enabled     = use_after_value ? payload.after_enabled : payload.before_enabled;
-  return ApplyEditorAdjustmentOperatorState(executor, *spec, state, error);
+  return params;
 }
 
 }  // namespace
@@ -445,35 +447,66 @@ auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& e
 auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const CommitGraph& graph,
                                       const EditCommit& commit, bool use_after_value,
                                       std::string* error) -> bool {
+  (void)graph;
   try {
-    if (commit.GetKind() == EditCommitKind::kEdit) {
-      return ApplyOrdinaryPayloadToLive(
-          executor, OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON()), use_after_value, error);
+    if (!IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+      if (error) *error = "Commit payload is not a typed batch";
+      return false;
     }
-    if (commit.GetKind() == EditCommitKind::kMerge) {
-      const auto payload = MergeEditPayload::FromJSON(commit.GetPayloadJSON());
-      for (const auto& field : payload.fields) {
-        OrdinaryEditPayload ordinary;
-        ordinary.operator_type   = field.operator_type;
-        ordinary.stage_name      = field.stage_name;
-        ordinary.field_name      = field.field_name;
-        ordinary.before_value    = field.before_value;
-        ordinary.after_value     = field.resolved_value;
-        ordinary.before_enabled  = field.before_enabled;
-        ordinary.after_enabled   = field.resolved_enabled;
-        if (!ApplyOrdinaryPayloadToLive(executor, ordinary, use_after_value, error)) {
-          return false;
-        }
+    const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+    for (const auto& change : batch.changes) {
+      const auto* parameter = std::get_if<SetParameterChange>(&change);
+      if (parameter == nullptr) {
+        continue;
       }
-      return true;
+      const auto spec = FieldSpec(parameter->target.field_key);
+      if (!spec.has_value()) {
+        continue;
+      }
+      EditorAdjustmentOperatorState state;
+      auto params = use_after_value ? parameter->after_value : parameter->before_value;
+      if (parameter->target.field_key == "exposure" && params.contains("exposure_ev")) {
+        params["exposure"] = params.at("exposure_ev");
+        params.erase("exposure_ev");
+      }
+      state.params  = std::move(params);
+      state.enabled = use_after_value ? parameter->after_enabled : parameter->before_enabled;
+      if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
+        return false;
+      }
     }
-    if (error) *error = "Unsupported commit kind for live pipeline apply";
-    return false;
+    return true;
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
   }
-  (void)graph;
+}
+
+auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
+                                      const PipelineDocument& document, std::string* error)
+    -> bool {
+  for (const char* field : kCurrentPanelFields) {
+    std::string field_error;
+    const auto  target = CompleteCurrentPanelParameterTarget(document, field, &field_error);
+    if (!target.has_value()) {
+      continue;
+    }
+    nlohmann::json json;
+    if (!ReadEditorParameterJson(document, *target, &json, error)) {
+      return false;
+    }
+    const auto spec = FieldSpec(field);
+    if (!spec.has_value()) {
+      continue;
+    }
+    EditorAdjustmentOperatorState state;
+    state.params  = CpuParamsFromModelJson(field, std::move(json));
+    state.enabled = true;
+    if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const CommitGraph& graph,
@@ -502,6 +535,12 @@ auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const Co
     }
     for (const auto& hash : graph.FirstParentChain(head)) {
       if (!ApplyHistoryCommitToLivePipeline(executor, graph, graph.GetCommit(hash), true, error)) {
+        restore();
+        return false;
+      }
+    }
+    if (const auto document = executor.GpuDagDocument()) {
+      if (!RemirrorCurrentPanelFromDocument(executor, *document, error)) {
         restore();
         return false;
       }

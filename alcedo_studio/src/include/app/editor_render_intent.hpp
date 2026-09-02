@@ -36,6 +36,14 @@ enum class EditorRenderReason : std::uint8_t {
   // A newly selected scope needs a fresh final-display frame, using the
   // current viewport region just like the deprecated QWidget scope switch.
   ScopeRefresh,
+  GraphTopologyChanged,
+  SettledMaskEdit,
+  // Same-image Version checkout / root / branch: one Quality rebuild of the
+  // live DAG. Distinct from InitialFrame so the session stays Interactive.
+  VersionDocumentChanged,
+  // Typed Paste replaced transferable Grades, Masks, and DRT/Post on a new
+  // root-relative Version. Quality rebuild of the live DAG.
+  PastedPipelineDocument,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -147,6 +155,10 @@ struct EditorRenderResult {
     case EditorRenderReason::UndoRedo:
     case EditorRenderReason::CropRotate:
     case EditorRenderReason::ScopeRefresh:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -159,6 +171,10 @@ struct EditorRenderResult {
       return EditorRenderQuality::Detail;
     case EditorRenderReason::SettledAdjustment:
     case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -203,6 +219,10 @@ struct EditorRenderResult {
     case EditorRenderReason::ImageSwitch:
     case EditorRenderReason::Retry:
     case EditorRenderReason::CropRotate:
+    case EditorRenderReason::GraphTopologyChanged:
+    case EditorRenderReason::SettledMaskEdit:
+    case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return true;
   }
   return true;

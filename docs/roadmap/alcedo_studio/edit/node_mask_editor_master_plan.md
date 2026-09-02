@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: NM0 and NM2 complete；NM1 in progress；NM3–NM8 planned。NML cancelled (2026-08-30).
+Status: NM0, NM2, and NM3 complete；NM1 in progress；NM4–NM8 planned。NML cancelled (2026-08-30).
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
 executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
@@ -1154,8 +1154,8 @@ Adjustment Transfer Paste
 | NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | 单 live document；共享 executor；R 修复任务请求、后台资源占用、使用权与导出 recipe；随后统一 document I/O |
 | NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
 | NM2 — Multi-Grade Runtime and Ownership | complete | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
-| NM3 — Multi-Mask Model and Runtime | planned | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
-| NM4 — History, Version, Recovery, and Paste | planned | `node_mask_editor/phase_nm4_history_version_paste_plan.md` | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
+| NM3 — Multi-Mask Model and Runtime | complete | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
+| NM4 — History, Version, Recovery, and Paste | planned | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
 | NM5 — QuickQanava Nodes Panel | planned | `node_mask_editor/phase_nm5_nodes_panel_plan.md` | 左侧 Nodes 面板连接真实 command/history/render 路径 |
 | NM6 — Node-aware Adjustment Stack | planned | `node_mask_editor/phase_nm6_node_aware_adjustments_plan.md` | 右侧参数面板按 Develop/Color Grade/DRT/Post context 工作 |
 | NM7 — Viewer Mask Authoring | planned | `node_mask_editor/phase_nm7_viewer_mask_authoring_plan.md` | Brush/Radial/Linear、QSG overlay、Interactive/Quality 和 history 完整连通 |
@@ -1348,6 +1348,8 @@ MaskAssetKey 行为。先按旧单 mask 模型写 history 会造成第二次数�
 immutable asset Undo 前置能力都有测试；尚不开放 viewer 绘制 UI。
 
 ### 21.5 Phase NM4 — History, Version, Recovery, and Paste
+
+执行方案：[Phase NM4 History, Version, recovery, and Paste](node_mask_editor/phase_nm4_history_version_paste_plan.md)。
 
 **为什么排在 UI 前：** 一旦用户能够新增节点或绘制 Mask，这些操作就必须立即具备 Undo、
 Version、journal、recovery 和 reopen 语义，不能把持久性留到 UI 之后补做。

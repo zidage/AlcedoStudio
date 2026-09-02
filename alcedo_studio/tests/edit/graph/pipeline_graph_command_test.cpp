@@ -114,7 +114,7 @@ TEST(GpuDagModelGraph, RemovePrimaryGradeKeepsRemainingGradesAndValidBackbone) {
   EXPECT_EQ(path[0], NodeId{"develop"});
   EXPECT_EQ(path[1], NodeId{"grade.b"});
   EXPECT_EQ(path[2], NodeId{"drt"});
-  EXPECT_EQ(document.PrimaryGrade(), nullptr);
+  EXPECT_EQ(document.PrimaryGrade(), remaining);
   EXPECT_TRUE(document.Graph().ValidateImageBackbone().empty());
 }
 
@@ -279,11 +279,10 @@ TEST(GpuDagModelGraph, GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbs
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
-  ASSERT_EQ(document.PrimaryGrade(), nullptr);
-
   const auto* remaining =
       dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode("grade.b"));
   ASSERT_NE(remaining, nullptr);
+  ASSERT_EQ(document.PrimaryGrade(), remaining);
   const auto plan = GraphCompiler::CompileStatic(document, DummyCompileSource());
   EXPECT_TRUE(plan.Contains(GpuPassKind::PrimaryColorGrade));
   ASSERT_NE(plan.FirstGrade(), nullptr);

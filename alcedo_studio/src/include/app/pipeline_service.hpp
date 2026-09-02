@@ -30,6 +30,8 @@
 
 namespace alcedo {
 
+class MaskStore;
+
 /// Live editor handle: one pipeline executor (parameter table + run state) plus a
 /// pointer to the image's CommitGraph.
 ///
@@ -40,14 +42,14 @@ namespace alcedo {
 /// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
 ///   the active Version tip and its first-parent chain fold. They are not independent
 ///   caches; never write a parallel head field onto this guard.
-/// - On commit (including merge), history advances head once and folds chain hash once.
+/// - On commit, history advances head once and folds chain hash once.
 ///   Applying that commit to the table may call SetOperator many times; those calls are
 ///   not separate chain-hash steps.
-/// - Serialized checkpoint identity is (head, chain, params). Load compares that label
-///   to the history tip; match skips first-parent replay.
+/// - Serialized checkpoint identity is (root, head, chain, document). Load compares
+///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
-  /// Authoritative format-version-2 graph used by the CUDA product renderer.
+  /// Authoritative pipeline DAG used by the CUDA product renderer.
   std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
@@ -67,6 +69,9 @@ struct PipelineGuard {
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
+  /// Immutable replay start for Version checkout and recovery. Loaded with the
+  /// stored root document; never mutated after the image enters history.
+  std::shared_ptr<const PipelineDocument> root_document_;
   bool                                 serialized_state_needs_writeback_ = false;
 
   /// Sole live CommitGraph for this element. Active Version head is the only logical
@@ -82,7 +87,7 @@ struct PipelineGuard {
   }
 
   /// First-parent chain fold for the active tip. Same algorithm history uses when
-  /// recording commits; used as the checkpoint label next to exported params.
+  /// recording commits; used as the checkpoint label next to the saved document.
   [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t {
     if (!commit_graph_) {
       return {};
@@ -168,13 +173,13 @@ class PipelineMgmtService final {
     pipeline_load_count_      = 0;
   }
 
-  /** @brief Save the guard's authoritative GPU DAG document as format version 2. */
+  /** @brief Save the guard's authoritative GPU DAG document. */
   void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
 
-  /// Load editor params for `id` using history tip as authority.
-  /// If checkpoint (params + head/chain label) matches active Version tip, import params
-  /// (skip first-parent replay). Otherwise rebuild from root + first-parent chain and mark
-  /// write-back. Thumbnail/export must use LoadPipeline (no editor history validation).
+  /// Load editor document for `id` using history tip as authority.
+  /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
+  /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
+  /// batches and mark write-back. Thumbnail/export must use LoadPipeline.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
@@ -186,35 +191,42 @@ class PipelineMgmtService final {
     editor_pipeline_history_rebuild_count_ = 0;
   }
 
-  /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
-  /// image. Calling this again for an image that already has a root verifies and loads that root;
-  /// it never replaces the stored root state.
+  /// Persist the current metadata-resolved document as the immutable root for a newly imported
+  /// image. When @p raw_color_context is null (non-RAW RGB files), Rec.709 XYZ→camera matrices
+  /// are bound onto the Develop node before the root is written. Calling this again for an image
+  /// that already has a root verifies and loads that root; it never replaces the stored root state.
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
-  /// Switch the live editor parameter table to another Version on the same image.
+  /// Switch the live editor document to another Version on the same image.
   ///
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: sets the active Version on the CommitGraph (history-owned head moves here), then
-  /// rebuilds the executor params from the immutable root plus the first-parent chain under the
-  /// render lock (or imports a matching checkpoint if present). On any failure the prior Version
-  /// remains active and the prior pipeline is restored — never publishes a partially reconstructed
-  /// pipeline. Does not invent a second head on the guard.
+  /// Behavior: resolves the target first-parent chain and Mask assets, then rebuilds the same live
+  /// document from the immutable root plus typed batches under the render lock. On any failure the
+  /// prior Version remains active and the prior document is restored. Does not invent a second head
+  /// on the guard.
   ///
-  /// @return true when the Version tip and pipeline params both match the checked-out head.
+  /// @param mask_store Persistent Mask store used to verify Brush keys before the new head is
+  ///        published. Null is accepted when the target document references no Mask assets.
+  /// @return true when the Version tip and live document both match the checked-out head.
   auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                     const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+                                     const version_ref_id_t& version_id, std::string* error = nullptr,
+                                     MaskStore* mask_store = nullptr) -> bool;
 
-  /// Rebuild the executor params from the immutable root and the first-parent chain of the
+  /// Rebuild the live document from the immutable root and the first-parent chain of the
   /// currently active Version tip. Used when the checkpoint label does not match history.
+  ///
+  /// @param mask_store Persistent Mask store used to verify Brush keys. Null is accepted when
+  ///        the rebuilt document references no Mask assets.
   auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                                 std::string*                          error = nullptr) -> bool;
+                                                 std::string*                          error = nullptr,
+                                                 MaskStore* mask_store = nullptr) -> bool;
 
-  /// Clean project-exit garbage collection: mark from every Version head through both parents and
-  /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
-  /// shutdown must not call this.
+  /// Clean project-exit garbage collection: mark from every Version head through first-parent
+  /// reachability and delete unreachable EditCommit rows. Must run only after the final
+  /// successful save; abnormal shutdown must not call this.
   /// @return number of deleted commit rows.
   auto               CollectUnreachableEditCommits() -> std::size_t;
 
@@ -232,8 +244,8 @@ class PipelineMgmtService final {
   void SyncPipeline(sl_element_id_t id);
 };
 
-/// Checkpoint label: which history tip the serialized params claim to match.
-/// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
+/// Checkpoint label: which history tip the serialized document claims to match.
+/// Not a pipeline-owned head — only a tag stored next to the document blob.
 struct PipelineCheckpointIdentity {
   head_commit_hash_t       head = std::nullopt;
   transaction_chain_hash_t chain{};
@@ -245,5 +257,16 @@ struct PipelineCheckpointIdentity {
                                                 head_commit_hash_t              logical_head,
                                                 const transaction_chain_hash_t& logical_chain)
     -> bool;
+
+/**
+ * @brief Replace the guard's writable document and bind it to the existing executor.
+ *
+ * Does not clone @p document again. Does not take the render lock.
+ *
+ * @pre Caller holds the executor render lock when @p guard is live.
+ * @param guard Loaded editor guard that already owns an executor.
+ * @param document Complete DAG that becomes the only writable document.
+ */
+void BindLivePipelineDocument(PipelineGuard& guard, PipelineDocument document);
 
 }  // namespace alcedo

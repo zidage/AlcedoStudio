@@ -280,8 +280,6 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("checkoutVersion");
     case InteractionCapability::PasteAdjustments:
       return QStringLiteral("pasteAdjustments");
-    case InteractionCapability::MergeAdjustments:
-      return QStringLiteral("mergeAdjustments");
   }
   return QStringLiteral("unknown");
 }

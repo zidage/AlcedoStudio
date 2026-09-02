@@ -4,125 +4,67 @@
 
 #pragma once
 
-#include <optional>
-#include <set>
-#include <span>
 #include <string>
-#include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
-#include "app/editor_adjustment_types.hpp"
-#include "app/pipeline_service.hpp"
+#include "app/document_transfer.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "edit/history/commit_types.hpp"
-#include "edit/history/edit_commit.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/pipeline/pipeline.hpp"
 #include "json.hpp"
-#include "type/type.hpp"
 
 namespace alcedo {
 
-class CPUPipelineExecutor;
-
+/**
+ * @brief Façade for Copy/Paste of transferable Color Grade, Mask, and DRT/Post data.
+ *
+ * Capture and JSON live in @ref CaptureDocumentTransfer. Paste builds one typed
+ * batch and one root-relative Version. This type does not create merge commits.
+ */
 class AdjustmentTransferService final {
  public:
   AdjustmentTransferService() = delete;
 
-  [[nodiscard]] static auto Capture(PipelineExecutor&                  source,
-                                    const AdjustmentTransferSelection& selection = {})
+  /**
+   * @brief Capture transferable DAG data from @p document.
+   *
+   * @param document Source pipeline DAG.
+   * @param mask_store Required when the document references persistent Brush keys.
+   */
+  [[nodiscard]] static auto Capture(const PipelineDocument& document,
+                                    MaskStore*              mask_store = nullptr)
       -> AdjustmentTransferPackage;
 
-  // Accepts stable external JSON, for example:
-  // {"schema":"alcedo.adjustment_transfer.v1","operators":[{"operator":"exposure",
-  // "params":{"exposure":2.0}}]}
+  /**
+   * @brief Parse a portable transfer document. Operator-list packages are rejected.
+   */
   [[nodiscard]] static auto ImportPackage(const nlohmann::json& package_json)
       -> AdjustmentTransferPackage;
+
+  /** @brief Canonical JSON for clipboard or disk. Includes fingerprint. */
   [[nodiscard]] static auto ExportPackage(const AdjustmentTransferPackage& package)
       -> nlohmann::json;
-  /// Stable fingerprint of the canonical package document used to reject a
-  /// merge completion that no longer belongs to its preview.
+
+  /** @brief Hash of the canonical package without the fingerprint field. */
   [[nodiscard]] static auto PackageFingerprint(const AdjustmentTransferPackage& package)
       -> std::string;
 
-  // Returns true when at least one target operator actually changed.
-  static auto Apply(PipelineExecutor& target, const AdjustmentTransferPackage& package) -> bool;
-
-  // Loads, applies, saves, and syncs selected pipelines. The returned applied ids are the ids whose
-  // pipelines changed; callers can invalidate thumbnail caches and refresh album rows for them.
-  // This low-level overload is intended for direct pipeline tooling; UI/CLI project operations
-  // should prefer the versioned overload below so pasted adjustments participate in edit history.
-  [[nodiscard]] static auto Apply(PipelineMgmtService&             pipeline_service,
-                                  std::span<const sl_element_id_t> target_ids,
-                                  const AdjustmentTransferPackage& package)
-      -> AdjustmentApplyResult;
-
-  // --- Phase 6C-8: Mini-Git Paste and Merge ---
-
-  [[nodiscard]] static auto BuildRootRelativeCommits(const AdjustmentTransferPackage& package,
-                                                     const root_id_t&                 root_id)
-      -> std::vector<EditCommit>;
-
-  /// Paste adjustments as a new root-relative Version. The new Version never inherits the
-  /// previously active Version's commits. The caller owns the CommitGraph; after a successful
-  /// paste the graph contains the new Version ref, the root-relative commit chain, and the
-  /// active Version is set to the new Version. The serialized pipeline state is stored on
-  /// ImageEditState.
-  [[nodiscard]] static auto PasteAsRootRelativeVersion(CommitGraph&         graph,
-                                                       const AdjustmentTransferPackage& package,
-                                                       std::string version_display_name)
-      -> AdjustmentPasteResult;
-
-  [[nodiscard]] static auto PasteAsRootRelativeVersion(CommitGraph&         graph,
-                                                       PipelineMgmtService& pipeline_service,
-                                                       sl_element_id_t      element_id,
-                                                       const AdjustmentTransferPackage& package,
-                                                       std::string version_display_name)
-      -> AdjustmentPasteResult;
-
-  // Shared merge core. The merge semantic logic (conflict detection, incoming
-  // ancestry insertion, field resolution via operator MergeParams) lives here
-  // and is reused by both the live editor merge
-  // (`EditorHistoryTransfer::BeginLiveMerge` / `CompleteLiveMerge`) and the
-  // batch merge below. Only the commit-insertion integration differs: the
-  // editor appends through the session WAL (`PrepareAppendMerge` /
-  // `PublishPreparedEdit`) and mutates the live pipeline; the batch inserts
-  // directly on the CommitGraph and rebuilds. Do not reintroduce a
-  // service-level InitiateMerge that stages temporary Version refs or shadow
-  // graphs — both entrypoints operate on a caller-owned graph.
-
-  /// Detect merge conflicts between a target's live pipeline and an incoming
-  /// package. Emits one conflict per incoming operator whose params or enabled
-  /// flag differ from the current state (or that the target does not yet have).
-  [[nodiscard]] static auto DetectMergeConflicts(
-      CPUPipelineExecutor& pipeline, const AdjustmentTransferPackage& package,
-      std::vector<AdjustmentMergeConflict>* conflicts, std::string* error = nullptr) -> bool;
-
-  /// Build and insert the incoming root-relative ancestry commits, returning
-  /// the incoming head the merge commit will name as its second parent. Returns
-  /// nullopt when the package has no valid adjustments.
-  [[nodiscard]] static auto InsertIncomingAncestryCommits(
-      CommitGraph& graph, const AdjustmentTransferPackage& package)
-      -> std::optional<commit_hash_t>;
-
-  /// Resolve one conflict into a MergeFieldDelta using the operator's
-  /// MergeParams so target image-local data the operator keeps (lens EXIF,
-  /// as-shot baseline) survives the merge. `choice` selects incoming/current.
-  [[nodiscard]] static auto BuildMergeFieldDelta(CPUPipelineExecutor&       pipeline,
-                                                  const AdjustmentMergeConflict& conflict,
-                                                  OperatorMergeChoice            choice)
-      -> MergeFieldDelta;
-
-  /// Batch merge: advance a target's active Version head to a two-parent merge
-  /// commit whose field deltas resolve every conflict as "use all incoming".
-  /// No new Version ref is created (git-merge on the current branch); the
-  /// active Version keeps its identity and carries the merge commit, preserving
-  /// the target's prior edit history as the first parent. The caller owns the
-  /// graph and the live pipeline (read for current values + MergeParams), then
-  /// rebuilds and persists the pipeline. Holds no session state.
-  [[nodiscard]] static auto MergeIntoActiveVersion(
-      CommitGraph& graph, CPUPipelineExecutor& live_pipeline,
-      const AdjustmentTransferPackage& package) -> AdjustmentPasteResult;
+  /**
+   * @brief Paste as a new Version at the target image root.
+   *
+   * Validates and remaps before any graph mutation. Inserts one typed Paste
+   * commit whose first parent is the root. Sets the new Version active.
+   * Does not mutate a live document; callers rebuild from the new head.
+   *
+   * @param graph Caller-owned commit graph.
+   * @param root_document Target immutable root. Develop and geometry stay here.
+   * @param package Validated transfer document.
+   * @param version_display_name Requested Version label; uniquified if needed.
+   * @param options Identity source and Mask stores.
+   */
+  [[nodiscard]] static auto PasteAsRootRelativeVersion(
+      CommitGraph& graph, const PipelineDocument& root_document,
+      const AdjustmentTransferPackage& package, std::string version_display_name,
+      const DocumentTransferPasteOptions& options = {}) -> AdjustmentPasteResult;
 };
 
 }  // namespace alcedo

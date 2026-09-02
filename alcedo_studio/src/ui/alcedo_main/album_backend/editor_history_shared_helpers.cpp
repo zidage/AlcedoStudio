@@ -8,10 +8,12 @@
 #include <ctime>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo::ui {
@@ -305,16 +307,16 @@ auto EnabledForAdjustmentParams(const nlohmann::json& params) -> bool {
 }
 
 auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string {
-  if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
-    return "merge";
+  if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+    try {
+      const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+      const auto row   = alcedo::ProjectPipelineEditHistory(batch);
+      return row.field_key;
+    } catch (...) {
+      return {};
+    }
   }
-  try {
-    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-    const auto key = alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
-    return key.has_value() ? *key : std::string{};
-  } catch (...) {
-    return {};
-  }
+  return {};
 }
 
 auto CommitRowFromEdit(const alcedo::EditCommit& commit,
@@ -323,35 +325,34 @@ auto CommitRowFromEdit(const alcedo::EditCommit& commit,
   alcedo::EditorHistoryCommit row;
   row.commit_hash = commit.GetCommitHash();
   row.first_parent_hash = commit.GetFirstParentHash();
-  row.second_parent_hash = commit.GetSecondParentHash();
-  row.kind = commit.GetKind();
   row.created_at_ns = commit.GetCreatedAtNs();
   row.position = position;
-  if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
-    row.field_key = "merge";
+  if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
     try {
-      const auto merge_payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
-      row.merge_field_keys.reserve(merge_payload.fields.size());
-      for (const auto& delta : merge_payload.fields) {
-        const auto key = alcedo::EditorAdjustmentFieldKey(delta.stage_name, delta.operator_type);
-        row.merge_field_keys.push_back(key.value_or(delta.field_name));
+      const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+      const auto typed = alcedo::ProjectPipelineEditHistory(batch);
+      row.operation_kind = std::string{alcedo::PipelineEditOperationKindText(typed.operation_kind)};
+      row.presentation_key = typed.presentation_key;
+      row.presentation_args_json =
+          typed.presentation_args.is_null() ? std::string{} : typed.presentation_args.dump();
+      row.node_id = typed.node_id;
+      row.node_display_name = typed.node_display_name;
+      row.adjustment_instance_id = typed.adjustment_instance_id;
+      row.mask_id = typed.mask_id;
+      row.mask_display_name = typed.mask_display_name;
+      row.field_key = typed.field_key;
+      row.before_value_json = typed.before_display_value.is_null()
+                                  ? std::string{}
+                                  : typed.before_display_value.dump();
+      row.after_value_json =
+          typed.after_display_value.is_null() ? std::string{} : typed.after_display_value.dump();
+      if (const auto* parameter = std::get_if<alcedo::SetParameterChange>(&batch.changes.front())) {
+        row.before_enabled = parameter->before_enabled;
+        row.after_enabled  = parameter->after_enabled;
       }
     } catch (...) {
+      row.field_key = CommitFieldKey(commit);
     }
-    return row;
-  }
-  try {
-    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-    const auto key = alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
-    row.field_key = key.value_or(std::string{});
-    row.before_value_json =
-        payload.before_value.is_null() ? std::string{} : payload.before_value.dump();
-    row.after_value_json =
-        payload.after_value.is_null() ? std::string{} : payload.after_value.dump();
-    row.before_enabled = payload.before_enabled;
-    row.after_enabled = payload.after_enabled;
-  } catch (...) {
-    row.field_key = CommitFieldKey(commit);
   }
   return row;
 }
@@ -381,51 +382,6 @@ auto UniqueVersionName(const alcedo::CommitGraph& graph, std::string requested,
 
 namespace {
 
-auto ResolveSnapshotFieldAtHead(const alcedo::CommitGraph& graph,
-                                const alcedo::head_commit_hash_t& head,
-                                alcedo::OperatorType operator_type,
-                                alcedo::PipelineStageName stage_name,
-                                alcedo::EditorAdjustmentOperatorState* state,
-                                std::string* error) -> bool {
-  if (state == nullptr) {
-    if (error) *error = "Field resolve output is null";
-    return false;
-  }
-  try {
-    const auto chain = graph.FirstParentChain(head);
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-      const auto& commit = graph.GetCommit(*it);
-      if (commit.GetKind() == alcedo::EditCommitKind::kEdit) {
-        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-        if (payload.operator_type == operator_type && payload.stage_name == stage_name) {
-          state->params  = payload.after_value.is_null() ? nlohmann::json::object()
-                                                         : payload.after_value;
-          state->enabled = payload.after_enabled;
-          return true;
-        }
-      } else if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
-        const auto payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
-        for (const auto& field : payload.fields) {
-          if (field.operator_type == operator_type && field.stage_name == stage_name) {
-            state->params = field.resolved_value.is_null() ? nlohmann::json::object()
-                                                           : field.resolved_value;
-            state->enabled = field.resolved_enabled;
-            return true;
-          }
-        }
-      }
-    }
-    // The complete root snapshot represents this explicit default. A history commit may refer
-    // to a field that has not yet been written on the first-parent chain.
-    state->params  = nlohmann::json::object();
-    state->enabled = true;
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-}
-
 auto ApplySnapshotState(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                         const std::string& field_key,
                         const alcedo::EditorAdjustmentOperatorState& state,
@@ -449,68 +405,50 @@ auto ApplySnapshotState(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
   return true;
 }
 
-auto SnapshotFieldForPayload(const alcedo::OrdinaryEditPayload& payload,
-                             std::string* error) -> std::optional<std::string> {
-  const auto field_key =
-      alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
-  if (!field_key.has_value() && error) {
-    *error = "Committed adjustment does not map to a supported editor field";
+auto PanelSnapshotParams(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
+  if (field_key == "exposure" && params.contains("exposure_ev")) {
+    params["exposure"] = params.at("exposure_ev");
+    params.erase("exposure_ev");
   }
-  return field_key;
+  return params;
+}
+
+auto ApplyTypedBatchToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                               const alcedo::PipelineEditBatch& batch, bool use_after_value,
+                               std::string* error) -> bool {
+  for (const auto& change : batch.changes) {
+    const auto* parameter = std::get_if<alcedo::SetParameterChange>(&change);
+    if (parameter == nullptr) {
+      continue;
+    }
+    alcedo::EditorAdjustmentOperatorState state;
+    state.params  = PanelSnapshotParams(parameter->target.field_key,
+                                       use_after_value ? parameter->after_value
+                                                       : parameter->before_value);
+    state.enabled = use_after_value ? parameter->after_enabled : parameter->before_enabled;
+    if (!ApplySnapshotState(snapshot, parameter->target.field_key, state, error)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
-
-auto ApplyCommittedPayloadToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                                     const alcedo::OrdinaryEditPayload& payload,
-                                     bool use_after_value, std::string* error) -> bool {
-  if (snapshot == nullptr) {
-    if (error) *error = "Adjustment snapshot output is null";
-    return false;
-  }
-  if (!IsCompleteAdjustmentSnapshot(*snapshot, error)) return false;
-  const auto field_key = SnapshotFieldForPayload(payload, error);
-  if (!field_key.has_value()) return false;
-  alcedo::EditorAdjustmentOperatorState state;
-  state.params  = use_after_value ? payload.after_value : payload.before_value;
-  state.enabled = use_after_value ? payload.after_enabled : payload.before_enabled;
-  return ApplySnapshotState(snapshot, *field_key, state, error);
-}
 
 auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                                   const alcedo::CommitGraph& graph,
                                   const alcedo::EditCommit& commit, bool use_after_value,
                                   std::string* error) -> bool {
+  (void)graph;
   if (snapshot == nullptr || !IsCompleteAdjustmentSnapshot(*snapshot, error)) return false;
   try {
-    if (commit.GetKind() == alcedo::EditCommitKind::kEdit) {
-      return ApplyCommittedPayloadToSnapshot(
-          snapshot, alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON()), use_after_value,
-          error);
-    }
-    if (commit.GetKind() != alcedo::EditCommitKind::kMerge) {
-      if (error) *error = "Unknown history commit kind";
+    if (!alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+      if (error) *error = "Commit payload is not a typed batch";
       return false;
     }
-
-    const auto payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
-    for (const auto& field : payload.fields) {
-      alcedo::EditorAdjustmentOperatorState state;
-      if (use_after_value) {
-        state.params  = field.resolved_value;
-        state.enabled = field.resolved_enabled;
-      } else {
-        state.params  = field.before_value;
-        state.enabled = field.before_enabled;
-      }
-      const auto field_key = alcedo::EditorAdjustmentFieldKey(field.stage_name, field.operator_type);
-      if (!field_key.has_value()) {
-        if (error) *error = "Merge field does not map to a supported editor field";
-        return false;
-      }
-      if (!ApplySnapshotState(snapshot, *field_key, state, error)) return false;
-    }
-    return true;
+    return ApplyTypedBatchToSnapshot(
+        snapshot, alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON()), use_after_value,
+        error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;

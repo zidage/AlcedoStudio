@@ -53,15 +53,11 @@ inline auto MakeVersion(const Hash128& id, std::string name, const head_commit_h
 inline auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
                        std::string after_value_json,
                        const head_commit_hash_t&     first_parent  = std::nullopt,
-                       const std::optional<Hash128>& second_parent = std::nullopt,
-                       EditCommitKind                kind = EditCommitKind::kEdit,
                        EditorHistoryTimelinePosition position =
                            EditorHistoryTimelinePosition::Applied) -> EditorHistoryCommit {
   EditorHistoryCommit commit;
   commit.commit_hash        = id;
   commit.first_parent_hash  = first_parent;
-  commit.second_parent_hash = second_parent;
-  commit.kind               = kind;
   commit.created_at_ns      = id.low64();
   commit.field_key          = std::move(field_key);
   commit.before_value_json  = std::move(before_value_json);
@@ -79,21 +75,16 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     const auto second_version  = StableId(2);
     const auto first_commit    = StableId(11);
     const auto second_commit   = StableId(12);
-    const auto merge_commit    = StableId(13);
-    const auto incoming_commit = StableId(14);
 
     snapshot_.active_version_id = first_version;
-    snapshot_.active_head       = merge_commit;
+    snapshot_.active_head       = second_commit;
     snapshot_.versions          = {
-        MakeVersion(first_version, "Base Look", merge_commit, true),
+        MakeVersion(first_version, "Base Look", second_commit, true),
         MakeVersion(second_version, "Alternate Look", first_commit, false),
     };
     snapshot_.commits = {
-        MakeCommit(merge_commit, "merge", std::string{}, std::string{}, second_commit,
-                   incoming_commit, EditCommitKind::kMerge,
-                   EditorHistoryTimelinePosition::Current),
         MakeCommit(second_commit, "contrast", R"({"contrast":0.0})", R"({"contrast":12.0})",
-                   first_commit),
+                   first_commit, EditorHistoryTimelinePosition::Current),
         MakeCommit(first_commit, "exposure", R"({"exposure":0.0})", R"({"exposure":0.35})"),
     };
     snapshot_.recovered_head = true;
@@ -108,6 +99,20 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto has_pending_recovery() const -> bool override { return recovery_pending_; }
   [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
+  [[nodiscard]] auto action_availability() const -> alcedo::EditorActionAvailability override {
+    alcedo::EditorActionAvailability availability;
+    auto allow = [&](alcedo::EditorAction action, bool enabled) {
+      availability.decisions[static_cast<std::size_t>(action)].allowed = enabled;
+    };
+    allow(alcedo::EditorAction::Undo, snapshot_.can_undo);
+    allow(alcedo::EditorAction::Redo, snapshot_.can_redo);
+    allow(alcedo::EditorAction::MoveHead, true);
+    allow(alcedo::EditorAction::ApplyPaste, true);
+    allow(alcedo::EditorAction::RetrySave, recovery_pending_);
+    allow(alcedo::EditorAction::DiscardAndContinue, recovery_pending_);
+    allow(alcedo::EditorAction::CancelPendingNavigation, recovery_pending_);
+    return availability;
+  }
 
   void SetPresentationSinkId(PresentationSinkId) override {}
   void SetPresentationSize(int, int) override {}
@@ -211,25 +216,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Adjustments pasted");
   }
 
-  auto BeginMerge(const AdjustmentTransferPackage&, AdjustmentMergePreview*)
-      -> EditorSessionResult override {
-    ++begin_merge_count_;
-    return Accepted("Merge started");
-  }
-
-  auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-      -> EditorSessionResult override {
-    last_merge_resolution_count_ = resolutions.size();
-    ++complete_merge_count_;
-    NotifyHistoryChange();
-    return Accepted("Merge completed");
-  }
-
-  auto CancelMerge() -> EditorSessionResult override {
-    NotifyHistoryChange();
-    return Accepted("Merge cancelled");
-  }
-
   auto RetrySave() -> EditorSessionResult override {
     ++retry_save_count_;
     recovery_pending_ = false;
@@ -307,11 +293,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto undo_count() const -> int { return undo_count_; }
   [[nodiscard]] auto redo_count() const -> int { return redo_count_; }
   [[nodiscard]] auto paste_count() const -> int { return paste_count_; }
-  [[nodiscard]] auto begin_merge_count() const -> int { return begin_merge_count_; }
-  [[nodiscard]] auto complete_merge_count() const -> int { return complete_merge_count_; }
-  [[nodiscard]] auto last_merge_resolution_count() const -> std::size_t {
-    return last_merge_resolution_count_;
-  }
   [[nodiscard]] auto retry_save_count() const -> int { return retry_save_count_; }
   [[nodiscard]] auto discard_count() const -> int { return discard_count_; }
   [[nodiscard]] auto cancel_recovery_count() const -> int { return cancel_recovery_count_; }
@@ -379,9 +360,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   undo_count_                  = 0;
   int                   redo_count_                  = 0;
   int                   paste_count_                 = 0;
-  int                   begin_merge_count_           = 0;
-  int                   complete_merge_count_        = 0;
-  std::size_t           last_merge_resolution_count_ = 0;
   bool                  recovery_pending_            = false;
   std::string           last_error_;
   int                   retry_save_count_      = 0;
@@ -415,48 +393,10 @@ class RecordingAdjustmentTransfer final : public QObject {
             {QStringLiteral("message"), QStringLiteral("Adjustments pasted")}};
   }
 
-  Q_INVOKABLE QVariantMap BeginMergeIntoEditor(QObject*) {
-    ++begin_merge_count_;
-    const QVariantMap conflict{
-        {QStringLiteral("fieldKey"), QStringLiteral("exposure")},
-        {QStringLiteral("currentValue"), 0.0},
-        {QStringLiteral("incomingValue"), 1.0},
-        {QStringLiteral("currentEnabled"), true},
-        {QStringLiteral("incomingEnabled"), true},
-    };
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("hasConflicts"), true},
-            {QStringLiteral("conflicts"), QVariantList{conflict}},
-            {QStringLiteral("message"), QStringLiteral("Choose every changed field")}};
-  }
-
-  Q_INVOKABLE QVariantMap CompleteMergeIntoEditor(QObject*, const QVariant& resolutions) {
-    ++complete_merge_count_;
-    last_resolution_count_ = resolutions.toList().size();
-    if (!resolutions.toList().isEmpty()) {
-      last_resolution_ = resolutions.toList().front().toMap();
-    }
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("message"), QStringLiteral("Merge completed")}};
-  }
-
-  Q_INVOKABLE QVariantMap CancelMergeIntoEditor(QObject*) {
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("message"), QStringLiteral("Merge cancelled")}};
-  }
-
   [[nodiscard]] auto paste_count() const -> int { return paste_count_; }
-  [[nodiscard]] auto begin_merge_count() const -> int { return begin_merge_count_; }
-  [[nodiscard]] auto complete_merge_count() const -> int { return complete_merge_count_; }
-  [[nodiscard]] auto last_resolution_count() const -> int { return last_resolution_count_; }
-  [[nodiscard]] auto last_resolution() const -> QVariantMap { return last_resolution_; }
 
  private:
-  int         paste_count_           = 0;
-  int         begin_merge_count_     = 0;
-  int         complete_merge_count_  = 0;
-  int         last_resolution_count_ = 0;
-  QVariantMap last_resolution_;
+  int paste_count_ = 0;
 };
 
 inline constexpr char kHarnessQml[] = R"(

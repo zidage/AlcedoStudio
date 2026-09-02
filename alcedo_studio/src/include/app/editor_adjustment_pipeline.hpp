@@ -17,6 +17,7 @@ namespace alcedo {
 class CommitGraph;
 class CPUPipelineExecutor;
 class EditCommit;
+class PipelineDocument;
 
 struct EditorAdjustmentFieldSpec {
   PipelineStageName stage_name    = PipelineStageName::Stage_Count;
@@ -91,8 +92,10 @@ auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& e
  * 1. Capture prior ExportPipelineParams for failure rollback.
  * 2. Reset editable operators to defaults (preserve image-local keys).
  * 3. Apply first-parent chain commit after-values via SetOperator.
- * 4. SetExecutionStages once.
- * 5. On any failure, ImportPipelineParams(prior) and return false.
+ * 4. Remirror current-panel CPU operators from the bound PipelineDocument when
+ *    present, so Paste InsertNode values reach panel snapshots.
+ * 5. SetExecutionStages once.
+ * 6. On any failure, ImportPipelineParams(prior) and return false.
  *
  * Caller must hold the executor render lock. Does not touch Version refs, WAL,
  * or DuckDB.
@@ -106,7 +109,21 @@ auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const Co
                                     const head_commit_hash_t& head, std::string* error) -> bool;
 
 /**
- * @brief Apply one ordinary or merge commit's after (or before) values to the live pipeline.
+ * @brief Copy current-panel Model JSON from @p document onto CPU stage operators.
+ *
+ * Grade fields use the Default Grade (`grade.primary`, else the first backbone
+ * Grade). DRT/Post, Develop, and geometry fields use their document owners.
+ * CPU aliases (`exposure` / `ocio_lmt`) are applied so panel snapshots match
+ * the live document after Paste InsertNode or document replay.
+ *
+ * Missing owners are skipped. Caller holds the executor render lock.
+ */
+auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
+                                      const PipelineDocument& document, std::string* error)
+    -> bool;
+
+/**
+ * @brief Remirror CPU stages from one typed-batch commit's after (or before) values.
  *
  * Used by undo (before) and redo (after). Caller holds the render lock.
  */

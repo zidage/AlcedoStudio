@@ -46,11 +46,9 @@ namespace alcedo {
 namespace {
 using namespace alcedo::test;  // controllable ports + recorder live in alcedo::test
 
-auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
+auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPackage {
   AdjustmentTransferPackage package;
-  package.operators_.push_back(AdjustmentTransferEntry{
-      PipelineStageName::Basic_Adjustment, OperatorType::EXPOSURE, true, false,
-      nlohmann::json{{"exposure", exposure}}});
+  package.color_grades_.push_back(nlohmann::json{{"id", "grade.primary"}});
   return package;
 }
 
@@ -348,37 +346,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(returned.load(), 1);
 }
 
-/// Invariant: Merge completion on the command thread never waits on the
-/// executor render mutex while the worker owns it.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       MergeWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::mutex render_lock;
-  history_->render_lock = &render_lock;
-  std::unique_lock<std::mutex> worker_holds(render_lock);
-
-  std::atomic<int>             returned{0};
-  auto                         fut     = std::async(std::launch::async, [&] {
-    (void)service_->CompleteMerge({});
-    returned.store(1);
-  });
-  const auto                   status  = fut.wait_for(std::chrono::milliseconds(200));
-
-  const bool                   blocked = (status != std::future_status::ready);
-  EXPECT_FALSE(blocked)
-      << "CompleteMerge blocked on the executor render lock (unfinished op: Merge)";
-
-  worker_holds.unlock();
-  (void)fut.get();
-  EXPECT_EQ(returned.load(), 1);
-}
-
 /// Invariant: live paste mutates the Version immediately, then queues one
 /// ordinary history checkpoint for WAL materialization. Prior CQ4 retained a
 /// shadow candidate until after save; the single-live-pipeline path creates the
@@ -435,76 +402,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0], "version_created");
-  EXPECT_EQ(events[1], "save_started");
-}
-
-/// Invariant: live merge mutates the Version immediately (CompleteLiveMerge), then
-/// queues one ordinary history checkpoint for WAL materialization — same ordering
-/// as live paste (mutate first, then StartHistoryCheckpoint).
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyJournalMergeCompletesLiveThenQueuesHistoryCheckpoint) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::vector<std::string> events;
-  history_->event_log                  = &events;
-  journal_->event_log                  = &events;
-  history_->dirty_journal              = true;
-  journal_->async_commit               = false;
-  checkpoint_store_->async_materialize = false;
-
-  const auto result                    = service_->CompleteMerge({});
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
-      << "live Merge must start the history checkpoint after CompleteLiveMerge";
-  drainQueue();
-
-  ASSERT_GE(events.size(), 2u) << "Merge must produce a merge commit and a save";
-  EXPECT_EQ(events[0], "merge_committed")
-      << "CompleteLiveMerge must run before the ordinary history checkpoint";
-  EXPECT_EQ(events[1], "save_started");
-}
-
-/// Live merge: CompleteLiveMerge then one ordinary save capture/materialization
-/// and one final render route. No shadow PublishTransferCandidate.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       LiveMergeMaterializesOneCheckpointAndOneFinalRender) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.25), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::vector<std::string> events;
-  history_->event_log                  = &events;
-  journal_->event_log                  = &events;
-  history_->dirty_journal              = true;
-  journal_->async_commit               = false;
-  checkpoint_store_->async_materialize = false;
-
-  const auto accepted_render_count_before =
-      runtime_->coordinator->diagnostics().accepted_count;
-  const auto capture_count_before     = history_->checkpoint_capture_count;
-  const auto materialize_count_before = checkpoint_store_->materialize_count;
-  const auto terminal_count_before    = recorder_->terminal_count();
-  const auto result = service_->CompleteMerge({});
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
-
-  drainQueue();
-
-  EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
-  EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
-  EXPECT_EQ(history_->transfer_publication_count, 0);
-  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count,
-            accepted_render_count_before + 1);
-  EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
-  EXPECT_FALSE(history_->dirty_journal);
-  ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], "merge_committed");
   EXPECT_EQ(events[1], "save_started");
 }
 

@@ -20,16 +20,21 @@
 namespace alcedo {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
+auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
+  PipelineEditBatch batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", before}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", after}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  return batch;
 }
 
 class MiniGitJournalAlignmentTest : public ::testing::Test {
@@ -56,7 +61,7 @@ TEST_F(MiniGitJournalAlignmentTest, EmptyRecordsAreFullyCovered) {
 }
 
 TEST_F(MiniGitJournalAlignmentTest, JournalMatchingStoredHeadIsFullyCovered) {
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   const auto records = journal_->records();
   ASSERT_FALSE(records.empty());
 
@@ -67,8 +72,8 @@ TEST_F(MiniGitJournalAlignmentTest, JournalMatchingStoredHeadIsFullyCovered) {
 }
 
 TEST_F(MiniGitJournalAlignmentTest, ContiguousMissingSuffixIsReportedAsExtension) {
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.25f)).committed);
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.25f, 0.5f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.0f, 0.25f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.25f, 0.5f)).committed);
   const auto records = journal_->records();
   ASSERT_EQ(records.size(), 2u);
 
@@ -86,7 +91,7 @@ TEST_F(MiniGitJournalAlignmentTest, ContiguousMissingSuffixIsReportedAsExtension
 }
 
 TEST_F(MiniGitJournalAlignmentTest, BrokenParentChainIsRejected) {
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   auto records = journal_->records();
   ASSERT_EQ(records.size(), 1u);
 
@@ -107,7 +112,7 @@ TEST_F(MiniGitJournalAlignmentTest, BrokenParentChainIsRejected) {
 }
 
 TEST_F(MiniGitJournalAlignmentTest, UnalignedFirstRecordIsBroken) {
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   auto records = journal_->records();
   ASSERT_FALSE(records.empty());
   records.front().expected_source_head = Hash128{0xbad, 0x1};
@@ -123,8 +128,8 @@ TEST_F(MiniGitJournalAlignmentTest, UnalignedFirstRecordIsBroken) {
 }
 
 TEST_F(MiniGitJournalAlignmentTest, ReplaySkippingMaterializedPrefixAppliesOnlyMissingSuffix) {
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.25f)).committed);
-  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.25f, 0.5f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.0f, 0.25f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposureBatch(0.25f, 0.5f)).committed);
   const auto records = journal_->records();
   ASSERT_EQ(records.size(), 2u);
 

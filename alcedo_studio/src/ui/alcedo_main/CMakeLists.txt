@@ -202,6 +202,7 @@ target_link_libraries(AlbumBackendLib
         EditorSessionService
         EditorAdjustmentPipeline
         EditorPipelineCommandService
+        PipelineHistoryApplier
         EditorMiniGitMaterializer
         ThumbnailService
         SemanticGenerationService
@@ -544,10 +545,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeConflictCard.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeJsonValue.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"

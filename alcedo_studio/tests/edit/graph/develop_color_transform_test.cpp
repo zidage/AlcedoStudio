@@ -237,6 +237,27 @@ TEST(GpuDagModelGraph, DevelopColorTransformRejectsMissingOrSingularCameraMatric
   EXPECT_EQ(singular_result.error, ColorTransformError::SingularCameraMatrix);
 }
 
+TEST(GpuDagModelGraph, DefaultPipelineDocumentStillRequiresBoundCameraProfile) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_NE(document.Develop(), nullptr);
+  const auto result = ResolveDevelopColorTransform(document.Develop()->Params().Params());
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, ColorTransformError::MissingCameraMatrices);
+}
+
+TEST(GpuDagModelGraph, BindRgbWorkingSpaceCameraProfileResolvesWithoutRawContext) {
+  DevelopPayload payload;
+  EXPECT_FALSE(ResolveDevelopColorTransform(payload).ok);
+  BindRgbWorkingSpaceCameraProfile(payload);
+  EXPECT_TRUE(payload.camera_profile.color_matrices_valid);
+  EXPECT_FALSE(payload.camera_profile.calibration_illuminants_valid);
+  EXPECT_NEAR(payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  EXPECT_NEAR(payload.camera_profile.color_matrix_2[0], 3.2404542, 1e-6);
+  const auto result = ResolveDevelopColorTransform(payload);
+  ASSERT_TRUE(result.ok);
+  EXPECT_NE(result.transform.camera_to_ap1[0], 1.0f);
+}
+
 TEST(GpuDagModelGraph, DevelopCameraProfileJsonRoundTripPreservesMatricesAndAsShotNeutral) {
   auto document = CreateDefaultPipelineDocument();
   auto payload  = DualIlluminantPayload();

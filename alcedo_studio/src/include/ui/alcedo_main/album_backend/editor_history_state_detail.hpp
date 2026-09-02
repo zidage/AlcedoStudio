@@ -9,11 +9,13 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -23,6 +25,7 @@
 namespace alcedo {
 class MiniGitJournal;
 class MiniGitWorkingHistory;
+class MaskStore;
 struct PipelineGuard;
 class PipelineMgmtService;
 }  // namespace alcedo
@@ -51,6 +54,8 @@ struct HistoryWorkingState {
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
   bool recovered_head = false;
+  /// Required for ReplaceMaskAsset undo/redo. Not owned.
+  alcedo::MaskStore* mask_store = nullptr;
 };
 
 /// Owns per-image WorkingState acquisition, release, and service-path
@@ -91,11 +96,28 @@ class EditorHistoryState {
   [[nodiscard]] auto JournalPathResolver() const
       -> std::function<std::filesystem::path(sl_element_id_t)>;
 
+  /// Record the render reason of the last successful mutation on this port.
+  void RecordPublishedRenderReason(std::optional<alcedo::EditorRenderReason> reason);
+
+  /// Last successful mutation's render reason. Nullopt means no pipeline render.
+  [[nodiscard]] auto LastPublishedRenderReason() const -> std::optional<alcedo::EditorRenderReason>;
+
+  /// Rebuild @p state's live document from the cached immutable root and @p head.
+  ///
+  /// Replays onto a clone, verifies Mask assets, then binds the same live guard
+  /// under the render lock. Does not move the Version ref. On failure the live
+  /// document is left unchanged.
+  auto ReplayWorkingDocumentFromImmutableRoot(HistoryWorkingState& state,
+                                              const alcedo::head_commit_hash_t& head,
+                                              std::string* error) -> bool;
+
  private:
   Services services_{};
   mutable std::mutex mutex_;
   std::weak_ptr<EditorSessionPipelinePort> pipeline_port_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<HistoryWorkingState>> working_states_;
+  std::optional<alcedo::EditorRenderReason> last_published_render_reason_ =
+      alcedo::EditorRenderReason::UndoRedo;
 };
 
 }  // namespace alcedo::ui

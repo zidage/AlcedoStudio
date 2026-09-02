@@ -4,14 +4,16 @@
 
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
 
+#include <exception>
 #include <filesystem>
+#include <mutex>
 #include <utility>
 
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
 namespace alcedo::ui {
@@ -34,18 +36,28 @@ auto EditorHistoryCheckpoint::CaptureSaveCheckpoint(
     return nullptr;
   }
 
-  const auto journal_snapshot = state->journal->Snapshot();
+  if (!state->pipeline_guard->document_) {
+    if (error) *error = "Mini-Git save capture requires a live pipeline document";
+    return nullptr;
+  }
 
   // Single live identity: CommitGraph active Version head is the only logical head.
   // Build one materialization from the graph, then project capture fields from it.
   auto& graph = *state->pipeline_guard->commit_graph_;
-  const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
-  const auto logical_chain = graph.ChainHashForHead(logical_head);
-
-  const auto pipeline_params = MakePipelineParamsFromSnapshot(state->committed_snapshot, error);
-  if (!pipeline_params.has_value()) return nullptr;
-  const auto serialized = alcedo::MakeEditorSerializedPipelineState(
-      state->pipeline_guard->root_id_, logical_head, logical_chain, *pipeline_params);
+  nlohmann::json serialized;
+  {
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    if (state->pipeline_guard->unsettled_preview_) {
+      if (error) *error = "Mini-Git save capture cannot run while an editor preview is unsettled";
+      return nullptr;
+    }
+    const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
+    const auto logical_chain = graph.ChainHashForHead(logical_head);
+    serialized = alcedo::MakeEditorSerializedPipelineState(
+        state->pipeline_guard->root_id_, logical_head, logical_chain,
+        *state->pipeline_guard->document_);
+  }
+  const auto journal_snapshot = state->journal->Snapshot();
 
   alcedo::EditorMiniGitSaveCapture capture;
   capture.journal_records        = journal_snapshot.records;

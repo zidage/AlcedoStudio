@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 
 #include <functional>
+#include <optional>
 
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
@@ -70,6 +71,91 @@ auto EditorSessionHistoryPort::CommitAdjustment(const alcedo::EditorHistoryGuard
   return mutation_->CommitAdjustment(guard, patch, error);
 }
 
+auto EditorSessionHistoryPort::CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
+                                                       alcedo::PipelineEditBatch batch,
+                                                       std::string* error) -> bool {
+  return mutation_->CommitPipelineEditBatch(guard, std::move(batch), error);
+}
+
+auto EditorSessionHistoryPort::AddColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
+                                             const alcedo::NodeId& before_node_id,
+                                             const alcedo::NodeId& new_id, std::string* error)
+    -> bool {
+  return mutation_->AddColorGrade(guard, before_node_id, new_id, error);
+}
+
+auto EditorSessionHistoryPort::RemoveColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
+                                                const alcedo::NodeId& node_id, std::string* error)
+    -> bool {
+  return mutation_->RemoveColorGrade(guard, node_id, error);
+}
+
+auto EditorSessionHistoryPort::ReconnectColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
+                                                   const alcedo::NodeId& node_id,
+                                                   const alcedo::NodeId& new_predecessor_id,
+                                                   const alcedo::NodeId& new_successor_id,
+                                                   std::string* error) -> bool {
+  return mutation_->ReconnectColorGrade(guard, node_id, new_predecessor_id, new_successor_id, error);
+}
+
+auto EditorSessionHistoryPort::RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
+                                                const alcedo::NodeId& node_id,
+                                                std::string display_name, std::string* error)
+    -> bool {
+  return mutation_->RenameColorGrade(guard, node_id, std::move(display_name), error);
+}
+
+auto EditorSessionHistoryPort::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
+                                                    const alcedo::NodeId& node_id, bool enabled,
+                                                    std::string* error) -> bool {
+  return mutation_->SetColorGradeEnabled(guard, node_id, enabled, error);
+}
+
+auto EditorSessionHistoryPort::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,
+                                                const alcedo::NodeId& node_id, float mix,
+                                                std::string* error) -> bool {
+  return mutation_->SetColorGradeMix(guard, node_id, mix, error);
+}
+
+auto EditorSessionHistoryPort::AddMask(const alcedo::EditorHistoryGuardHandle& guard,
+                                       const alcedo::NodeId& node_id, alcedo::MaskModel mask,
+                                       std::uint32_t display_index, std::string* error) -> bool {
+  return mutation_->AddMask(guard, node_id, std::move(mask), display_index, error);
+}
+
+auto EditorSessionHistoryPort::RemoveMask(const alcedo::EditorHistoryGuardHandle& guard,
+                                          const alcedo::NodeId& node_id,
+                                          const alcedo::MaskId& mask_id, std::string* error)
+    -> bool {
+  return mutation_->RemoveMask(guard, node_id, mask_id, error);
+}
+
+auto EditorSessionHistoryPort::ReplaceMaskSource(const alcedo::EditorHistoryGuardHandle& guard,
+                                                 const alcedo::NodeId& node_id,
+                                                 const alcedo::MaskId& mask_id,
+                                                 nlohmann::json after_source, std::string* error)
+    -> bool {
+  return mutation_->ReplaceMaskSource(guard, node_id, mask_id, std::move(after_source), error);
+}
+
+auto EditorSessionHistoryPort::ReplaceMaskAsset(const alcedo::EditorHistoryGuardHandle& guard,
+                                                const alcedo::NodeId& node_id,
+                                                const alcedo::MaskId& mask_id,
+                                                nlohmann::json after_source,
+                                                alcedo::MaskStore& mask_store, std::string* error)
+    -> bool {
+  return mutation_->ReplaceMaskAsset(guard, node_id, mask_id, std::move(after_source), mask_store,
+                                     error);
+}
+
+auto EditorSessionHistoryPort::SetMaskField(const alcedo::EditorHistoryGuardHandle& guard,
+                                            const alcedo::NodeId& node_id,
+                                            const alcedo::MaskId& mask_id, std::string field_key,
+                                            nlohmann::json after_value, std::string* error) -> bool {
+  return mutation_->SetMaskField(guard, node_id, mask_id, std::move(field_key),
+                                 std::move(after_value), error);
+}
+
 auto EditorSessionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                     std::string* error) -> bool {
   return mutation_->Undo(guard, error);
@@ -78,6 +164,11 @@ auto EditorSessionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& guar
 auto EditorSessionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guard,
                                     std::string* error) -> bool {
   return mutation_->Redo(guard, error);
+}
+
+auto EditorSessionHistoryPort::LastPublishedRenderReason() const
+    -> std::optional<alcedo::EditorRenderReason> {
+  return state_->LastPublishedRenderReason();
 }
 
 auto EditorSessionHistoryPort::MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
@@ -139,12 +230,6 @@ auto EditorSessionHistoryPort::RemoveVersion(const alcedo::EditorHistoryGuardHan
   return version_refs_->RemoveVersion(guard, version_id, error);
 }
 
-auto EditorSessionHistoryPort::CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                           const alcedo::AdjustmentMergePreview& preview,
-                                           std::string* error) -> bool {
-  return transfer_->CancelMerge(guard, preview, error);
-}
-
 auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(
     const alcedo::EditorHistoryGuardHandle& guard,
     const alcedo::AdjustmentTransferPackage& package, std::string version_display_name,
@@ -158,22 +243,6 @@ auto EditorSessionHistoryPort::CancelLivePaste(const alcedo::EditorHistoryGuardH
                                                const alcedo::version_ref_id_t& paste_version_id,
                                                std::string* error) -> bool {
   return transfer_->CancelLivePaste(guard, prior_version_id, paste_version_id, error);
-}
-
-auto EditorSessionHistoryPort::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                              const alcedo::AdjustmentTransferPackage& package,
-                                              alcedo::AdjustmentMergePreview* preview,
-                                              std::string* error) -> bool {
-  return transfer_->BeginLiveMerge(guard, package, preview, error);
-}
-
-auto EditorSessionHistoryPort::CompleteLiveMerge(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentTransferPackage& package,
-    const alcedo::AdjustmentMergePreview& preview,
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
-  return transfer_->CompleteLiveMerge(guard, package, preview, resolutions, result, error);
 }
 
 auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(

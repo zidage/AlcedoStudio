@@ -630,6 +630,32 @@ void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorCont
   }
 }
 
+void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload) {
+  RawRuntimeColorContext imported;
+  imported.valid_                         = true;
+  imported.output_in_camera_space_        = false;
+  imported.color_matrices_valid_          = true;
+  imported.as_shot_neutral_valid_         = true;
+  imported.calibration_illuminants_valid_ = false;
+  imported.color_matrix_1_cct_          = 6504.0;
+  imported.color_matrix_2_cct_          = 6504.0;
+  imported.as_shot_neutral_[0]          = 1.0;
+  imported.as_shot_neutral_[1]          = 1.0;
+  imported.as_shot_neutral_[2]          = 1.0;
+  imported.cam_mul_[0]                 = 1.0f;
+  imported.cam_mul_[1]                 = 1.0f;
+  imported.cam_mul_[2]                 = 1.0f;
+  // IEC 61966-2-1 XYZ→Rec.709 / sRGB, stored as DNG ColorMatrix (XYZ→camera).
+  static constexpr double kXyzToRec709[9] = {
+      3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
+      0.0415560, 0.0556434,  -0.2040259, 1.0572252};
+  for (int i = 0; i < 9; ++i) {
+    imported.color_matrix_1_[i] = kXyzToRec709[i];
+    imported.color_matrix_2_[i] = kXyzToRec709[i];
+  }
+  BindDevelopCameraProfile(payload, imported);
+}
+
 auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransformResult {
   cv::Matx33d cm1;
   cv::Matx33d cm2;

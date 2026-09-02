@@ -5,527 +5,33 @@
 #include "app/adjustment_transfer_service.hpp"
 
 #include <algorithm>
-#include <array>
-#include <memory>
-#include <mutex>
-#include <optional>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <unordered_set>
+#include <utility>
 
-#include "app/editor_adjustment_pipeline.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
-#include "type/hash_type.hpp"
+#include "edit/history/edit_commit.hpp"
 
 namespace alcedo {
 namespace {
 
-constexpr std::string_view kSchema = "alcedo.adjustment_transfer.v1";
-
-constexpr auto             kStages = std::array{
-    PipelineStageName::Image_Loading,    PipelineStageName::Geometry_Adjustment,
-    PipelineStageName::To_WorkingSpace,  PipelineStageName::Basic_Adjustment,
-    PipelineStageName::Color_Adjustment, PipelineStageName::Detail_Adjustment,
-    PipelineStageName::Output_Transform,
-};
-
-auto StageName(PipelineStageName stage) -> std::string_view {
-  switch (stage) {
-    case PipelineStageName::Image_Loading:
-      return "Image Loading";
-    case PipelineStageName::Geometry_Adjustment:
-      return "Geometry Adjustment";
-    case PipelineStageName::To_WorkingSpace:
-      return "To Working Space";
-    case PipelineStageName::Basic_Adjustment:
-      return "Basic Adjustment";
-    case PipelineStageName::Color_Adjustment:
-      return "Color Adjustment";
-    case PipelineStageName::Detail_Adjustment:
-      return "Detail Adjustment";
-    case PipelineStageName::Output_Transform:
-      return "Output Transform";
-    default:
-      return "Unknown Stage";
-  }
-}
-
-auto ParseStageName(const std::string& name) -> PipelineStageName {
-  for (PipelineStageName stage : kStages) {
-    if (name == StageName(stage)) {
-      return stage;
-    }
-  }
-  return PipelineStageName::Stage_Count;
-}
-
-auto OperatorScriptName(OperatorType op_type) -> std::string_view {
-  switch (op_type) {
-    case OperatorType::RAW_DECODE:
-      return "raw_decode";
-    case OperatorType::LENS_CALIBRATION:
-      return "lens_calib";
-    case OperatorType::CROP_ROTATE:
-      return "crop_rotate";
-    case OperatorType::COLOR_TEMP:
-      return "color_temp";
-    case OperatorType::EXPOSURE:
-      return "exposure";
-    case OperatorType::CONTRAST:
-      return "contrast";
-    case OperatorType::WHITE:
-      return "white";
-    case OperatorType::BLACK:
-      return "black";
-    case OperatorType::SHADOWS:
-      return "shadows";
-    case OperatorType::HIGHLIGHTS:
-      return "highlights";
-    case OperatorType::CURVE:
-      return "curve";
-    case OperatorType::HLS:
-      return "HLS";
-    case OperatorType::SATURATION:
-      return "saturation";
-    case OperatorType::TINT:
-      return "tint";
-    case OperatorType::VIBRANCE:
-      return "vibrance";
-    case OperatorType::LMT:
-      return "ocio_lmt";
-    case OperatorType::COLOR_WHEEL:
-      return "color_wheel";
-    case OperatorType::CLARITY:
-      return "clarity";
-    case OperatorType::SHARPEN:
-      return "sharpen";
-    case OperatorType::ODT:
-      return "odt";
-    default:
-      return "unknown";
-  }
-}
-
-auto ParseOperatorScriptName(const std::string& name) -> OperatorType {
-  for (OperatorType op_type : {OperatorType::RAW_DECODE,  OperatorType::LENS_CALIBRATION,
-                               OperatorType::CROP_ROTATE, OperatorType::COLOR_TEMP,
-                               OperatorType::EXPOSURE,    OperatorType::CONTRAST,
-                               OperatorType::WHITE,       OperatorType::BLACK,
-                               OperatorType::SHADOWS,     OperatorType::HIGHLIGHTS,
-                               OperatorType::CURVE,       OperatorType::HLS,
-                               OperatorType::SATURATION,  OperatorType::TINT,
-                               OperatorType::VIBRANCE,    OperatorType::LMT,
-                               OperatorType::COLOR_WHEEL, OperatorType::CLARITY,
-                               OperatorType::SHARPEN,     OperatorType::ODT}) {
-    if (name == OperatorScriptName(op_type)) {
-      return op_type;
-    }
-  }
-  return OperatorType::UNKNOWN;
-}
-
-auto DefaultStageForOperator(OperatorType op_type) -> PipelineStageName {
-  switch (op_type) {
-    case OperatorType::RAW_DECODE:
-    case OperatorType::LENS_CALIBRATION:
-      return PipelineStageName::Image_Loading;
-    case OperatorType::CROP_ROTATE:
-      return PipelineStageName::Geometry_Adjustment;
-    case OperatorType::COLOR_TEMP:
-      return PipelineStageName::To_WorkingSpace;
-    case OperatorType::EXPOSURE:
-    case OperatorType::CONTRAST:
-    case OperatorType::WHITE:
-    case OperatorType::BLACK:
-    case OperatorType::SHADOWS:
-    case OperatorType::HIGHLIGHTS:
-    case OperatorType::CURVE:
-      return PipelineStageName::Basic_Adjustment;
-    case OperatorType::HLS:
-    case OperatorType::SATURATION:
-    case OperatorType::TINT:
-    case OperatorType::VIBRANCE:
-    case OperatorType::LMT:
-    case OperatorType::COLOR_WHEEL:
-      return PipelineStageName::Color_Adjustment;
-    case OperatorType::CLARITY:
-    case OperatorType::SHARPEN:
-      return PipelineStageName::Detail_Adjustment;
-    case OperatorType::ODT:
-      return PipelineStageName::Output_Transform;
-    default:
-      return PipelineStageName::Stage_Count;
-  }
-}
-
-auto IsInFilter(OperatorType op_type, const AdjustmentTransferSelection& selection) -> bool {
-  return !selection.operator_filter_.has_value() || selection.operator_filter_->contains(op_type);
-}
-
-auto IsOperatorSelected(OperatorType op_type, const AdjustmentTransferSelection& selection)
-    -> bool {
-  if (!IsInFilter(op_type, selection)) {
-    return false;
-  }
-
-  switch (op_type) {
-    case OperatorType::RAW_DECODE:
-      return selection.include_image_loading_;
-    case OperatorType::LENS_CALIBRATION:
-      return selection.include_lens_calibration_;
-    case OperatorType::CROP_ROTATE:
-      return selection.include_geometry_;
-    case OperatorType::COLOR_TEMP:
-      return selection.include_color_temperature_;
-    case OperatorType::EXPOSURE:
-    case OperatorType::CONTRAST:
-    case OperatorType::WHITE:
-    case OperatorType::BLACK:
-    case OperatorType::SHADOWS:
-    case OperatorType::HIGHLIGHTS:
-    case OperatorType::CURVE:
-      return selection.include_tone_;
-    case OperatorType::HLS:
-    case OperatorType::SATURATION:
-    case OperatorType::TINT:
-    case OperatorType::VIBRANCE:
-    case OperatorType::LMT:
-    case OperatorType::COLOR_WHEEL:
-      return selection.include_color_;
-    case OperatorType::CLARITY:
-    case OperatorType::SHARPEN:
-      return selection.include_detail_;
-    case OperatorType::ODT:
-      return selection.include_output_transform_;
-    case OperatorType::RESIZE:
-    case OperatorType::UNKNOWN:
-    default:
-      return false;
-  }
-}
-
-auto SanitizeColorTemperatureParams(nlohmann::json                     params,
-                                    const AdjustmentTransferSelection& selection)
-    -> nlohmann::json {
-  if (selection.include_color_temperature_resolved_values_) {
-    return params;
-  }
-  if (!params.contains("color_temp") || !params["color_temp"].is_object()) {
-    return params;
-  }
-
-  auto& inner = params["color_temp"];
-  inner.erase("resolved_cct");
-  inner.erase("resolved_tint");
-  inner.erase("as_shot_cct");
-  inner.erase("as_shot_tint");
-  if (inner.value("mode", std::string{}) == "as_shot") {
-    inner.erase("cct");
-    inner.erase("tint");
-    inner.erase("custom_cct");
-    inner.erase("custom_tint");
-  }
-  return params;
-}
-
-auto SanitizeLensCalibrationParams(nlohmann::json                     params,
-                                   const AdjustmentTransferSelection& selection) -> nlohmann::json {
-  if (selection.include_lens_calibration_runtime_metadata_) {
-    return params;
-  }
-  if (!params.contains("lens_calib") || !params["lens_calib"].is_object()) {
-    return params;
-  }
-
-  auto& inner = params["lens_calib"];
-  for (const char* key : {"cam_maker", "cam_model", "lens_maker", "lens_model", "focal_length_mm",
-                          "aperture_f_number", "distance_m", "focal_35mm_mm", "crop_factor_hint"}) {
-    inner.erase(key);
-  }
-  return params;
-}
-
-auto SanitizeCropRotateParams(nlohmann::json params) -> nlohmann::json {
-  if (params.contains("crop_rotate") && params["crop_rotate"].is_object()) {
-    params["crop_rotate"].erase("source_size");
-  }
-  return params;
-}
-
-auto SanitizeParams(OperatorType op_type, nlohmann::json params,
-                    const AdjustmentTransferSelection& selection) -> nlohmann::json {
-  switch (op_type) {
-    case OperatorType::COLOR_TEMP:
-      return SanitizeColorTemperatureParams(std::move(params), selection);
-    case OperatorType::LENS_CALIBRATION:
-      return SanitizeLensCalibrationParams(std::move(params), selection);
-    case OperatorType::CROP_ROTATE:
-      return SanitizeCropRotateParams(std::move(params));
-    default:
-      return params;
-  }
-}
-
-auto RebuildExecutionStagesIfPossible(PipelineExecutor& pipeline) -> void {
-  auto* cpu_pipeline = dynamic_cast<CPUPipelineExecutor*>(&pipeline);
-  if (cpu_pipeline == nullptr) {
-    return;
-  }
-  cpu_pipeline->SetExecutionStages();
-}
-
-void MergeJsonObject(nlohmann::json& target, const nlohmann::json& patch) {
-  if (!target.is_object() || !patch.is_object()) {
-    target = patch;
-    return;
-  }
-  for (const auto& [key, value] : patch.items()) {
-    if (target.contains(key) && target[key].is_object() && value.is_object()) {
-      MergeJsonObject(target[key], value);
-    } else {
-      target[key] = value;
-    }
-  }
-}
-
-}  // namespace
-
-auto AdjustmentTransferService::Capture(PipelineExecutor&                  source,
-                                        const AdjustmentTransferSelection& selection)
-    -> AdjustmentTransferPackage {
-  AdjustmentTransferPackage package;
-
-  for (PipelineStageName stage_name : kStages) {
-    auto& stage = source.GetStage(stage_name);
-    for (const auto& [op_type, op_entry] : stage.GetAllOperators()) {
-      if (!op_entry.op_ || !IsOperatorSelected(op_type, selection)) {
-        continue;
-      }
-
-      package.operators_.push_back({
-          .stage_         = stage_name,
-          .operator_type_ = op_type,
-          .enabled_       = op_entry.enable_,
-          .merge_params_  = false,
-          .params_        = SanitizeParams(op_type, op_entry.op_->GetParams(), selection),
-      });
-    }
-  }
-
-  return package;
-}
-
-auto AdjustmentTransferService::ImportPackage(const nlohmann::json& package_json)
-    -> AdjustmentTransferPackage {
-  if (!package_json.is_object()) {
-    throw std::runtime_error("AdjustmentTransferService: package must be a JSON object.");
-  }
-
-  const std::string schema = package_json.value("schema", std::string{kSchema});
-  if (schema != kSchema) {
-    throw std::runtime_error("AdjustmentTransferService: unsupported adjustment package schema.");
-  }
-  if (!package_json.contains("operators") || !package_json["operators"].is_array()) {
-    throw std::runtime_error("AdjustmentTransferService: package operators must be an array.");
-  }
-
-  AdjustmentTransferPackage package;
-  package.schema_ = schema;
-
-  for (const auto& entry_json : package_json["operators"]) {
-    if (!entry_json.is_object()) {
-      throw std::runtime_error("AdjustmentTransferService: operator entry must be an object.");
-    }
-
-    const std::string  operator_name = entry_json.value("operator", std::string{});
-    const OperatorType op_type       = ParseOperatorScriptName(operator_name);
-    if (op_type == OperatorType::UNKNOWN || op_type == OperatorType::RESIZE) {
-      throw std::runtime_error("AdjustmentTransferService: unknown or unsupported operator: " +
-                               operator_name);
-    }
-
-    PipelineStageName stage = DefaultStageForOperator(op_type);
-    if (entry_json.contains("stage")) {
-      stage = ParseStageName(entry_json.value("stage", std::string{}));
-    }
-    if (stage == PipelineStageName::Stage_Count) {
-      throw std::runtime_error("AdjustmentTransferService: unknown stage for operator: " +
-                               operator_name);
-    }
-    if (!entry_json.contains("params")) {
-      throw std::runtime_error("AdjustmentTransferService: operator is missing params: " +
-                               operator_name);
-    }
-
-    package.operators_.push_back({
-        .stage_         = stage,
-        .operator_type_ = op_type,
-        .enabled_       = entry_json.value("enabled", true),
-        .merge_params_  = entry_json.value("mergeParams", false),
-        .params_        = entry_json.at("params"),
-    });
-  }
-
-  return package;
-}
-
-auto AdjustmentTransferService::ExportPackage(const AdjustmentTransferPackage& package)
-    -> nlohmann::json {
-  nlohmann::json operators = nlohmann::json::array();
-  for (const auto& entry : package.operators_) {
-    if (entry.operator_type_ == OperatorType::UNKNOWN ||
-        entry.operator_type_ == OperatorType::RESIZE) {
-      continue;
-    }
-    operators.push_back({
-        {"stage", std::string(StageName(entry.stage_))},
-        {"operator", std::string(OperatorScriptName(entry.operator_type_))},
-        {"enabled", entry.enabled_},
-        {"mergeParams", entry.merge_params_},
-        {"params", entry.params_},
-    });
-  }
-
-  return {
-      {"schema", package.schema_.empty() ? std::string{kSchema} : package.schema_},
-      {"operators", std::move(operators)},
-  };
-}
-
-auto AdjustmentTransferService::PackageFingerprint(const AdjustmentTransferPackage& package)
-    -> std::string {
-  const auto canonical = ExportPackage(package).dump();
-  return Hash128::Compute(canonical.data(), canonical.size()).ToString();
-}
-
-auto AdjustmentTransferService::Apply(PipelineExecutor&                target,
-                                      const AdjustmentTransferPackage& package) -> bool {
-  bool changed = false;
-
-  for (const auto& op : package.operators_) {
-    if (op.stage_ == PipelineStageName::Stage_Count || op.operator_type_ == OperatorType::UNKNOWN ||
-        op.operator_type_ == OperatorType::RESIZE) {
-      continue;
-    }
-
-    auto&          stage            = target.GetStage(op.stage_);
-    bool           entry_changed    = true;
-    nlohmann::json effective_params = op.params_;
-    auto           current          = stage.GetOperator(op.operator_type_);
-    if (current.has_value() && current.value() != nullptr && current.value()->op_) {
-      if (op.merge_params_) {
-        effective_params = current.value()->op_->GetParams();
-        MergeJsonObject(effective_params, op.params_);
-      }
-      if (op.operator_type_ == OperatorType::CROP_ROTATE) {
-        const auto current_params = current.value()->op_->GetParams();
-        if (current_params.contains("crop_rotate") &&
-            current_params["crop_rotate"].contains("source_size")) {
-          effective_params["crop_rotate"]["source_size"] =
-              current_params["crop_rotate"]["source_size"];
-        }
-      }
-      entry_changed = current.value()->enable_ != op.enabled_ ||
-                      current.value()->op_->GetParams() != effective_params;
-    }
-
-    if (!entry_changed) {
-      continue;
-    }
-
-    stage.SetOperator(op.operator_type_, effective_params, target.GetGlobalParams());
-    stage.EnableOperator(op.operator_type_, op.enabled_, target.GetGlobalParams());
-    changed = true;
-  }
-
-  if (changed) {
-    RebuildExecutionStagesIfPossible(target);
-  }
-  return changed;
-}
-
-auto AdjustmentTransferService::Apply(PipelineMgmtService&             pipeline_service,
-                                      std::span<const sl_element_id_t> target_ids,
-                                      const AdjustmentTransferPackage& package)
-    -> AdjustmentApplyResult {
-  AdjustmentApplyResult result;
-  if (package.Empty()) {
-    result.unchanged_ids_.assign(target_ids.begin(), target_ids.end());
-    return result;
-  }
-
-  for (sl_element_id_t target_id : target_ids) {
-    if (target_id == 0) {
-      continue;
-    }
-
-    std::shared_ptr<PipelineGuard> guard;
-    try {
-      guard = pipeline_service.LoadPipeline(target_id);
-      if (!guard || !guard->pipeline_) {
-        result.failures_.push_back({target_id, "Pipeline was not available."});
-        continue;
-      }
-
-      bool changed = false;
-      {
-        std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-        changed = Apply(*guard->pipeline_, package);
-      }
-
-      if (changed) {
-        guard->dirty_ = true;
-        result.applied_ids_.push_back(target_id);
-      } else {
-        result.unchanged_ids_.push_back(target_id);
-      }
-      pipeline_service.SavePipeline(guard);
-    } catch (const std::exception& e) {
-      if (guard) {
-        pipeline_service.SavePipeline(guard);
-      }
-      result.failures_.push_back({target_id, e.what()});
-    } catch (...) {
-      if (guard) {
-        pipeline_service.SavePipeline(guard);
-      }
-      result.failures_.push_back({target_id, "Unknown adjustment apply failure."});
-    }
-  }
-
-  pipeline_service.Sync();
-  return result;
-}
-
-// --- Phase 6C-8: Mini-Git paste (root-relative Version). Editor merge is live-path only. ---
-
-namespace {
-
-/// Unique display name for a new Version in a CommitGraph, avoiding collisions with
-/// existing Version names.
-auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, const std::string& requested_name,
-                                      std::string_view fallback_name) -> std::string {
-  const std::string base_name =
-      requested_name.empty() ? std::string{fallback_name} : requested_name;
-  bool              base_exists = false;
-  int               max_suffix  = 1;
-
-  const std::string prefix      = base_name + " (";
+auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, std::string requested,
+                                      std::string fallback) -> std::string {
+  auto base_name = requested.empty() ? std::move(fallback) : std::move(requested);
+  bool base_exists = false;
+  int  max_suffix  = 1;
   for (const auto& [id, ref] : graph.GetAllVersionRefs()) {
-    const std::string& existing_name = ref.display_name;
-    if (existing_name == base_name) {
+    (void)id;
+    const auto& name = ref.display_name;
+    if (name == base_name) {
       base_exists = true;
       continue;
     }
-    if (existing_name.size() <= prefix.size() + 1 || existing_name.back() != ')' ||
-        existing_name.rfind(prefix, 0) != 0) {
+    const auto prefix = base_name + " (";
+    if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0 ||
+        name.back() != ')') {
       continue;
     }
-    const std::string suffix =
-        existing_name.substr(prefix.size(), existing_name.size() - prefix.size() - 1);
     try {
-      const int parsed = std::stoi(suffix);
+      const auto parsed = std::stoi(name.substr(prefix.size(), name.size() - prefix.size() - 1));
       if (parsed > 1) {
         max_suffix  = std::max(max_suffix, parsed);
         base_exists = true;
@@ -533,7 +39,6 @@ auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, const std::strin
     } catch (...) {
     }
   }
-
   if (!base_exists) {
     return base_name;
   }
@@ -542,255 +47,67 @@ auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, const std::strin
 
 }  // namespace
 
-auto AdjustmentTransferService::BuildRootRelativeCommits(const AdjustmentTransferPackage& package,
-                                                         const root_id_t&                 root_id)
-    -> std::vector<EditCommit> {
-  std::vector<EditCommit> commits;
-  commits.reserve(package.operators_.size());
+auto AdjustmentTransferService::Capture(const PipelineDocument& document, MaskStore* mask_store)
+    -> AdjustmentTransferPackage {
+  return CaptureDocumentTransfer(document, mask_store);
+}
 
-  head_commit_hash_t parent = std::nullopt;  // root
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == PipelineStageName::Stage_Count ||
-        entry.operator_type_ == OperatorType::UNKNOWN ||
-        entry.operator_type_ == OperatorType::RESIZE) {
-      continue;
-    }
+auto AdjustmentTransferService::ImportPackage(const nlohmann::json& package_json)
+    -> AdjustmentTransferPackage {
+  return ImportDocumentTransfer(package_json);
+}
 
-    OrdinaryEditPayload payload;
-    payload.operator_type  = entry.operator_type_;
-    payload.stage_name     = entry.stage_;
-    // Transfer entries contain the complete operator parameter object. Mark the
-    // commit as a full operator replacement so pipeline reconstruction does not
-    // nest that object under the operator name.
-    payload.field_name     = "$operator_params";
-    payload.before_value   = nlohmann::json(nullptr);
-    payload.before_enabled = false;
-    payload.after_value    = entry.params_;
-    payload.after_enabled  = entry.enabled_;
+auto AdjustmentTransferService::ExportPackage(const AdjustmentTransferPackage& package)
+    -> nlohmann::json {
+  return ExportDocumentTransfer(package);
+}
 
-    auto commit            = EditCommit::MakeEdit(root_id, parent, std::move(payload));
-    parent                 = commit.GetCommitHash();
-    commits.push_back(std::move(commit));
-  }
-  return commits;
+auto AdjustmentTransferService::PackageFingerprint(const AdjustmentTransferPackage& package)
+    -> std::string {
+  return DocumentTransferFingerprint(package);
 }
 
 auto AdjustmentTransferService::PasteAsRootRelativeVersion(
-    CommitGraph& graph, const AdjustmentTransferPackage& package, std::string version_display_name)
-    -> AdjustmentPasteResult {
+    CommitGraph& graph, const PipelineDocument& root_document,
+    const AdjustmentTransferPackage& package, std::string version_display_name,
+    const DocumentTransferPasteOptions& options) -> AdjustmentPasteResult {
   AdjustmentPasteResult result;
-  if (package.Empty()) {
-    result.error = "Adjustment transfer package is empty";
-    return result;
-  }
-
-  // Build root-relative commit chain.
-  auto commits = BuildRootRelativeCommits(package, graph.GetRootId());
-  if (commits.empty()) {
-    result.error = "No valid adjustments to paste";
-    return result;
-  }
-
-  // Insert all commits into the graph.
-  for (const auto& commit : commits) {
-    (void)graph.InsertCommit(commit);
-  }
-
-  const auto new_head = commits.back().GetCommitHash();
-  const auto display_name =
-      UniqueVersionDisplayNameForGraph(graph, version_display_name, "Pasted Adjustments");
-  const auto new_version_id = graph.CreateVersionRefAtHead(display_name, new_head);
-  graph.SetActiveVersionId(new_version_id);
-
-  result.pasted         = true;
-  result.new_version_id = new_version_id;
-  result.new_head       = new_head;
-  return result;
-}
-
-auto AdjustmentTransferService::PasteAsRootRelativeVersion(
-    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    [[maybe_unused]] sl_element_id_t element_id, const AdjustmentTransferPackage& package,
-    std::string version_display_name) -> AdjustmentPasteResult {
-  return PasteAsRootRelativeVersion(graph, package, std::move(version_display_name));
-}
-
-namespace {
-
-void MergeJsonObjectDeep(nlohmann::json& target, const nlohmann::json& patch) {
-  if (!target.is_object() || !patch.is_object()) {
-    target = patch;
-    return;
-  }
-  for (const auto& [key, value] : patch.items()) {
-    if (target.contains(key) && target[key].is_object() && value.is_object()) {
-      MergeJsonObjectDeep(target[key], value);
-    } else {
-      target[key] = value;
-    }
-  }
-}
-
-}  // namespace
-
-auto AdjustmentTransferService::DetectMergeConflicts(
-    CPUPipelineExecutor& pipeline, const AdjustmentTransferPackage& package,
-    std::vector<AdjustmentMergeConflict>* conflicts, std::string* error) -> bool {
-  if (conflicts == nullptr) {
-    if (error != nullptr) *error = "Merge conflict output is required";
-    return false;
-  }
-  conflicts->clear();
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == PipelineStageName::Stage_Count ||
-        entry.operator_type_ == OperatorType::UNKNOWN ||
-        entry.operator_type_ == OperatorType::RESIZE) {
-      continue;
-    }
-
-    auto&      stage   = pipeline.GetStage(entry.stage_);
-    const auto current = stage.GetOperator(entry.operator_type_);
-    const bool has_current =
-        current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr;
-
-    nlohmann::json current_value   = nlohmann::json(nullptr);
-    bool           current_enabled = false;
-    if (has_current) {
-      current_value   = current.value()->op_->GetParams();
-      current_enabled = current.value()->enable_;
-    }
-
-    nlohmann::json incoming_value = entry.params_;
-    if (has_current && entry.merge_params_) {
-      incoming_value = current_value;
-      MergeJsonObjectDeep(incoming_value, entry.params_);
-    }
-
-    bool params_conflict = false;
-    if (has_current) {
-      params_conflict = current.value()->op_->DetectMergeConflict(current_value, incoming_value);
-    } else {
-      params_conflict = !incoming_value.is_null();
-    }
-    if (params_conflict || current_enabled != entry.enabled_) {
-      AdjustmentMergeConflict conflict;
-      conflict.stage         = entry.stage_;
-      conflict.operator_type = entry.operator_type_;
-      const auto script_key  = EditorAdjustmentFieldKey(entry.stage_, entry.operator_type_);
-      conflict.field_key     = (script_key.has_value() ? *script_key : std::string{"unknown"}) +
-                           "/" + std::to_string(static_cast<int>(entry.stage_));
-      conflict.current_value    = std::move(current_value);
-      conflict.incoming_value   = std::move(incoming_value);
-      conflict.current_enabled  = current_enabled;
-      conflict.incoming_enabled = entry.enabled_;
-      conflicts->push_back(std::move(conflict));
-    }
-  }
-  return true;
-}
-
-auto AdjustmentTransferService::InsertIncomingAncestryCommits(
-    CommitGraph& graph, const AdjustmentTransferPackage& package)
-    -> std::optional<commit_hash_t> {
-  auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
-  if (incoming_commits.empty()) {
-    return std::nullopt;
-  }
-  for (const auto& commit : incoming_commits) {
-    (void)graph.InsertCommit(commit);
-  }
-  return incoming_commits.back().GetCommitHash();
-}
-
-auto AdjustmentTransferService::BuildMergeFieldDelta(
-    CPUPipelineExecutor& pipeline, const AdjustmentMergeConflict& conflict,
-    OperatorMergeChoice choice) -> MergeFieldDelta {
-  MergeFieldDelta delta;
-  delta.operator_type  = conflict.operator_type;
-  delta.stage_name     = conflict.stage;
-  delta.field_name     = "$operator_params";
-  delta.before_value   = conflict.current_value;
-  delta.before_enabled = conflict.current_enabled;
-
-  nlohmann::json resolved_value = conflict.current_value;
-  auto&          stage           = pipeline.GetStage(conflict.stage);
-  const auto     current_op      = stage.GetOperator(conflict.operator_type);
-  const bool     has_current =
-      current_op.has_value() && current_op.value() != nullptr && current_op.value()->op_ != nullptr;
-  if (has_current) {
-    resolved_value = current_op.value()->op_->MergeParams(conflict.current_value,
-                                                          conflict.incoming_value, choice);
-  } else if (choice == OperatorMergeChoice::kTakeIncoming) {
-    resolved_value = conflict.incoming_value;
-  }
-  delta.resolved_value   = std::move(resolved_value);
-  delta.resolved_enabled = choice == OperatorMergeChoice::kTakeIncoming
-                               ? conflict.incoming_enabled
-                               : conflict.current_enabled;
-  return delta;
-}
-
-auto AdjustmentTransferService::MergeIntoActiveVersion(
-    CommitGraph& graph, CPUPipelineExecutor& live_pipeline,
-    const AdjustmentTransferPackage& package) -> AdjustmentPasteResult {
-  AdjustmentPasteResult result;
-  if (package.Empty()) {
-    result.error = "Adjustment transfer package is empty";
-    return result;
-  }
-
-  const auto active_version_id = graph.GetActiveVersionId();
-  const auto current_head       = graph.GetActiveVersionRef().head_commit_hash;
-  result.prior_version_id   = active_version_id;
-
-  // Detect conflicts and build the merge payload under the render lock so
-  // operator MergeParams (color temp, lens calib, …) resolve against a stable
-  // current image-local state. Graph mutations happen after the lock releases.
-  std::vector<AdjustmentMergeConflict> conflicts;
-  MergeEditPayload                      merge_payload;
-  {
-    std::unique_lock<std::mutex> render_lock(live_pipeline.GetRenderLock());
-    std::string                   detect_error;
-    if (!DetectMergeConflicts(live_pipeline, package, &conflicts, &detect_error)) {
-      result.error = std::move(detect_error);
-      return result;
-    }
-    std::unordered_set<std::string> seen_keys;
-    for (const auto& conflict : conflicts) {
-      if (!seen_keys.insert(conflict.field_key).second) continue;
-      merge_payload.fields.push_back(
-          BuildMergeFieldDelta(live_pipeline, conflict, OperatorMergeChoice::kTakeIncoming));
-    }
-  }
-
-  // Insert incoming root-relative ancestry commits; the merge commit's second
-  // parent must already exist in the graph.
-  const auto incoming_head = InsertIncomingAncestryCommits(graph, package);
-  if (!incoming_head.has_value()) {
-    result.error = "No valid adjustments to merge";
-    return result;
-  }
-
-  EditCommit merge_commit;
+  result.prior_version_id = graph.GetActiveVersionId();
+  PreparedDocumentPaste prepared;
   try {
-    merge_commit = EditCommit::MakeMerge(graph.GetRootId(), current_head, *incoming_head,
-                                         std::move(merge_payload));
+    prepared = PrepareDocumentPaste(package, root_document, options);
   } catch (const std::exception& ex) {
     result.error = ex.what();
     return result;
   }
-  (void)graph.InsertCommit(merge_commit);
 
-  // A merge advances the active Version's head to the two-parent merge commit
-  // (git-merge on the current branch). It does not create a new Version ref;
-  // the active Version keeps its identity and now carries the merge commit, so
-  // the target's prior edit history is preserved as the first parent.
-  graph.MoveWorkingHead(active_version_id, merge_commit.GetCommitHash());
-
-  result.pasted         = true;
-  result.new_version_id = active_version_id;
-  result.new_head       = merge_commit.GetCommitHash();
-  return result;
+  version_ref_id_t new_version_id{};
+  bool             version_created = false;
+  try {
+    const auto display_name =
+        UniqueVersionDisplayNameForGraph(graph, std::move(version_display_name),
+                                         "Pasted Adjustments");
+    new_version_id = graph.CreateVersionRefAtRoot(display_name);
+    version_created = true;
+    graph.SetActiveVersionId(new_version_id);
+    auto commit =
+        EditCommit::MakePipelineEdit(graph.GetRootId(), std::nullopt, std::move(prepared.batch));
+    if (!graph.InsertCommit(commit)) {
+      throw std::runtime_error("Paste commit was not inserted");
+    }
+    graph.MoveWorkingHead(new_version_id, commit.GetCommitHash());
+    result.pasted         = true;
+    result.new_version_id = new_version_id;
+    result.new_head       = commit.GetCommitHash();
+    return result;
+  } catch (const std::exception& ex) {
+    graph.SetActiveVersionId(result.prior_version_id);
+    if (version_created) {
+      (void)graph.RemoveVersionRef(new_version_id);
+    }
+    result.error = ex.what();
+    return result;
+  }
 }
 
 }  // namespace alcedo

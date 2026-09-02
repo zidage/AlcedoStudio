@@ -71,4 +71,47 @@ namespace alcedo {
 [[nodiscard]] auto SetColorGradeEnabled(PipelineDocument& document, const NodeId& node_id,
                                         bool enabled) -> std::vector<GraphValidationError>;
 
+/**
+ * @brief Set Color Grade mix in `[0, 1]`. Does not change NodeId or edges.
+ *
+ * @pre Caller holds the shared executor render lock. No unrelated Model is copied.
+ * @return Empty on success. On failure @p document is left unchanged.
+ */
+[[nodiscard]] auto SetColorGradeMix(PipelineDocument& document, const NodeId& node_id, float mix)
+    -> std::vector<GraphValidationError>;
+
+/**
+ * @brief Insert a Color Grade deserialized from stored node JSON onto exact scene edges.
+ *
+ * Redo and inverse-remove use this instead of @ref AddCleanColorGrade so NodeId,
+ * AdjustmentInstanceId, Masks, mix, and enabled values are restored exactly.
+ *
+ * @p incoming is predecessor to the inserted node. @p outgoing is the inserted node
+ * to successor. The predecessor-to-successor edge is disconnected.
+ *
+ * @pre Caller holds the shared executor render lock.
+ * @return Empty on success. On failure @p document is left unchanged.
+ */
+[[nodiscard]] auto InsertColorGradeFromJson(PipelineDocument& document, nlohmann::json node_json,
+                                            const GraphEdge& incoming, const GraphEdge& outgoing)
+    -> std::vector<GraphValidationError>;
+
+/**
+ * @brief Unique scene-image predecessor edge of @p node_id, or null.
+ */
+[[nodiscard]] auto FindSceneImagePredecessor(const PipelineGraph& graph, const NodeId& node_id)
+    -> const GraphEdge*;
+
+/**
+ * @brief Unique scene-image successor edge of @p node_id, or null.
+ */
+[[nodiscard]] auto FindSceneImageSuccessor(const PipelineGraph& graph, const NodeId& node_id)
+    -> const GraphEdge*;
+
+/**
+ * @brief Exact scene-image edge from @p from to @p to on the image port, or null.
+ */
+[[nodiscard]] auto FindSceneImageEdge(const PipelineGraph& graph, const NodeId& from,
+                                      const NodeId& to) -> const GraphEdge*;
+
 }  // namespace alcedo

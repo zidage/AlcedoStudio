@@ -206,7 +206,6 @@ void EditorSessionController::SyncBackgroundActionRestrictions() {
   alcedo::EditorBackgroundActionRestrictions restrictions;
   restrictions.blocks_select_image = !interaction_policy_->CanSelectEditorImage();
   restrictions.blocks_paste        = !interaction_policy_->CanPasteAdjustments();
-  restrictions.blocks_merge        = !interaction_policy_->CanMergeAdjustments();
   restrictions.blocks_checkout     = !interaction_policy_->CanCheckoutVersion();
   restrictions.blocks_workspace    = !interaction_policy_->CanSwitchWorkspace();
   session_backend_->SetBackgroundActionRestrictions(restrictions);
@@ -994,6 +993,12 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "CropRotate";
     case R::ScopeRefresh:
       return "ScopeRefresh";
+    case R::GraphTopologyChanged:
+      return "GraphTopologyChanged";
+    case R::SettledMaskEdit:
+      return "SettledMaskEdit";
+    case R::VersionDocumentChanged:
+      return "VersionDocumentChanged";
   }
   return "Unknown";
 }
@@ -1278,25 +1283,6 @@ auto EditorSessionController::PasteAdjustmentPackage(
     -> alcedo::EditorSessionResult {
   if (!session_backend_) return {};
   return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString());
-}
-
-auto EditorSessionController::BeginMergeAdjustmentPackage(
-    const alcedo::AdjustmentTransferPackage& package, alcedo::AdjustmentMergePreview* preview)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->BeginMerge(package, preview);
-}
-
-auto EditorSessionController::CompleteMergeAdjustments(
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->CompleteMerge(resolutions);
-}
-
-auto EditorSessionController::CancelMergeAdjustments() -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->CancelMerge();
 }
 
 auto EditorSessionController::BuildSnapshotMap(

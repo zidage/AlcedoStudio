@@ -50,9 +50,6 @@ enum class EditorSessionCommandKind : std::uint8_t {
   RenameVersion,
   RemoveVersion,
   ApplyPaste,
-  BeginMerge,
-  CompleteMerge,
-  CancelMerge,
   RetrySave,
   DiscardAndContinue,
   CancelPendingNavigation,
@@ -72,7 +69,7 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   PipelineSnapshotBuilt,
   WorkerRequestFailed,
   NavigationFinished,
-  /// A history save checkpoint (Rename/Remove/Paste/Merge publication or a
+  /// A history save checkpoint (Rename/Remove/Paste publication or a
   /// dirty-journal flush before a retained transfer) reached its terminal
   /// outcome. Carries success, session generation, last journal sequence, and
   /// the operation that started the checkpoint.
@@ -99,10 +96,8 @@ struct EditorSessionCommand {
   version_ref_id_t                        version_id{};
   commit_hash_t                           commit_id{};
   AdjustmentTransferPackage               transfer_package{};
-  std::vector<AdjustmentMergeResolution>  merge_resolutions;
   std::string                             text;
   bool                                    persist_changes = true;
-  std::shared_ptr<AdjustmentMergePreview> merge_preview;
   /// Presentation binding for SetPresentationTarget / SetPresentationSize /
   /// SetGeometryOverlay. Unused by other command kinds.
   PresentationSinkId                      presentation_sink_id = 0;

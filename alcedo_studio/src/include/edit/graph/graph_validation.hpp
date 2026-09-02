@@ -27,6 +27,7 @@ enum class GraphValidationCode {
   ProtectedEndpoint,
   NotAColorGrade,
   InvalidDisplayName,
+  InvalidNodeValue,
 };
 
 struct GraphValidationError {

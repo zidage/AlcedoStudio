@@ -296,14 +296,6 @@ QString InteractionPolicyController::PasteAdjustmentsReason() const {
   return EvalGlobal(InteractionCapability::PasteAdjustments).reason_;
 }
 
-bool InteractionPolicyController::CanMergeAdjustments() const {
-  return EvalGlobal(InteractionCapability::MergeAdjustments).allowed_;
-}
-
-QString InteractionPolicyController::MergeAdjustmentsReason() const {
-  return EvalGlobal(InteractionCapability::MergeAdjustments).reason_;
-}
-
 // ── Q_INVOKABLE one-shot queries (full {allowed, reason, blockingTaskIds} map) ─
 QVariantMap InteractionPolicyController::EvaluateEditImageDescription(uint elementId) const {
   return ToVariantMap(Eval(InteractionCapability::EditImageDescription, elementId));
@@ -356,10 +348,6 @@ QVariantMap InteractionPolicyController::EvaluateCheckoutVersion() const {
 
 QVariantMap InteractionPolicyController::EvaluatePasteAdjustments() const {
   return ToVariantMap(EvalGlobal(InteractionCapability::PasteAdjustments));
-}
-
-QVariantMap InteractionPolicyController::EvaluateMergeAdjustments() const {
-  return ToVariantMap(EvalGlobal(InteractionCapability::MergeAdjustments));
 }
 
 }  // namespace alcedo::ui

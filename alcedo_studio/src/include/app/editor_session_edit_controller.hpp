@@ -25,11 +25,12 @@ struct EditorEditOutcome {
     Failed,
     Rejected,
   };
-  Kind                    kind      = Kind::Accepted;
+  Kind                    kind            = Kind::Accepted;
   EditorSessionIdentity   identity{};
-  EditorRenderReason       reason    = EditorRenderReason::InteractiveAdjustment;
-  EditorRenderCommand      render_command;
-  std::string              message;
+  EditorRenderReason      reason          = EditorRenderReason::InteractiveAdjustment;
+  bool                    schedule_render = true;
+  EditorRenderCommand     render_command;
+  std::string             message;
 };
 
 /// Owns provisional/settled edit routing. All methods run during queue
