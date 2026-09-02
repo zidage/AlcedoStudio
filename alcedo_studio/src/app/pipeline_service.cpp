@@ -226,10 +226,6 @@ auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
                                           guard.transaction_chain_hash(), *guard.document_);
 }
 
-void BindLiveDocument(PipelineGuard& guard, PipelineDocument document) {
-  BindLivePipelineDocument(guard, std::move(document));
-}
-
 void CacheRootDocument(PipelineGuard& guard, const PipelineDocument& document) {
   guard.root_document_ = std::make_shared<PipelineDocument>(ClonePipelineDocument(document));
 }
@@ -245,6 +241,66 @@ void BindDevelopData(PipelineDocument& document, const RawRuntimeColorContext& r
   if (next != payload) {
     develop->Params().ReplaceParams(std::move(next));
   }
+}
+
+void BindWorkingSpaceDevelopData(PipelineDocument& document) {
+  auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return;
+  }
+  auto payload = develop->Params().Params();
+  auto next    = payload;
+  BindRgbWorkingSpaceCameraProfile(next);
+  if (next != payload) {
+    develop->Params().ReplaceParams(std::move(next));
+  }
+}
+
+/// Bind Rec.709 onto a live document that cannot resolve CameraToAp1 and has no stored RAW
+/// color context. RAW roots keep missing matrices so decode/import still fails closed.
+void EnsureRenderableCameraProfile(
+    PipelineDocument& document, const std::optional<RawRuntimeColorContext>& raw_color_context) {
+  auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return;
+  }
+  if (develop->Params().Params().camera_profile.color_matrices_valid) {
+    return;
+  }
+  if (raw_color_context.has_value()) {
+    return;
+  }
+  BindWorkingSpaceDevelopData(document);
+}
+
+auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
+    -> std::optional<RawRuntimeColorContext> {
+  try {
+    auto             db_guard = storage.GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       state = graph_service.GetImageEditState(id);
+    if (!state.has_value()) {
+      return std::nullopt;
+    }
+    const auto encoded = graph_service.GetRootSerializedPipelineState(id, state->root_id);
+    if (!encoded.has_value()) {
+      return std::nullopt;
+    }
+    const auto loaded = TryDecodeRootState(*encoded, id, state->root_id);
+    if (!loaded.has_value()) {
+      return std::nullopt;
+    }
+    return loaded->raw_color_context;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+void BindLiveDocument(PipelineGuard& guard, PipelineDocument document,
+                      const std::optional<RawRuntimeColorContext>& raw_color_context) {
+  EnsureRenderableCameraProfile(document, raw_color_context);
+  BindLivePipelineDocument(guard, std::move(document));
 }
 
 auto FirstParentCommits(const CommitGraph& graph, head_commit_hash_t head)
@@ -287,7 +343,7 @@ auto ReplayLiveDocumentFromRoot(PipelineGuard& guard, const CommitGraph& graph,
   if (!VerifyPersistentMaskAssets(*replayed, mask_store, error)) {
     return false;
   }
-  BindLiveDocument(guard, std::move(*replayed));
+  BindLiveDocument(guard, std::move(*replayed), root_state.raw_color_context);
   if (root_state.raw_color_context.has_value()) {
     guard.pipeline_->InjectRawMetadata(*root_state.raw_color_context);
   }
@@ -552,6 +608,13 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
 
     pipeline_guard->pipeline_ = std::move(pipeline);
     pipeline_guard->document_ = LoadPipelineDocument(storage_->GetElementStore(), id);
+    std::optional<RawRuntimeColorContext> stored_raw;
+    const auto* develop = pipeline_guard->document_->Develop();
+    if (develop != nullptr &&
+        !develop->Params().Params().camera_profile.color_matrices_valid) {
+      stored_raw = StoredRootRawColorContext(*storage_, id);
+    }
+    EnsureRenderableCameraProfile(*pipeline_guard->document_, stored_raw);
     pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_, false);
     ValidateProductDocument(*pipeline_guard->document_, id);
     pipeline_guard->dirty_ = false;
@@ -640,6 +703,8 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
       BindDevelopData(*pipeline->document_, *raw_color_context);
       pipeline->pipeline_->InjectRawMetadata(*raw_color_context);
       raw_json = RawColorContextToJson(*raw_color_context);
+    } else {
+      BindWorkingSpaceDevelopData(*pipeline->document_);
     }
     ValidateProductDocument(*pipeline->document_, pipeline->id_);
   }
@@ -731,7 +796,8 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
           stored->transaction_chain_hash == expected_chain) {
         try {
           std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-          BindLiveDocument(*pipeline, ClonePipelineDocument(stored->document));
+          BindLiveDocument(*pipeline, ClonePipelineDocument(stored->document),
+                           root_state->raw_color_context);
           if (root_state->raw_color_context.has_value()) {
             pipeline->pipeline_->InjectRawMetadata(*root_state->raw_color_context);
           }
@@ -1013,7 +1079,8 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   auto restore_prior = [&]() {
     graph.SetActiveVersionId(prior_version_id);
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    BindLiveDocument(*pipeline, ClonePipelineDocument(prior_document));
+    BindLiveDocument(*pipeline, ClonePipelineDocument(prior_document),
+                     root_state->raw_color_context);
     ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
                                   root_state->raw_color_context, accelerator_preference_);
     pipeline->pipeline_->SetExecutionStages();
@@ -1022,7 +1089,7 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   graph.SetActiveVersionId(version_id);
   try {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    BindLiveDocument(*pipeline, std::move(*replayed));
+    BindLiveDocument(*pipeline, std::move(*replayed), root_state->raw_color_context);
     if (root_state->raw_color_context.has_value()) {
       pipeline->pipeline_->InjectRawMetadata(*root_state->raw_color_context);
     }
@@ -1120,7 +1187,8 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
 
   auto restore_prior = [&]() {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    BindLiveDocument(*pipeline, ClonePipelineDocument(prior_document));
+    BindLiveDocument(*pipeline, ClonePipelineDocument(prior_document),
+                     root_state->raw_color_context);
     ImportSerializedPipelineState(*pipeline->pipeline_, prior_params,
                                   root_state->raw_color_context, accelerator_preference_);
     pipeline->pipeline_->SetExecutionStages();

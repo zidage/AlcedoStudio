@@ -58,25 +58,10 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
                             const PipelineHistoryApplyContext& context = {}) -> bool;
 
 /**
- * @brief Apply one leftover ordinary payload onto the current-panel document Models.
+ * @brief Clone @p root_document and apply first-parent typed batch commits in order.
  *
- * Maps CPU operator JSON aliases (`exposure` → `exposure_ev`, `ocio_lmt` →
- * `cube_path`) and keeps only keys the live Model already owns. Does not convert
- * old project, document, root, checkpoint, or WAL format versions.
- *
- * @pre Caller holds the shared executor render lock when @p document is live.
- */
-auto ApplyLeftoverOrdinaryPayloadToDocument(PipelineDocument& document,
-                                            const OrdinaryEditPayload& payload,
-                                            std::string* error) -> bool;
-
-/**
- * @brief Clone @p root_document and apply first-parent commits in order.
- *
- * Typed batches use @ref ApplyPipelineEditBatch. Leftover ordinary and merge
- * payloads (Paste/merge until that path is replaced) apply onto the document
- * Models. A failed change leaves the returned document unset; the clone is
- * discarded. Does not take the render lock.
+ * Typed batches use @ref ApplyPipelineEditBatch. A failed change leaves the returned document unset;
+ * the clone is discarded. Does not take the render lock.
  *
  * @param root_document Immutable image root DAG.
  * @param first_parent_commits Root-to-head first-parent commits, oldest first.

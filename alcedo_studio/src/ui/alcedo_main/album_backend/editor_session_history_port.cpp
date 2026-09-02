@@ -230,12 +230,6 @@ auto EditorSessionHistoryPort::RemoveVersion(const alcedo::EditorHistoryGuardHan
   return version_refs_->RemoveVersion(guard, version_id, error);
 }
 
-auto EditorSessionHistoryPort::CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                           const alcedo::AdjustmentMergePreview& preview,
-                                           std::string* error) -> bool {
-  return transfer_->CancelMerge(guard, preview, error);
-}
-
 auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(
     const alcedo::EditorHistoryGuardHandle& guard,
     const alcedo::AdjustmentTransferPackage& package, std::string version_display_name,
@@ -249,22 +243,6 @@ auto EditorSessionHistoryPort::CancelLivePaste(const alcedo::EditorHistoryGuardH
                                                const alcedo::version_ref_id_t& paste_version_id,
                                                std::string* error) -> bool {
   return transfer_->CancelLivePaste(guard, prior_version_id, paste_version_id, error);
-}
-
-auto EditorSessionHistoryPort::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                              const alcedo::AdjustmentTransferPackage& package,
-                                              alcedo::AdjustmentMergePreview* preview,
-                                              std::string* error) -> bool {
-  return transfer_->BeginLiveMerge(guard, package, preview, error);
-}
-
-auto EditorSessionHistoryPort::CompleteLiveMerge(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentTransferPackage& package,
-    const alcedo::AdjustmentMergePreview& preview,
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
-  return transfer_->CompleteLiveMerge(guard, package, preview, resolutions, result, error);
 }
 
 auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(

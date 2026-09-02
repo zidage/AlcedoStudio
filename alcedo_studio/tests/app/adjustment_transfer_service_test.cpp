@@ -51,18 +51,9 @@ TEST(AdjustmentTransferServiceTest, TransferSurfaceHasNoPipelineMergeOperation) 
   ASSERT_TRUE(pasted.pasted) << pasted.error;
   EXPECT_EQ(graph->CommitCount(), 1u);
   const auto& commit = graph->GetCommit(pasted.new_head);
-  EXPECT_EQ(commit.GetKind(), EditCommitKind::kEdit);
-  EXPECT_EQ(commit.GetSecondParentHash(), std::nullopt);
   ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
   EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
             PipelineEditOperationKind::Paste);
-  for (const auto& [id, ref] : graph->GetAllVersionRefs()) {
-    (void)id;
-    if (!ref.head_commit_hash.has_value()) {
-      continue;
-    }
-    EXPECT_NE(graph->GetCommit(*ref.head_commit_hash).GetKind(), EditCommitKind::kMerge);
-  }
   project.TearDown();
 }
 

@@ -644,20 +644,6 @@ auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QV
       session->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
 }
 
-auto AdjustmentTransferController::BeginMergeIntoEditor(QObject* /*editorSession*/) -> QVariantMap {
-  return ErrorResult(Tr("Pipeline merge is not supported."));
-}
-
-auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject* /*editorSession*/,
-                                                           const QVariantList& /*resolutions*/)
-    -> QVariantMap {
-  return ErrorResult(Tr("Pipeline merge is not supported."));
-}
-
-auto AdjustmentTransferController::CancelMergeIntoEditor(QObject* /*editorSession*/) -> QVariantMap {
-  return ErrorResult(Tr("Pipeline merge is not supported."));
-}
-
 auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
                                                    PipelineMgmtService& pipeline_service)
     -> QVariantMap {
@@ -756,7 +742,7 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
   }
 
   pipeline_service.Sync();
-  PostProcessApplyResult(result, false);
+  PostProcessApplyResult(result);
 
   QVariantList failures;
   for (const auto& failure : result.failures_) {
@@ -779,14 +765,7 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
   return response;
 }
 
-auto AdjustmentTransferController::MergeViaMiniGit(const std::vector<sl_element_id_t>& /*ids*/,
-                                                   PipelineMgmtService& /*pipeline_service*/)
-    -> QVariantMap {
-  return ErrorResult(Tr("Pipeline merge is not supported."));
-}
-
-void AdjustmentTransferController::PostProcessApplyResult(const AdjustmentApplyResult& result,
-                                                          bool /*merge_strategy*/) {
+void AdjustmentTransferController::PostProcessApplyResult(const AdjustmentApplyResult& result) {
   auto thumbnail_service  = project_->handler().thumbnail_service();
   bool hdr_metadata_dirty = false;
   for (sl_element_id_t element_id : result.applied_ids_) {

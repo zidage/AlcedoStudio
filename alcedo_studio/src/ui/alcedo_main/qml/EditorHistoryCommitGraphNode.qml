@@ -2,19 +2,18 @@ import QtQuick
 
 // One cell of the history commit graph: the link segments above and below the
 // row plus the node glyph. Stacked cells form the continuous Git-graph rail.
-// The host delegate supplies row state (current / merge / root / future) and
+// The host delegate supplies row state (current / root / future) and
 // link connectivity; all glyph geometry derives from AppTheme spacing tokens.
 //
 // Glyph language (DESIGN.md, Git-graph timeline):
 //   applied edit  — small solid disc
 //   undone (redo) — small hollow ring
-//   graph root    — large hollow ring (also used for merge commits)
+//   graph root    — large hollow ring
 //   checked out   — large double ring (text-ink outline + inner dot)
 Item {
     id: root
 
     property bool current: false
-    property bool merge: false
     property bool rootCommit: false
     property bool future: false
     // Link continuity: the newest row has no segment above; the graph-root
@@ -38,9 +37,9 @@ Item {
     readonly property int nodeLarge: appTheme.spaceLg
     readonly property int nodeDot: appTheme.spaceXs + 2
     readonly property bool largeNode: root.current
-                                      || (!root.future && (root.rootCommit || root.merge))
+                                      || (!root.future && root.rootCommit)
     readonly property bool hollowNode: root.current || root.future
-                                       || root.rootCommit || root.merge
+                                       || root.rootCommit
 
     implicitWidth: appTheme.spaceLg + appTheme.spaceSm
 

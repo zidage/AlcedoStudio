@@ -11,7 +11,6 @@
 
 #include "edit/history/commit_types.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
-#include "edit/operators/op_base.hpp"
 #include "json.hpp"
 
 namespace alcedo {
@@ -22,113 +21,38 @@ struct EditCommitAccess;
 }  // namespace edit_history_test
 
 /**
- * @brief Canonical ordinary-edit payload used for hashing and forward replay.
- *
- * Field identity is operator + stage + optional field name. Before/after values and enabled
- * flags are stored so reconstruction never re-derives the user action.
- */
-struct OrdinaryEditPayload {
-  OperatorType      operator_type = OperatorType::UNKNOWN;
-  PipelineStageName stage_name    = PipelineStageName::Basic_Adjustment;
-  std::string       field_name;
-  nlohmann::json    before_value   = nlohmann::json(nullptr);
-  nlohmann::json    after_value    = nlohmann::json(nullptr);
-  bool              before_enabled = false;
-  bool              after_enabled  = true;
-
-  auto              CanonicalJSON() const -> nlohmann::json;
-  auto              ToJSON() const -> nlohmann::json { return CanonicalJSON(); }
-  static auto       FromJSON(const nlohmann::json& j) -> OrdinaryEditPayload;
-};
-
-/**
- * @brief One UI-resolved field in a merge payload.
- *
- * `before_*` stores the live first-parent operator state so undo can reverse without
- * replaying the second parent or re-deriving values from the transfer package.
- */
-struct MergeFieldDelta {
-  OperatorType      operator_type = OperatorType::UNKNOWN;
-  PipelineStageName stage_name    = PipelineStageName::Basic_Adjustment;
-  std::string       field_name;
-  nlohmann::json    before_value     = nlohmann::json(nullptr);
-  bool              before_enabled   = false;
-  nlohmann::json    resolved_value   = nlohmann::json(nullptr);
-  bool              resolved_enabled = true;
-
-  /// Field identity used for merge-payload canonicalization (parent order is separate).
-  auto              IdentityKey() const -> std::string;
-  auto              CanonicalJSON() const -> nlohmann::json;
-  static auto       FromJSON(const nlohmann::json& j) -> MergeFieldDelta;
-};
-
-/**
- * @brief Complete merge payload: the full field delta transforming first-parent pipeline state
- * into the merge result. Reconstruction applies this payload; it does not re-run conflict UI.
- *
- * Applying a merge to the live pipeline may call SetOperator / enable once per field. That is
- * only parameter-table mutation. History still records **one** merge commit and folds
- * transaction_chain_hash **once** when the tip advances to that commit.
- *
- * Field deltas are stored and hashed in identity-sorted order. Duplicate field identities are
- * rejected. Ordered parent hashes remain significant for the commit hash and are not part of this
- * payload.
- */
-struct MergeEditPayload {
-  std::vector<MergeFieldDelta> fields;
-
-  /// Sort by field identity and reject duplicates. Called by MakeMerge and FromJSON.
-  void                         CanonicalizeAndValidate();
-
-  auto                         CanonicalJSON() const -> nlohmann::json;
-  auto                         ToJSON() const -> nlohmann::json { return CanonicalJSON(); }
-  static auto                  FromJSON(const nlohmann::json& j) -> MergeEditPayload;
-};
-
-/**
  * @brief Immutable content-addressed commit object.
  *
- * Ordinary edits have at most one parent (first_parent_hash; null means root). Merge commits have
- * ordered parents: first = checked-out branch, second = incoming branch. An Edit commit must not
- * carry a second parent; a Merge commit must carry exactly one second parent.
+ * All commits are first-parent commits whose payload is a canonical PipelineEditBatch.
+ * Root-child commits have nullopt first_parent_hash.
  */
 class EditCommit {
  public:
   EditCommit() = default;
 
-  /// Production factory. The creation timestamp comes from the process-wide monotonic clock.
-  static auto MakeEdit(root_id_t root_id, head_commit_hash_t first_parent,
-                       OrdinaryEditPayload payload) -> EditCommit;
-
   /**
-   * @brief Create an ordinary first-parent commit whose payload is a typed batch.
+   * @brief Create a first-parent commit whose payload is a typed batch.
    *
    * @param root_id Image root bound into the commit hash.
    * @param first_parent Prior head, or nullopt for a root-child commit.
-   * @param payload Validated typed batch. Ordinary and merge payloads are rejected.
+   * @param payload Validated typed batch. Non-batch payloads are rejected.
    * @return Finalized immutable commit. Does not insert into a graph.
    */
   static auto MakePipelineEdit(root_id_t root_id, head_commit_hash_t first_parent,
                                PipelineEditBatch payload) -> EditCommit;
 
-  /// Production factory. The creation timestamp comes from the process-wide monotonic clock.
-  static auto MakeMerge(root_id_t root_id, head_commit_hash_t first_parent,
-                        commit_hash_t second_parent, MergeEditPayload payload) -> EditCommit;
-
   auto        GetCommitHash() const -> commit_hash_t { return commit_hash_; }
   auto        GetRootId() const -> root_id_t { return root_id_; }
   auto        GetFirstParentHash() const -> head_commit_hash_t { return first_parent_hash_; }
-  auto GetSecondParentHash() const -> std::optional<commit_hash_t> { return second_parent_hash_; }
-  auto GetCreatedAtNs() const -> std::uint64_t { return created_at_ns_; }
-  auto GetKind() const -> EditCommitKind { return kind_; }
-  auto GetPayloadJSON() const -> const nlohmann::json& { return edit_payload_; }
+  auto        GetCreatedAtNs() const -> std::uint64_t { return created_at_ns_; }
+  auto        GetPayloadJSON() const -> const nlohmann::json& { return edit_payload_; }
 
   /// Host-endianness-independent hash input bytes for this commit object.
   auto CanonicalHashInput() const -> std::vector<std::uint8_t>;
   auto ComputeCommitHash() const -> commit_hash_t;
   void FinalizeHash();
 
-  /// Validate kind, parent cardinality, and payload shape without rehashing.
+  /// Validate parent cardinality and payload shape without rehashing.
   void ValidateStructure() const;
 
   auto ToJSON() const -> nlohmann::json;
@@ -137,23 +61,15 @@ class EditCommit {
  private:
   friend struct edit_history_test::EditCommitAccess;
 
-  static auto MakeEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
-                                  std::uint64_t created_at_ns, OrdinaryEditPayload payload)
-      -> EditCommit;
   static auto MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                           std::uint64_t created_at_ns, PipelineEditBatch payload)
       -> EditCommit;
-  static auto        MakeMergeAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
-                                          commit_hash_t second_parent, std::uint64_t created_at_ns,
-                                          MergeEditPayload payload) -> EditCommit;
 
   commit_hash_t      commit_hash_{};
   root_id_t          root_id_{};
-  head_commit_hash_t first_parent_hash_            = std::nullopt;
-  std::optional<commit_hash_t> second_parent_hash_ = std::nullopt;
-  std::uint64_t                created_at_ns_      = 0;
-  EditCommitKind               kind_               = EditCommitKind::kEdit;
-  nlohmann::json               edit_payload_       = nlohmann::json::object();
+  head_commit_hash_t first_parent_hash_ = std::nullopt;
+  std::uint64_t      created_at_ns_     = 0;
+  nlohmann::json     edit_payload_      = nlohmann::json::object();
 };
 
 /**
@@ -191,7 +107,7 @@ auto TransactionChainFoldInput(const transaction_chain_hash_t& previous,
                                const commit_hash_t& commit_hash) -> std::vector<std::uint8_t>;
 
 /// Fold **one commit** into the chain hash. Call once when history head advances to that
-/// commit — never once per SetOperator. Merge commits still fold exactly once.
+/// commit — never once per SetOperator.
 auto FoldTransactionChainHash(const transaction_chain_hash_t& previous,
                               const commit_hash_t& commit_hash) -> transaction_chain_hash_t;
 

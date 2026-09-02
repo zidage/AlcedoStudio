@@ -78,7 +78,7 @@ auto IndependentCommitHashInput(const root_id_t& root_id, std::uint64_t created_
   bytes.push_back(0);  // first parent absent
   bytes.push_back(0);  // second parent absent
   AppendU64LE(bytes, created_at_ns);
-  bytes.push_back(static_cast<std::uint8_t>(EditCommitKind::kEdit));
+  bytes.push_back(0);  // fixed kind = edit
   bytes.insert(bytes.end(), payload_dump.begin(), payload_dump.end());
   return bytes;
 }
@@ -239,6 +239,44 @@ TEST(PipelineEditBatch, TypedBatchGoldenBytesAndHashRemainStable) {
   }();
   const auto folded = Hash128::Compute(fold_input.data(), fold_input.size());
   EXPECT_EQ(FoldTransactionChainHash(root_chain, commit.GetCommitHash()), folded);
+  EXPECT_EQ(folded.ToString(), LoadGolden("set_parameter_chain_hash.txt"));
+}
+
+TEST(PipelineEditBatch, TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval) {
+  const auto golden = LoadGolden("set_parameter_batch.json");
+  const auto parsed = nlohmann::json::parse(golden);
+  EXPECT_FALSE(parsed.contains("kind"));
+  EXPECT_FALSE(parsed.contains("operator_type"));
+  EXPECT_FALSE(parsed.contains("stage_name"));
+  EXPECT_FALSE(parsed.contains("merge_field_keys"));
+  EXPECT_FALSE(parsed.contains("conflicts"));
+  const auto batch  = PipelineEditBatch::FromJSON(parsed);
+  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
+
+  const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
+  const auto      commit = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
+      root, std::nullopt, 42, batch);
+  const auto commit_json = commit.ToJSON();
+  EXPECT_EQ(commit_json.at("kind").get<std::string>(), "edit");
+  EXPECT_EQ(commit_json.at("second_parent_hash").get<std::string>(), "");
+  EXPECT_FALSE(commit_json.contains("merge_field_keys"));
+  EXPECT_FALSE(commit_json.contains("operator_type"));
+  EXPECT_FALSE(commit_json.contains("stage_name"));
+  EXPECT_EQ(commit_json.at("edit_payload").dump(), golden);
+
+  const auto golden_input = IndependentCommitHashInput(root, 42, golden);
+  EXPECT_EQ(commit.CanonicalHashInput(), golden_input);
+  const auto expected_hash = Hash128::Compute(golden_input.data(), golden_input.size());
+  EXPECT_EQ(commit.GetCommitHash(), expected_hash);
+  EXPECT_EQ(expected_hash.ToString(), LoadGolden("set_parameter_commit_hash.txt"));
+  EXPECT_NE(expected_hash.ToString(), kOldOrdinaryCommitHash);
+
+  const auto root_input = IndependentRootChainInput(root);
+  const auto root_chain = Hash128::Compute(root_input.data(), root_input.size());
+  EXPECT_EQ(ComputeRootChainHash(root), root_chain);
+  EXPECT_EQ(root_chain.ToString(), LoadGolden("root_chain_hash.txt"));
+
+  const auto folded = FoldTransactionChainHash(root_chain, commit.GetCommitHash());
   EXPECT_EQ(folded.ToString(), LoadGolden("set_parameter_chain_hash.txt"));
 }
 
@@ -466,14 +504,19 @@ TEST(PipelineEditBatch, ParameterHistoryRequiresCompleteOwnerNodeAndInstance) {
 }
 
 TEST(PipelineEditBatch, OrdinaryAndMergePayloadsAreRejected) {
-  OrdinaryEditPayload ordinary;
-  ordinary.operator_type = OperatorType::EXPOSURE;
-  ordinary.stage_name    = PipelineStageName::Basic_Adjustment;
-  ordinary.field_name    = "exposure";
-  EXPECT_THROW((void)PipelineEditBatch::FromJSON(ordinary.CanonicalJSON()), std::runtime_error);
+  nlohmann::json ordinary = {
+      {"operator_type", 1},
+      {"stage_name", 2},
+      {"field_name", "exposure"},
+      {"before_value", 0.0},
+      {"after_value", 1.0},
+  };
+  EXPECT_THROW((void)PipelineEditBatch::FromJSON(ordinary), std::runtime_error);
 
-  MergeEditPayload merge;
-  EXPECT_THROW((void)PipelineEditBatch::FromJSON(merge.CanonicalJSON()), std::runtime_error);
+  nlohmann::json merge = {
+      {"fields", nlohmann::json::array()},
+  };
+  EXPECT_THROW((void)PipelineEditBatch::FromJSON(merge), std::runtime_error);
 }
 
 TEST(PipelineEditBatch, IncompatibleChangeKindIsRejected) {
@@ -582,19 +625,8 @@ TEST(PipelineEditBatch, FuzzParseRejectsNonCanonicalPayloads) {
   }
 }
 
-TEST(PipelineEditBatch, GraphInsertAndOrdinaryHashFormatChanged) {
+TEST(PipelineEditBatch, GraphInsertAndTypedCommitVerification) {
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "exposure";
-  payload.before_value   = 0.0;
-  payload.after_value    = 1.25;
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  const auto ordinary = edit_history_test::EditCommitAccess::MakeEditAtTimestamp(
-      root, std::nullopt, 42, payload);
-  EXPECT_NE(ordinary.GetCommitHash().ToString(), kOldOrdinaryCommitHash);
   EXPECT_NE(ComputeRootChainHash(root).ToString(), kOldRootChainHash);
 
   auto graph = CommitGraph::CreateEmpty(44);

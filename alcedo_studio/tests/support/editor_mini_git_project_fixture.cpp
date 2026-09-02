@@ -21,16 +21,21 @@
 namespace alcedo::test {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
+auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
+  PipelineEditBatch batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", before}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", after}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  return batch;
 }
 
 auto DocumentWithExposure(float exposure) -> PipelineDocument {
@@ -112,7 +117,7 @@ auto EditorMiniGitProjectFixture::CheckpointDocumentExposure(const nlohmann::jso
 auto EditorMiniGitProjectFixture::AppendExposureEdit(sl_element_id_t element_id, float before,
                                                      float after, std::string* error) -> bool {
   auto& runtime = RuntimeFor(element_id);
-  auto  result  = runtime.history->AppendEdit(MakeExposurePayload(before, after));
+  auto  result  = runtime.history->AppendEdit(MakeExposureBatch(before, after));
   if (!result.committed) {
     if (error != nullptr) {
       *error = result.error.empty() ? "AppendExposureEdit failed" : result.error;

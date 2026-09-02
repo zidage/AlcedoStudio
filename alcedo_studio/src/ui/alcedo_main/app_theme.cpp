@@ -61,10 +61,6 @@ struct ThemeColors {
   QColor button_pressed_fill;
   QColor button_selected_fill;
   QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
-  QColor merge_current_color;
-  QColor merge_current_fill_color;
-  QColor merge_incoming_color;
-  QColor merge_incoming_fill_color;
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -108,10 +104,6 @@ auto MakePuerhTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover / bg_deep
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
@@ -147,10 +139,6 @@ auto MakeClassicTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
@@ -1076,7 +1064,6 @@ auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
 auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
 auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
-auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
@@ -1144,18 +1131,6 @@ auto AppTheme::buttonSelectedFillColor() const -> QColor {
 }
 auto AppTheme::disabledSurfaceColor() const -> QColor {
   return GetTheme(current_theme_index_).disabled_surface;
-}
-auto AppTheme::mergeCurrentColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_color;
-}
-auto AppTheme::mergeCurrentFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_fill_color;
-}
-auto AppTheme::mergeIncomingColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_color;
-}
-auto AppTheme::mergeIncomingFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_fill_color;
 }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }

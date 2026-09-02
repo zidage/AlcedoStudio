@@ -54,7 +54,8 @@ class CommitGraphStore {
   /// List every element_id that has an ImageEditState row.
   auto ListImageElementIds() -> std::vector<sl_element_id_t>;
 
-  /// Mark all Version heads (both parents), delete unreachable EditCommit rows for one image.
+  /// Mark all Version heads along first-parent reachability, then delete unreachable EditCommit
+  /// rows for one image.
   /// Safe on abnormal restart only when called during a clean project exit after the final save.
   /// @return number of commit rows deleted.
   auto DeleteUnreachableCommits(sl_element_id_t element_id) -> std::size_t;

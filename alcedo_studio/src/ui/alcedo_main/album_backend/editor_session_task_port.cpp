@@ -56,7 +56,6 @@ auto EditorSessionTaskPort::BeginTask(const std::string& name, sl_element_id_t e
       {InteractionCapability::SwitchWorkspace, 0, save_reason},
       {InteractionCapability::CheckoutVersion, 0, save_reason},
       {InteractionCapability::PasteAdjustments, 0, save_reason},
-      {InteractionCapability::MergeAdjustments, 0, save_reason},
   };
   const QString ui_id = tasks->RegisterTask(snapshot, {});
   {

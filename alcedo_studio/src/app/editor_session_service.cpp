@@ -423,10 +423,6 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
       return Open(queued.element_id, queued.image_id);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -497,10 +493,6 @@ auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
       return CheckoutVersion(queued.version_id);
     });
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
   const auto outcome = navigation_.RequestCheckoutVersion(version_id);
   return FinishVersionNavigation(outcome);
 }
@@ -511,14 +503,6 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   EditorHistorySnapshot snapshot;
   if (!dependencies_.history->ReadHistorySnapshot(lifecycle_.history_guard(), &snapshot, &error)) {
     return {};
-  }
-  if (pending_merge_preview_) {
-    const auto hidden_id = pending_merge_preview_->incoming_version_id;
-    snapshot.versions.erase(std::remove_if(snapshot.versions.begin(), snapshot.versions.end(),
-                                           [&hidden_id](const EditorHistoryVersion& version) {
-                                             return version.version_id == hidden_id;
-                                           }),
-                            snapshot.versions.end());
   }
   return snapshot;
 }
@@ -537,20 +521,6 @@ auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustment
   return snapshot;
 }
 
-auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -> bool {
-  if (!pending_merge_preview_) return true;
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    if (error) *error = "Cannot discard the pending editor merge without a history guard";
-    return false;
-  }
-  // Live merge preview does not stage a shadow graph; clear session state only.
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  return true;
-}
-
 auto EditorSessionService::CreateRootVersion(std::string display_name) -> EditorSessionResult {
   if (!reducing_command_) {
     EditorSessionCommand command;
@@ -559,10 +529,6 @@ auto EditorSessionService::CreateRootVersion(std::string display_name) -> Editor
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       return CreateRootVersion(queued.text);
     });
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   return FinishVersionNavigation(navigation_.RequestCreateRootVersion(std::move(display_name)));
 }
@@ -577,10 +543,6 @@ auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       return BranchFromCommit(queued.commit_id, queued.text);
     });
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   return FinishVersionNavigation(
       navigation_.RequestBranchFromCommit(commit_id, std::move(display_name)));
@@ -705,130 +667,6 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   return started;
 }
 
-auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
-                                      AdjustmentMergePreview* preview) -> EditorSessionResult {
-  if (!reducing_command_) {
-    auto                 holder = std::make_shared<AdjustmentMergePreview>();
-    EditorSessionCommand command;
-    command.kind             = EditorSessionCommandKind::BeginMerge;
-    command.transfer_package = package;
-    command.merge_preview    = holder;
-    const auto result =
-        SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-          return BeginMerge(queued.transfer_package, queued.merge_preview.get());
-        });
-    if (preview != nullptr && command_queue_.IsOwnerThread()) {
-      *preview = *holder;
-    }
-    return result;
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
-    return Reject("Merge requires an interactive session");
-  }
-  if (pending_merge_preview_) {
-    return Reject("A merge is already awaiting resolution");
-  }
-  if (preview == nullptr) {
-    return Reject("Merge preview storage is required");
-  }
-  AdjustmentMergePreview next_preview;
-  std::string            error;
-  if (!dependencies_.history->BeginLiveMerge(lifecycle_.history_guard(), package, &next_preview,
-                                             &error)) {
-    return Reject(error.empty() ? "Editor Merge failed to start" : std::move(error));
-  }
-  const bool has_conflicts = next_preview.has_conflicts;
-  const auto preview_id = MergePreviewId{next_merge_preview_id_.value++};
-  next_preview.preview_id = preview_id;
-  // Retain the package for CompleteLiveMerge; no shadow graph is staged.
-  pending_merge_preview_   = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
-  pending_merge_package_   = package;
-  active_merge_preview_id_ = preview_id;
-  AcquireLease(EditorOperationLeaseKind::MergePreview, current_operation_id_,
-               lifecycle_.identity().element_id, lifecycle_.identity().image_id,
-               lifecycle_.active_image_load_request(), "Merge preview is active");
-  *preview                = *pending_merge_preview_;
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = has_conflicts ? "Merge requires field resolutions" : "Merge is ready to apply";
-  return Emit(std::move(result));
-}
-
-auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-    -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind              = EditorSessionCommandKind::CompleteMerge;
-    command.merge_resolutions = resolutions;
-    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return CompleteMerge(queued.merge_resolutions);
-    });
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
-    return Reject("Merge completion requires an interactive session");
-  }
-  if (!pending_merge_preview_) {
-    return Reject("No merge is awaiting resolution");
-  }
-  if (!pending_merge_package_.has_value()) {
-    return Reject("Merge package is unavailable");
-  }
-  if (!active_merge_preview_id_.has_value() ||
-      pending_merge_preview_->preview_id != *active_merge_preview_id_) {
-    return Reject("Merge preview is stale");
-  }
-  std::string error;
-  AdjustmentMergeResult merge_result;
-  if (!dependencies_.history->CompleteLiveMerge(
-          lifecycle_.history_guard(), *pending_merge_package_, *pending_merge_preview_,
-          resolutions, &merge_result, &error)) {
-    return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
-  }
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-
-  BumpHistoryRevision();
-  AcquireLease(EditorOperationLeaseKind::MergeMaterialization, current_operation_id_,
-               lifecycle_.identity().element_id, lifecycle_.identity().image_id,
-               lifecycle_.active_image_load_request(), "Merge publication is in progress");
-  auto started = StartHistoryCheckpoint("Adjustments merged", true);
-  if (started.kind == EditorSessionResultKind::Rejected ||
-      started.kind == EditorSessionResultKind::Failed) {
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-  }
-  return started;
-}
-
-auto EditorSessionService::CancelMerge() -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind = EditorSessionCommandKind::CancelMerge;
-    return SubmitCommand(std::move(command),
-                         [this](const EditorSessionCommand&) { return CancelMerge(); });
-  }
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    return Reject("No active editor merge");
-  }
-  if (!pending_merge_preview_) {
-    return Reject("No merge is awaiting resolution");
-  }
-  // BeginLiveMerge does not mutate graph/pipeline; cancel is a session-state clear only.
-  pending_merge_package_.reset();
-  pending_merge_preview_.reset();
-  active_merge_preview_id_.reset();
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Merge cancelled";
-  BumpHistoryRevision();
-  return Emit(std::move(result));
-}
 
 auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, bool route_render)
     -> EditorSessionResult {
@@ -925,7 +763,6 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
     ReleaseLeaseByCommandId(completion.operation.command_id);
     ReleaseLeasesByKind(EditorOperationLeaseKind::SaveCheckpoint);
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
     EditorSessionResult published;
     published.kind     = EditorSessionResultKind::Failed;
     published.state    = lifecycle_.state();
@@ -948,7 +785,6 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   if (!completion.success) {
     pending_history_checkpoint_.reset();
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
     lifecycle_.KeepCurrentAfterCheckpointFailure(
         completion.message.empty() ? "Editor save checkpoint failed" : completion.message);
     AcquireLease(EditorOperationLeaseKind::FailureRecovery, completion.operation.command_id,
@@ -983,7 +819,6 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
                                                                      &sync_error)) {
       pending_history_checkpoint_.reset();
       ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-      ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
       EditorSessionResult failed;
       failed.kind     = EditorSessionResultKind::Failed;
       failed.state    = lifecycle_.state();
@@ -1003,7 +838,6 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   const auto marker = std::move(*pending_history_checkpoint_);
   pending_history_checkpoint_.reset();
   ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-  ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
 
   EditorSessionResult published;
   published.identity = lifecycle_.identity();
@@ -1037,10 +871,6 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       return Switch(queued.element_id, queued.image_id);
     });
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
@@ -1125,10 +955,6 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       return Close(queued.persist_changes);
     });
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   const auto outcome = navigation_.RequestClose(persist_changes);
   if (outcome.rejected) {
@@ -1350,10 +1176,6 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   if (state != EditorSessionState::Interactive && state != EditorSessionState::Failed) {
     return Reject("Discard requires an image with an active history session");
   }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
-  }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
   auto       outcome = edit_.HandleDiscard(guard, ident, state);
@@ -1397,10 +1219,6 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   }
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
-  }
-  std::string merge_error;
-  if (!CancelPendingMergeForNavigation(&merge_error)) {
-    return Reject(std::move(merge_error));
   }
   // Cancel outstanding save work. Each in-flight checkpoint publishes one
   // terminal cancellation through the posted completion path; navigation keeps
@@ -1576,11 +1394,8 @@ auto EditorSessionService::BuildActionInputs() -> EditorActionInputs {
   inputs.session_state = lifecycle_.state();
   inputs.has_image     = lifecycle_.has_image();
   inputs.package_available = package_available_;
-  inputs.merge_preview_active = active_merge_preview_id_.has_value();
-  inputs.active_merge_preview = active_merge_preview_id_.value_or(MergePreviewId{});
   inputs.background_blocks_select_image = background_restrictions_.blocks_select_image;
   inputs.background_blocks_paste        = background_restrictions_.blocks_paste;
-  inputs.background_blocks_merge        = background_restrictions_.blocks_merge;
   inputs.background_blocks_checkout     = background_restrictions_.blocks_checkout;
   inputs.background_blocks_workspace    = background_restrictions_.blocks_workspace;
   // A second selection may queue/replace while a switch save or acquire is

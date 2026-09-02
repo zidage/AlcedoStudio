@@ -29,6 +29,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -1164,17 +1165,10 @@ TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializ
   ASSERT_NE(local->commit_graph_, nullptr);
   const auto          root_id = local->root_id_;
 
-  OrdinaryEditPayload local_payload;
-  local_payload.operator_type  = OperatorType::EXPOSURE;
-  local_payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  local_payload.field_name     = "$operator_params";
-  local_payload.before_value   = nlohmann::json{{"exposure", 0.0f}};
-  local_payload.after_value    = nlohmann::json{{"exposure", 1.0f}};
-  local_payload.before_enabled = true;
-  local_payload.after_enabled  = true;
-  const auto local_version     = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
-  auto       local_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(local_payload));
-  const auto local_head   = local_commit.GetCommitHash();
+  const auto local_version = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
+  auto local_commit =
+      EditCommit::MakePipelineEdit(root_id, std::nullopt, MakeExposureBatch(0.0f, 1.0f));
+  const auto local_head = local_commit.GetCommitHash();
   ASSERT_TRUE(local->commit_graph_->InsertCommit(std::move(local_commit)));
   local->commit_graph_->MoveWorkingHead(local_version, local_head);
   local->commit_graph_->SetActiveVersionId(local_version);
@@ -1188,16 +1182,9 @@ TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializ
     auto             remote_graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(remote_graph.has_value());
 
-    OrdinaryEditPayload remote_payload;
-    remote_payload.operator_type  = OperatorType::EXPOSURE;
-    remote_payload.stage_name     = PipelineStageName::Basic_Adjustment;
-    remote_payload.field_name     = "$operator_params";
-    remote_payload.before_value   = nlohmann::json{{"exposure", 0.0f}};
-    remote_payload.after_value    = nlohmann::json{{"exposure", 2.0f}};
-    remote_payload.before_enabled = true;
-    remote_payload.after_enabled  = true;
-    auto remote_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(remote_payload));
-    remote_head        = remote_commit.GetCommitHash();
+    auto remote_commit =
+        EditCommit::MakePipelineEdit(root_id, std::nullopt, MakeExposureBatch(0.0f, 2.0f));
+    remote_head = remote_commit.GetCommitHash();
     ASSERT_TRUE(remote_graph->InsertCommit(std::move(remote_commit)));
     remote_graph->MoveWorkingHead(remote_graph->GetActiveVersionId(), remote_head);
     graph_service.Materialize(remote_graph->CaptureMaterialization());
@@ -1232,16 +1219,9 @@ TEST_F(PipelineMapperTests,
 
   // Commit an adjustment: the working head advances, but ImageEditState.materialized_*
   // stays at root (MoveWorkingHead never advances materialized state by design).
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "exposure";
-  payload.before_value   = 0.0f;
-  payload.after_value    = 1.0f;
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  auto       edit        = EditCommit::MakeEdit(root_id, std::nullopt, std::move(payload));
-  const auto new_head    = edit.GetCommitHash();
+  auto edit =
+      EditCommit::MakePipelineEdit(root_id, std::nullopt, MakeExposureBatch(0.0f, 1.0f));
+  const auto new_head = edit.GetCommitHash();
   ASSERT_TRUE(guard->commit_graph_->InsertCommit(std::move(edit)));
   guard->commit_graph_->MoveWorkingHead(guard->commit_graph_->GetActiveVersionId(), new_head);
 
@@ -1349,6 +1329,127 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
   reopened.SavePipeline(loaded);
 }
 
+TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorage());
+
+  auto initial = first.LoadPipeline(711);
+  ASSERT_NE(initial, nullptr);
+  ASSERT_NE(initial->document_->Develop(), nullptr);
+  EXPECT_TRUE(initial->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_NEAR(initial->document_->Develop()->Params().Params().camera_profile.color_matrix_1[0],
+              3.2404542, 1e-6);
+  ASSERT_TRUE(
+      ResolveDevelopColorTransform(initial->document_->Develop()->Params().Params()).ok);
+
+  first.InitializeImageRoot(initial);
+  const auto payload = initial->document_->Develop()->Params().Params();
+  EXPECT_TRUE(payload.camera_profile.color_matrices_valid);
+  EXPECT_NEAR(payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  EXPECT_NEAR(payload.camera_profile.color_matrix_2[0], 3.2404542, 1e-6);
+  ASSERT_TRUE(ResolveDevelopColorTransform(payload).ok);
+  EXPECT_NE(payload.camera_profile.color_matrix_1[0], 0.625);
+  first.SavePipeline(initial);
+
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                loaded = reopened.LoadEditorPipeline(711);
+  ASSERT_NE(loaded, nullptr);
+  const auto reopened_payload = loaded->document_->Develop()->Params().Params();
+  EXPECT_TRUE(reopened_payload.camera_profile.color_matrices_valid);
+  EXPECT_NEAR(reopened_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  ASSERT_TRUE(ResolveDevelopColorTransform(reopened_payload).ok);
+  reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesRenderableOnReload) {
+  ProjectService project(db_path_, meta_path_);
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    graph_service.CreateRootPipelinePersisted(722, CreateDefaultPipelineDocument(), std::nullopt);
+  }
+  project.GetStorage()->GetElementStore().UpdatePipelineJsonByElementId(
+      722, CreateDefaultPipelineDocument().ToJson());
+
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       state = graph_service.GetImageEditState(722);
+    ASSERT_TRUE(state.has_value());
+    const auto encoded = graph_service.GetRootSerializedPipelineState(722, state->root_id);
+    ASSERT_TRUE(encoded.has_value());
+    const auto root = DecodePipelineRootState(*encoded);
+    EXPECT_FALSE(root.raw_color_context.has_value());
+    ASSERT_NE(root.document.Develop(), nullptr);
+    EXPECT_FALSE(root.document.Develop()->Params().Params().camera_profile.color_matrices_valid);
+    EXPECT_FALSE(ResolveDevelopColorTransform(root.document.Develop()->Params().Params()).ok);
+  }
+
+  PipelineMgmtService pipelines(project.GetStorage());
+  auto                loaded = pipelines.LoadPipeline(722);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->document_->Develop(), nullptr);
+  const auto loaded_payload = loaded->document_->Develop()->Params().Params();
+  EXPECT_TRUE(loaded_payload.camera_profile.color_matrices_valid);
+  EXPECT_NEAR(loaded_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  ASSERT_TRUE(ResolveDevelopColorTransform(loaded_payload).ok);
+
+  auto editor = pipelines.LoadEditorPipeline(722);
+  ASSERT_NE(editor, nullptr);
+  ASSERT_NE(editor->document_->Develop(), nullptr);
+  const auto editor_payload = editor->document_->Develop()->Params().Params();
+  EXPECT_TRUE(editor_payload.camera_profile.color_matrices_valid);
+  EXPECT_NEAR(editor_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  ASSERT_TRUE(ResolveDevelopColorTransform(editor_payload).ok);
+
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       encoded =
+        graph_service.GetRootSerializedPipelineState(722, editor->root_id_);
+    ASSERT_TRUE(encoded.has_value());
+    const auto root = DecodePipelineRootState(*encoded);
+    EXPECT_FALSE(root.raw_color_context.has_value());
+    ASSERT_NE(root.document.Develop(), nullptr);
+    EXPECT_FALSE(root.document.Develop()->Params().Params().camera_profile.color_matrices_valid);
+  }
+
+  pipelines.SavePipeline(editor);
+}
+
+TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorage());
+
+  RawRuntimeColorContext raw_context;
+  raw_context.valid_                = true;
+  raw_context.color_matrices_valid_ = false;
+
+  auto initial = first.LoadPipeline(723);
+  ASSERT_NE(initial, nullptr);
+  first.InitializeImageRoot(initial, &raw_context);
+  EXPECT_FALSE(initial->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(initial->document_->Develop()->Params().Params()).ok);
+  first.SavePipeline(initial);
+
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                loaded = reopened.LoadPipeline(723);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->document_->Develop(), nullptr);
+  EXPECT_FALSE(loaded->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(loaded->document_->Develop()->Params().Params()).ok);
+
+  auto editor = reopened.LoadEditorPipeline(723);
+  ASSERT_NE(editor, nullptr);
+  ASSERT_NE(editor->document_->Develop(), nullptr);
+  EXPECT_FALSE(editor->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(editor->document_->Develop()->Params().Params()).ok);
+  reopened.SavePipeline(editor);
+}
+
 TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
@@ -1403,15 +1504,8 @@ TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
     auto             graph = graph_service.LoadGraph(703);
     ASSERT_TRUE(graph.has_value());
 
-    OrdinaryEditPayload payload;
-    payload.operator_type  = OperatorType::EXPOSURE;
-    payload.stage_name     = PipelineStageName::Basic_Adjustment;
-    payload.field_name     = "exposure";
-    payload.before_value   = 1.5f;
-    payload.after_value    = 2.0f;
-    payload.before_enabled = true;
-    payload.after_enabled  = true;
-    auto commit  = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    auto commit = EditCommit::MakePipelineEdit(graph->GetRootId(), std::nullopt,
+                                               MakeExposureBatch(1.5f, 2.0f));
     missing_hash = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), missing_hash);

@@ -32,7 +32,6 @@ namespace alcedo {
 struct EditorBackgroundActionRestrictions {
   bool blocks_select_image = false;
   bool blocks_paste        = false;
-  bool blocks_merge        = false;
   bool blocks_checkout     = false;
   bool blocks_workspace    = false;
 };
@@ -181,32 +180,6 @@ class IEditorSessionBackend {
     result.state    = state();
     result.identity = identity();
     result.message  = "Editor Paste is not supported by this backend";
-    return result;
-  }
-  virtual auto BeginMerge(const AdjustmentTransferPackage& /*package*/,
-                          AdjustmentMergePreview* /*preview*/) -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge is not supported by this backend";
-    return result;
-  }
-  virtual auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& /*resolutions*/)
-      -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge is not supported by this backend";
-    return result;
-  }
-  virtual auto CancelMerge() -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Editor Merge cancellation is not supported by this backend";
     return result;
   }
   virtual auto Close(bool persist_changes) -> EditorSessionResult = 0;
@@ -381,11 +354,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RemoveVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
   auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name)
       -> EditorSessionResult override;
-  auto BeginMerge(const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview)
-      -> EditorSessionResult override;
-  auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-      -> EditorSessionResult override;
-  auto               CancelMerge() -> EditorSessionResult override;
   auto               Close(bool persist_changes) -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
   /// Phase 7A: true when the session is awaiting save-failure recovery.
@@ -463,7 +431,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// save-service start whose result is posted back as SaveCheckpointFinished.
   /// Publishes SaveStarted (or Rejected/Failed) for the current operation.
   auto StartHistoryCheckpointSave() -> EditorSessionResult;
-  auto CancelPendingMergeForNavigation(std::string* error) -> bool;
   /// Increment the history revision so the controller emits one dedicated
   /// history signal on the next change notification. Call only at points where
   /// history-display-affecting state actually changed (settled commit, head
@@ -493,10 +460,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                    publication_dirty_    = false;
   std::vector<EditorSessionResult>        results_;
   mutable std::mutex                      results_mutex_;
-  std::unique_ptr<AdjustmentMergePreview>          pending_merge_preview_;
-  std::optional<AdjustmentTransferPackage>         pending_merge_package_;
-  MergePreviewId                                   next_merge_preview_id_{1};
-  std::optional<MergePreviewId>                    active_merge_preview_id_;
   std::optional<PendingHistoryCheckpoint>          pending_history_checkpoint_;
   std::vector<EditorOperationLease>       active_leases_;
   EditorActionAvailability                published_availability_{};

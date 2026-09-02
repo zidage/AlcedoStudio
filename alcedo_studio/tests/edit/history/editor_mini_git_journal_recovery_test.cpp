@@ -19,22 +19,29 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/operator_registeration.hpp"
+#include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "type/hash_type.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
+auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
+  PipelineEditBatch batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", before}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", after}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  return batch;
 }
 
 }  // namespace
@@ -121,7 +128,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, NonExistentJournalSucceeds) {
 TEST_F(EditorMiniGitJournalRecoveryTest, FullyCoveredWalClearsWithoutRewritingDb) {
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.75f)).committed);
+  ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 0.75f)).committed);
   ASSERT_FALSE(journal->records().empty());
 
   // Persist the unique history snapshot via CommitWriter (normal save path).
@@ -154,7 +161,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, FullyCoveredWalClearsWithoutRewritingDb
 TEST_F(EditorMiniGitJournalRecoveryTest, ContiguousMissingSuffixLeavesWalForLiveAttach) {
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   ASSERT_FALSE(journal->records().empty());
 
   // DB still at empty head — WAL is a contiguous extension.
@@ -187,7 +194,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, TruncateJournalFileReturnsTrueForNonExi
 TEST_F(EditorMiniGitJournalRecoveryTest, TruncateJournalFileClearsExistingFile) {
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   ASSERT_TRUE(std::filesystem::exists(journal_path_));
 
   EXPECT_TRUE(EditorMiniGitJournalRecovery::TruncateJournalFile(journal_path_));
@@ -208,7 +215,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, RecoveryWithNullErrorDoesNotCrash) {
 TEST_F(EditorMiniGitJournalRecoveryTest, BrokenParentIsolatesWalAndWritesNothing) {
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
   ASSERT_FALSE(journal->records().empty());
 
   auto records = journal->records();
@@ -237,12 +244,68 @@ TEST_F(EditorMiniGitJournalRecoveryTest, BrokenParentIsolatesWalAndWritesNothing
   EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 0u);
 }
 
+void RewriteJournalEditPayload(const std::filesystem::path& path, const nlohmann::json& payload) {
+  std::ifstream in(path, std::ios::binary);
+  ASSERT_TRUE(in.is_open());
+  std::string line;
+  ASSERT_TRUE(std::getline(in, line));
+  in.close();
+  auto frame = nlohmann::json::parse(line);
+  ASSERT_TRUE(frame.is_object());
+  ASSERT_TRUE(frame.contains("record"));
+  frame["record"]["edit_commit"]["edit_payload"] = payload;
+  const auto dump                                = frame.at("record").dump();
+  frame["checksum"] = Hash128::Compute(dump.data(), dump.size()).ToString();
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(out.is_open());
+  out << frame.dump() << '\n';
+}
+
+TEST_F(EditorMiniGitJournalRecoveryTest, CurrentFormatWalRejectsOrdinaryAndMergePayloadsBeforeReplay) {
+  const nlohmann::json ordinary_payload = {{"stage_name", "basic"},
+                                            {"operator_type", "exposure"},
+                                            {"field_key", "exposure"}};
+  const nlohmann::json merge_payload = {{"conflicts", nlohmann::json::array()},
+                                         {"resolved_fields", nlohmann::json::array({"exposure"})}};
+
+  for (const auto& payload : {ordinary_payload, merge_payload}) {
+    {
+      auto               guard = storage_->GetDatabase().GetConnectionGuard();
+      auto               lock  = guard.Lock();
+      CommitGraphStore graph_service(guard.conn_);
+      auto               stored = graph_service.LoadGraph(element_id_);
+      ASSERT_TRUE(stored.has_value());
+      graph_ = std::make_shared<CommitGraph>(std::move(*stored));
+    }
+    ASSERT_TRUE(EditorMiniGitJournalRecovery::TruncateJournalFile(journal_path_));
+    auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
+    MiniGitWorkingHistory history(graph_, journal);
+    ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 0.5f)).committed);
+    RewriteJournalEditPayload(journal_path_, payload);
+
+    std::string load_error;
+    MiniGitJournal loaded(journal_path_);
+    EXPECT_FALSE(loaded.Load(&load_error));
+    EXPECT_FALSE(load_error.empty());
+
+    std::string recover_error;
+    auto        result = recovery_->Recover(element_id_, journal_path_, &recover_error);
+    EXPECT_FALSE(result.accepted);
+    EXPECT_FALSE(result.error.empty());
+
+    auto               guard = storage_->GetDatabase().GetConnectionGuard();
+    auto               lock  = guard.Lock();
+    CommitGraphStore graph_service(guard.conn_);
+    EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 0u);
+  }
+}
+
 /// Normal save clears WAL without materializing from WAL records (write path
 /// uses unique history capture only).
 TEST_F(EditorMiniGitJournalRecoveryTest, NormalSaveCaptureDoesNotRequireJournalFold) {
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
+  ASSERT_TRUE(history.AppendEdit(MakeExposureBatch(0.0f, 1.0f)).committed);
 
   const auto logical_head  = graph_->GetActiveVersionRef().head_commit_hash;
   const auto logical_chain = graph_->ChainHashForHead(logical_head);

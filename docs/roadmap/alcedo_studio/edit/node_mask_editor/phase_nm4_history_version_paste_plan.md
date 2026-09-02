@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1–4.6 complete
+Status: NM4.1–4.7 complete
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -895,6 +895,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | NM4.4 | complete | Version branch, checkout, recovery, materialization, and reopen. |
 | NM4.5 | complete | Paste-only transfer, merge-path removal, and Mask asset reachability. |
 | NM4.6 | complete | Failure, concurrency, service, storage, and project qualification. |
+| NM4.7 | complete | Obsolete ordinary-payload, merge, replay, API, test, and QML code removal. |
 
 Implement these phases in order.
 Keep each sub-phase buildable and testable.
@@ -1962,6 +1963,319 @@ Source revision: `587d8995` plus this qualification change.
 
 **Remaining gaps:** no test forces `restore_prior` itself to throw (fatal session prefix is implemented). MSVC `std::filesystem::remove` clears read-only, so OS-denied Mask deletion was not injected; corrupt-file preservation still reports failure and keeps the file. Panel snapshots still remirror current-panel CPU stages after document replay. No packaged-product or real-RAW UI evidence (NM8). `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` remains failing.
 
+### 6.7 NM4.7 — Obsolete history payload and merge code removal
+
+**Reason for this sub-phase**
+
+NM4.6 found code that no supported project can legitimately use:
+
+- `EditorMerge*.qml` files remain on disk but are not registered.
+- `BeginLiveMerge` and `CompleteLiveMerge` remain as reject-only service signatures.
+- `PrepareAppendMerge`, `MakeMerge`, merge payloads, second-parent branches, and merge presentation
+  state remain reachable to tests or parsing code but not to the product.
+- `OrdinaryEditPayload` and ordinary/merge replay can map payloads stored in current-format commit
+  rows or WAL records onto the document and CPU parameter table.
+
+These paths do not provide old-project compatibility. Old project versions fail at the
+project-open boundary before history, checkpoint, or WAL load. Keeping the paths therefore
+widens the current format, creates an accidental alternate history model, and makes later agents
+infer product behavior that NM4 explicitly removed.
+
+This sub-phase removes those paths. It does not convert an old project and does not add a
+substitute replay path.
+
+**Current-format invariant**
+
+A valid NM4 commit has all of these properties:
+
+- it is a first-parent commit;
+- its payload is a canonical `PipelineEditBatch` with the supported batch format value;
+- the serialized `kind` value is `"edit"`;
+- the serialized second-parent value is empty;
+- the commit hash still uses the current NM4 commit-format bytes;
+- a WAL edit record contains that same valid commit object.
+
+Do not advance the project, commit, chain, document, checkpoint, or WAL format merely to perform
+this cleanup. Existing valid NM4 projects must reopen with the same commit and chain hashes.
+
+If `kind`, the empty second-parent slot, or their database columns are required by the current
+serialized shape or hash input, keep them only as fixed codec or mapper values. They must not
+remain as a public enum, optional product state, factory choice, presentation role, replay branch,
+or graph traversal edge. `EditCommit::FromJSON`, storage load, and WAL recovery must reject any
+non-edit kind, non-empty second parent, or non-`PipelineEditBatch` payload before document replay.
+
+**Required context**
+
+Read Sections 2.2–2.3, 3, 4.4–4.9, 4.12–4.14, 6.3–6.6, and 7–9.
+Trace the project-open order, commit codec, graph load, WAL recovery, first-parent replay,
+Undo/Redo, history projection, and QML registrations before deleting a symbol.
+
+**Work**
+
+1. Freeze valid current-format commit JSON, canonical hash bytes, commit hashes, chain hashes, and
+   WAL bytes as regression fixtures before removing old types.
+2. Make `EditCommit` accept and store only canonical `PipelineEditBatch` payloads. Remove
+   `OrdinaryEditPayload`, `MergeFieldDelta`, `MergeEditPayload`, their JSON codecs, factories, test
+   accessors, and helpers.
+3. Remove `EditCommitKind` as a product/domain choice, `kMerge`, `MakeEdit`, `MakeMerge`,
+   `MakeMergeAtTimestamp`, `GetKind`, and `GetSecondParentHash`. Keep any current-format edit marker
+   and empty second-parent encoding private to the codec or mapper.
+4. Make `EditCommit::FromJSON` reject an ordinary payload, merge payload, numeric or non-edit kind,
+   and non-empty second parent before hash acceptance or graph insertion. Keep strict exact-key and
+   canonical-payload checks.
+5. Simplify `CommitGraph` reachability and validation to the first-parent DAG used by Versions.
+   Remove second-parent lookup, traversal, insertion, and error branches.
+6. Remove `MiniGitWorkingHistory::PrepareAppendEdit(OrdinaryEditPayload)`, `AppendEdit` for ordinary
+   payloads, `PrepareAppendMerge`, and merge publication. A WAL edit record must continue the
+   active first-parent path with one typed batch commit.
+7. Remove `ApplyLeftoverOrdinaryPayloadToDocument`, `ApplyLeftoverMergePayloadToDocument`,
+   `ApplyOrdinaryPayloadToLive`, and all ordinary/merge branches in root replay, Version checkout,
+   Undo/Redo, recovery, and CPU remirroring. Parse the typed batch before the first mutation.
+8. Remove merge state from history rows, models, localization/presentation helpers, QML roles, and
+   test harnesses, including `merge_field_keys`, second-parent display data, and merge-specific
+   labels.
+9. Remove `BeginLiveMerge` and `CompleteLiveMerge` from session ports, implementations, controllers,
+   mocks, and fixtures. Remove any remaining merge preview, resolution, or transfer types whose only
+   owner was those calls.
+10. Delete every unregistered `EditorMerge*.qml` file. Do not register, archive, or replace it.
+11. Replace ordinary/merge fixtures in tests with typed-batch fixtures when the test verifies a
+    still-supported graph, storage, WAL, recovery, history, or transfer behavior. Delete tests that
+    exist only to prove removed merge behavior.
+12. Replace CQ5 runtime calls to reject-only merge methods with qualification that proves Paste is
+    the only transfer mutation and that the removed symbols and QML files are absent.
+13. Add negative codec, storage, WAL, and reopen cases for an ordinary payload, merge payload,
+    non-edit kind, and non-empty second parent encoded inside otherwise current-format data.
+14. Prove that an old project version still fails in `ProjectPackageBackend` before commit graph,
+    checkpoint, or WAL parsing. Do not route that failure through the new negative payload cases.
+15. Remove obsolete includes, forward declarations, CMake source entries, QML test data, fixtures,
+    localization entries, comments, and documentation that describe ordinary or merge support in
+    the current mini-Git path.
+16. Scan first-party production and test code. No removed type, API, replay helper, merge QML file,
+    merge history role, or second-parent runtime branch may remain.
+
+Do not delete the separate pre-mini-Git `EditHistory`, `WorkingVersion`, or transaction-journal
+subsystem in this sub-phase only because its naming is old. Those owners still have production
+callers outside the NM4 mini-Git path. Remove one of them only after its callers and persistent data
+owner are migrated in an explicitly scoped plan.
+
+**Primary files**
+
+- [commit_types.hpp](../../../../../alcedo_studio/src/include/edit/history/commit_types.hpp)
+- [edit_commit.hpp](../../../../../alcedo_studio/src/include/edit/history/edit_commit.hpp)
+- [edit_commit.cpp](../../../../../alcedo_studio/src/edit/history/edit_commit.cpp)
+- [commit_graph.cpp](../../../../../alcedo_studio/src/edit/history/commit_graph.cpp)
+- [mini_git_working_history.hpp](../../../../../alcedo_studio/src/include/edit/history/mini_git_working_history.hpp)
+- [mini_git_working_history.cpp](../../../../../alcedo_studio/src/edit/history/mini_git_working_history.cpp)
+- [pipeline_history_applier.hpp](../../../../../alcedo_studio/src/include/app/pipeline_history_applier.hpp)
+- [pipeline_history_applier.cpp](../../../../../alcedo_studio/src/app/pipeline_history_applier.cpp)
+- [editor_adjustment_pipeline.cpp](../../../../../alcedo_studio/src/app/editor_adjustment_pipeline.cpp)
+- [editor_session_ports.hpp](../../../../../alcedo_studio/src/include/app/editor_session_ports.hpp)
+- [editor_session_history_port.hpp](../../../../../alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp)
+- [editor_session_history_port.cpp](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp)
+- [editor_history_transfer.hpp](../../../../../alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_transfer.hpp)
+- [editor_history_transfer.cpp](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_transfer.cpp)
+- [editor_history_shared_helpers.cpp](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp)
+- [editor_history_models.cpp](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_models.cpp)
+- [commit_graph_store.cpp](../../../../../alcedo_studio/src/storage/store/edit_history/commit_graph_store.cpp)
+- `alcedo_studio/src/ui/alcedo_main/qml/EditorMerge*.qml` (delete)
+
+Check all first-party callers found by the removal scan. The list above is not permission to leave
+a removed symbol in an unlisted file.
+
+**Supported reopen call chain**
+
+```text
+supported NM4 project
+  -> project version accepted
+  -> root, commit graph, refs, checkpoint, and WAL load
+  -> each commit requires fixed edit marker + empty second parent + PipelineEditBatch
+  -> commit and chain hashes remain unchanged
+  -> matching checkpoint or typed first-parent replay
+  -> exact live PipelineDocument and Version head
+```
+
+**Rejected-data call chains**
+
+```text
+old project version
+  -> ProjectPackageBackend rejects before history, checkpoint, or WAL load
+  -> original version error remains visible
+
+supported project envelope + ordinary payload / merge payload / non-edit kind / second parent
+  -> commit codec, storage mapper, or WAL validation rejects before replay
+  -> no document mutation, graph insertion, head move, checkpoint write, or fallback
+```
+
+**Required evidence**
+
+- Golden current-format typed commits retain their JSON, canonical bytes, commit hashes, and chain
+  hashes after cleanup.
+- A valid saved NM4 project with empty and non-empty WAL cases reopens to the same document, refs,
+  head, and checkpoint label.
+- Ordinary and merge payloads in current-format commit rows and WAL records fail before apply.
+- A non-edit kind and non-empty second parent fail before graph insertion.
+- Old project metadata fails before any history reader is entered.
+- Undo, Redo, branch creation, Version checkout, recovery, materialization, Paste, history rows, and
+  Mask asset reachability remain green with typed commits only.
+- CQ5 proves Paste is the only transfer mutation without calling a merge API.
+- Repository scans find none of the removed symbols or QML files.
+
+**Build and test targets**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineEditBatchTest CommitGraphTest PipelineHistoryApplierTest EditorMiniGitJournalRecoveryTest EditorMiniGitMaterializerTest EditorSessionHistoryPortTest AdjustmentTransferServiceMiniGitTest EditorSessionCq5QualificationTest EditorHistoryTransactionsPanelQmlTest EditorHistoryVersionsRailLifecycleQmlTest
+```
+
+Run the whole binaries serially where tests share fixed database or filesystem paths.
+Also run every affected target discovered from removed test fixtures and CMake dependencies.
+
+**Exit conditions**
+
+- [x] Existing valid NM4 project, commit, chain, checkpoint, and WAL identities are unchanged.
+- [x] The only accepted commit payload is a canonical `PipelineEditBatch`.
+- [x] Ordinary, merge, non-edit-kind, and second-parent data fail before any replay or mutation.
+- [x] Old project versions still fail before history, checkpoint, and WAL parsing.
+- [x] No public commit-kind choice, merge factory, second-parent graph path, reject-only merge API,
+      merge presentation state, or ordinary/merge apply helper remains.
+- [x] All `EditorMerge*.qml` files are deleted and no QML registration or test references them.
+- [x] Paste remains the only adjustment-transfer mutation and still creates one typed commit on one
+      new target Version.
+- [x] Typed Undo, Redo, Version checkout, recovery, materialization, reopen, Paste, and Mask asset
+      reachability suites pass.
+- [x] First-party repository scans contain none of the explicitly removed symbols.
+
+##### Phase NM4.7 completion record (2026-09-02)
+
+**Status:** complete — typed-batch-only commits; ordinary/merge product paths, APIs, QML, and i18n removed; Rec.709 working-space camera profile bound for non-RAW roots.
+
+**Primary success call chain:**
+
+```text
+supported NM4 project
+  -> ProjectPackageBackend accepts 0.4.0
+  -> EditCommit::FromJSON requires kind == "edit", empty second_parent_hash, PipelineEditBatch
+  -> first-parent WAL / graph / checkpoint load
+  -> commit and chain hashes match pre-cleanup goldens
+  -> matching checkpoint or typed first-parent replay
+  -> live PipelineDocument and Version head
+
+non-RAW import (JPEG / TIFF / PNG / mock RGB)
+  -> PersistAssembledImportPipeline
+  -> InitializeImageRoot(guard, nullptr)
+  -> BindRgbWorkingSpaceCameraProfile on Develop
+  -> CreateRootPipelinePersisted + SavePipeline
+  -> CameraToAp1 resolves Rec.709 XYZ→camera matrices
+```
+
+**Primary failure call chain:**
+
+```text
+old project version (e.g. 0.3.0)
+  -> ProjectPackageBackend rejects before history, checkpoint, or WAL load
+  -> "Incompatible project format" remains visible; DuckDB / WAL / checkpoint bytes unread
+
+current-format envelope + ordinary payload / merge payload / non-edit kind / second parent
+  -> EditCommit::FromJSON, CommitGraphStore::LoadGraph, or MiniGitJournal::Load
+  -> reject before graph insertion, document replay, head move, or checkpoint write
+  -> WAL isolate on recovery load failure; DuckDB commit count unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `TypedBatchGoldenBytesAndHashRemainStable` | `PipelineEditBatchTest` | PASS |
+| `TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval` | `PipelineEditBatchTest` | PASS |
+| `CurrentFormatCommitRejectsOrdinaryAndMergePayloads` | `CommitGraphTest` | PASS |
+| `CurrentFormatCommitRejectsNonEditKindAndSecondParent` | `CommitGraphTest` | PASS |
+| `OldProjectMetadataFailsBeforeHistoryLoad` | `CommitGraphTest` | PASS |
+| `OldProjectMetadataFailsBeforeAnyHistoryReader` | `CommitGraphTest` | PASS |
+| `CurrentFormatWalRejectsOrdinaryAndMergePayloadsBeforeReplay` | `EditorMiniGitJournalRecoveryTest` | PASS |
+| `TransferSurfaceHasNoPipelineMergeOperation` | `AdjustmentTransferServiceMiniGitTest` | PASS |
+| `EditorMergeQmlFilesAreAbsent` | `EditorSessionCq5QualificationTest` | PASS |
+| `BindRgbWorkingSpaceCameraProfileResolvesWithoutRawContext` | `GpuDagModelGraphTest` | PASS |
+| `DefaultPipelineDocumentStillRequiresBoundCameraProfile` | `GpuDagModelGraphTest` | PASS |
+| `NonRawImageRootBindsWorkingSpaceCameraProfile` | `PipelineMapperTest` | PASS |
+| `HistoryToolbarUndoAndRedoFollowUserClicks` (typed Contrast title) | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineEditBatchTest CommitGraphTest PipelineHistoryApplierTest EditorMiniGitJournalRecoveryTest EditorMiniGitMaterializerTest EditorSessionHistoryPortTest AdjustmentTransferServiceMiniGitTest EditorSessionCq5QualificationTest EditorHistoryTransactionsPanelQmlTest EditorHistoryVersionsRailLifecycleQmlTest GpuDagModelGraphTest PipelineMapperTest
+```
+
+Suite totals: `PipelineEditBatchTest` 17/17; `CommitGraphTest` 40/40; `GpuDagModelGraphTest` 65/65; `EditorMiniGitJournalRecoveryTest` 11/11; `PipelineHistoryApplierTest` 12/12; `PipelineMapperTest` 32/32 (2 disabled, pre-existing); `EditorSessionCq5QualificationTest` 6/6; `AdjustmentTransferServiceMiniGitTest` 15/15; `EditorMiniGitMaterializerTest` 14/14; `EditorSessionHistoryPortTest` 69/69; `EditorHistoryTransactionsPanelQmlTest` 6/6; `EditorHistoryVersionsRailLifecycleQmlTest` 5/5.
+
+**Checklist / exit condition:** all boxes checked.
+
+**LOC note (grill-code-review):** working-tree NM4.7 + Rec.709 bind is 78 files, +1203 / −3785. Largest touched files remain over the ~1000-line mark from prior phases (`pipeline_service.cpp` 1302, `pipeline_service_test.cpp` 1440, `editor_session_history_port_test.cpp` 1599, `app_theme.cpp` 1185, `commit_graph_test.cpp` 1066). This phase deleted merge/ordinary types rather than adding a new owner; `BindRgbWorkingSpaceCameraProfile` lives in `develop_color_transform` (796). No new god fixture.
+
+**Remaining gaps:** `InteractionCapability::MergeAdjustments` remains a save-lock capability name, not a pipeline merge-commit API. Operator `DetectMergeConflict` remains for paste field conflicts. Codec still serializes `kind == "edit"` and an empty `second_parent_hash` (hash input unchanged). Pre-mini-Git `EditHistory` / `WorkingVersion` retained as required. Mock files already persisted without camera matrices still fail `CameraToAp1` until re-imported; new null-RAW `InitializeImageRoot` writes Rec.709 into the root document.
+
+##### Phase NM4.7 residual completion record (2026-09-02)
+
+**Status:** complete — load-time Rec.709 for persisted non-RAW documents; removed leftover `MergeAdjustments` save-lock
+
+**Primary success call chain:**
+
+```text
+LoadPipeline / LoadEditorPipeline / CheckoutVersion / replay
+  -> EnsureRenderableCameraProfile
+  -> StoredRootRawColorContext (only when live matrices are invalid)
+  -> BindRgbWorkingSpaceCameraProfile when no stored RAW context
+  -> live CameraToAp1 resolves; immutable PipelineRoot snapshot is unchanged
+```
+
+```text
+EditorSessionTaskPort::BeginTask("editor_save")
+  -> four InteractionLock values (SelectEditorImage, SwitchWorkspace, CheckoutVersion, PasteAdjustments)
+  -> InteractionPolicyController disables those QML surfaces
+  -> EndTask / FinishTask clears locks
+```
+
+**Primary failure call chain:**
+
+```text
+persisted RAW root with color_matrices_valid == false
+  -> StoredRootRawColorContext returns the stored RAW context
+  -> EnsureRenderableCameraProfile does not bind Rec.709
+  -> ResolveDevelopColorTransform remains not ok
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PersistedNonRawDocumentWithoutCameraMatricesBecomesRenderableOnReload` | `PipelineMapperTest` | PASS |
+| `PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile` | `PipelineMapperTest` | PASS |
+| `NonRawImageRootBindsWorkingSpaceCameraProfile` | `PipelineMapperTest` | PASS |
+| `RegistersEditorSaveLocksAndFinishesTask` | `EditorSessionTaskPortTest` | PASS |
+| `ProductionEditorSaveTaskPublishesAndClearsFourCheckpointLocks` | `AlbumBackendInteractionPolicyTest` | PASS |
+| `EditorSaveLocksDisableFilmstripWorkspaceCheckoutAndPasteWithReason` | `AlbumBackendInteractionPolicyTest` | PASS |
+| `FourQmlEntrySurfacesBlockedDuringSaveAndRecoverAfterFinish` | `EditorCheckpointQmlIntegrationTest` | PASS |
+| `SwitchFromAToBAfterCheckpointPersistsAAndPresentsB` | `EditorCheckpointNavigationTest` | PASS |
+| `TransferSurfaceHasNoPipelineMergeOperation` | `EditorAdjustmentTransferActionsQmlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest EditorSessionTaskPortTest AlbumBackendInteractionPolicyTest EditorCheckpointQmlIntegrationTest EditorCheckpointNavigationTest EditorAdjustmentTransferActionsQmlTest
+.\PipelineMapperTest.exe   (from PipelineMapperTest_runtime)
+.\EditorSessionTaskPortTest.exe
+.\AlbumBackendInteractionPolicyTest.exe
+.\EditorCheckpointQmlIntegrationTest.exe
+.\EditorCheckpointNavigationTest.exe
+.\EditorAdjustmentTransferActionsQmlTest.exe
+```
+
+Suite totals: `PipelineMapperTest` 34/34 (2 disabled, pre-existing); `EditorSessionTaskPortTest` 3/3; `AlbumBackendInteractionPolicyTest` 14/14; `EditorCheckpointQmlIntegrationTest` 3/3; `EditorCheckpointNavigationTest` 2/2; `EditorAdjustmentTransferActionsQmlTest` 5/5.
+
+**Checklist / exit condition:** residual load-time Rec.709 and MergeAdjustments removal implemented and proven.
+
+**LOC note (grill-code-review):** `pipeline_service.cpp` 1355 after the two anonymous helpers (still over ~1000). `pipeline_service_test.cpp` 1532. No new god fixture; Rec.709 bind stays in `develop_color_transform`, load policy stays in `PipelineMgmtService`.
+
+**Residual gaps:** Operator `DetectMergeConflict` remains paste field-conflict policy. Codec still serializes `kind == "edit"` and an empty `second_parent_hash` (hash input unchanged). Pre-mini-Git `EditHistory` / `WorkingVersion` retained as required. `pipeline_service.cpp` is still above the ~1000-line split mark.
+
 ## 7. Acceptance matrix
 
 The names below specify assertion goals.
@@ -1973,6 +2287,10 @@ Do not put a phase identifier in a test name, target, file, or fixture.
 | Batch canonical form | `TypedBatchGoldenBytesAndHashRemainStable`: compare independent fixed JSON, bytes, commit hash, and chain hash. |
 | Batch order | `ChangingTypedChangeOrderChangesCommitIdentity`: use noncommuting changes and compare hashes. |
 | Strict parse | `UnknownOrMissingTypedPayloadFieldsAreRejected`: cover every variant and version field. |
+| Typed commit only | `CurrentFormatCommitRejectsOrdinaryAndMergePayloads`: reject before graph insertion or replay. |
+| First-parent only | `CurrentFormatCommitRejectsNonEditKindAndSecondParent`: reject before graph insertion. |
+| Identity after cleanup | `TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval`: compare the pre-cleanup fixed JSON, bytes, commit hash, and chain hash. |
+| Project boundary order | `OldProjectMetadataFailsBeforeAnyHistoryReader`: instrument commit, checkpoint, and WAL readers. |
 | Target identity | `ParameterHistoryRequiresCompleteOwnerNodeAndInstance`: do not infer from field or selection. |
 | Parameter inverse | `ParameterForwardInverseRestoresDocumentHash`: cover Document, Develop, Grade, and DRT/Post. |
 | Add Grade | `AddGradeUndoRedoPreservesStableIdsAndCleanValues`: compare node and adjustment IDs. |

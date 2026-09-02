@@ -107,9 +107,7 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   const auto chain = guard_->commit_graph_->FirstParentChain(paste_result.new_head);
   ASSERT_EQ(chain.size(), 1u);
   const auto& commit = guard_->commit_graph_->GetCommit(chain[0]);
-  EXPECT_EQ(commit.GetKind(), alcedo::EditCommitKind::kEdit);
   EXPECT_EQ(commit.GetFirstParentHash(), std::nullopt);
-  EXPECT_EQ(commit.GetSecondParentHash(), std::nullopt);
   ASSERT_TRUE(alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON()));
   const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
   EXPECT_EQ(batch.operation_kind, alcedo::PipelineEditOperationKind::Paste);
@@ -210,22 +208,7 @@ TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMo
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
 }
 
-TEST_F(EditorDocumentPasteTest, TransferSurfaceHasNoPipelineMergeOperation) {
-  std::string error;
-  const auto  handle = history_.Acquire(77, &error);
-  ASSERT_TRUE(handle.valid) << error;
-  const auto package = test::MakeExposureTransferPackage(1.25);
-  alcedo::AdjustmentMergePreview preview;
-  EXPECT_FALSE(history_.BeginLiveMerge(handle, package, &preview, &error));
-  EXPECT_NE(error.find("Pipeline merge is not supported"), std::string::npos);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), 0u);
 
-  alcedo::AdjustmentMergeResult merge_result;
-  EXPECT_FALSE(history_.CompleteLiveMerge(handle, package, preview, {}, &merge_result, &error));
-  EXPECT_FALSE(merge_result.merged);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), 0u);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
-}
 
 }  // namespace
 }  // namespace alcedo::ui

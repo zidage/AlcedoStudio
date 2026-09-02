@@ -96,14 +96,7 @@ auto VersionNameExists(const alcedo::CommitGraph& graph, const std::string& name
 auto UniqueVersionName(const alcedo::CommitGraph& graph, std::string requested,
                        const alcedo::version_ref_id_t* ignored = nullptr) -> std::string;
 
-/// Apply one ordinary commit to an immutable adjustment snapshot. No journal, graph, or executor
-/// state is changed by this function.
-auto ApplyCommittedPayloadToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                                     const alcedo::OrdinaryEditPayload& payload,
-                                     bool use_after_value, std::string* error) -> bool;
-
-/// Apply one history commit to an immutable adjustment snapshot. Merge before-values are resolved
-/// against the commit's first-parent chain, so the live executor is not consulted.
+/// Apply one history commit to an immutable adjustment snapshot.
 auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                                   const alcedo::CommitGraph& graph,
                                   const alcedo::EditCommit& commit, bool use_after_value,

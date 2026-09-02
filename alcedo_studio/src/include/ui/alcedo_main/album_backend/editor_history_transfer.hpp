@@ -21,11 +21,6 @@ class EditorHistoryTransfer {
  public:
   explicit EditorHistoryTransfer(EditorHistoryState& state);
 
-  /// Cancel a live merge preview. Product merge is not supported; this remains
-  /// a successful no-op so the session can clear leftover preview ids.
-  auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                   const alcedo::AdjustmentMergePreview& preview, std::string* error) -> bool;
-
   /// Validate a transfer document, remap identities, apply one typed Paste batch
   /// to the live document from the immutable root, and publish one WAL commit.
   ///
@@ -44,18 +39,6 @@ class EditorHistoryTransfer {
                        const alcedo::version_ref_id_t& prior_version_id,
                        const alcedo::version_ref_id_t& paste_version_id, std::string* error)
       -> bool;
-
-  /// Detect merge conflicts. Always fails; product merge is not supported.
-  auto BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                      const alcedo::AdjustmentTransferPackage& package,
-                      alcedo::AdjustmentMergePreview* preview, std::string* error) -> bool;
-
-  /// Complete a live merge. Always fails; product merge is not supported.
-  auto CompleteLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                         const alcedo::AdjustmentTransferPackage& package,
-                         const alcedo::AdjustmentMergePreview& preview,
-                         const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-                         alcedo::AdjustmentMergeResult* result, std::string* error) -> bool;
 
  private:
   EditorHistoryState& state_;

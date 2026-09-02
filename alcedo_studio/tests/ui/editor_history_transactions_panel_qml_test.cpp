@@ -85,17 +85,16 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   auto* recovery_notice = Find(QStringLiteral("editorHistoryRecoveryNotice"));
   ASSERT_NE(recovery_notice, nullptr);
   EXPECT_TRUE(recovery_notice->property("visible").toBool());
-  auto* merge_title = Find(QStringLiteral("editorHistoryCommitTitle"));
-  ASSERT_NE(merge_title, nullptr);
-  // Dense merge row: title is "Merge"; second parent lives on the hash line.
-  EXPECT_TRUE(merge_title->property("text").toString().contains(QStringLiteral("Merge")));
+  auto* commit_title = Find(QStringLiteral("editorHistoryCommitTitle"));
+  ASSERT_NE(commit_title, nullptr);
+  EXPECT_EQ(commit_title->property("text").toString(), QStringLiteral("Contrast"));
   auto* history_card = Find(QStringLiteral("editorHistoryCard"));
   ASSERT_NE(history_card, nullptr);
   EXPECT_EQ(history_card->property("color").value<QColor>(),
             AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(history_card->property("selectionOutlineColor").value<QColor>(),
             AppTheme::Instance().textColor());
-  EXPECT_EQ(merge_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
+  EXPECT_EQ(commit_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
 
   Click(window_, undo);
   EXPECT_EQ(backend_.undo_count(), 1);
@@ -157,13 +156,12 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
        NonCurrentCardsRenderBeforeAfterValueText) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
-  // Fixture seeds merge(Current) + contrast(Applied) + exposure(Applied). Every
-  // non-current edit card must render its before/after value line, not only the
-  // head. Regression: the value label previously stayed empty for non-current
-  // cards because the JS-block text binding did not re-evaluate; it now binds
-  // directly to the authoritative delta_text the presentation helper computes.
+  // Fixture: contrast(Current) + exposure(Applied). Every non-current edit card
+  // must render its before/after value line, not only the head. Regression: the
+  // value label previously stayed empty for non-current cards because the JS-block
+  // text binding did not re-evaluate; it now binds directly to the authoritative
+  // delta_text the presentation helper computes.
   for (auto* delegate : HistoryCards()) {
-    if (delegate->property("mergeTransaction").toBool()) continue;
     if (delegate->property("currentTransaction").toBool()) continue;
     auto* value_label =
         delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitValue"));
@@ -189,7 +187,6 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, EachTransactionCardShowsItsOwnComm
   for (auto* delegate : HistoryCards()) {
     const QString commit_id = delegate->property("transactionId").toString();
     if (commit_id.isEmpty()) continue;
-    if (delegate->property("mergeTransaction").toBool()) continue;
     auto* hash_label =
         delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitHash"));
     ASSERT_NE(hash_label, nullptr) << "transaction card missing commit hash label";

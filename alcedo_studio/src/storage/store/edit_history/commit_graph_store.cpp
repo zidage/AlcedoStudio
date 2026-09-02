@@ -75,23 +75,28 @@ auto CommitGraphStore::ToCommitParams(const EditCommit& commit) -> EditCommitMap
   params.commit_hash        = MakeStringPtr(commit.GetCommitHash().ToString());
   params.root_id            = MakeStringPtr(commit.GetRootId().ToString());
   params.first_parent_hash  = MakeStringPtr(HeadCommitHashToStorage(commit.GetFirstParentHash()));
-  params.second_parent_hash = MakeStringPtr(commit.GetSecondParentHash().has_value()
-                                                ? commit.GetSecondParentHash()->ToString()
-                                                : std::string{});
+  params.second_parent_hash = MakeStringPtr("");
   params.created_at_ns      = commit.GetCreatedAtNs();
-  params.kind               = static_cast<std::uint32_t>(commit.GetKind());
+  params.kind               = 0;
   params.edit_payload       = MakeStringPtr(commit.GetPayloadJSON().dump());
   return params;
 }
 
 auto CommitGraphStore::FromCommitParams(EditCommitMapperParams&& params) -> EditCommit {
+  if (params.kind != 0) {
+    throw std::runtime_error("CommitGraphStore::FromCommitParams: non-edit kind is not supported");
+  }
+  if (params.second_parent_hash && !params.second_parent_hash->empty()) {
+    throw std::runtime_error(
+        "CommitGraphStore::FromCommitParams: non-empty second parent is not supported");
+  }
   nlohmann::json j;
   j["commit_hash"]        = params.commit_hash ? *params.commit_hash : std::string{};
   j["root_id"]            = params.root_id ? *params.root_id : std::string{};
   j["first_parent_hash"]  = params.first_parent_hash ? *params.first_parent_hash : std::string{};
-  j["second_parent_hash"] = params.second_parent_hash ? *params.second_parent_hash : std::string{};
+  j["second_parent_hash"] = std::string{};
   j["created_at_ns"]      = params.created_at_ns;
-  j["kind"]               = static_cast<int>(params.kind);
+  j["kind"]               = "edit";
   j["edit_payload"] = nlohmann::json::parse(params.edit_payload ? *params.edit_payload : "{}");
   return EditCommit::FromJSON(j);
 }

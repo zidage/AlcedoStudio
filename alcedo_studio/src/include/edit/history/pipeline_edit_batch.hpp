@@ -290,8 +290,8 @@ struct PipelineEditBatch {
   /**
    * @brief Parse and require canonical dump equality with @ref CanonicalJSON.
    *
-   * Unknown keys, unknown enums, duplicate-incompatible objects, ordinary edit
-   * payloads, and merge payloads are rejected.
+  * Unknown keys, unknown enums, duplicate-incompatible objects, and non-batch
+   * payloads are rejected.
    *
    * @throws std::runtime_error when @p json is not a canonical typed batch.
    */
@@ -301,7 +301,7 @@ struct PipelineEditBatch {
 /**
  * @brief True when @p json is an object that carries @c batch_format_version.
  *
- * Used to distinguish typed batches from ordinary or merge payloads.
+ * Used to distinguish typed batches from non-batch commit payloads.
  */
 [[nodiscard]] auto IsPipelineEditBatchJson(const nlohmann::json& json) -> bool;
 

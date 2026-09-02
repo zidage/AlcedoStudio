@@ -94,9 +94,7 @@ ApplicationWindow {
     property QtObject policy: QtObject {
         objectName: "interactionPolicy"
         property bool canPasteAdjustments: true
-        property bool canMergeAdjustments: true
         property string pasteAdjustmentsReason: "Paste is blocked"
-        property string mergeAdjustmentsReason: "Merge is blocked"
     }
 
     Loader {

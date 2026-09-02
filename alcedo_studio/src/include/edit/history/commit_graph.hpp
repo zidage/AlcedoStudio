@@ -113,7 +113,7 @@ class CommitGraph {
   /// Walk first parents from head to root, then reverse to root→head order for replay.
   auto FirstParentChain(const head_commit_hash_t& head) const -> std::vector<commit_hash_t>;
 
-  /// Mark every Version head and walk both parents. Used by clean-exit garbage collection.
+  /// Mark every Version head and walk first parents. Used by clean-exit garbage collection.
   [[nodiscard]] auto CollectReachableCommitHashes() const -> std::unordered_set<commit_hash_t>;
 
   /// Commit objects present in the graph but not reachable from any Version head.
@@ -123,8 +123,8 @@ class CommitGraph {
   /// pass unreachable commits; reachable deletions throw.
   void               EraseUnreachableCommits(const std::vector<commit_hash_t>& hashes);
 
-  /// First-parent chain fold for `head`. Unit of fold is one commit (merge = one fold even
-  /// when many operators change). Deterministic; does not hash live pipeline params.
+  /// First-parent chain fold for `head`. Unit of fold is one commit even when many operators
+  /// change. Deterministic; does not hash live pipeline params.
   auto ChainHashForHead(const head_commit_hash_t& head) const -> transaction_chain_hash_t;
   auto ChainHashForVersion(const version_ref_id_t& version_id) const -> transaction_chain_hash_t;
 

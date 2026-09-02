@@ -714,16 +714,21 @@ TEST_F(PipelineSharedUseTest, QueuedRenderDoesNotStorePixelsUnderStaleCommitLabe
       [&queued](ThumbnailRequestResult result) { queued.set_value(std::move(result)); }, true,
       nullptr, ThumbnailResolution::k256);
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 2, 10s));
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "exposure";
-  payload.before_value   = 0.0f;
-  payload.after_value    = 0.25f;
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  auto commit = EditCommit::MakeEdit(live->root_id_, live->working_head_commit_hash(),
-                                      std::move(payload));
+  PipelineEditBatch batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", 0.0f}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", 0.25f}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  auto commit = EditCommit::MakePipelineEdit(live->root_id_, live->working_head_commit_hash(),
+                                             std::move(batch));
   const auto new_head = commit.GetCommitHash();
   ASSERT_TRUE(live->commit_graph_->InsertCommit(std::move(commit)));
   live->commit_graph_->MoveWorkingHead(live->commit_graph_->GetActiveVersionId(), new_head);

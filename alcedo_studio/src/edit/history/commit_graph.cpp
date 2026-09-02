@@ -133,24 +133,6 @@ void CommitGraph::ValidateCommitAgainstGraph(const EditCommit& commit) const {
       throw std::runtime_error("CommitGraph: first parent belongs to another root");
     }
   }
-  if (commit.GetKind() == EditCommitKind::kEdit) {
-    if (commit.GetSecondParentHash().has_value()) {
-      throw std::runtime_error("CommitGraph: Edit commit must not have a second parent");
-    }
-  } else if (commit.GetKind() == EditCommitKind::kMerge) {
-    if (!commit.GetSecondParentHash().has_value()) {
-      throw std::runtime_error("CommitGraph: Merge commit requires a second parent");
-    }
-    const auto* parent = FindCommit(*commit.GetSecondParentHash());
-    if (parent == nullptr) {
-      throw std::runtime_error("CommitGraph: second parent commit is missing");
-    }
-    if (parent->GetRootId() != state_.root_id) {
-      throw std::runtime_error("CommitGraph: second parent belongs to another root");
-    }
-  } else {
-    throw std::runtime_error("CommitGraph: unknown commit kind");
-  }
 }
 
 void CommitGraph::ValidateReachableStructure() const {
@@ -333,9 +315,6 @@ auto CommitGraph::CollectReachableCommitHashes() const -> std::unordered_set<com
     }
     if (commit->GetFirstParentHash().has_value()) {
       stack.push_back(*commit->GetFirstParentHash());
-    }
-    if (commit->GetSecondParentHash().has_value()) {
-      stack.push_back(*commit->GetSecondParentHash());
     }
   }
   return reachable;

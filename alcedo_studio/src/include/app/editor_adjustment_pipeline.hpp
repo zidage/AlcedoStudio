@@ -123,7 +123,7 @@ auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
     -> bool;
 
 /**
- * @brief Apply one ordinary or merge commit's after (or before) values to the live pipeline.
+ * @brief Remirror CPU stages from one typed-batch commit's after (or before) values.
  *
  * Used by undo (before) and redo (after). Caller holds the render lock.
  */

@@ -81,12 +81,6 @@ auto EditorActionName(EditorAction action) -> const char* {
       return "RemoveVersion";
     case EditorAction::ApplyPaste:
       return "ApplyPaste";
-    case EditorAction::BeginMerge:
-      return "BeginMerge";
-    case EditorAction::CompleteMerge:
-      return "CompleteMerge";
-    case EditorAction::CancelMerge:
-      return "CancelMerge";
     case EditorAction::RetrySave:
       return "RetrySave";
     case EditorAction::DiscardAndContinue:
@@ -117,7 +111,6 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
-          EditorAction::BeginMerge,        EditorAction::CompleteMerge,     EditorAction::CancelMerge,
           EditorAction::RequestViewChange,
       };
     case EditorOperationLeaseKind::SaveCheckpoint:
@@ -126,10 +119,8 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
-          EditorAction::BeginMerge,        EditorAction::CompleteMerge,     EditorAction::CancelMerge,
       };
     case EditorOperationLeaseKind::PasteMaterialization:
-    case EditorOperationLeaseKind::MergeMaterialization:
       return {
           EditorAction::SelectImage,       EditorAction::PreviewAdjustment,
           EditorAction::CommitAdjustment,  EditorAction::Undo,
@@ -137,22 +128,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::DiscardChanges,    EditorAction::CheckoutVersion,
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CompleteMerge,     EditorAction::CancelMerge,
-          EditorAction::RequestViewChange,
-      };
-    case EditorOperationLeaseKind::MergePreview:
-      // Preview enables Complete/Cancel only; other mutation stays blocked by
-      // base Interactive + package facts. No broad block list — Complete/Cancel
-      // are gated by merge_preview_active in Evaluate.
-      return {
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion,
-          EditorAction::BranchVersion,     EditorAction::RenameVersion,
-          EditorAction::RemoveVersion,     EditorAction::Undo,
-          EditorAction::Redo,              EditorAction::MoveHead,
-          EditorAction::DiscardChanges,    EditorAction::PreviewAdjustment,
-          EditorAction::CommitAdjustment,  EditorAction::SelectImage,
+          EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
       };
     case EditorOperationLeaseKind::FailureRecovery:
       return {
@@ -162,9 +138,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::DiscardChanges,    EditorAction::CheckoutVersion,
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
-          EditorAction::ApplyPaste,        EditorAction::BeginMerge,
-          EditorAction::CompleteMerge,     EditorAction::CancelMerge,
-          EditorAction::RequestViewChange,
+          EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
       };
   }
   return {};
@@ -204,12 +178,6 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::RemoveVersion;
     case EditorSessionCommandKind::ApplyPaste:
       return EditorAction::ApplyPaste;
-    case EditorSessionCommandKind::BeginMerge:
-      return EditorAction::BeginMerge;
-    case EditorSessionCommandKind::CompleteMerge:
-      return EditorAction::CompleteMerge;
-    case EditorSessionCommandKind::CancelMerge:
-      return EditorAction::CancelMerge;
     case EditorSessionCommandKind::RetrySave:
       return EditorAction::RetrySave;
     case EditorSessionCommandKind::DiscardAndContinue:
@@ -326,35 +294,6 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       }
       if (inputs.background_blocks_paste) {
         return Deny("A background task blocks Paste");
-      }
-      if (inputs.merge_preview_active) {
-        return Deny("Finish or cancel Merge before Paste");
-      }
-      return Allow();
-
-    case EditorAction::BeginMerge:
-      if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
-        return Deny("Merge requires an interactive image");
-      }
-      if (!inputs.package_available) {
-        return Deny("No copied adjustments are available");
-      }
-      if (inputs.background_blocks_merge) {
-        return Deny("A background task blocks Merge");
-      }
-      if (inputs.merge_preview_active) {
-        return Deny("A Merge preview is already active");
-      }
-      return Allow();
-
-    case EditorAction::CompleteMerge:
-    case EditorAction::CancelMerge:
-      if (!inputs.merge_preview_active || !inputs.active_merge_preview.valid()) {
-        return Deny("No active Merge preview");
-      }
-      if (inputs.session_state != EditorSessionState::Interactive &&
-          !IsBusyNavigationState(inputs.session_state)) {
-        return Deny("Merge resolution requires an active editor session");
       }
       return Allow();
 

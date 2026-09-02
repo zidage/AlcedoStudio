@@ -177,12 +177,6 @@ class IEditorHistoryPort {
     return false;
   }
 
-  virtual auto CancelMerge(const EditorHistoryGuardHandle& /*guard*/,
-                           const AdjustmentMergePreview& /*preview*/, std::string* error) -> bool {
-    if (error != nullptr)
-      *error = "Editor Merge cancellation is not supported by this history port";
-    return false;
-  }
 
   /// Paste onto the live CommitGraph and WAL, then apply package operators to
   /// the live pipeline. Default fake records success without mutating state.
@@ -214,35 +208,6 @@ class IEditorHistoryPort {
     return true;
   }
 
-  /// Detect merge conflicts from the live pipeline without mutating the graph.
-  virtual auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                              const AdjustmentTransferPackage& package,
-                              AdjustmentMergePreview* preview, std::string* error) -> bool {
-    if (preview == nullptr) {
-      if (error != nullptr) *error = "Merge preview storage is required";
-      return false;
-    }
-    if (package.Empty()) {
-      if (error != nullptr) *error = "Adjustment transfer package is empty";
-      return false;
-    }
-    *preview = {};
-    return true;
-  }
-
-  /// Apply merge resolutions to the live pipeline and append one merge commit + WAL.
-  virtual auto CompleteLiveMerge(
-      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentTransferPackage& /*package*/,
-      const AdjustmentMergePreview& /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentMergeResult* result,
-      std::string* error) -> bool {
-    if (result == nullptr) {
-      if (error != nullptr) *error = "Merge result storage is required";
-      return false;
-    }
-    result->merged = true;
-    return true;
-  }
 
   /// Capture the immutable live history prefix that a save checkpoint must
   /// persist. Production copies journal records and their inclusive sequence

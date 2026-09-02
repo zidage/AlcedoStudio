@@ -133,18 +133,9 @@ TEST_F(AdjustmentTransferPasteMergeTest, TransferSurfaceHasNoPipelineMergeOperat
       *graph, CreateDefaultPipelineDocument(), package, "Pasted");
   ASSERT_TRUE(pasted.pasted) << pasted.error;
   const auto& commit = graph->GetCommit(pasted.new_head);
-  EXPECT_EQ(commit.GetKind(), EditCommitKind::kEdit);
-  EXPECT_EQ(commit.GetSecondParentHash(), std::nullopt);
   ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
   EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
             PipelineEditOperationKind::Paste);
-  for (const auto& [id, ref] : graph->GetAllVersionRefs()) {
-    (void)id;
-    if (!ref.head_commit_hash.has_value()) {
-      continue;
-    }
-    EXPECT_NE(graph->GetCommit(*ref.head_commit_hash).GetKind(), EditCommitKind::kMerge);
-  }
 }
 
 // ============================================================================
@@ -165,7 +156,6 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteGradeChainPasteCreatesOneTypedC
   EXPECT_EQ(chain.size(), 1u);
   const auto& commit = graph->GetCommit(chain[0]);
   EXPECT_EQ(commit.GetFirstParentHash(), std::nullopt);
-  EXPECT_EQ(commit.GetKind(), EditCommitKind::kEdit);
   ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
   EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
             PipelineEditOperationKind::Paste);
@@ -337,7 +327,7 @@ TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
 
 TEST_F(AdjustmentTransferPasteMergeTest,
        LivePipelineColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
-  // Live operator DetectMergeConflict (same policy BeginLiveMerge uses).
+  // Live operator DetectMergeConflict (paste field-conflict policy).
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
 
   auto guard = pipeline_service_->LoadPipeline(element_id);

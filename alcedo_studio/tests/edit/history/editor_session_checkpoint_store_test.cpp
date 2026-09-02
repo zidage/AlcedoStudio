@@ -30,16 +30,21 @@
 namespace alcedo::ui {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> alcedo::OrdinaryEditPayload {
-  alcedo::OrdinaryEditPayload payload;
-  payload.operator_type  = alcedo::OperatorType::EXPOSURE;
-  payload.stage_name     = alcedo::PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
+auto MakeExposureBatch(float before, float after) -> alcedo::PipelineEditBatch {
+  alcedo::PipelineEditBatch batch;
+  alcedo::SetParameterChange change;
+  change.target.owner_kind             = alcedo::PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = alcedo::NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = alcedo::AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", before}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", after}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = alcedo::PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  return batch;
 }
 
 class EditorSessionCheckpointStoreTest : public ::testing::Test {
@@ -83,7 +88,7 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
   auto CaptureEdit() -> alcedo::EditorMiniGitSaveCapture {
     auto                          journal = std::make_shared<alcedo::MiniGitJournal>(journal_path_);
     alcedo::MiniGitWorkingHistory history(graph_, journal);
-    if (!history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed) {
+    if (!history.AppendEdit(MakeExposureBatch(0.0f, 1.25f)).committed) {
       throw std::runtime_error("failed to append test capture");
     }
     const auto snapshot      = journal->Snapshot();

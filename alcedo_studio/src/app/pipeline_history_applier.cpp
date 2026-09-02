@@ -512,82 +512,6 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
   return true;
 }
 
-auto RemapLeftoverOrdinaryParamKeys(nlohmann::json params) -> nlohmann::json {
-  if (!params.is_object()) {
-    return params;
-  }
-  if (params.contains("exposure") && !params.contains("exposure_ev")) {
-    params["exposure_ev"] = params.at("exposure");
-    params.erase("exposure");
-  }
-  if (params.contains("ocio_lmt") && !params.contains("cube_path")) {
-    params["cube_path"] = params.at("ocio_lmt");
-    params.erase("ocio_lmt");
-  }
-  return params;
-}
-
-auto RestrictToModelKeys(const nlohmann::json& params, const nlohmann::json& current)
-    -> nlohmann::json {
-  nlohmann::json kept = nlohmann::json::object();
-  if (!params.is_object() || !current.is_object()) {
-    return kept;
-  }
-  for (auto it = params.begin(); it != params.end(); ++it) {
-    if (current.contains(it.key())) {
-      kept[it.key()] = it.value();
-    }
-  }
-  return kept;
-}
-
-auto ApplyLeftoverOrdinaryPayloadToDocument(PipelineDocument& document,
-                                            const OrdinaryEditPayload& payload, std::string* error)
-    -> bool {
-  const auto field_key = EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
-  if (!field_key.has_value()) {
-    return SetError(error, "leftover ordinary payload operator is not a document adjustment");
-  }
-  auto target = CompleteCurrentPanelParameterTarget(document, *field_key, error);
-  if (!target.has_value()) {
-    return false;
-  }
-  if (payload.after_value.is_null()) {
-    return true;
-  }
-  if (!payload.after_value.is_object()) {
-    return SetError(error, "leftover ordinary payload after value must be a JSON object");
-  }
-  nlohmann::json current;
-  if (!ReadEditorParameterJson(document, *target, &current, error)) {
-    return false;
-  }
-  const auto patch =
-      RestrictToModelKeys(RemapLeftoverOrdinaryParamKeys(payload.after_value), current);
-  if (patch.empty()) {
-    return SetError(error, "leftover ordinary payload has no document model keys for " + *field_key);
-  }
-  return ApplyEditorParameterPatch(document, *target, patch, error);
-}
-
-auto ApplyLeftoverMergePayloadToDocument(PipelineDocument& document, const MergeEditPayload& payload,
-                                         std::string* error) -> bool {
-  for (const auto& field : payload.fields) {
-    OrdinaryEditPayload ordinary;
-    ordinary.operator_type  = field.operator_type;
-    ordinary.stage_name     = field.stage_name;
-    ordinary.field_name     = field.field_name;
-    ordinary.after_value    = field.resolved_value;
-    ordinary.after_enabled  = field.resolved_enabled;
-    ordinary.before_value   = field.before_value;
-    ordinary.before_enabled = field.before_enabled;
-    if (!ApplyLeftoverOrdinaryPayloadToDocument(document, ordinary, error)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 auto ReplayPipelineDocumentFromRoot(const PipelineDocument&             root_document,
                                     const std::vector<EditCommit>&      first_parent_commits,
                                     std::string*                        error,
@@ -596,34 +520,15 @@ auto ReplayPipelineDocumentFromRoot(const PipelineDocument&             root_doc
   try {
     auto document = ClonePipelineDocument(root_document);
     for (const auto& commit : first_parent_commits) {
-      if (IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
-        if (commit.GetKind() != EditCommitKind::kEdit) {
-          SetError(error, "ReplayPipelineDocumentFromRoot: typed batch must be an edit commit");
-          return std::nullopt;
-        }
-        const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
-        if (!ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, error,
-                                    context)) {
-          return std::nullopt;
-        }
-        continue;
+      if (!IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+        SetError(error, "ReplayPipelineDocumentFromRoot: commit payload is not a typed batch");
+        return std::nullopt;
       }
-      if (commit.GetKind() == EditCommitKind::kEdit) {
-        if (!ApplyLeftoverOrdinaryPayloadToDocument(
-                document, OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON()), error)) {
-          return std::nullopt;
-        }
-        continue;
+      const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+      if (!ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, error,
+                                  context)) {
+        return std::nullopt;
       }
-      if (commit.GetKind() == EditCommitKind::kMerge) {
-        if (!ApplyLeftoverMergePayloadToDocument(
-                document, MergeEditPayload::FromJSON(commit.GetPayloadJSON()), error)) {
-          return std::nullopt;
-        }
-        continue;
-      }
-      SetError(error, "ReplayPipelineDocumentFromRoot: unsupported commit kind");
-      return std::nullopt;
     }
     if (!PipelineDocumentPassesValidation(document, error)) {
       return std::nullopt;

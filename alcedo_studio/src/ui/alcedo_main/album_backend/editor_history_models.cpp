@@ -149,13 +149,6 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
       return QString::fromStdString(row.commit_hash.ToString());
     case FirstParentIdRole:
       return HeadText(row.first_parent_hash);
-    case SecondParentIdRole:
-      return row.second_parent_hash.has_value()
-                 ? QString::fromStdString(row.second_parent_hash->ToString())
-                 : QString{};
-    case CommitKindRole:
-      return row.kind == alcedo::EditCommitKind::kMerge ? QStringLiteral("merge")
-                                                        : QStringLiteral("edit");
     case CreatedAtNsRole:
       return static_cast<qulonglong>(row.created_at_ns);
     case FieldKeyRole:
@@ -172,10 +165,6 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
       return pres.delta_text;
     case IconKeyRole:
       return pres.icon_key;
-    case IsMergeRole:
-      return pres.is_merge;
-    case MergeSummaryRole:
-      return pres.merge_summary;
     default:
       return {};
   }
@@ -184,8 +173,6 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
 auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
   return {{CommitIdRole, "commitId"},
           {FirstParentIdRole, "firstParentId"},
-          {SecondParentIdRole, "secondParentId"},
-          {CommitKindRole, "commitKind"},
           {CreatedAtNsRole, "createdAtNs"},
           {LabelRole, "label"},
           {FieldKeyRole, "fieldKey"},
@@ -195,9 +182,7 @@ auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
           {AfterTextRole, "afterText"},
           {DeltaTextRole, "deltaText"},
           {IconKeyRole, "iconKey"},
-          {TimelinePositionRole, "timelinePosition"},
-          {IsMergeRole, "isMerge"},
-          {MergeSummaryRole, "mergeSummary"}};
+          {TimelinePositionRole, "timelinePosition"}};
 }
 
 void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
@@ -229,7 +214,7 @@ auto EditorHistoryModel::PresentationFor(const alcedo::EditorHistoryCommit& comm
   }
   auto pres = PresentEditorHistoryCommit(
       commit.field_key, commit.before_value_json, commit.after_value_json,
-      commit.before_enabled, commit.after_enabled, commit.kind, commit.merge_field_keys);
+      commit.before_enabled, commit.after_enabled);
   presentation_cache_.emplace(commit.commit_hash, pres);
   return pres;
 }

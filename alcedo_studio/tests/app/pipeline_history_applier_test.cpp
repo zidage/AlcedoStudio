@@ -217,18 +217,30 @@ TEST(PipelineHistoryApplierTest, HeadPublishFailureRevokesOnlyNewJournalTail) {
   EXPECT_EQ(history.working_head(), first_head);
 }
 
-TEST(PipelineHistoryApplierTest, ReplayAppliesLeftoverOrdinaryExposureOntoDefaultDocument) {
-  auto        root  = CreateDefaultPipelineDocument();
-  auto        graph = CommitGraph::CreateEmpty(21);
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.after_value    = nlohmann::json{{"exposure", 0.85}};
-  payload.after_enabled  = true;
-  const auto  commit     = EditCommit::MakeEdit(graph.GetRootId(), std::nullopt, std::move(payload));
+TEST(PipelineHistoryApplierTest, ReplayAppliesTypedBatchExposureOntoDefaultDocument) {
+  auto root  = CreateDefaultPipelineDocument();
+  auto graph = CommitGraph::CreateEmpty(21);
+
+  const auto target = test::ColorGradeFieldTarget("exposure");
+  nlohmann::json before_json;
   std::string error;
-  const auto  replayed   = ReplayPipelineDocumentFromRoot(root, {commit}, &error);
+  ASSERT_TRUE(ReadEditorParameterJson(root, target, &before_json, &error)) << error;
+  auto after_json = before_json;
+  after_json["exposure_ev"] = 0.85;
+
+  SetParameterChange change;
+  change.target         = ToPipelineParameterTarget(target);
+  change.before_value   = before_json;
+  change.after_value    = after_json;
+  change.before_enabled = true;
+  change.after_enabled  = true;
+
+  PipelineEditBatch batch;
+  batch.operation_kind   = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  const auto commit = EditCommit::MakePipelineEdit(graph.GetRootId(), std::nullopt, std::move(batch));
+  const auto replayed = ReplayPipelineDocumentFromRoot(root, {commit}, &error);
   ASSERT_TRUE(replayed.has_value()) << error;
   nlohmann::json exposure;
   ASSERT_TRUE(ReadEditorParameterJson(*replayed, test::ColorGradeFieldTarget("exposure"), &exposure,
@@ -238,23 +250,18 @@ TEST(PipelineHistoryApplierTest, ReplayAppliesLeftoverOrdinaryExposureOntoDefaul
   EXPECT_NEAR(exposure.at("exposure_ev").get<double>(), 0.85, 1e-5);
 }
 
-TEST(PipelineHistoryApplierTest, ReplayAppliesLeftoverLutOrdinaryPayloadOntoDefaultDocument) {
-  auto        root  = CreateDefaultPipelineDocument();
-  auto        graph = CommitGraph::CreateEmpty(22);
-  OrdinaryEditPayload payload;
-  payload.operator_type = OperatorType::LMT;
-  payload.stage_name    = PipelineStageName::Color_Adjustment;
-  payload.field_name    = "$operator_params";
-  payload.after_value   = nlohmann::json{{"ocio_lmt", "D:/luts/teal_orange.cube"}};
-  payload.after_enabled = true;
-  const auto  commit    = EditCommit::MakeEdit(graph.GetRootId(), std::nullopt, std::move(payload));
-  std::string error;
-  const auto  replayed  = ReplayPipelineDocumentFromRoot(root, {commit}, &error);
-  ASSERT_TRUE(replayed.has_value()) << error;
-  auto* lmt = replayed->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt());
-  ASSERT_NE(lmt, nullptr);
-  ASSERT_TRUE(lmt->ToJson().contains("cube_path"));
-  EXPECT_EQ(lmt->ToJson().at("cube_path").get<std::string>(), "D:/luts/teal_orange.cube");
+TEST(PipelineHistoryApplierTest, ReplayRejectsNonBatchPayload) {
+  auto root  = CreateDefaultPipelineDocument();
+  auto graph = CommitGraph::CreateEmpty(22);
+  nlohmann::json non_batch_payload = {{"operator_type", 1}, {"exposure", 0.85}};
+  nlohmann::json commit_json;
+  commit_json["root_id"] = graph.GetRootId().ToString();
+  commit_json["first_parent_hash"] = "";
+  commit_json["second_parent_hash"] = "";
+  commit_json["created_at_ns"] = 100;
+  commit_json["kind"] = "edit";
+  commit_json["edit_payload"] = non_batch_payload;
+  EXPECT_THROW(EditCommit::FromJSON(commit_json), std::runtime_error);
 }
 
 TEST(PipelineHistoryApplierTest, CollectPersistentMaskAssetKeysOmitsRadialAndEmptyBrushKeys) {

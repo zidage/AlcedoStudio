@@ -25,7 +25,7 @@ namespace alcedo {
 //
 // 1. Edit history owns HEAD.
 //    - CommitGraph + VersionRef.head_commit_hash is the only working tip.
-//    - Switching Version, undo, redo, paste, and merge move history head only.
+//    - Switching Version, undo, redo, and paste move history head only.
 //    - PipelineGuard must not store a parallel working_head field.
 //
 // 2. PipelineDocument is the live DAG (plus executor).
@@ -38,9 +38,6 @@ namespace alcedo {
 //    - Unit of advancement is one commit (or one head-move to an existing tip):
 //        root_chain = H(chain_format_version, root_id)
 //        next_chain = H(previous_chain, commit_hash)   // exactly once per commit
-//    - A merge commit may apply many SetOperator calls to reach the final table;
-//      intermediate SetOperator calls do not fold the chain hash. One merge
-//      commit => one fold when history head advances to that commit.
 //    - Checkpoint / ImageEditState store (root, head, chain, document) together
 //      so load can compare history tip ↔ checkpoint label. Match => install the
 //      document (skip first-parent replay). Mismatch => history wins; rebuild
@@ -51,7 +48,7 @@ namespace alcedo {
 //      not that the tip value stays constant across Version switches.
 // =============================================================================
 
-/// Content-addressed identity of one immutable edit or merge commit.
+/// Content-addressed identity of one immutable edit commit.
 using commit_hash_t = Hash128;
 
 /// Immutable identity of the image-specific root pipeline after import metadata resolution.
@@ -65,44 +62,10 @@ using version_ref_id_t = Hash128;
 using head_commit_hash_t = std::optional<commit_hash_t>;
 
 /// First-parent chain fold from the image root to a given head.
-/// Advances once per commit on that chain (including multi-field merge commits).
+/// Advances once per commit on that chain.
 /// Used as the checkpoint label that pairs the saved document with a history tip.
 using transaction_chain_hash_t = Hash128;
 
-enum class EditCommitKind : std::uint8_t {
-  kEdit  = 0,
-  kMerge = 1,
-};
-
-inline auto EditCommitKindToString(EditCommitKind kind) -> const char* {
-  switch (kind) {
-    case EditCommitKind::kEdit:
-      return "edit";
-    case EditCommitKind::kMerge:
-      return "merge";
-  }
-  throw std::runtime_error("EditCommitKind: unknown enum value");
-}
-
-inline auto EditCommitKindFromString(const std::string& value) -> EditCommitKind {
-  if (value == "edit") {
-    return EditCommitKind::kEdit;
-  }
-  if (value == "merge") {
-    return EditCommitKind::kMerge;
-  }
-  throw std::runtime_error("EditCommitKind: unknown kind string '" + value + "'");
-}
-
-inline auto EditCommitKindFromInt(int value) -> EditCommitKind {
-  if (value == static_cast<int>(EditCommitKind::kEdit)) {
-    return EditCommitKind::kEdit;
-  }
-  if (value == static_cast<int>(EditCommitKind::kMerge)) {
-    return EditCommitKind::kMerge;
-  }
-  throw std::runtime_error("EditCommitKind: unknown kind integer " + std::to_string(value));
-}
 
 /// Encode a nullable head as a storage string. Empty means root.
 inline auto HeadCommitHashToStorage(const head_commit_hash_t& head) -> std::string {

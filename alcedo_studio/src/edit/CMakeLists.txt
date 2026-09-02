@@ -19,7 +19,7 @@ set(HISTORY_SRCS
 
 def_library(EditHistory
     SOURCES ${HISTORY_SRCS}
-    PUBLIC_DEPS Image TimeProvider JSON EditPipeline EditGraph
+    PUBLIC_DEPS Image TimeProvider JSON EditPipeline EditGraph ThreadPool
 )
 
 # GPU-free render geometry: coordinate spaces, resolver, sampling plans. No CUDA.

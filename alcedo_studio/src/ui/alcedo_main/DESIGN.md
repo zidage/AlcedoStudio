@@ -95,8 +95,6 @@ and notify via `ThemeChanged`.
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
-| **Merge current** | **`mergeCurrentColor` / `mergeCurrentFillColor`** | **Git red for Current labels, value ink, borders, and selected wells** |
-| **Merge incoming** | **`mergeIncomingColor` / `mergeIncomingFillColor`** | **Git green for Incoming labels, value ink, borders, and selected wells** |
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
 | **List favorite idle** | **`editorListFavoriteIdleColor`** | **Unstarred glyph on sunken (dark) rows** |
@@ -117,7 +115,7 @@ invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 graph: flat rows sit directly on the sunken `bgBaseColor` well while a
 continuous 1 px `cardBorderColor` rail links state-driven node glyphs down the
 left gutter — small solid disc for applied edits, small hollow ring for undone
-(redo) rows, large hollow ring for the graph root and merge commits, and a
+(redo) rows, large hollow ring for the graph root, and a
 large double ring (text-ink outline + inner dot) for the checked-out commit.
 Only the checked-out row carries a `cardSurfaceColor` fill with the quiet 1 px
 text-token outline; all other rows stay flat, showing at most a quiet
@@ -243,19 +241,9 @@ the two side columns read as one family.
 | `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
-| `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog — top action bar + three-column Current / Incoming / Merged cards |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
-
-**Merge dialog layout:** `EditorMergeDialog` is centered on `Overlay.overlay`
-with the shared MultiEffect blur + `overlayColor` dim used by other modal
-dialogs. Header is one row: `Merge Conflicts` title with Cancel / Complete on
-the same vertical center. Conflict rows scroll in the middle; sticky
-Use All Current / Incoming sit below the list, horizontally centered. Conflict
-rows have no outer card chrome — only the three comparison panes are cards
-(`bgBaseColor`, quiet border; selected sides use merge-tint borders). Complete
-uses the monochrome selected fill.
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
 `overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /

@@ -911,7 +911,7 @@ alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 # Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
 add_executable(EditorGeometryOverlayDraftRoutingTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
 target_include_directories(EditorGeometryOverlayDraftRoutingTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}

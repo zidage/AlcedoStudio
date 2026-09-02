@@ -54,8 +54,7 @@ struct MaskAssetMaintenanceReport {
     -> std::set<MaskAssetKey>;
 
 /**
- * @brief Brush keys stored on a typed-batch commit payload. Ordinary and merge
- *        leftover payloads contribute no keys.
+ * @brief Brush keys stored on a typed-batch commit payload.
  */
 [[nodiscard]] auto CollectMaskAssetKeysFromCommit(const EditCommit& commit)
     -> std::set<MaskAssetKey>;

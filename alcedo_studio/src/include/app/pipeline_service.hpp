@@ -42,7 +42,7 @@ class MaskStore;
 /// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
 ///   the active Version tip and its first-parent chain fold. They are not independent
 ///   caches; never write a parallel head field onto this guard.
-/// - On commit (including merge), history advances head once and folds chain hash once.
+/// - On commit, history advances head once and folds chain hash once.
 ///   Applying that commit to the table may call SetOperator many times; those calls are
 ///   not separate chain-hash steps.
 /// - Serialized checkpoint identity is (root, head, chain, document). Load compares
@@ -192,8 +192,9 @@ class PipelineMgmtService final {
   }
 
   /// Persist the current metadata-resolved document as the immutable root for a newly imported
-  /// image. Calling this again for an image that already has a root verifies and loads that root;
-  /// it never replaces the stored root state.
+  /// image. When @p raw_color_context is null (non-RAW RGB files), Rec.709 XYZ→camera matrices
+  /// are bound onto the Develop node before the root is written. Calling this again for an image
+  /// that already has a root verifies and loads that root; it never replaces the stored root state.
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
@@ -223,9 +224,9 @@ class PipelineMgmtService final {
                                                  std::string*                          error = nullptr,
                                                  MaskStore* mask_store = nullptr) -> bool;
 
-  /// Clean project-exit garbage collection: mark from every Version head through both parents and
-  /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
-  /// shutdown must not call this.
+  /// Clean project-exit garbage collection: mark from every Version head through first-parent
+  /// reachability and delete unreachable EditCommit rows. Must run only after the final
+  /// successful save; abnormal shutdown must not call this.
   /// @return number of deleted commit rows.
   auto               CollectUnreachableEditCommits() -> std::size_t;
 

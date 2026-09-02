@@ -698,24 +698,9 @@ auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::
 
 auto PresentEditorHistoryCommit(const std::string& field_key, const std::string& before_value_json,
                                 const std::string& after_value_json, bool before_enabled,
-                                bool after_enabled, EditCommitKind kind,
-                                const std::vector<std::string>& merge_field_keys)
+                                bool after_enabled)
     -> EditorHistoryCommitPresentation {
   EditorHistoryCommitPresentation out;
-  if (kind == EditCommitKind::kMerge || field_key == "merge") {
-    out.is_merge     = true;
-    out.display_name = QStringLiteral("Merge");
-    out.icon_key     = QStringLiteral(":/history_icons/git-commit-horizontal.svg");
-    if (!merge_field_keys.empty()) {
-      out.merge_summary = QStringLiteral("Resolved %1 field%2")
-                              .arg(static_cast<int>(merge_field_keys.size()))
-                              .arg(merge_field_keys.size() == 1 ? QString() : QStringLiteral("s"));
-    } else {
-      out.merge_summary = QStringLiteral("Resolved incoming adjustments");
-    }
-    return out;
-  }
-
   const auto         spec = alcedo::ResolveEditorAdjustmentField(field_key);
   const OperatorType op   = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;
   out.display_name        = DisplayName(op);

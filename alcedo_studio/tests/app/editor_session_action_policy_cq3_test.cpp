@@ -130,14 +130,9 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_EQ(undo.kind, EditorSessionResultKind::Rejected);
   EXPECT_FALSE(published.For(EditorAction::Undo).allowed);
 
-  const auto complete = service_->CompleteMerge({});
-  EXPECT_EQ(complete.kind, EditorSessionResultKind::Rejected);
-  EXPECT_FALSE(published.For(EditorAction::CompleteMerge).allowed);
-
   EXPECT_TRUE(published.For(EditorAction::SelectImage).allowed);
   EXPECT_TRUE(published.For(EditorAction::PreviewAdjustment).allowed);
   EXPECT_TRUE(published.For(EditorAction::ApplyPaste).allowed);
-  EXPECT_TRUE(published.For(EditorAction::BeginMerge).allowed);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test,
@@ -319,7 +314,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
 
   EditorBackgroundActionRestrictions blocked;
   blocked.blocks_paste = true;
-  blocked.blocks_merge = true;
   service_->SetBackgroundActionRestrictions(blocked);
   (void)service_->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
   drainQueue();
@@ -331,16 +325,12 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   inputs.can_redo                = true;
   inputs.package_available       = true;
   inputs.background_blocks_paste = true;
-  inputs.background_blocks_merge = true;
 
   const auto paste = EditorActionPolicy::Evaluate(EditorAction::ApplyPaste, {}, inputs);
-  const auto merge = EditorActionPolicy::Evaluate(EditorAction::BeginMerge, {}, inputs);
   const auto undo  = EditorActionPolicy::Evaluate(EditorAction::Undo, {}, inputs);
   EXPECT_FALSE(paste.allowed);
-  EXPECT_FALSE(merge.allowed);
   EXPECT_TRUE(undo.allowed);
   EXPECT_EQ(Decision(EditorAction::ApplyPaste).allowed, paste.allowed);
-  EXPECT_EQ(Decision(EditorAction::BeginMerge).allowed, merge.allowed);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test,

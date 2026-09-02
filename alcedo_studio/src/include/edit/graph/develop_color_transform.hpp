@@ -62,6 +62,24 @@ struct ColorTransformResult {
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported);
 
 /**
+ * @brief Bind Rec.709 / sRGB XYZ→camera matrices for files that have no RAW camera profile.
+ *
+ * Used when image-root initialization has no @c RawRuntimeColorContext (JPEG,
+ * TIFF, PNG, and other mock RGB files).
+ * IEC 61966-2-1 XYZ→Rec.709 is stored as ColorMatrix1 and ColorMatrix2 with a
+ * single D65 illuminant. Missing RAW calibration is not substituted: RAW import
+ * must still bind extracted camera matrices and still fails when those
+ * matrices are absent.
+ *
+ * @pre Called only on the null-RAW import / root-init branch. Does not change
+ *      @c CreateDefaultPipelineDocument().
+ * Side effects: overwrites camera-profile fields and, on success, as-shot
+ *               CCT/tint via @ref BindDevelopCameraProfile.
+ * Thread: CPU; the caller holds any required document lock.
+ */
+void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload);
+
+/**
  * @brief Interpolate stored ColorMatrix/ForwardMatrix fields for the current CCT/tint.
  *
  * @pre @p develop.camera_profile.color_matrices_valid is true and both colour

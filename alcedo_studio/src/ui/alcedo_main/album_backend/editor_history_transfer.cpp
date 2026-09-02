@@ -347,32 +347,4 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
   return true;
 }
 
-auto EditorHistoryTransfer::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& /*guard*/,
-                                           const alcedo::AdjustmentTransferPackage& /*package*/,
-                                           alcedo::AdjustmentMergePreview* preview,
-                                           std::string* error) -> bool {
-  if (preview == nullptr) return SetError(error, "Merge preview storage is required");
-  *preview = {};
-  preview->error = "Pipeline merge is not supported";
-  return SetError(error, "Pipeline merge is not supported");
-}
-
-auto EditorHistoryTransfer::CompleteLiveMerge(
-    const alcedo::EditorHistoryGuardHandle& /*guard*/,
-    const alcedo::AdjustmentTransferPackage& /*package*/,
-    const alcedo::AdjustmentMergePreview& /*preview*/,
-    const std::vector<alcedo::AdjustmentMergeResolution>& /*resolutions*/,
-    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
-  if (result == nullptr) return SetError(error, "Merge result storage is required");
-  *result = {};
-  result->error = "Pipeline merge is not supported";
-  return SetError(error, "Pipeline merge is not supported");
-}
-
-auto EditorHistoryTransfer::CancelMerge(const alcedo::EditorHistoryGuardHandle& /*guard*/,
-                                        const alcedo::AdjustmentMergePreview& /*preview*/,
-                                        std::string* /*error*/) -> bool {
-  return true;
-}
-
 }  // namespace alcedo::ui

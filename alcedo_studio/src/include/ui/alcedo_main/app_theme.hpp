@@ -77,7 +77,6 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorSidePanelWidth READ editorSidePanelWidth CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMin READ editorSidePanelWidthMin CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
-  Q_PROPERTY(int editorMergeDialogWidth READ editorMergeDialogWidth CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
@@ -122,12 +121,6 @@ class AppTheme final : public QObject {
   // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
   // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
   Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
-  // Git-style merge colors. The fills are opaque dark wells so the resolver
-  // does not need ad-hoc alpha colors in QML.
-  Q_PROPERTY(QColor mergeCurrentColor READ mergeCurrentColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeCurrentFillColor READ mergeCurrentFillColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeIncomingColor READ mergeIncomingColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeIncomingFillColor READ mergeIncomingFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderTrackColor READ editorSliderTrackColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderPositiveColor READ editorSliderPositiveColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderNegativeColor READ editorSliderNegativeColor NOTIFY ThemeChanged)
@@ -252,7 +245,6 @@ class AppTheme final : public QObject {
   auto        editorSidePanelWidth() const -> int;
   auto        editorSidePanelWidthMin() const -> int;
   auto        editorSidePanelWidthMax() const -> int;
-  auto        editorMergeDialogWidth() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        collectionsSidebarWidth() const -> int;
@@ -288,10 +280,6 @@ class AppTheme final : public QObject {
   auto        buttonPressedFillColor() const -> QColor;
   auto        buttonSelectedFillColor() const -> QColor;
   auto        disabledSurfaceColor() const -> QColor;
-  auto        mergeCurrentColor() const -> QColor;
-  auto        mergeCurrentFillColor() const -> QColor;
-  auto        mergeIncomingColor() const -> QColor;
-  auto        mergeIncomingFillColor() const -> QColor;
   auto        editorSliderTrackColor() const -> QColor { return EditorSliderTrackColor(); }
   auto        editorSliderPositiveColor() const -> QColor { return EditorSliderAccentColor(true); }
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }

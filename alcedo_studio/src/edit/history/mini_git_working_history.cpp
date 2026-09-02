@@ -113,17 +113,9 @@ auto ValidateAndApplyRecord(CommitGraph& graph, const MiniGitJournalRecord& reco
       SetError(error, e.what());
       return false;
     }
-    const bool is_edit  = commit.GetKind() == EditCommitKind::kEdit;
-    const bool is_merge = commit.GetKind() == EditCommitKind::kMerge;
-    if ((!is_edit && !is_merge) || commit.GetRootId() != graph.GetRootId() ||
-        commit.GetFirstParentHash() != source_head ||
+    if (commit.GetRootId() != graph.GetRootId() || commit.GetFirstParentHash() != source_head ||
         record.target_head != commit.GetCommitHash()) {
       SetError(error, "mini-Git commit record does not continue the checked-out first-parent path");
-      return false;
-    }
-    if (is_merge && commit.GetSecondParentHash().has_value() &&
-        graph.FindCommit(*commit.GetSecondParentHash()) == nullptr) {
-      SetError(error, "mini-Git merge record second parent is missing from the commit graph");
       return false;
     }
     if (record.target_chain_hash !=
@@ -476,57 +468,6 @@ auto MiniGitWorkingHistory::PrepareAppendEdit(PipelineEditBatch payload) const
   return prepared;
 }
 
-auto MiniGitWorkingHistory::PrepareAppendEdit(OrdinaryEditPayload payload) const
-    -> MiniGitPreparedEdit {
-  MiniGitPreparedEdit prepared;
-  const auto          source_head  = working_head();
-  const auto          source_chain = transaction_chain_hash();
-  try {
-    prepared.commit = EditCommit::MakeEdit(graph_->GetRootId(), source_head, std::move(payload));
-  } catch (const std::exception& e) {
-    prepared.error = e.what();
-    return prepared;
-  }
-
-  prepared.target_chain = FoldTransactionChainHash(source_chain, prepared.commit.GetCommitHash());
-  prepared.journal_record.kind                       = MiniGitJournalRecordKind::kEditCommit;
-  prepared.journal_record.expected_source_head       = source_head;
-  prepared.journal_record.expected_source_chain_hash = source_chain;
-  prepared.journal_record.target_head                = prepared.commit.GetCommitHash();
-  prepared.journal_record.target_chain_hash          = prepared.target_chain;
-  prepared.journal_record.edit_commit                = prepared.commit;
-  prepared.ready                                     = true;
-  return prepared;
-}
-
-auto MiniGitWorkingHistory::PrepareAppendMerge(commit_hash_t     second_parent,
-                                               MergeEditPayload  payload) const
-    -> MiniGitPreparedEdit {
-  MiniGitPreparedEdit prepared;
-  const auto          source_head  = working_head();
-  const auto          source_chain = transaction_chain_hash();
-  if (graph_->FindCommit(second_parent) == nullptr) {
-    prepared.error = "mini-Git merge second parent is not in the commit graph";
-    return prepared;
-  }
-  try {
-    prepared.commit = EditCommit::MakeMerge(graph_->GetRootId(), source_head, second_parent,
-                                            std::move(payload));
-  } catch (const std::exception& e) {
-    prepared.error = e.what();
-    return prepared;
-  }
-
-  prepared.target_chain = FoldTransactionChainHash(source_chain, prepared.commit.GetCommitHash());
-  prepared.journal_record.kind                       = MiniGitJournalRecordKind::kEditCommit;
-  prepared.journal_record.expected_source_head       = source_head;
-  prepared.journal_record.expected_source_chain_hash = source_chain;
-  prepared.journal_record.target_head                = prepared.commit.GetCommitHash();
-  prepared.journal_record.target_chain_hash          = prepared.target_chain;
-  prepared.journal_record.edit_commit                = prepared.commit;
-  prepared.ready                                     = true;
-  return prepared;
-}
 
 auto MiniGitWorkingHistory::PublishPreparedEdit(const MiniGitPreparedEdit& prepared)
     -> MiniGitEditAppendResult {
@@ -608,15 +549,6 @@ auto MiniGitWorkingHistory::AbandonPublishedEdit(const MiniGitPreparedEdit& prep
 
 auto MiniGitWorkingHistory::AppendEdit(PipelineEditBatch payload) -> MiniGitEditAppendResult {
   return PublishPreparedEdit(PrepareAppendEdit(std::move(payload)));
-}
-
-auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult {
-  return PublishPreparedEdit(PrepareAppendEdit(std::move(payload)));
-}
-
-auto MiniGitWorkingHistory::AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
-    -> MiniGitEditAppendResult {
-  return PublishPreparedEdit(PrepareAppendMerge(second_parent, std::move(payload)));
 }
 
 namespace {
