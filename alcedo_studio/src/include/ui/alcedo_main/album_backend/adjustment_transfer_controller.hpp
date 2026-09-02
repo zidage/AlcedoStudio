@@ -12,6 +12,10 @@
 
 #include "app/adjustment_transfer_service.hpp"
 
+namespace alcedo {
+class PipelineMgmtService;
+}
+
 namespace alcedo::ui {
 
 class ImportExportHandler;

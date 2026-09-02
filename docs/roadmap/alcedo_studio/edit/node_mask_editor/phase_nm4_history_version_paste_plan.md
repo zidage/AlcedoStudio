@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: NM4.1–4.4 complete; NM4.5–4.6 planned
+Status: NM4.1–4.5 complete; NM4.6 planned
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -893,7 +893,7 @@ NM4 does not claim package or real-RAW UI qualification.
 | NM4.2 | complete | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
 | NM4.3 | complete | Immutable root document, unified format cutover, and full-document checkpoint. |
 | NM4.4 | complete | Version branch, checkout, recovery, materialization, and reopen. |
-| NM4.5 | planned | Paste-only transfer, merge-path removal, and Mask asset reachability. |
+| NM4.5 | complete | Paste-only transfer, merge-path removal, and Mask asset reachability. |
 | NM4.6 | planned | Failure, concurrency, service, storage, and project qualification. |
 
 Implement these phases in order.
@@ -1691,14 +1691,85 @@ invalid package / missing asset / ID collision / graph failure / WAL failure / s
 
 **Exit conditions**
 
-- [ ] Transfer packages contain complete portable DAG data.
-- [ ] Paste creates one new Version and one typed batch commit.
-- [ ] Target Develop, RAW data, and geometry remain unchanged.
-- [ ] All imported IDs are remapped before publication.
-- [ ] Paste failure leaves no partial Version or head move.
-- [ ] No product merge creation or conflict UI remains.
-- [ ] Asset reachability includes every durable and recovery owner.
-- [ ] Asset deletion is separate from rendering and reports failures.
+- [x] Transfer packages contain complete portable DAG data.
+- [x] Paste creates one new Version and one typed batch commit.
+- [x] Target Develop, RAW data, and geometry remain unchanged.
+- [x] All imported IDs are remapped before publication.
+- [x] Paste failure leaves no partial Version or head move.
+- [x] No product merge creation or conflict UI remains.
+- [x] Asset reachability includes every durable and recovery owner.
+- [x] Asset deletion is separate from rendering and reports failures.
+
+##### Phase NM4.5 completion record (2026-09-02)
+
+**Status:** complete — document-shaped transfer packages, root-relative typed Paste, merge product-path rejection, and Mask-asset reachability with exact-file maintenance deletion.
+
+**Primary success call chain:**
+
+```text
+Paste request + validated transfer document
+  -> read target root (keep Develop + geometry)
+  -> remap NodeId / AdjustmentInstanceId / MaskId
+  -> Put/reuse Mask assets
+  -> build one Paste PipelineEditBatch
+  -> CreateVersionRefAtRoot + SelectVersion
+  -> persist empty Version refs (when a pipeline service is bound)
+  -> reset live document to root; ApplyPipelineEditBatch Forward under render lock
+  -> remirror current-panel CPU from the live document
+  -> WAL PrepareAppendEdit + PublishPreparedEdit (one commit, parent null)
+  -> remirror panel; checkpoint
+  -> PastedPipelineDocument Quality render
+```
+
+**Primary failure call chain:**
+
+```text
+invalid package / missing asset / ID collision / apply / WAL / save
+  -> restore prior document, head, refs, active Version
+  -> persist Version-ref rollback when the empty Version was already durable
+  -> truncate WAL if a paste commit was published
+  -> no empty Paste Version, no commit, no head move, no render
+  -> report the actual error
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PasteKeepsTargetDevelopRawDataAndGeometry` | `DocumentTransferTest` | PASS |
+| `PasteRemapsEveryNodeAdjustmentAndMaskId` | `DocumentTransferTest` | PASS |
+| `PasteCreatesOneRootRelativeVersionAndOneTypedCommit` | `EditorSessionHistoryPortTest` | PASS |
+| `FailedPasteCreatesNoVersionCommitHeadMoveOrRender` | `EditorSessionHistoryPortTest` | PASS |
+| `TransferSurfaceHasNoPipelineMergeOperation` | `AdjustmentTransferServiceTest`, MiniGit, history-port, QML actions/dialog | PASS |
+| `InactiveVersionAndWalKeepReferencedMaskAssets` | `MaskAssetReachabilityTest` | PASS |
+| `MaintenanceRemovesOnlyUnreferencedExactMaskAssetFiles` | `MaskAssetReachabilityTest` | PASS |
+| `PasteCrashRecoveryReplaysWalOntoLogicalHead` | `EditorSessionHistoryPortTest` | PASS |
+| `LibraryPasteOfLutRestoresLutFieldInAdjustmentSnapshotOnEditorReopen` | `EditorSessionHistoryPortTest` | PASS |
+| `PasteUsesVisibleActionAndDoesNotExposeMerge` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DocumentTransferTest --target MaskAssetReachabilityTest --target AdjustmentTransferServiceTest --target AdjustmentTransferServiceMiniGitTest --target EditorSessionHistoryPortTest --target EditorSessionCommandQueueBaselineTest --target EditorSessionCq5QualificationTest --target EditorAdjustmentTransferActionsQmlTest --target AdjustmentTransferDialogQmlTest --target EditorHistoryTransactionsPanelQmlTest
+build\debug\alcedo_studio\tests\app\DocumentTransferTest_runtime\DocumentTransferTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\MaskAssetReachabilityTest_runtime\MaskAssetReachabilityTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceTest_runtime\AdjustmentTransferServiceTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceMiniGitTest_runtime\AdjustmentTransferServiceMiniGitTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\app\EditorSessionCq5QualificationTest_runtime\EditorSessionCq5QualificationTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\ui\EditorAdjustmentTransferActionsQmlTest_runtime\EditorAdjustmentTransferActionsQmlTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\ui\AdjustmentTransferDialogQmlTest_runtime\AdjustmentTransferDialogQmlTest.exe --gtest_brief=1
+build\debug\alcedo_studio\tests\ui\EditorHistoryTransactionsPanelQmlTest_runtime\EditorHistoryTransactionsPanelQmlTest.exe --gtest_brief=1
+```
+
+Suite totals: `DocumentTransferTest` 6/6; `MaskAssetReachabilityTest` 2/2; `AdjustmentTransferServiceTest` 3/3; `AdjustmentTransferServiceMiniGitTest` 15/15; `EditorSessionHistoryPortTest` 69/69; `EditorSessionCq5QualificationTest` 5/5; `EditorAdjustmentTransferActionsQmlTest` 5/5; `AdjustmentTransferDialogQmlTest` 2/2; `EditorHistoryTransactionsPanelQmlTest` 6/6. `EditorSessionCommandQueueBaselineTest` 15/16 (`RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` still expects queued C after B; not a Paste/reachability path).
+
+**Checklist / exit condition:** all NM4.5 boxes checked from executed tests above.
+
+**LOC note (grill-code-review):** `document_transfer.cpp` 550; `mask_asset_reachability.cpp` 204; `adjustment_transfer_service.cpp` 100; `editor_history_transfer.cpp` 339; `editor_adjustment_pipeline.cpp` 559 (now remirrors bound document after head apply); `adjustment_transfer_controller.cpp` 844. `pipeline_service.cpp` 1174 remains above 1000; Paste stays in `document_transfer` / `editor_history_transfer`, not absorbed there. Transfer identity hook is `SetDocumentTransferIdentitySourceForTesting`.
+
+**Remaining gaps:** NM4.6 qualification of the full Section 7 matrix, concurrent save/checkout/edit, and repository scans. Merge enum values and leftover `BeginLiveMerge`/`CompleteLiveMerge` signatures still exist so CQ5 can reject them; they return `"Pipeline merge is not supported"`. Unregistered `EditorMerge*.qml` files remain on disk. Panel snapshots still remirror current-panel CPU stages after document replay. No packaged-product or real-RAW UI evidence (NM8). `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` remains failing (element 30 vs 50 after B's save); that is command-queue selection promotion, not Paste.
 
 ### 6.6 NM4.6 — Qualification
 

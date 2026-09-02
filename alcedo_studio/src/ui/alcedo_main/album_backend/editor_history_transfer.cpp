@@ -10,15 +10,18 @@
 #include <unordered_set>
 #include <utility>
 
-#include "app/adjustment_transfer_service.hpp"
+#include "app/document_transfer.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
-#include "app/editor_mini_git_materializer.hpp"
+#include "app/editor_pipeline_command_service.hpp"
+#include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/operators/op_base.hpp"
+#include "edit/history/version_ref.hpp"
+#include "edit/mask/mask_store.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -45,9 +48,11 @@ struct LivePastePriorState {
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending;
   bool recovered = false;
   std::optional<alcedo::PipelineDocument> document;
+  std::optional<alcedo::EditorRenderReason> published_reason;
 };
 
-auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
+auto CaptureLivePastePrior(HistoryWorkingState& state, EditorHistoryState& history_state)
+    -> LivePastePriorState {
   LivePastePriorState prior;
   prior.graph = *state.pipeline_guard->commit_graph_;
   prior.selection = state.history->WorkingSelection();
@@ -56,13 +61,15 @@ auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
   prior.snapshot = state.committed_snapshot;
   prior.pending = state.pending_before;
   prior.recovered = state.recovered_head;
+  prior.published_reason = history_state.LastPublishedRenderReason();
   if (state.pipeline_guard->document_) {
     prior.document = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
   }
   return prior;
 }
 
-void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState& prior) {
+void RestoreLivePastePrior(HistoryWorkingState& state, EditorHistoryState& history_state,
+                           const LivePastePriorState& prior) {
   *state.pipeline_guard->commit_graph_ = prior.graph;
   state.history->PublishWorkingSelection(prior.selection);
   state.pipeline_guard->dirty_ = prior.dirty;
@@ -70,6 +77,7 @@ void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState
   state.committed_snapshot = prior.snapshot;
   state.pending_before = prior.pending;
   state.recovered_head = prior.recovered;
+  history_state.RecordPublishedRenderReason(prior.published_reason);
   if (prior.document.has_value() && state.pipeline_guard->document_) {
     if (state.pipeline_guard->pipeline_) {
       std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
@@ -79,62 +87,6 @@ void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState
       *state.pipeline_guard->document_ = alcedo::ClonePipelineDocument(*prior.document);
     }
   }
-}
-
-/// Append paste package entries to the live CommitGraph + WAL only. Do not
-/// mutate committed_snapshot here; the caller regenerates it from history after
-/// applying the package to the live pipeline.
-auto AppendPackageEntriesToLiveHistory(HistoryWorkingState& state,
-                                       const alcedo::AdjustmentTransferPackage& package,
-                                       std::string* error) -> bool {
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == alcedo::PipelineStageName::Stage_Count ||
-        entry.operator_type_ == alcedo::OperatorType::UNKNOWN ||
-        entry.operator_type_ == alcedo::OperatorType::RESIZE) {
-      continue;
-    }
-    alcedo::OrdinaryEditPayload payload;
-    payload.operator_type = entry.operator_type_;
-    payload.stage_name = entry.stage_;
-    payload.field_name = "$operator_params";
-    payload.before_value = nlohmann::json(nullptr);
-    payload.before_enabled = false;
-    payload.after_value = entry.params_;
-    payload.after_enabled = entry.enabled_;
-    const auto prepared = state.history->PrepareAppendEdit(std::move(payload));
-    if (!prepared.ready) {
-      return SetError(error, prepared.error.empty() ? "Paste edit prepare failed" : prepared.error);
-    }
-    const auto appended = state.history->PublishPreparedEdit(prepared);
-    if (!appended.committed) {
-      return SetError(error, appended.error.empty() ? "Paste WAL append failed" : appended.error);
-    }
-  }
-  return true;
-}
-
-auto ApplyPackageEntriesToLiveDocument(alcedo::PipelineDocument& document,
-                                       const alcedo::AdjustmentTransferPackage& package,
-                                       std::string* error) -> bool {
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == alcedo::PipelineStageName::Stage_Count ||
-        entry.operator_type_ == alcedo::OperatorType::UNKNOWN ||
-        entry.operator_type_ == alcedo::OperatorType::RESIZE) {
-      continue;
-    }
-    alcedo::OrdinaryEditPayload payload;
-    payload.operator_type  = entry.operator_type_;
-    payload.stage_name     = entry.stage_;
-    payload.field_name     = "$operator_params";
-    payload.before_value   = nlohmann::json(nullptr);
-    payload.before_enabled = false;
-    payload.after_value    = entry.params_;
-    payload.after_enabled  = entry.enabled_;
-    if (!alcedo::ApplyLeftoverOrdinaryPayloadToDocument(document, payload, error)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 }  // namespace
@@ -161,61 +113,135 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
 
   auto& graph = *state->pipeline_guard->commit_graph_;
   const auto prior_version_id = graph.GetActiveVersionId();
-  const auto prior = CaptureLivePastePrior(*state);
-  const auto expected_materialized = prior.graph.GetImageEditState();
+  const auto prior = CaptureLivePastePrior(*state, state_);
 
+  if (!state->pipeline_guard->root_document_) {
+    return SetError(error, "Editor live paste requires an immutable root document");
+  }
+
+  std::optional<alcedo::MaskStore> owned_mask_store;
+  alcedo::DocumentTransferPasteOptions options;
+  if (!package.mask_assets_.empty()) {
+    if (state->mask_store != nullptr) {
+      options.source_mask_store = state->mask_store;
+      options.target_mask_store = state->mask_store;
+    } else {
+      owned_mask_store.emplace(alcedo::DefaultProductMaskStoreRoot());
+      options.source_mask_store = &*owned_mask_store;
+      options.target_mask_store = &*owned_mask_store;
+    }
+  }
+
+  alcedo::PreparedDocumentPaste prepared;
+  try {
+    prepared = alcedo::PrepareDocumentPaste(package, *state->pipeline_guard->root_document_,
+                                            options);
+  } catch (const std::exception& ex) {
+    return SetError(error, ex.what());
+  }
+
+  const auto expected_before_version = graph.GetImageEditState();
   alcedo::version_ref_id_t new_version_id{};
   try {
     new_version_id =
         graph.CreateVersionRefAtRoot(UniqueVersionName(graph, std::move(version_display_name)));
     graph.SetActiveVersionId(new_version_id);
   } catch (const std::exception& ex) {
+    RestoreLivePastePrior(*state, state_, prior);
     return SetError(error, ex.what());
   }
   if (!state->history->SelectVersion(new_version_id, error)) {
-    RestoreLivePastePrior(*state, prior);
+    RestoreLivePastePrior(*state, state_, prior);
     return false;
   }
 
-  // Persist the empty paste Version so crash recovery can Replay WAL onto it
-  // before the next ordinary DuckDB journal materialization.
+  bool version_persisted = false;
+  alcedo::ImageEditState persisted_version_state{};
   if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
-    if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
-                                                     &persistence_error)) {
-      RestoreLivePastePrior(*state, prior);
+    if (!pipeline_service->PersistEditorHistoryState(
+            state->pipeline_guard, expected_before_version, &persistence_error)) {
+      RestoreLivePastePrior(*state, state_, prior);
       return SetError(error, persistence_error.empty() ? "Paste Version persistence failed"
-                                                      : persistence_error);
+                                                       : persistence_error);
     }
+    version_persisted       = true;
+    persisted_version_state = graph.GetImageEditState();
   }
+
+  bool wal_published = false;
+  auto rollback_after_version = [&]() -> bool {
+    RestoreLivePastePrior(*state, state_, prior);
+    if (version_persisted) {
+      if (auto pipeline_service = state_.PipelineMapper()) {
+        std::string persistence_error;
+        if (!pipeline_service->PersistEditorHistoryState(
+                state->pipeline_guard, persisted_version_state, &persistence_error)) {
+          return SetError(error, persistence_error.empty()
+                                     ? "Paste Version persistence rollback failed"
+                                     : persistence_error);
+        }
+      }
+    }
+    if (wal_published && state->journal != nullptr) {
+      std::string truncate_error;
+      if (!state->journal->TruncateMaterialized(&truncate_error)) {
+        return SetError(error, truncate_error.empty() ? "Paste WAL rollback failed"
+                                                      : truncate_error);
+      }
+    }
+    return true;
+  };
 
   state->committed_snapshot = state->root_snapshot;
   state->pending_before.clear();
-  if (!AppendPackageEntriesToLiveHistory(*state, package, error)) {
-    RestoreLivePastePrior(*state, prior);
-    return false;
-  }
 
-  bool document_apply_failed = false;
   {
     std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    (void)alcedo::AdjustmentTransferService::Apply(*state->pipeline_guard->pipeline_, package);
-    if (!ApplyPackageEntriesToLiveDocument(*state->pipeline_guard->document_, package, error)) {
-      document_apply_failed = true;
+    *state->pipeline_guard->document_ =
+        alcedo::ClonePipelineDocument(*state->pipeline_guard->root_document_);
+    alcedo::PipelineHistoryApplyContext context;
+    context.mask_store = options.target_mask_store;
+    if (!alcedo::ApplyPipelineEditBatch(*state->pipeline_guard->document_, prepared.batch,
+                                        alcedo::PipelineEditApplyDirection::Forward, error,
+                                        context)) {
+      (void)rollback_after_version();
+      return false;
+    }
+    state->pipeline_guard->pipeline_->SetPipelineDocument(state->pipeline_guard->document_, false);
+    if (!alcedo::RemirrorCurrentPanelFromDocument(*state->pipeline_guard->pipeline_,
+                                                  *state->pipeline_guard->document_, error)) {
+      (void)rollback_after_version();
+      return false;
     }
   }
-  if (document_apply_failed) {
-    RestoreLivePastePrior(*state, prior);
-    return false;
-  }
 
-  alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!SnapshotAtHead(state->root_snapshot, graph, state->history->working_head(), &next_snapshot,
-                      error)) {
-    RestoreLivePastePrior(*state, prior);
-    return false;
+  const auto prepared_edit = state->history->PrepareAppendEdit(prepared.batch);
+  if (!prepared_edit.ready) {
+    if (!rollback_after_version()) {
+      return false;
+    }
+    return SetError(error, prepared_edit.error.empty() ? "Paste edit prepare failed"
+                                                       : prepared_edit.error);
   }
-  state->committed_snapshot = std::move(next_snapshot);
+  const auto appended = state->history->PublishPreparedEdit(prepared_edit);
+  if (!appended.committed) {
+    if (!rollback_after_version()) {
+      return false;
+    }
+    return SetError(error, appended.error.empty() ? "Paste WAL append failed" : appended.error);
+  }
+  wal_published = true;
+
+  {
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    if (!MakeAdjustmentSnapshotFromLivePipeline(*state->pipeline_guard->pipeline_,
+                                                &state->committed_snapshot, error)) {
+      (void)rollback_after_version();
+      return false;
+    }
+  }
+  state_.RecordPublishedRenderReason(alcedo::RenderReasonForBatch(prepared.batch));
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->serialized_state_needs_writeback_ = true;
   state->recovered_head = false;
@@ -321,195 +347,31 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
   return true;
 }
 
-namespace {
-
-auto InferLiveMergeChoice(const alcedo::AdjustmentMergeResolution& resolution,
-                          const alcedo::AdjustmentMergeConflict& conflict)
-    -> alcedo::OperatorMergeChoice {
-  if (resolution.choice.has_value()) {
-    return *resolution.choice;
-  }
-  if (resolution.resolved_value == conflict.incoming_value) {
-    return alcedo::OperatorMergeChoice::kTakeIncoming;
-  }
-  return alcedo::OperatorMergeChoice::kKeepCurrent;
-}
-
-}  // namespace
-
-auto EditorHistoryTransfer::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                           const alcedo::AdjustmentTransferPackage& package,
+auto EditorHistoryTransfer::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& /*guard*/,
+                                           const alcedo::AdjustmentTransferPackage& /*package*/,
                                            alcedo::AdjustmentMergePreview* preview,
                                            std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
   if (preview == nullptr) return SetError(error, "Merge preview storage is required");
   *preview = {};
-  if (package.Empty()) return SetError(error, "Adjustment transfer package is empty");
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
-    return SetError(error, "Editor live merge requires a complete history state");
-  }
-  if (!state->pipeline_guard->pipeline_) {
-    return SetError(error, "Editor live merge requires a live pipeline executor");
-  }
-
-  preview->first_parent_head = state->history->working_head();
-  preview->source_package_fingerprint =
-      alcedo::AdjustmentTransferService::PackageFingerprint(package);
-
-  {
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    if (!alcedo::AdjustmentTransferService::DetectMergeConflicts(
-            *state->pipeline_guard->pipeline_, package, &preview->conflicts, error)) {
-      return false;
-    }
-  }
-  preview->has_conflicts = !preview->conflicts.empty();
-  // No shadow Version / incoming head until CompleteLiveMerge inserts ancestry commits.
-  preview->incoming_version_id = {};
-  preview->incoming_head       = {};
-  return true;
+  preview->error = "Pipeline merge is not supported";
+  return SetError(error, "Pipeline merge is not supported");
 }
 
 auto EditorHistoryTransfer::CompleteLiveMerge(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentTransferPackage& package,
-    const alcedo::AdjustmentMergePreview& preview,
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
+    const alcedo::EditorHistoryGuardHandle& /*guard*/,
+    const alcedo::AdjustmentTransferPackage& /*package*/,
+    const alcedo::AdjustmentMergePreview& /*preview*/,
+    const std::vector<alcedo::AdjustmentMergeResolution>& /*resolutions*/,
     alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
   if (result == nullptr) return SetError(error, "Merge result storage is required");
   *result = {};
-  if (!preview.error.empty()) {
-    return SetError(error, "Cannot complete a merge that failed to initiate: " + preview.error);
-  }
-  if (package.Empty()) return SetError(error, "Adjustment transfer package is empty");
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history ||
-      !state->journal) {
-    return SetError(error, "Editor live merge requires a complete history state");
-  }
-  if (!state->pipeline_guard->pipeline_) {
-    return SetError(error, "Editor live merge requires a live pipeline executor");
-  }
-  if (preview.source_package_fingerprint !=
-      alcedo::AdjustmentTransferService::PackageFingerprint(package)) {
-    return SetError(error, "Merge source package no longer matches the preview");
-  }
-  if (state->history->working_head() != preview.first_parent_head) {
-    return SetError(error, "Merge preview is stale because the active history changed");
-  }
-  if (preview.has_conflicts && resolutions.empty()) {
-    return SetError(error, "Merge has conflicts but no resolutions were provided");
-  }
-
-  auto& graph = *state->pipeline_guard->commit_graph_;
-  const auto prior = CaptureLivePastePrior(*state);
-  const auto expected_materialized = prior.graph.GetImageEditState();
-
-  // Insert incoming ancestry commits (no user-visible Version ref). Shared
-  // core: AdjustmentTransferService builds and inserts the root-relative chain.
-  alcedo::commit_hash_t incoming_head_value;
-  try {
-    auto incoming_head =
-        alcedo::AdjustmentTransferService::InsertIncomingAncestryCommits(graph, package);
-    if (!incoming_head.has_value()) {
-      return SetError(error, "No valid adjustments in merge package");
-    }
-    incoming_head_value = *incoming_head;
-  } catch (const std::exception& ex) {
-    RestoreLivePastePrior(*state, prior);
-    return SetError(error, ex.what());
-  }
-  const auto incoming_head = incoming_head_value;
-
-  // Persist ancestry commits so WAL recovery of the merge commit can resolve the
-  // second parent after a crash (materialized head remains pre-merge).
-  if (auto pipeline_service = state_.PipelineMapper()) {
-    std::string persistence_error;
-    if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
-                                                     &persistence_error)) {
-      RestoreLivePastePrior(*state, prior);
-      return SetError(error, persistence_error.empty() ? "Merge ancestry persistence failed"
-                                                      : persistence_error);
-    }
-  }
-
-  // Live parameter-table apply: one SetOperator/enable per resolved field. These intermediate
-  // mutations do not advance history or fold transaction_chain_hash. Below, PrepareAppendMerge +
-  // PublishPreparedEdit record a single merge commit and fold the chain hash once.
-  alcedo::MergeEditPayload merge_payload;
-  std::unordered_set<std::string> resolved_keys;
-  {
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    auto& pipeline = *state->pipeline_guard->pipeline_;
-    for (const auto& resolution : resolutions) {
-      if (!resolved_keys.insert(resolution.field_key).second) continue;
-      const alcedo::AdjustmentMergeConflict* conflict = nullptr;
-      for (const auto& c : preview.conflicts) {
-        if (c.field_key == resolution.field_key) {
-          conflict = &c;
-          break;
-        }
-      }
-      if (conflict == nullptr) continue;
-
-      const auto choice = InferLiveMergeChoice(resolution, *conflict);
-      auto delta = alcedo::AdjustmentTransferService::BuildMergeFieldDelta(pipeline, *conflict,
-                                                                            choice);
-      merge_payload.fields.push_back(delta);
-
-      // Live parameter-table apply (session-specific): one SetOperator/enable per
-      // resolved field. These intermediate mutations do not advance history;
-      // PrepareAppendMerge + PublishPreparedEdit below record one merge commit.
-      auto&      stage   = pipeline.GetStage(conflict->stage);
-      auto&      globals = pipeline.GetGlobalParams();
-      if (!delta.resolved_value.is_null() && delta.resolved_value.is_object()) {
-        stage.SetOperator(conflict->operator_type, delta.resolved_value, globals);
-      }
-      stage.EnableOperator(conflict->operator_type, delta.resolved_enabled, globals);
-    }
-  }
-
-  if (preview.has_conflicts && merge_payload.fields.size() != preview.conflicts.size()) {
-    RestoreLivePastePrior(*state, prior);
-    return SetError(error, "Not all merge conflicts were resolved");
-  }
-
-  const auto prepared = state->history->PrepareAppendMerge(incoming_head, std::move(merge_payload));
-  if (!prepared.ready) {
-    RestoreLivePastePrior(*state, prior);
-    return SetError(error, prepared.error.empty() ? "Merge prepare failed" : prepared.error);
-  }
-  const auto appended = state->history->PublishPreparedEdit(prepared);
-  if (!appended.committed) {
-    RestoreLivePastePrior(*state, prior);
-    return SetError(error, appended.error.empty() ? "Merge WAL append failed" : appended.error);
-  }
-
-  alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!SnapshotAtHead(state->root_snapshot, graph, state->history->working_head(), &next_snapshot,
-                      error)) {
-    RestoreLivePastePrior(*state, prior);
-    return false;
-  }
-  state->committed_snapshot = std::move(next_snapshot);
-  state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->serialized_state_needs_writeback_ = true;
-  state->pending_before.clear();
-  state->recovered_head = false;
-
-  result->merged            = true;
-  result->active_version_id = graph.GetActiveVersionId();
-  result->merge_commit_hash = appended.commit->GetCommitHash();
-  return true;
+  result->error = "Pipeline merge is not supported";
+  return SetError(error, "Pipeline merge is not supported");
 }
 
 auto EditorHistoryTransfer::CancelMerge(const alcedo::EditorHistoryGuardHandle& /*guard*/,
                                         const alcedo::AdjustmentMergePreview& /*preview*/,
                                         std::string* /*error*/) -> bool {
-  // BeginLiveMerge does not stage a shadow graph or temporary Version; cancel is
-  // owned by the session (clear package / preview ids). History port is a no-op.
   return true;
 }
 

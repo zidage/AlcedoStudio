@@ -10,64 +10,33 @@
 
 #include "app/adjustment_transfer_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/basic/color_temp_op.hpp"
 #include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "support/document_transfer_test_support.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
 namespace {
 
-/// Build a simple transfer package with one exposure adjustment.
-auto MakeExposurePackage(float exposure_value, bool enabled = true) -> AdjustmentTransferPackage {
-  AdjustmentTransferPackage package;
-  package.operators_.push_back({
-      .stage_         = PipelineStageName::Basic_Adjustment,
-      .operator_type_ = OperatorType::EXPOSURE,
-      .enabled_       = enabled,
-      .merge_params_  = false,
-      .params_        = {{"exposure", exposure_value}},
-  });
-  return package;
+/// Capture a transferable Color Grade document with the requested exposure.
+auto MakeExposurePackage(float exposure_value) -> AdjustmentTransferPackage {
+  return test::MakeExposureTransferPackage(static_cast<double>(exposure_value));
 }
 
-/// Build a transfer package with one contrast adjustment.
+/// Capture a transferable Color Grade document with the requested contrast.
 auto MakeContrastPackage(float contrast_value) -> AdjustmentTransferPackage {
-  AdjustmentTransferPackage package;
-  package.operators_.push_back({
-      .stage_         = PipelineStageName::Basic_Adjustment,
-      .operator_type_ = OperatorType::CONTRAST,
-      .enabled_       = true,
-      .merge_params_  = false,
-      .params_        = {{"contrast", contrast_value}},
-  });
-  return package;
-}
-
-/// Build a transfer package with exposure and contrast.
-auto MakeExposureContrastPackage(float exposure_value, float contrast_value)
-    -> AdjustmentTransferPackage {
-  AdjustmentTransferPackage package;
-  package.operators_.push_back({
-      .stage_         = PipelineStageName::Basic_Adjustment,
-      .operator_type_ = OperatorType::EXPOSURE,
-      .enabled_       = true,
-      .merge_params_  = false,
-      .params_        = {{"exposure", exposure_value}},
-  });
-  package.operators_.push_back({
-      .stage_         = PipelineStageName::Basic_Adjustment,
-      .operator_type_ = OperatorType::CONTRAST,
-      .enabled_       = true,
-      .merge_params_  = false,
-      .params_        = {{"contrast", contrast_value}},
-  });
-  return package;
+  auto document = CreateDefaultPipelineDocument();
+  test::PatchDocumentField(&document, test::ColorGradeFieldTarget("contrast"),
+                           nlohmann::json{{"contrast", contrast_value}});
+  return CaptureDocumentTransfer(document);
 }
 
 // ============================================================================
@@ -115,7 +84,7 @@ TEST_F(AdjustmentTransferPasteMergeTest,
   // Paste a contrast adjustment as a new Version.
   auto contrast_pkg = MakeContrastPackage(0.5f);
   auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, contrast_pkg, "Pasted Contrast");
+      *graph, CreateDefaultPipelineDocument(), contrast_pkg, "Pasted Contrast");
   ASSERT_TRUE(paste_result.pasted) << paste_result.error;
 
   // The new Version is now active.
@@ -150,174 +119,56 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteWithEmptyPackageReturnsError) {
 
   AdjustmentTransferPackage empty_pkg;
   auto                      result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, empty_pkg, "Empty Paste");
+      *graph, CreateDefaultPipelineDocument(), empty_pkg, "Empty Paste");
   EXPECT_FALSE(result.pasted);
   EXPECT_FALSE(result.error.empty());
 }
 
-// ============================================================================
-// Merge commit graph shape (no service-level InitiateMerge / temp Version)
-// ============================================================================
-
-/// Insert incoming ancestry commits without a temporary Version ref, then create a
-/// two-parent merge on the active Version. Editor merge production path is
-/// BeginLiveMerge/CompleteLiveMerge; this covers the CommitGraph payload shape.
-TEST_F(AdjustmentTransferPasteMergeTest, TwoParentMergeCommitUsesIncomingAncestryWithoutTempVersion) {
+TEST_F(AdjustmentTransferPasteMergeTest, TransferSurfaceHasNoPipelineMergeOperation) {
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
-
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  const auto current_head = graph->GetActiveVersionRef().head_commit_hash;
-  ASSERT_TRUE(current_head.has_value());
-  const auto version_id_before = graph->GetActiveVersionId();
-  const auto version_count_before = graph->GetAllVersionRefs().size();
-
-  auto pkg              = MakeExposurePackage(2.0f);
-  auto incoming_commits = AdjustmentTransferService::BuildRootRelativeCommits(pkg, graph->GetRootId());
-  ASSERT_FALSE(incoming_commits.empty());
-  for (const auto& commit : incoming_commits) {
-    (void)graph->InsertCommit(commit);
+  const auto package = MakeExposurePackage(2.0f);
+  const auto pasted  = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      *graph, CreateDefaultPipelineDocument(), package, "Pasted");
+  ASSERT_TRUE(pasted.pasted) << pasted.error;
+  const auto& commit = graph->GetCommit(pasted.new_head);
+  EXPECT_EQ(commit.GetKind(), EditCommitKind::kEdit);
+  EXPECT_EQ(commit.GetSecondParentHash(), std::nullopt);
+  ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
+  EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
+            PipelineEditOperationKind::Paste);
+  for (const auto& [id, ref] : graph->GetAllVersionRefs()) {
+    (void)id;
+    if (!ref.head_commit_hash.has_value()) {
+      continue;
+    }
+    EXPECT_NE(graph->GetCommit(*ref.head_commit_hash).GetKind(), EditCommitKind::kMerge);
   }
-  const auto incoming_head = incoming_commits.back().GetCommitHash();
-
-  MergeEditPayload merge_payload;
-  MergeFieldDelta  delta;
-  delta.operator_type    = OperatorType::EXPOSURE;
-  delta.stage_name       = PipelineStageName::Basic_Adjustment;
-  delta.field_name       = "$operator_params";
-  delta.before_value     = {{"exposure", 1.0f}};
-  delta.before_enabled   = true;
-  delta.resolved_value   = {{"exposure", 2.0f}};
-  delta.resolved_enabled = true;
-  merge_payload.fields.push_back(std::move(delta));
-
-  const auto merge_commit =
-      EditCommit::MakeMerge(graph->GetRootId(), current_head, incoming_head, std::move(merge_payload));
-  (void)graph->InsertCommit(merge_commit);
-  graph->MoveWorkingHead(version_id_before, merge_commit.GetCommitHash());
-
-  EXPECT_EQ(graph->GetActiveVersionId(), version_id_before);
-  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_commit.GetCommitHash());
-  EXPECT_EQ(graph->GetAllVersionRefs().size(), version_count_before);
-  EXPECT_EQ(merge_commit.GetKind(), EditCommitKind::kMerge);
-  EXPECT_EQ(merge_commit.GetFirstParentHash(), current_head);
-  EXPECT_EQ(merge_commit.GetSecondParentHash(), incoming_head);
-
-  auto chain = graph->FirstParentChain(merge_commit.GetCommitHash());
-  EXPECT_GE(chain.size(), 2u);
-  EXPECT_NE(graph->FindCommit(*merge_commit.GetFirstParentHash()), nullptr);
-  EXPECT_NE(graph->FindCommit(*merge_commit.GetSecondParentHash()), nullptr);
 }
-
-// ============================================================================
-// Batch merge (MergeIntoActiveVersion): all-incoming resolution on the
-// caller-owned graph + live pipeline, with no session WAL.
-// ============================================================================
-
-/// Batch merge advances the active Version head to a two-parent merge commit
-/// whose field delta resolves to the incoming value, without creating a new
-/// Version ref. Mirrors the editor merge shape but operates on the caller-owned
-/// graph + live pipeline.
-TEST_F(AdjustmentTransferPasteMergeTest,
-       MergeIntoActiveVersionAdvancesHeadWithAllIncomingResolution) {
-  const auto element_id  = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph       = project_.graph(element_id).get();
-  ASSERT_NE(graph, nullptr);
-
-  // Current head: one exposure edit at +1.0.
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  const auto current_head   = graph->GetActiveVersionRef().head_commit_hash;
-  const auto active_version = graph->GetActiveVersionId();
-  ASSERT_TRUE(current_head.has_value());
-  EXPECT_EQ(graph->CommitCount(), 1u);
-
-  // Live pipeline reflecting the current exposure so DetectMergeConflicts sees
-  // a current value and the operator can resolve via MergeParams.
-  CPUPipelineExecutor live_pipeline;
-  ASSERT_TRUE(AdjustmentTransferService::Apply(live_pipeline, MakeExposurePackage(1.0f)));
-
-  auto merge_result = AdjustmentTransferService::MergeIntoActiveVersion(
-      *graph, live_pipeline, MakeExposurePackage(2.0f));
-  ASSERT_TRUE(merge_result.pasted) << merge_result.error;
-
-  // Active Version is unchanged; its head advanced to the merge commit.
-  EXPECT_EQ(graph->GetActiveVersionId(), active_version);
-  EXPECT_EQ(merge_result.new_version_id, active_version);
-  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_result.new_head);
-  // current + incoming ancestry + merge commit.
-  EXPECT_EQ(graph->CommitCount(), 3u);
-
-  const auto& merge_commit = graph->GetCommit(merge_result.new_head);
-  EXPECT_EQ(merge_commit.GetKind(), EditCommitKind::kMerge);
-  EXPECT_EQ(merge_commit.GetFirstParentHash(), current_head);
-
-  // Second parent is the incoming root-relative ancestry head: a root-parented
-  // commit (first parent nullopt) carrying the incoming exposure. Derived from
-  // the graph because BuildRootRelativeCommits timestamps make recompute differ.
-  const auto second_parent_opt = merge_commit.GetSecondParentHash();
-  ASSERT_TRUE(second_parent_opt.has_value());
-  const auto& incoming_commit = graph->GetCommit(*second_parent_opt);
-  EXPECT_EQ(incoming_commit.GetKind(), EditCommitKind::kEdit);
-  EXPECT_EQ(incoming_commit.GetFirstParentHash(), std::nullopt);
-  const auto incoming_payload = OrdinaryEditPayload::FromJSON(incoming_commit.GetPayloadJSON());
-  EXPECT_EQ(incoming_payload.operator_type, OperatorType::EXPOSURE);
-  EXPECT_EQ(incoming_payload.after_value["exposure"], 2.0f);
-
-  // The merge payload resolves the exposure field to the incoming value (+2.0)
-  // and records the target's current state (+1.0) for undo.
-  const auto payload = MergeEditPayload::FromJSON(merge_commit.GetPayloadJSON());
-  ASSERT_EQ(payload.fields.size(), 1u);
-  EXPECT_EQ(payload.fields[0].operator_type, OperatorType::EXPOSURE);
-  ASSERT_TRUE(payload.fields[0].resolved_value.contains("exposure"));
-  EXPECT_EQ(payload.fields[0].resolved_value["exposure"], 2.0f);
-  EXPECT_EQ(payload.fields[0].resolved_enabled, true);
-  ASSERT_TRUE(payload.fields[0].before_value.contains("exposure"));
-  EXPECT_EQ(payload.fields[0].before_value["exposure"], 1.0f);
-  EXPECT_EQ(payload.fields[0].before_enabled, true);
-
-  // First-parent chain reaches the merge commit and the prior current commit.
-  const auto chain = graph->FirstParentChain(merge_result.new_head);
-  EXPECT_GE(chain.size(), 2u);
-}
-
-/// MergeIntoActiveVersion rejects an empty package before touching the graph.
-TEST_F(AdjustmentTransferPasteMergeTest, MergeIntoActiveVersionRejectsEmptyPackage) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-
-  CPUPipelineExecutor live_pipeline;
-  auto result = AdjustmentTransferService::MergeIntoActiveVersion(*graph, live_pipeline,
-                                                                  AdjustmentTransferPackage{});
-  EXPECT_FALSE(result.pasted);
-  EXPECT_FALSE(result.error.empty());
-  // Graph untouched.
-  EXPECT_EQ(graph->GetActiveVersionId(), project_.graph(element_id)->GetActiveVersionId());
-}
-
 
 // ============================================================================
 // Robustness / edge case tests
 // ============================================================================
 
-/// Multi-operator paste creates a commit chain with correct parent linkage.
-TEST_F(AdjustmentTransferPasteMergeTest, MultiOperatorPasteCreatesCorrectlyLinkedCommitChain) {
+/// One Paste action publishes one typed batch commit whose first parent is root.
+TEST_F(AdjustmentTransferPasteMergeTest, CompleteGradeChainPasteCreatesOneTypedCommit) {
   const auto element_id   = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph        = project_.graph(element_id).get();
 
-  auto       pkg          = MakeExposureContrastPackage(1.5f, 0.3f);
+  auto       pkg          = MakeContrastPackage(0.3f);
   auto       paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, pkg, "Multi Paste");
+      *graph, CreateDefaultPipelineDocument(), pkg, "Multi Paste");
   ASSERT_TRUE(paste_result.pasted) << paste_result.error;
 
-  // The commit chain should have two commits linked by first parent.
   auto chain = graph->FirstParentChain(paste_result.new_head);
-  EXPECT_EQ(chain.size(), 2u);
-
-  // First commit's parent is root; second commit's parent is the first commit.
-  const auto& first  = graph->GetCommit(chain[0]);
-  const auto& second = graph->GetCommit(chain[1]);
-  EXPECT_EQ(first.GetFirstParentHash(), std::nullopt);
-  EXPECT_EQ(second.GetFirstParentHash(), first.GetCommitHash());
+  EXPECT_EQ(chain.size(), 1u);
+  const auto& commit = graph->GetCommit(chain[0]);
+  EXPECT_EQ(commit.GetFirstParentHash(), std::nullopt);
+  EXPECT_EQ(commit.GetKind(), EditCommitKind::kEdit);
+  ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
+  EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
+            PipelineEditOperationKind::Paste);
 }
 
 /// Paste creates a distinct Version even when the exact same commit objects already
@@ -329,13 +180,13 @@ TEST_F(AdjustmentTransferPasteMergeTest, RepeatedPasteCreatesDistinctVersionRef)
   auto       pkg        = MakeExposurePackage(1.0f);
 
   auto       first      = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, pkg, "First Paste");
+      *graph, CreateDefaultPipelineDocument(), pkg, "First Paste");
   ASSERT_TRUE(first.pasted);
   const auto first_version_id = first.new_version_id;
 
   // Second paste with the same package.
   auto       second           = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, pkg, "Second Paste");
+      *graph, CreateDefaultPipelineDocument(), pkg, "Second Paste");
   ASSERT_TRUE(second.pasted);
 
   // Different Version ID, same commit objects (shared).
@@ -359,7 +210,7 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteDoesNotAffectOtherVersions) {
   graph->SetActiveVersionId(original_version_id);
   auto pkg          = MakeExposurePackage(2.0f);
   auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id, pkg, "Pasted");
+      *graph, CreateDefaultPipelineDocument(), pkg, "Pasted");
   ASSERT_TRUE(paste_result.pasted);
 
   // The second Version should still exist and be at root.

@@ -11,6 +11,8 @@
 #include <variant>
 #include <vector>
 
+#include "app/editor_pipeline_command_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
@@ -409,6 +411,24 @@ auto ApplyOrdinaryPayloadToLive(CPUPipelineExecutor& executor, const OrdinaryEdi
   return ApplyEditorAdjustmentOperatorState(executor, *spec, state, error);
 }
 
+constexpr const char* kCurrentPanelFields[] = {
+    "exposure", "contrast", "white",   "black",     "shadows",    "highlights", "curve",
+    "saturation", "vibrance", "tint", "hls",       "color_wheel", "lut",
+    "clarity",    "sharpen",  "odt",  "film_grain", "halation",   "crop_rotate", "raw_decode",
+    "lens_calib", "color_temp"};
+
+auto CpuParamsFromModelJson(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
+  if (field_key == "exposure" && params.contains("exposure_ev")) {
+    params["exposure"] = params.at("exposure_ev");
+    params.erase("exposure_ev");
+  }
+  if (field_key == "lut" && params.contains("cube_path") && !params.contains("ocio_lmt")) {
+    params["ocio_lmt"] = params.at("cube_path");
+    params.erase("cube_path");
+  }
+  return params;
+}
+
 }  // namespace
 
 auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& executor,
@@ -503,6 +523,33 @@ auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const Commi
   (void)graph;
 }
 
+auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
+                                      const PipelineDocument& document, std::string* error)
+    -> bool {
+  for (const char* field : kCurrentPanelFields) {
+    std::string field_error;
+    const auto  target = CompleteCurrentPanelParameterTarget(document, field, &field_error);
+    if (!target.has_value()) {
+      continue;
+    }
+    nlohmann::json json;
+    if (!ReadEditorParameterJson(document, *target, &json, error)) {
+      return false;
+    }
+    const auto spec = FieldSpec(field);
+    if (!spec.has_value()) {
+      continue;
+    }
+    EditorAdjustmentOperatorState state;
+    state.params  = CpuParamsFromModelJson(field, std::move(json));
+    state.enabled = true;
+    if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const CommitGraph& graph,
                                     const head_commit_hash_t& head, std::string* error) -> bool {
   nlohmann::json prior;
@@ -529,6 +576,12 @@ auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const Co
     }
     for (const auto& hash : graph.FirstParentChain(head)) {
       if (!ApplyHistoryCommitToLivePipeline(executor, graph, graph.GetCommit(hash), true, error)) {
+        restore();
+        return false;
+      }
+    }
+    if (const auto document = executor.GpuDagDocument()) {
+      if (!RemirrorCurrentPanelFromDocument(executor, *document, error)) {
         restore();
         return false;
       }

@@ -111,8 +111,9 @@ auto RenderReasonForBatch(const PipelineEditBatch& batch) -> std::optional<Edito
     case PipelineEditOperationKind::SetParameter:
     case PipelineEditOperationKind::SetNodeEnabled:
     case PipelineEditOperationKind::SetNodeMix:
-    case PipelineEditOperationKind::Paste:
       return EditorRenderReason::SettledAdjustment;
+    case PipelineEditOperationKind::Paste:
+      return EditorRenderReason::PastedPipelineDocument;
   }
   return EditorRenderReason::SettledAdjustment;
 }
@@ -368,6 +369,11 @@ auto MakeSetMaskFieldBatch(const NodeId& node_id, const MaskId& mask_id, std::st
   return PipelineEditBatch::Make(PipelineEditOperationKind::SetMaskField, {std::move(change)},
                                  PresentationKeyForOperation(PipelineEditOperationKind::SetMaskField),
                                  std::move(args));
+}
+
+auto MakePasteBatch(std::vector<PipelineEditChange> changes) -> PipelineEditBatch {
+  return PipelineEditBatch::Make(PipelineEditOperationKind::Paste, std::move(changes),
+                                 PresentationKeyForOperation(PipelineEditOperationKind::Paste));
 }
 
 auto PublishTypedPipelineEdit(MiniGitWorkingHistory& history, const PipelineEditBatch& batch)

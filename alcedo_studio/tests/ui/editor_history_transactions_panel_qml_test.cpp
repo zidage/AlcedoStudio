@@ -108,46 +108,14 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   EXPECT_FALSE(Find(QStringLiteral("editorHistoryRedoButton"))->isEnabled());
 }
 
-TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteAndMergeUseVisibleActionsAndResolveEveryField) {
+TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteUsesVisibleActionAndDoesNotExposeMerge) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
 
   Click(window_, Find(QStringLiteral("editorHistoryPasteButton")));
   EXPECT_EQ(transfer_.paste_count(), 1);
-
-  Click(window_, Find(QStringLiteral("editorHistoryMergeButton")));
-  EXPECT_EQ(transfer_.begin_merge_count(), 1);
-  auto* dialog = window_->findChild<QObject*>(QStringLiteral("editorMergeDialog"));
-  ASSERT_NE(dialog, nullptr);
-  ASSERT_TRUE(dialog->property("visible").toBool());
-
-  auto* complete = Find(QStringLiteral("editorMergeAcceptButton"));
-  ASSERT_NE(complete, nullptr);
-  EXPECT_FALSE(complete->isEnabled());
-
-  auto* merged = Find(QStringLiteral("editorMergeResolvedValue"));
-  ASSERT_NE(merged, nullptr);
-  EXPECT_EQ(merged->property("text").toString(),
-            QStringLiteral("Waiting for resolution..."));
-
-  Click(window_, Find(QStringLiteral("editorMergeUseAllCurrentButton")));
-  EXPECT_TRUE(complete->isEnabled());
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
-
-  Click(window_, Find(QStringLiteral("editorMergeUseAllIncomingButton")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
-
-  Click(window_, Find(QStringLiteral("editorMergeCurrentChoiceButton")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
-
-  Click(window_, Find(QStringLiteral("editorMergeConflictChoice")));
-  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
-  ProcessEvents();
-
-  Click(window_, Find(QStringLiteral("editorMergeAcceptButton")));
-  EXPECT_EQ(transfer_.complete_merge_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution().value(QStringLiteral("resolvedValue")).toDouble(), 1.0);
+  EXPECT_EQ(Find(QStringLiteral("editorHistoryMergeButton")), nullptr);
+  EXPECT_EQ(window_->findChild<QObject*>(QStringLiteral("editorMergeDialog")), nullptr);
 }
 
 TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryCardClickMovesToCommit) {

@@ -5,11 +5,6 @@
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 
 #include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
-#include <QJsonValue>
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -18,6 +13,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "app/adjustment_transfer_service.hpp"
+#include "app/document_transfer.hpp"
+#include "edit/mask/mask_store.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
@@ -118,39 +116,6 @@ auto SessionResultMap(const alcedo::EditorSessionResult& result) -> QVariantMap 
   return {{"success", success},
           {"message", QString::fromStdString(result.message)},
           {"kind", static_cast<int>(result.kind)}};
-}
-
-auto JsonToVariant(const nlohmann::json& value) -> QVariant {
-  const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(value.dump()));
-  if (document.isObject() || document.isArray()) return document.toVariant();
-  if (value.is_boolean()) return value.get<bool>();
-  if (value.is_number()) return value.get<double>();
-  if (value.is_string()) return QString::fromStdString(value.get<std::string>());
-  return {};
-}
-
-auto PreviewMap(const alcedo::AdjustmentMergePreview& preview) -> QVariantMap {
-  QVariantList conflicts;
-  conflicts.reserve(static_cast<qsizetype>(preview.conflicts.size()));
-  for (const auto& conflict : preview.conflicts) {
-    conflicts.push_back(QVariantMap{
-        {"fieldKey", QString::fromStdString(conflict.field_key)},
-        {"currentValue", JsonToVariant(conflict.current_value)},
-        {"incomingValue", JsonToVariant(conflict.incoming_value)},
-        {"currentEnabled", conflict.current_enabled},
-        {"incomingEnabled", conflict.incoming_enabled},
-    });
-  }
-  QVariantMap result{
-      {"success", preview.error.empty()},
-      {"hasConflicts", preview.has_conflicts},
-      {"conflicts", conflicts},
-      {"incomingVersionId", QString::fromStdString(preview.incoming_version_id.ToString())},
-      {"incomingHead", preview.incoming_head != alcedo::commit_hash_t{}
-                           ? QString::fromStdString(preview.incoming_head.ToString())
-                           : QString{}}};
-  if (!preview.error.empty()) result.insert("message", QString::fromStdString(preview.error));
-  return result;
 }
 
 auto CurrentExceptionText(const char* fallback) -> QString {
@@ -600,16 +565,13 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
     QVariantList              summary;
     {
       std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+      if (!guard->document_) {
+        throw std::runtime_error("Pipeline document was not available.");
+      }
+      alcedo::MaskStore mask_store(alcedo::DefaultProductMaskStoreRoot());
+      package = alcedo::CaptureDocumentTransfer(*guard->document_, &mask_store);
       for (const auto* spec : specs) {
         const bool enabled = OperatorEnabledFor(*guard->pipeline_, *spec);
-        const auto params  = TransferParamsFor(*guard->pipeline_, *spec);
-        package.operators_.push_back({
-            .stage_         = spec->stage,
-            .operator_type_ = spec->op_type,
-            .enabled_       = enabled,
-            .merge_params_  = spec->merge_params,
-            .params_        = params,
-        });
         const auto summary_value =
             ValueFor(*spec, OperatorParamsFor(*guard->pipeline_, *spec), enabled);
         summary.push_back(SummaryRow(*spec, summary_value));
@@ -668,15 +630,10 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   }
 
   const bool merge_strategy = strategy != QStringLiteral("paste");
-
-  // Paste creates a root-relative Version per target. Merge advances each
-  // target's active Version head to a two-parent merge commit with every
-  // conflict resolved as "use all incoming" (no per-field conflict UI in a
-  // batch context).
-  if (!merge_strategy) {
-    return PasteViaMiniGit(ids, *pipeline_service);
+  if (merge_strategy) {
+    return ErrorResult(Tr("Pipeline merge is not supported."));
   }
-  return MergeViaMiniGit(ids, *pipeline_service);
+  return PasteViaMiniGit(ids, *pipeline_service);
 }
 
 auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QVariantMap {
@@ -687,66 +644,18 @@ auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QV
       session->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
 }
 
-auto AdjustmentTransferController::BeginMergeIntoEditor(QObject* editorSession) -> QVariantMap {
-  if (!copied_package_.has_value()) return ErrorResult(Tr("No copied adjustments."));
-  auto* session = qobject_cast<EditorSessionController*>(editorSession);
-  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
-  AdjustmentMergePreview preview;
-  const auto             result = session->BeginMergeAdjustmentPackage(*copied_package_, &preview);
-  auto                   map    = SessionResultMap(result);
-  if (map.value("success").toBool()) {
-    const auto preview_map = PreviewMap(preview);
-    for (auto it = preview_map.cbegin(); it != preview_map.cend(); ++it)
-      map.insert(it.key(), it.value());
-  }
-  return map;
+auto AdjustmentTransferController::BeginMergeIntoEditor(QObject* /*editorSession*/) -> QVariantMap {
+  return ErrorResult(Tr("Pipeline merge is not supported."));
 }
 
-auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject*            editorSession,
-                                                           const QVariantList& resolutions)
+auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject* /*editorSession*/,
+                                                           const QVariantList& /*resolutions*/)
     -> QVariantMap {
-  auto* session = qobject_cast<EditorSessionController*>(editorSession);
-  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
-  std::vector<AdjustmentMergeResolution> typed_resolutions;
-  typed_resolutions.reserve(static_cast<std::size_t>(resolutions.size()));
-  for (const auto& value : resolutions) {
-    const auto map       = value.toMap();
-    const auto field_key = map.value("fieldKey").toString().trimmed();
-    if (field_key.isEmpty()) continue;
-    AdjustmentMergeResolution resolution;
-    resolution.field_key        = field_key.toStdString();
-    resolution.resolved_enabled = map.value("resolvedEnabled", true).toBool();
-    const auto choice_text      = map.value("choice").toString().trimmed().toLower();
-    if (choice_text == QStringLiteral("incoming")) {
-      resolution.choice = OperatorMergeChoice::kTakeIncoming;
-    } else if (choice_text == QStringLiteral("current")) {
-      resolution.choice = OperatorMergeChoice::kKeepCurrent;
-    }
-    const auto resolved_value = map.value("resolvedValue");
-    const auto qvalue         = QJsonValue::fromVariant(resolved_value);
-    if (qvalue.isObject() || qvalue.isArray()) {
-      const auto document =
-          qvalue.isObject() ? QJsonDocument(qvalue.toObject()) : QJsonDocument(qvalue.toArray());
-      resolution.resolved_value =
-          nlohmann::json::parse(document.toJson(QJsonDocument::Compact).toStdString());
-    } else if (qvalue.isBool()) {
-      resolution.resolved_value = qvalue.toBool();
-    } else if (qvalue.isDouble()) {
-      resolution.resolved_value = qvalue.toDouble();
-    } else if (qvalue.isString()) {
-      resolution.resolved_value = qvalue.toString().toStdString();
-    } else {
-      resolution.resolved_value = nullptr;
-    }
-    typed_resolutions.push_back(std::move(resolution));
-  }
-  return SessionResultMap(session->CompleteMergeAdjustments(typed_resolutions));
+  return ErrorResult(Tr("Pipeline merge is not supported."));
 }
 
-auto AdjustmentTransferController::CancelMergeIntoEditor(QObject* editorSession) -> QVariantMap {
-  auto* session = qobject_cast<EditorSessionController*>(editorSession);
-  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
-  return SessionResultMap(session->CancelMergeAdjustments());
+auto AdjustmentTransferController::CancelMergeIntoEditor(QObject* /*editorSession*/) -> QVariantMap {
+  return ErrorResult(Tr("Pipeline merge is not supported."));
 }
 
 auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
@@ -787,9 +696,6 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
     // publish it through the same guarded graph materialization used by named
     // Version operations.
     const auto graph_before_paste = *graph;
-    const auto prior_head         = guard->working_head_commit_hash();
-    const auto prior_chain        = guard->transaction_chain_hash();
-    const bool prior_dirty        = guard->dirty_;
     const bool prior_serialized   = guard->serialized_state_needs_writeback_;
     auto       restore_prior      = [&] {
       *graph = graph_before_paste;
@@ -798,9 +704,19 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
       guard->serialized_state_needs_writeback_ = prior_serialized;
     };
     try {
+      if (!guard->root_document_) {
+        restore_prior();
+        result.failures_.push_back({element_id, "Target root document was not available."});
+        pipeline_service.SavePipeline(guard);
+        continue;
+      }
+      alcedo::MaskStore mask_store(alcedo::DefaultProductMaskStoreRoot());
+      alcedo::DocumentTransferPasteOptions options;
+      options.source_mask_store = &mask_store;
+      options.target_mask_store = &mask_store;
       auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-          *graph, pipeline_service, element_id, *copied_package_,
-          Tr("Pasted Adjustments").toStdString());
+          *graph, *guard->root_document_, *copied_package_,
+          Tr("Pasted Adjustments").toStdString(), options);
       if (paste_result.pasted) {
         std::string rebuild_error;
         if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
@@ -863,108 +779,10 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
   return response;
 }
 
-auto AdjustmentTransferController::MergeViaMiniGit(const std::vector<sl_element_id_t>& ids,
-                                                   PipelineMgmtService&                pipeline_service)
+auto AdjustmentTransferController::MergeViaMiniGit(const std::vector<sl_element_id_t>& /*ids*/,
+                                                   PipelineMgmtService& /*pipeline_service*/)
     -> QVariantMap {
-  AdjustmentApplyResult result;
-  for (sl_element_id_t element_id : ids) {
-    if (element_id == 0) {
-      continue;
-    }
-
-    std::shared_ptr<PipelineGuard> guard;
-    try {
-      guard = pipeline_service.LoadEditorPipeline(element_id);
-    } catch (const std::exception& e) {
-      result.failures_.push_back({element_id, e.what()});
-      continue;
-    }
-    if (!guard || !guard->pipeline_) {
-      result.failures_.push_back({element_id, "Pipeline was not available."});
-      if (guard) {
-        pipeline_service.SavePipeline(guard);
-      }
-      continue;
-    }
-
-    CommitGraph* graph = guard->commit_graph_ ? guard->commit_graph_.get() : nullptr;
-    if (graph == nullptr) {
-      result.failures_.push_back({element_id, "Mini-Git graph was not available for merge."});
-      pipeline_service.SavePipeline(guard);
-      continue;
-    }
-
-    // A merge advances the active Version head to a two-parent merge commit.
-    // Like paste, publish it through guarded graph materialization so the
-    // transition is durable and rebuildable.
-    const auto graph_before_merge  = *graph;
-    const bool prior_serialized     = guard->serialized_state_needs_writeback_;
-    auto       restore_prior        = [&] {
-      *graph = graph_before_merge;
-      std::string ignored_error;
-      (void)pipeline_service.RebuildActiveEditorPipeline(guard, &ignored_error);
-      guard->serialized_state_needs_writeback_ = prior_serialized;
-    };
-    try {
-      auto merge_result = AdjustmentTransferService::MergeIntoActiveVersion(
-          *graph, *guard->pipeline_, *copied_package_);
-      if (merge_result.pasted) {
-        std::string rebuild_error;
-        if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
-          restore_prior();
-          result.failures_.push_back({element_id, rebuild_error.empty()
-                                                      ? "Failed to rebuild merged pipeline"
-                                                      : std::move(rebuild_error)});
-        } else {
-          guard->serialized_state_needs_writeback_ = true;
-          std::string persistence_error;
-          if (!pipeline_service.PersistEditorHistoryState(
-                  guard, graph_before_merge.GetImageEditState(), &persistence_error)) {
-            restore_prior();
-            result.failures_.push_back({element_id, persistence_error.empty()
-                                                        ? "Failed to persist merged Version"
-                                                        : std::move(persistence_error)});
-          } else {
-            // Same as Paste: Persist cleared the checkpoint; SavePipeline must
-            // write the rebuilt live params so editor panels restore selection.
-            guard->serialized_state_needs_writeback_ = true;
-            guard->dirty_                            = false;
-            result.applied_ids_.push_back(element_id);
-          }
-        }
-      } else {
-        restore_prior();
-        result.failures_.push_back({element_id, merge_result.error});
-      }
-    } catch (const std::exception& e) {
-      restore_prior();
-      result.failures_.push_back({element_id, e.what()});
-    }
-    pipeline_service.SavePipeline(guard);
-  }
-
-  pipeline_service.Sync();
-  PostProcessApplyResult(result, true);
-
-  QVariantList failures;
-  for (const auto& failure : result.failures_) {
-    failures.push_back(QVariantMap{{"elementId", static_cast<uint>(failure.file_id_)},
-                                   {"message", QString::fromStdString(failure.message_)}});
-  }
-
-  QVariantMap response;
-  if (result.applied_ids_.empty() && !result.failures_.empty()) {
-    response = ErrorResult(QString::fromStdString(result.failures_.front().message_));
-  } else if (!result.failures_.empty()) {
-    response = SuccessResult(Tr("Adjustments merged with some failures."));
-  } else {
-    response = SuccessResult(Tr("Adjustments merged."));
-  }
-  response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
-  response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
-  response.insert("failureCount", static_cast<int>(result.failures_.size()));
-  response.insert("failures", failures);
-  return response;
+  return ErrorResult(Tr("Pipeline merge is not supported."));
 }
 
 void AdjustmentTransferController::PostProcessApplyResult(const AdjustmentApplyResult& result,

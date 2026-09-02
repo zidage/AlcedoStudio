@@ -167,11 +167,27 @@ auto PipelineDocument::Develop() const -> const DevelopNodeModel* {
 }
 
 auto PipelineDocument::PrimaryGrade() -> ColorGradeNodeModel* {
-  return Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"));
+  if (auto* named = Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"))) {
+    return named;
+  }
+  for (const auto& id : graph_.ImageBackboneNodeIds()) {
+    if (auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(id))) {
+      return grade;
+    }
+  }
+  return nullptr;
 }
 
 auto PipelineDocument::PrimaryGrade() const -> const ColorGradeNodeModel* {
-  return Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"));
+  if (const auto* named = Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"))) {
+    return named;
+  }
+  for (const auto& id : graph_.ImageBackboneNodeIds()) {
+    if (const auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(id))) {
+      return grade;
+    }
+  }
+  return nullptr;
 }
 
 auto PipelineDocument::Drt() -> DrtNodeModel* {

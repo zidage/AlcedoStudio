@@ -46,11 +46,9 @@ namespace alcedo {
 namespace {
 using namespace alcedo::test;  // controllable ports + recorder live in alcedo::test
 
-auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
+auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPackage {
   AdjustmentTransferPackage package;
-  package.operators_.push_back(AdjustmentTransferEntry{
-      PipelineStageName::Basic_Adjustment, OperatorType::EXPOSURE, true, false,
-      nlohmann::json{{"exposure", exposure}}});
+  package.color_grades_.push_back(nlohmann::json{{"id", "grade.primary"}});
   return package;
 }
 

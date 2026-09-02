@@ -286,28 +286,21 @@ TEST(EditorAdjustmentTransferActionsQmlTest, PolicyBlocksPasteAtOpenAndRecoversA
 }
 
 TEST(EditorAdjustmentTransferActionsQmlTest,
-     MergeStrategyIsDispatchedToBackendAndPasteRemainsAvailable) {
+     TransferSurfaceHasNoPipelineMergeOperation) {
   EditorAdjustmentTransferActionsQmlHarness harness;
   ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
   auto* actions  = harness.actions();
   auto* transfer = harness.transfer();
-  auto* policy   = harness.policy();
   ASSERT_NE(actions, nullptr);
   ASSERT_NE(transfer, nullptr);
-  ASSERT_NE(policy, nullptr);
 
-  // Merge is now a supported batch strategy: it dispatches to the backend with
-  // the "merge" strategy (resolved as "use all incoming" per target) instead of
-  // being rejected as a deferred per-field resolution request.
   InvokeStrategy(actions, QStringLiteral("merge"));
-  EXPECT_EQ(harness.transfer_fake.paste_call_count(), 1);
-  EXPECT_EQ(harness.transfer_fake.last_strategy(), QStringLiteral("merge"));
-  EXPECT_EQ(harness.transfer_fake.last_targets().size(), 2);
+  EXPECT_EQ(harness.transfer_fake.paste_call_count(), 0);
+  EXPECT_TRUE(harness.transfer_fake.last_strategy().isEmpty());
 
-  // Paste remains available and dispatches with its own strategy.
   InvokeStrategy(actions, QStringLiteral("paste"));
-  EXPECT_EQ(harness.transfer_fake.paste_call_count(), 2);
+  EXPECT_EQ(harness.transfer_fake.paste_call_count(), 1);
   EXPECT_EQ(harness.transfer_fake.last_strategy(), QStringLiteral("paste"));
 }
 

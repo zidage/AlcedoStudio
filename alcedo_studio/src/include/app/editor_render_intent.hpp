@@ -41,6 +41,9 @@ enum class EditorRenderReason : std::uint8_t {
   // Same-image Version checkout / root / branch: one Quality rebuild of the
   // live DAG. Distinct from InitialFrame so the session stays Interactive.
   VersionDocumentChanged,
+  // Typed Paste replaced transferable Grades, Masks, and DRT/Post on a new
+  // root-relative Version. Quality rebuild of the live DAG.
+  PastedPipelineDocument,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -155,6 +158,7 @@ struct EditorRenderResult {
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
     case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -170,6 +174,7 @@ struct EditorRenderResult {
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
     case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:
@@ -217,6 +222,7 @@ struct EditorRenderResult {
     case EditorRenderReason::GraphTopologyChanged:
     case EditorRenderReason::SettledMaskEdit:
     case EditorRenderReason::VersionDocumentChanged:
+    case EditorRenderReason::PastedPipelineDocument:
       return true;
   }
   return true;

@@ -1011,7 +1011,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.task_id  = completion.task_id;
   if (marker.route_render) {
     EditorRenderCommand command;
-    command.reason       = EditorRenderReason::InitialFrame;
+    command.reason =
+        dependencies_.history->LastPublishedRenderReason().value_or(EditorRenderReason::InitialFrame);
     command.operation_id = current_operation_id_;
     render_.RouteInitialRender(command, lifecycle_.identity(),
                                lifecycle_.active_image_load_request());

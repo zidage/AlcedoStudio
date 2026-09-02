@@ -82,4 +82,14 @@ void SetMaskStorePublishHookForTesting(
                        const std::filesystem::path& destination)>
         hook);
 
+/**
+ * @brief Host directory used by the product renderer Mask store.
+ *
+ * Paste, Copy, and maintenance scanners use this path when no other store is
+ * supplied. The directory is created on first @ref MaskStore::Put.
+ */
+[[nodiscard]] inline auto DefaultProductMaskStoreRoot() -> std::filesystem::path {
+  return std::filesystem::temp_directory_path() / "alcedo_studio" / "product_mask_store";
+}
+
 }  // namespace alcedo

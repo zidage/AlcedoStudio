@@ -57,7 +57,8 @@ class MaskStore;
  *
  * Rename-only batches return nullopt (no render). Graph topology and Mask
  * edits return their dedicated Quality reasons. Parameter, enabled, and mix
- * edits return @ref EditorRenderReason::SettledAdjustment.
+ * edits return @ref EditorRenderReason::SettledAdjustment. Paste returns
+ * @ref EditorRenderReason::PastedPipelineDocument.
  */
 [[nodiscard]] auto RenderReasonForBatch(const PipelineEditBatch& batch)
     -> std::optional<EditorRenderReason>;
@@ -132,6 +133,14 @@ class MaskStore;
 [[nodiscard]] auto MakeSetMaskFieldBatch(const NodeId& node_id, const MaskId& mask_id,
                                          std::string field_key, nlohmann::json before_value,
                                          nlohmann::json after_value) -> PipelineEditBatch;
+
+/**
+ * @brief Build one typed Paste batch from ordered document changes.
+ *
+ * @p changes may mix Grade, Mask, and parameter variants. Validate still requires
+ * a non-empty list. Presentation uses @ref PresentationKeyForOperation for Paste.
+ */
+[[nodiscard]] auto MakePasteBatch(std::vector<PipelineEditChange> changes) -> PipelineEditBatch;
 
 /**
  * @brief Append one typed-batch journal record and publish the commit and head.

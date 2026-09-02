@@ -178,6 +178,7 @@ add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp
@@ -196,6 +197,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   EditorPipelineCommandService
   PipelineHistoryApplier
   EditGraph
+  EditMaskStore
   EditorMiniGitMaterializer
   PipelineMgmtService
   ProjectService
@@ -1027,9 +1029,8 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
 
-# Paste/Merge strategy switcher dialog: verifies the real AdjustmentTransferDialog
-# loads in paste mode, exposes the SegmentedCardSwitcher, toggles the merge
-# notice with pasteStrategy, and reflects the strategy on the accept button.
+# Paste-only transfer dialog: verifies the real AdjustmentTransferDialog loads
+# in paste mode without a merge strategy switcher or merge accept label.
 add_executable(AdjustmentTransferDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp

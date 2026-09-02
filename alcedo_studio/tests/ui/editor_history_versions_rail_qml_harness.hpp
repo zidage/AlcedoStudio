@@ -108,6 +108,20 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto has_pending_recovery() const -> bool override { return recovery_pending_; }
   [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
+  [[nodiscard]] auto action_availability() const -> alcedo::EditorActionAvailability override {
+    alcedo::EditorActionAvailability availability;
+    auto allow = [&](alcedo::EditorAction action, bool enabled) {
+      availability.decisions[static_cast<std::size_t>(action)].allowed = enabled;
+    };
+    allow(alcedo::EditorAction::Undo, snapshot_.can_undo);
+    allow(alcedo::EditorAction::Redo, snapshot_.can_redo);
+    allow(alcedo::EditorAction::MoveHead, true);
+    allow(alcedo::EditorAction::ApplyPaste, true);
+    allow(alcedo::EditorAction::RetrySave, recovery_pending_);
+    allow(alcedo::EditorAction::DiscardAndContinue, recovery_pending_);
+    allow(alcedo::EditorAction::CancelPendingNavigation, recovery_pending_);
+    return availability;
+  }
 
   void SetPresentationSinkId(PresentationSinkId) override {}
   void SetPresentationSize(int, int) override {}
