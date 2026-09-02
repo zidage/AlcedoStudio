@@ -37,9 +37,9 @@ struct EditorHistoryCommitPresentation {
 
 /// Pure payload-to-display conversion for one editor history commit. Maps the
 /// stable field key and the OrdinaryEditPayload before/after JSON to
-/// user-facing text and an operator glyph key. Has no dependency on the editor
-/// session, commit graph, pipeline, or QML engine, so it is unit-testable in
-/// isolation.
+/// user-facing text and an operator glyph key. Typed pipeline batches carry
+/// presentation_key and saved identity on EditorHistoryCommit instead of a
+/// stage or operator; this helper remains the ordinary-edit formatter.
 ///
 /// `field_key` is the stable editor adjustment key (e.g. "exposure") or
 /// "merge"/empty for merge commits. `before_value_json`/`after_value_json` are

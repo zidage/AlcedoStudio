@@ -195,6 +195,16 @@ gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
 alcedo_register_test_target(CommitGraphTest edit)
 
+# Typed pipeline-edit batch schema, canonical JSON, and commit identity.
+add_executable(PipelineEditBatchTest ${ALCEDO_TEST_ROOT}/edit/history/pipeline_edit_batch_test.cpp)
+target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineEditBatchTest EditHistory GTest::gtest_main)
+target_compile_definitions(PipelineEditBatchTest PRIVATE
+  PIPELINE_EDIT_BATCH_GOLDEN_DIR="${ALCEDO_TEST_ROOT}/edit/history/goldens")
+gtest_discover_tests(PipelineEditBatchTest TEST_PREFIX "PipelineEditBatchTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineEditBatchTest edit)
+
 # Redo-only journal record format, RewriteTimeline, independent timeline simulator.
 add_executable(EditorTransactionJournalTest ${ALCEDO_TEST_ROOT}/edit/history/editor_transaction_journal_test.cpp)
 target_include_directories(EditorTransactionJournalTest PUBLIC ${ALCEDO_INCLUDE_DIR})

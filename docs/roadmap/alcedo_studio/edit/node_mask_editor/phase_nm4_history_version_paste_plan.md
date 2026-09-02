@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: planned
+Status: NM4.1 complete; NM4.2–4.6 planned
 
 Prerequisite: NM3 complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -889,7 +889,7 @@ NM4 does not claim package or real-RAW UI qualification.
 
 | Phase | Status | Result |
 | --- | --- | --- |
-| NM4.1 | planned | Typed batch schema, canonical encoding, commit identity, and presentation data. |
+| NM4.1 | complete | Typed batch schema, canonical encoding, commit identity, and presentation data. |
 | NM4.2 | planned | Reversible live-document apply, WAL publication, Undo, Redo, and head moves. |
 | NM4.3 | planned | Immutable root document, unified format cutover, and full-document checkpoint. |
 | NM4.4 | planned | Version branch, checkout, recovery, materialization, and reopen. |
@@ -976,13 +976,75 @@ missing ID / unknown kind / wrong owner / non-finite value / malformed node or M
 
 **Exit conditions**
 
-- [ ] Every first-release action has one typed change representation.
-- [ ] Each change has complete identity and before/after data.
-- [ ] Canonical JSON and hash bytes have independent golden values.
-- [ ] Change order is preserved and affects the commit hash.
-- [ ] Old ordinary and merge payloads fail in the new format.
-- [ ] History projection does not require a stage or operator identity.
-- [ ] No live document mutation uses the new payload yet.
+- [x] Every first-release action has one typed change representation.
+- [x] Each change has complete identity and before/after data.
+- [x] Canonical JSON and hash bytes have independent golden values.
+- [x] Change order is preserved and affects the commit hash.
+- [x] Old ordinary and merge payloads fail in the new format.
+- [x] History projection does not require a stage or operator identity.
+- [x] No live document mutation uses the new payload yet.
+
+##### NM4.1 completion record (2026-09-01)
+
+**Status:** complete — typed `PipelineEditBatch` schema, canonical JSON, commit/chain format v2, history projection data; live apply still uses ordinary payloads.
+
+**Primary success call chain:**
+
+```text
+typed user-action fixture
+  -> PipelineEditBatch::Make / Validate
+  -> CanonicalJSON dump (frozen golden files)
+  -> EditCommit::MakePipelineEdit
+  -> CanonicalHashInput + Hash128 (kCommitFormatVersion = 2)
+  -> CommitGraph::InsertCommit
+  -> CommitGraphStore::Materialize
+  -> LoadGraph + PipelineEditBatch::FromJSON identical dump
+```
+
+**Primary failure call chain:**
+
+```text
+missing ID / unknown kind / extra key / non-finite / ordinary or merge payload
+  -> PipelineEditBatch::Make or FromJSON throws
+  -> EditCommit::MakePipelineEdit does not finalize a hash
+  -> no CommitGraph or DuckDB row is written from the failed batch
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `TypedBatchGoldenBytesAndHashRemainStable` | `PipelineEditBatchTest` | PASS |
+| `RemoveColorGradeGoldenBytesRemainStable` (node deletion with Masks) | `PipelineEditBatchTest` | PASS |
+| `ReconnectGoldenBytesRemainStable` | `PipelineEditBatchTest` | PASS |
+| `BrushAssetReplacementGoldenBytesRemainStable` | `PipelineEditBatchTest` | PASS |
+| `RoundTripForEveryChangeVariant` | `PipelineEditBatchTest` | PASS |
+| `ChangingTypedChangeOrderChangesCommitIdentity` | `PipelineEditBatchTest` | PASS |
+| `UnknownOrMissingTypedPayloadFieldsAreRejected` | `PipelineEditBatchTest` | PASS |
+| `ParameterHistoryRequiresCompleteOwnerNodeAndInstance` | `PipelineEditBatchTest` | PASS |
+| `OrdinaryAndMergePayloadsAreRejected` | `PipelineEditBatchTest` | PASS |
+| `LocaleIndependentHashEquality` | `PipelineEditBatchTest` | PASS |
+| `FuzzParseRejectsNonCanonicalPayloads` | `PipelineEditBatchTest` | PASS |
+| `TypedHistoryRowsUseSavedIdentityAndLocalizationData` | `PipelineEditBatchTest` | PASS |
+| `GraphInsertAndOrdinaryHashFormatChanged` | `PipelineEditBatchTest` | PASS |
+| `EditCommitHashing.FixedHashVectorsAreStable` | `CommitGraphTest` | PASS |
+| `CommitGraphPersistenceTests.TypedPipelineEditBatchRoundTripsThroughStore` | `CommitGraphTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target PipelineEditBatchTest CommitGraphTest --parallel 4
+.\alcedo_studio\tests\edit\PipelineEditBatchTest_runtime\PipelineEditBatchTest.exe
+.\alcedo_studio\tests\edit\CommitGraphTest_runtime\CommitGraphTest.exe
+```
+
+Suite totals: PipelineEditBatchTest 16/16 PASS; CommitGraphTest 35/35 PASS (includes MiniGit ordinary-path regression under format v2).
+
+**Checklist / exit condition:** all NM4.1 boxes checked from the tests above. Live mutation remains ordinary (`editor_history_mutation.cpp`); `OrderedChangesForApply` only reorders stored changes.
+
+**LOC note (grill-code-review):** `pipeline_edit_batch.cpp` is 1245 lines (schema, per-variant JSON, validation). That is one payload module; splitting change codecs into files without owned state would be a method split. The next owned-state module is the NM4.2 applier. Header 337 lines. Test 610 lines. `commit_graph_test.cpp` 967 lines.
+
+**Remaining gaps:** NM4.2 live apply / WAL / Undo. NM4.3 project and `kImageEditSchemaVersion` cutover. NM4.5 merge removal and paste product. Dual path remains: `EditCommit` still accepts `OrdinaryEditPayload` when `batch_format_version` is absent. `CommitRowFromEdit` is wired for typed batches but was not executed in a UI-port binary this phase; domain `ProjectPipelineEditHistory` was. nlohmann last-wins duplicate object keys; extra keys are rejected. QML history roles for the new `EditorHistoryCommit` fields are not added.
 
 ### 6.2 NM4.2 — Reversible live-document history
 

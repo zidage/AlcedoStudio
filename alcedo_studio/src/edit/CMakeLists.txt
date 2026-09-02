@@ -11,13 +11,14 @@ set(HISTORY_SRCS
     ${ALCEDO_SRC_ROOT}/edit/history/editor_journal_recovery.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/version_ref.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/edit_commit.cpp
+    ${ALCEDO_SRC_ROOT}/edit/history/pipeline_edit_batch.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/commit_graph.cpp
     ${ALCEDO_SRC_ROOT}/edit/history/mini_git_working_history.cpp
 )
 
 def_library(EditHistory
     SOURCES ${HISTORY_SRCS}
-    PUBLIC_DEPS Image TimeProvider JSON EditPipeline
+    PUBLIC_DEPS Image TimeProvider JSON EditPipeline EditGraph
 )
 
 # GPU-free render geometry: coordinate spaces, resolver, sampling plans. No CUDA.

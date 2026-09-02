@@ -73,10 +73,11 @@ using transaction_chain_hash_t = Hash128;
 constexpr std::uint32_t kImageEditSchemaVersion = 1;
 
 /// Stable hash inputs for commit objects. Changing this invalidates all stored commit hashes.
-constexpr std::uint32_t kCommitFormatVersion = 1;
+/// Version 2 includes typed `PipelineEditBatch` payloads in the hash input.
+constexpr std::uint32_t kCommitFormatVersion = 2;
 
 /// Stable hash inputs for the incremental transaction-chain fold.
-constexpr std::uint32_t kChainFormatVersion = 1;
+constexpr std::uint32_t kChainFormatVersion = 2;
 
 enum class EditCommitKind : std::uint8_t {
   kEdit  = 0,

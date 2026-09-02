@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "edit/history/commit_types.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/op_base.hpp"
 #include "json.hpp"
 
@@ -99,6 +100,17 @@ class EditCommit {
   static auto MakeEdit(root_id_t root_id, head_commit_hash_t first_parent,
                        OrdinaryEditPayload payload) -> EditCommit;
 
+  /**
+   * @brief Create an ordinary first-parent commit whose payload is a typed batch.
+   *
+   * @param root_id Image root bound into the commit hash.
+   * @param first_parent Prior head, or nullopt for a root-child commit.
+   * @param payload Validated typed batch. Ordinary and merge payloads are rejected.
+   * @return Finalized immutable commit. Does not insert into a graph.
+   */
+  static auto MakePipelineEdit(root_id_t root_id, head_commit_hash_t first_parent,
+                               PipelineEditBatch payload) -> EditCommit;
+
   /// Production factory. The creation timestamp comes from the process-wide monotonic clock.
   static auto MakeMerge(root_id_t root_id, head_commit_hash_t first_parent,
                         commit_hash_t second_parent, MergeEditPayload payload) -> EditCommit;
@@ -127,6 +139,9 @@ class EditCommit {
 
   static auto MakeEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                   std::uint64_t created_at_ns, OrdinaryEditPayload payload)
+      -> EditCommit;
+  static auto MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
+                                          std::uint64_t created_at_ns, PipelineEditBatch payload)
       -> EditCommit;
   static auto        MakeMergeAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                           commit_hash_t second_parent, std::uint64_t created_at_ns,

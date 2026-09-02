@@ -8,10 +8,12 @@
 #include <ctime>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo::ui {
@@ -308,6 +310,15 @@ auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string {
   if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
     return "merge";
   }
+  if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+    try {
+      const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+      const auto row   = alcedo::ProjectPipelineEditHistory(batch);
+      return row.field_key;
+    } catch (...) {
+      return {};
+    }
+  }
   try {
     const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
     const auto key = alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
@@ -337,6 +348,34 @@ auto CommitRowFromEdit(const alcedo::EditCommit& commit,
         row.merge_field_keys.push_back(key.value_or(delta.field_name));
       }
     } catch (...) {
+    }
+    return row;
+  }
+  if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+    try {
+      const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+      const auto typed = alcedo::ProjectPipelineEditHistory(batch);
+      row.operation_kind = std::string{alcedo::PipelineEditOperationKindText(typed.operation_kind)};
+      row.presentation_key = typed.presentation_key;
+      row.presentation_args_json =
+          typed.presentation_args.is_null() ? std::string{} : typed.presentation_args.dump();
+      row.node_id = typed.node_id;
+      row.node_display_name = typed.node_display_name;
+      row.adjustment_instance_id = typed.adjustment_instance_id;
+      row.mask_id = typed.mask_id;
+      row.mask_display_name = typed.mask_display_name;
+      row.field_key = typed.field_key;
+      row.before_value_json = typed.before_display_value.is_null()
+                                  ? std::string{}
+                                  : typed.before_display_value.dump();
+      row.after_value_json =
+          typed.after_display_value.is_null() ? std::string{} : typed.after_display_value.dump();
+      if (const auto* parameter = std::get_if<alcedo::SetParameterChange>(&batch.changes.front())) {
+        row.before_enabled = parameter->before_enabled;
+        row.after_enabled  = parameter->after_enabled;
+      }
+    } catch (...) {
+      row.field_key = CommitFieldKey(commit);
     }
     return row;
   }

@@ -281,9 +281,31 @@ auto EditCommit::MakeEdit(root_id_t root_id, head_commit_hash_t first_parent,
                              CommitClock::NextGlobal(WallClockNowNs()), std::move(payload));
 }
 
+auto EditCommit::MakePipelineEdit(root_id_t root_id, head_commit_hash_t first_parent,
+                                  PipelineEditBatch payload) -> EditCommit {
+  return MakePipelineEditAtTimestamp(root_id, std::move(first_parent),
+                                     CommitClock::NextGlobal(WallClockNowNs()), std::move(payload));
+}
+
 auto EditCommit::MakeEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                      std::uint64_t created_at_ns, OrdinaryEditPayload payload)
     -> EditCommit {
+  EditCommit commit;
+  commit.root_id_            = root_id;
+  commit.first_parent_hash_  = std::move(first_parent);
+  commit.second_parent_hash_ = std::nullopt;
+  commit.created_at_ns_      = created_at_ns;
+  commit.kind_               = EditCommitKind::kEdit;
+  commit.edit_payload_       = payload.CanonicalJSON();
+  commit.ValidateStructure();
+  commit.FinalizeHash();
+  return commit;
+}
+
+auto EditCommit::MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
+                                             std::uint64_t created_at_ns, PipelineEditBatch payload)
+    -> EditCommit {
+  payload.Validate();
   EditCommit commit;
   commit.root_id_            = root_id;
   commit.first_parent_hash_  = std::move(first_parent);
@@ -323,6 +345,10 @@ void EditCommit::ValidateStructure() const {
     if (second_parent_hash_.has_value()) {
       throw std::runtime_error("EditCommit: Edit kind must not have a second parent");
     }
+    if (IsPipelineEditBatchJson(edit_payload_)) {
+      (void)PipelineEditBatch::FromJSON(edit_payload_);
+      return;
+    }
     // FromJSON requires exact keys, enum ranges, and canonical dump equality.
     (void)OrdinaryEditPayload::FromJSON(edit_payload_);
     return;
@@ -330,6 +356,9 @@ void EditCommit::ValidateStructure() const {
   if (kind_ == EditCommitKind::kMerge) {
     if (!second_parent_hash_.has_value()) {
       throw std::runtime_error("EditCommit: Merge kind requires exactly one second parent");
+    }
+    if (IsPipelineEditBatchJson(edit_payload_)) {
+      throw std::runtime_error("EditCommit: Merge kind cannot carry a typed pipeline batch");
     }
     (void)MergeEditPayload::FromJSON(edit_payload_);
     return;

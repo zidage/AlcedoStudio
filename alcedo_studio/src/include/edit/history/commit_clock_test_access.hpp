@@ -27,6 +27,13 @@ struct EditCommitAccess {
                                            std::move(payload));
   }
 
+  static auto MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
+                                          std::uint64_t created_at_ns, PipelineEditBatch payload)
+      -> EditCommit {
+    return EditCommit::MakePipelineEditAtTimestamp(root_id, std::move(first_parent), created_at_ns,
+                                                   std::move(payload));
+  }
+
   static auto MakeMergeAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                    commit_hash_t second_parent, std::uint64_t created_at_ns,
                                    MergeEditPayload payload) -> EditCommit {

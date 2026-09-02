@@ -24,6 +24,7 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/op_base.hpp"
 #include "storage/store/database.hpp"
@@ -575,7 +576,7 @@ TEST(EditCommitHashing, CommitClockIsProcessWideStrictlyIncreasingAndThreadSafe)
 }
 
 TEST(EditCommitHashing, FixedHashVectorsAreStable) {
-  // Fixed little-endian hash vectors for format version 1. Do not change without a schema bump.
+  // Fixed little-endian hash vectors for format version 2. Do not change without a schema bump.
   const root_id_t     root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
   const auto          root_chain = ComputeRootChainHash(root);
 
@@ -599,10 +600,12 @@ TEST(EditCommitHashing, FixedHashVectorsAreStable) {
   EXPECT_EQ(Hash128::Compute(commit_input.data(), commit_input.size()), commit.GetCommitHash());
   EXPECT_EQ(Hash128::Compute(fold_input.data(), fold_input.size()), folded);
 
-  // Frozen golden hex strings for little-endian format version 1.
-  EXPECT_EQ(root_chain.ToString(), "b086b9015c867f88aeca8730b1b8d55c");
-  EXPECT_EQ(commit.GetCommitHash().ToString(), "02c397162017dc758e0c06ed5b9e0529");
-  EXPECT_EQ(folded.ToString(), "e1b24bd4acb55030f625eb7dc7f47be2");
+  // Frozen golden hex strings for little-endian format version 2.
+  EXPECT_NE(root_chain.ToString(), "b086b9015c867f88aeca8730b1b8d55c");
+  EXPECT_NE(commit.GetCommitHash().ToString(), "02c397162017dc758e0c06ed5b9e0529");
+  EXPECT_EQ(root_chain.ToString(), "19e34ca4b0d642a1a92384e936e8207c");
+  EXPECT_EQ(commit.GetCommitHash().ToString(), "90a164713f9f53e1a0af5243e267f954");
+  EXPECT_EQ(folded.ToString(), "a63f288930d58ea701238b46cd30216e");
 }
 
 TEST(CommitGraphTraversal, FirstParentTraversalAndChainFoldAreDeterministic) {
@@ -720,6 +723,43 @@ TEST_F(CommitGraphPersistenceTests, TwoVersionRefsShareOneStoredCommitRow) {
   ASSERT_TRUE(reloaded.has_value());
   ASSERT_TRUE(reloaded->GetImageEditState().serialized_pipeline_state.has_value());
   EXPECT_EQ(*reloaded->GetImageEditState().serialized_pipeline_state, serialized_state);
+}
+
+TEST_F(CommitGraphPersistenceTests, TypedPipelineEditBatchRoundTripsThroughStore) {
+  auto               guard = db_->GetConnectionGuard();
+  auto               lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  auto graph = CommitGraph::CreateEmpty(1002);
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = nlohmann::json{{"exposure_ev", 0.0}};
+  change.after_value                   = nlohmann::json{{"exposure_ev", 0.75}};
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  auto batch = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter, {change},
+                                       "history.operation.set_parameter");
+  auto commit = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
+      graph.GetRootId(), std::nullopt, 11, std::move(batch));
+  ASSERT_TRUE(graph.InsertCommit(commit));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), commit.GetCommitHash());
+
+  const nlohmann::json serialized_state = nlohmann::json{{"exposure", 0.75f}};
+  auto materialization =
+      graph.CaptureMaterializationWithSerializedPipelineState(serialized_state);
+  ASSERT_NO_THROW(service.Materialize(materialization));
+
+  auto loaded = service.LoadGraph(1002);
+  ASSERT_TRUE(loaded.has_value());
+  const auto* restored = loaded->FindCommit(commit.GetCommitHash());
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->GetPayloadJSON().dump(), commit.GetPayloadJSON().dump());
+  const auto typed = PipelineEditBatch::FromJSON(restored->GetPayloadJSON());
+  EXPECT_EQ(typed.operation_kind, PipelineEditOperationKind::SetParameter);
+  EXPECT_EQ(PipelineEditChangeKindOf(typed.changes.front()), PipelineEditChangeKind::SetParameter);
 }
 
 TEST_F(CommitGraphPersistenceTests, InconsistentMaterializationLeavesPriorRowsUnchanged) {
