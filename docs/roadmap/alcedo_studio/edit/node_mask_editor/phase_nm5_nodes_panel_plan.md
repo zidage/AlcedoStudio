@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: planned
+Status: NM5.1 complete; NM5.2–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -707,6 +707,89 @@ alcedo_main startup
 
 Record the date, revision, exact initialization signature, commands, test count, and upstream
 differences here after implementation.
+
+##### NM5.1 completion record (2026-09-03)
+
+**Status:** complete — production `alcedo_main` links the pinned QuickQanava static module and
+initializes it before the Alcedo QML module loads. The production-style harness proves a
+Loader-owned `Qan.GraphView`/`Qan.Graph` with one visual node, repeated Loader teardown and
+recreation, and the real missing-module error path.
+
+**Revision:** base repository revision `9ba15d40`, branch
+`feature/nodes-panel-foundation`; QuickQanava remains submodule tag `2.50` at
+`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`. The pinned checkout has no source changes.
+
+**Primary success call chains:**
+
+```text
+alcedo_main startup
+  -> QQuickStyle::setStyle("Basic")
+  -> QQmlApplicationEngine with qrc:/ import path
+  -> QuickQanava::initialize(QQmlEngine* engine) with &engine
+  -> engine.loadFromModule("Alcedo.Main", "Main")
+```
+
+```text
+QuickQanavaProductionIntegrationTest
+  -> Basic style and qrc:/ import path
+  -> QuickQanava::initialize(&engine)
+  -> Loader sourceComponent creates Qan.GraphView
+  -> Qan.Graph binds to GraphView.graph
+  -> Component.onCompleted calls graph.insertNode()
+  -> node label and visual item are observed
+  -> Loader active=false/true destroys and recreates the graph five times
+```
+
+**Tests and evidence:**
+
+| Evidence | Result |
+| --- | --- |
+| `alcedo_main` links `QuickQanava` and `QuickQanavaplugin` | PASS |
+| Basic style remains selected before engine creation | PASS |
+| One `Qan.Graph` and one `Qan.Node` load through the Loader | PASS |
+| `Qan.GraphView.graph` binds to the Loader-owned graph and the node has an item | PASS |
+| Five Loader teardown/recreation cycles leave no stale graph objects | PASS |
+| Missing QuickQanava import reports the actual QML error and creates no root object | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target QuickQanavaProductionIntegrationTest alcedo_main --parallel 4
+build/debug/alcedo_studio/tests/ui/QuickQanavaProductionIntegrationTest_runtime/QuickQanavaProductionIntegrationTest.exe --gtest_color=no
+```
+
+The direct test run passed all 3 tests. A filtered CTest run could not reach this target because
+the UI directory's existing PRE_TEST discovery first launches
+`SharedToneCurveTest_runtime/SharedToneCurveTest.exe`, which exits with `0xc0000139` for the
+pre-existing lensfun runtime entry-point mismatch. The new binary was therefore run directly;
+its own runtime directory contains the expected offscreen Qt plugins and all three tests pass.
+
+**Pinned API differences:**
+
+- The website Graph snippet shows a no-argument `QuickQanava::initialize()` form, but the pinned
+  2.50 header exposes only `static void initialize(QQmlEngine* engine)`. Production and the
+  harness use the pinned `QuickQanava::initialize(&engine)` signature.
+- Website external-project examples add a source-directory import path. Alcedo embeds the static
+  module and adds `qrc:/` before initialization, which is the path used by the pinned
+  `QuickQanava` component factories.
+- The pinned QML sources use unversioned `import QuickQanava as Qan`, while the public harness
+  uses the documented `import QuickQanava 2.0 as Qan`. Qt 6.9.3 therefore needs the Alcedo-owned
+  QML module wrapper to publish the pinned QML files at both 2.0 and 1.0 while keeping the
+  module's public version at 2.0. This keeps the submodule checkout unchanged and allows both
+  the documented entry point and the pinned nested imports to resolve.
+
+**Checklist / exit condition:** all NM5.1 work and exit conditions are checked. No production
+PipelineDocument or Qan projection was added in this setup phase.
+
+**LOC note (grill-code-review):** 237-line integration harness; 30-line test registration;
+7-line QML module-version compatibility setup; 8 production link/initialization lines. The
+QuickQanava submodule source remains unchanged.
+
+**Residual gaps:** NM5.2–NM5.8 still own the immutable Alcedo projection, node delegate, Nodes
+rail page, selection/navigation state, graph commands, visual connector, and final lifecycle/build
+qualification. macOS checks were not run on this Windows host. The unrelated CTest discovery
+runtime mismatch remains outside NM5.1.
 
 ---
 
@@ -1413,9 +1496,9 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 
 ## 19. NM5 completion criteria
 
-- [ ] The production target links the pinned QuickQanava module.
-- [ ] Production initializes QuickQanava before QML load.
-- [ ] Production remains on Qt Quick Controls Basic.
+- [x] The production target links the pinned QuickQanava module.
+- [x] Production initializes QuickQanava before QML load.
+- [x] Production remains on Qt Quick Controls Basic.
 - [ ] Nodes is a page in the shared editor tool rail.
 - [ ] History, Versions, and Nodes share one page state and Loader.
 - [ ] `PipelineDocument` remains the only product graph.

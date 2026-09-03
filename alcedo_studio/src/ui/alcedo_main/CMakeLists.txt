@@ -442,6 +442,8 @@ target_link_libraries(alcedo_main
         AlbumBackendLib
         AppDiagnostics
         UiLocalization
+        QuickQanava
+        QuickQanavaplugin
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2

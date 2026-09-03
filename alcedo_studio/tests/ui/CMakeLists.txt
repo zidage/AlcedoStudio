@@ -733,6 +733,36 @@ alcedo_ui_gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
     PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
 alcedo_register_test_target(EditorHistoryVersionsRailLifecycleQmlTest ui)
 
+# QuickQanava production integration: static-module initialization, a
+# Loader-owned graph, and repeated graph object teardown/recreation.
+add_executable(QuickQanavaProductionIntegrationTest
+    ${ALCEDO_TEST_ROOT}/ui/quickqanava_production_integration_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(QuickQanavaProductionIntegrationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(QuickQanavaProductionIntegrationTest
+    PRIVATE
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(QuickQanavaProductionIntegrationTest
+    TEST_PREFIX "QuickQanavaProductionIntegrationTest."
+    PROPERTIES LABELS "quickqanava;workspace_qml")
+alcedo_register_test_target(QuickQanavaProductionIntegrationTest ui)
+
 # Phase 7B: final-display identity stamping, stale-output rejection, and
 # hidden/resume analyzer lifecycle.
 add_executable(EditorScopeControllerTest

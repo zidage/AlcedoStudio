@@ -11,6 +11,7 @@
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlExtensionPlugin>
 #include <qqml.h>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -19,6 +20,8 @@
 #include <QSettings>
 #include <QString>
 #include <QtGlobal>
+
+#include <QuickQanava>
 
 #include <exiv2/error.hpp>
 #include <optional>
@@ -37,6 +40,8 @@
 #include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/clock/time_provider.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 #ifdef Q_OS_WIN
 #include "windows_frameless_window.hpp"
@@ -255,6 +260,7 @@ int main(int argc, char* argv[]) {
 
   QQmlApplicationEngine engine;
   engine.addImportPath("qrc:/");
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   app_modules.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty("appModules", &app_modules);
