@@ -16,6 +16,7 @@
 
 #include "json.hpp"
 
+#include "app/editor_node_graph_projection.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_render_intent.hpp"
@@ -198,15 +199,38 @@ TEST_F(EditorVersionCheckoutTest, BranchVersionSharesCommitsAndKeepsIndependentH
   EXPECT_NE(*branch_head, *shared_head);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), 3u);
   EXPECT_NE(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.look"}), nullptr);
+  const auto* branch_grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.look"}));
+  ASSERT_NE(branch_grade, nullptr);
+  EXPECT_EQ(branch_grade->DisplayName(), "Color Grade 2");
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
 
   ASSERT_TRUE(history_.CheckoutVersion(handle, default_id, &error)) << error;
   EXPECT_EQ(guard_->working_head_commit_hash(), shared_head);
   EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.look"}), nullptr);
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 0.75f);
+  ASSERT_NE(guard_->document_->PrimaryGrade(), nullptr);
+  EXPECT_EQ(guard_->document_->PrimaryGrade()->DisplayName(), "Color Grade 1");
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 2u);
+  const auto default_projection =
+      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8, 11, 1);
+  ASSERT_EQ(default_projection.nodes.size(), 3u);
+  EXPECT_EQ(default_projection.nodes[1].node_id, alcedo::NodeId{"grade.primary"});
+  EXPECT_EQ(default_projection.nodes[1].display_name, "Color Grade 1");
 
   ASSERT_TRUE(history_.CheckoutVersion(handle, branch_id, &error)) << error;
   EXPECT_EQ(guard_->working_head_commit_hash(), branch_head);
-  ASSERT_NE(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.look"}), nullptr);
+  const auto* checked_out_grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.look"}));
+  ASSERT_NE(checked_out_grade, nullptr);
+  EXPECT_EQ(checked_out_grade->DisplayName(), "Color Grade 2");
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
+  const auto branch_projection =
+      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8, 12, 2);
+  ASSERT_EQ(branch_projection.nodes.size(), 4u);
+  EXPECT_EQ(branch_projection.nodes[2].node_id, alcedo::NodeId{"grade.look"});
+  EXPECT_EQ(branch_projection.nodes[2].display_name, "Color Grade 2");
+  EXPECT_TRUE(alcedo::EditorNodeGraphProjection::AcceptsGeneration(branch_projection, 8));
 }
 
 TEST_F(EditorVersionCheckoutTest, VersionCheckoutReplacesTheDagOnTheSameLiveGuard) {
@@ -349,7 +373,15 @@ TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExa
     const auto  handle = history.Acquire(element_id, &error);
     ASSERT_TRUE(handle.valid) << error;
     ASSERT_TRUE(CommitSettled(history, handle, "exposure", R"({"exposure":1.25})", &error)) << error;
-    EXPECT_EQ(guard->commit_graph_->CommitCount(), 1u);
+    ASSERT_TRUE(history.AddColorGrade(handle, alcedo::NodeId{"drt"},
+                                      alcedo::NodeId{"grade.recovered"}, &error))
+        << error;
+    EXPECT_EQ(guard->commit_graph_->CommitCount(), 2u);
+    const auto* recovered = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+        guard->document_->Graph().FindNode(alcedo::NodeId{"grade.recovered"}));
+    ASSERT_NE(recovered, nullptr);
+    EXPECT_EQ(recovered->DisplayName(), "Color Grade 2");
+    EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 3u);
     history.Release(handle);
     project.SaveProject(meta_path);
   }
@@ -373,18 +405,23 @@ TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExa
     EXPECT_EQ(guard->commit_graph_->CommitCount(), expected_commits);
     EXPECT_TRUE(guard->working_head_commit_hash().has_value());
     EXPECT_FLOAT_EQ(DocumentExposureEv(*guard->document_), 1.25f);
+    const auto* recovered = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+        guard->document_->Graph().FindNode(alcedo::NodeId{"grade.recovered"}));
+    ASSERT_NE(recovered, nullptr);
+    EXPECT_EQ(recovered->DisplayName(), "Color Grade 2");
+    EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 3u);
     history.Release(handle);
     pipeline_service->SavePipeline(guard);
   };
 
-  reopen(1u);
+  reopen(2u);
   {
     alcedo::MiniGitJournal journal(journal_path);
     std::string            error;
     ASSERT_TRUE(journal.Load(&error)) << error;
     EXPECT_TRUE(journal.records().empty());
   }
-  reopen(1u);
+  reopen(2u);
 
   std::filesystem::remove(db_path, ec);
   std::filesystem::remove(meta_path, ec);
@@ -484,6 +521,9 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     const auto  handle = history.Acquire(element_id, &error);
     ASSERT_TRUE(handle.valid) << error;
     EXPECT_EQ(guard->commit_graph_->GetActiveVersionId(), default_id);
+    ASSERT_NE(guard->document_->PrimaryGrade(), nullptr);
+    EXPECT_EQ(guard->document_->PrimaryGrade()->DisplayName(), "Color Grade 1");
+    EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 2u);
     EXPECT_EQ(guard->working_head_commit_hash(), saved_head);
     EXPECT_EQ(guard->transaction_chain_hash(), saved_chain);
     EXPECT_EQ(guard->commit_graph_->GetAllVersionRefs().size(), saved_refs);

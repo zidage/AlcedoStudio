@@ -207,7 +207,8 @@ TEST(GpuDagModelGraph, GraphMutationInverseRestoresCanonicalDocumentJson) {
   const auto original = DocumentJson(document);
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   EXPECT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.b"}).empty());
-  EXPECT_EQ(DocumentJson(document), original);
+  EXPECT_NE(DocumentJson(document), original);
+  EXPECT_EQ(document.NextColorGradeNameNumber(), 3u);
 
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   const auto two_grades = DocumentJson(document);

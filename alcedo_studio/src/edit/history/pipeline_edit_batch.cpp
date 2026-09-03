@@ -7,11 +7,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo {
@@ -124,6 +126,23 @@ auto OptionalIdFromJson(const nlohmann::json& value, std::string_view context, c
 auto RequiredIdFromJson(const nlohmann::json& json, const char* key, std::string_view context)
     -> std::string {
   return RequireNonEmptyString(json, key, context);
+}
+
+auto RequirePositiveUint64(const nlohmann::json& json, const char* key, std::string_view context)
+    -> std::uint64_t {
+  const auto& value = json.at(key);
+  if (value.is_number_unsigned()) {
+    const auto number = value.get<std::uint64_t>();
+    if (number != 0) {
+      return number;
+    }
+  } else if (value.is_number_integer()) {
+    const auto number = value.get<std::int64_t>();
+    if (number > 0) {
+      return static_cast<std::uint64_t>(number);
+    }
+  }
+  Fail(std::string{context} + ": '" + key + "' must be a positive uint64");
 }
 
 auto IdToJson(std::string_view value) -> nlohmann::json {
@@ -469,6 +488,23 @@ void ValidateAddColorGrade(const AddColorGradeChange& change) {
   if (node.at("id").get<std::string>() != std::string{change.node_id.Value()}) {
     Fail("AddColorGrade: node.id must match node_id");
   }
+  if (change.before_next_color_grade_name_number == 0 ||
+      change.after_next_color_grade_name_number == 0) {
+    Fail("AddColorGrade: name-counter values must be positive");
+  }
+  const bool counter_unchanged =
+      change.before_next_color_grade_name_number == change.after_next_color_grade_name_number;
+  const bool counter_advanced =
+      change.before_next_color_grade_name_number != std::numeric_limits<std::uint64_t>::max() &&
+      change.after_next_color_grade_name_number == change.before_next_color_grade_name_number + 1;
+  if (!counter_unchanged && !counter_advanced) {
+    Fail("AddColorGrade: name-counter state must be unchanged or advance by one");
+  }
+  if (counter_advanced &&
+      node.at("display_name").get<std::string>() !=
+          DefaultColorGradeDisplayName(change.before_next_color_grade_name_number)) {
+    Fail("AddColorGrade: generated display name does not match the stored counter");
+  }
   RequireEdgeEndpoints(change.incoming_edge, change.predecessor_id, change.node_id,
                        "AddColorGrade incoming_edge");
   RequireEdgeEndpoints(change.outgoing_edge, change.node_id, change.successor_id,
@@ -668,7 +704,10 @@ auto ChangeToJson(const PipelineEditChange& change) -> nlohmann::json {
                   {"kind", "rename_color_grade"},
                   {"node_id", std::string{typed.node_id.Value()}}};
         } else if constexpr (std::is_same_v<Typed, AddColorGradeChange>) {
-          return {{"incoming_edge", EdgeToJson(typed.incoming_edge)},
+          return {{"after_next_color_grade_name_number", typed.after_next_color_grade_name_number},
+                  {"before_next_color_grade_name_number",
+                   typed.before_next_color_grade_name_number},
+                  {"incoming_edge", EdgeToJson(typed.incoming_edge)},
                   {"kind", "add_color_grade"},
                   {"node", typed.node},
                   {"node_id", std::string{typed.node_id.Value()}},
@@ -787,13 +826,18 @@ auto ChangeFromJson(const nlohmann::json& json) -> PipelineEditChange {
     }
     case PipelineEditChangeKind::AddColorGrade: {
       RequireExactObjectKeys(json,
-                             {"incoming_edge", "kind", "node", "node_id", "outgoing_edge",
-                              "predecessor_id", "successor_id"},
+                             {"after_next_color_grade_name_number",
+                              "before_next_color_grade_name_number", "incoming_edge", "kind",
+                              "node", "node_id", "outgoing_edge", "predecessor_id", "successor_id"},
                              "AddColorGrade");
       AddColorGradeChange change;
       change.node_id         = NodeId{RequiredIdFromJson(json, "node_id", "AddColorGrade")};
       change.predecessor_id  = NodeId{RequiredIdFromJson(json, "predecessor_id", "AddColorGrade")};
       change.successor_id    = NodeId{RequiredIdFromJson(json, "successor_id", "AddColorGrade")};
+      change.before_next_color_grade_name_number =
+          RequirePositiveUint64(json, "before_next_color_grade_name_number", "AddColorGrade");
+      change.after_next_color_grade_name_number =
+          RequirePositiveUint64(json, "after_next_color_grade_name_number", "AddColorGrade");
       change.node            = CanonicalColorGradeNodeJson(json.at("node"), "AddColorGrade node");
       change.incoming_edge   = EdgeFromJson(json.at("incoming_edge"), "AddColorGrade incoming_edge");
       change.outgoing_edge   = EdgeFromJson(json.at("outgoing_edge"), "AddColorGrade outgoing_edge");

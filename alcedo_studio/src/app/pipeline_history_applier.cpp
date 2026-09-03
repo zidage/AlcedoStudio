@@ -161,6 +161,9 @@ auto ApplyRename(PipelineDocument& document, const RenameColorGradeChange& chang
 auto ApplyAddColorGrade(PipelineDocument& document, const AddColorGradeChange& change,
                         PipelineEditApplyDirection direction, std::string* error) -> bool {
   if (direction == PipelineEditApplyDirection::Forward) {
+    if (document.NextColorGradeNameNumber() != change.before_next_color_grade_name_number) {
+      return SetError(error, "AddColorGrade expected the before name-counter value");
+    }
     if (document.Graph().FindNode(change.node_id) != nullptr) {
       return SetError(error, "AddColorGrade expected the stored node to be absent");
     }
@@ -169,15 +172,27 @@ auto ApplyAddColorGrade(PipelineDocument& document, const AddColorGradeChange& c
     if (split == nullptr) {
       return SetError(error, "AddColorGrade expected predecessor-to-successor edge is missing");
     }
-    return ApplyGraph(document,
-                      InsertColorGradeFromJson(document, change.node, ToGraphEdge(change.incoming_edge),
-                                               ToGraphEdge(change.outgoing_edge)),
-                      error);
+    if (!ApplyGraph(document,
+                    InsertColorGradeFromJson(document, change.node,
+                                             ToGraphEdge(change.incoming_edge),
+                                             ToGraphEdge(change.outgoing_edge)),
+                    error)) {
+      return false;
+    }
+    document.SetNextColorGradeNameNumber(change.after_next_color_grade_name_number);
+    return true;
+  }
+  if (document.NextColorGradeNameNumber() != change.after_next_color_grade_name_number) {
+    return SetError(error, "AddColorGrade inverse expected the after name-counter value");
   }
   if (document.Graph().FindNode(change.node_id) == nullptr) {
     return SetError(error, "AddColorGrade inverse expected the stored node to be present");
   }
-  return ApplyGraph(document, RemoveColorGradeAndBridge(document, change.node_id), error);
+  if (!ApplyGraph(document, RemoveColorGradeAndBridge(document, change.node_id), error)) {
+    return false;
+  }
+  document.SetNextColorGradeNameNumber(change.before_next_color_grade_name_number);
+  return true;
 }
 
 auto ApplyRemoveColorGrade(PipelineDocument& document, const RemoveColorGradeChange& change,

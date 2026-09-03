@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
@@ -17,6 +18,9 @@
 #include "json.hpp"
 
 namespace alcedo {
+
+/// First value reserved for the next automatically named Color Grade.
+inline constexpr std::uint64_t kInitialNextColorGradeNameNumber = 2;
 
 /**
  * @brief Serializable pipeline: geometry plus DAG. Does not own a GPU workspace.
@@ -32,6 +36,25 @@ class PipelineDocument {
   [[nodiscard]] auto Geometry() const -> const ImageGeometryModel& { return geometry_; }
   [[nodiscard]] auto Graph() -> PipelineGraph& { return graph_; }
   [[nodiscard]] auto Graph() const -> const PipelineGraph& { return graph_; }
+
+  /**
+   * @brief Return the next automatically assigned Color Grade display-name number.
+   */
+  [[nodiscard]] auto NextColorGradeNameNumber() const -> std::uint64_t {
+    return next_color_grade_name_number_;
+  }
+
+  /**
+   * @brief Restore an exact automatically assigned Color Grade display-name number.
+   * @throws std::invalid_argument when @p number is zero.
+   */
+  void               SetNextColorGradeNameNumber(std::uint64_t number);
+
+  /**
+   * @brief Advance the automatically assigned Color Grade display-name number.
+   * @throws std::overflow_error when no larger value can be represented.
+   */
+  void               ConsumeNextColorGradeNameNumber();
 
   [[nodiscard]] auto TopologyDirty() const -> bool { return topology_dirty_; }
   void               MarkTopologyDirty() { topology_dirty_ = true; }
@@ -63,8 +86,15 @@ class PipelineDocument {
   std::uint32_t       format_version_ = kPipelineDocumentFormatVersion;
   ImageGeometryModel  geometry_{};
   PipelineGraph       graph_{};
+  std::uint64_t       next_color_grade_name_number_ = kInitialNextColorGradeNameNumber;
   bool                topology_dirty_ = true;
 };
+
+/**
+ * @brief Format the product display name for an automatically assigned Color Grade.
+ * @throws std::invalid_argument when @p number is zero.
+ */
+[[nodiscard]] auto DefaultColorGradeDisplayName(std::uint64_t number) -> std::string;
 
 /// Product Default Color Grade exposure, in EV. Baked by @ref CreateDefaultPipelineDocument.
 inline constexpr float kDefaultPipelineExposureEv = 1.5f;

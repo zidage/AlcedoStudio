@@ -378,6 +378,8 @@ auto BuildPasteBatch(const PipelineDocument& root, const std::vector<nlohmann::j
     change.successor_id   = successor;
     change.incoming_edge  = PipelineSceneEdge{predecessor, ImagePort(), new_id, ImagePort()};
     change.outgoing_edge  = PipelineSceneEdge{new_id, ImagePort(), successor, ImagePort()};
+    change.before_next_color_grade_name_number = working.NextColorGradeNameNumber();
+    change.after_next_color_grade_name_number  = working.NextColorGradeNameNumber();
     const auto errors     = InsertColorGradeFromJson(
         working, change.node, ToGraphEdge(change.incoming_edge), ToGraphEdge(change.outgoing_edge));
     if (!errors.empty()) {

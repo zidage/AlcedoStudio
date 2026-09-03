@@ -4,6 +4,7 @@
 
 #include "app/pipeline_document_history.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -167,10 +168,17 @@ auto CaptureAddColorGradeChange(const PipelineDocument& document, const NodeId& 
   if (incoming == nullptr) {
     Fail("AddColorGrade insert point has no scene-image predecessor");
   }
+  const auto next_name_number = document.NextColorGradeNameNumber();
+  if (next_name_number == std::numeric_limits<std::uint64_t>::max()) {
+    Fail("AddColorGrade display-name number is exhausted");
+  }
   auto node = CreateCleanColorGradeNode(new_id);
+  node->SetDisplayName(DefaultColorGradeDisplayName(next_name_number));
   AddColorGradeChange change;
   change.node_id         = new_id;
   change.node            = node->ToJson();
+  change.before_next_color_grade_name_number = next_name_number;
+  change.after_next_color_grade_name_number  = next_name_number + 1;
   change.predecessor_id  = incoming->from_node;
   change.successor_id    = before_node_id;
   change.incoming_edge   = PipelineSceneEdge{incoming->from_node, incoming->from_port, new_id,

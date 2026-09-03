@@ -65,7 +65,7 @@ void AppendHash(std::vector<std::uint8_t>& out, const Hash128& hash) {
 
 auto IndependentRootChainInput(const root_id_t& root_id) -> std::vector<std::uint8_t> {
   std::vector<std::uint8_t> bytes;
-  AppendU32LE(bytes, 2u);
+  AppendU32LE(bytes, kChainFormatVersion);
   AppendHash(bytes, root_id);
   return bytes;
 }
@@ -73,7 +73,7 @@ auto IndependentRootChainInput(const root_id_t& root_id) -> std::vector<std::uin
 auto IndependentCommitHashInput(const root_id_t& root_id, std::uint64_t created_at_ns,
                                 const std::string& payload_dump) -> std::vector<std::uint8_t> {
   std::vector<std::uint8_t> bytes;
-  AppendU32LE(bytes, 2u);
+  AppendU32LE(bytes, kCommitFormatVersion);
   AppendHash(bytes, root_id);
   bytes.push_back(0);  // first parent absent
   bytes.push_back(0);  // second parent absent
@@ -104,7 +104,7 @@ auto MakeParameterChange(double before, double after) -> SetParameterChange {
 
 auto MakeParameterBatch(double before, double after) -> PipelineEditBatch {
   nlohmann::json args{{"field_key", "exposure"},
-                      {"node_display_name", "Color Grade"},
+                      {"node_display_name", "Color Grade 1"},
                       {"node_id", "grade.primary"}};
   return PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
                                  {MakeParameterChange(before, after)},
@@ -324,7 +324,7 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
 
   RenameColorGradeChange rename;
   rename.node_id             = NodeId{"grade.primary"};
-  rename.before_display_name = "Color Grade";
+  rename.before_display_name = "Color Grade 1";
   rename.after_display_name  = "Look";
   ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::RenameColorGrade, {rename},
                                           "history.operation.rename_color_grade"));
@@ -581,7 +581,7 @@ TEST(PipelineEditBatch, TypedHistoryRowsUseSavedIdentityAndLocalizationData) {
   EXPECT_EQ(parameter.field_key, "exposure");
   EXPECT_EQ(parameter.node_id, "grade.primary");
   EXPECT_EQ(parameter.adjustment_instance_id, "grade.primary.exposure");
-  EXPECT_EQ(parameter.node_display_name, "Color Grade");
+  EXPECT_EQ(parameter.node_display_name, "Color Grade 1");
   EXPECT_FALSE(parameter.presentation_args.contains("stage_name"));
   EXPECT_FALSE(parameter.presentation_args.contains("operator_type"));
 }
