@@ -866,10 +866,10 @@ add_custom_command(TARGET alcedo_main POST_BUILD
     VERBATIM
 )
 
-if(WIN32 AND TARGET alcedo_lensfun)
+if(WIN32 AND TARGET puerhlab_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:alcedo_lensfun>"
+            "$<TARGET_FILE:puerhlab_lensfun>"
             "$<TARGET_FILE_DIR:alcedo_main>/lensfun.dll"
         VERBATIM
     )

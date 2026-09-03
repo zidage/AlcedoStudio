@@ -11,6 +11,9 @@
       "description": "Windows: Build with debug info",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/debug",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -24,6 +27,9 @@
       "description": "Windows: Build release",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -39,6 +45,9 @@
       "description": "Windows: Build release test executables",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release-test",
+      "environment": {
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",

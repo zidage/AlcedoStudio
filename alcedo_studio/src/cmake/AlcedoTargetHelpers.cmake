@@ -65,11 +65,20 @@ function(alcedo_copy_linked_runtime_dlls target_name)
   endif()
 
   set(_alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:${target_name}>")
-  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
-    list(APPEND _alcedo_runtime_search_dirs
-      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
-    )
+  # Submodule lensfun and first-party product DLLs must win over vcpkg/installed.
+  # vcpkg lensfun 0.3.4 exports C++ names only; Operators imports the C lf_* API
+  # from alcedo_studio/src/third_party/lensfun. Searching vcpkg first yields
+  # STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139).
+  if(TARGET puerhlab_lensfun)
+    list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:puerhlab_lensfun>")
   endif()
+  list(APPEND _alcedo_runtime_search_dirs
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/decoders"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/edit"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/image"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/opencl"
+    "${CMAKE_BINARY_DIR}/alcedo_studio/src/utils"
+  )
   if(DEFINED CUDAToolkit_BIN_DIR AND NOT "${CUDAToolkit_BIN_DIR}" STREQUAL "")
     list(APPEND _alcedo_runtime_search_dirs "${CUDAToolkit_BIN_DIR}")
   endif()
@@ -77,8 +86,10 @@ function(alcedo_copy_linked_runtime_dlls target_name)
     "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows"
     "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin"
   )
-  if(TARGET alcedo_lensfun)
-    list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:alcedo_lensfun>")
+  if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    list(APPEND _alcedo_runtime_search_dirs
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
+    )
   endif()
   if(TARGET Qt6::Core)
     list(APPEND _alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:Qt6::Core>")

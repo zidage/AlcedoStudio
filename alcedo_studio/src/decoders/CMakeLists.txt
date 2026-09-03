@@ -133,7 +133,7 @@ endif()
 
 def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
-    PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy lensfun::lensfun
+    PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy puerhlab_lensfun
     # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
     PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph
 )
@@ -157,6 +157,14 @@ if(DEFINED ALCEDO_LENSFUN_INCLUDE_DIR AND NOT "${ALCEDO_LENSFUN_INCLUDE_DIR}" ST
 endif()
 if(TARGET puerhlab_lensfun_build)
     add_dependencies(Operators puerhlab_lensfun_build)
+endif()
+if(WIN32 AND TARGET puerhlab_lensfun)
+    add_custom_command(TARGET Operators POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:puerhlab_lensfun>"
+            "$<TARGET_FILE_DIR:Operators>/lensfun.dll"
+        COMMENT "Alcedo: install submodule lensfun.dll next to Operators"
+        VERBATIM)
 endif()
 
 # --- Accelerator Backend Selection ---
