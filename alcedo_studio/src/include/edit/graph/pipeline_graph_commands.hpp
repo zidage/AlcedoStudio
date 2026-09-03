@@ -19,7 +19,8 @@ namespace alcedo {
  * The new node becomes the scene-image predecessor of @p before_node_id. When
  * @p before_node_id is DRT, the insert is after the last Color Grade or Develop.
  * @p new_id is the stable NodeId of the inserted node. The node is
- * @ref CreateCleanColorGradeNode, not a copy of the product Default look.
+ * @ref CreateCleanColorGradeNode, not a copy of the product Default look. Its
+ * display name is assigned from the document's next-name counter.
  *
  * @pre Caller holds the shared executor render lock. No unrelated Model is copied.
  * @return Empty on success. On failure @p document is left unchanged.
@@ -84,7 +85,8 @@ namespace alcedo {
  * @brief Insert a Color Grade deserialized from stored node JSON onto exact scene edges.
  *
  * Redo and inverse-remove use this instead of @ref AddCleanColorGrade so NodeId,
- * AdjustmentInstanceId, Masks, mix, and enabled values are restored exactly.
+ * display name, AdjustmentInstanceId, Masks, mix, and enabled values are restored exactly.
+ * Stored-node insertion does not allocate a display-name number.
  *
  * @p incoming is predecessor to the inserted node. @p outgoing is the inserted node
  * to successor. The predecessor-to-successor edge is disconnected.

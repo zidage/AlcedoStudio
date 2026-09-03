@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "json.hpp"
@@ -147,6 +148,9 @@ struct AddColorGradeChange {
   NodeId             successor_id;
   PipelineSceneEdge  incoming_edge;
   PipelineSceneEdge  outgoing_edge;
+  // Stored-node insertion uses equal values because it restores an existing display name.
+  std::uint64_t      before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
+  std::uint64_t      after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
 
   auto operator==(const AddColorGradeChange&) const -> bool = default;
 };

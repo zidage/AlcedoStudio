@@ -97,7 +97,11 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json)
     -> std::unique_ptr<ColorGradeNodeModel> {
   auto        node    = std::make_unique<ColorGradeNodeModel>(NodeId{json.at("id").get<std::string>()});
   const auto& catalog = BuiltinAdjustmentCatalog::Instance();
-  node->display_name_ = json.value("display_name", std::string{"Color Grade"});
+  if (!json.contains("display_name") || !json.at("display_name").is_string() ||
+      json.at("display_name").get<std::string>().empty()) {
+    throw std::runtime_error("ColorGrade FromJson: display_name must be non-empty");
+  }
+  node->display_name_ = json.at("display_name").get<std::string>();
   node->enabled_      = json.value("enabled", true);
   node->mix_          = json.value("mix", 1.0f);
   if (json.contains("adjustments") && json["adjustments"].is_array()) {

@@ -5,6 +5,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 
 #include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -144,14 +145,24 @@ auto AddCleanColorGrade(PipelineDocument& document, const NodeId& before_node_id
                   "Insert point has no scene-image predecessor: " +
                       std::string{before_node_id.Value()})};
   }
+  const auto next_name_number = document.NextColorGradeNameNumber();
+  if (next_name_number == std::numeric_limits<std::uint64_t>::max()) {
+    return {Error(GraphValidationCode::InvalidNodeValue,
+                  "Color Grade display-name number is exhausted")};
+  }
 
   const GraphEdge previous = *incoming;
   auto            node     = CreateCleanColorGradeNode(new_id);
-  return FinishEdit(document, document.Graph().ApplyBackboneEdit(
-                                  {previous},
-                                  {{previous.from_node, previous.from_port, new_id, kImagePort},
-                                   {new_id, kImagePort, before_node_id, previous.to_port}},
-                                  std::move(node)));
+  node->SetDisplayName(DefaultColorGradeDisplayName(next_name_number));
+  auto errors = document.Graph().ApplyBackboneEdit(
+      {previous},
+      {{previous.from_node, previous.from_port, new_id, kImagePort},
+       {new_id, kImagePort, before_node_id, previous.to_port}},
+      std::move(node));
+  if (errors.empty()) {
+    document.ConsumeNextColorGradeNameNumber();
+  }
+  return FinishEdit(document, std::move(errors));
 }
 
 auto RemoveColorGradeAndBridge(PipelineDocument& document, const NodeId& node_id)

@@ -5,6 +5,7 @@
 #include "edit/graph/pipeline_document.hpp"
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -76,6 +77,17 @@ void ValidateDocumentShape(const nlohmann::json& json) {
   if (!json.contains("edges") || !json["edges"].is_array()) {
     throw std::runtime_error("Pipeline document is missing an edges array");
   }
+  if (!json.contains("next_color_grade_name_number")) {
+    throw std::runtime_error(
+        "Pipeline document requires a positive next_color_grade_name_number");
+  }
+  const auto& next_name_number = json.at("next_color_grade_name_number");
+  const bool  valid_next_name_number =
+      (next_name_number.is_number_unsigned() && next_name_number.get<std::uint64_t>() != 0) ||
+      (next_name_number.is_number_integer() && next_name_number.get<std::int64_t>() > 0);
+  if (!valid_next_name_number) {
+    throw std::runtime_error("Pipeline document requires a positive next_color_grade_name_number");
+  }
 
   for (std::size_t index = 0; index < json["nodes"].size(); ++index) {
     const auto& node = json["nodes"][index];
@@ -121,6 +133,12 @@ void ValidateDocumentShape(const nlohmann::json& json) {
         throw std::runtime_error("Pipeline document ColorGrade is missing a masks array at " +
                                  path);
       }
+      if (type == type_ids::ColorGradeNode().Text() &&
+          (!node.contains("display_name") || !node["display_name"].is_string() ||
+           node["display_name"].get<std::string>().empty())) {
+        throw std::runtime_error(
+            "Pipeline document ColorGrade requires a non-empty display_name at " + path);
+      }
     } else if (!node.contains("params") || !node["params"].is_object()) {
       throw std::runtime_error("Pipeline document node is missing object params at " + path);
     }
@@ -157,6 +175,27 @@ void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
 }
 
 }  // namespace
+
+void PipelineDocument::SetNextColorGradeNameNumber(std::uint64_t number) {
+  if (number == 0) {
+    throw std::invalid_argument("PipelineDocument next Color Grade name number must be positive");
+  }
+  next_color_grade_name_number_ = number;
+}
+
+void PipelineDocument::ConsumeNextColorGradeNameNumber() {
+  if (next_color_grade_name_number_ == std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error("PipelineDocument Color Grade name number is exhausted");
+  }
+  ++next_color_grade_name_number_;
+}
+
+auto DefaultColorGradeDisplayName(std::uint64_t number) -> std::string {
+  if (number == 0) {
+    throw std::invalid_argument("Color Grade display-name number must be positive");
+  }
+  return "Color Grade " + std::to_string(number);
+}
 
 auto PipelineDocument::Develop() -> DevelopNodeModel* {
   return Downcast<DevelopNodeModel>(graph_.FindNode("develop"));
@@ -223,6 +262,7 @@ auto PipelineDocument::ToJson() const -> nlohmann::json {
   }
   return {{"format_version", format_version_},
           {"geometry", geometry_.ToJson()},
+          {"next_color_grade_name_number", next_color_grade_name_number_},
           {"nodes", std::move(nodes)},
           {"edges", std::move(edges)}};
 }
@@ -231,6 +271,7 @@ auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument 
   ValidateDocumentShape(json);
   PipelineDocument document;
   document.format_version_ = kPipelineDocumentFormatVersion;
+  document.SetNextColorGradeNameNumber(json["next_color_grade_name_number"].get<std::uint64_t>());
   document.geometry_ = ImageGeometryModel::FromJson(json["geometry"]);
   for (const auto& node_json : json["nodes"]) {
     document.graph_.AddNode(NodeFromJson(node_json));
@@ -250,6 +291,7 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   PipelineDocument document;
   document.Graph().AddNode(std::make_unique<DevelopNodeModel>(NodeId{"develop"}));
   auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
+  grade->SetDisplayName(DefaultColorGradeDisplayName(1));
   ApplyDefaultPipelineLook(*grade);
   document.Graph().AddNode(std::move(grade));
   document.Graph().AddNode(DrtNodeModel::MakeDefault(NodeId{"drt"}));

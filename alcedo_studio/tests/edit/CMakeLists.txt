@@ -209,6 +209,17 @@ gtest_discover_tests(PipelineDocumentCheckpointTest
   PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(PipelineDocumentCheckpointTest edit)
 
+# Default Color Grade naming, serialized counter, typed replay, and exact restoration.
+add_executable(PipelineDocumentDefaultNameTest
+  ${ALCEDO_TEST_ROOT}/edit/history/pipeline_document_default_name_test.cpp)
+target_include_directories(PipelineDocumentDefaultNameTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineDocumentDefaultNameTest
+  PipelineHistoryApplier EditHistory EditGraph GTest::gtest_main)
+gtest_discover_tests(PipelineDocumentDefaultNameTest
+  TEST_PREFIX "PipelineDocumentDefaultNameTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineDocumentDefaultNameTest edit)
+
 # Typed pipeline-edit batch schema, canonical JSON, and commit identity.
 add_executable(PipelineEditBatchTest ${ALCEDO_TEST_ROOT}/edit/history/pipeline_edit_batch_test.cpp)
 target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR})

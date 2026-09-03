@@ -193,6 +193,7 @@ target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
+  EditorNodeGraphProjection
   EditorAdjustmentPipeline
   EditorPipelineCommandService
   PipelineHistoryApplier

@@ -948,7 +948,7 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.4.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.5.0");
 }
 
 TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {

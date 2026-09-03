@@ -52,19 +52,19 @@ auto MultiGradeDocument() -> PipelineDocument {
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.4.0");
+  EXPECT_EQ(kProjectFileVersion, "0.5.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
-  EXPECT_EQ(kPackedProjectFormatVersion, 4u);
-  EXPECT_EQ(kPipelineDocumentFormatVersion, 4u);
-  EXPECT_EQ(kImageEditSchemaVersion, 2u);
-  EXPECT_EQ(kCommitFormatVersion, 2u);
-  EXPECT_EQ(kChainFormatVersion, 2u);
-  EXPECT_EQ(kPipelineEditBatchFormatVersion, 1u);
-  EXPECT_EQ(kRootStateFormatVersion, 2u);
-  EXPECT_EQ(kCheckpointStateFormatVersion, 2u);
-  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 3u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v2");
+  EXPECT_EQ(kPackedProjectFormatVersion, 5u);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 5u);
+  EXPECT_EQ(kImageEditSchemaVersion, 3u);
+  EXPECT_EQ(kCommitFormatVersion, 3u);
+  EXPECT_EQ(kChainFormatVersion, 3u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 2u);
+  EXPECT_EQ(kRootStateFormatVersion, 3u);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 3u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 4u);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v3");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(kProjectFileVersion));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));
 }

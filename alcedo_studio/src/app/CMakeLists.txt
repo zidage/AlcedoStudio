@@ -396,6 +396,13 @@ def_library(EditorPipelineCommandService
     PUBLIC_DEPS EditGraph JSON
 )
 
+def_library(EditorNodeGraphProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_projection.hpp"
+    PUBLIC_DEPS EditGraph
+)
+
 def_library(PipelineHistoryApplier
     SOURCES
         "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"

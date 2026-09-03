@@ -67,6 +67,16 @@ gtest_discover_tests(PipelineHistoryApplierTest
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(PipelineHistoryApplierTest app)
 
+add_executable(EditorNodeGraphProjectionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_node_graph_projection_test.cpp)
+target_include_directories(EditorNodeGraphProjectionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorNodeGraphProjectionTest
+    PRIVATE GTest::gtest_main EditorNodeGraphProjection EditGraph)
+gtest_discover_tests(EditorNodeGraphProjectionTest
+    TEST_PREFIX "EditorNodeGraphProjectionTest."
+    PROPERTIES LABELS "ci_core_flow;edit;nodes")
+alcedo_register_test_target(EditorNodeGraphProjectionTest app)
+
 add_executable(DocumentTransferTest
     ${ALCEDO_TEST_ROOT}/app/document_transfer_test.cpp)
 target_include_directories(DocumentTransferTest

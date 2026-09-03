@@ -423,13 +423,18 @@ TEST_F(EditorDocumentHistoryTest, AddGradeUndoRedoPreservesStableIdsAndCleanValu
   const auto stored = extra->ToJson();
   EXPECT_TRUE(extra->Enabled());
   EXPECT_FLOAT_EQ(extra->Mix(), 1.0f);
+  EXPECT_EQ(extra->DisplayName(), "Color Grade 2");
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 2u);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   const auto* restored = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
   ASSERT_NE(restored, nullptr);
   EXPECT_EQ(restored->ToJson(), stored);
+  EXPECT_EQ(restored->DisplayName(), "Color Grade 2");
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
 }
 
 TEST_F(EditorDocumentHistoryTest, DeleteGradeUndoRestoresNodeMasksAndExactEdges) {

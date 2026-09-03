@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1 complete; NM5.2–NM5.8 planned
+Status: NM5.1–NM5.2 complete; NM5.3–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -884,6 +884,114 @@ Plan to add:
 Record the date, format revision, schema field, commands, test count, success chain, and failure
 chain here after implementation.
 
+##### NM5.2 completion record (2026-09-03)
+
+**Status:** complete — `PipelineDocument` now stores and validates the next default Color Grade
+name number. A new document starts with `Color Grade 1` and counter value `2`; a successful typed
+Add consumes exactly one value, while failure, Rename, Remove, Reconnect, and stored-node
+insertion leave the counter unchanged. Forward, inverse, recovery, reopen, and Version checkout
+restore the recorded counter and display name values exactly. The new Alcedo-owned projection
+contains only stable node, Mask, edge, revision, and session-generation values; it does not add
+production Qan primitives.
+
+**Revision and format:** base repository revision `777c9244` (`NM5.1`), branch
+`feature/nodes-panel-name-counter-projection`. The serialized field is
+`next_color_grade_name_number`. Because the field changes the persisted document and typed history
+payloads, all incompatible format identities move together: project `0.5.0`, packed project `5`,
+PipelineDocument `5`, image-edit schema `3`, commit `3`, chain `3`, typed batch `2`, root `3`,
+checkpoint `3`, Mini-Git WAL `4`, and transfer schema `alcedo.adjustment_transfer.v3`. No old
+format migration or substitute read path was added.
+
+**Primary success call chains:**
+
+```text
+AddColorGrade
+  -> validate predecessor, node id, and complete candidate graph
+  -> read next_color_grade_name_number = N
+  -> assign "Color Grade N" to the local Color Grade model
+  -> validate and apply the candidate graph
+  -> consume N only after graph acceptance
+  -> capture typed Add before = N and after = N + 1
+  -> forward replay applies stored node JSON and exact after value
+  -> inverse replay removes the node and restores exact before value
+```
+
+```text
+history head / recovery / reopen / Version checkout
+  -> materialize the exact PipelineDocument JSON
+  -> EditorNodeGraphProjection::Build
+  -> value-only EditorNodeGraphSnapshot
+  -> EditorNodeGraphProjection::AcceptsGeneration
+```
+
+Stored-node and transfer path:
+
+```text
+Paste or stored Color Grade insertion
+  -> remap stored node JSON
+  -> typed Add before = after = current counter
+  -> InsertColorGradeFromJson
+  -> keep the stored display name and counter unchanged
+```
+
+**Failure chain:**
+
+```text
+invalid, duplicate, disconnected, or exhausted Add
+  -> return the actual graph or counter error
+  -> do not apply the candidate document
+  -> leave graph, display names, and counter unchanged
+```
+
+**Projection values and update rules:** `EditorNodeGraphSnapshot` owns copied vectors for nodes
+and edges plus `session_generation`, `projection_revision`, and `topology_revision`. Each node
+copies `NodeId`, node kind, display name, and ordered Mask `{MaskId, source_kind}` values. Each edge
+copies its endpoint node and port IDs. Adjustment values, enabled state, mix values, topology
+numbers, and Qan pointers are absent. A parameter-only document edit can rebuild value data with
+the same topology revision; a topology update receives a new topology revision; a session consumer
+accepts only an exact session generation.
+
+**Tests and evidence:**
+
+| Target | Result |
+| --- | --- |
+| `EditorNodeGraphProjectionTest` | 6/6 passed: values, Mask order/source kinds, parameter stability, revisions, generation, invalid backbone. |
+| `PipelineDocumentDefaultNameTest` | 6/6 passed: defaults, increasing names, failure, replay, stored insertion, format/overflow validation. |
+| `PipelineHistoryApplierTest`, `PipelineEditBatchTest`, `GpuDagModelGraphTest`, `PipelineDocumentCheckpointTest` | 109/109 passed. |
+| `DocumentTransferTest`, `AdjustmentTransferServiceMiniGitTest`, `AdjustmentTransferServiceTest` | 24/24 passed. |
+| `EditorSessionHistoryPortTest`, `EditorSessionCheckpointStoreTest` | 76/76 passed, including typed Add, recovery, reopen, checkout counter/name assertions, and projection rebuilds for both checked-out states. |
+| **Total direct runtime execution** | **221/221 passed across 11 targets.** |
+
+Commands used:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorNodeGraphProjectionTest PipelineDocumentDefaultNameTest PipelineHistoryApplierTest PipelineEditBatchTest GpuDagModelGraphTest PipelineDocumentCheckpointTest DocumentTransferTest AdjustmentTransferServiceMiniGitTest AdjustmentTransferServiceTest EditorSessionHistoryPortTest EditorSessionCheckpointStoreTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionHistoryPortTest PipelineDocumentDefaultNameTest --parallel 4
+```
+
+The selected CTest listing could not complete because its existing UI pre-test discovery launches
+`SharedToneCurveTest_runtime/SharedToneCurveTest.exe`, which exits with `0xc0000139` from the
+pre-existing lensfun runtime entry-point mismatch. The 11 target binaries were therefore run from
+their generated `_runtime` directories; all 221 tests passed, including the final rebuilt session
+history target.
+
+**Pinned API differences:** none in this sub-phase. NM5.2 adds no Qan dependency or primitive; the
+projection is an Alcedo-owned C++ value boundary. The pinned QuickQanava integration and its
+documented-versus-pinned initialization differences remain recorded in NM5.1.
+
+**LOC note (grill-code-review):** 413 production additions including the new projection library,
+257 lines in two new focused test files, and 314 additions/77 deletions in already tracked files
+including format fixtures and regression assertions. The pre-existing 1,179-line
+`pipeline_edit_batch.cpp` is 1,222 lines after the focused validation additions; no new source or
+test file exceeds the repository review threshold, and the existing large source file was not
+split outside this phase's scope.
+
+**Residual gaps:** NM5.3–NM5.8 still own Qan adapter primitives, ports, delegates, Nodes rail/page
+UI, local layout state, visual connector behavior, accessibility, packaging, and final lifecycle
+qualification. The CTest discovery runtime mismatch remains outside this sub-phase; direct test
+binaries pass. macOS checks were not run on this Windows host.
+
 ---
 
 ## 10. NM5.3 — Qan adapter, ports, and read-only topology
@@ -1501,10 +1609,10 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] Production remains on Qt Quick Controls Basic.
 - [ ] Nodes is a page in the shared editor tool rail.
 - [ ] History, Versions, and Nodes share one page state and Loader.
-- [ ] `PipelineDocument` remains the only product graph.
-- [ ] The document stores the next default Color Grade name number.
-- [ ] A new document names its primary Grade `Color Grade 1`.
-- [ ] Add uses increasing default names and exact typed-history replay.
+- [x] `PipelineDocument` remains the only product graph.
+- [x] The document stores the next default Color Grade name number.
+- [x] A new document names its primary Grade `Color Grade 1`.
+- [x] Add uses increasing default names and exact typed-history replay.
 - [ ] Nodes show no topology numbers.
 - [ ] Nodes show no status dots.
 - [ ] Nodes show no On/Off state or action.
@@ -1517,10 +1625,10 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [ ] Gradient, Radial, and Brush use the approved paths.
 - [ ] The page contains no unapproved pill, badge, or status dot.
 - [ ] The page contains no `xx · xx` compound label or equivalent substitute.
-- [ ] Projection uses stable NodeId, MaskId, revisions, and session generation.
+- [x] Projection uses stable NodeId, MaskId, revisions, and session generation.
 - [ ] No Qan pointer survives a generation replacement.
-- [ ] Parameter edits do not rebuild the graph.
-- [ ] Version checkout publishes the correct projection.
+- [x] Parameter edits do not rebuild the graph.
+- [x] Version checkout publishes the correct projection.
 - [ ] The initial layout is vertical and deterministic.
 - [ ] Node positions, view, zoom, selection, and drawer state are local UI state.
 - [ ] The product allows one selected node.
