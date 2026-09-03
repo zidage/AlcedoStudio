@@ -157,12 +157,19 @@ foreach(_rel IN LISTS _alcedo_quickqanava_qml)
     list(APPEND _alcedo_quickqanava_qml_abs "${_abs}")
 endforeach()
 
+# The pinned QML sources use both unversioned imports and the documented 2.0
+# public import. Keep the source files visible to both import forms without
+# changing the pinned checkout.
+set_source_files_properties(${_alcedo_quickqanava_qml_abs}
+    PROPERTIES QT_QML_SOURCE_VERSIONS "2.0;1.0")
+
 set(_alcedo_quickqanava_binary_dir "${CMAKE_BINARY_DIR}/third_party/QuickQanava")
 file(MAKE_DIRECTORY "${_alcedo_quickqanava_binary_dir}")
 
 qt_add_qml_module(QuickQanava
     STATIC
     URI QuickQanava
+    VERSION 2.0
     SOURCES ${_alcedo_quickqanava_sources}
     QML_FILES ${_alcedo_quickqanava_qml_abs}
     RESOURCE_PREFIX /
