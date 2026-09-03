@@ -221,9 +221,30 @@ target_link_libraries(AlbumBackendLib
         CudaDriverRequirements
 )
 
+# Maps PipelineDocument snapshots onto pinned QuickQanava primitives. The QML
+# GraphView owns the qan::Graph; this adapter owns only identity maps.
+add_library(AlcedoQanGraph STATIC
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/alcedo_qan_graph.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+)
+target_include_directories(AlcedoQanGraph
+    PUBLIC
+        "${ALCEDO_INCLUDE_ROOT}"
+)
+target_link_libraries(AlcedoQanGraph
+    PUBLIC
+        EditorNodeGraphProjection
+        QuickQanava
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+)
+
 # The editor shell is QML-only. Widgets remains private to the album backend for
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
+target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
