@@ -28,6 +28,8 @@ git submodule update --init --recursive alcedo/src/third_party/lensfun
 .\vcpkg\vcpkg.exe install glib:x64-windows
 ```
 
+不要安装 vcpkg 的 `lensfun` 端口。Alcedo 从 `alcedo_studio/src/third_party/lensfun` 构建 Lensfun。`vcpkg-overlays/lensfun` 会阻止该端口再安装一份互相冲突的 `lensfun.dll`。
+
 如果你想改用非 vcpkg 的 GLib2 包，请在配置 Alcedo Studio 时显式传入 `ALCEDO_LENSFUN_GLIB2_BASE_DIR`。
 
 ## 顶层配置示例

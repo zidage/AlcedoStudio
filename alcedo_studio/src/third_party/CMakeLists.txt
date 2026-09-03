@@ -266,12 +266,21 @@ if(WIN32)
 endif()
 add_dependencies(puerhlab_lensfun puerhlab_lensfun_build)
 
+# Product code links the bundled submodule. A package-manager lensfun target
+# (vcpkg 0.3.4 exports C++ names only) must not win this name.
+if(TARGET lensfun::lensfun)
+    get_target_property(_alcedo_lensfun_alias lensfun::lensfun ALIASED_TARGET)
+    if(NOT _alcedo_lensfun_alias STREQUAL "puerhlab_lensfun")
+        message(FATAL_ERROR
+            "lensfun::lensfun is already defined and is not the bundled submodule. "
+            "Remove the vcpkg lensfun package (`vcpkg remove lensfun`) and reconfigure. "
+            "Alcedo builds Lensfun from alcedo_studio/src/third_party/lensfun.")
+    endif()
+else()
+    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
+endif()
 if(NOT TARGET alcedo_lensfun)
     add_library(alcedo_lensfun ALIAS puerhlab_lensfun)
-endif()
-
-if(NOT TARGET lensfun::lensfun)
-    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
 endif()
 
 set(PUERHLAB_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INSTALL_DIR}/include" CACHE INTERNAL
