@@ -146,6 +146,24 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
+  // Nodes graph canvas and node-card geometry. Colors follow the active theme;
+  // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
+  Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphGridColor READ graphGridColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphEdgeColor READ graphEdgeColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphCandidateEdgeColor READ graphCandidateEdgeColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphPortFillColor READ graphPortFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphPortBorderColor READ graphPortBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphSelectionOutlineColor READ graphSelectionOutlineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(int graphNodeWidth READ graphNodeWidth CONSTANT)
+  Q_PROPERTY(int graphEndpointHeight READ graphEndpointHeight CONSTANT)
+  Q_PROPERTY(int graphNameRowHeight READ graphNameRowHeight CONSTANT)
+  Q_PROPERTY(int graphMaskDrawerHeaderHeight READ graphMaskDrawerHeaderHeight CONSTANT)
+  Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
+  Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
+  Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
+  Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
+  Q_PROPERTY(int graphSelectionOutlineWidth READ graphSelectionOutlineWidth CONSTANT)
 
  public:
   enum class FontRole : int {
@@ -296,6 +314,22 @@ class AppTheme final : public QObject {
   auto scopeHistogramRedColor() const -> QColor;
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
+  auto graphCanvasColor() const -> QColor;
+  auto graphGridColor() const -> QColor;
+  auto graphEdgeColor() const -> QColor;
+  auto graphCandidateEdgeColor() const -> QColor;
+  auto graphPortFillColor() const -> QColor;
+  auto graphPortBorderColor() const -> QColor;
+  auto graphSelectionOutlineColor() const -> QColor;
+  auto graphNodeWidth() const -> int;
+  auto graphEndpointHeight() const -> int;
+  auto graphNameRowHeight() const -> int;
+  auto graphMaskDrawerHeaderHeight() const -> int;
+  auto graphMaskRowHeight() const -> int;
+  auto graphPortSize() const -> int;
+  auto graphPortHitSize() const -> int;
+  auto graphEdgeWidth() const -> int;
+  auto graphSelectionOutlineWidth() const -> int;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

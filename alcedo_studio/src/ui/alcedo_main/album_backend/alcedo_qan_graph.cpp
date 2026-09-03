@@ -4,6 +4,9 @@
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 
+#include <QQmlEngine>
+#include <QVariant>
+#include <QVariantMap>
 #include <cstddef>
 #include <string>
 
@@ -12,6 +15,7 @@
 #include "qanNode.h"
 #include "qanNodeItem.h"
 #include "qanPortItem.h"
+#include "qanStyle.h"
 
 namespace alcedo::ui {
 namespace {
@@ -32,6 +36,7 @@ AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {}
 AlcedoQanGraph::~AlcedoQanGraph() {
   rebuild_in_progress_ = true;
   ClearIdentityMaps();
+  DropCachedDelegates();
 }
 
 void AlcedoQanGraph::set_graph(qan::Graph* graph) {
@@ -43,8 +48,9 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   }
   rebuild_in_progress_ = true;
   ClearIdentityMaps();
-  has_projection_      = false;
-  applied_             = {};
+  has_projection_ = false;
+  applied_        = {};
+  DropCachedDelegates();
   rebuild_in_progress_ = false;
   graph_               = graph;
   if (!graph_.isNull()) {
@@ -52,6 +58,50 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   }
   emit GraphChanged();
 }
+
+void AlcedoQanGraph::set_color_grade_delegate_url(const QUrl& url) {
+  if (color_grade_delegate_url_ == url) {
+    return;
+  }
+  color_grade_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::color_grade_delegate_url() const -> QUrl { return color_grade_delegate_url_; }
+
+void AlcedoQanGraph::set_endpoint_delegate_url(const QUrl& url) {
+  if (endpoint_delegate_url_ == url) {
+    return;
+  }
+  endpoint_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::endpoint_delegate_url() const -> QUrl { return endpoint_delegate_url_; }
+
+void AlcedoQanGraph::set_port_delegate_url(const QUrl& url) {
+  if (port_delegate_url_ == url) {
+    return;
+  }
+  port_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::port_delegate_url() const -> QUrl { return port_delegate_url_; }
+
+void AlcedoQanGraph::set_edge_delegate_url(const QUrl& url) {
+  if (edge_delegate_url_ == url) {
+    return;
+  }
+  edge_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::edge_delegate_url() const -> QUrl { return edge_delegate_url_; }
 
 auto AlcedoQanGraph::graph() const -> qan::Graph* { return graph_.data(); }
 
@@ -159,7 +209,14 @@ auto AlcedoQanGraph::topology_revision() const -> std::uint64_t {
 
 auto AlcedoQanGraph::has_projection() const -> bool { return has_projection_; }
 
-auto AlcedoQanGraph::InsertQanNode(qan::Graph& graph) -> qan::Node* { return graph.insertNode(); }
+auto AlcedoQanGraph::InsertQanNode(qan::Graph& graph, const EditorNodeProjection& node)
+    -> qan::Node* {
+  auto* component = ComponentFor(node.node_kind);
+  if (component == nullptr) {
+    return nullptr;
+  }
+  return graph.insertNode(component);
+}
 
 void AlcedoQanGraph::ClearIdentityMaps() {
   node_by_id_.clear();
@@ -174,6 +231,7 @@ void AlcedoQanGraph::OnGraphDestroyed() {
   ClearIdentityMaps();
   has_projection_ = false;
   applied_        = {};
+  DropCachedDelegates();
   graph_.clear();
   rebuild_in_progress_ = false;
   emit GraphChanged();
@@ -294,7 +352,7 @@ auto AlcedoQanGraph::ApplyRoles(const EditorNodeGraphSnapshot& snapshot)
       result.error = QStringLiteral("Qan node is missing a visual item");
       return result;
     }
-    qan_node->setLabel(ToQString(node.display_name));
+    ApplyNodePresentation(*qan_node, node);
     node_projections_[node.node_id] = node;
   }
   applied_         = snapshot;
@@ -345,16 +403,25 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
   if (graph_.isNull()) {
     return QStringLiteral("AlcedoQanGraph has no Qan graph");
   }
+  const auto delegate_error = EnsureDelegates();
+  if (!delegate_error.isEmpty()) {
+    return delegate_error;
+  }
   for (const auto& node : snapshot.nodes) {
-    auto* qan_node = InsertQanNode(*graph_);
+    auto* qan_node = InsertQanNode(*graph_, node);
     if (qan_node == nullptr) {
+      if (ComponentFor(node.node_kind) == nullptr) {
+        return node.node_kind == EditorNodeKind::ColorGrade
+                   ? QStringLiteral("Alcedo color-grade node delegate is not set")
+                   : QStringLiteral("Alcedo endpoint node delegate is not set");
+      }
       return QStringLiteral("Qan node creation failed");
     }
     if (qan_node->getItem() == nullptr) {
       graph_->removeNode(qan_node, true);
       return QStringLiteral("Qan node is missing a visual item");
     }
-    qan_node->setLabel(ToQString(node.display_name));
+    ApplyNodePresentation(*qan_node, node);
     node_by_id_[node.node_id]       = qan_node;
     node_projections_[node.node_id] = node;
     node_from_qan_[qan_node]        = ReverseNode{node.node_id, snapshot.session_generation};
@@ -419,9 +486,13 @@ auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString
   if (out == nullptr || in == nullptr) {
     return QStringLiteral("Qan edge port binding failed");
   }
-  auto* qan_edge = graph_->insertEdge(source, dest);
+  auto* qan_edge = graph_->insertEdge(source, dest, edge_component_.get());
   if (qan_edge == nullptr || qan_edge->getItem() == nullptr) {
     return QStringLiteral("Qan edge creation failed");
+  }
+  if (auto* item = qan_edge->getItem()) {
+    item->setSrcShape(qan::EdgeStyle::ArrowShape::None);
+    item->setDstShape(qan::EdgeStyle::ArrowShape::None);
   }
   graph_->bindEdge(qan_edge, out, in);
   if (qan_edge->getItem()->getSourceItem() != out ||
@@ -444,6 +515,150 @@ auto AlcedoQanGraph::ToQString(std::string_view text) -> QString {
 
 auto AlcedoQanGraph::QanPortId(bool is_input, const PortId& port_id) -> QString {
   return (is_input ? QStringLiteral("in:") : QStringLiteral("out:")) + ToQString(port_id.Value());
+}
+
+void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node) {
+  qan_node.setLabel(ToQString(node.display_name));
+  auto* item = qan_node.getItem();
+  if (item == nullptr) {
+    return;
+  }
+  item->setResizable(false);
+  item->setProperty("nodeKind", NodeKindKey(node.node_kind));
+  item->setProperty("masks", MasksToVariant(node.masks));
+}
+
+auto AlcedoQanGraph::EnsureDelegates() -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    return QStringLiteral("Qan graph has no QML engine");
+  }
+  if (delegate_engine_.data() != engine) {
+    DropCachedDelegates();
+    delegate_engine_ = engine;
+  }
+  if (!color_grade_component_) {
+    auto loaded = LoadComponent(color_grade_delegate_url_,
+                                QStringLiteral("Alcedo color-grade node delegate"));
+    if (!loaded.component) {
+      return loaded.error;
+    }
+    color_grade_component_ = std::move(loaded.component);
+  }
+  if (!endpoint_component_) {
+    auto loaded =
+        LoadComponent(endpoint_delegate_url_, QStringLiteral("Alcedo endpoint node delegate"));
+    if (!loaded.component) {
+      return loaded.error;
+    }
+    endpoint_component_ = std::move(loaded.component);
+  }
+  if (!edge_component_) {
+    auto loaded = LoadComponent(edge_delegate_url_, QStringLiteral("Alcedo edge delegate"));
+    if (!loaded.component) {
+      return loaded.error;
+    }
+    edge_component_ = std::move(loaded.component);
+  }
+  return InstallPortDelegate();
+}
+
+auto AlcedoQanGraph::LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent {
+  LoadedComponent loaded;
+  if (url.isEmpty()) {
+    loaded.error = role + QStringLiteral(" URL is empty");
+    return loaded;
+  }
+  if (graph_.isNull()) {
+    loaded.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return loaded;
+  }
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    loaded.error = QStringLiteral("Qan graph has no QML engine");
+    return loaded;
+  }
+  auto component = std::make_unique<QQmlComponent>(engine, url, QQmlComponent::PreferSynchronous);
+  if (component->isError() || !component->isReady()) {
+    loaded.error = role + QStringLiteral(" failed to load");
+    if (!component->errorString().isEmpty()) {
+      loaded.error += QStringLiteral(": ") + component->errorString().trimmed();
+    }
+    return loaded;
+  }
+  loaded.component = std::move(component);
+  return loaded;
+}
+
+void AlcedoQanGraph::DropCachedDelegates() {
+  color_grade_component_.reset();
+  endpoint_component_.reset();
+  edge_component_.reset();
+  delegate_engine_.clear();
+  port_delegate_graph_.clear();
+}
+
+auto AlcedoQanGraph::InstallPortDelegate() -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  if (port_delegate_graph_.data() == graph_.data()) {
+    return {};
+  }
+  auto loaded = LoadComponent(port_delegate_url_, QStringLiteral("Alcedo port delegate"));
+  if (!loaded.component) {
+    return loaded.error;
+  }
+  graph_->setProperty("portDelegate", QVariant::fromValue(loaded.component.release()));
+  port_delegate_graph_ = graph_;
+  return {};
+}
+
+auto AlcedoQanGraph::ComponentFor(EditorNodeKind kind) const -> QQmlComponent* {
+  if (kind == EditorNodeKind::ColorGrade) {
+    return color_grade_component_.get();
+  }
+  return endpoint_component_.get();
+}
+
+auto AlcedoQanGraph::NodeKindKey(EditorNodeKind kind) -> QString {
+  switch (kind) {
+    case EditorNodeKind::Develop:
+      return QStringLiteral("develop");
+    case EditorNodeKind::Drt:
+      return QStringLiteral("drt");
+    case EditorNodeKind::ColorGrade:
+      return QStringLiteral("colorGrade");
+  }
+  return QStringLiteral("colorGrade");
+}
+
+auto AlcedoQanGraph::SourceKindKey(MaskSourceKind kind) -> QString {
+  switch (kind) {
+    case MaskSourceKind::Brush:
+      return QStringLiteral("brush");
+    case MaskSourceKind::Radial:
+      return QStringLiteral("radial");
+    case MaskSourceKind::LinearGradient:
+      return QStringLiteral("linearGradient");
+  }
+  return QStringLiteral("radial");
+}
+
+auto AlcedoQanGraph::MasksToVariant(const std::vector<EditorNodeMaskProjection>& masks)
+    -> QVariantList {
+  QVariantList list;
+  list.reserve(static_cast<qsizetype>(masks.size()));
+  for (const auto& mask : masks) {
+    QVariantMap row;
+    row.insert(QStringLiteral("maskId"), ToQString(mask.mask_id.Value()));
+    row.insert(QStringLiteral("sourceKind"), SourceKindKey(mask.source_kind));
+    list.push_back(row);
+  }
+  return list;
 }
 
 }  // namespace alcedo::ui
