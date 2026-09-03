@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.2 complete; NM5.3–NM5.8 planned
+Status: NM5.1–NM5.3 complete; NM5.4–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -1068,6 +1068,122 @@ Verify exact pinned names for:
 
 Record the date, pinned API signatures, commands, test count, success chain, and failure chain here.
 
+##### NM5.3 completion record (2026-09-03)
+
+**Status:** complete — `AlcedoQanGraph` maps an immutable `EditorNodeGraphSnapshot` onto
+documented QuickQanava primitives. Each projected node, backbone edge, and real top/bottom
+port is created through pinned `insertNode` / `insertEdge` / `insertPort` / `bindEdge` calls.
+NodeId and edge identity live only in adapter maps, not in Qan labels. Rename and Mask
+source-kind updates keep the live Qan objects. Version or generation replacement clears
+reverse maps before destroying primitives. A stale snapshot or Qan pointer cannot select or
+edit the live document. A failed Qan insert restores the prior complete projection. This
+sub-phase does not expose Add, Rename, Delete, or Reconnect product commands, and QML does
+not construct the adapter yet.
+
+**Revision:** base repository revision `2829e926` (`NM5.2`), branch
+`feature/nodes-panel-qan-adapter`. QuickQanava remains submodule tag `2.50` at
+`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`.
+
+**Pinned API signatures used:**
+
+```text
+qan::Graph::insertNode(QQmlComponent* = nullptr, qan::NodeStyle* = nullptr)
+qan::Graph::removeNode(qan::Node* node, bool force = false)
+qan::Graph::insertEdge(qan::Node* source, qan::Node* destination, QQmlComponent* = nullptr)
+qan::Graph::removeEdge(qan::Edge* edge, bool force = false)
+qan::Graph::insertPort(qan::Node* node, qan::NodeItem::Dock dock,
+                       qan::PortItem::Type portType = InOut, QString label = "", QString id = "")
+qan::Graph::bindEdge(qan::Edge* edge, qan::PortItem* outPort, qan::PortItem* inPort)
+qan::Node::setLabel(const QString&)
+qan::Node::getItem()
+qan::NodeItem::findPort(const QString& portId)
+qan::EdgeItem::getSourceItem() / getDestinationItem()
+QObject::destroyed
+```
+
+**Primary success call chain:**
+
+```text
+EditorNodeGraphProjection::Build
+  -> EditorNodeGraphSnapshot
+  -> AlcedoQanGraph::ApplySnapshot
+  -> same generation + topology revision: setLabel and Mask roles in place
+  -> generation or topology change: clear identity maps
+  -> qan::Graph::removeEdge / removeNode(force)
+  -> qan::Graph::insertNode / insertPort / insertEdge / bindEdge
+  -> NodeId <-> QPointer<qan::Node> and edge-identity maps
+  -> GraphView-owned qan::Graph
+```
+
+**Primary failure call chain:**
+
+```text
+stale session/topology/projection revision
+  -> reject ApplySnapshot
+  -> live Qan primitives, maps, and revisions unchanged
+```
+
+```text
+Qan insertNode / insertPort / insertEdge / bindEdge failure
+  -> rebuild_in_progress rejects LiveNodeId
+  -> destroy partial primitives
+  -> rebuild the prior snapshot
+  -> return the real Qan error; no substitute graph
+```
+
+**Pinned API differences:**
+
+- The `insertPort` comment refers to `qan::NodeItem::getPort()`. Pinned 2.50 exposes
+  `findPort(const QString& portId)` instead. The adapter stores QPointer ports keyed by
+  product PortId and uses empty Qan port labels with `in:` / `out:` identity strings.
+- `qan::Node::delegate()` and `qan::Edge::delegate()` cache a process-lifetime
+  `QQmlComponent` on the first `QQmlEngine`. A second engine cannot create visual items
+  through C++ `insertNode()`. Adapter tests share one engine and recreate the Loader-owned
+  graph. Production already uses one engine.
+- The class comment says visual connectors default to enabled. Pinned 2.50 sets
+  `_connectorEnabled = false`. This sub-phase leaves that default; later work enables
+  request-only mode.
+- Website `QuickQanava::initialize()` remains `initialize(QQmlEngine*)` as recorded in NM5.1.
+
+**Tests and evidence:**
+
+| Required criterion | Test | Result |
+| --- | --- | --- |
+| NodeId maps to one live Qan node | `MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGeneration` | PASS |
+| Backbone edges bind to top/bottom ports | `BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts` | PASS |
+| Rename updates one label without replacing the graph | `RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives` | PASS |
+| Mask kind change updates one node without replacing edges | `MaskKindChangeUpdatesOneNodeWithoutReplacingEdges` | PASS |
+| Version replacement removes old primitives and reverse maps | `VersionReplacementRemovesOldPrimitivesAndReverseMapEntries` | PASS |
+| Stale primitive cannot select or edit | `StalePrimitiveCannotSelectOrEditTheNewDocument` | PASS |
+| Adapter failure restores the prior projection | `AdapterInsertFailureRestoresThePriorCompleteQanProjection` | PASS |
+| Loader destruction clears identity maps | `GraphDestructionClearsIdentityMaps` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlcedoQanGraphTest --parallel 4
+build/debug/alcedo_studio/tests/ui/AlcedoQanGraphTest_runtime/AlcedoQanGraphTest.exe --gtest_color=no
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumBackendLib --parallel 4
+```
+
+Suite totals: **8/8 passed** on the direct runtime binary. `AlbumBackendLib` links
+`AlcedoQanGraph`. QML type registration was not added because QML does not construct the
+adapter in this sub-phase.
+
+**Checklist / exit condition:** all NM5.3 work and exit conditions are checked. No node
+delegate, Mask drawer, Nodes rail page, or graph command was added.
+
+**LOC note (grill-code-review):** 212-line adapter header, 450-line adapter source, 421-line
+focused test file, plus CMake wiring in `alcedo_main/CMakeLists.txt` and `tests/ui/CMakeLists.txt`.
+No changed file exceeds the 1000-line review threshold.
+
+**Residual gaps:** NM5.4–NM5.8 still own the Alcedo node delegate, Mask drawer, Nodes rail
+page, layout/selection store, Add/Rename/Delete, visual connector, accessibility, and
+package checks. macOS checks were not run on this Windows host. The unrelated CTest
+discovery runtime mismatch remains outside this sub-phase; the adapter binary was run
+directly.
+
 ---
 
 ## 11. NM5.4 — Alcedo node delegate and Mask drawer
@@ -1626,7 +1742,7 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [ ] The page contains no unapproved pill, badge, or status dot.
 - [ ] The page contains no `xx · xx` compound label or equivalent substitute.
 - [x] Projection uses stable NodeId, MaskId, revisions, and session generation.
-- [ ] No Qan pointer survives a generation replacement.
+- [x] No Qan pointer survives a generation replacement.
 - [x] Parameter edits do not rebuild the graph.
 - [x] Version checkout publishes the correct projection.
 - [ ] The initial layout is vertical and deterministic.

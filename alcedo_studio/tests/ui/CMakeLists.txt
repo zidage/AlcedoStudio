@@ -764,6 +764,36 @@ alcedo_ui_gtest_discover_tests(QuickQanavaProductionIntegrationTest
     PROPERTIES LABELS "quickqanava;workspace_qml")
 alcedo_register_test_target(QuickQanavaProductionIntegrationTest ui)
 
+# Read-only Qan adapter: NodeId maps, ports, role updates, generation replacement.
+add_executable(AlcedoQanGraphTest
+    ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AlcedoQanGraphTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(AlcedoQanGraphTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(AlcedoQanGraphTest
+    TEST_PREFIX "AlcedoQanGraphTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes")
+alcedo_register_test_target(AlcedoQanGraphTest ui)
+
 # Phase 7B: final-display identity stamping, stale-output rejection, and
 # hidden/resume analyzer lifecycle.
 add_executable(EditorScopeControllerTest
