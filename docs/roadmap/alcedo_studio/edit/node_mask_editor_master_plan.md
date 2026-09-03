@@ -1,8 +1,9 @@
-# Node-aware Pipeline Editing and Mask Authoring 总体方案
+# Node-aware Pipeline Editing and Mask Authoring Master Plan
 
 Date: 2026-08-29
 
-Status: NM0, NM2, and NM3 complete；NM1 in progress；NM4–NM8 planned。NML cancelled (2026-08-30).
+Status: NM0, NM2, NM3, and NM4 complete; NM1 in progress; NM5-NM8 planned. NML was
+cancelled on 2026-08-30.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
 executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
@@ -13,6 +14,9 @@ R 处理任务请求、后台工作区占用、使用权与完整导出 recipe�
 不保留空闲块；不增加通用两阶段分配或延迟指针回填机制。
 [缩略图磁盘写回 Issue #113](https://github.com/zidage/AlcedoStudio/issues/113)单独跟踪，后续讨论由
 disk cache service 拥有写回/失效机制；不在 R 中实施，也不作为 NM1.5 的前置条件。
+2026-09-02 UI revision: NM4 is complete. The approved node-editor UI, VI mapping,
+QuickQanava boundary, and official documentation sources for NM5-NM8 are fixed before NM5 starts.
+See the [NM5 execution plan](node_mask_editor/phase_nm5_nodes_panel_plan.md) for its sub-phases.
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -36,8 +40,17 @@ disk cache service 拥有写回/失效机制；不在 R 中实施，也不作为
 - [Editor Single Live Pipeline + WAL + Checkpoint](../ui/editor_single_live_pipeline_wal_checkpoint_plan.md)
 - [Phase 7A History/Versions Recovery and Editor Performance Plan](../ui/phase_7a_history_versions_repair_and_ui_refactor_plan.md)
 - [QuickQanava repository](https://github.com/cneben/QuickQanava)
+- [QuickQanava documentation home](https://cneben.github.io/QuickQanava/index.html)
+- [QuickQanava installation documentation](https://cneben.github.io/QuickQanava/installation.html)
 - [QuickQanava graph documentation](https://cneben.github.io/QuickQanava/graph.html)
+- [QuickQanava nodes and groups documentation](https://cneben.github.io/QuickQanava/nodes.html)
+- [QuickQanava edges documentation](https://cneben.github.io/QuickQanava/edges.html)
+- [QuickQanava styles documentation](https://cneben.github.io/QuickQanava/styles.html)
+- [QuickQanava utilities documentation](https://cneben.github.io/QuickQanava/utilities.html)
 - [QuickQanava custom topology documentation](https://cneben.github.io/QuickQanava/advanced.html)
+- [QuickQanava samples documentation](https://cneben.github.io/QuickQanava/samples.html)
+- [QuickQanava API reference notice](https://cneben.github.io/QuickQanava/reference.html)
+- [QuickQanava licence](https://cneben.github.io/QuickQanava/licence.html)
 
 ---
 
@@ -762,13 +775,13 @@ render。这样 Version checkout 可以恢复当时的节点名称，历史描�
 history row 从 typed payload 派生可本地化描述，例如：
 
 ```text
-Exposure · Warm Face: +0.30 → +0.55
-Added Color Grade · Sky
-Removed Color Grade · Background
-Reconnected Color Grade · Skin after Base Grade
-Added Radial Mask · Warm Face
-Brush stroke · Warm Face / Mask 2
-Feather · Warm Face / Radial 1: 24 px → 48 px
+Exposure for Warm Face: +0.30 → +0.55
+Added Color Grade: Sky
+Removed Color Grade: Background
+Reconnected Color Grade: Skin after Base Grade
+Added Radial Mask: Warm Face
+Brush stroke for Warm Face / Mask 2
+Feather for Warm Face / Radial 1: 24 px → 48 px
 ```
 
 不要把已本地化字符串写入 commit payload。payload 保存稳定 ID、operation kind 和数值；QML
@@ -839,18 +852,43 @@ Paste 失败时不得创建空 Version、部分 Mask asset 引用或移动 activ
 
 ---
 
-## 15. QuickQanava 集成边界
+## 15. QuickQanava integration boundary
 
-### 15.1 依赖策略
+All QuickQanava decisions must cite the official documentation. Do not infer behavior from another
+node editor.
 
-- 使用上游 QuickQanava，不实现自有 graph canvas、edge router、port hit testing、selection、
-  pan 或 zoom 组件；
-- 固定经过验证的 tag/commit，不在 configure 时跟随浮动分支；
-- 优先作为仓库 submodule/vendor source 接入，构建不依赖在线 FetchContent；
-- 记录 BSD-3-Clause license 和第三方 notices；
-- 验证 Qt 6.9.3、C++20 主工程、Windows/MSVC 和 macOS/Clang；
-- 验证静态/动态 QML module 的 import path、资源、install 和 package；
-- production QML 继续使用 Qt Quick Controls Basic，不因上游示例改成 Material。
+The online API Reference no longer contains class details. Its page directs users to generate
+Doxygen from the upstream source. Alcedo pins tag `2.50`, commit
+`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`. The pinned headers define the exact buildable API.
+
+| Design question | Official section | Fixed decision |
+| --- | --- | --- |
+| Library scope | [QuickQanava `Introduction`](https://cneben.github.io/QuickQanava/index.html) | Use the official directed-graph view, QML delegates, drag, navigation, and visual topology input. |
+| CMake and static library | [Installation](https://cneben.github.io/QuickQanava/installation.html) | Use the pinned submodule and CMake. Configuration does not fetch a moving revision. |
+| Product data and visuals | [Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html) | `PipelineDocument` owns product data. The Qan graph is a projection. |
+| Engine integration | [Graph `QuickQanava Initialization`](https://cneben.github.io/QuickQanava/graph.html) | Initialize before QML load. Production stays on Basic style. |
+| View navigation | [Graph `Graph View`](https://cneben.github.io/QuickQanava/graph.html), [Utilities `Navigable`](https://cneben.github.io/QuickQanava/utilities.html) | Use documented pan and zoom. Verify center and fit methods in the pinned header. |
+| Grid | [Graph `Grid`](https://cneben.github.io/QuickQanava/graph.html) | Use `Qan.LineGrid`. Do not add snap-to-grid. |
+| Nodes and ports | [Nodes/Groups `Adding content`, `Docks and Ports`](https://cneben.github.io/QuickQanava/nodes.html) | Use official node, port, and edge-to-port APIs. |
+| Variable node height | [Nodes/Groups `Node Resizing`, `Defining Custom Nodes`](https://cneben.github.io/QuickQanava/nodes.html) | Use a rectangular custom delegate. Verify bounds and edges after a Mask drawer fold. |
+| Single selection | [Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html) | Use official selection. The Alcedo controller owns the selected NodeId. |
+| Custom appearance | [Nodes/Groups `Defining Custom Nodes`](https://cneben.github.io/QuickQanava/nodes.html), [Advanced `Defining Custom Topology`](https://cneben.github.io/QuickQanava/advanced.html) | Use an Alcedo QML delegate and a thin C++ adapter. |
+| Reconnect request | [Edges `Visual Connectors`](https://cneben.github.io/QuickQanava/edges.html) | Set `connectorCreateDefaultEdge = false`. Send the request to the Alcedo service. |
+| Style | [Styles `Node Style`, `Material Styling`](https://cneben.github.io/QuickQanava/styles.html) | Use style extension points only. Do not copy Material appearance. Disable effects and gradient fill. |
+| Samples | [Samples](https://cneben.github.io/QuickQanava/samples.html) | Use custom, navigable, topology, and connector examples only to confirm official usage. |
+| API signatures | [API Reference](https://cneben.github.io/QuickQanava/reference.html) | Check pinned `src/*.h` files and local Doxygen. Record differences in each completion record. |
+| Distribution | [Licence](https://cneben.github.io/QuickQanava/licence.html) | Keep the required notices in source and binary distributions. |
+
+### 15.1 Dependency policy
+
+- Use upstream QuickQanava. Do not implement a second graph canvas, edge router, port hit test,
+  selection system, or navigation system.
+- Keep the verified tag and commit. Do not follow a moving branch during configuration.
+- Build from the repository submodule. Do not add an online FetchContent dependency.
+- Keep BSD-3-Clause and third-party notices.
+- Verify Qt 6.9.3, C++20, Windows/MSVC, and macOS/Clang.
+- Verify QML import paths, resources, install output, and packages.
+- Keep Qt Quick Controls Basic in production.
 
 ### 15.2 Adapter
 
@@ -858,40 +896,43 @@ Paste 失败时不得创建空 Version、部分 Mask asset 引用或移动 activ
 PipelineDocument
   -> EditorNodeGraphProjection
   -> AlcedoQanGraph adapter
-  -> QuickQanava GraphView / node / port / edge delegates
+  -> QuickQanava GraphView, node, port, and edge delegates
 ```
 
-允许为 QuickQanava extension point 编写薄的 Alcedo delegate，以显示节点标题、状态、端口和
-VI token；不允许重新实现节点拖动、edge 绘制、connector 或 graph navigation。
+The adapter can use documented QuickQanava extension points. It can show node names, Mask source
+types, ports, edges, and AppTheme roles. It cannot reimplement node movement, edge drawing, visual
+connectors, selection, or graph navigation.
 
-建议关闭 QuickQanava 默认的直接建边行为：
+Disable default edge insertion:
 
 ```text
 connectorCreateDefaultEdge = false
 connectorRequestEdgeCreation
-  -> EditorNodeController validate
-  -> typed reconnect mutation
-  -> apply command on live PipelineDocument
+  -> EditorNodeController validation
+  -> typed Reconnect mutation
+  -> live PipelineDocument change
   -> graph projection revision
 ```
 
-视觉 connector 在 backend 成功前只表示候选连接。失败时恢复原图并显示精确原因。
+The visual connector remains temporary until the backend succeeds. Failure restores the prior
+permanent graph and reports the exact reason.
 
-### 15.3 Projection 更新
+### 15.3 Projection updates
 
-- 参数 slider 变化不重建 graph projection；
-- node name/enabled/mask count 只更新对应 node roles；
-- graph topology revision 才添加/删除 node 和 edge projection；
-- Version checkout 替换整份 projection，但保留同 Version layout state；
-- Qan object lifetime 不能成为 NodeId lifetime；
-- QML 不保存裸 C++ model 指针跨异步操作。
+- A parameter slider change does not rebuild the graph projection.
+- A Rename updates one node label.
+- A Mask Add, Remove, reorder, or source-kind change updates only the owner node drawer.
+- A topology revision adds, removes, or reconnects projected nodes and edges.
+- A Version checkout replaces the projection and restores that Version's local layout state.
+- Qan object lifetime never defines NodeId lifetime.
+- QML does not keep a raw C++ model pointer across asynchronous work.
 
 ---
 
-## 16. Nodes 面板
+## 16. Nodes panel
 
-Nodes 作为左侧 `EditorWorkspaceRail` 的第三个可展开页面，与 History、Versions 同属一个视觉
-和生命周期体系：
+Nodes is the third expandable page in `EditorWorkspaceRail`. It shares visual rules and Loader
+lifetime with History and Versions.
 
 ```text
 Rail
@@ -901,33 +942,262 @@ Rail
   Background Tasks
 ```
 
-需要把当前 `historyPanelPage` 概念改成中性的 rail page state，例如
-`editorToolPanelPage`。合法值至少为 `""`、`history`、`versions`、`nodes`。
+### 16.1 Design inputs
 
-布局规则：
+| Item | Fixed value |
+| --- | --- |
+| Platforms | Windows and macOS desktop |
+| Window | 1200×760 logical pixels by default; 960×640 minimum |
+| DPR | 1.0, 1.25, 1.5, and 2.0 |
+| Style | Qt Quick Controls Basic |
+| VI | `AppTheme` and `DESIGN.md` |
+| Primary content | Center photo viewer |
+| Secondary content | Selected node and right adjustment stack |
+| Tertiary content | Graph layout and navigation |
+| Input | Mouse, trackpad, and keyboard |
+| Text | `qsTr()` with 30–40 percent expansion allowance |
 
-- 使用 `cardSurfaceColor`、`cardBorderColor`、`panelRadius` 和现有 fold motion；
-- 默认宽度 `editorSidePanelWidth`；
-- 如果 320 px 对 node graph 不够，允许在现有 `editorSidePanelWidthMin/Max` 范围内由用户调整，
-  不能为 Nodes 建立并行宽度体系；
-- panel fully closed 时卸载 graph delegates，layout state 存在 rail/controller；
-- reduced motion 时立即到达终态；
-- 节点/端口/删除/添加必须支持键盘操作和可见 focus；
-- tooltip、Accessible.name 和错误信息必须可本地化；
-- 不依靠 hover 才显示唯一操作入口。
+Use the existing dense-editor typography. Do not add another type scale.
 
-第一版主链默认纵向排列，Develop 在上、DRT/Post 在下。节点位置是用户可调的 UI layout，
-按 `(project, image, version, NodeId)` 保存，不进入 Version DAG 或 edit history。
+### 16.2 Workspace relationship
 
-Endpoint node 显示锁定/不可删除状态。Color Grade 显示 enabled、Mask 数量和当前选择。添加按钮
-创建 Clean Color Grade，并插入到当前 Color Grade 后或 DRT/Post 前；具体规则必须在 UI 和
-keyboard action 中一致。
+```text
+Top toolbar
+
+┌────────┬─────────────────────────┬───────────────────┐
+│ Rail   │ Viewer                  │ Adjustment stack  │
+│ 48 px  │                         │ 320 px preferred  │
+│        │                         │                   │
+│ Hist   │                         │ Selected node     │
+│ Vers   │                         │ context           │
+│ Nodes  │                         │                   │
+│ Tasks  │                         │                   │
+├────────┴─────────────────────────┴───────────────────┤
+│ Filmstrip under the viewer column                   │
+└─────────────────────────────────────────────────────┘
+```
+
+Nodes replaces only the left expandable body. It does not cover the viewer or create a floating
+window. History, Versions, and Nodes cannot be open together.
+
+Rename `historyPanelPage` to a neutral property such as `editorToolPanelPage`. Accept only `""`,
+`history`, `versions`, and `nodes`.
+
+### 16.3 Page and rail action
+
+The page has a compact header and a graph canvas. The header shows `Nodes` and one Add action.
+Fit remains available through `Ctrl+0` and the canvas context menu.
+
+Use the approved Tabler `stack-2` paths for `panel_icons/nodes.svg`:
+
+```svg
+<path d="M12 4l-8 4l8 4l8 -4l-8 -4" />
+<path d="M4 12l8 4l8 -4" />
+<path d="M4 16l8 4l8 -4" />
+```
+
+Normalize the source to a 24×24 viewBox and white stroke. Keep the user-approved 2 px stroke. Use
+`IconActionButton` and AppTheme tint. Do not add a count, pill, badge, or status dot.
+
+### 16.4 Direction and local layout
+
+The first layout is vertical. Develop is at the top. DRT/Post is at the bottom. Color Grades follow
+execution order.
+
+Generate deterministic first positions from backbone order. Do not depend on an undocumented
+QuickQanava layout. Do not add snap-to-grid or a minimap.
+
+Users can move nodes, move the view, and zoom. Store these values by project, image, Version, and
+NodeId. Also store selected NodeId and each Color Grade drawer state.
+
+These values are local UI state. They do not enter `PipelineDocument`, history, or photo rendering.
+Keep removed NodeId layout values so Undo can restore them.
+
+### 16.5 Default names
+
+Node names do not show topology position. New Color Grades use a serialized creation counter:
+
+```text
+Color Grade 1
+Color Grade 2
+Color Grade 3
+```
+
+The default document names the primary Grade `Color Grade 1` and stores next value `2`. A successful
+Add consumes one value. Add failure does not. Rename, Remove, Reconnect, and node movement do not
+change the counter. A topology reorder never changes an existing name.
+
+The counter is document metadata. Typed Add history must replay the exact counter transition.
+Reinsertion of stored node JSON does not allocate another name.
+
+### 16.6 Node and Mask drawer
+
+A Color Grade node shows only its display name and Mask stack. It does not show a topology number,
+node kind, status dot, On/Off state, adjustment summary, Mask count, or persistent action row.
+
+The Mask stack is a drawer below the name. The drawer starts open. Its `Masks` header stays visible
+when closed. The full header row opens or closes the drawer. A disclosure chevron shows direction.
+
+Each row shows only the approved source-type icon and localized type label:
+
+| Model kind | UI label | Icon |
+| --- | --- | --- |
+| `MaskSourceKind::LinearGradient` | `Gradient` | `mask_icons/gradient.svg` |
+| `MaskSourceKind::Radial` | `Radial` | `mask_icons/radial.svg` |
+| `MaskSourceKind::Brush` | `Brush` | `mask_icons/brush.svg` |
+
+Do not show Mask name, opacity, enabled state, invert state, ranges, identity, selection, or actions.
+An empty open drawer has no Mask rows.
+
+Drawer state is local UI layout state. A fold creates no history and no render. The output port and
+bound edge follow the current node height.
+
+Develop and DRT/Post use compact fixed-name delegates. They do not show Mask drawers. Do not add a
+`Locked` badge or status dot.
+
+### 16.7 Approved Mask paths
+
+Gradient uses Tabler `wash-dry`:
+
+```svg
+<path d="M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12" />
+```
+
+Radial uses Tabler `wash-dryclean`:
+
+```svg
+<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+```
+
+Brush uses Tabler `brush`:
+
+```svg
+<path d="M3 21v-4a4 4 0 1 1 4 4h-4" />
+<path d="M21 3a16 16 0 0 0 -12.8 10.2" />
+<path d="M21 3a16 16 0 0 1 -10.2 12.8" />
+<path d="M10.6 9a9 9 0 0 1 4.4 4.4" />
+```
+
+Normalize all three files to the shared 24×24 viewBox and white stroke. Keep the user-approved
+2 px stroke. The Radial circle is an approved type icon. Do not reuse it as a status dot.
+
+### 16.8 VI mapping
+
+| Element | Rule |
+| --- | --- |
+| Rail and panel shell | `cardSurfaceColor`, `cardBorderColor`, `panelRadius`, and existing fold motion |
+| Graph canvas | Deep AppTheme surface |
+| Grid | Official `Qan.LineGrid` with an AppTheme graph role |
+| Color Grade node | `cardSurfaceColor` plus 1 px `cardBorderColor` |
+| Selected node | Same fill with a high-contrast outline around the full drawer |
+| Port | Small solid square with a larger input area |
+| Edge | Thin line with an AppTheme graph role |
+| Candidate edge | Separate AppTheme role; temporary until validation succeeds |
+| Error | `dangerColor` plus text; never color alone |
+
+Add missing graph roles to AppTheme and `DESIGN.md` in one change. QML does not contain raw graph
+colors, spacing, radii, or durations.
+
+Set `NodeStyle.effectEnabled` to false. Use solid fill. Do not use shadow, glow, gradient, glass,
+Material appearance, unrequested pills or badges, unrequested status dots, or `xx · xx` labels.
+
+### 16.9 Selection, keyboard, and accessibility
+
+The product allows one selected node. `EditorNodeController.selectedNodeId` is authoritative.
+QuickQanava selection mirrors it.
+
+After Version checkout, restore that Version's recent selected NodeId. If it is absent, select the
+first Color Grade. If no Grade exists, select DRT/Post.
+
+| Input | Result |
+| --- | --- |
+| `Tab`, `Shift+Tab` | Move through the header, canvas, and drawer headers. |
+| `Up`, `Down` | Select the previous or next backbone node. |
+| `Home`, `End` | Select Develop or DRT/Post. |
+| `Enter`, `Space` on `Masks` | Open or close the drawer. |
+| `F2` | Rename a selected Color Grade. |
+| `Escape` | Cancel Rename or Reconnect. Otherwise return focus to the canvas. |
+| `Delete` | Delete a selected Color Grade. |
+| `Ctrl++` | Add a clean Color Grade. |
+| `Ctrl+0` | Fit the graph through a pinned, documented navigation API. |
+
+Delete is undoable and needs no confirmation dialog. Endpoints reject Delete. All actions use
+localized text, accessible names, and visible keyboard focus.
+
+### 16.10 Size and Loader lifetime
+
+Use `editorSidePanelWidth` as the preferred width. History, Versions, and Nodes share one stored
+tool-panel width. Clamp it to `editorSidePanelWidthMin/Max`.
+
+The workspace computes an effective width after it reserves the 360 logical-pixel viewer floor and
+the right-panel minimum. The viewer keeps that floor at 960×640.
+
+After a complete close, the Loader destroys GraphView delegates. The controller and layout store
+retain plain values only. They retain no `qan::Node*`.
+
+Use the existing rail fold. `reduceMotion` makes it immediate.
+
+### 16.11 Structure command rule
+
+QML calls `EditorNodeController` only. QML does not modify product topology.
+
+```text
+QML action
+  -> EditorNodeController session and generation check
+  -> NM4 EditorSessionHistoryPort command
+  -> domain validation under the render lock
+  -> typed batch, WAL, and history head
+  -> projection publication
+  -> AlcedoQanGraph update
+  -> required render intent
+```
+
+Do not update permanent Qan topology before service success. Failure keeps the prior projection and
+shows the exact error.
+
+NM5 does not expose `SetColorGradeEnabled` or any equivalent On/Off action. The existing stored
+field can remain for data compatibility and execution.
+
+### 16.12 Reconnect rule
+
+Each Color Grade has one top input port and one bottom output port. Develop has no incoming scene
+port. DRT/Post has no outgoing scene port.
+
+Use the official visual connector. Set `connectorCreateDefaultEdge` to false. The connector shows a
+temporary request only.
+
+Only a selected Color Grade can start a move. Resolve the target against the backbone after the
+moving Grade is removed from an in-memory order calculation.
+
+```text
+connectorRequestEdgeCreation
+  -> resolve NodeId, target, and generation
+  -> remove the moving Grade from temporary order
+  -> compute new predecessor and successor
+  -> validate one complete backbone move
+  -> NM4 ReconnectColorGrade
+  -> topology projection revision
+  -> permanent Qan edge update
+```
+
+An invalid or stale request changes no document, creates no history, and leaves no permanent edge.
+
+### 16.13 Detailed execution plan
+
+See [Phase NM5 — QuickQanava Nodes Panel](node_mask_editor/phase_nm5_nodes_panel_plan.md) for the
+sub-phases, files, interfaces, call chains, tests, and required official sections.
 
 ---
 
 ## 17. Node-aware Adjustment Stack
 
-引入 `EditorAdjustmentContext`，至少发布：
+NM6 has a narrow QuickQanava dependency. It uses the official
+[Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html) section and the
+[Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html) section. These
+sections define the boundary between topology, visual items, and node selection. NM6 does not
+store adjustment state in QuickQanava.
+
+Add `EditorAdjustmentContext`. It publishes at least these fields:
 
 ```text
 selected_node_id
@@ -939,38 +1209,101 @@ adjustment_snapshot
 context_revision
 ```
 
-右侧 `EditorAdjustmentStack.qml` 不再假设一个全局参数表，而是按 context 显示可用 panel：
+`EditorAdjustmentStack.qml` must use this context. It must not assume one global parameter set.
+It shows only the panels that the selected node supports.
 
-| 选中对象 | 可用 panel |
+| Selected object | Available panels |
 | --- | --- |
-| Develop | RAW Decode、Develop-owned controls、Geometry |
-| Color Grade | Tone、Look、LUT、Masks、Geometry |
-| DRT/Post | DRT/Display、Clarity、Sharpen、Halation、Film Grain、Geometry |
+| Develop | RAW Decode, Develop-owned controls, Geometry |
+| Color Grade | Tone, Look, LUT, Masks, Geometry |
+| DRT/Post | DRT/Display, Clarity, Sharpen, Halation, Film Grain, Geometry |
 
-Geometry 是 Document/global 参数，所以在三个 context 都可以访问；它不因节点选择而创建三份
-实例。
+Geometry is a document-level parameter group. All three contexts can open it. Node selection does
+not create three Geometry instances.
 
-每个 panel 的 `loadFromSnapshot()` 改为读取当前 context 的 snapshot。Panel 初次构建、
-session rebind、Version checkout、node selection 和 Undo/Redo 后都要加载正确值，但 load-only
-路径不能提交 history 或 render。
+### 17.1 Right-panel wayfinding
 
-当用户切换节点时：
+The adjustment stack has one fixed context header below the scope area and above the adjustment
+navigation.
 
-1. 结束或取消当前 provisional input sequence；
-2. 更新 selected NodeId；
-3. 发布新的 context snapshot；
-4. adjustment stack 选择该节点支持的首选 panel，或保留仍然合法的 panel；
-5. 只更新 UI，不触发照片渲染。
+The header shows:
 
-删除 selected Color Grade 后，选择其后继 Color Grade；若没有则选择前驱；再没有则选择
-DRT/Post。Version checkout 后优先恢复该 Version 的最近选择，找不到时选择 Default/第一个
-Color Grade。
+- the current node display name;
+- the node kind on a separate plain-text line;
+- the selected Mask name when the Masks panel has a valid Mask selection.
+
+The header uses a flat layout and a bottom divider. It does not use a new panel surface. It does not
+use a pill, badge, chip, tag, or status dot. It does not join values with a decorative separator.
+The node display name uses `fontSizeTitle` and `fontWeightStrong`. The node kind and Mask name use
+caption tokens.
+
+The header identifies the owner of the visible parameters. It does not store a second selection.
+It does not show or change a Color Grade On/Off value.
+
+### 17.2 Panel routing
+
+The existing adjustment navigation keeps its monochrome segmented VI. It shows only the panels
+that the selected node supports. It does not present an unsupported panel as editable content.
+
+When the selected node changes, routing uses these rules:
+
+1. Keep Geometry when Geometry is still valid.
+2. Keep the current panel when the new node supports it.
+3. Select RAW by default for Develop.
+4. Select Tone by default for Color Grade.
+5. Select Display by default for DRT/Post.
+
+The panel key, `StackLayout` index, and navigation order must use one mapping. Do not keep separate
+hard-coded orders.
+
+Each panel `loadFromSnapshot()` operation reads the current context snapshot. It loads the correct
+values after initial construction, session rebind, Version checkout, node selection, and Undo/Redo.
+A load-only path does not submit history or request a render.
+
+When the user selects a different node:
+
+1. Settle or cancel the current provisional input sequence.
+2. Update the selected `NodeId`.
+3. Publish a new context snapshot.
+4. Select the preferred supported panel, or keep the current panel when it is still valid.
+5. Update the UI without a photo render.
+
+After deletion of the selected Color Grade, select its successor. If there is no successor, select
+its predecessor. If neither exists, select DRT/Post. After Version checkout, restore the last valid
+selection for that Version. If no stored selection is valid, select the Default or first Color
+Grade node.
+
+### 17.3 Selection ownership
+
+`EditorNodeController.selectedNodeId` from NM5 is the only node selection. NM6 does not add a
+second selected-node property. A click in the right panel does not implicitly select another Color
+Grade.
+
+A node-selection change is a UI-state change. It does not submit history. It does not request a
+photo render.
+
+A parameter target contains the full `NodeId` and `AdjustmentInstanceId`. A Color Grade panel does
+not use an implicit `grade.primary` target.
+
+### 17.4 Size and text
+
+The adjustment stack continues to use `editorSidePanelWidthMin` and
+`editorSidePanelWidthMax`. The context header and navigation do not increase the minimum panel
+width. User-visible text uses `qsTr()`. The header elides a long name and exposes the full name to
+assistive technology. A large system font does not cover the navigation or the first panel
+control.
 
 ---
 
-## 18. Mask authoring 状态机
+## 18. Mask authoring state machine
 
-建议由 `EditorMaskAuthoringController` 统一管理，而不是把状态分散到 QML handlers：
+QuickQanava does not draw the Mask overlay. NM7 uses the official
+[Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html) section and the
+[Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html) section only to keep the
+owner Color Grade selected. The Alcedo viewer architecture continues to own viewer input, QSG
+overlays, and Mask pixels.
+
+`EditorMaskAuthoringController` owns the state. Do not distribute this state across QML handlers.
 
 ```text
 Inactive
@@ -982,7 +1315,7 @@ Settling
 Failed
 ```
 
-状态至少锁定：
+The state captures at least:
 
 ```text
 session_generation
@@ -995,7 +1328,7 @@ provisional params or stroke
 dirty rectangle
 ```
 
-创建流程：
+Creation uses this call chain:
 
 ```text
 select Color Grade
@@ -1008,65 +1341,139 @@ select Color Grade
   -> settle to one history commit and Quality render
 ```
 
-需要明确以下抢占行为：
+Use these interruption rules:
 
-- image switch、Version checkout、Undo/Redo、node deletion 前必须完成或取消 authoring；
-- stale session generation 的异步 render/result 不得更新新图片 overlay；
-- Escape 恢复被编辑 Mask 的 before 参数；
-- Delete 删除 selected Mask，但不能删除错误节点中同 index 的 Mask；
-- viewer pan/zoom 与 Mask authoring 使用明确 mode/focus 路由，不能同时解释同一个 pointer input；
-- keyboard 用户可以选择 Mask、移动控制点、调整数值并退出模式。
+- Settle or cancel authoring before image switch, Version checkout, Undo/Redo, or node deletion.
+- Reject an asynchronous render result from a stale session generation.
+- Escape restores the before parameters of the edited Mask.
+- Delete removes the selected Mask by `NodeId` and `MaskId`. It does not use a row index as identity.
+- Viewer pan/zoom and Mask authoring use an explicit mode and focus route. They do not interpret the
+  same pointer input.
+- A keyboard user can select a Mask, move a control point, change a value, and leave the mode.
+
+### 18.1 Masks panel
+
+Masks is a right-side panel for the Color Grade context. Its controls do not become QuickQanava
+graph content.
+
+The panel has this structure:
+
+1. A header shows `Masks`.
+2. Three fixed actions create Brush, Radial, or Linear Gradient Masks.
+3. A list shows the Masks that the selected Color Grade owns.
+4. The selected row exposes only supported Mask controls, including opacity, rename, and delete.
+5. A range area shows only fields that the product implements.
+
+The Mask list uses the existing recessed list well. A selected row uses
+`editorListSelectedFillColor` and `editorListSelectedInkColor`. A Mask type uses the approved icon
+and text label from Section 16 and `DESIGN.md`. Color is not the only selection cue. The panel does
+not add a pill, badge, chip, tag, or status dot unless a later product requirement explicitly asks
+for one.
+
+After Mask add, delete, or reorder, update the owning node's Mask drawer rows. Update row identity,
+order, type, and label only. Do not add a Mask count. Do not rebuild the full graph.
+
+### 18.2 Viewer authoring bar
+
+In authoring mode, the viewer shows a compact authoring bar. It shows the source kind, selected
+Mask name, Done, and Cancel. Each value has its own text element. Do not join values with a
+decorative separator.
+
+The bar uses `cardSurfaceColor`, `cardBorderColor`, and `panelRadius`. Done and Cancel use existing
+shared action components. Escape is equivalent to Cancel. Enter is equivalent to Done when the
+current source can settle.
+
+The authoring bar does not cover a primary control point. It does not change the viewer coordinate
+space.
+
+### 18.3 QSG overlay VI
+
+The QSG overlay uses Mask semantic roles from `AppTheme`. Add these roles if the implementation
+needs them:
+
+- `maskOverlayControlColor`
+- `maskOverlayControlOutlineColor`
+- `maskOverlayCoverageColor`
+- `maskOverlayInactiveColor`
+
+Control points use a two-layer, high-contrast stroke. The coverage preview uses a visible alpha and
+an outline. Selection, invalid input, and disabled input also use shape or text. Color is not the
+only cue. A small point that only reports status is not permitted.
+
+During adjustment input, hide the overlay as specified in Section 10.4. After authoring ends,
+restore the overlay from controller state.
+
+### 18.4 Cross-panel input ownership
+
+After Mask authoring starts:
+
+- Nodes keeps the current Color Grade selected.
+- Graph structure actions are temporarily unavailable.
+- Node layout input is temporarily unavailable.
+- The right Masks panel stays visible.
+- The viewer receives Mask input.
+- History and Version checkout obey the settle-or-cancel rules.
+
+After authoring ends, graph input becomes available. Reject input and render results from an old
+session generation.
 
 ---
 
-## 19. 序列化与项目格式切换
+## 19. Serialization and project-format cutover
 
-新 PipelineDocument schema 至少保存：
+The new `PipelineDocument` schema stores at least:
 
-- document geometry；
-- Develop model；
-- 有序 Color Grade nodes；
-- scene-image edges；
-- 每个 Color Grade 的 adjustment 列表、enabled、mix；
-- 每个 Color Grade 的 masks；
-- MaskId、source、enabled、opacity；
-- `color_range` 和 `luminance_range` 的直接字段；
-- raster `MaskAssetKey` 和 descriptor；
-- DRT/Post 参数和后处理参数。
+- document geometry;
+- the Develop model;
+- ordered Color Grade nodes;
+- scene-image edges;
+- the next default Color Grade name number;
+- each Color Grade adjustment list, enabled value, and mix value;
+- each Color Grade Mask list;
+- each `MaskId`, source, enabled value, and opacity;
+- direct `color_range` and `luminance_range` fields;
+- each raster `MaskAssetKey` and descriptor;
+- DRT/Post and post-processing parameters.
 
-不保存：
+It does not store:
 
-- QuickQanava object；
-- graph selection、hover、focus；
-- graph pan/zoom；
-- QSG vertices/material instances；
-- provisional stroke；
-- dirty bits、GPU handles、cache state；
-- render request；
-- panel active page。
+- a QuickQanava object;
+- graph selection, hover, or focus;
+- graph pan or zoom;
+- QSG vertices or material instances;
+- a provisional stroke;
+- dirty bits, GPU handles, or cache state;
+- a render request;
+- the active panel page.
 
-NM4 在节点、Mask 和 history 数据就绪后统一切换 document/history/project metadata 格式。
-新版本只创建和读取新项目；旧项目在打开入口返回 unsupported-format error，不转换当前 v2
-或 stage 项目，不重算旧提交。
+NM4 changes the document, history, and project-metadata formats after node, Mask, and history data
+are ready. The new release creates and reads only the new project format. The project-open boundary
+returns an unsupported-format error for an old project. It does not convert the current v2 or stage
+project and does not recalculate an old commit.
 
-NM1 使用当前开发图格式完成模型和 document 保存读取；NM2/NM3 修改节点字段与所有权，
-不因此要求 NM1 先实现最终项目版本。NM4 才证明新格式的 golden JSON、round-trip、
-错误处理、history recovery 与真实项目 reopen。合法性校验留在读取边界，不在渲染调用方逐层分流。
+NM1 uses the development graph format to complete model and document I/O. NM2 and NM3 change node
+fields and ownership. These changes do not require NM1 to publish the final project format. NM4
+proves golden JSON, round-trip behavior, error handling, history recovery, and real-project reopen
+for the new format. Validate data at the read boundary. Do not distribute format checks across
+render callers.
 
 ---
 
-## 20. 主要调用链
+## 20. Primary call chains
 
-### 20.1 新建 Color Grade
+### 20.1 Add a Color Grade
 
 ```text
 NodeEditorPanel / QuickQanava action
   -> EditorNodeController::AddCleanColorGrade
   -> validate command inputs and acquire live pipeline access
-  -> CreateCleanColorGradeNode
+  -> read next_color_grade_name_number
+  -> form the default display name
+  -> CreateCleanColorGradeNode with that name
   -> Insert node + reconnect live backbone (keep affected edges for rollback)
   -> Validate graph and ownership
-  -> record PipelineEditBatch with WAL/history ordering (NM4)
+  -> record PipelineEditBatch with exact before/after counter values and NM4 WAL/history ordering
+  -> advance the serialized counter only as part of the accepted change
   -> finish local change and notify graph/context/history projections
   -> submit GraphTopologyChanged Quality render
 ```
@@ -1083,7 +1490,7 @@ AdjustmentSlider
   -> settled: one typed edit commit + Quality render
 ```
 
-### 20.3 Radial Mask 编辑
+### 20.3 Edit a Radial Mask
 
 ```text
 Masks panel selects Radial
@@ -1140,26 +1547,27 @@ Adjustment Transfer Paste
 
 ---
 
-## 21. 一级 Phase 总表
+## 21. Phase summary
 
-本总体方案锁定以下一级 Phase。它们是架构和产品能力的顺序，不等同于一个 PR；每个 Phase
-将来都有自己的执行方案，执行方案内部再拆具体子 Phase 和可评审 PR。
+This master plan fixes the following top-level phase order. The order describes architecture and
+product dependencies. It does not require one pull request for each phase. Each execution plan can
+split its phase into reviewable sub-phases and pull requests.
 
-本次只预留文件路径，不创建空的执行方案。开始对应 Phase 时创建文件，并把表中的代码路径
-改成 Markdown 链接。
+Create an execution-plan file when its phase starts. Do not create an empty plan. Replace a reserved
+path with a Markdown link when the file exists.
 
-| Phase | Status | 未来执行方案 | 阶段结果 |
+| Phase | Status | Execution plan | Result |
 | --- | --- | --- | --- |
-| NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | 固定依赖、构建和 package 路径，证明官方组件可被 production QML 使用 |
-| NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | 单 live document；共享 executor；R 修复任务请求、后台资源占用、使用权与导出 recipe；随后统一 document I/O |
-| NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | 不升级、不打开 DAG document 之前的 stage-only 项目；不迁移 mini-git commit |
-| NM2 — Multi-Grade Runtime and Ownership | complete | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | compiler 和三后端真正执行多 Color Grade，并落实参数所有权 |
-| NM3 — Multi-Mask Model and Runtime | complete | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | 每节点多 Mask、Union、Range 字段和不可变 raster asset 完整可用 |
-| NM4 — History, Version, Recovery, and Paste | planned | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | typed history、每 Version 一 DAG、recovery 和 Paste-only 完成切换 |
-| NM5 — QuickQanava Nodes Panel | planned | `node_mask_editor/phase_nm5_nodes_panel_plan.md` | 左侧 Nodes 面板连接真实 command/history/render 路径 |
-| NM6 — Node-aware Adjustment Stack | planned | `node_mask_editor/phase_nm6_node_aware_adjustments_plan.md` | 右侧参数面板按 Develop/Color Grade/DRT/Post context 工作 |
-| NM7 — Viewer Mask Authoring | planned | `node_mask_editor/phase_nm7_viewer_mask_authoring_plan.md` | Brush/Radial/Linear、QSG overlay、Interactive/Quality 和 history 完整连通 |
-| NM8 — Product Qualification and Cutover | planned | `node_mask_editor/phase_nm8_product_qualification_plan.md` | 三后端、真实 RAW、reopen、Version/Paste、性能和 package 验收完成 |
+| NM0 — QuickQanava Integration Baseline | complete | [node_mask_editor/phase_nm0_quickqanava_integration_plan.md](node_mask_editor/phase_nm0_quickqanava_integration_plan.md) | Pin the dependency and establish the build, package, and production-QML paths. |
+| NM1 — PipelineDocument Editing Foundation | in progress; C acceptance incomplete; R before NM1.5 | [node_mask_editor/phase_nm1_pipeline_document_editing_plan.md](node_mask_editor/phase_nm1_pipeline_document_editing_plan.md) | Use one live document and one shared executor. Correct task requests, background resource use, access ownership, export recipes, and document I/O. |
+| NML — Legacy Stage Compatibility and Default DAG Upgrade | cancelled 2026-08-30 | — | Do not upgrade or open stage-only projects from before the DAG document. Do not migrate mini-git commits. |
+| NM2 — Multi-Grade Runtime and Ownership | complete | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | Execute multiple Color Grade nodes in all three backends and apply parameter ownership. |
+| NM3 — Multi-Mask Model and Runtime | complete | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | Support multiple Masks per node, Union, range fields, and immutable raster assets. |
+| NM4 — History, Version, Recovery, and Paste | complete | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | Complete typed history, one DAG per Version, recovery, and Paste-only transfer. |
+| NM5 — QuickQanava Nodes Panel | planned | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
+| NM6 — Node-aware Adjustment Stack | planned | `node_mask_editor/phase_nm6_node_aware_adjustments_plan.md` | Make the right adjustment panel use Develop, Color Grade, and DRT/Post context. |
+| NM7 — Viewer Mask Authoring | planned | `node_mask_editor/phase_nm7_viewer_mask_authoring_plan.md` | Connect Brush, Radial, and Linear Gradient authoring to QSG overlays, Interactive and Quality rendering, and history. |
+| NM8 — Product Qualification and Cutover | planned | `node_mask_editor/phase_nm8_product_qualification_plan.md` | Qualify all three backends, real RAW files, reopen, Version, Paste, performance, and package behavior. |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
 
@@ -1366,54 +1774,120 @@ metadata，失败不创建部分 Version。
 
 ### 21.6 Phase NM5 — QuickQanava Nodes Panel
 
-**为什么此时才开放：** 到这里 node mutation 已经有真实多节点 backend 和完整 history/
-Version 行为，Nodes panel 不会暴露半完成产品操作。
+Execution plan: [Phase NM5 — QuickQanava Nodes Panel](node_mask_editor/phase_nm5_nodes_panel_plan.md).
 
-**阶段边界：** 在 `EditorWorkspaceRail` 增加 Nodes 页面；建立 `EditorNodeGraphProjection`、
-Alcedo Qan adapter、node selection、Clean node 添加、删除、重新连接、rename 和 layout state；
-所有 connector 请求先经 app service；只使用 QuickQanava 的 graph interaction primitives。
+**Reason for this position:** Node changes now use the real multi-node backends and the complete
+history and Version paths. The Nodes panel does not expose an incomplete product operation.
 
-**退出条件：** Nodes panel 的所有可见命令都走 NM1–NM4 路径；失败不留下视觉 edge；panel
-Loader、Basic style、AppTheme、keyboard、accessibility、reduced motion 和 package 测试通过。
+**Scope:** Add the Nodes page to `EditorWorkspaceRail`. Add `EditorNodeGraphProjection`, the Alcedo
+Qan adapter, node selection, the serialized default-name counter, Clean Color Grade add, delete,
+reconnect, rename, and layout state. Add the default-open Mask drawer to each Color Grade node.
+Each Mask row shows only the approved type icon and type label. Route each connector request through
+the application service. Use QuickQanava only for graph interaction and visual topology.
+
+The node body does not show topology numbers, status dots, Color Grade On/Off content, adjustment
+summaries, Mask counts, persistent action rows, pills, badges, chips, or tags. The page toggle uses
+the approved stack icon. Gradient, Radial, and Brush rows use the approved icons in `DESIGN.md`.
+
+**Exit criteria:** Every visible Nodes command uses the NM1-NM4 paths. A failed request leaves no
+visual edge. The panel Loader, Basic style, AppTheme mapping, keyboard access, assistive-technology
+metadata, reduced-motion behavior, and package load pass their tests.
+
+**Required official QuickQanava documentation:**
+
+- [Installation](https://cneben.github.io/QuickQanava/installation.html): production CMake and the
+  static module.
+- [Graph](https://cneben.github.io/QuickQanava/graph.html): data and visual separation,
+  initialization, `GraphView`, navigation, and `LineGrid`.
+- [Nodes/Groups](https://cneben.github.io/QuickQanava/nodes.html): nodes, ports, selection, resize,
+  and custom delegates.
+- [Edges](https://cneben.github.io/QuickQanava/edges.html): edges and visual connector requests.
+- [Styles](https://cneben.github.io/QuickQanava/styles.html): style properties. Do not import the
+  upstream Material example into Alcedo production QML.
+- [Advanced use](https://cneben.github.io/QuickQanava/advanced.html): the C++ graph and custom
+  topology adapter.
+- [Samples](https://cneben.github.io/QuickQanava/samples.html): `custom`, `navigable`, `topology`,
+  and connector examples.
+- [API Reference](https://cneben.github.io/QuickQanava/reference.html): local Doxygen and pinned
+  checkout header verification, as directed by the page.
+- [Licence](https://cneben.github.io/QuickQanava/licence.html): package notice.
 
 ### 21.7 Phase NM6 — Node-aware Adjustment Stack
 
-**为什么排在 Nodes panel 后：** adjustment context 需要稳定的 selected NodeId、node kind、
-删除后选择规则和 Version checkout selection 恢复。先改右侧 panel 会继续依赖隐式 primary
-grade。
+**Reason for this position:** Adjustment context needs a stable selected `NodeId`, node kind,
+post-delete selection rule, and Version-checkout selection restore. An earlier change to the right
+panel would continue to depend on an implicit primary Color Grade.
 
-**阶段边界：** 引入 `EditorAdjustmentContext`；Develop、Color Grade 和 DRT/Post 显示各自合法
-panels；Geometry 保持 document/global；每个 panel 的 `loadFromSnapshot()` 读取当前 context；
-统一 slider API 锁定 NodeId/AdjustmentInstanceId；切换节点只更新 UI，不渲染。
+**Scope:** Add `EditorAdjustmentContext`. Show only the valid panels for Develop, Color Grade, and
+DRT/Post. Keep Geometry at document scope. Make each panel `loadFromSnapshot()` read the current
+context. Make the shared slider interface capture `NodeId` and `AdjustmentInstanceId`. A node
+selection change updates the UI and does not request a photo render. The context header does not
+show a Color Grade On/Off value, pill, badge, chip, tag, status dot, or decorative separator label.
 
-**退出条件：** 三类 node context、selection restore、panel re-entry、Version checkout、
-load-only、provisional/settled 和 history target 测试通过；Color Grade context 中不存在
-RAW Decode 或 DRT/Post 专属控件。
+**Exit criteria:** Tests pass for all three node contexts, selection restore, panel re-entry,
+Version checkout, load-only paths, provisional and settled input, and full history targets. A Color
+Grade context does not contain RAW Decode or DRT/Post-only controls.
+
+**Required official QuickQanava documentation:**
+
+- [Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html): Qan visual topology does not
+  own adjustment state.
+- [Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html): the selected node from
+  NM5 is an NM6 context input.
+- [Advanced `Observation of Topological Modifications`](https://cneben.github.io/QuickQanava/advanced.html):
+  use topology observations only to refresh the visual selection. They do not replace the
+  application snapshot signal.
 
 ### 21.8 Phase NM7 — Viewer Mask Authoring
 
-**为什么最后接入交互：** viewer authoring 同时依赖 selected node context、多 Mask runtime、
-immutable MaskStore、typed history 和 Interactive/Quality render。任何一项缺失都会产生无法
-恢复或无法正确预览的编辑。
+**Reason for this position:** Viewer authoring needs the selected-node context, multi-Mask runtime,
+immutable `MaskStore`, typed history, and Interactive and Quality rendering. A missing dependency
+would produce an edit that cannot restore or preview correctly.
 
-**阶段边界：** Masks panel 的 style action、Brush/Radial/Linear 创建、viewer input routing、
-ReferenceSpace mapping、QSG mask editing overlay、临时 raster dirty rectangle、settled asset、
-Escape 取消、模式抢占和 stale session fencing 完整接入。调色参数输入期间隐藏 overlay。
+**Scope:** Add the Masks panel actions, Brush, Radial, and Linear Gradient creation, viewer input
+routing, `ReferenceSpace` mapping, QSG Mask-editing overlay, provisional raster dirty rectangle,
+settled asset, Escape cancellation, mode interruption, and stale-session fencing. Hide the overlay
+during adjustment input. Use the approved Mask type icons. Do not add an unrequested pill, badge,
+chip, tag, or status dot.
 
-**退出条件：** 三种 Mask 都能在真实 viewer 中编辑；QSG 与 evaluator 参数一致；pointer
-release 一次 commit；settled 后 Quality；Escape 无 commit；image/Version 切换不接受旧结果。
+**Exit criteria:** Users can edit all three Mask types in the real viewer. QSG and evaluator
+parameters agree. Pointer release creates one commit. A settled edit requests Quality. Escape does
+not create a commit. Image and Version changes reject old results.
+
+**Required official QuickQanava documentation:**
+
+- [Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html): a Mask stays in the Alcedo
+  model. It does not enter Qan topology.
+- [Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html): keep the owner Color
+  Grade selected during authoring.
+
+QuickQanava does not own viewer input, the QSG overlay, or Mask coverage. NM7 does not infer these
+features from QuickQanava examples.
 
 ### 21.9 Phase NM8 — Product Qualification and Cutover
 
-**为什么独立：** 单元和组件测试不能证明 QuickQanava package、真实 RAW、多 backend、history
-recovery、Mask asset 和最终帧在同一产品路径中一致。
+**Reason for a separate phase:** Unit and component tests cannot prove that the packaged
+QuickQanava module, real RAW input, all backends, history recovery, Mask assets, and final frame use
+one correct product path.
 
-**阶段边界：** 执行第 23 节全部测试和真实 RAW E2E；记录 Windows/CUDA、OpenCL、macOS/Metal、
-package、reopen、Version、Paste、性能、内存和 cache 证据；删除在前面 Phase 明确替代的旧 UI/
-service 路径；更新本文 completion record。
+**Scope:** Run all tests in Section 23 and the real-RAW end-to-end cases. Record evidence for
+Windows/CUDA, OpenCL, macOS/Metal, package load, reopen, Version, Paste, performance, memory, and
+cache behavior. Remove old UI and service paths that an earlier phase explicitly replaced. Update
+this document with the completion record.
 
-**退出条件：** 第 26 节全局完成条件全部满足；不存在 legacy stage 回写、单 primary grade 产品
-分支、可变 raster key、新 merge UI 或其他 backend/CPU 替代路径。
+**Exit criteria:** All global completion criteria in Section 26 pass. There is no legacy-stage
+write-back, single-primary-Color-Grade product branch, mutable raster key, new merge UI, or substitute
+backend or CPU path.
+
+**Required official QuickQanava documentation:**
+
+- [Installation](https://cneben.github.io/QuickQanava/installation.html): verify Windows and macOS
+  build, install, and package paths.
+- [Graph `QuickQanava Initialization`](https://cneben.github.io/QuickQanava/graph.html): verify the
+  engine load order in the packaged application.
+- [API Reference](https://cneben.github.io/QuickQanava/reference.html): verify the pinned-checkout
+  API against local Doxygen output.
+- [Licence](https://cneben.github.io/QuickQanava/licence.html): verify the final binary notice.
 
 ---
 
@@ -1583,7 +2057,7 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - 多 Color Grade 结果缓存按 NodeId + input content + node params/mask content 分层；
 - node deletion/reconnect 允许淘汰不可达 node cache，但必须遵守 GPU submission lease；
 - panel close 后没有残留 Qan delegates 或 QML connection 泄漏；
-- N8 必须记录同一真实 RAW、同一 viewport、同一 backend 的单节点基线和多节点/多 Mask 数据。
+- NM8 必须记录同一真实 RAW、同一 viewport、同一 backend 的单节点基线和多节点/多 Mask 数据。
 
 在 N8 之前由现有产品 baseline 确定具体毫秒和内存预算；不能用降低 decode 分辨率、质量或
 切换 backend 的方式达标。

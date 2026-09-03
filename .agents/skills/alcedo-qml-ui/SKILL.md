@@ -18,7 +18,7 @@ marketing UI skills when touching `alcedo_studio/src/ui/alcedo_main/`.
 
 ## Before any visual or panel change
 
-1. Read **`alcedo_studio/src/ui/alcedo_main/DESIGN.md`** (VI contract).
+1. Read **`alcedo_studio/src/ui/alcedo_main/DESIGN.md`** (VI specification).
 2. Map every color, radius, space, type size, and icon size to an **`appTheme`**
    token or a listed shared component.
 3. If a new value is required, add it to **`AppTheme`** (`app_theme.hpp` /
@@ -57,6 +57,40 @@ QQuickStyle::setStyle("Basic");
   Material ripples and minimum paddings
 
 Tests may load Material for isolation harnesses; production QML must not.
+
+---
+
+## Hard ban: compound labels with centered-dot separators
+
+Alcedo-owned UI copy must not join independent names, values, counts, modes, or
+states into an `xx · xx` string. This rule applies to panel titles, node chrome,
+metadata, badges, toolbars, list rows, and status text.
+
+**Forbidden examples:** `On · 2 masks`, `RAW · Active`, `Tone Curve · Enabled`.
+
+Give each item a separate visual role instead. Use a dedicated label, value,
+icon with an accessible name, column, or row. Use spacing, alignment, or a
+structural divider when the relationship needs visual grouping. Do not evade
+this rule by replacing the centered dot with a bullet, slash, vertical bar, or
+dash inside the same compound label.
+
+## Hard ban: unrequested pills and badges
+
+Do not add a new pill, badge, chip, tag, lozenge, or similar rounded text
+container unless the user explicitly requests that element for the current UI.
+Do not infer permission from a reference image, an existing component, or the
+type of data. Use plain text, an icon, a standard action, or layout structure by
+default. Do not copy an existing approved pill or badge into a new surface
+without an explicit user request.
+
+## Hard ban: unrequested status dots
+
+Do not add a new status dot, presence dot, activity dot, notification dot, or
+other colored circular indicator unless the user explicitly requests it for the
+current UI. Do not infer permission from a reference image, an existing
+component, or a semantic color token. Do not use a dot for decorative balance.
+Existing approved indicators can remain in an unchanged surface. Do not copy
+them into a new or changed surface without an explicit user request.
 
 ---
 

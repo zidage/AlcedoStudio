@@ -61,6 +61,41 @@ Version and transaction **titles**, times, and section chrome stay on
 
 ---
 
+## UI copy composition
+
+### Hard ban: `xx · xx` labels
+
+Do not join independent names, values, counts, modes, or states with a centered
+dot in Alcedo-owned UI copy. This ban applies to panel titles, node chrome,
+metadata, badges, toolbars, list rows, and status text.
+
+Forbidden examples include `On · 2 masks`, `RAW · Active`, and
+`Tone Curve · Enabled`. Give each item a separate visual role: a dedicated
+label, value, icon with an accessible name, column, or row. Use spacing,
+alignment, or a structural divider when the relationship needs visual grouping.
+Do not reproduce the same compound-label pattern with a bullet, slash, vertical
+bar, or dash.
+
+### Hard ban: unrequested pills and badges
+
+Do not add a new pill, badge, chip, tag, lozenge, or similar rounded text
+container unless the user explicitly requests that element for the current UI.
+A reference image, an existing component, or a data type does not give this
+permission. Use plain text, an icon, a standard action, or layout structure by
+default. Do not copy an existing approved pill or badge into a new surface
+without an explicit user request.
+
+### Hard ban: unrequested status dots
+
+Do not add a new status dot, presence dot, activity dot, notification dot, or
+other colored circular indicator unless the user explicitly requests it for the
+current UI. A reference image, an existing component, or a semantic color token
+does not give this permission. Do not use a dot for decorative balance.
+Existing approved indicators can remain in an unchanged surface. Do not copy
+them into a new or changed surface without an explicit user request.
+
+---
+
 ## Color and surface hierarchy
 
 Semantic colors follow the active theme (`currentThemeIndex` 0 Alcedo / 1 Classic)
@@ -273,6 +308,117 @@ QPainter-backed waveform density image.
 
 ---
 
+## Nodes panel and graph nodes
+
+The Nodes page is the third expandable page in `EditorWorkspaceRail`. It shares
+the rail shell, width limits, fold motion, and Loader lifetime with History and
+Versions. Only one tool page can be open.
+
+### Nodes rail icon
+
+Use `panel_icons/nodes.svg` for the Nodes toggle. The icon uses the approved
+Tabler `stack-2` paths:
+
+```svg
+<path d="M12 4l-8 4l8 4l8 -4l-8 -4" />
+<path d="M4 12l8 4l8 -4" />
+<path d="M4 16l8 4l8 -4" />
+```
+
+Normalize the asset to the shared 24×24 viewBox and white source stroke. Keep
+the user-approved 2 px stroke width. Tint it with `ColorImage`. Do not add a count, badge, or status
+dot to this icon.
+
+### Graph canvas
+
+The graph uses a vertical Develop-to-DRT/Post backbone. The canvas uses a deep
+AppTheme surface and a quiet official QuickQanava `Qan.LineGrid`. Do not add a
+nested card, minimap, gradient, shadow, glow, or glass effect.
+
+Use AppTheme roles for the canvas, grid, edge, port, candidate edge, and node
+selection. Add each missing role to `AppTheme` and this file in the same change.
+Do not put raw graph colors in QML.
+
+### Color Grade node content
+
+A Color Grade node shows only:
+
+1. Its display name.
+2. A `Masks` drawer header.
+3. Its Mask source types when the drawer is open.
+
+Do not show a topology number. The default name can contain a creation number,
+such as `Color Grade 3`. Topology changes do not change this name.
+
+Do not show node-kind text, a status dot, On/Off content, an adjustment summary,
+a Mask count, or a persistent action row. Do not add a pill or badge. Do not use
+an `xx · xx` compound label or an equivalent separator pattern.
+
+The node uses `cardSurfaceColor` with a 1 px `cardBorderColor` outline. Selection
+keeps the same surface and uses a high-contrast outline around the full node.
+Selection does not change the node size. It does not add a label, status dot,
+glow, or large blue fill.
+
+Develop and DRT/Post use compact endpoint delegates. They show their fixed names
+and real ports. They do not show a Mask drawer. Do not add a `Locked` badge.
+
+### Mask drawer
+
+Each Color Grade Mask drawer starts open. The user can open or close it from the
+full `Masks` header row. A disclosure chevron shows the fold direction. It is
+not a status indicator.
+
+The header stays visible when the drawer is closed. It does not show a Mask
+count. The body clips during the fold and uses `motionFoldOpenMs`,
+`motionFoldCloseMs`, and `motionEasing`. `reduceMotion` sets the duration to
+zero.
+
+The open state is UI layout state. A drawer change does not modify the pipeline,
+create history, or start photo rendering. An empty open drawer has no Mask rows.
+
+Each Mask row is flat. It shows only the approved source-type icon and localized
+type name. Do not show the Mask name, opacity, enabled value, invert value,
+ranges, identity, selection, or actions.
+
+| Model kind | UI label | Icon |
+| --- | --- | --- |
+| `MaskSourceKind::LinearGradient` | `Gradient` | `mask_icons/gradient.svg` |
+| `MaskSourceKind::Radial` | `Radial` | `mask_icons/radial.svg` |
+| `MaskSourceKind::Brush` | `Brush` | `mask_icons/brush.svg` |
+
+Use these approved paths:
+
+```svg
+<!-- Gradient: Tabler wash-dry -->
+<path d="M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12" />
+
+<!-- Radial: Tabler wash-dryclean -->
+<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+
+<!-- Brush: Tabler brush -->
+<path d="M3 21v-4a4 4 0 1 1 4 4h-4" />
+<path d="M21 3a16 16 0 0 0 -12.8 10.2" />
+<path d="M21 3a16 16 0 0 1 -10.2 12.8" />
+<path d="M10.6 9a9 9 0 0 1 4.4 4.4" />
+```
+
+Normalize all three files to the shared 24×24 viewBox and white source stroke.
+Keep the user-approved 2 px stroke width. Use one optical size and one source
+size for the group. The Radial circle is an approved type icon. Do not reuse it
+as a status dot.
+
+### Ports and variable height
+
+Use one small square input port at the top and one small square output port at
+the bottom of a Color Grade. The visible square has a larger input area. A port
+is a connection control, not a status dot.
+
+The output port follows the bottom of the node when the Mask drawer changes
+height. Bound edges must update to the new port position. The user cannot resize
+the node directly.
+
+---
+
 ## Icon and action geometry
 
 Three independent sizes — never inherit only the SVG viewBox:
@@ -304,7 +450,8 @@ geometry tests (token equality + optional grab fixtures).
 on a 24×24 viewBox. At the compact 18 px optical size this resolves to roughly
 1.125 logical pixels before antialiasing, keeping dense navigation crisp rather
 than visually bold. Do not mix the upstream Tabler 2 px default with locally
-normalized icons in the same navigation group.
+normalized icons in the same navigation group. The user-approved Nodes rail
+icon and Gradient, Radial, and Brush Mask icons are documented 2 px exceptions.
 
 **Every SVG action must:**
 
