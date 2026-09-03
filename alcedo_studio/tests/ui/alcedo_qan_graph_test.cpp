@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
 #include <QQuickStyle>
@@ -21,6 +22,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QuickQanava>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -38,6 +40,7 @@
 #include "qanNode.h"
 #include "qanNodeItem.h"
 #include "qanPortItem.h"
+#include "ui/alcedo_main/app_theme.hpp"
 
 Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
@@ -82,7 +85,16 @@ ApplicationWindow {
 }
 )qml";
 
-void           SetBasicStyle() {
+auto           SrcQmlDir() -> QString {
+  return QString::fromStdString(
+      (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
+}
+
+auto QmlFileUrl(const char* file_name) -> QUrl {
+  return QUrl::fromLocalFile(SrcQmlDir() + QLatin1Char('/') + QLatin1String(file_name));
+}
+
+void SetBasicStyle() {
   static std::once_flag style_once;
   std::call_once(style_once, [] { QQuickStyle::setStyle(QStringLiteral("Basic")); });
 }
@@ -107,7 +119,11 @@ class QanHarness final {
                      });
 
     SetBasicStyle();
+    alcedo::ui::AppTheme::Instance().setReduceMotion(true);
     engine_.addImportPath(QStringLiteral("qrc:/"));
+    engine_.addImportPath(SrcQmlDir());
+    engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"),
+                                              &alcedo::ui::AppTheme::Instance());
     QuickQanava::initialize(&engine_);
     engine_.loadData(QByteArray{kGraphHarnessQml},
                      QUrl(QStringLiteral("file:///AlcedoQanGraphHarness.qml")));
@@ -137,6 +153,14 @@ auto WarningText(const QStringList& warnings) -> std::string {
   return warnings.join(QLatin1Char('\n')).toStdString();
 }
 
+void AttachAlcedoDelegates(alcedo::ui::AlcedoQanGraph& adapter, qan::Graph* graph) {
+  adapter.set_color_grade_delegate_url(QmlFileUrl("EditorNodeDelegate.qml"));
+  adapter.set_endpoint_delegate_url(QmlFileUrl("EditorEndpointNodeDelegate.qml"));
+  adapter.set_port_delegate_url(QmlFileUrl("EditorNodePortDelegate.qml"));
+  adapter.set_edge_delegate_url(QmlFileUrl("EditorNodeEdgeDelegate.qml"));
+  adapter.set_graph(graph);
+}
+
 auto MakeMask(alcedo::MaskId id, alcedo::MaskSource source) -> alcedo::MaskModel {
   alcedo::MaskModel mask;
   mask.id           = std::move(id);
@@ -150,7 +174,8 @@ class FailAfterInsertsGraph final : public alcedo::ui::AlcedoQanGraph {
   void FailAfterSuccessfulInserts(int count) { remaining_success_ = count; }
 
  protected:
-  auto InsertQanNode(qan::Graph& graph) -> qan::Node* override {
+  auto InsertQanNode(qan::Graph& graph, const alcedo::EditorNodeProjection& node)
+      -> qan::Node* override {
     if (remaining_success_.has_value()) {
       if (*remaining_success_ == 0) {
         remaining_success_.reset();
@@ -158,7 +183,7 @@ class FailAfterInsertsGraph final : public alcedo::ui::AlcedoQanGraph {
       }
       --*remaining_success_;
     }
-    return AlcedoQanGraph::InsertQanNode(graph);
+    return AlcedoQanGraph::InsertQanNode(graph, node);
   }
 
  private:
@@ -237,7 +262,7 @@ std::unique_ptr<QanHarness> AlcedoQanGraph::harness_;
 
 TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGeneration) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4, 2, 1);
   const auto result   = adapter.ApplySnapshot(snapshot);
 
@@ -250,7 +275,7 @@ TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGenera
 
 TEST_F(AlcedoQanGraph, BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
   const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 3, 2);
@@ -267,7 +292,7 @@ TEST_F(AlcedoQanGraph, BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts) {
 
 TEST_F(AlcedoQanGraph, RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   auto       document = CreateDefaultPipelineDocument();
   const auto before   = EditorNodeGraphProjection::Build(document, 6, 10, 4);
   ASSERT_TRUE(adapter.ApplySnapshot(before).succeeded) << "initial apply";
@@ -293,7 +318,7 @@ TEST_F(AlcedoQanGraph, RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives) {
 
 TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   auto  document = CreateDefaultPipelineDocument();
   auto* grade    = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -323,7 +348,7 @@ TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
 
 TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntries) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto first = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8, 1, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(first).succeeded) << "initial apply";
 
@@ -354,7 +379,7 @@ TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntrie
 
 TEST_F(AlcedoQanGraph, StalePrimitiveCannotSelectOrEditTheNewDocument) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto current = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 12, 3, 2);
   ASSERT_TRUE(adapter.ApplySnapshot(current).succeeded) << "initial apply";
   QPointer<qan::Node> live_grade = adapter.NodeFor(NodeId{"grade.primary"});
@@ -381,7 +406,7 @@ TEST_F(AlcedoQanGraph, StalePrimitiveCannotSelectOrEditTheNewDocument) {
 
 TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection) {
   FailAfterInsertsGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 3, 7, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ExpectLiveBackbone(adapter, prior);
@@ -404,7 +429,7 @@ TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection
 
 TEST_F(AlcedoQanGraph, GraphDestructionClearsIdentityMaps) {
   ui::AlcedoQanGraph adapter;
-  adapter.set_graph(harness_->Graph());
+  AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   QPointer<qan::Graph> old_graph = harness_->Graph();
@@ -417,6 +442,18 @@ TEST_F(AlcedoQanGraph, GraphDestructionClearsIdentityMaps) {
   EXPECT_FALSE(adapter.has_projection());
   EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), nullptr);
   EXPECT_EQ(adapter.LiveNodeId(old_node.data()), std::nullopt);
+}
+
+TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {
+  ui::AlcedoQanGraph adapter;
+  adapter.set_graph(harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto result   = adapter.ApplySnapshot(snapshot);
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("URL is empty")), -1);
+  EXPECT_EQ(harness_->Graph()->getNodeCount(), 0);
+  EXPECT_FALSE(adapter.has_projection());
 }
 
 }  // namespace alcedo

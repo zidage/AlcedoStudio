@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.3 complete; NM5.4–NM5.8 planned
+Status: NM5.1–NM5.4 complete; NM5.5–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -1274,6 +1274,146 @@ Plan to modify:
 
 Record the date, screenshots, token additions, pinned delegate API, commands, and test count here.
 
+##### NM5.4 completion record (2026-09-03)
+
+**Status:** complete — Alcedo Color Grade, endpoint, Mask-drawer, port, and edge
+delegates replace the default QuickQanava chrome. Color Grade cards show only
+the display name and a default-open Mask drawer. Mask rows show the approved
+type icon and localized type label in model display order. Drawer open/close is
+local UI state: it does not write `PipelineDocument`, create history, or start
+a photo render. Output ports and bound edges follow both open and closed
+heights. This sub-phase does not add the Nodes rail page, layout store, or
+graph commands.
+
+**Revision:** base repository revision `b3de1074` (`NM5.3`), branch
+`feature/nodes-panel-delegates`. QuickQanava remains submodule tag `2.50` at
+`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`.
+
+**Pinned delegate API:**
+
+```text
+qan::Graph::insertNode(QQmlComponent* nodeComponent, qan::NodeStyle* = nullptr)
+qan::Graph::insertEdge(qan::Node* source, qan::Node* destination, QQmlComponent*)
+qan::Graph::portDelegate / qmlSetPortDelegate  (graph takes ownership)
+qan::NodeItem root for custom node delegates
+qan::NodeItem::resizable = false
+qan::NodeItem::setDefaultBoundingShape()
+qan::HorizontalDock anchors.top: hostNodeItem.bottom
+qan::EdgeItem::srcShape / dstShape = EdgeStyle::None
+```
+
+**Token additions (AppTheme + DESIGN.md):** `graphCanvasColor`, `graphGridColor`,
+`graphEdgeColor`, `graphCandidateEdgeColor`, `graphPortFillColor`,
+`graphPortBorderColor`, `graphSelectionOutlineColor`, `graphNodeWidth` (220),
+`graphEndpointHeight` (40), `graphNameRowHeight` (32),
+`graphMaskDrawerHeaderHeight` (28), `graphMaskRowHeight` (28), `graphPortSize`
+(8), `graphPortHitSize` (16), `graphEdgeWidth` (1),
+`graphSelectionOutlineWidth` (1).
+
+**Assets:** `panel_icons/nodes.svg` (Tabler `stack-2`) and
+`mask_icons/{gradient,radial,brush}.svg` (Tabler `wash-dry`, `wash-dryclean`,
+`brush`), 24×24, white stroke, user-approved 2 px width, listed in
+`resource.qrc`.
+
+**Primary success call chain:**
+
+```text
+EditorNodeGraphSnapshot
+  -> AlcedoQanGraph::EnsureDelegates
+  -> qan::Graph::insertNode(Color Grade or endpoint QQmlComponent)
+  -> ApplyNodePresentation (label, nodeKind, masks, resizable=false)
+  -> qan::Graph::insertPort with Alcedo square portDelegate
+  -> qan::Graph::insertEdge with Alcedo edge delegate
+  -> Color Grade name row + default-open Mask drawer
+  -> icon and localized type row for each Mask
+  -> setDefaultBoundingShape after height change
+  -> bottom dock / output port follow the current node bottom
+```
+
+**Primary failure call chain:**
+
+```text
+missing or unloadable delegate URL
+  -> ApplySnapshot returns the real QML or empty-URL error
+  -> no Qan primitives inserted
+  -> no fallback to default Node.qml / Port.qml / Edge.qml
+```
+
+```text
+Mask drawer header toggle
+  -> local expanded / drawerOpen only
+  -> projection revision, topology revision, and node presentation unchanged
+```
+
+**Pinned API differences:**
+
+- Website custom-node samples import Material. Alcedo delegates use Basic and
+  AppTheme only.
+- Website text says rectangular bounds regenerate automatically on width/height
+  change. Pinned `qan::NodeItem` only fills an empty shape lazily; Alcedo
+  delegates call `setDefaultBoundingShape()` on size changes.
+- Default `NodeStyle.effectType` is shadow. Alcedo delegates do not use
+  `Qan.RectNodeTemplate`, so those effects never paint.
+- Default edge `dstShape` is Arrow. Each Alcedo edge owns a dedicated
+  `Qan.EdgeStyle` with `None` endings and `graphEdgeWidth` / `graphEdgeColor`.
+- `qan::Graph::portDelegate` takes ownership of the component. The adapter
+  installs a new instance on each bound graph instead of sharing one object
+  across Loader recreation.
+- Website `insertNode()` snippets omit a component. Alcedo always passes the
+  kind-specific delegate; an empty URL is a hard error.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Node has no topology number, On/Off, adjustment summary, Mask count, pill, or badge | `ColorGradeShowsNameWithoutTopologyStatusAdjustmentOrMaskCount` | PASS |
+| Mask rows show only approved type icon and type label in display order | `MaskRowsShowOnlyApprovedTypeIconAndLabelInDisplayOrder` | PASS |
+| Drawer starts open; user can close and reopen; no history/render | `MaskDrawerStartsOpenAndUserCanCloseAndReopenWithoutHistory` | PASS |
+| Output port and edges follow both heights | `OutputPortAndEdgesFollowOpenAndClosedDrawerHeight` | PASS |
+| Endpoints omit the Mask drawer | `EndpointDelegatesOmitMaskDrawerAndKeepCompactHeight` | PASS |
+| Empty open drawer has no Mask rows | `EmptyOpenDrawerHasNoMaskRows` | PASS |
+| Both themes keep AppTheme card tokens | `NodeVisualTokensMatchAppThemeInBothThemes` | PASS |
+| Compact source size ≥ optical size; icons ready in both themes | `MaskTypeIconsStayReadyForCompactSourceSizeAcrossThemes` | PASS |
+| Production node QML has no Material, shadow, glow, or gradient chrome | `ProductionNodeQmlHasNoMaterialImportOrEffectChrome` | PASS |
+| Missing delegate URL fails with the real error | `ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty` | PASS |
+| Adapter mapping, ports, role updates, stale rejection, restore | `AlcedoQanGraphTest` (8 prior + empty-URL) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlcedoQanGraphTest EditorNodeDelegateQmlTest AlcedoQanGraph AlcedoMainQml --parallel 4
+build/debug/alcedo_studio/tests/ui/AlcedoQanGraphTest_runtime/AlcedoQanGraphTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodeDelegateQmlTest_runtime/EditorNodeDelegateQmlTest.exe --gtest_color=no
+```
+
+Suite totals: **9/9** `AlcedoQanGraphTest`, **9/9** `EditorNodeDelegateQmlTest`,
+**18/18** direct runtime execution. CTest discovery still hits the unrelated
+`SharedToneCurveTest` lensfun entry-point mismatch; binaries were run from
+their `_runtime` directories.
+
+No screenshot grab matrix was captured. VI bans, token equality, icon Ready
+status, and both theme indices are asserted in-process. DPR 1.0 / 1.25 / 1.5 /
+2.0 sharpness is covered by the DESIGN source≥optical token rule, not by
+grabbed frames.
+
+**Checklist / exit condition:** all NM5.4 work and exit conditions are checked.
+No Nodes rail page, layout store, or graph command was added.
+
+**LOC note (grill-code-review):** new delegates 97 + 59 + 198 + 85 + 31 + 32
+QML lines; adapter source 665 and header 283 after delegate URL/install
+additions; new `EditorNodeDelegateQmlTest` 574 lines; `app_theme.cpp` is 1,221
+lines after 36 token getters (already over the 1,000-line review threshold
+before this sub-phase; no responsibility split in this display-only change).
+No new source file exceeds 1,000 lines.
+
+**Residual gaps:** NM5.5–NM5.8 still own the Nodes rail page, navigation,
+selection/`EditorNodeController`, layout store, Add/Rename/Delete, visual
+connector, accessibility of the full page, packaging, and screenshot visual
+matrix. The `nodes.svg` asset is registered but not yet a rail action. macOS
+checks were not run on this Windows host. The unrelated CTest discovery runtime
+mismatch remains outside this sub-phase.
+
 ---
 
 ## 12. NM5.5 — Rail, navigation, selection, and layout state
@@ -1729,16 +1869,16 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] The document stores the next default Color Grade name number.
 - [x] A new document names its primary Grade `Color Grade 1`.
 - [x] Add uses increasing default names and exact typed-history replay.
-- [ ] Nodes show no topology numbers.
-- [ ] Nodes show no status dots.
-- [ ] Nodes show no On/Off state or action.
-- [ ] Nodes show no adjustment summary.
-- [ ] Each Color Grade shows a default-open Mask drawer.
-- [ ] The user can close and reopen each drawer.
-- [ ] Drawer state is local UI state and creates no history or render.
-- [ ] Mask rows show only the approved type icon and type label.
+- [x] Nodes show no topology numbers.
+- [x] Nodes show no status dots.
+- [x] Nodes show no On/Off state or action.
+- [x] Nodes show no adjustment summary.
+- [x] Each Color Grade shows a default-open Mask drawer.
+- [x] The user can close and reopen each drawer.
+- [x] Drawer state is local UI state and creates no history or render.
+- [x] Mask rows show only the approved type icon and type label.
 - [ ] The Nodes rail uses the approved `stack-2` path.
-- [ ] Gradient, Radial, and Brush use the approved paths.
+- [x] Gradient, Radial, and Brush use the approved paths.
 - [ ] The page contains no unapproved pill, badge, or status dot.
 - [ ] The page contains no `xx · xx` compound label or equivalent substitute.
 - [x] Projection uses stable NodeId, MaskId, revisions, and session generation.
@@ -1758,7 +1898,7 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [ ] All visible actions support keyboard input and accessibility.
 - [ ] All product text uses localization.
 - [ ] All visual values use AppTheme and `DESIGN.md`.
-- [ ] Node delegates use no shadow, glow, gradient, or Material style.
+- [x] Node delegates use no shadow, glow, gradient, or Material style.
 - [ ] Reduced-motion behavior passes.
 - [ ] The viewer keeps its 360 logical-pixel floor at 960×640.
 - [ ] Windows build, install, and package checks pass.

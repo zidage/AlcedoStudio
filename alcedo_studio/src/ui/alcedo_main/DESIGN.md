@@ -339,6 +339,25 @@ Use AppTheme roles for the canvas, grid, edge, port, candidate edge, and node
 selection. Add each missing role to `AppTheme` and this file in the same change.
 Do not put raw graph colors in QML.
 
+| Token | Value | Use |
+| --- | --- | --- |
+| `graphCanvasColor` | `bgDeepColor` | Graph view surface |
+| `graphGridColor` | blend of `bgDeepColor` toward `textMutedColor` (0.22) | Quiet `Qan.LineGrid` |
+| `graphEdgeColor` | `textMutedColor` | Permanent backbone edge |
+| `graphCandidateEdgeColor` | blend of `textMutedColor` toward `textColor` (0.35) | Connector request preview |
+| `graphPortFillColor` | `cardSurfaceColor` | Square port fill |
+| `graphPortBorderColor` | `textColor` | Square port outline |
+| `graphSelectionOutlineColor` | `textColor` | Selected node outline |
+| `graphNodeWidth` | 220 | Color Grade and endpoint width |
+| `graphEndpointHeight` | 40 | Develop / DRT/Post height |
+| `graphNameRowHeight` | 32 | Color Grade name row |
+| `graphMaskDrawerHeaderHeight` | 28 | `Masks` disclosure header |
+| `graphMaskRowHeight` | 28 | One Mask type row |
+| `graphPortSize` | 8 | Visible square port |
+| `graphPortHitSize` | 16 | Port pointer target |
+| `graphEdgeWidth` | 1 | Backbone stroke |
+| `graphSelectionOutlineWidth` | 1 | Selected outline (inside the card; does not change node size) |
+
 ### Color Grade node content
 
 A Color Grade node shows only:

@@ -15,6 +15,10 @@
     <file>panel_icons/waveform.svg</file>
     <file>panel_icons/palette.svg</file>
     <file>panel_icons/versions.svg</file>
+    <file>panel_icons/nodes.svg</file>
+    <file>mask_icons/gradient.svg</file>
+    <file>mask_icons/radial.svg</file>
+    <file>mask_icons/brush.svg</file>
     <file>panel_icons/clock-play.svg</file>
     <file>panel_icons/reset.svg</file>
     <file>panel_icons/color-filter.svg</file>

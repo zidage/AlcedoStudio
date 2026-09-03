@@ -968,6 +968,42 @@ auto AppTheme::scopeGridColor() const -> QColor {
   return Blend(bgDeepColor(), textMutedColor(), 0.32);
 }
 
+auto AppTheme::graphCanvasColor() const -> QColor { return bgDeepColor(); }
+
+auto AppTheme::graphGridColor() const -> QColor {
+  return Blend(bgDeepColor(), textMutedColor(), 0.22);
+}
+
+auto AppTheme::graphEdgeColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::graphCandidateEdgeColor() const -> QColor {
+  return Blend(textMutedColor(), textColor(), 0.35);
+}
+
+auto AppTheme::graphPortFillColor() const -> QColor { return cardSurfaceColor(); }
+
+auto AppTheme::graphPortBorderColor() const -> QColor { return textColor(); }
+
+auto AppTheme::graphSelectionOutlineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::graphNodeWidth() const -> int { return 220; }
+
+auto AppTheme::graphEndpointHeight() const -> int { return 40; }
+
+auto AppTheme::graphNameRowHeight() const -> int { return 32; }
+
+auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
+
+auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
+
+auto AppTheme::graphPortSize() const -> int { return 8; }
+
+auto AppTheme::graphPortHitSize() const -> int { return 16; }
+
+auto AppTheme::graphEdgeWidth() const -> int { return 1; }
+
+auto AppTheme::graphSelectionOutlineWidth() const -> int { return 1; }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

@@ -768,6 +768,9 @@ alcedo_register_test_target(QuickQanavaProductionIntegrationTest ui)
 add_executable(AlcedoQanGraphTest
     ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
 target_include_directories(AlcedoQanGraphTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
@@ -787,12 +790,55 @@ target_link_libraries(AlcedoQanGraphTest
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::QuickEffects
+        Qt6::Svg
         Qt6::Widgets
 )
+target_compile_definitions(AlcedoQanGraphTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(AlcedoQanGraphTest PROPERTIES AUTOMOC ON)
 alcedo_ui_gtest_discover_tests(AlcedoQanGraphTest
     TEST_PREFIX "AlcedoQanGraphTest."
     PROPERTIES LABELS "quickqanava;editor_nodes")
 alcedo_register_test_target(AlcedoQanGraphTest ui)
+
+# Alcedo node/endpoint/Mask-drawer delegates: VI bans, drawer fold, ports, icons.
+add_executable(EditorNodeDelegateQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_delegate_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorNodeDelegateQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorNodeDelegateQmlTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodeDelegateQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorNodeDelegateQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodeDelegateQmlTest
+    TEST_PREFIX "EditorNodeDelegateQmlTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodeDelegateQmlTest ui)
 
 # Phase 7B: final-display identity stamping, stale-output rejection, and
 # hidden/resume analyzer lifecycle.

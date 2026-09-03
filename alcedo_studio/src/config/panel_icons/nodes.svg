@@ -1,0 +1,22 @@
+<!--
+  Source: Tabler Icons (https://tabler.io/icons/icon/stack-2)
+  License: MIT
+  Category: Design / Development
+  Tabler icon name: stack-2
+  Nodes rail toggle. User-approved 2 px stroke exception (DESIGN.md).
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12 4l-8 4l8 4l8 -4l-8 -4" />
+  <path d="M4 12l8 4l8 -4" />
+  <path d="M4 16l8 4l8 -4" />
+</svg>

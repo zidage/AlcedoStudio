@@ -6,9 +6,14 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QQmlComponent>
+#include <QQmlEngine>
 #include <QString>
+#include <QUrl>
+#include <QVariantList>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -55,6 +60,14 @@ struct AlcedoQanGraphApplyResult {
 class AlcedoQanGraph : public QObject {
   Q_OBJECT
   Q_PROPERTY(qan::Graph* graph READ graph WRITE set_graph NOTIFY GraphChanged)
+  Q_PROPERTY(QUrl colorGradeDelegateUrl READ color_grade_delegate_url WRITE
+                 set_color_grade_delegate_url NOTIFY DelegatesChanged)
+  Q_PROPERTY(QUrl endpointDelegateUrl READ endpoint_delegate_url WRITE set_endpoint_delegate_url
+                 NOTIFY DelegatesChanged)
+  Q_PROPERTY(QUrl portDelegateUrl READ port_delegate_url WRITE set_port_delegate_url NOTIFY
+                 DelegatesChanged)
+  Q_PROPERTY(QUrl edgeDelegateUrl READ edge_delegate_url WRITE set_edge_delegate_url NOTIFY
+                 DelegatesChanged)
 
  public:
   explicit AlcedoQanGraph(QObject* parent = nullptr);
@@ -67,6 +80,39 @@ class AlcedoQanGraph : public QObject {
    */
   void               set_graph(qan::Graph* graph);
   [[nodiscard]] auto graph() const -> qan::Graph*;
+
+  /**
+   * @brief Set the QML delegate URL for Color Grade nodes.
+   *
+   * The URL is resolved against the bound graph's QQmlEngine. An empty URL or a
+   * load error fails ApplySnapshot with the real QML error. There is no fallback
+   * to the default QuickQanava node delegate.
+   */
+  void               set_color_grade_delegate_url(const QUrl& url);
+  [[nodiscard]] auto color_grade_delegate_url() const -> QUrl;
+
+  /**
+   * @brief Set the QML delegate URL for Develop and DRT/Post nodes.
+   * @see set_color_grade_delegate_url
+   */
+  void               set_endpoint_delegate_url(const QUrl& url);
+  [[nodiscard]] auto endpoint_delegate_url() const -> QUrl;
+
+  /**
+   * @brief Set the QML delegate URL for scene-image ports.
+   *
+   * Each bound Qan graph receives its own component instance because
+   * qan::Graph takes ownership of portDelegate.
+   */
+  void               set_port_delegate_url(const QUrl& url);
+  [[nodiscard]] auto port_delegate_url() const -> QUrl;
+
+  /**
+   * @brief Set the QML delegate URL for backbone edges.
+   * @see set_color_grade_delegate_url
+   */
+  void               set_edge_delegate_url(const QUrl& url);
+  [[nodiscard]] auto edge_delegate_url() const -> QUrl;
 
   /**
    * @brief Project @p snapshot onto the bound Qan graph.
@@ -128,15 +174,18 @@ class AlcedoQanGraph : public QObject {
 
  signals:
   void GraphChanged();
+  void DelegatesChanged();
 
  protected:
   /**
    * @brief Documented @c qan::Graph::insertNode() entry used during rebuilds.
    *
-   * Tests may override this to inject a nullptr result. Production always
-   * forwards to the bound graph.
+   * Uses the Color Grade or endpoint delegate for @p node. Tests may override
+   * this to inject a nullptr result. Production always forwards to the bound
+   * graph with the matching Alcedo delegate.
    */
-  [[nodiscard]] virtual auto InsertQanNode(qan::Graph& graph) -> qan::Node*;
+  [[nodiscard]] virtual auto InsertQanNode(qan::Graph& graph, const EditorNodeProjection& node)
+      -> qan::Node*;
 
  private:
   struct EdgeKey {
@@ -192,15 +241,38 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto InsertPort(qan::Node& qan_node, const NodeId& node_id, const PortId& port_id,
                                 bool is_input) -> qan::PortItem*;
   [[nodiscard]] auto InsertEdge(const EditorNodeEdgeProjection& edge) -> QString;
+  void               ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node);
+  [[nodiscard]] auto EnsureDelegates() -> QString;
+  struct LoadedComponent {
+    std::unique_ptr<QQmlComponent> component;
+    QString                        error;
+  };
+  [[nodiscard]] auto        LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent;
+  void                      DropCachedDelegates();
+  [[nodiscard]] auto        InstallPortDelegate() -> QString;
+  [[nodiscard]] auto        ComponentFor(EditorNodeKind kind) const -> QQmlComponent*;
 
   [[nodiscard]] static auto MakeEdgeKey(const EditorNodeEdgeProjection& edge) -> EdgeKey;
   [[nodiscard]] static auto ToQString(std::string_view text) -> QString;
   [[nodiscard]] static auto QanPortId(bool is_input, const PortId& port_id) -> QString;
+  [[nodiscard]] static auto NodeKindKey(EditorNodeKind kind) -> QString;
+  [[nodiscard]] static auto SourceKindKey(MaskSourceKind kind) -> QString;
+  [[nodiscard]] static auto MasksToVariant(const std::vector<EditorNodeMaskProjection>& masks)
+      -> QVariantList;
 
-  QPointer<qan::Graph>      graph_;
-  bool                      has_projection_      = false;
-  bool                      rebuild_in_progress_ = false;
-  EditorNodeGraphSnapshot   applied_;
+  QPointer<qan::Graph>                              graph_;
+  QUrl                                              color_grade_delegate_url_;
+  QUrl                                              endpoint_delegate_url_;
+  QUrl                                              port_delegate_url_;
+  QUrl                                              edge_delegate_url_;
+  QPointer<QQmlEngine>                              delegate_engine_;
+  QPointer<qan::Graph>                              port_delegate_graph_;
+  std::unique_ptr<QQmlComponent>                    color_grade_component_;
+  std::unique_ptr<QQmlComponent>                    endpoint_component_;
+  std::unique_ptr<QQmlComponent>                    edge_component_;
+  bool                                              has_projection_      = false;
+  bool                                              rebuild_in_progress_ = false;
+  EditorNodeGraphSnapshot                           applied_;
   std::map<NodeId, QPointer<qan::Node>>             node_by_id_;
   std::map<EdgeKey, QPointer<qan::Edge>>            edge_by_key_;
   std::map<NodeId, NodePorts>                       ports_by_node_;
