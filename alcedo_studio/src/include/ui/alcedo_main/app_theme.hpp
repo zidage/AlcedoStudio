@@ -92,6 +92,10 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int spaceMd READ spaceMd CONSTANT)
   Q_PROPERTY(int spaceLg READ spaceLg CONSTANT)
   Q_PROPERTY(int spaceXl READ spaceXl CONSTANT)
+  // Library date activity graph (GitHub-style capture heatmap).
+  Q_PROPERTY(int dateGraphCellMinSize READ dateGraphCellMinSize CONSTANT)
+  Q_PROPERTY(int dateGraphCellGap READ dateGraphCellGap CONSTANT)
+  Q_PROPERTY(int dateGraphCellRadius READ dateGraphCellRadius CONSTANT)
   Q_PROPERTY(int motionFoldOpenMs READ motionFoldOpenMs CONSTANT)
   Q_PROPERTY(int motionFoldCloseMs READ motionFoldCloseMs CONSTANT)
   Q_PROPERTY(int motionFadeMs READ motionFadeMs CONSTANT)
@@ -146,6 +150,11 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor dateGraphLevel3Color READ dateGraphLevel3Color NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor dateGraphLevel4Color READ dateGraphLevel4Color NOTIFY ThemeChanged)
 
  public:
   enum class FontRole : int {
@@ -258,6 +267,9 @@ class AppTheme final : public QObject {
   auto        spaceMd() const -> int;
   auto        spaceLg() const -> int;
   auto        spaceXl() const -> int;
+  auto        dateGraphCellMinSize() const -> int;
+  auto        dateGraphCellGap() const -> int;
+  auto        dateGraphCellRadius() const -> int;
   auto        motionFoldOpenMs() const -> int;
   auto        motionFoldCloseMs() const -> int;
   auto        motionFadeMs() const -> int;
@@ -296,6 +308,11 @@ class AppTheme final : public QObject {
   auto scopeHistogramRedColor() const -> QColor;
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
+  auto dateGraphLevel0Color() const -> QColor;
+  auto dateGraphLevel1Color() const -> QColor;
+  auto dateGraphLevel2Color() const -> QColor;
+  auto dateGraphLevel3Color() const -> QColor;
+  auto dateGraphLevel4Color() const -> QColor;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

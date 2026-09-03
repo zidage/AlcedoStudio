@@ -984,6 +984,26 @@ auto AppTheme::scopeHistogramBlueColor() const -> QColor {
   return Blend(QColor(0x8E, 0xB9, 0xE5), textColor(), 0.18);
 }
 
+auto AppTheme::dateGraphLevel0Color() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.22);
+}
+
+auto AppTheme::dateGraphLevel1Color() const -> QColor {
+  return Blend(bgBaseColor(), toneSteel(), 0.30);
+}
+
+auto AppTheme::dateGraphLevel2Color() const -> QColor {
+  return Blend(bgBaseColor(), toneSteel(), 0.52);
+}
+
+auto AppTheme::dateGraphLevel3Color() const -> QColor {
+  return Blend(bgBaseColor(), toneSteel(), 0.74);
+}
+
+auto AppTheme::dateGraphLevel4Color() const -> QColor {
+  return toneSteel();
+}
+
 auto AppTheme::uiFontFamily() const -> QString {
   RegisterFonts();
   return ActiveUiFamily(FontState());
@@ -1077,6 +1097,9 @@ auto AppTheme::spaceSm() const -> int { return 8; }
 auto AppTheme::spaceMd() const -> int { return 12; }
 auto AppTheme::spaceLg() const -> int { return 16; }
 auto AppTheme::spaceXl() const -> int { return 20; }
+auto AppTheme::dateGraphCellMinSize() const -> int { return 10; }
+auto AppTheme::dateGraphCellGap() const -> int { return 3; }
+auto AppTheme::dateGraphCellRadius() const -> int { return 2; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }

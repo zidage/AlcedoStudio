@@ -944,6 +944,52 @@
     </message>
 </context>
 <context>
+    <name>DateCommitGraph</name>
+    <message>
+        <source>Last year</source>
+        <translation>Last year</translation>
+    </message>
+    <message>
+        <source>Capture activity</source>
+        <translation>Capture activity</translation>
+    </message>
+    <message>
+        <source>No photos on %1</source>
+        <translation>No photos on %1</translation>
+    </message>
+    <message>
+        <source>%1 photo on %2</source>
+        <translation>%1 photo on %2</translation>
+    </message>
+    <message>
+        <source>%1 photos on %2</source>
+        <translation>%1 photos on %2</translation>
+    </message>
+    <message>
+        <source>Less</source>
+        <translation>Less</translation>
+    </message>
+    <message>
+        <source>More</source>
+        <translation>More</translation>
+    </message>
+    <message>
+        <source>No capture dates</source>
+        <translation>No capture dates</translation>
+    </message>
+</context>
+<context>
+    <name>DateFilterSection</name>
+    <message>
+        <source>Calendar</source>
+        <translation>Calendar</translation>
+    </message>
+    <message>
+        <source>Activity</source>
+        <translation>Activity</translation>
+    </message>
+</context>
+<context>
     <name>Alcedo</name>
     <message>
         <location filename="../album_backend/image_controller.cpp" line="+51"/>

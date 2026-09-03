@@ -944,6 +944,52 @@
     </message>
 </context>
 <context>
+    <name>DateCommitGraph</name>
+    <message>
+        <source>Last year</source>
+        <translation>近一年</translation>
+    </message>
+    <message>
+        <source>Capture activity</source>
+        <translation>拍摄活跃度</translation>
+    </message>
+    <message>
+        <source>No photos on %1</source>
+        <translation>%1 没有照片</translation>
+    </message>
+    <message>
+        <source>%1 photo on %2</source>
+        <translation>%2 有 %1 张照片</translation>
+    </message>
+    <message>
+        <source>%1 photos on %2</source>
+        <translation>%2 有 %1 张照片</translation>
+    </message>
+    <message>
+        <source>Less</source>
+        <translation>少</translation>
+    </message>
+    <message>
+        <source>More</source>
+        <translation>多</translation>
+    </message>
+    <message>
+        <source>No capture dates</source>
+        <translation>没有拍摄日期</translation>
+    </message>
+</context>
+<context>
+    <name>DateFilterSection</name>
+    <message>
+        <source>Calendar</source>
+        <translation>日历</translation>
+    </message>
+    <message>
+        <source>Activity</source>
+        <translation>热力图</translation>
+    </message>
+</context>
+<context>
     <name>Alcedo</name>
     <message>
         <location filename="../album_backend/image_controller.cpp" line="+51"/>
