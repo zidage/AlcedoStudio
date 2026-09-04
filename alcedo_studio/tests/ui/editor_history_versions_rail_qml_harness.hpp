@@ -295,6 +295,20 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Color Grade renamed");
   }
 
+  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
+                           const NodeId& new_successor_id) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors =
+        alcedo::ReconnectColorGrade(*document_, node_id, new_predecessor_id, new_successor_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_reconnected_node_id_      = node_id;
+    last_reconnect_predecessor_id_ = new_predecessor_id;
+    last_reconnect_successor_id_   = new_successor_id;
+    ++reconnect_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade reconnected");
+  }
+
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
@@ -366,9 +380,19 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto add_grade_count() const -> int { return add_grade_count_; }
   [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
   [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
+  [[nodiscard]] auto reconnect_grade_count() const -> int { return reconnect_grade_count_; }
   [[nodiscard]] auto last_added_node_id() const -> NodeId { return last_added_node_id_; }
   [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
   [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
+  [[nodiscard]] auto last_reconnected_node_id() const -> NodeId {
+    return last_reconnected_node_id_;
+  }
+  [[nodiscard]] auto last_reconnect_predecessor_id() const -> NodeId {
+    return last_reconnect_predecessor_id_;
+  }
+  [[nodiscard]] auto last_reconnect_successor_id() const -> NodeId {
+    return last_reconnect_successor_id_;
+  }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -443,9 +467,13 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   add_grade_count_       = 0;
   int                   remove_grade_count_    = 0;
   int                   rename_grade_count_    = 0;
+  int                   reconnect_grade_count_ = 0;
   NodeId                last_added_node_id_;
   NodeId                last_removed_node_id_;
   NodeId                last_renamed_node_id_;
+  NodeId                last_reconnected_node_id_;
+  NodeId                last_reconnect_predecessor_id_;
+  NodeId                last_reconnect_successor_id_;
 };
 
 class RecordingInteractionPolicy final : public QObject {

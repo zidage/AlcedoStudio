@@ -367,6 +367,10 @@ Item {
                     id: graphTopology
                     objectName: "editorNodesQanGraph"
                     multipleSelectionEnabled: false
+                    connectorEnabled: true
+                    connectorCreateDefaultEdge: false
+                    connectorEdgeColor: appTheme.graphCandidateEdgeColor
+                    connectorColor: appTheme.graphPortBorderColor
                 }
 
                 Keys.onPressed: function (event) {

@@ -8,7 +8,9 @@
 #include <QuickQanava>
 #include <functional>
 
+#include "app/editor_node_graph_projection.hpp"
 #include "editor_history_versions_rail_qml_harness.hpp"
+#include "qanConnector.h"
 #include "qanGraph.h"
 #include "qanNode.h"
 #include "qanNodeItem.h"
@@ -395,6 +397,107 @@ TEST_F(EditorNodesPanelQmlTest, DeleteKeyRemovesSelectedGradeAndSelectsItsSucces
     return visible;
   };
   QTRY_COMPARE_WITH_TIMEOUT(visible_on_view(), 3, 2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, VisualConnectorIsRequestOnlyWithThemeCandidateColor) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->graph() != nullptr, 2000);
+  auto* graph = adapter->graph();
+  QTRY_VERIFY_WITH_TIMEOUT(graph->getConnector() != nullptr, 2000);
+  EXPECT_TRUE(graph->getConnectorEnabled());
+  EXPECT_FALSE(graph->getConnectorCreateDefaultEdge());
+  EXPECT_EQ(graph->getConnectorEdgeColor(), AppTheme::Instance().graphCandidateEdgeColor());
+  EXPECT_EQ(graph->getConnectorColor(), AppTheme::Instance().graphPortBorderColor());
+}
+
+TEST_F(EditorNodesPanelQmlTest, ConnectorMoveRebuildsPermanentEdgesFromAcceptedProjection) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = backend_.last_added_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ProcessEvents();
+
+  ASSERT_TRUE(
+      nodes->requestConnectorMove(QStringLiteral("grade.primary"), QStringLiteral("drt"), false));
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.reconnect_grade_count() == 1, 2000);
+  EXPECT_EQ(backend_.last_reconnect_predecessor_id(), extra);
+  EXPECT_EQ(backend_.last_reconnect_successor_id(), NodeId{"drt"});
+  QTRY_COMPARE_WITH_TIMEOUT(nodes->backbone_node_ids().at(1), NodeIdToQString(extra), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      adapter->EdgeFor(EditorNodeEdgeProjection{extra, PortId{"image"}, NodeId{"grade.primary"},
+                                                PortId{"image"}}) != nullptr,
+      2000);
+  EXPECT_EQ(adapter->EdgeFor(EditorNodeEdgeProjection{NodeId{"grade.primary"}, PortId{"image"},
+                                                      extra, PortId{"image"}}),
+            nullptr);
+  EXPECT_EQ(adapter->graph()->get_edge_count(), 3);
+}
+
+TEST_F(EditorNodesPanelQmlTest, DrawerFoldDoesNotChangeReconnectNeighbors) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = backend_.last_added_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  auto* output = adapter->OutputPortFor(NodeId{"grade.primary"}, PortId{"image"});
+  auto* input  = adapter->InputPortFor(NodeId{"grade.primary"}, PortId{"image"});
+  ASSERT_NE(output, nullptr);
+  ASSERT_NE(input, nullptr);
+  adapter->SetDrawerOpen(NodeId{"grade.primary"}, false);
+  ProcessEvents();
+  EXPECT_EQ(adapter->OutputPortFor(NodeId{"grade.primary"}, PortId{"image"}), output);
+  EXPECT_EQ(adapter->InputPortFor(NodeId{"grade.primary"}, PortId{"image"}), input);
+
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ASSERT_TRUE(
+      nodes->requestConnectorMove(QStringLiteral("grade.primary"), QStringLiteral("drt"), false));
+  EXPECT_EQ(backend_.last_reconnect_predecessor_id(), extra);
+  EXPECT_EQ(backend_.last_reconnect_successor_id(), NodeId{"drt"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, FailedReconnectKeepsPermanentEdgesAndShowsExactError) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = backend_.last_added_node_id();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ProcessEvents();
+  const auto topology_before = adapter->topology_revision();
+  const auto ids_before      = nodes->backbone_node_ids();
+  backend_.SetFailNodeCommands(true);
+
+  EXPECT_FALSE(
+      nodes->requestConnectorMove(QStringLiteral("grade.primary"), QStringLiteral("drt"), false));
+  EXPECT_EQ(nodes->backbone_node_ids(), ids_before);
+  EXPECT_EQ(adapter->topology_revision(), topology_before);
+  EXPECT_EQ(nodes->last_error(), QStringLiteral("mini-Git journal append failed"));
+  auto* error = Find(QStringLiteral("editorNodesCommandError"));
+  ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->property("text").toString(), QStringLiteral("mini-Git journal append failed"));
+  EXPECT_NE(adapter->EdgeFor(EditorNodeEdgeProjection{NodeId{"grade.primary"}, PortId{"image"},
+                                                      extra, PortId{"image"}}),
+            nullptr);
 }
 
 TEST_F(EditorNodesPanelQmlTest, FailedAddKeepsPriorPermanentQanProjectionAndExactError) {

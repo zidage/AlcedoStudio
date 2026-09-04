@@ -95,6 +95,13 @@ class IEditorHistoryPort {
     if (error != nullptr) *error = "Color Grade removal is not supported by this history port";
     return false;
   }
+  /// Move one Color Grade between a new scene-image predecessor and successor.
+  virtual auto ReconnectColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                                   const NodeId& /*node_id*/, const NodeId& /*new_predecessor_id*/,
+                                   const NodeId& /*new_successor_id*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade reconnect is not supported by this history port";
+    return false;
+  }
   /// Rename one Color Grade without requesting a pixel render.
   virtual auto RenameColorGrade(const EditorHistoryGuardHandle& /*guard*/,
                                 const NodeId& /*node_id*/, std::string /*display_name*/,

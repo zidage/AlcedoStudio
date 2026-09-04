@@ -28,9 +28,10 @@ class EditorSessionController;
  * Owns the session generation, selected NodeId, and published
  * EditorNodeGraphSnapshot. It does not own Qan visuals or layout coordinates.
  * When the open Nodes page binds its AlcedoQanGraph, this controller applies
- * the published snapshot onto that adapter after Add, Rename, and Delete.
- * Reconnect remains outside this controller until its request-only connector
- * phase.
+ * the published snapshot onto that adapter after Add, Rename, Delete, and
+ * Reconnect. Visual connector requests resolve product IDs on the adapter,
+ * then this controller computes the remaining-backbone predecessor and
+ * successor and submits NM4 ReconnectColorGrade.
  *
  * Threading: GUI thread only. Side effects: snapshot and selection signals.
  * Failure: stale generations and unknown NodeIds leave the live snapshot and
@@ -55,6 +56,8 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool canRenameSelectedColorGrade READ can_rename_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool canDeleteSelectedColorGrade READ can_delete_selected_color_grade NOTIFY
+                 ActionAvailabilityChanged)
+  Q_PROPERTY(bool canReconnectSelectedColorGrade READ can_reconnect_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(QString selectedNodeName READ selected_node_name NOTIFY SelectionChanged)
   Q_PROPERTY(QObject* graphAdapter READ graph_adapter_object WRITE set_graph_adapter NOTIFY
@@ -135,6 +138,26 @@ class EditorNodeController : public QObject {
    * @return false without changing product or projected state on command failure.
    */
   Q_INVOKABLE bool   deleteColorGrade(const QString& node_id);
+  /**
+   * @brief Move one Color Grade between a new predecessor and successor.
+   *
+   * @p request_generation must match the bound session. A no-op neighbor pair
+   * returns true without a history commit. Invalid, cyclic, fan-in, and fan-out
+   * pairs fail closed.
+   */
+  Q_INVOKABLE bool   requestReconnect(const QString& node_id, const QString& predecessor_id,
+                                      const QString& successor_id);
+  Q_INVOKABLE bool   requestReconnect(const QString& node_id, const QString& predecessor_id,
+                                      const QString& successor_id, quint64 request_generation);
+  /**
+   * @brief Resolve a visual-connector drop against the remaining backbone.
+   *
+   * @p source_node_id must be the selected Color Grade. @p destination_is_output
+   * inserts after the destination; otherwise the Grade is inserted before it.
+   */
+  Q_INVOKABLE bool   requestConnectorMove(const QString& source_node_id,
+                                          const QString& destination_node_id,
+                                          bool           destination_is_output);
 
   [[nodiscard]] auto selected_node_id() const -> NodeId { return selected_node_id_; }
   [[nodiscard]] auto selected_node_id_string() const -> QString;
@@ -151,6 +174,7 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto can_add_color_grade() const -> bool;
   [[nodiscard]] auto can_rename_selected_color_grade() const -> bool;
   [[nodiscard]] auto can_delete_selected_color_grade() const -> bool;
+  [[nodiscard]] auto can_reconnect_selected_color_grade() const -> bool;
   [[nodiscard]] auto selected_node_name() const -> QString;
   [[nodiscard]] auto snapshot() const -> const EditorNodeGraphSnapshot& { return snapshot_; }
 
@@ -195,7 +219,18 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> const EditorNodeProjection*;
   [[nodiscard]] auto ValidateCommandGeneration() -> bool;
   [[nodiscard]] auto IsColorGrade(const NodeId& node_id) const -> bool;
+  [[nodiscard]] auto CurrentPredecessor(const NodeId& node_id) const -> NodeId;
+  [[nodiscard]] auto CurrentSuccessor(const NodeId& node_id) const -> NodeId;
+  [[nodiscard]] auto ResolveConnectorMove(const NodeId& moving_id, const NodeId& destination_id,
+                                          bool destination_is_output, NodeId* predecessor_id,
+                                          NodeId* successor_id) -> bool;
+  [[nodiscard]] auto NeighborsAreAdjacentInRemaining(const NodeId& moving_id,
+                                                     const NodeId& predecessor_id,
+                                                     const NodeId& successor_id) const -> bool;
   void               SetCommandActive(bool active);
+  void OnConnectorMoveRequested(const QString& source_node_id, const QString& destination_node_id,
+                                bool destination_is_output);
+  void OnConnectorRequestRejected(const QString& error);
   [[nodiscard]] auto TopologyChanged(const EditorNodeGraphSnapshot& snapshot) const -> bool;
   [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;
   void               SelectByKind(EditorNodeKind kind);

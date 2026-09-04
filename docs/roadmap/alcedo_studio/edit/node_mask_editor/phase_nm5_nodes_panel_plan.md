@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.6 complete; NM5.7–NM5.8 planned
+Status: NM5.1–NM5.7 complete; NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -2162,8 +2162,110 @@ Verify the pinned forms of:
 
 ### 14.7 Completion record
 
-Record the date, pinned connector properties, commands, test count, success chain, and failure
-chain here.
+##### NM5.7 completion record (2026-09-04)
+
+**Status:** complete — the Nodes page enables the pinned QuickQanava visual connector in
+request-only mode. Only the selected Color Grade can start a move. A drop is resolved through
+generation-checked identity maps, the moving Grade is removed from an in-memory backbone order,
+and NM4 `ReconnectColorGrade` runs with the computed predecessor and successor. Permanent Qan
+edges update only after the accepted projection is published.
+
+**Revision and branch:** base repository revision `dcd9dce8` (`origin/main` with NM5.6 merged),
+branch `feature/nodes-panel-visual-connector-reconnect`.
+
+**Pinned connector properties (QuickQanava 2.50 `56bdf78d`):**
+
+| Property / signal | Pinned value used |
+| --- | --- |
+| `connectorEnabled` | `true` (pinned header default is `false`; website text says default `true`) |
+| `connectorCreateDefaultEdge` | `false` |
+| `connectorRequestEdgeCreation(src, dst, srcPort, dstPort)` | request-only path; official website omits the port arguments present in 2.50 |
+| `connectorEdgeColor` | `AppTheme.graphCandidateEdgeColor` |
+| `connectorColor` | `AppTheme.graphPortBorderColor` |
+| selected Color Grade `connectable` | `OutConnectable`; connector `sourcePort` is the bottom `image` output |
+| other Color Grades | `InConnectable` |
+| Develop | `UnConnectable` (no incoming move target) |
+| DRT/Post | `InConnectable` (no outgoing move source) |
+
+**Primary success call chain:**
+
+```text
+user drags the official visual connector from the selected Color Grade
+  -> Qan shows a temporary connector (no default insertEdge)
+  -> connectorRequestEdgeCreation(src, dst, srcPort, dstPort)
+  -> AlcedoQanGraph resolves live NodeIds and generation
+  -> EditorNodeController removes the moving Grade from remaining backbone order
+  -> compute predecessor and successor (insert before dest, or after an output port)
+  -> EditorSessionController::SubmitReconnectColorGrade
+  -> EditorSessionService queue admission as CommitAdjustment
+  -> EditorSessionHistoryPort::ReconnectColorGrade under the render lock
+  -> typed Reconnect batch and Mini-Git WAL append
+  -> topology projection revision
+  -> AlcedoQanGraph replaces permanent edges from the accepted snapshot
+  -> GraphTopologyChanged Quality render
+```
+
+**Primary failure call chain:**
+
+```text
+Develop incoming target, DRT outgoing source, unselected source, self-cycle,
+non-adjacent fan-in/fan-out, stale Qan primitive, stale generation, or backend failure
+  -> reject before or during history mutation
+  -> no PipelineDocument change
+  -> no history commit
+  -> hideConnectorPreview (temporary Qan edge closed)
+  -> permanent Qan edge set unchanged
+  -> EditorNodesPanel shows the exact error
+```
+
+A no-op drop onto the current successor returns success without a history commit.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Develop has no incoming move target; DRT has no outgoing source | `EditorNodeSelectionLayoutTest` | PASS |
+| Each Grade has one input and one output; request-only connector; theme colors | `AlcedoQanGraphTest` | PASS |
+| Valid move creates one commit and one topology Quality render | `EditorSessionNodeCommandTest`, `EditorNodeSelectionLayoutTest`, `EditorNodesPanelQmlTest` | PASS |
+| No-op move creates no commit | `EditorNodeSelectionLayoutTest` | PASS |
+| Cycle, fan-in, and fan-out requests fail | `EditorNodeSelectionLayoutTest` | PASS |
+| Stale Qan primitive cannot change the current Version | `AlcedoQanGraphTest` | PASS |
+| Backend failure leaves permanent edges and exact error | `EditorNodesPanelQmlTest` | PASS |
+| Undo restores exact order and selection | `EditorNodeSelectionLayoutTest` | PASS |
+| Drawer fold does not change port identity or reconnect neighbors | `AlcedoQanGraphTest`, `EditorNodesPanelQmlTest` | PASS |
+
+| Target or suite | Result |
+| --- | --- |
+| `EditorSessionNodeCommandTest` | 5/5 passed |
+| `EditorSessionActionPolicyCq3Test` | 12/12 passed |
+| `EditorNodeSelectionLayoutTest` | 25/25 passed |
+| `AlcedoQanGraphTest` | 15/15 passed |
+| `EditorNodesPanelQmlTest` | 19/19 passed |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionNodeCommandTest EditorSessionActionPolicyCq3Test EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest AlcedoQanGraphTest alcedo_main
+build\debug\alcedo_studio\tests\app\EditorSessionNodeCommandTest_runtime\EditorSessionNodeCommandTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionActionPolicyCq3Test_runtime\EditorSessionActionPolicyCq3Test.exe
+build\debug\alcedo_studio\tests\ui\EditorNodeSelectionLayoutTest_runtime\EditorNodeSelectionLayoutTest.exe
+build\debug\alcedo_studio\tests\ui\AlcedoQanGraphTest_runtime\AlcedoQanGraphTest.exe
+build\debug\alcedo_studio\tests\ui\EditorNodesPanelQmlTest_runtime\EditorNodesPanelQmlTest.exe
+```
+
+`alcedo_main` linked. macOS checks were not run on this Windows host.
+
+**Checklist / exit condition:** all boxes in 14.6 checked.
+
+**LOC note (grill-code-review):** `editor_node_controller.cpp` 761; `alcedo_qan_graph.cpp` 942;
+`EditorNodesPanel.qml` 455. `editor_session_service.cpp` 1547 and
+`editor_session_controller.cpp` 1263 were already above 1000; this sub-phase only added the
+Reconnect routing methods beside the existing Add/Remove/Rename paths and did not absorb more
+business rules into those facades.
+
+**Residual gaps:** NM5.8 still owns lifecycle, accessibility, localization, install, and package
+checks. Keyboard Reconnect is listed under NM5.8. Real-RAW and three-backend qualification remain
+NM8.
 
 ---
 

@@ -61,6 +61,7 @@ enum class EditorSessionCommandKind : std::uint8_t {
   AddColorGrade,
   RemoveColorGrade,
   RenameColorGrade,
+  ReconnectColorGrade,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -110,6 +111,8 @@ struct EditorSessionCommand {
   bool                                    geometry_overlay_active = false;
   NodeId                                  node_id;
   NodeId                                  before_node_id;
+  NodeId                                  predecessor_node_id;
+  NodeId                                  successor_node_id;
 };
 
 /// Typed worker completion envelope. Payload-specific values are kept as

@@ -11,6 +11,7 @@
 #include <QUuid>
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
@@ -45,10 +46,10 @@ auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnaps
 EditorNodeController::EditorNodeController(QObject* parent) : QObject(parent) {}
 
 EditorNodeController::~EditorNodeController() {
-  if (graph_adapter_connection_) {
-    QObject::disconnect(graph_adapter_connection_);
-    graph_adapter_connection_ = {};
+  if (graph_adapter_ != nullptr) {
+    disconnect(graph_adapter_.data(), nullptr, this, nullptr);
   }
+  graph_adapter_connection_ = {};
   DisconnectSession();
 }
 
@@ -238,6 +239,10 @@ auto EditorNodeController::can_delete_selected_color_grade() const -> bool {
   return can_rename_selected_color_grade();
 }
 
+auto EditorNodeController::can_reconnect_selected_color_grade() const -> bool {
+  return can_rename_selected_color_grade();
+}
+
 auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> bool {
   const auto bound_generation = BoundSessionGeneration();
   if (bound_generation.has_value() && snapshot.session_generation != *bound_generation) {
@@ -331,14 +336,18 @@ void EditorNodeController::set_graph_adapter(QObject* adapter) {
   if (graph_adapter_.data() == graph) {
     return;
   }
-  if (graph_adapter_connection_) {
-    QObject::disconnect(graph_adapter_connection_);
-    graph_adapter_connection_ = {};
+  if (graph_adapter_ != nullptr) {
+    disconnect(graph_adapter_.data(), nullptr, this, nullptr);
   }
-  graph_adapter_ = graph;
+  graph_adapter_connection_ = {};
+  graph_adapter_            = graph;
   if (graph_adapter_ != nullptr) {
     graph_adapter_connection_ = connect(graph_adapter_.data(), &AlcedoQanGraph::GraphChanged, this,
                                         [this] { QueueProjectionApply(); });
+    connect(graph_adapter_.data(), &AlcedoQanGraph::ConnectorMoveRequested, this,
+            &EditorNodeController::OnConnectorMoveRequested);
+    connect(graph_adapter_.data(), &AlcedoQanGraph::ConnectorRequestRejected, this,
+            &EditorNodeController::OnConnectorRequestRejected);
   }
   emit GraphAdapterChanged();
   if (graph_adapter_ != nullptr && has_snapshot_) {
@@ -556,6 +565,219 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   }
   QueueProjectionApply();
   return true;
+}
+
+auto EditorNodeController::CurrentPredecessor(const NodeId& node_id) const -> NodeId {
+  const int index = IndexOf(node_id);
+  if (index <= 0) {
+    return {};
+  }
+  return snapshot_.nodes[static_cast<std::size_t>(index - 1)].node_id;
+}
+
+auto EditorNodeController::CurrentSuccessor(const NodeId& node_id) const -> NodeId {
+  const int index = IndexOf(node_id);
+  if (index < 0 || index + 1 >= static_cast<int>(snapshot_.nodes.size())) {
+    return {};
+  }
+  return snapshot_.nodes[static_cast<std::size_t>(index + 1)].node_id;
+}
+
+auto EditorNodeController::NeighborsAreAdjacentInRemaining(const NodeId& moving_id,
+                                                           const NodeId& predecessor_id,
+                                                           const NodeId& successor_id) const
+    -> bool {
+  if (!has_snapshot_ || predecessor_id.Empty() || successor_id.Empty()) {
+    return false;
+  }
+  const NodeId* previous = nullptr;
+  for (const auto& node : snapshot_.nodes) {
+    if (node.node_id == moving_id) {
+      continue;
+    }
+    if (previous != nullptr && *previous == predecessor_id && node.node_id == successor_id) {
+      return true;
+    }
+    previous = &node.node_id;
+  }
+  return false;
+}
+
+auto EditorNodeController::ResolveConnectorMove(const NodeId& moving_id,
+                                                const NodeId& destination_id,
+                                                bool destination_is_output, NodeId* predecessor_id,
+                                                NodeId* successor_id) -> bool {
+  if (predecessor_id == nullptr || successor_id == nullptr) {
+    return false;
+  }
+  *predecessor_id = {};
+  *successor_id   = {};
+  if (!IsColorGrade(moving_id)) {
+    SetLastError(tr("Only a selected Color Grade can start a move"));
+    return false;
+  }
+  const auto* destination = NodeFor(destination_id);
+  if (destination == nullptr) {
+    SetLastError(tr("That node is not in the current graph"));
+    return false;
+  }
+  if (moving_id == destination_id) {
+    SetLastError(tr("A Color Grade cannot reconnect to itself"));
+    return false;
+  }
+
+  std::vector<const EditorNodeProjection*> remaining;
+  remaining.reserve(snapshot_.nodes.size());
+  for (const auto& node : snapshot_.nodes) {
+    if (node.node_id != moving_id) {
+      remaining.push_back(&node);
+    }
+  }
+  int dest_index = -1;
+  for (int i = 0; i < static_cast<int>(remaining.size()); ++i) {
+    if (remaining[static_cast<std::size_t>(i)]->node_id == destination_id) {
+      dest_index = i;
+      break;
+    }
+  }
+  if (dest_index < 0) {
+    SetLastError(tr("That node is not in the current graph"));
+    return false;
+  }
+
+  if (destination_is_output) {
+    if (destination->node_kind == EditorNodeKind::Drt) {
+      SetLastError(tr("DRT/Post has no outgoing move source"));
+      return false;
+    }
+    if (dest_index + 1 >= static_cast<int>(remaining.size())) {
+      SetLastError(tr("Reconnect would create a cycle, fan-in, or fan-out"));
+      return false;
+    }
+    *predecessor_id = destination_id;
+    *successor_id   = remaining[static_cast<std::size_t>(dest_index + 1)]->node_id;
+  } else {
+    if (destination->node_kind == EditorNodeKind::Develop) {
+      SetLastError(tr("Develop has no incoming move target"));
+      return false;
+    }
+    if (dest_index == 0) {
+      SetLastError(tr("Develop has no incoming move target"));
+      return false;
+    }
+    *predecessor_id = remaining[static_cast<std::size_t>(dest_index - 1)]->node_id;
+    *successor_id   = destination_id;
+  }
+  return true;
+}
+
+bool EditorNodeController::requestReconnect(const QString& node_id, const QString& predecessor_id,
+                                            const QString& successor_id) {
+  return requestReconnect(node_id, predecessor_id, successor_id, session_generation_);
+}
+
+bool EditorNodeController::requestReconnect(const QString& node_id, const QString& predecessor_id,
+                                            const QString& successor_id,
+                                            quint64        request_generation) {
+  if (!ValidateCommandGeneration()) {
+    return false;
+  }
+  if (request_generation != session_generation_) {
+    SetLastError(tr("The node command is from another editor session"));
+    return false;
+  }
+  const auto id   = NodeIdFromQString(node_id);
+  const auto pred = NodeIdFromQString(predecessor_id);
+  const auto succ = NodeIdFromQString(successor_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade can be reconnected"));
+    return false;
+  }
+  if (id == pred || id == succ || pred == succ) {
+    SetLastError(tr("A Color Grade cannot reconnect to itself"));
+    return false;
+  }
+  if (NodeFor(pred) == nullptr || NodeFor(succ) == nullptr) {
+    SetLastError(tr("That node is not in the current graph"));
+    return false;
+  }
+  if (NodeFor(pred)->node_kind == EditorNodeKind::Drt) {
+    SetLastError(tr("DRT/Post has no outgoing move source"));
+    return false;
+  }
+  if (NodeFor(succ)->node_kind == EditorNodeKind::Develop) {
+    SetLastError(tr("Develop has no incoming move target"));
+    return false;
+  }
+  if (!NeighborsAreAdjacentInRemaining(id, pred, succ)) {
+    SetLastError(tr("Reconnect would create a cycle, fan-in, or fan-out"));
+    return false;
+  }
+  if (CurrentPredecessor(id) == pred && CurrentSuccessor(id) == succ) {
+    SetLastError({});
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return true;
+  }
+
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitReconnectColorGrade(id, pred, succ);
+  if (graph_adapter_ != nullptr) {
+    graph_adapter_->hideConnectorPreview();
+  }
+  if (EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  selectNode(node_id);
+  QueueProjectionApply();
+  return true;
+}
+
+bool EditorNodeController::requestConnectorMove(const QString& source_node_id,
+                                                const QString& destination_node_id,
+                                                bool           destination_is_output) {
+  if (!ValidateCommandGeneration()) {
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  const auto source = NodeIdFromQString(source_node_id);
+  if (source != selected_node_id_ || !IsColorGrade(source)) {
+    SetLastError(tr("Only a selected Color Grade can start a move"));
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  NodeId predecessor;
+  NodeId successor;
+  if (!ResolveConnectorMove(source, NodeIdFromQString(destination_node_id), destination_is_output,
+                            &predecessor, &successor)) {
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  return requestReconnect(source_node_id, NodeIdToQString(predecessor), NodeIdToQString(successor),
+                          session_generation_);
+}
+
+void EditorNodeController::OnConnectorMoveRequested(const QString& source_node_id,
+                                                    const QString& destination_node_id,
+                                                    bool           destination_is_output) {
+  requestConnectorMove(source_node_id, destination_node_id, destination_is_output);
+}
+
+void EditorNodeController::OnConnectorRequestRejected(const QString& error) {
+  if (graph_adapter_ != nullptr) {
+    graph_adapter_->hideConnectorPreview();
+  }
+  SetLastError(error);
 }
 
 void EditorNodeController::SelectAt(int index) {

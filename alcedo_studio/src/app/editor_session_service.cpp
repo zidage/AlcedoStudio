@@ -1169,6 +1169,49 @@ auto EditorSessionService::RenameColorGrade(const NodeId& node_id, std::string d
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::ReconnectColorGrade(const NodeId& node_id,
+                                               const NodeId& new_predecessor_id,
+                                               const NodeId& new_successor_id)
+    -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind                = EditorSessionCommandKind::ReconnectColorGrade;
+    command.node_id             = node_id;
+    command.predecessor_node_id = new_predecessor_id;
+    command.successor_node_id   = new_successor_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return ReconnectColorGrade(queued.node_id, queued.predecessor_node_id,
+                                 queued.successor_node_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Color Grade reconnect requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->ReconnectColorGrade(lifecycle_.history_guard(), node_id,
+                                                  new_predecessor_id, new_successor_id, &error)) {
+    return Reject(error.empty() ? "Color Grade reconnect failed" : std::move(error));
+  }
+
+  const auto          reason = dependencies_.history->LastPublishedRenderReason();
+  EditorSessionResult result;
+  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
+                                       : EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Color Grade reconnected";
+  if (reason.has_value()) {
+    EditorRenderCommand render_command;
+    render_command.reason       = *reason;
+    render_command.operation_id = current_operation_id_;
+    render_.RouteInitialRender(render_command, result.identity,
+                               lifecycle_.active_image_load_request());
+  }
+  BumpHistoryRevision();
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
   EditorAdjustmentPatch patch;
   patch.field_key = std::move(patch_key);

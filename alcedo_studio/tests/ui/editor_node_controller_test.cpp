@@ -109,6 +109,19 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     NotifyChange();
     return Accepted("Color Grade renamed");
   }
+  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
+                           const NodeId& new_successor_id) -> EditorSessionResult override {
+    ++reconnect_count_;
+    last_reconnect_node_        = node_id;
+    last_reconnect_predecessor_ = new_predecessor_id;
+    last_reconnect_successor_   = new_successor_id;
+    if (fail_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors =
+        alcedo::ReconnectColorGrade(document_, node_id, new_predecessor_id, new_successor_id);
+    if (!errors.empty()) return Rejected(errors.front().message);
+    NotifyChange();
+    return Accepted("Color Grade reconnected");
+  }
 
   void SetGeneration(std::uint64_t value) { request_.value = value; }
   auto Document() -> PipelineDocument& { return document_; }
@@ -123,6 +136,14 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto add_count() const -> int { return add_count_; }
   [[nodiscard]] auto remove_count() const -> int { return remove_count_; }
   [[nodiscard]] auto rename_count() const -> int { return rename_count_; }
+  [[nodiscard]] auto reconnect_count() const -> int { return reconnect_count_; }
+  [[nodiscard]] auto last_reconnect_node() const -> NodeId { return last_reconnect_node_; }
+  [[nodiscard]] auto last_reconnect_predecessor() const -> NodeId {
+    return last_reconnect_predecessor_;
+  }
+  [[nodiscard]] auto last_reconnect_successor() const -> NodeId {
+    return last_reconnect_successor_;
+  }
 
  private:
   auto Accepted(std::string message) const -> EditorSessionResult {
@@ -149,6 +170,10 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   int                                               add_count_     = 0;
   int                                               remove_count_  = 0;
   int                                               rename_count_  = 0;
+  int                                               reconnect_count_ = 0;
+  NodeId                                            last_reconnect_node_;
+  NodeId                                            last_reconnect_predecessor_;
+  NodeId                                            last_reconnect_successor_;
 };
 
 TEST(EditorNodeController, LayoutStoreBindingDoesNotPublishASnapshot) {
@@ -365,6 +390,142 @@ TEST(EditorNodeController, ActiveCommandRejectsNestedAddBeforeBackendMutation) {
   EXPECT_FALSE(nested_accepted);
   EXPECT_EQ(backend.add_count(), 1);
   EXPECT_EQ(controller.backbone_node_ids().size(), 4);
+}
+
+TEST(EditorNodeController, ConnectorMovePlacesGradeBetweenRemainingNeighbors) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(30);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  ASSERT_TRUE(controller.can_reconnect_selected_color_grade());
+
+  ASSERT_TRUE(controller.requestConnectorMove(QStringLiteral("grade.primary"),
+                                              QStringLiteral("drt"), false));
+  EXPECT_EQ(backend.reconnect_count(), 1);
+  EXPECT_EQ(backend.last_reconnect_node(), NodeId{"grade.primary"});
+  EXPECT_EQ(backend.last_reconnect_predecessor(), NodeId{"grade.extra"});
+  EXPECT_EQ(backend.last_reconnect_successor(), NodeId{"drt"});
+  const auto ids = controller.backbone_node_ids();
+  ASSERT_EQ(ids.size(), 4);
+  EXPECT_EQ(ids[0], QStringLiteral("develop"));
+  EXPECT_EQ(ids[1], QStringLiteral("grade.extra"));
+  EXPECT_EQ(ids[2], QStringLiteral("grade.primary"));
+  EXPECT_EQ(ids[3], QStringLiteral("drt"));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, NoOpConnectorMoveCreatesNoHistoryCommit) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(31);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  const auto before = controller.backbone_node_ids();
+
+  EXPECT_TRUE(controller.requestConnectorMove(QStringLiteral("grade.primary"),
+                                              QStringLiteral("grade.extra"), false));
+  EXPECT_EQ(backend.reconnect_count(), 0);
+  EXPECT_EQ(controller.backbone_node_ids(), before);
+  EXPECT_TRUE(controller.last_error().isEmpty());
+}
+
+TEST(EditorNodeController, DevelopAndDrtRejectIncomingAndOutgoingMoveTargets) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(32);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+
+  EXPECT_FALSE(controller.requestConnectorMove(QStringLiteral("grade.primary"),
+                                               QStringLiteral("develop"), false));
+  EXPECT_EQ(controller.last_error(), QStringLiteral("Develop has no incoming move target"));
+  EXPECT_FALSE(
+      controller.requestConnectorMove(QStringLiteral("grade.extra"), QStringLiteral("drt"), true));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Only a selected Color Grade can start a move"));
+  controller.selectNode(QStringLiteral("grade.extra"));
+  EXPECT_FALSE(
+      controller.requestConnectorMove(QStringLiteral("grade.extra"), QStringLiteral("drt"), true));
+  EXPECT_EQ(controller.last_error(), QStringLiteral("DRT/Post has no outgoing move source"));
+  EXPECT_EQ(backend.reconnect_count(), 0);
+}
+
+TEST(EditorNodeController, CycleAndFanOutReconnectsFailWithoutDocumentChange) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(33);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto before = controller.backbone_node_ids();
+
+  EXPECT_FALSE(controller.requestReconnect(QStringLiteral("grade.primary"),
+                                           QStringLiteral("grade.primary"), QStringLiteral("drt")));
+  EXPECT_EQ(controller.last_error(), QStringLiteral("A Color Grade cannot reconnect to itself"));
+  EXPECT_FALSE(controller.requestReconnect(QStringLiteral("grade.primary"),
+                                           QStringLiteral("develop"), QStringLiteral("drt")));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Reconnect would create a cycle, fan-in, or fan-out"));
+  EXPECT_EQ(backend.reconnect_count(), 0);
+  EXPECT_EQ(controller.backbone_node_ids(), before);
+}
+
+TEST(EditorNodeController, StaleGenerationAndBackendFailureLeaveReconnectUnchanged) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(34);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  const auto before = controller.backbone_node_ids();
+
+  EXPECT_FALSE(controller.requestReconnect(
+      QStringLiteral("grade.primary"), QStringLiteral("grade.extra"), QStringLiteral("drt"), 1));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("The node command is from another editor session"));
+  EXPECT_EQ(backend.reconnect_count(), 0);
+
+  backend.SetFailCommands(true);
+  EXPECT_FALSE(controller.requestReconnect(QStringLiteral("grade.primary"),
+                                           QStringLiteral("grade.extra"), QStringLiteral("drt")));
+  EXPECT_EQ(backend.reconnect_count(), 1);
+  EXPECT_EQ(controller.backbone_node_ids(), before);
+  EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
+}
+
+TEST(EditorNodeController, UndoProjectionRestoresReconnectOrderAndSelection) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.SetGeneration(35);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  ASSERT_TRUE(controller.requestReconnect(QStringLiteral("grade.primary"),
+                                          QStringLiteral("grade.extra"), QStringLiteral("drt")));
+  EXPECT_EQ(controller.backbone_node_ids()[1], QStringLiteral("grade.extra"));
+
+  auto undo_document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(undo_document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  ASSERT_TRUE(controller.PublishDocument(undo_document, 35));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(controller.backbone_node_ids()[1], QStringLiteral("grade.primary"));
+  EXPECT_EQ(controller.backbone_node_ids()[2], QStringLiteral("grade.extra"));
 }
 
 TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {

@@ -114,6 +114,23 @@ TEST_F(EditorSessionNodeCommandTest, DeleteCreatesOneHistoryChangeAndRoutesTopol
 }
 
 TEST_F(EditorSessionNodeCommandTest,
+       ReconnectCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  const auto result =
+      service_->ReconnectColorGrade(NodeId{"grade.primary"}, NodeId{"develop"}, NodeId{"drt"});
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->reconnect_grade_count, 1);
+  EXPECT_EQ(history_->last_node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(history_->last_predecessor_id, NodeId{"develop"});
+  EXPECT_EQ(history_->last_successor_id, NodeId{"drt"});
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
+  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
+}
+
+TEST_F(EditorSessionNodeCommandTest,
        JournalFailurePublishesExactErrorWithoutHistoryOrRenderChange) {
   history_->fail_node_command = true;
   const auto renders_before   = scheduler_->requests.size();

@@ -14,13 +14,14 @@
 #include <QObject>
 #include <QPointer>
 #include <QQmlApplicationEngine>
-#include <QQuickItem>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QStringList>
 #include <QUrl>
 #include <QuickQanava>
@@ -37,6 +38,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "qanConnector.h"
 #include "qanEdge.h"
 #include "qanEdgeItem.h"
 #include "qanGraph.h"
@@ -510,6 +512,108 @@ TEST_F(AlcedoQanGraph, GraphDestructionClearsIdentityMaps) {
   EXPECT_FALSE(adapter.has_projection());
   EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), nullptr);
   EXPECT_EQ(adapter.LiveNodeId(old_node.data()), std::nullopt);
+}
+
+TEST_F(AlcedoQanGraph, EnablesRequestOnlyConnectorWithThemeColorsAndRoleConnectable) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 4, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  auto* graph = harness_->Graph();
+  ASSERT_NE(graph, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return graph->getConnector() != nullptr; }));
+  EXPECT_TRUE(graph->getConnectorEnabled());
+  EXPECT_FALSE(graph->getConnectorCreateDefaultEdge());
+  EXPECT_EQ(graph->getConnectorEdgeColor(),
+            alcedo::ui::AppTheme::Instance().graphCandidateEdgeColor());
+  EXPECT_EQ(graph->getConnectorColor(), alcedo::ui::AppTheme::Instance().graphPortBorderColor());
+  EXPECT_EQ(adapter.NodeFor(NodeId{"develop"})->getItem()->getConnectable(),
+            qan::NodeItem::Connectable::UnConnectable);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"drt"})->getItem()->getConnectable(),
+            qan::NodeItem::Connectable::InConnectable);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"})->getItem()->getConnectable(),
+            qan::NodeItem::Connectable::OutConnectable);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.second"})->getItem()->getConnectable(),
+            qan::NodeItem::Connectable::InConnectable);
+  ASSERT_NE(graph->getConnector()->getSourcePort(), nullptr);
+  EXPECT_EQ(graph->getConnector()->getSourcePort(),
+            adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()));
+}
+
+TEST_F(AlcedoQanGraph, ConnectorDropResolvesLiveIdsWithoutInsertingAPermanentEdge) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 5, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+  auto* graph = harness_->Graph();
+  ASSERT_TRUE(WaitFor([&] { return graph->getConnector() != nullptr; }));
+  const auto edges_before = graph->get_edge_count();
+
+  QSignalSpy moved(&adapter, &ui::AlcedoQanGraph::ConnectorMoveRequested);
+  QSignalSpy rejected(&adapter, &ui::AlcedoQanGraph::ConnectorRequestRejected);
+  auto*      dest_item = adapter.NodeFor(NodeId{"drt"})->getItem();
+  ASSERT_NE(dest_item, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(graph->getConnector(), "connectorReleased",
+                                        Qt::DirectConnection, Q_ARG(QQuickItem*, dest_item)));
+  ASSERT_EQ(moved.count(), 1);
+  EXPECT_EQ(rejected.count(), 0);
+  const auto args = moved.takeFirst();
+  EXPECT_EQ(args.at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(args.at(1).toString(), QStringLiteral("drt"));
+  EXPECT_FALSE(args.at(2).toBool());
+  EXPECT_EQ(graph->get_edge_count(), edges_before);
+}
+
+TEST_F(AlcedoQanGraph, ConnectorDropOnUnknownPrimitiveRejectsWithoutCreatingAnEdge) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 6, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+  auto* graph = harness_->Graph();
+  ASSERT_TRUE(WaitFor([&] { return graph->getConnector() != nullptr; }));
+  auto* stray = graph->insertNode();
+  ASSERT_NE(stray, nullptr);
+  ASSERT_NE(stray->getItem(), nullptr);
+  const auto edges_before = graph->get_edge_count();
+
+  QSignalSpy rejected(&adapter, &ui::AlcedoQanGraph::ConnectorRequestRejected);
+  QSignalSpy moved(&adapter, &ui::AlcedoQanGraph::ConnectorMoveRequested);
+  ASSERT_TRUE(QMetaObject::invokeMethod(graph->getConnector(), "connectorReleased",
+                                        Qt::DirectConnection,
+                                        Q_ARG(QQuickItem*, stray->getItem())));
+  ASSERT_EQ(rejected.count(), 1);
+  EXPECT_EQ(moved.count(), 0);
+  EXPECT_EQ(rejected.takeFirst().at(0).toString(),
+            QStringLiteral("That graph item is no longer part of the current Version"));
+  EXPECT_EQ(graph->get_edge_count(), edges_before);
+}
+
+TEST_F(AlcedoQanGraph, DrawerFoldKeepsPortIdentityForReconnect) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
+  auto* output = adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort());
+  auto* input  = adapter.InputPortFor(NodeId{"grade.primary"}, kImagePort());
+  ASSERT_NE(output, nullptr);
+  ASSERT_NE(input, nullptr);
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  ASSERT_TRUE(WaitFor([&] {
+    auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+    return item != nullptr && !item->property("drawerOpen").toBool();
+  }));
+  EXPECT_EQ(adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()), output);
+  EXPECT_EQ(adapter.InputPortFor(NodeId{"grade.primary"}, kImagePort()), input);
+  EXPECT_EQ(output->getId(), QStringLiteral("out:image"));
+  EXPECT_EQ(input->getId(), QStringLiteral("in:image"));
 }
 
 TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {

@@ -215,10 +215,28 @@ class AlcedoQanGraph : public QObject {
   Q_INVOKABLE void    setDrawerOpen(const QString& node_id, bool open);
   Q_INVOKABLE bool    drawerOpen(const QString& node_id) const;
   Q_INVOKABLE void    applyProductSelection(const QString& node_id);
+  /**
+   * @brief Hide the official visual connector preview without inserting an edge.
+   *
+   * Call after a request is accepted or rejected. The adapter never creates a
+   * permanent Qan edge from a connector drop.
+   */
+  Q_INVOKABLE void    hideConnectorPreview();
 
  signals:
   void GraphChanged();
   void DelegatesChanged();
+  /**
+   * @brief Generation-checked connector drop ready for a product Reconnect.
+   *
+   * @p destinationIsOutput is true when the drop target is an output port.
+   */
+  void ConnectorMoveRequested(const QString& sourceNodeId, const QString& destinationNodeId,
+                              bool destinationIsOutput);
+  /**
+   * @brief Connector drop that could not be resolved to live product IDs.
+   */
+  void ConnectorRequestRejected(const QString& error);
   /**
    * @brief Emitted when a Color Grade Mask drawer is opened or closed.
    *
@@ -280,7 +298,11 @@ class AlcedoQanGraph : public QObject {
   void               BindDrawerSignals();
   void               BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
   void               ConfigureGraphPolicy();
+  void               ConfigureConnector();
+  void               ApplyConnectablePolicy();
   void               OnGraphDestroyed();
+  void OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst, qan::PortItem* src_port,
+                                      qan::PortItem* dst_port);
 
  private slots:
   void OnDrawerOpenChanged();
