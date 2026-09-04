@@ -55,7 +55,18 @@ void FlushDeferredDeletes() { QCoreApplication::sendPostedEvents(nullptr, QEvent
 
 }  // namespace
 
-AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {}
+AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {
+  connect(&AppTheme::Instance(), &AppTheme::ThemeChanged, this, [this]() {
+    ConfigureConnector();
+    for (const auto& [key, candidate] : edge_candidate_) {
+      const auto it = edge_by_key_.find(key);
+      if (it == edge_by_key_.end() || it->second.isNull()) {
+        continue;
+      }
+      ApplyEdgePresentation(*it->second, candidate);
+    }
+  });
+}
 
 AlcedoQanGraph::~AlcedoQanGraph() {
   rebuild_in_progress_ = true;
@@ -424,8 +435,8 @@ auto AlcedoQanGraph::ApplyRoles(const EditorNodeGraphSnapshot& snapshot)
     ApplyNodePresentation(*qan_node, node);
     node_projections_[node.node_id] = node;
   }
-  applied_         = snapshot;
-  has_projection_  = true;
+  applied_        = snapshot;
+  has_projection_ = true;
   BindDrawerSignals();
   result.succeeded = true;
   return result;
@@ -450,7 +461,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     rebuild_in_progress_ = false;
     BindDrawerSignals();
     ApplyConnectablePolicy();
-    result.succeeded     = true;
+    result.succeeded = true;
     return result;
   }
 
@@ -470,7 +481,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
   }
   rebuild_in_progress_ = false;
   ApplyConnectablePolicy();
-  result.error         = error;
+  result.error = error;
   return result;
 }
 
@@ -579,7 +590,7 @@ auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString
     graph_->removeEdge(qan_edge, true);
     return QStringLiteral("Qan edge did not bind to the requested ports");
   }
-  const auto key = MakeEdgeKey(edge);
+  const auto key    = MakeEdgeKey(edge);
   edge_by_key_[key] = qan_edge;
   ApplyEdgePresentation(*qan_edge, false);
   edge_candidate_[key] = false;
@@ -766,8 +777,8 @@ auto AlcedoQanGraph::PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& sna
     node_projections_[node.node_id] = node;
   }
   PromoteCandidatePresentation();
-  applied_        = snapshot;
-  has_projection_ = true;
+  applied_         = snapshot;
+  has_projection_  = true;
   result.succeeded = true;
   return result;
 }
@@ -912,13 +923,11 @@ auto AlcedoQanGraph::InstallPortDockDelegate() -> QString {
   if (port_dock_delegate_graph_.data() == graph_.data()) {
     return {};
   }
-  auto loaded =
-      LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
+  auto loaded = LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
   if (!loaded.component) {
     return loaded.error;
   }
-  graph_->setProperty("horizontalDockDelegate",
-                      QVariant::fromValue(loaded.component.release()));
+  graph_->setProperty("horizontalDockDelegate", QVariant::fromValue(loaded.component.release()));
   port_dock_delegate_graph_ = graph_;
   return {};
 }

@@ -9,12 +9,31 @@
 #include <utility>
 
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
+#include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui {
 namespace {
 
 constexpr qreal kMinZoom = 0.1;
 constexpr qreal kMaxZoom = 8.0;
+
+auto            MetricsFromAppTheme() -> EditorNodeLayoutMetrics {
+  const auto&             theme = AppTheme::Instance();
+  EditorNodeLayoutMetrics metrics;
+  metrics.origin_x             = theme.graphNodeOriginX();
+  metrics.origin_y             = theme.graphNodeOriginY();
+  metrics.vertical_gap         = theme.graphNodeVerticalGap();
+  metrics.node_width           = theme.graphNodeWidth();
+  metrics.endpoint_height      = theme.graphEndpointHeight();
+  metrics.name_row_height      = theme.graphNameRowHeight();
+  metrics.divider_height       = theme.graphNameRowDividerHeight();
+  metrics.drawer_header_height = theme.graphMaskDrawerHeaderHeight();
+  metrics.mask_row_height      = theme.graphMaskRowHeight();
+  metrics.panel_width_min      = theme.editorSidePanelWidthMin();
+  metrics.panel_width_max      = theme.editorSidePanelWidthMax();
+  metrics.panel_width_default  = theme.editorSidePanelWidth();
+  return metrics;
+}
 
 }  // namespace
 
@@ -26,7 +45,7 @@ auto NodeIdToQString(const NodeId& node_id) -> QString {
 auto NodeIdFromQString(const QString& node_id) -> NodeId { return NodeId{node_id.toStdString()}; }
 
 EditorNodeLayoutStore::EditorNodeLayoutStore(QObject* parent)
-    : EditorNodeLayoutStore(EditorNodeLayoutMetrics{}, parent) {}
+    : EditorNodeLayoutStore(MetricsFromAppTheme(), parent) {}
 
 EditorNodeLayoutStore::EditorNodeLayoutStore(EditorNodeLayoutMetrics metrics, QObject* parent)
     : QObject(parent), metrics_(metrics) {}
@@ -239,7 +258,7 @@ void EditorNodeLayoutStore::EnsureDefaultPositions(const EditorNodeGraphSnapshot
   }
 }
 
-void EditorNodeLayoutStore::AssignStagingPosition(const NodeId& node_id,
+void EditorNodeLayoutStore::AssignStagingPosition(const NodeId&                  node_id,
                                                   const EditorNodeGraphSnapshot& snapshot) {
   if (node_id.Empty()) {
     return;

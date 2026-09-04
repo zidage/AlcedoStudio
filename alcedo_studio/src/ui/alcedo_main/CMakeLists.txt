@@ -226,6 +226,24 @@ target_link_libraries(AlbumBackendLib
         CudaDriverRequirements
 )
 
+# Canonical runtime theme tokens. DESIGN.md is the human VI spec; this library
+# is the only linkable source for colors, type, and graph metrics. Bundled
+# fonts/icons live here so RegisterFonts() and Q_INIT_RESOURCE share one owner.
+# Do not compile app_theme.cpp into executables that already link AppTheme.
+def_library(AppTheme
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
+        "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+)
+target_compile_definitions(AppTheme PRIVATE
+    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
+)
+
 # Maps PipelineDocument snapshots onto pinned QuickQanava primitives. The QML
 # GraphView owns the qan::Graph; this adapter owns only identity maps.
 add_library(AlcedoQanGraph STATIC
@@ -238,6 +256,7 @@ target_include_directories(AlcedoQanGraph
 )
 target_link_libraries(AlcedoQanGraph
     PUBLIC
+        AppTheme
         EditorNodeGraphProjection
         QuickQanava
         Qt6::Core
@@ -254,10 +273,8 @@ target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
@@ -606,8 +623,9 @@ foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESO
     )
 endforeach()
 
+# QML module only. Fonts/icons are owned by AppTheme (resource.qrc).
 add_library(AlcedoMainQml STATIC
-    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    "${ALCEDO_UI_SHELL_ROOT}/alcedo_main_qml_module.cpp"
 )
 target_include_directories(AlcedoMainQml PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 target_link_libraries(AlcedoMainQml
@@ -655,8 +673,6 @@ set(ALCEDO_TEST_HOST_SOURCES
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"

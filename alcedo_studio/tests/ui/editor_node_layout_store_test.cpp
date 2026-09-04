@@ -8,6 +8,7 @@
 
 #include "app/editor_node_graph_projection.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "ui/alcedo_main/app_theme.hpp"
 
 namespace {
 
@@ -145,6 +146,24 @@ TEST(EditorNodeLayoutStore, AssignStagingPositionStacksLaterDraftsDownwardOnTheS
   EXPECT_DOUBLE_EQ(a->x(), static_cast<qreal>(metrics.origin_x));
   EXPECT_DOUBLE_EQ(b->x(), a->x());
   EXPECT_GT(b->y(), a->y());
+}
+
+TEST(EditorNodeLayoutStore, DefaultConstructorReadsMetricsFromAppTheme) {
+  const auto&           theme = alcedo::ui::AppTheme::Instance();
+  EditorNodeLayoutStore store;
+  const auto&           metrics = store.metrics();
+  EXPECT_EQ(metrics.origin_x, theme.graphNodeOriginX());
+  EXPECT_EQ(metrics.origin_y, theme.graphNodeOriginY());
+  EXPECT_EQ(metrics.vertical_gap, theme.graphNodeVerticalGap());
+  EXPECT_EQ(metrics.node_width, theme.graphNodeWidth());
+  EXPECT_EQ(metrics.endpoint_height, theme.graphEndpointHeight());
+  EXPECT_EQ(metrics.name_row_height, theme.graphNameRowHeight());
+  EXPECT_EQ(metrics.drawer_header_height, theme.graphMaskDrawerHeaderHeight());
+  EXPECT_EQ(metrics.mask_row_height, theme.graphMaskRowHeight());
+  EXPECT_EQ(metrics.divider_height, theme.graphNameRowDividerHeight());
+  EXPECT_EQ(metrics.panel_width_min, theme.editorSidePanelWidthMin());
+  EXPECT_EQ(metrics.panel_width_max, theme.editorSidePanelWidthMax());
+  EXPECT_EQ(metrics.panel_width_default, theme.editorSidePanelWidth());
 }
 
 }  // namespace
