@@ -102,13 +102,14 @@ Item {
         editorSession: root.editorSession
     }
 
+    EditorNodeLayoutStore {
+        id: nodesLayoutStore
+    }
+
     EditorNodeController {
         id: nodesController
         editorSession: root.editorSession
-    }
-
-    EditorNodeLayoutStore {
-        id: nodesLayoutStore
+        layoutStore: nodesLayoutStore
     }
 
     function driveFoldProgress(value) {

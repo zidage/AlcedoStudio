@@ -212,9 +212,7 @@ auto EditorHistoryModel::PresentationFor(const alcedo::EditorHistoryCommit& comm
       it != presentation_cache_.end()) {
     return it->second;
   }
-  auto pres = PresentEditorHistoryCommit(
-      commit.field_key, commit.before_value_json, commit.after_value_json,
-      commit.before_enabled, commit.after_enabled);
+  auto pres = PresentEditorHistoryCommit(commit);
   presentation_cache_.emplace(commit.commit_hash, pres);
   return pres;
 }

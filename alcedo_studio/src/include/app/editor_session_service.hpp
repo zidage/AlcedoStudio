@@ -217,6 +217,35 @@ class IEditorSessionBackend {
     result.message = "Adjustment commit not supported by this backend";
     return result;
   }
+  /// Add a clean Color Grade through typed history. Default backends reject.
+  virtual auto AddColorGrade(const NodeId& /*before_node_id*/, const NodeId& /*new_id*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade creation is not supported by this backend";
+    return result;
+  }
+  /// Remove a Color Grade and bridge its backbone neighbors. Default backends reject.
+  virtual auto RemoveColorGrade(const NodeId& /*node_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade removal is not supported by this backend";
+    return result;
+  }
+  /// Rename a Color Grade as a metadata-only history change. Default backends reject.
+  virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade rename is not supported by this backend";
+    return result;
+  }
   virtual auto RequestViewChange(EditorRenderReason /*reason*/,
                                  std::optional<ViewportRenderRegion> /*region*/)
       -> EditorSessionResult {
@@ -369,10 +398,15 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto               CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto               Patch(std::string patch_key) -> EditorSessionResult;
-  auto               CommitAdjustment(std::string patch_key) -> EditorSessionResult;
-  auto               Undo() -> EditorSessionResult override;
-  auto               Redo() -> EditorSessionResult override;
+  auto               AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
+      -> EditorSessionResult override;
+  auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override;
+  auto RenameColorGrade(const NodeId& node_id, std::string display_name)
+      -> EditorSessionResult override;
+  auto Patch(std::string patch_key) -> EditorSessionResult;
+  auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
+  auto Undo() -> EditorSessionResult override;
+  auto Redo() -> EditorSessionResult override;
   auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;

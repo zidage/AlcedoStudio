@@ -15,7 +15,10 @@
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_history_types.hpp"
+#include "app/pipeline_document_history.hpp"
 #include "edit/operators/op_base.hpp"
+#include "json.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -694,12 +697,92 @@ auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::
   return {};
 }
 
+auto DisplayTextFromStoredJson(const std::string& json_text, const std::string& fallback)
+    -> QString {
+  if (!json_text.empty()) {
+    try {
+      const auto parsed = nlohmann::json::parse(json_text);
+      if (parsed.is_string()) {
+        return QString::fromStdString(parsed.get<std::string>());
+      }
+      if (parsed.is_object() && parsed.contains("display_name") &&
+          parsed.at("display_name").is_string()) {
+        return QString::fromStdString(parsed.at("display_name").get<std::string>());
+      }
+    } catch (...) {
+    }
+  }
+  return QString::fromStdString(fallback);
+}
+
+auto PresentGraphOperation(const alcedo::EditorHistoryCommit& commit)
+    -> std::optional<EditorHistoryCommitPresentation> {
+  const auto add_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::AddColorGrade);
+  const auto rename_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RenameColorGrade);
+  const auto remove_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RemoveColorGrade);
+  if (commit.presentation_key != add_key && commit.presentation_key != rename_key &&
+      commit.presentation_key != remove_key) {
+    return std::nullopt;
+  }
+
+  EditorHistoryCommitPresentation out;
+  const QString name = DisplayTextFromStoredJson(commit.after_value_json, commit.node_display_name);
+  if (commit.presentation_key == add_key) {
+    out.display_name = QStringLiteral("Add Color Grade");
+    out.after_text   = name;
+    out.delta_text   = name;
+    out.icon_key     = QStringLiteral(":/history_icons/git-commit-horizontal.svg");
+    return out;
+  }
+  if (commit.presentation_key == rename_key) {
+    const QString before =
+        DisplayTextFromStoredJson(commit.before_value_json, commit.node_display_name);
+    out.display_name = QStringLiteral("Rename Color Grade");
+    out.before_text  = before;
+    out.after_text   = name.isEmpty() ? QString::fromStdString(commit.node_display_name) : name;
+    out.delta_text   = out.before_text.isEmpty()
+                           ? out.after_text
+                           : QStringLiteral("%1 \u2192 %2").arg(out.before_text, out.after_text);
+    out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
+    return out;
+  }
+  out.display_name = QStringLiteral("Delete Color Grade");
+  out.after_text   = name.isEmpty() ? QString::fromStdString(commit.node_display_name) : name;
+  out.delta_text   = out.after_text;
+  out.icon_key     = QStringLiteral(":/history_icons/square-split-horizontal.svg");
+  return out;
+}
+
 }  // namespace
 
 auto PresentEditorHistoryCommit(const std::string& field_key, const std::string& before_value_json,
                                 const std::string& after_value_json, bool before_enabled,
                                 bool after_enabled)
     -> EditorHistoryCommitPresentation {
+  alcedo::EditorHistoryCommit commit;
+  commit.field_key         = field_key;
+  commit.before_value_json = before_value_json;
+  commit.after_value_json  = after_value_json;
+  commit.before_enabled    = before_enabled;
+  commit.after_enabled     = after_enabled;
+  return PresentEditorHistoryCommit(commit);
+}
+
+auto PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit& commit)
+    -> EditorHistoryCommitPresentation {
+  if (const auto graph = PresentGraphOperation(commit)) {
+    return *graph;
+  }
+
+  const auto& field_key         = commit.field_key;
+  const auto& before_value_json = commit.before_value_json;
+  const auto& after_value_json  = commit.after_value_json;
+  const bool  before_enabled    = commit.before_enabled;
+  const bool  after_enabled     = commit.after_enabled;
+
   EditorHistoryCommitPresentation out;
   const auto         spec = alcedo::ResolveEditorAdjustmentField(field_key);
   const OperatorType op   = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;

@@ -10,6 +10,10 @@
 
 #include "edit/history/commit_types.hpp"
 
+namespace alcedo {
+struct EditorHistoryCommit;
+}
+
 namespace alcedo::ui {
 
 /// User-facing presentation of one history commit row. Produced by a pure
@@ -30,15 +34,29 @@ struct EditorHistoryCommitPresentation {
   QString icon_key;
 };
 
-/// Pure payload-to-display conversion for one editor history commit. Maps the
-/// stable field key and the committed before/after JSON to
-/// user-facing text and an operator glyph key. Typed pipeline batches carry
-/// presentation_key and saved identity on EditorHistoryCommit.
+/// Present an adjustment-field commit from its stored field key and JSON.
+///
+/// Prefer @ref PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit&)
+/// when the row came from a typed pipeline batch so localization keys and
+/// saved node names are used.
 auto PresentEditorHistoryCommit(const std::string& field_key,
                                 const std::string& before_value_json,
                                 const std::string& after_value_json,
                                 bool               before_enabled,
                                 bool               after_enabled)
+    -> EditorHistoryCommitPresentation;
+
+/**
+ * @brief Present one published history row, including typed graph operations.
+ *
+ * @param commit Immutable history projection row. Graph Add/Rename/Delete rows
+ *        use @c presentation_key and saved @c node_display_name. Adjustment
+ *        rows still use @c field_key and before/after JSON.
+ * @return Display strings and glyph key. Never throws; unknown keys fall back
+ *         to the adjustment formatter.
+ * @note Pure and synchronous. Does not read live selection or the document.
+ */
+auto PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit& commit)
     -> EditorHistoryCommitPresentation;
 
 }  // namespace alcedo::ui

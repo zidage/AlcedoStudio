@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQuickItem>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlError>
@@ -382,6 +383,35 @@ TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
   EXPECT_EQ(adapter.NodeProjection(NodeId{"grade.primary"})->masks.front().source_kind,
             MaskSourceKind::Brush);
   EXPECT_EQ(harness_->Graph()->getNodeCount(), 3);
+}
+
+TEST_F(AlcedoQanGraph, RemovingAColorGradeReplacesQanPrimitivesAndHidesTheRemovedCard) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  const auto first = EditorNodeGraphProjection::Build(document, 9, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(first).succeeded) << "initial apply";
+
+  QPointer<qan::Node>      removed_node = adapter.NodeFor(NodeId{"grade.primary"});
+  ASSERT_FALSE(removed_node.isNull());
+  QPointer<QQuickItem>     removed_item = removed_node->getItem();
+  ASSERT_FALSE(removed_item.isNull());
+  EXPECT_TRUE(removed_item->isVisible());
+
+  ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  const auto second = EditorNodeGraphProjection::Build(document, 9, 2, 2);
+  const auto result = adapter.ApplySnapshot(second);
+
+  ASSERT_TRUE(result.succeeded) << result.error.toStdString();
+  EXPECT_TRUE(result.rebuilt_topology);
+  EXPECT_TRUE(removed_node.isNull());
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
+  if (!removed_item.isNull()) {
+    EXPECT_FALSE(removed_item->isVisible());
+    EXPECT_EQ(removed_item->parentItem(), nullptr);
+  }
+  ExpectLiveBackbone(adapter, second);
 }
 
 TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntries) {

@@ -7,7 +7,7 @@ import Alcedo.Main 1.0
 
 // Nodes page: header plus a navigable QuickQanava canvas. Product selection
 // lives on EditorNodeController. Positions, zoom, view, and Mask drawers live
-// on EditorNodeLayoutStore. This page does not mutate PipelineDocument.
+// on EditorNodeLayoutStore. Product changes route through EditorNodeController.
 Item {
     id: root
     objectName: "editorNodesPageBody"
@@ -17,7 +17,9 @@ Item {
     property var nodeController: null
     property var nodeLayoutStore: null
 
-    property string statusMessage: ""
+    property bool renameVisible: false
+    property string renameNodeId: ""
+    property string renameOriginalName: ""
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -33,6 +35,67 @@ Item {
     }
 
     onLayoutIdentityKeyChanged: activateLayoutKey()
+
+    function addColorGrade() {
+        if (!root.nodeController || !root.nodeController.canAddColorGrade) {
+            return
+        }
+        root.nodeController.addCleanColorGrade()
+    }
+
+    function beginRename() {
+        if (!root.nodeController
+                || !root.nodeController.canRenameSelectedColorGrade) {
+            return
+        }
+        root.renameNodeId = root.nodeController.selectedNodeId
+        root.renameOriginalName = root.nodeController.selectedNodeName
+        renameField.text = root.renameOriginalName
+        root.renameVisible = true
+        Qt.callLater(function () {
+            if (root.renameVisible) {
+                renameField.forceActiveFocus()
+                renameField.selectAll()
+            }
+        })
+    }
+
+    function cancelRename() {
+        root.renameVisible = false
+        root.renameNodeId = ""
+        root.renameOriginalName = ""
+        renameField.text = ""
+        graphView.forceActiveFocus()
+    }
+
+    function commitRename() {
+        if (!root.renameVisible || !root.nodeController) {
+            return
+        }
+        const name = renameField.text.trim()
+        if (name.length === 0) {
+            return
+        }
+        if (name === root.renameOriginalName) {
+            cancelRename()
+            return
+        }
+        if (root.nodeController.renameColorGrade(root.renameNodeId, name)) {
+            cancelRename()
+        }
+    }
+
+    function deleteSelectedColorGrade() {
+        if (!root.nodeController
+                || !root.nodeController.canDeleteSelectedColorGrade) {
+            return
+        }
+        if (root.renameVisible) {
+            cancelRename()
+        }
+        root.nodeController.deleteColorGrade(root.nodeController.selectedNodeId)
+        graphView.forceActiveFocus()
+    }
 
     function captureView() {
         if (!graphView || !root.nodeLayoutStore) {
@@ -69,7 +132,30 @@ Item {
         qanAdapter.applyProductSelection(root.nodeController.selectedNodeId)
     }
 
+    function bindControllerAdapter() {
+        if (!root.nodeController) {
+            return
+        }
+        if (qanAdapter && qanAdapter.graph) {
+            root.nodeController.graphAdapter = qanAdapter
+        }
+    }
+
+    function clearControllerAdapter() {
+        if (root.nodeController) {
+            root.nodeController.graphAdapter = null
+        }
+    }
+
+    Binding {
+        target: root.nodeController
+        property: "graphAdapter"
+        value: (qanAdapter && qanAdapter.graph) ? qanAdapter : null
+        when: root.nodeController !== null && root.nodeController !== undefined
+    }
+
     function bindGraph() {
+        bindControllerAdapter()
         if (!root.nodeController || !qanAdapter || !qanAdapter.graph) {
             return
         }
@@ -103,7 +189,7 @@ Item {
     Connections {
         target: root.nodeController
         function onSnapshotChanged() {
-            bindGraph()
+            Qt.callLater(function () { root.bindGraph() })
         }
         function onSelectionChanged() {
             if (qanAdapter) {
@@ -111,6 +197,10 @@ Item {
             }
             if (root.nodeLayoutStore) {
                 root.nodeLayoutStore.selectedNodeId = root.nodeController.selectedNodeId
+            }
+            if (root.renameVisible
+                    && root.renameNodeId !== root.nodeController.selectedNodeId) {
+                root.cancelRename()
             }
         }
     }
@@ -123,12 +213,14 @@ Item {
             }
         }
         function onGraphChanged() {
-            bindGraph()
+            root.bindControllerAdapter()
+            Qt.callLater(function () { root.bindGraph() })
         }
     }
 
     Component.onCompleted: {
         activateLayoutKey()
+        bindControllerAdapter()
         bindGraph()
         if (graphView.originCross) {
             graphView.originCross.visible = false
@@ -137,7 +229,10 @@ Item {
         graphView.hScrollBar.policy = ScrollBar.AlwaysOff
     }
 
-    Component.onDestruction: captureView()
+    Component.onDestruction: {
+        captureView()
+        clearControllerAdapter()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -172,7 +267,73 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Add Color Grade")
+                onClicked: root.addColorGrade()
             }
+        }
+
+        RowLayout {
+            objectName: "editorNodeRenameRow"
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.renameVisible ? appTheme.iconButtonHitSizeCompact : 0
+            spacing: appTheme.spaceSm
+            visible: root.renameVisible
+
+            TextField {
+                id: renameField
+                objectName: "editorNodeRenameField"
+                Layout.fillWidth: true
+                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                enabled: root.renameVisible && root.nodeController
+                         && !root.nodeController.commandActive
+                color: root.colText
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeBody
+                placeholderText: qsTr("Color Grade name")
+                selectByMouse: true
+                leftPadding: appTheme.spaceSm
+                rightPadding: appTheme.spaceSm
+                Accessible.name: qsTr("Rename Color Grade")
+                background: Rectangle {
+                    radius: appTheme.controlRadiusSmall
+                    color: appTheme.bgBaseColor
+                    border.width: 1
+                    border.color: renameField.activeFocus ? root.colText : root.colCardBorder
+                }
+                onAccepted: root.commitRename()
+                Keys.onEscapePressed: function (event) {
+                    root.cancelRename()
+                    event.accepted = true
+                }
+            }
+
+            IconActionButton {
+                objectName: "editorNodeRenameAcceptButton"
+                compact: true
+                enabled: root.renameVisible && root.nodeController
+                         && !root.nodeController.commandActive
+                         && renameField.text.trim().length > 0
+                iconSrc: "qrc:/panel_icons/edit.svg"
+                iconColorDefault: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: appTheme.buttonSelectedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Accept Rename")
+                onClicked: root.commitRename()
+            }
+        }
+
+        Label {
+            objectName: "editorNodesCommandError"
+            Layout.fillWidth: true
+            visible: root.nodeController && root.nodeController.lastError.length > 0
+            text: root.nodeController ? root.nodeController.lastError : ""
+            color: appTheme.dangerColor
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
 
         Rectangle {
@@ -212,7 +373,17 @@ Item {
                     if (!root.nodeController) {
                         return
                     }
-                    if (event.key === Qt.Key_Up) {
+                    if (event.key === Qt.Key_F2) {
+                        root.beginRename()
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Delete) {
+                        root.deleteSelectedColorGrade()
+                        event.accepted = true
+                    } else if ((event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)
+                               && (event.modifiers & Qt.ControlModifier)) {
+                        root.addColorGrade()
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Up) {
                         root.nodeController.selectPreviousBackboneNode()
                         event.accepted = true
                     } else if (event.key === Qt.Key_Down) {
@@ -243,6 +414,19 @@ Item {
                     if (id.length > 0) {
                         root.nodeController.selectNode(id)
                     }
+                }
+                onNodeRightClicked: function (node, position) {
+                    if (!root.nodeController || !qanAdapter || !node || !node.item) {
+                        return
+                    }
+                    const id = qanAdapter.liveNodeId(node)
+                    if (id.length === 0) {
+                        return
+                    }
+                    root.nodeController.selectNode(id)
+                    const menuPosition = node.item.mapToItem(canvasHost,
+                                                              position.x, position.y)
+                    nodeMenu.openAt(menuPosition.x, menuPosition.y)
                 }
                 onRightClicked: function () {
                     canvasMenu.popup()
@@ -282,6 +466,27 @@ Item {
                     objectName: "editorNodesFitMenuItem"
                     text: qsTr("Fit")
                     onTriggered: root.fitGraph()
+                }
+            }
+
+            AppContextMenu {
+                id: nodeMenu
+                objectName: "editorNodesNodeMenu"
+
+                AppMenuItem {
+                    objectName: "editorNodesRenameMenuItem"
+                    text: qsTr("Rename Color Grade")
+                    enabled: root.nodeController
+                             ? root.nodeController.canRenameSelectedColorGrade : false
+                    onTriggered: root.beginRename()
+                }
+
+                AppMenuItem {
+                    objectName: "editorNodesDeleteMenuItem"
+                    text: qsTr("Delete Color Grade")
+                    enabled: root.nodeController
+                             ? root.nodeController.canDeleteSelectedColorGrade : false
+                    onTriggered: root.deleteSelectedColorGrade()
                 }
             }
         }

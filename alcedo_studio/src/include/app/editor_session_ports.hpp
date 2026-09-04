@@ -17,6 +17,7 @@
 #include "app/editor_history_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -80,6 +81,26 @@ class IEditorHistoryPort {
                                 const EditorAdjustmentPatch& /*patch*/, std::string* /*error*/)
       -> bool {
     return true;
+  }
+  /// Add one clean Color Grade immediately before @p before_node_id.
+  virtual auto AddColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                             const NodeId& /*before_node_id*/, const NodeId& /*new_id*/,
+                             std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade creation is not supported by this history port";
+    return false;
+  }
+  /// Remove one Color Grade and bridge its scene-image predecessor and successor.
+  virtual auto RemoveColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                                const NodeId& /*node_id*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade removal is not supported by this history port";
+    return false;
+  }
+  /// Rename one Color Grade without requesting a pixel render.
+  virtual auto RenameColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                                const NodeId& /*node_id*/, std::string /*display_name*/,
+                                std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade rename is not supported by this history port";
+    return false;
   }
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
