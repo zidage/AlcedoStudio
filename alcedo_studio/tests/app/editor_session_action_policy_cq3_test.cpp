@@ -145,6 +145,8 @@ TEST(EditorSessionNodeCommandPolicy,
             EditorAction::CommitAdjustment);
   EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::ReconnectColorGrade),
             EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::EditNodeGraph),
+            EditorAction::CommitAdjustment);
 }
 
 TEST_F(EditorSessionActionPolicyCq3Test,

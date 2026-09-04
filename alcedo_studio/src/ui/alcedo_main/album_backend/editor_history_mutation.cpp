@@ -620,6 +620,29 @@ auto EditorHistoryMutation::ReconnectColorGrade(const alcedo::EditorHistoryGuard
   }
 }
 
+auto EditorHistoryMutation::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
+                                          alcedo::NodeGraphTopologyChange change,
+                                          std::string* error) -> bool {
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+  try {
+    return PublishAppliedTypedBatch(*state, state_, MakeEditNodeGraphBatch(std::move(change)), false,
+                                    state->mask_store, error);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
 auto EditorHistoryMutation::RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
                                              const alcedo::NodeId& node_id, std::string display_name,
                                              std::string* error) -> bool {

@@ -239,6 +239,38 @@ void EditorNodeLayoutStore::EnsureDefaultPositions(const EditorNodeGraphSnapshot
   }
 }
 
+void EditorNodeLayoutStore::AssignStagingPosition(const NodeId& node_id,
+                                                  const EditorNodeGraphSnapshot& snapshot) {
+  if (node_id.Empty()) {
+    return;
+  }
+  auto& value = MutableCurrent();
+  if (value.node_positions.find(node_id) != value.node_positions.end()) {
+    return;
+  }
+  EnsureDefaultPositions(snapshot);
+
+  const qreal column_x  = static_cast<qreal>(metrics_.origin_x);
+  const qreal gap       = static_cast<qreal>(metrics_.vertical_gap);
+  qreal       staging_y = static_cast<qreal>(metrics_.origin_y);
+  auto        height_of = [this, &snapshot](const NodeId& id) -> qreal {
+    for (const auto& node : snapshot.nodes) {
+      if (node.node_id == id) {
+        return DefaultHeight(node.node_kind, static_cast<int>(node.masks.size()), DrawerOpen(id));
+      }
+    }
+    return DefaultHeight(EditorNodeKind::ColorGrade, 0, DrawerOpen(id));
+  };
+  for (const auto& [id, position] : value.node_positions) {
+    if (id == node_id) {
+      continue;
+    }
+    staging_y = std::max(staging_y, position.y() + height_of(id) + gap);
+  }
+  value.node_positions[node_id] = QPointF(column_x, staging_y);
+  emit LayoutChanged();
+}
+
 void EditorNodeLayoutStore::ensureDefaultsFrom(QObject* controller) {
   auto* nodes = qobject_cast<EditorNodeController*>(controller);
   if (nodes == nullptr || !nodes->has_snapshot()) {

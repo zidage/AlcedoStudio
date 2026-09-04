@@ -114,6 +114,32 @@ TEST_F(EditorSessionNodeCommandTest, DeleteCreatesOneHistoryChangeAndRoutesTopol
 }
 
 TEST_F(EditorSessionNodeCommandTest,
+       EditNodeGraphCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  NodeGraphTopologyChange change;
+  change.before_next_color_grade_name_number = 2;
+  change.after_next_color_grade_name_number  = 2;
+  NodeGraphDisconnectedEdge disconnected;
+  disconnected.edge                = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
+                                                       NodeId{"drt"}, PortId{"image"}};
+  disconnected.original_edge_index = 1;
+  change.disconnected_edges.push_back(disconnected);
+  NodeGraphConnectedEdge connected;
+  connected.edge             = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
+                                                 NodeId{"drt"}, PortId{"image"}};
+  connected.final_edge_index = 1;
+  change.connected_edges.push_back(connected);
+  const auto result = service_->EditNodeGraph(change);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->edit_node_graph_count, 1);
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
+  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
+}
+
+TEST_F(EditorSessionNodeCommandTest,
        ReconnectCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
   const auto renders_before  = scheduler_->requests.size();
   const auto revision_before = service_->history_revision();

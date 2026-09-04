@@ -122,6 +122,190 @@ auto PipelineGraph::ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected
   }
 }
 
+auto PipelineGraph::ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&   removed_nodes,
+                                       std::vector<TopologyNodeInsertion>        inserted_nodes,
+                                       const std::vector<TopologyEdgeRemoval>&   disconnected_edges,
+                                       const std::vector<TopologyEdgeInsertion>& connected_edges,
+                                       TopologyDeltaStepHook                     after_step,
+                                       std::vector<std::unique_ptr<INodeModel>>* discarded_nodes)
+    -> std::vector<GraphValidationError> {
+  auto error = [](std::string message) {
+    return std::vector<GraphValidationError>{
+        {GraphValidationCode::InvalidNodeValue, std::move(message)}};
+  };
+  auto matches = [](const GraphEdge& lhs, const GraphEdge& rhs) { return lhs == rhs; };
+
+  std::vector<char> remove_node(nodes_.size(), 0);
+  for (const auto& removal : removed_nodes) {
+    if (removal.original_index >= nodes_.size() || nodes_[removal.original_index] == nullptr ||
+        nodes_[removal.original_index]->Id() != removal.id) {
+      return error("Topology delta removed node does not match the live graph");
+    }
+    if (remove_node[removal.original_index] != 0) {
+      return error("Topology delta removes the same node index twice");
+    }
+    remove_node[removal.original_index] = 1;
+  }
+
+  std::vector<char> remove_edge(edges_.size(), 0);
+  for (const auto& removal : disconnected_edges) {
+    if (removal.original_index >= edges_.size() ||
+        !matches(edges_[removal.original_index], removal.edge)) {
+      return error("Topology delta disconnected edge does not match the live graph");
+    }
+    if (remove_edge[removal.original_index] != 0) {
+      return error("Topology delta disconnects the same edge index twice");
+    }
+    remove_edge[removal.original_index] = 1;
+  }
+
+  for (const auto& insertion : inserted_nodes) {
+    if (insertion.node == nullptr) {
+      return error("Topology delta inserted node is null");
+    }
+    const auto& id = insertion.node->Id();
+    bool        replacing_removed = false;
+    for (const auto& removal : removed_nodes) {
+      if (removal.id == id) {
+        replacing_removed = true;
+        break;
+      }
+    }
+    if (!replacing_removed && FindNode(id) != nullptr) {
+      return error("Topology delta inserted NodeId already exists");
+    }
+  }
+
+  const auto remaining_edge_count = edges_.size() - disconnected_edges.size();
+  const auto remaining_node_count = nodes_.size() - removed_nodes.size();
+  for (const auto& insertion : connected_edges) {
+    if (insertion.final_index > remaining_edge_count + connected_edges.size()) {
+      return error("Topology delta connected edge index is past the final edge list");
+    }
+    const bool exists = std::any_of(edges_.begin(), edges_.end(), [&](const GraphEdge& edge) {
+      return matches(edge, insertion.edge);
+    });
+    const bool disconnecting =
+        std::any_of(disconnected_edges.begin(), disconnected_edges.end(),
+                    [&](const TopologyEdgeRemoval& item) { return matches(item.edge, insertion.edge); });
+    if (exists && !disconnecting) {
+      return error("Topology delta connected edge already exists");
+    }
+  }
+  for (const auto& insertion : inserted_nodes) {
+    if (insertion.final_index > remaining_node_count + inserted_nodes.size()) {
+      return error("Topology delta inserted node index is past the final node list");
+    }
+  }
+
+  nodes_.reserve(nodes_.size() + inserted_nodes.size());
+  edges_.reserve(edges_.size() + connected_edges.size());
+
+  auto sorted_disconnected = disconnected_edges;
+  std::sort(sorted_disconnected.begin(), sorted_disconnected.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.original_index > rhs.original_index; });
+  auto sorted_removed = removed_nodes;
+  std::sort(sorted_removed.begin(), sorted_removed.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.original_index > rhs.original_index; });
+  auto sorted_inserted = std::move(inserted_nodes);
+  std::sort(sorted_inserted.begin(), sorted_inserted.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.final_index < rhs.final_index; });
+  auto sorted_connected = connected_edges;
+  std::sort(sorted_connected.begin(), sorted_connected.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.final_index < rhs.final_index; });
+
+  std::vector<std::pair<std::size_t, GraphEdge>> held_edges;
+  held_edges.reserve(sorted_disconnected.size());
+  std::vector<std::pair<std::size_t, std::unique_ptr<INodeModel>>> held_nodes;
+  held_nodes.reserve(sorted_removed.size());
+  std::vector<std::size_t> inserted_at;
+  inserted_at.reserve(sorted_inserted.size());
+  std::vector<std::size_t> connected_at;
+  connected_at.reserve(sorted_connected.size());
+
+  auto restore = [&] {
+    for (auto it = connected_at.rbegin(); it != connected_at.rend(); ++it) {
+      if (*it < edges_.size()) {
+        edges_.erase(edges_.begin() + static_cast<std::ptrdiff_t>(*it));
+      }
+    }
+    for (auto it = inserted_at.rbegin(); it != inserted_at.rend(); ++it) {
+      if (*it < nodes_.size()) {
+        nodes_.erase(nodes_.begin() + static_cast<std::ptrdiff_t>(*it));
+      }
+    }
+    std::sort(held_nodes.begin(), held_nodes.end(),
+              [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    for (auto& [index, node] : held_nodes) {
+      nodes_.insert(nodes_.begin() + static_cast<std::ptrdiff_t>(index), std::move(node));
+    }
+    std::sort(held_edges.begin(), held_edges.end(),
+              [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    for (auto& [index, edge] : held_edges) {
+      edges_.insert(edges_.begin() + static_cast<std::ptrdiff_t>(index), std::move(edge));
+    }
+  };
+
+  auto run_step = [&](std::string_view step, std::size_t index) {
+    if (after_step) {
+      after_step(step, index);
+    }
+  };
+
+  try {
+    for (const auto& removal : sorted_disconnected) {
+      held_edges.emplace_back(removal.original_index, edges_[removal.original_index]);
+      edges_.erase(edges_.begin() + static_cast<std::ptrdiff_t>(removal.original_index));
+      run_step("disconnect", removal.original_index);
+    }
+    for (const auto& removal : sorted_removed) {
+      held_nodes.emplace_back(removal.original_index, std::move(nodes_[removal.original_index]));
+      nodes_.erase(nodes_.begin() + static_cast<std::ptrdiff_t>(removal.original_index));
+      run_step("remove_node", removal.original_index);
+    }
+    for (auto& insertion : sorted_inserted) {
+      if (insertion.final_index > nodes_.size()) {
+        restore();
+        return error("Topology delta inserted node index is past the live node list");
+      }
+      nodes_.insert(nodes_.begin() + static_cast<std::ptrdiff_t>(insertion.final_index),
+                    std::move(insertion.node));
+      inserted_at.push_back(insertion.final_index);
+      run_step("insert_node", insertion.final_index);
+    }
+    for (const auto& insertion : sorted_connected) {
+      if (insertion.final_index > edges_.size()) {
+        restore();
+        return error("Topology delta connected edge index is past the live edge list");
+      }
+      edges_.insert(edges_.begin() + static_cast<std::ptrdiff_t>(insertion.final_index),
+                    insertion.edge);
+      connected_at.push_back(insertion.final_index);
+      run_step("connect", insertion.final_index);
+    }
+
+    auto errors   = Validate();
+    auto backbone = ValidateImageBackbone();
+    errors.insert(errors.end(), backbone.begin(), backbone.end());
+    run_step("validate", 0);
+    if (!errors.empty()) {
+      restore();
+      return errors;
+    }
+    if (discarded_nodes != nullptr) {
+      discarded_nodes->clear();
+      discarded_nodes->reserve(held_nodes.size());
+      for (auto& [index, node] : held_nodes) {
+        discarded_nodes->push_back(std::move(node));
+      }
+    }
+    return {};
+  } catch (...) {
+    restore();
+    throw;
+  }
+}
+
 auto PipelineGraph::FindNode(const NodeId& id) const -> const INodeModel* {
   for (const auto& node : nodes_) {
     if (node->Id() == id) {

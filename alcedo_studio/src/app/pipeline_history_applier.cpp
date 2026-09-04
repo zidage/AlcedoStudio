@@ -443,6 +443,11 @@ auto ApplyOneChange(PipelineDocument& document, const PipelineEditChange& change
                                         typed.after_source, direction, error);
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
           return ApplyReplaceMaskAsset(document, typed, direction, error, context.mask_store);
+        } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
+          return ApplyGraph(document,
+                            ApplyNodeGraphTopologyChange(document, typed, direction,
+                                                         context.after_topology_step),
+                            error);
         } else {
           return ApplySetMaskField(document, typed, direction, error);
         }
@@ -477,6 +482,23 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
     batch.Validate();
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
+  }
+  if (batch.operation_kind == PipelineEditOperationKind::EditNodeGraph) {
+    if (batch.changes.size() != 1) {
+      return SetError(error, "EditNodeGraph requires exactly one topology change");
+    }
+    const auto* change = std::get_if<NodeGraphTopologyChange>(&batch.changes.front());
+    if (change == nullptr) {
+      return SetError(error, "EditNodeGraph requires a NodeGraphTopologyChange");
+    }
+    try {
+      return ApplyGraph(document,
+                        ApplyNodeGraphTopologyChange(document, *change, direction,
+                                                     context.after_topology_step),
+                        error);
+    } catch (const std::exception& ex) {
+      return SetError(error, ex.what());
+    }
   }
   auto snapshot = ClonePipelineDocument(document);
   const auto ordered = OrderedChangesForApply(batch, direction);

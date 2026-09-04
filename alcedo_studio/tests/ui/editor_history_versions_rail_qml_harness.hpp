@@ -31,6 +31,7 @@
 
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
+#include "app/pipeline_document_history.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "type/hash_type.hpp"
@@ -309,6 +310,19 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Color Grade reconnected");
   }
 
+  auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = ApplyNodeGraphTopologyChange(*document_, change,
+                                                     PipelineEditApplyDirection::Forward);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_topology_change_ = std::move(change);
+    ++edit_node_graph_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Node graph topology updated");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
@@ -381,6 +395,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
   [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
   [[nodiscard]] auto reconnect_grade_count() const -> int { return reconnect_grade_count_; }
+  [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
+  [[nodiscard]] auto last_topology_change() const -> const NodeGraphTopologyChange& {
+    return last_topology_change_;
+  }
   [[nodiscard]] auto last_added_node_id() const -> NodeId { return last_added_node_id_; }
   [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
   [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
@@ -468,6 +486,8 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   remove_grade_count_    = 0;
   int                   rename_grade_count_    = 0;
   int                   reconnect_grade_count_ = 0;
+  int                   edit_node_graph_count_ = 0;
+  NodeGraphTopologyChange last_topology_change_{};
   NodeId                last_added_node_id_;
   NodeId                last_removed_node_id_;
   NodeId                last_renamed_node_id_;

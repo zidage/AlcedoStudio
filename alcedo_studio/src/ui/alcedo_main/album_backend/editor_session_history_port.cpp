@@ -98,6 +98,12 @@ auto EditorSessionHistoryPort::ReconnectColorGrade(const alcedo::EditorHistoryGu
   return mutation_->ReconnectColorGrade(guard, node_id, new_predecessor_id, new_successor_id, error);
 }
 
+auto EditorSessionHistoryPort::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
+                                             alcedo::NodeGraphTopologyChange change,
+                                             std::string* error) -> bool {
+  return mutation_->EditNodeGraph(guard, std::move(change), error);
+}
+
 auto EditorSessionHistoryPort::RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
                                                 const alcedo::NodeId& node_id,
                                                 std::string display_name, std::string* error)

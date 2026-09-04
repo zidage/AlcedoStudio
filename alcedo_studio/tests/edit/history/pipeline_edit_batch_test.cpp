@@ -342,6 +342,20 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   ExpectRoundTrip(MakeRemoveGradeBatch());
   ExpectRoundTrip(MakeReconnectBatch());
 
+  NodeGraphTopologyChange topology;
+  topology.before_next_color_grade_name_number = 2;
+  topology.after_next_color_grade_name_number  = 3;
+  NodeGraphDisconnectedEdge disconnected;
+  disconnected.edge                = MakeSceneEdge("grade.look", "drt");
+  disconnected.original_edge_index = 1;
+  topology.disconnected_edges.push_back(disconnected);
+  NodeGraphConnectedEdge connected_edge;
+  connected_edge.edge             = MakeSceneEdge("grade.look", "grade.extra");
+  connected_edge.final_edge_index = 1;
+  topology.connected_edges.push_back(connected_edge);
+  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::EditNodeGraph, {topology},
+                                          "history.operation.edit_node_graph"));
+
   AddMaskChange add_mask;
   add_mask.node_id       = NodeId{"grade.look"};
   add_mask.mask_id       = MaskId{"mask.radial"};

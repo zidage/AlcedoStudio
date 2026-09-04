@@ -34,6 +34,7 @@ enum class PipelineEditOperationKind : std::uint8_t {
   ReplaceMaskAsset,
   SetMaskField,
   Paste,
+  EditNodeGraph,
 };
 
 /// Discriminator for one stored typed change.
@@ -50,6 +51,7 @@ enum class PipelineEditChangeKind : std::uint8_t {
   ReplaceMaskSource,
   ReplaceMaskAsset,
   SetMaskField,
+  NodeGraphTopologyChange,
 };
 
 /// Owner of one stored parameter write. Unspecified is not a legal stored value.
@@ -181,6 +183,56 @@ struct ReconnectColorGradeChange {
   auto operator==(const ReconnectColorGradeChange&) const -> bool = default;
 };
 
+/// One Color Grade inserted by a net topology delta.
+struct NodeGraphInsertedNode {
+  nlohmann::json node              = nlohmann::json::object();
+  std::uint32_t  final_node_index = 0;
+
+  auto operator==(const NodeGraphInsertedNode&) const -> bool = default;
+};
+
+/// One Color Grade removed by a net topology delta.
+struct NodeGraphRemovedNode {
+  nlohmann::json node                 = nlohmann::json::object();
+  std::uint32_t  original_node_index = 0;
+
+  auto operator==(const NodeGraphRemovedNode&) const -> bool = default;
+};
+
+/// One scene-image edge disconnected from the bound base graph.
+struct NodeGraphDisconnectedEdge {
+  PipelineSceneEdge edge;
+  std::uint32_t     original_edge_index = 0;
+
+  auto operator==(const NodeGraphDisconnectedEdge&) const -> bool = default;
+};
+
+/// One scene-image edge present in the final graph.
+struct NodeGraphConnectedEdge {
+  PipelineSceneEdge edge;
+  std::uint32_t     final_edge_index = 0;
+
+  auto operator==(const NodeGraphConnectedEdge&) const -> bool = default;
+};
+
+/**
+ * @brief Net topology delta from one bound base graph to one accepted graph.
+ *
+ * One stored change applies in place. It is not a list of Add, Remove, or
+ * Reconnect commands. Transient session generation and topology revision
+ * guards are not replay data and are omitted.
+ */
+struct NodeGraphTopologyChange {
+  std::vector<NodeGraphInsertedNode>     inserted_nodes;
+  std::vector<NodeGraphRemovedNode>      removed_nodes;
+  std::vector<NodeGraphDisconnectedEdge> disconnected_edges;
+  std::vector<NodeGraphConnectedEdge>    connected_edges;
+  std::uint64_t before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
+  std::uint64_t after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
+
+  auto operator==(const NodeGraphTopologyChange&) const -> bool = default;
+};
+
 struct AddMaskChange {
   NodeId         node_id;
   MaskId         mask_id;
@@ -231,7 +283,7 @@ using PipelineEditChange =
     std::variant<SetParameterChange, SetNodeEnabledChange, SetNodeMixChange, RenameColorGradeChange,
                  AddColorGradeChange, RemoveColorGradeChange, ReconnectColorGradeChange,
                  AddMaskChange, RemoveMaskChange, ReplaceMaskSourceChange, ReplaceMaskAssetChange,
-                 SetMaskFieldChange>;
+                 SetMaskFieldChange, NodeGraphTopologyChange>;
 
 /**
  * @brief Saved identity used by history rows. Never reads a live document.

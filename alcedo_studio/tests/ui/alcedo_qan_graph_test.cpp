@@ -532,13 +532,13 @@ TEST_F(AlcedoQanGraph, EnablesRequestOnlyConnectorWithThemeColorsAndRoleConnecta
             alcedo::ui::AppTheme::Instance().graphCandidateEdgeColor());
   EXPECT_EQ(graph->getConnectorColor(), alcedo::ui::AppTheme::Instance().graphPortBorderColor());
   EXPECT_EQ(adapter.NodeFor(NodeId{"develop"})->getItem()->getConnectable(),
-            qan::NodeItem::Connectable::UnConnectable);
+            qan::NodeItem::Connectable::OutConnectable);
   EXPECT_EQ(adapter.NodeFor(NodeId{"drt"})->getItem()->getConnectable(),
             qan::NodeItem::Connectable::InConnectable);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"})->getItem()->getConnectable(),
-            qan::NodeItem::Connectable::OutConnectable);
+            qan::NodeItem::Connectable::Connectable);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.second"})->getItem()->getConnectable(),
-            qan::NodeItem::Connectable::InConnectable);
+            qan::NodeItem::Connectable::Connectable);
   ASSERT_NE(graph->getConnector()->getSourcePort(), nullptr);
   EXPECT_EQ(graph->getConnector()->getSourcePort(),
             adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()));
@@ -614,6 +614,47 @@ TEST_F(AlcedoQanGraph, DrawerFoldKeepsPortIdentityForReconnect) {
   EXPECT_EQ(adapter.InputPortFor(NodeId{"grade.primary"}, kImagePort()), input);
   EXPECT_EQ(output->getId(), QStringLiteral("out:image"));
   EXPECT_EQ(input->getId(), QStringLiteral("in:image"));
+}
+
+TEST_F(AlcedoQanGraph, IncrementalInsertAndRemovePreserveUnaffectedIdentities) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+  const auto replace_count = adapter.topology_replace_count();
+  auto*      develop       = adapter.NodeFor(NodeId{"develop"});
+  auto*      primary       = adapter.NodeFor(NodeId{"grade.primary"});
+  auto*      drt           = adapter.NodeFor(NodeId{"drt"});
+  ASSERT_NE(develop, nullptr);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(drt, nullptr);
+
+  EditorNodeProjection extra;
+  extra.node_id      = NodeId{"grade.extra"};
+  extra.node_kind    = EditorNodeKind::ColorGrade;
+  extra.display_name = "Color Grade 2";
+  ASSERT_TRUE(adapter.InsertProjectedNode(extra).succeeded);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), develop);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"drt"}), drt);
+  EXPECT_NE(adapter.NodeFor(NodeId{"grade.extra"}), nullptr);
+  EXPECT_NE(adapter.InputPortFor(NodeId{"grade.extra"}, PortId{"image"}), nullptr);
+  EXPECT_NE(adapter.OutputPortFor(NodeId{"grade.extra"}, PortId{"image"}), nullptr);
+
+  EditorNodeEdgeProjection edge{NodeId{"develop"}, PortId{"image"}, NodeId{"grade.extra"},
+                                PortId{"image"}};
+  ASSERT_TRUE(adapter.RemoveProjectedEdge(EditorNodeEdgeProjection{
+                                              NodeId{"develop"}, PortId{"image"},
+                                              NodeId{"grade.primary"}, PortId{"image"}})
+                  .succeeded);
+  EXPECT_NE(adapter.OutputPortFor(NodeId{"develop"}, PortId{"image"}), nullptr);
+  EXPECT_NE(adapter.InputPortFor(NodeId{"grade.extra"}, PortId{"image"}), nullptr);
+  const auto edge_result = adapter.InsertProjectedEdge(edge, true);
+  ASSERT_TRUE(edge_result.succeeded) << edge_result.error.toStdString();
+  EXPECT_EQ(adapter.topology_replace_count(), replace_count);
+  ASSERT_TRUE(adapter.RemoveProjectedNode(NodeId{"grade.extra"}).succeeded);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), develop);
 }
 
 TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {

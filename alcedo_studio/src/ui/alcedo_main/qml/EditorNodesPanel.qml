@@ -326,6 +326,17 @@ Item {
         }
 
         Label {
+            objectName: "editorNodesEditingGuidance"
+            Layout.fillWidth: true
+            visible: root.nodeController && root.nodeController.incompleteDraft
+            text: root.nodeController ? root.nodeController.incompleteDraftInstruction : ""
+            color: root.colMuted
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+        }
+
+        Label {
             objectName: "editorNodesCommandError"
             Layout.fillWidth: true
             visible: root.nodeController && root.nodeController.lastError.length > 0

@@ -161,6 +161,19 @@ class EditorNodeLayoutStore : public QObject {
   void                EnsureDefaultPositions(const EditorNodeGraphSnapshot& snapshot);
 
   /**
+   * @brief Place one unconnected draft node below the current vertical DAG.
+   *
+   * Uses the backbone origin x so the new card stays in the vertical view.
+   * Existing stored positions are left unchanged. Multiple unconnected draft
+   * nodes stack downward. Does not write PipelineDocument or history.
+   * @param node_id Draft Color Grade that has no stored position yet.
+   * @param snapshot Live or draft projection used for node heights and to fill
+   *        missing backbone positions before measuring the lowest card.
+   */
+  void                AssignStagingPosition(const NodeId& node_id,
+                                            const EditorNodeGraphSnapshot& snapshot);
+
+  /**
    * @brief QML entry that copies defaults from an EditorNodeController snapshot.
    * @param controller EditorNodeController, or ignored when the type does not match.
    */

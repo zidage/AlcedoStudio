@@ -146,6 +146,40 @@ class AlcedoQanGraph : public QObject {
       -> AlcedoQanGraphApplyResult;
 
   /**
+   * @brief Insert one projected node and its ports without replacing the graph.
+   * @return Failure restores no other primitives. The new node is removed on error.
+   */
+  [[nodiscard]] auto InsertProjectedNode(const EditorNodeProjection& node)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Remove one mapped node and incident mapped edges.
+   */
+  [[nodiscard]] auto RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Insert one edge. @p candidate uses the request-preview color until promotion.
+   */
+  [[nodiscard]] auto InsertProjectedEdge(const EditorNodeEdgeProjection& edge, bool candidate)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Remove one mapped edge. Unknown edges succeed as no-ops.
+   */
+  [[nodiscard]] auto RemoveProjectedEdge(const EditorNodeEdgeProjection& edge)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Recolor every mapped edge to the permanent AppTheme stroke.
+   */
+  void PromoteCandidatePresentation();
+  /**
+   * @brief Record committed snapshot revisions without replacing Qan primitives.
+   *
+   * Requires live node and edge identities to match @p snapshot. Used after
+   * automatic topology submission and adapter recreation is not required.
+   */
+  [[nodiscard]] auto PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& snapshot)
+      -> AlcedoQanGraphApplyResult;
+  [[nodiscard]] auto topology_replace_count() const -> int { return topology_replace_count_; }
+
+  /**
    * @return Live Qan node for @p node_id in the current generation, or nullptr.
    */
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> qan::Node*;
@@ -227,7 +261,7 @@ class AlcedoQanGraph : public QObject {
   void GraphChanged();
   void DelegatesChanged();
   /**
-   * @brief Generation-checked connector drop ready for a product Reconnect.
+   * @brief Generation-checked connector drop ready for exclusive-port Connect.
    *
    * @p destinationIsOutput is true when the drop target is an output port.
    */
@@ -325,6 +359,7 @@ class AlcedoQanGraph : public QObject {
                                 bool is_input) -> qan::PortItem*;
   [[nodiscard]] auto InsertEdge(const EditorNodeEdgeProjection& edge) -> QString;
   void               ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node);
+  void               ApplyEdgePresentation(qan::Edge& qan_edge, bool candidate);
   [[nodiscard]] auto EnsureDelegates() -> QString;
   struct LoadedComponent {
     std::unique_ptr<QQmlComponent> component;
@@ -359,6 +394,8 @@ class AlcedoQanGraph : public QObject {
   std::unique_ptr<QQmlComponent>                    edge_component_;
   bool                                              has_projection_      = false;
   bool                                              rebuild_in_progress_ = false;
+  int                                               topology_replace_count_ = 0;
+  std::map<EdgeKey, bool>                           edge_candidate_;
   EditorNodeGraphSnapshot                           applied_;
   std::map<NodeId, QPointer<qan::Node>>             node_by_id_;
   std::map<EdgeKey, QPointer<qan::Edge>>            edge_by_key_;

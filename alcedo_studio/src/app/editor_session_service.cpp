@@ -1212,6 +1212,43 @@ auto EditorSessionService::ReconnectColorGrade(const NodeId& node_id,
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind             = EditorSessionCommandKind::EditNodeGraph;
+    command.topology_change  = std::move(change);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return EditNodeGraph(queued.topology_change);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Node graph topology edit requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->EditNodeGraph(lifecycle_.history_guard(), std::move(change),
+                                            &error)) {
+    return Reject(error.empty() ? "Node graph topology edit failed" : std::move(error));
+  }
+
+  const auto          reason = dependencies_.history->LastPublishedRenderReason();
+  EditorSessionResult result;
+  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
+                                       : EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Node graph topology updated";
+  if (reason.has_value()) {
+    EditorRenderCommand render_command;
+    render_command.reason       = *reason;
+    render_command.operation_id = current_operation_id_;
+    render_.RouteInitialRender(render_command, result.identity,
+                               lifecycle_.active_image_load_request());
+  }
+  BumpHistoryRevision();
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
   EditorAdjustmentPatch patch;
   patch.field_key = std::move(patch_key);

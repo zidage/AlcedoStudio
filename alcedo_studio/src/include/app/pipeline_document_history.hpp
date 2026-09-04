@@ -106,6 +106,24 @@ class MaskStore;
 [[nodiscard]] auto MakeReconnectColorGradeBatch(ReconnectColorGradeChange change)
     -> PipelineEditBatch;
 
+[[nodiscard]] auto MakeEditNodeGraphBatch(NodeGraphTopologyChange change) -> PipelineEditBatch;
+
+/**
+ * @brief Apply one stored topology delta in place on the live document graph.
+ *
+ * Forward uses stored after-counter and final indexes. Inverse swaps inserted
+ * with removed and connected with disconnected, then restores the before
+ * counter. Does not clone the document. On any validation error or exception
+ * the live node objects, node order, edge order, and counter are restored.
+ *
+ * @pre Caller holds the shared executor render lock.
+ */
+[[nodiscard]] auto ApplyNodeGraphTopologyChange(PipelineDocument& document,
+                                                const NodeGraphTopologyChange& change,
+                                                PipelineEditApplyDirection direction,
+                                                TopologyDeltaStepHook after_step = {})
+    -> std::vector<GraphValidationError>;
+
 [[nodiscard]] auto MakeRenameColorGradeBatch(const NodeId& node_id, std::string before_name,
                                              std::string after_name) -> PipelineEditBatch;
 

@@ -26,6 +26,7 @@ namespace alcedo {
 class IFrameSink;
 class IEditorSessionBackend;
 class PipelineDocument;
+struct NodeGraphTopologyChange;
 }  // namespace alcedo
 
 namespace alcedo::ui {
@@ -216,6 +217,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   auto SubmitReconnectColorGrade(const alcedo::NodeId& node_id,
                                  const alcedo::NodeId& new_predecessor_id,
                                  const alcedo::NodeId& new_successor_id)
+      -> alcedo::EditorSessionResult;
+  /** Route one net topology delta through the active session backend. */
+  auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;
   /// Seal the active image via the same Close path as leaving the editor for
   /// Library (`WorkspaceRouter::OpenLibrary`). persistChanges=true may leave

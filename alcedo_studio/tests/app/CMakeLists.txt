@@ -77,6 +77,27 @@ gtest_discover_tests(EditorNodeGraphProjectionTest
     PROPERTIES LABELS "ci_core_flow;edit;nodes")
 alcedo_register_test_target(EditorNodeGraphProjectionTest app)
 
+add_executable(EditorNodeGraphDraftTest
+    ${ALCEDO_TEST_ROOT}/app/editor_node_graph_draft_test.cpp)
+target_include_directories(EditorNodeGraphDraftTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorNodeGraphDraftTest
+    PRIVATE GTest::gtest_main EditorNodeGraphDraft EditGraph)
+gtest_discover_tests(EditorNodeGraphDraftTest
+    TEST_PREFIX "EditorNodeGraphDraftTest."
+    PROPERTIES LABELS "ci_core_flow;edit;nodes")
+alcedo_register_test_target(EditorNodeGraphDraftTest app)
+
+add_executable(PipelineGraphTopologyDeltaTest
+    ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_topology_delta_test.cpp)
+target_include_directories(PipelineGraphTopologyDeltaTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineGraphTopologyDeltaTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier EditGraph)
+gtest_discover_tests(PipelineGraphTopologyDeltaTest
+    TEST_PREFIX "PipelineGraphTopologyDeltaTest."
+    PROPERTIES LABELS "ci_core_flow;edit;graph")
+alcedo_register_test_target(PipelineGraphTopologyDeltaTest app)
+
 add_executable(DocumentTransferTest
     ${ALCEDO_TEST_ROOT}/app/document_transfer_test.cpp)
 target_include_directories(DocumentTransferTest

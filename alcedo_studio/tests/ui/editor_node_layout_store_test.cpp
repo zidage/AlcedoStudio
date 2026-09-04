@@ -102,4 +102,49 @@ TEST(EditorNodeLayoutStore, PreferredPanelWidthStaysInsideSidePanelRange) {
   EXPECT_EQ(store.preferred_panel_width(), 460);
 }
 
+TEST(EditorNodeLayoutStore, AssignStagingPositionPlacesNewNodeBelowTheBackbone) {
+  const auto            metrics = MakeMetrics();
+  EditorNodeLayoutStore store(metrics);
+  store.activate("p", 1, 2, "v");
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  store.EnsureDefaultPositions(snapshot);
+
+  const auto develop = store.NodePosition(NodeId{"develop"});
+  const auto primary = store.NodePosition(NodeId{"grade.primary"});
+  const auto drt     = store.NodePosition(NodeId{"drt"});
+  ASSERT_TRUE(develop.has_value());
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(drt.has_value());
+
+  const NodeId draft{"grade.draft"};
+  store.AssignStagingPosition(draft, snapshot);
+  const auto staged = store.NodePosition(draft);
+  ASSERT_TRUE(staged.has_value());
+  EXPECT_DOUBLE_EQ(staged->x(), static_cast<qreal>(metrics.origin_x));
+  EXPECT_GT(staged->y(), drt->y());
+  EXPECT_EQ(store.NodePosition(NodeId{"develop"}), develop);
+  EXPECT_EQ(store.NodePosition(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(store.NodePosition(NodeId{"drt"}), drt);
+}
+
+TEST(EditorNodeLayoutStore, AssignStagingPositionStacksLaterDraftsDownwardOnTheSameX) {
+  const auto            metrics = MakeMetrics();
+  EditorNodeLayoutStore store(metrics);
+  store.activate("p", 1, 2, "v");
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+
+  const NodeId first{"grade.draft-a"};
+  const NodeId second{"grade.draft-b"};
+  store.AssignStagingPosition(first, snapshot);
+  store.AssignStagingPosition(second, snapshot);
+
+  const auto a = store.NodePosition(first);
+  const auto b = store.NodePosition(second);
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  EXPECT_DOUBLE_EQ(a->x(), static_cast<qreal>(metrics.origin_x));
+  EXPECT_DOUBLE_EQ(b->x(), a->x());
+  EXPECT_GT(b->y(), a->y());
+}
+
 }  // namespace
