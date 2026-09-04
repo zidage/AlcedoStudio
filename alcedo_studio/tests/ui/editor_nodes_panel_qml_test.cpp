@@ -58,6 +58,17 @@ TEST_F(EditorNodesPanelQmlTest, HistoryVersionsAndNodesAreMutuallyExclusive) {
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesPageBody")) == nullptr, 2000);
 }
 
+TEST_F(EditorNodesPanelQmlTest, GraphCanvasPaintsUniformBackgroundWithoutGrid) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesGraphView")) != nullptr, 2000);
+  auto* view = Find(QStringLiteral("editorNodesGraphView"));
+  auto* grid = view->property("grid").value<QObject*>();
+  ASSERT_NE(grid, nullptr) << "grid: null swaps in QuickQanava's empty default grid";
+  EXPECT_STREQ(grid->metaObject()->className(), "qan::Grid")
+      << "the painted Qan.LineGrid must not be installed on the Nodes canvas";
+}
+
 TEST_F(EditorNodesPanelQmlTest, FullCloseDestroysGraphDelegates) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();

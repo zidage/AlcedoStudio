@@ -1611,9 +1611,10 @@ unknown NodeId or Ctrl-click extra node
   Material-blue selection rectangle. Alcedo sets `multipleSelectionEnabled`
   false and `selectionRectEnabled` false. Product selection is the controller
   NodeId; the Alcedo card outline is the visible selected state.
-- `qan::Graph::setSelectionDelegate` is protected in pinned 2.50. QML sets
-  `selectionDelegate: null` on `Qan.Graph`. C++ does not call the protected
-  setter.
+- `qan::Graph::setSelectionDelegate` is protected in pinned 2.50, and
+  `selectionDelegate: null` resets the default blue animated selection item
+  instead of disabling it. The adapter installs an inline invisible `Item`
+  through `QObject::setProperty`; see the visual polish follow-up below.
 - Official `GraphView.qml` ships AlwaysOn scrollbars and an origin cross.
   The Nodes canvas turns both off. Fit uses pinned `fitContentInView()`.
 - Website `QuickQanava::initialize()` remains `initialize(QQmlEngine*)` as
@@ -1696,6 +1697,48 @@ here because `WaitForInteractiveImage` did not return on this GPU path;
 History/Versions/Nodes exclusivity is proven by `EditorNodesPanelQmlTest`.
 macOS checks were not run on this Windows host. The unrelated CTest discovery
 runtime mismatch remains outside this sub-phase.
+
+**Visual polish follow-up (2026-09-03):** node graph visuals were corrected
+after NM5.5 review. Ports are hollow green-outlined squares
+(`graphPortFillColor` transparent, `graphPortBorderColor` `#3FB950`, 1.5 px
+stroke) on a new zero-margin Alcedo horizontal dock delegate
+(`EditorNodePortDock.qml`, installed through `horizontalDockDelegate`), so
+port squares sit flush against the node card edge. Backbone edges use
+`graphEdgeWidth` 2. The earlier `selectionDelegate: null` note was wrong:
+pinned QuickQanava 2.50 treats null as "reset to the default blue animated
+`SelectionItem`". `AlcedoQanGraph::ConfigureGraphPolicy` now installs an
+inline invisible `Item` as the selection delegate, so selection is only the
+card outline swap. Node cards use the new visible `graphNodeBorderColor`
+outline, and the Mask drawer sits in a sunken `graphMaskDrawerSurfaceColor`
+well inset inside the card border with rounded bottom corners, so the drawer
+no longer reads as a floating overlay. New coverage:
+`AlcedoQanGraph.InstallsFlushPortDockAndInvisibleSelectionDelegate`,
+`EditorNodeDelegateQml.PortSquareIsHollowGreenOutlineAcrossThemes`,
+`EditorNodeDelegateQml.BackboneEdgeStrokeMatchesGraphEdgeTokens`,
+`EditorNodeDelegateQml.MaskDrawerWellIsInsetInsideVisibleCardBorder`. Full
+`ctest -L quickqanava`: 33/33 PASS.
+
+**Visual polish follow-up 2 (2026-09-03):** three review findings fixed.
+The Mask drawer header hover/focus wash now keeps a
+`graphSelectionOutlineWidth` bottom inset and rounds its bottom corners to the
+well radius whenever the header spans the whole drawer (closed, or open with no
+Mask rows), so hovering no longer paints over the card's bottom border
+(`EditorNodeMaskDrawer.qml` wash, objectName
+`editorNodeMaskDrawerHeaderWash`). First-open edge/node misalignment is fixed:
+QuickQanava edge items only recompute endpoints on port-local geometry changes,
+and the first polish pass moves the zero-margin docks to their anchored
+positions without any port-local change, leaving edges stale from the first
+rendered frame. `EditorNodePortDock.qml` now forwards dock position changes to
+`hostNodeItem.updatePortsEdges()` (the upstream VerticalDock #145 pattern);
+this also keeps edges glued during Mask drawer folds. The canvas grid is
+removed: the panel assigns `grid: null` on the `Qan.GraphView`, which swaps in
+QuickQanava's empty default grid, and the unused `graphGridColor` token is
+dropped from AppTheme and DESIGN.md. New coverage:
+`EditorNodeDelegateQml.EdgeEndpointsStayGluedToPortsThroughFirstOpenBurstAndDrawerFold`
+(verified to fail without the dock forwarding),
+`EditorNodeDelegateQml.MaskDrawerHeaderWashKeepsCardBorderVisibleOnHover`,
+`EditorNodesPanelQmlTest.GraphCanvasPaintsUniformBackgroundWithoutGrid`. Full
+`ctest -L quickqanava`: 36/36 PASS.
 
 ---
 

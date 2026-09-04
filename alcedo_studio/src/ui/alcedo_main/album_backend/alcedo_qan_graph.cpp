@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 
+#include <QDebug>
 #include <QMetaMethod>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -96,6 +97,17 @@ void AlcedoQanGraph::set_port_delegate_url(const QUrl& url) {
 }
 
 auto AlcedoQanGraph::port_delegate_url() const -> QUrl { return port_delegate_url_; }
+
+void AlcedoQanGraph::set_port_dock_delegate_url(const QUrl& url) {
+  if (port_dock_delegate_url_ == url) {
+    return;
+  }
+  port_dock_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::port_dock_delegate_url() const -> QUrl { return port_dock_delegate_url_; }
 
 void AlcedoQanGraph::set_edge_delegate_url(const QUrl& url) {
   if (edge_delegate_url_ == url) {
@@ -572,7 +584,11 @@ auto AlcedoQanGraph::EnsureDelegates() -> QString {
     }
     edge_component_ = std::move(loaded.component);
   }
-  return InstallPortDelegate();
+  const auto port_error = InstallPortDelegate();
+  if (!port_error.isEmpty()) {
+    return port_error;
+  }
+  return InstallPortDockDelegate();
 }
 
 auto AlcedoQanGraph::LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent {
@@ -608,6 +624,7 @@ void AlcedoQanGraph::DropCachedDelegates() {
   edge_component_.reset();
   delegate_engine_.clear();
   port_delegate_graph_.clear();
+  port_dock_delegate_graph_.clear();
 }
 
 auto AlcedoQanGraph::InstallPortDelegate() -> QString {
@@ -624,6 +641,44 @@ auto AlcedoQanGraph::InstallPortDelegate() -> QString {
   graph_->setProperty("portDelegate", QVariant::fromValue(loaded.component.release()));
   port_delegate_graph_ = graph_;
   return {};
+}
+
+auto AlcedoQanGraph::InstallPortDockDelegate() -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  if (port_dock_delegate_graph_.data() == graph_.data()) {
+    return {};
+  }
+  auto loaded =
+      LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
+  if (!loaded.component) {
+    return loaded.error;
+  }
+  graph_->setProperty("horizontalDockDelegate",
+                      QVariant::fromValue(loaded.component.release()));
+  port_dock_delegate_graph_ = graph_;
+  return {};
+}
+
+void AlcedoQanGraph::InstallInvisibleSelectionDelegate() {
+  if (graph_.isNull()) {
+    return;
+  }
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    return;
+  }
+  // Node delegates paint their own selection outline; the QuickQanava
+  // selection item must exist (qan::NodeItem expects one) but render nothing.
+  auto component = std::make_unique<QQmlComponent>(engine);
+  component->setData(QByteArrayLiteral("import QtQuick\nItem {}\n"), QUrl());
+  if (!component->isReady()) {
+    qWarning() << "AlcedoQanGraph: failed to create invisible selection delegate:"
+               << component->errorString();
+    return;
+  }
+  graph_->setProperty("selectionDelegate", QVariant::fromValue(component.release()));
 }
 
 auto AlcedoQanGraph::ComponentFor(EditorNodeKind kind) const -> QQmlComponent* {
@@ -675,6 +730,7 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
     return;
   }
   graph_->setMultipleSelectionEnabled(false);
+  InstallInvisibleSelectionDelegate();
 }
 
 void AlcedoQanGraph::ClearDrawerConnections() {

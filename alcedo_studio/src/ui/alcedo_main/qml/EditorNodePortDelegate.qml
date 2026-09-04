@@ -25,7 +25,7 @@ Qan.PortItem {
         height: appTheme.graphPortSize
         radius: 0
         color: appTheme.graphPortFillColor
-        border.width: 1
+        border.width: 1.5
         border.color: appTheme.graphPortBorderColor
     }
 }

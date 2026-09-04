@@ -585,6 +585,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskDrawer.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskTypeRow.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDock.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeEdgeDelegate.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodesPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"

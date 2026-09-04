@@ -37,7 +37,7 @@ Qan.NodeItem {
         color: appTheme.cardSurfaceColor
         border.width: appTheme.graphSelectionOutlineWidth
         border.color: root.selected ? appTheme.graphSelectionOutlineColor
-                                    : appTheme.cardBorderColor
+                                    : appTheme.graphNodeBorderColor
 
         Column {
             id: column
@@ -71,7 +71,8 @@ Qan.NodeItem {
             Rectangle {
                 id: divider
                 objectName: "editorNodeDrawerDivider"
-                width: parent.width
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - 2 * appTheme.graphSelectionOutlineWidth
                 height: 1
                 color: appTheme.cardBorderColor
             }
@@ -81,7 +82,7 @@ Qan.NodeItem {
                 width: parent.width
                 masks: root.masks
                 expanded: root.drawerOpen
-                surfaceColor: appTheme.cardSurfaceColor
+                surfaceColor: appTheme.graphMaskDrawerSurfaceColor
                 onToggled: function (open) {
                     root.drawerOpen = open
                 }

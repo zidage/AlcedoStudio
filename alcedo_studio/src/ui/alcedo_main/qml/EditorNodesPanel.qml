@@ -193,7 +193,10 @@ Item {
                 anchors.margins: 1
                 navigable: true
                 selectionRectEnabled: false
-                gridThickColor: appTheme.graphGridColor
+                // Uniform canvas, no grid: assigning null swaps in QuickQanava's
+                // empty default grid (Navigable::setGrid), so nothing is painted
+                // behind the nodes.
+                grid: null
                 focus: true
                 activeFocusOnTab: true
                 Accessible.role: Accessible.Canvas
@@ -203,7 +206,6 @@ Item {
                     id: graphTopology
                     objectName: "editorNodesQanGraph"
                     multipleSelectionEnabled: false
-                    selectionDelegate: null
                 }
 
                 Keys.onPressed: function (event) {
@@ -268,6 +270,7 @@ Item {
                 colorGradeDelegateUrl: Qt.resolvedUrl("EditorNodeDelegate.qml")
                 endpointDelegateUrl: Qt.resolvedUrl("EditorEndpointNodeDelegate.qml")
                 portDelegateUrl: Qt.resolvedUrl("EditorNodePortDelegate.qml")
+                portDockDelegateUrl: Qt.resolvedUrl("EditorNodePortDock.qml")
                 edgeDelegateUrl: Qt.resolvedUrl("EditorNodeEdgeDelegate.qml")
             }
 

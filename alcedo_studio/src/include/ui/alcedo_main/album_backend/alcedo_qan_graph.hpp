@@ -69,6 +69,8 @@ class AlcedoQanGraph : public QObject {
                  NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl portDelegateUrl READ port_delegate_url WRITE set_port_delegate_url NOTIFY
                  DelegatesChanged)
+  Q_PROPERTY(QUrl portDockDelegateUrl READ port_dock_delegate_url WRITE
+                 set_port_dock_delegate_url NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl edgeDelegateUrl READ edge_delegate_url WRITE set_edge_delegate_url NOTIFY
                  DelegatesChanged)
 
@@ -109,6 +111,16 @@ class AlcedoQanGraph : public QObject {
    */
   void               set_port_delegate_url(const QUrl& url);
   [[nodiscard]] auto port_delegate_url() const -> QUrl;
+
+  /**
+   * @brief Set the QML delegate URL for the horizontal port dock.
+   *
+   * The dock positions port items against the node card edge. Each bound Qan
+   * graph receives its own component instance because qan::Graph takes
+   * ownership of horizontalDockDelegate.
+   */
+  void               set_port_dock_delegate_url(const QUrl& url);
+  [[nodiscard]] auto port_dock_delegate_url() const -> QUrl;
 
   /**
    * @brief Set the QML delegate URL for backbone edges.
@@ -298,6 +310,8 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto        LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent;
   void                      DropCachedDelegates();
   [[nodiscard]] auto        InstallPortDelegate() -> QString;
+  [[nodiscard]] auto        InstallPortDockDelegate() -> QString;
+  void                      InstallInvisibleSelectionDelegate();
   [[nodiscard]] auto        ComponentFor(EditorNodeKind kind) const -> QQmlComponent*;
 
   [[nodiscard]] static auto MakeEdgeKey(const EditorNodeEdgeProjection& edge) -> EdgeKey;
@@ -312,9 +326,11 @@ class AlcedoQanGraph : public QObject {
   QUrl                                              color_grade_delegate_url_;
   QUrl                                              endpoint_delegate_url_;
   QUrl                                              port_delegate_url_;
+  QUrl                                              port_dock_delegate_url_;
   QUrl                                              edge_delegate_url_;
   QPointer<QQmlEngine>                              delegate_engine_;
   QPointer<qan::Graph>                              port_delegate_graph_;
+  QPointer<qan::Graph>                              port_dock_delegate_graph_;
   std::unique_ptr<QQmlComponent>                    color_grade_component_;
   std::unique_ptr<QQmlComponent>                    endpoint_component_;
   std::unique_ptr<QQmlComponent>                    edge_component_;

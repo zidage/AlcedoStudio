@@ -331,22 +331,25 @@ dot to this icon.
 
 ### Graph canvas
 
-The graph uses a vertical Develop-to-DRT/Post backbone. The canvas uses a deep
-AppTheme surface and a quiet official QuickQanava `Qan.LineGrid`. Do not add a
-nested card, minimap, gradient, shadow, glow, or glass effect.
+The graph uses a vertical Develop-to-DRT/Post backbone. The canvas is a uniform
+deep AppTheme surface with no grid: the panel assigns `grid: null` on the
+`Qan.GraphView`, which swaps in QuickQanava's empty default grid. Do not add a
+line or point grid, a nested card, minimap, gradient, shadow, glow, or glass
+effect.
 
-Use AppTheme roles for the canvas, grid, edge, port, candidate edge, and node
+Use AppTheme roles for the canvas, edge, port, candidate edge, and node
 selection. Add each missing role to `AppTheme` and this file in the same change.
 Do not put raw graph colors in QML.
 
 | Token | Value | Use |
 | --- | --- | --- |
 | `graphCanvasColor` | `bgDeepColor` | Graph view surface |
-| `graphGridColor` | blend of `bgDeepColor` toward `textMutedColor` (0.22) | Quiet `Qan.LineGrid` |
 | `graphEdgeColor` | `textMutedColor` | Permanent backbone edge |
 | `graphCandidateEdgeColor` | blend of `textMutedColor` toward `textColor` (0.35) | Connector request preview |
-| `graphPortFillColor` | `cardSurfaceColor` | Square port fill |
-| `graphPortBorderColor` | `textColor` | Square port outline |
+| `graphPortFillColor` | transparent | Hollow square port fill (canvas shows through) |
+| `graphPortBorderColor` | `#3FB950` | Hollow square port outline |
+| `graphNodeBorderColor` | blend of `cardSurfaceColor` toward `textMutedColor` (0.5) | Visible node card outline |
+| `graphMaskDrawerSurfaceColor` | `bgBaseColor` | Sunken Mask drawer well inside the card |
 | `graphSelectionOutlineColor` | `textColor` | Selected node outline |
 | `graphNodeWidth` | 220 | Color Grade and endpoint width |
 | `graphNodeVerticalGap` | 48 | Vertical space between backbone nodes |
@@ -358,8 +361,21 @@ Do not put raw graph colors in QML.
 | `graphMaskRowHeight` | 28 | One Mask type row |
 | `graphPortSize` | 8 | Visible square port |
 | `graphPortHitSize` | 16 | Port pointer target |
-| `graphEdgeWidth` | 1 | Backbone stroke |
+| `graphEdgeWidth` | 2 | Backbone stroke |
 | `graphSelectionOutlineWidth` | 1 | Selected outline (inside the card; does not change node size) |
+
+Ports are hollow green-outlined squares. The Alcedo horizontal dock delegate
+(`EditorNodePortDock.qml`) uses zero outer margin, so port squares sit directly
+against the node card edge; do not reintroduce the QuickQanava default dock
+margin. The dock forwards its own position changes to
+`hostNodeItem.updatePortsEdges()` (the upstream VerticalDock #145 pattern):
+edge endpoints only recompute on port-local geometry changes, so without that
+forwarding a dock move — anchor placement after creation or a drawer fold
+changing the host height — leaves edges visually detached from their ports.
+Node selection paints only the card outline: the adapter installs an
+invisible QuickQanava selection delegate, so the default blue animated
+selection item never renders. Do not set `selectionDelegate` to null in QML;
+null resets the QuickQanava default instead of disabling it.
 
 ### Color Grade node content
 
@@ -376,10 +392,14 @@ Do not show node-kind text, a status dot, On/Off content, an adjustment summary,
 a Mask count, or a persistent action row. Do not add a pill or badge. Do not use
 an `xx · xx` compound label or an equivalent separator pattern.
 
-The node uses `cardSurfaceColor` with a 1 px `cardBorderColor` outline. Selection
-keeps the same surface and uses a high-contrast outline around the full node.
-Selection does not change the node size. It does not add a label, status dot,
-glow, or large blue fill.
+The node uses `cardSurfaceColor` with a 1 px `graphNodeBorderColor` outline that
+stays visible against the canvas. The Mask drawer sits in a sunken
+`graphMaskDrawerSurfaceColor` well inset inside that outline, with rounded
+bottom corners that follow the card radius, so the drawer reads as a contained
+section of the card rather than a floating overlay. Selection keeps the same
+surface and swaps the outline to the high-contrast
+`graphSelectionOutlineColor`. Selection does not change the node size. It does
+not add a label, status dot, glow, or large blue fill.
 
 Develop and DRT/Post use compact endpoint delegates. They show their fixed names
 and real ports. They do not show a Mask drawer. Do not add a `Locked` badge.
@@ -394,6 +414,12 @@ The header stays visible when the drawer is closed. It does not show a Mask
 count. The body clips during the fold and uses `motionFoldOpenMs`,
 `motionFoldCloseMs`, and `motionEasing`. `reduceMotion` sets the duration to
 zero.
+
+Header hover and keyboard focus paint the `hoverColor` wash inside the well
+only: the wash is inset by `graphSelectionOutlineWidth` on every side so the
+card outline stays visible, and when the drawer is fully closed (the header
+then spans the whole drawer) its bottom corners follow the well radius instead
+of painting square corners over the card.
 
 The open state is UI layout state. A drawer change does not modify the pipeline,
 create history, or start photo rendering. An empty open drawer has no Mask rows.

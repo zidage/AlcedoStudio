@@ -149,11 +149,12 @@ class AppTheme final : public QObject {
   // Nodes graph canvas and node-card geometry. Colors follow the active theme;
   // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
   Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor graphGridColor READ graphGridColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphEdgeColor READ graphEdgeColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphCandidateEdgeColor READ graphCandidateEdgeColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphPortFillColor READ graphPortFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphPortBorderColor READ graphPortBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphNodeBorderColor READ graphNodeBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphMaskDrawerSurfaceColor READ graphMaskDrawerSurfaceColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphSelectionOutlineColor READ graphSelectionOutlineColor NOTIFY ThemeChanged)
   Q_PROPERTY(int graphNodeWidth READ graphNodeWidth CONSTANT)
   Q_PROPERTY(int graphNodeVerticalGap READ graphNodeVerticalGap CONSTANT)
@@ -318,11 +319,12 @@ class AppTheme final : public QObject {
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
   auto graphCanvasColor() const -> QColor;
-  auto graphGridColor() const -> QColor;
   auto graphEdgeColor() const -> QColor;
   auto graphCandidateEdgeColor() const -> QColor;
   auto graphPortFillColor() const -> QColor;
   auto graphPortBorderColor() const -> QColor;
+  auto graphNodeBorderColor() const -> QColor;
+  auto graphMaskDrawerSurfaceColor() const -> QColor;
   auto graphSelectionOutlineColor() const -> QColor;
   auto graphNodeWidth() const -> int;
   auto graphNodeVerticalGap() const -> int;

@@ -75,6 +75,24 @@ Item {
         }
     }
 
+    // Sunken well behind header and body so the drawer reads as an inset
+    // section of the node card instead of a floating overlay. Inset margins
+    // keep the card border visible; bottom corners follow the card radius.
+    Rectangle {
+        id: well
+        objectName: "editorNodeMaskDrawerWell"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: appTheme.graphSelectionOutlineWidth
+        anchors.rightMargin: appTheme.graphSelectionOutlineWidth
+        anchors.bottomMargin: appTheme.graphSelectionOutlineWidth
+        color: root.surfaceColor
+        bottomLeftRadius: appTheme.controlRadiusSmall - appTheme.graphSelectionOutlineWidth
+        bottomRightRadius: appTheme.controlRadiusSmall - appTheme.graphSelectionOutlineWidth
+    }
+
     Column {
         anchors.left: parent.left
         anchors.right: parent.right
@@ -98,11 +116,25 @@ Item {
                 }
             }
 
+            // Hover/focus feedback stays inside the well: the bottom inset keeps
+            // the card border visible, and whenever the header spans the whole
+            // drawer (closed, or open with no Mask rows) its bottom corners
+            // follow the well radius instead of painting square corners over
+            // the card.
             Rectangle {
+                id: headerWash
+                objectName: "editorNodeMaskDrawerHeaderWash"
                 anchors.fill: parent
+                anchors.leftMargin: appTheme.graphSelectionOutlineWidth
+                anchors.rightMargin: appTheme.graphSelectionOutlineWidth
+                anchors.bottomMargin: appTheme.graphSelectionOutlineWidth
                 color: headerMouse.containsMouse || header.activeFocus
                        ? root.hoverColor
-                       : root.surfaceColor
+                       : "transparent"
+                bottomLeftRadius: header.height >= root.height - 0.5
+                                  ? appTheme.controlRadiusSmall - appTheme.graphSelectionOutlineWidth
+                                  : 0
+                bottomRightRadius: bottomLeftRadius
             }
 
             RowLayout {
