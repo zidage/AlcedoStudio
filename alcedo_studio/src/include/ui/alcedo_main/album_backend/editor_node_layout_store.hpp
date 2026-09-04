@@ -50,7 +50,8 @@ struct EditorNodeLayoutKey {
 /**
  * @brief Geometry tokens used to compute the first backbone layout.
  *
- * Production fills these from AppTheme. Tests may supply explicit values.
+ * Defaults match the DESIGN.md graph-node sizes. Tests may supply explicit
+ * values. The QML default constructor uses these members as-is.
  */
 struct EditorNodeLayoutMetrics {
   int origin_x             = 48;
@@ -101,12 +102,6 @@ class EditorNodeLayoutStore : public QObject {
  public:
   explicit EditorNodeLayoutStore(QObject* parent = nullptr);
   explicit EditorNodeLayoutStore(EditorNodeLayoutMetrics metrics, QObject* parent = nullptr);
-
-  /**
-   * @brief Fill metrics from the process AppTheme tokens.
-   * @pre AppTheme has been constructed.
-   */
-  [[nodiscard]] static auto MetricsFromAppTheme() -> EditorNodeLayoutMetrics;
 
   /**
    * @brief Select the layout key used by the QML-facing getters and setters.

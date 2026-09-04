@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
-#include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -26,25 +25,8 @@ auto NodeIdToQString(const NodeId& node_id) -> QString {
 
 auto NodeIdFromQString(const QString& node_id) -> NodeId { return NodeId{node_id.toStdString()}; }
 
-auto EditorNodeLayoutStore::MetricsFromAppTheme() -> EditorNodeLayoutMetrics {
-  const auto&             theme = AppTheme::Instance();
-  EditorNodeLayoutMetrics metrics;
-  metrics.origin_x             = theme.graphNodeOriginX();
-  metrics.origin_y             = theme.graphNodeOriginY();
-  metrics.vertical_gap         = theme.graphNodeVerticalGap();
-  metrics.node_width           = theme.graphNodeWidth();
-  metrics.endpoint_height      = theme.graphEndpointHeight();
-  metrics.name_row_height      = theme.graphNameRowHeight();
-  metrics.drawer_header_height = theme.graphMaskDrawerHeaderHeight();
-  metrics.mask_row_height      = theme.graphMaskRowHeight();
-  metrics.panel_width_min      = theme.editorSidePanelWidthMin();
-  metrics.panel_width_max      = theme.editorSidePanelWidthMax();
-  metrics.panel_width_default  = theme.editorSidePanelWidth();
-  return metrics;
-}
-
 EditorNodeLayoutStore::EditorNodeLayoutStore(QObject* parent)
-    : EditorNodeLayoutStore(MetricsFromAppTheme(), parent) {}
+    : EditorNodeLayoutStore(EditorNodeLayoutMetrics{}, parent) {}
 
 EditorNodeLayoutStore::EditorNodeLayoutStore(EditorNodeLayoutMetrics metrics, QObject* parent)
     : QObject(parent), metrics_(metrics) {}
