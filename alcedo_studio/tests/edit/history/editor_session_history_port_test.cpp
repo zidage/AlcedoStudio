@@ -34,6 +34,8 @@
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/document_transfer_test_support.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "app/editor_history_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -985,6 +987,51 @@ TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompou
                                          R"({"crop_rotate":{"angle_degrees":12.0}})", true, true);
   EXPECT_EQ(crop.display_name.toStdString(), "Crop / Rotate");
   EXPECT_EQ(crop.after_text.toStdString(), "+12\u00b0");
+}
+
+TEST(EditorHistoryCommitPresentationTest, TypedGraphOperationsUseSavedNamesAndKeepAdjustmentRows) {
+  using alcedo::EditorHistoryCommit;
+  using alcedo::PipelineEditOperationKind;
+  using alcedo::PresentationKeyForOperation;
+
+  EditorHistoryCommit add;
+  add.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::AddColorGrade);
+  add.node_display_name = "Color Grade 2";
+  add.after_value_json  = R"({"display_name":"Color Grade 2"})";
+  const auto add_pres   = PresentEditorHistoryCommit(add);
+  EXPECT_EQ(add_pres.display_name.toStdString(), "Add Color Grade");
+  EXPECT_EQ(add_pres.after_text.toStdString(), "Color Grade 2");
+  EXPECT_EQ(add_pres.delta_text.toStdString(), "Color Grade 2");
+
+  EditorHistoryCommit rename;
+  rename.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::RenameColorGrade);
+  rename.node_display_name = "Sky";
+  rename.before_value_json = R"("Color Grade 1")";
+  rename.after_value_json  = R"("Sky")";
+  const auto rename_pres   = PresentEditorHistoryCommit(rename);
+  EXPECT_EQ(rename_pres.display_name.toStdString(), "Rename Color Grade");
+  EXPECT_EQ(rename_pres.before_text.toStdString(), "Color Grade 1");
+  EXPECT_EQ(rename_pres.after_text.toStdString(), "Sky");
+  EXPECT_EQ(rename_pres.delta_text.toStdString(), "Color Grade 1 \u2192 Sky");
+
+  EditorHistoryCommit remove;
+  remove.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::RemoveColorGrade);
+  remove.node_display_name = "Color Grade 2";
+  remove.after_value_json  = R"({"display_name":"Color Grade 2"})";
+  const auto remove_pres   = PresentEditorHistoryCommit(remove);
+  EXPECT_EQ(remove_pres.display_name.toStdString(), "Delete Color Grade");
+  EXPECT_EQ(remove_pres.delta_text.toStdString(), "Color Grade 2");
+
+  EditorHistoryCommit exposure;
+  exposure.field_key         = "exposure";
+  exposure.presentation_key  = PresentationKeyForOperation(PipelineEditOperationKind::SetParameter);
+  exposure.before_value_json = R"({"exposure":0.0})";
+  exposure.after_value_json  = R"({"exposure":0.35})";
+  exposure.before_enabled    = true;
+  exposure.after_enabled     = true;
+  const auto exposure_pres   = PresentEditorHistoryCommit(exposure);
+  EXPECT_EQ(exposure_pres.display_name.toStdString(), "Exposure");
+  EXPECT_EQ(exposure_pres.after_text.toStdString(), "+0.35");
 }
 
 // ---------------------------------------------------------------------------

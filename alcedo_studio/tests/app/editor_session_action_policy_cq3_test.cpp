@@ -135,6 +135,16 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_TRUE(published.For(EditorAction::ApplyPaste).allowed);
 }
 
+TEST(EditorSessionNodeCommandPolicy,
+     AddRenameAndRemoveUseTheSameAdmissionDecisionAsSettledAdjustments) {
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::AddColorGrade),
+            EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RenameColorGrade),
+            EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RemoveColorGrade),
+            EditorAction::CommitAdjustment);
+}
+
 TEST_F(EditorSessionActionPolicyCq3Test,
        AcceptedOperationLeaseBlocksAndCompletionRestoresExactlyItsDeclaredActions) {
   openInteractive();

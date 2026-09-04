@@ -157,6 +157,9 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::PreviewAdjustment:
       return EditorAction::PreviewAdjustment;
     case EditorSessionCommandKind::CommitAdjustment:
+    case EditorSessionCommandKind::AddColorGrade:
+    case EditorSessionCommandKind::RemoveColorGrade:
+    case EditorSessionCommandKind::RenameColorGrade:
       return EditorAction::CommitAdjustment;
     case EditorSessionCommandKind::Undo:
       return EditorAction::Undo;

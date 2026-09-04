@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app/editor_pipeline_command_service.hpp"
+#include "app/editor_history_types.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
@@ -28,6 +29,7 @@
 #include "edit/operators/operator_registeration.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 
 namespace alcedo::ui {
@@ -530,6 +532,64 @@ TEST_F(EditorDocumentHistoryTest, RenameCreatesHistoryWithoutRenderIntent) {
   ASSERT_NE(grade, nullptr);
   EXPECT_EQ(grade->DisplayName(), "Look A");
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
+}
+
+TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistoryTitles) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
+                                     &error))
+      << error;
+  alcedo::EditorHistorySnapshot added;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &added, &error)) << error;
+  ASSERT_FALSE(added.commits.empty());
+  const auto add_pres = PresentEditorHistoryCommit(added.commits.front());
+  EXPECT_EQ(added.commits.front().presentation_key, "history.operation.add_color_grade");
+  EXPECT_EQ(add_pres.display_name.toStdString(), "Add Color Grade");
+  EXPECT_EQ(add_pres.after_text.toStdString(), "Color Grade 2");
+
+  ASSERT_TRUE(history_.RenameColorGrade(handle, alcedo::NodeId{"grade.extra"}, "Sky", &error))
+      << error;
+  alcedo::EditorHistorySnapshot renamed;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &renamed, &error)) << error;
+  ASSERT_FALSE(renamed.commits.empty());
+  const auto rename_pres = PresentEditorHistoryCommit(renamed.commits.front());
+  EXPECT_EQ(renamed.commits.front().presentation_key, "history.operation.rename_color_grade");
+  EXPECT_EQ(rename_pres.display_name.toStdString(), "Rename Color Grade");
+  EXPECT_EQ(rename_pres.after_text.toStdString(), "Sky");
+
+  ASSERT_TRUE(history_.RemoveColorGrade(handle, alcedo::NodeId{"grade.extra"}, &error)) << error;
+  alcedo::EditorHistorySnapshot removed;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &removed, &error)) << error;
+  ASSERT_FALSE(removed.commits.empty());
+  const auto remove_pres = PresentEditorHistoryCommit(removed.commits.front());
+  EXPECT_EQ(removed.commits.front().presentation_key, "history.operation.remove_color_grade");
+  EXPECT_EQ(remove_pres.display_name.toStdString(), "Delete Color Grade");
+  EXPECT_EQ(remove_pres.delta_text.toStdString(), "Sky");
+}
+
+TEST_F(EditorDocumentHistoryTest,
+       AddJournalFailureRestoresDocumentHeadCounterAndPublishedRenderReason) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto before_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_head     = guard_->working_head_commit_hash();
+  const auto before_count    = guard_->commit_graph_->CommitCount();
+  const auto before_counter  = guard_->document_->NextColorGradeNameNumber();
+  const auto before_reason   = history_.LastPublishedRenderReason();
+  ASSERT_TRUE(std::filesystem::create_directory(journal_path_));
+
+  EXPECT_FALSE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.failed"},
+                                      &error));
+  EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_document);
+  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count);
+  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), before_counter);
+  EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.failed"}), nullptr);
+  EXPECT_EQ(history_.LastPublishedRenderReason(), before_reason);
 }
 
 TEST_F(EditorDocumentHistoryTest, MaskAddRemoveUndoRestoresValueAndDisplayIndex) {

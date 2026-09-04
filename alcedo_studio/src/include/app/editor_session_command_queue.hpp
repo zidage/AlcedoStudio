@@ -19,6 +19,7 @@
 #include "app/editor_session_render_controller.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/history/commit_types.hpp"
 
 namespace alcedo {
@@ -57,6 +58,9 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetPresentationTarget,
   SetPresentationSize,
   SetGeometryOverlay,
+  AddColorGrade,
+  RemoveColorGrade,
+  RenameColorGrade,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -104,6 +108,8 @@ struct EditorSessionCommand {
   int                                     presentation_width   = 0;
   int                                     presentation_height  = 0;
   bool                                    geometry_overlay_active = false;
+  NodeId                                  node_id;
+  NodeId                                  before_node_id;
 };
 
 /// Typed worker completion envelope. Payload-specific values are kept as

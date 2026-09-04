@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.5 complete; NM5.6–NM5.8 planned
+Status: NM5.1–NM5.6 complete; NM5.7–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -1817,6 +1817,260 @@ Rename is metadata-only. It creates history but does not start a photo render.
 
 Record the date, commands, test count, success chain, failure chain, and render reasons here.
 
+##### NM5.6 completion record (2026-09-04)
+
+**Status:** complete — the Nodes header and `Ctrl++` add a clean Color Grade after the selected
+Grade or before DRT. F2 and the node context menu rename the selected Grade in place. Delete and
+the node context menu remove the selected Grade and select its successor, predecessor, or DRT.
+The UI exposes no Enable or Disable action and adds no persistent card actions. All three commands
+use the session queue and NM4 typed history; Qan receives only the accepted document projection.
+
+**Revision and branch:** base repository revision `2dd00168`, branch
+`feature/nodes-panel-add-rename-delete`.
+
+**Primary success call chains:**
+
+```text
+header Add or Ctrl++
+  -> EditorNodeController::addCleanColorGrade
+  -> verify the bound session, internal generation fence, and edit availability
+  -> create grade.<QUuid> and resolve the next before_node_id
+  -> EditorSessionController::SubmitAddColorGrade
+  -> EditorSessionService queue admission as CommitAdjustment
+  -> EditorSessionHistoryPort::AddColorGrade under the render lock
+  -> typed Add batch and Mini-Git WAL append
+  -> history publication and EditorNodeGraphProjection refresh
+  -> AlcedoQanGraph applies the accepted topology
+  -> select the new stable NodeId
+  -> GraphTopologyChanged Quality render
+```
+
+```text
+F2 or node-menu Rename
+  -> EditorNodeController::renameColorGrade
+  -> reject endpoints, missing ids, blank names, stale sessions, and blocked edits
+  -> EditorSessionController::SubmitRenameColorGrade
+  -> EditorSessionService queue admission as CommitAdjustment
+  -> EditorSessionHistoryPort::RenameColorGrade
+  -> typed Rename batch and Mini-Git WAL append
+  -> metadata projection refresh with the same NodeId and selection
+  -> no render reason and no photo render
+```
+
+```text
+Delete key or node-menu Delete
+  -> EditorNodeController::deleteColorGrade
+  -> verify a live Color Grade and remember successor plus predecessor
+  -> EditorSessionController::SubmitRemoveColorGrade
+  -> EditorSessionService queue admission as CommitAdjustment
+  -> EditorSessionHistoryPort::RemoveColorGrade
+  -> typed Remove batch bridges the exact backbone neighbors and appends the WAL record
+  -> accepted topology projection replaces the permanent Qan topology
+  -> select successor, predecessor, or DRT; retain the removed NodeId for Undo selection restore
+  -> GraphTopologyChanged Quality render
+```
+
+**Failure chain:**
+
+```text
+invalid endpoint, missing NodeId, stale internal generation, blocked action, or active command
+  -> reject before history mutation
+
+domain validation or Mini-Git WAL append failure
+  -> NM4 restores document, head, default-name counter, and published render reason
+  -> EditorSessionService returns the exact error without routing a render
+  -> EditorNodeController keeps selection and the accepted projection
+  -> AlcedoQanGraph creates no temporary permanent node or edge
+  -> EditorNodesPanel shows the exact error
+```
+
+**Render reasons:** successful Add and Delete publish `GraphTopologyChanged`, which routes one
+Quality render. Rename publishes no render reason and routes no photo render. Failed commands do
+not change the prior published render reason and route no render.
+
+**Tests and evidence:**
+
+| Target or suite | Result |
+| --- | --- |
+| `EditorSessionNodeCommandTest` | 4/4 passed: queue/service routing, one history change, Add/Delete topology render, Rename no-render, and exact failure publication. |
+| `EditorSessionActionPolicyCq3Test` | 12/12 passed: the new command kinds use settled-edit admission, and public QML/API generation tokens remain absent. |
+| `EditorNodeSelectionLayoutTest` | 16/16 passed: stable Add placement/name, Rename identity, Delete fallback, Undo selection restore, endpoint/missing-id/stale-session rejection, and failure preservation. |
+| `EditorNodesPanelQmlTest` | 14/14 passed: header Add, `Ctrl++`, F2, Delete, the shared right-click menu, no Enable action, exact error text, and unchanged permanent Qan projection on failure. |
+| `AlcedoQanGraphTest` | 10/10 passed: live identity mapping, role-only Rename, topology replacement, stale-pointer rejection, and adapter rollback. |
+| Filtered `EditorSessionHistoryPortTest` and `EditorDocumentHistoryTest` | 51/51 passed: real typed Add/Rename/Delete Undo/Redo, exact edges and Mask content, render intent, and real WAL-open failure restoration. |
+| **Focused direct runtime execution** | **107/107 passed across six binaries.** |
+| `ctest --test-dir build/debug -L quickqanava --output-on-failure` | **41/41 passed.** |
+
+Build and test commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionActionPolicyCq3Test EditorSessionNodeCommandTest EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest EditorSessionHistoryPortTest AlcedoQanGraphTest alcedo_main
+ctest --test-dir build/debug -L quickqanava --output-on-failure
+```
+
+The six focused binaries were also run directly from their generated `_runtime` directories. The
+production `alcedo_main` target and the QML cache compilation completed successfully. The wrapper
+printed its existing `vswhere.exe` lookup warning but found the configured MSVC environment and
+completed each build.
+
+**Pinned API differences:** the online Nodes documentation describes graph-level selection and
+node-event observation but does not give the QML callback parameter list used here. The pinned
+2.50 `qanGraphView.h` exposes `nodeRightClicked(qan::Node*, QPointF)`. The Nodes page therefore
+handles pinned `onNodeRightClicked(node, position)`, resolves the `qan::Node*` through
+`AlcedoQanGraph::liveNodeId`, and opens the shared menu only for a current mapped node. No pinned
+source was changed.
+
+**LOC note (grill-code-review):** the implementation adds 631 production lines and 554 test lines,
+including the new 131-line focused service test. The largest touched production files were already
+large orchestration files; the focused additions remain in their existing queue, controller, and
+history responsibilities. `EditorNodeController` is 519 lines and `EditorNodesPanel.qml` is 467
+lines after this phase. No new file exceeds the review threshold.
+
+**Review result:** grill-code-review found no remaining high-confidence correctness, ownership,
+performance, naming, fixture-fidelity, or maintainability blocker. Its verification pass caught
+and closed queue-admission mapping, public generation-token exposure, duplicate projection refresh,
+right-click coordinate routing, and formatter-churn issues before completion.
+
+**Residual gaps:** NM5.7 still owns the request-only visual connector and Reconnect UI. NM5.8 still
+owns final accessibility/localization/theme audits plus Windows install/package and available-macOS
+qualification. Those later checks are not claimed here.
+
+##### NM5.6 completion record (2026-09-04, history presentation and session availability)
+
+**Status:** complete — typed Add/Rename/Delete history rows show saved Color Grade names instead of
+the generic adjustment “Edit” title, and Nodes Add/Rename/Delete disable when session
+`can_edit` flips through `ActionAvailabilityChanged` without a snapshot change. Nested Add while a
+command is already active is rejected before a second backend mutation. Undo of Delete restores the
+removed Grade’s Mask drawer content on the node projection.
+
+This record covers the residual of 13.5 (`history presentation`, `session action availability`) and
+the 13.6 Mask-restore and command-active criteria. The earlier 2026-09-04 record still covers the
+header/`Ctrl++`/F2/Delete command path.
+
+**Revision and branch:** base repository revision `2dd00168`, branch
+`feature/nodes-panel-add-rename-delete`.
+
+**Primary success call chain:**
+
+```text
+typed Add / Rename / Delete commit
+  -> ProjectPipelineEditHistory
+  -> EditorHistoryCommit.presentation_key + node_display_name
+  -> PresentEditorHistoryCommit(commit)
+  -> EditorHistoryModel displayName / deltaText
+```
+
+```text
+header Add / Ctrl++ / F2 rename / Delete
+  -> EditorNodeController
+  -> EditorSessionController::Submit*
+  -> EditorSessionService queue (CommitAdjustment admission)
+  -> EditorSessionHistoryPort typed batch + WAL
+  -> projection / AlcedoQanGraph after accept
+  -> Add/Delete: GraphTopologyChanged Quality render; Rename: no render
+```
+
+**Availability call chain:**
+
+```text
+session ActionAvailabilityChanged (observer, no StateChanged)
+  -> EditorNodeController::ActionAvailabilityChanged
+  -> QML re-reads canAddColorGrade / canRenameColorGrade / canDeleteColorGrade
+```
+
+**Primary failure call chain:**
+
+```text
+blocked can_edit / command_active_ / WAL append failure
+  -> reject before mutation, or restore document / counter / projection / selection
+  -> exact error
+  -> no temporary permanent Qan node
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `TypedGraphOperationsUseSavedNamesAndKeepAdjustmentRows` | `EditorSessionHistoryPortTest` | PASS |
+| `AddRenameAndDeleteSnapshotsPresentTypedHistoryTitles` | `EditorSessionHistoryPortTest` (`EditorDocumentHistoryTest`) | PASS |
+| `HistoryModelPresentsTypedAddColorGradeTitleAndName` | `EditorSessionControllerPhase5ATest` | PASS |
+| `BlockedEditAvailabilityDisablesAddWithoutSnapshotChange` | `EditorNodeSelectionLayoutTest` | PASS |
+| `ActiveCommandRejectsNestedAddBeforeBackendMutation` | `EditorNodeSelectionLayoutTest` | PASS |
+| `DeleteSelectsSuccessorThenUndoProjectionRestoresDeletedSelection` (Mask restore) | `EditorNodeSelectionLayoutTest` | PASS |
+| Add/Rename/Delete queue, render, exact WAL error | `EditorSessionNodeCommandTest` | PASS 4/4 |
+| Settled-edit admission for graph command kinds | `EditorSessionActionPolicyCq3Test` | PASS 12/12 |
+| Header Add, `Ctrl++`, F2, Delete, context menu, failure Qan | `EditorNodesPanelQmlTest` | PASS 14/14 |
+| Role-only Rename, topology replacement, adapter rollback | `AlcedoQanGraphTest` | PASS 10/10 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest EditorNodeSelectionLayoutTest EditorSessionControllerPhase5ATest EditorNodesPanelQmlTest EditorSessionNodeCommandTest EditorSessionActionPolicyCq3Test AlcedoQanGraphTest
+```
+
+Ninja reported no outstanding work for those targets (they were already built in this tree). The
+seven binaries were then run directly from their `_runtime` directories. Suite totals:
+**174/174 passed** (72 + 18 + 44 + 4 + 12 + 14 + 10). Logs:
+`build/tmp/nm5.6-residual/<binary>.log`. `ctest -L quickqanava` was not re-run in this residual
+pass; the labeled Qan binaries above were executed directly instead.
+
+**Checklist / exit condition:** 13.3 items 1–11 and 13.6 remain satisfied, including History titles
+for typed graph operations, session action availability without a snapshot change, nested-command
+rejection, and Undo restoring Mask drawer content on the node projection.
+
+**LOC note (grill-code-review):** residual production is the commit-object
+`PresentEditorHistoryCommit` overload (~80 lines in
+`editor_history_commit_presentation.cpp`) plus `EditorHistoryModel::PresentationFor` using that
+overload and `EditorNodeController` forwarding `ActionAvailabilityChanged`. Residual tests add the
+six named cases above. `editor_history_commit_presentation.cpp` is 788 lines;
+`editor_node_controller.cpp` is 473 lines. No new file exceeds the review split threshold.
+
+**Remaining gaps:** NM5.7 still owns the request-only visual connector and Reconnect UI. NM5.8 still
+owns final accessibility/localization/theme audits plus Windows install/package and available-macOS
+qualification.
+
+##### NM5.6 completion record (2026-09-04, live Qan apply on the open Nodes page)
+
+**Status:** complete — Add, Rename, and Delete apply the published snapshot onto the bound
+`AlcedoQanGraph` from `EditorNodeController` while the Nodes page stays open. The page binds
+`graphAdapter` for the life of the Loader and clears it on destroy. Topology rebuilds re-parent
+and show live node and edge items on the GraphView container, so the user does not close and
+reopen the panel to see the accepted backbone.
+
+**Revision and branch:** base repository revision `2dd00168`, branch
+`feature/nodes-panel-add-rename-delete`.
+
+**Primary success call chain:**
+
+```text
+Add / Rename / Delete
+  -> EditorSessionService typed history accept
+  -> EditorNodeController::refreshFromSession / PublishSnapshot
+  -> QueueProjectionApply
+  -> ApplyBoundGraph
+  -> AlcedoQanGraph::ApplySnapshot
+  -> AttachLiveVisuals on the GraphView container
+```
+
+**What was proven (executed tests):**
+
+| Target or suite | Result |
+| --- | --- |
+| `EditorNodeSelectionLayoutTest` | 19/19 passed, including live adapter/layout binding and Undo selection restore. |
+| `EditorNodesPanelQmlTest` | 15/15 passed, including open-page adapter bind, live Add Qan identity, and Delete successor cards remaining visible on the GraphView. |
+| `AlcedoQanGraphTest` | 11/11 passed, including topology replacement and hidden removed cards. |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest AlcedoQanGraphTest alcedo_main
+```
+
+The three binaries were run directly from their `_runtime` directories after the live-apply
+change. `alcedo_main` linked with the updated QML cache. macOS checks were not run on this
+Windows host. NM5.7–NM5.8 remain outside this sub-phase.
+
 ---
 
 ## 14. NM5.7 — Request-only visual connector and Reconnect
@@ -2092,8 +2346,8 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] The initial layout is vertical and deterministic.
 - [x] Node positions, view, zoom, selection, and drawer state are local UI state.
 - [x] The product allows one selected node.
-- [ ] Add creates a clean Color Grade.
-- [ ] Rename and Delete use NM4 typed history.
+- [x] Add creates a clean Color Grade.
+- [x] Rename and Delete use NM4 typed history.
 - [ ] Reconnect uses the official visual connector.
 - [ ] `connectorCreateDefaultEdge` is false.
 - [ ] The backend accepts a request before permanent Qan edges change.

@@ -344,6 +344,17 @@ gtest_discover_tests(EditorSessionCommandQueueBaselineTest
     PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionCommandQueueBaselineTest app)
 
+add_executable(EditorSessionNodeCommandTest
+    ${ALCEDO_TEST_ROOT}/app/editor_session_node_command_test.cpp)
+target_include_directories(EditorSessionNodeCommandTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionNodeCommandTest
+    EditorSessionService xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSessionNodeCommandTest
+    TEST_PREFIX "EditorSessionNodeCommandTest."
+    PROPERTIES LABELS "editor_session;quickqanava")
+alcedo_register_test_target(EditorSessionNodeCommandTest app)
+
 # CQ3: action-admission policy, operation leases, scoped request-id correlation.
 add_executable(EditorSessionActionPolicyCq3Test
     ${ALCEDO_TEST_ROOT}/app/editor_session_action_policy_cq3_test.cpp)

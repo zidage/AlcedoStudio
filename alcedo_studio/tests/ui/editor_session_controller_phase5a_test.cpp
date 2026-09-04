@@ -19,11 +19,14 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
@@ -1357,5 +1360,30 @@ TEST(EditorSessionControllerPhase5ATest, InvalidVersionOrCommitIdPublishesReject
   EXPECT_EQ(controller.last_history_result().value("action").toString(),
             QStringLiteral("moveHeadToCommit"));
 }
+
+TEST(EditorSessionControllerPhase5ATest, HistoryModelPresentsTypedAddColorGradeTitleAndName) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+
+  alcedo::EditorHistoryCommit add;
+  add.commit_hash       = alcedo::Hash128(1, 0);
+  add.presentation_key  = alcedo::PresentationKeyForOperation(
+      alcedo::PipelineEditOperationKind::AddColorGrade);
+  add.node_display_name = "Color Grade 2";
+  add.after_value_json  = R"({"display_name":"Color Grade 2"})";
+  add.position          = alcedo::EditorHistoryTimelinePosition::Current;
+  backend.history_projection_.commits.push_back(std::move(add));
+
+  EditorSessionController controller(&backend);
+  EditorHistoryModel      model;
+  model.setEditorSession(&controller);
+  ASSERT_EQ(model.count(), 1);
+  EXPECT_EQ(model.data(model.index(0), EditorHistoryModel::DisplayNameRole).toString(),
+            QStringLiteral("Add Color Grade"));
+  EXPECT_EQ(model.data(model.index(0), EditorHistoryModel::DeltaTextRole).toString(),
+            QStringLiteral("Color Grade 2"));
+}
+
 }  // namespace
 }  // namespace alcedo::ui

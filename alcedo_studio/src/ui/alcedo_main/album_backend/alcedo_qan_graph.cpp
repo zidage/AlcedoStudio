@@ -21,6 +21,8 @@
 #include "qanPortItem.h"
 #include "qanStyle.h"
 
+#include <QQuickItem>
+
 namespace alcedo::ui {
 namespace {
 
@@ -31,6 +33,18 @@ auto ContainsNodeId(const std::vector<EditorNodeProjection>& nodes, const NodeId
     }
   }
   return false;
+}
+
+/// QuickQanava parents NodeItem/EdgeItem to the view container and destroys
+/// them with deleteLater. Hide and unparent immediately so a topology rebuild
+/// cannot leave the previous cards on screen while the photo has already
+/// moved on.
+void HideDetachedVisual(QQuickItem* item) {
+  if (item == nullptr) {
+    return;
+  }
+  item->setVisible(false);
+  item->setParentItem(nullptr);
 }
 
 }  // namespace
@@ -276,12 +290,42 @@ void AlcedoQanGraph::DestroyPrimitives(const std::vector<QPointer<qan::Edge>>& e
   }
   for (const auto& edge : edges) {
     if (!edge.isNull()) {
+      HideDetachedVisual(edge->getItem());
       graph_->removeEdge(edge.data(), true);
     }
   }
   for (const auto& node : nodes) {
     if (!node.isNull()) {
+      HideDetachedVisual(node->getItem());
       graph_->removeNode(node.data(), true);
+    }
+  }
+}
+
+void AlcedoQanGraph::AttachLiveVisuals() {
+  if (graph_.isNull()) {
+    return;
+  }
+  auto* container = graph_->getContainerItem();
+  auto  attach    = [container](QQuickItem* item) {
+    if (item == nullptr) {
+      return;
+    }
+    item->setVisible(true);
+    if (container != nullptr && item->parentItem() != container) {
+      item->setParentItem(container);
+    }
+  };
+  for (const auto& [id, node] : node_by_id_) {
+    Q_UNUSED(id);
+    if (!node.isNull()) {
+      attach(node->getItem());
+    }
+  }
+  for (const auto& [key, edge] : edge_by_key_) {
+    Q_UNUSED(key);
+    if (!edge.isNull()) {
+      attach(edge->getItem());
     }
   }
 }
@@ -457,6 +501,7 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
       return edge_error;
     }
   }
+  AttachLiveVisuals();
   return {};
 }
 

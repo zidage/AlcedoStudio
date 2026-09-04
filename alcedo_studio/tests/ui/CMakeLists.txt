@@ -869,6 +869,7 @@ target_include_directories(EditorNodeSelectionLayoutTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
     PRIVATE ${ALCEDO_TEST_DIR}
     PRIVATE ${ALCEDO_TEST_ROOT}/ui
+    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph
 )
 target_link_libraries(EditorNodeSelectionLayoutTest
     PRIVATE

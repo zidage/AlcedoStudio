@@ -65,14 +65,14 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                alcedo::PipelineEditBatch batch, std::string* error) -> bool;
   auto AddColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
                      const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id,
-                     std::string* error) -> bool;
+                     std::string* error) -> bool override;
   auto RemoveColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                        std::string* error) -> bool;
+                        std::string* error) -> bool override;
   auto ReconnectColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                            const alcedo::NodeId& new_predecessor_id,
                            const alcedo::NodeId& new_successor_id, std::string* error) -> bool;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                        std::string display_name, std::string* error) -> bool;
+                        std::string display_name, std::string* error) -> bool override;
   auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                             bool enabled, std::string* error) -> bool;
   auto SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,

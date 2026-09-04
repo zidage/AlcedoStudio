@@ -32,6 +32,7 @@
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -113,6 +114,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     };
     allow(alcedo::EditorAction::Undo, snapshot_.can_undo);
     allow(alcedo::EditorAction::Redo, snapshot_.can_redo);
+    allow(alcedo::EditorAction::PreviewAdjustment,
+          state_ == EditorSessionState::Interactive && has_image_);
+    allow(alcedo::EditorAction::CommitAdjustment,
+          state_ == EditorSessionState::Interactive && has_image_);
     allow(alcedo::EditorAction::MoveHead, true);
     allow(alcedo::EditorAction::ApplyPaste, true);
     allow(alcedo::EditorAction::RetrySave, recovery_pending_);
@@ -258,6 +263,38 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("View changed");
   }
 
+  auto AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = AddCleanColorGrade(*document_, before_node_id, new_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_added_node_id_ = new_id;
+    ++add_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade created");
+  }
+
+  auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = RemoveColorGradeAndBridge(*document_, node_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_removed_node_id_ = node_id;
+    ++remove_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade removed");
+  }
+
+  auto RenameColorGrade(const NodeId& node_id, std::string display_name)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = alcedo::RenameColorGrade(*document_, node_id, std::move(display_name));
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_renamed_node_id_ = node_id;
+    ++rename_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade renamed");
+  }
+
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
@@ -326,6 +363,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
   [[nodiscard]] auto patch_count() const -> int { return patch_count_; }
   [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
+  [[nodiscard]] auto add_grade_count() const -> int { return add_grade_count_; }
+  [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
+  [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
+  [[nodiscard]] auto last_added_node_id() const -> NodeId { return last_added_node_id_; }
+  [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
+  [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -334,6 +377,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   }
 
   void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
+  void SetFailNodeCommands(bool fail) { fail_node_commands_ = fail; }
 
  private:
   auto Accepted(const char* message) const -> EditorSessionResult {
@@ -391,10 +435,17 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   discard_count_         = 0;
   int                   cancel_recovery_count_ = 0;
   bool                  block_version_ops_     = false;
+  bool                  fail_node_commands_    = false;
   int                   blocked_create_count_  = 0;
   int                   blocked_rename_count_  = 0;
   int                   patch_count_           = 0;
   int                   view_change_count_     = 0;
+  int                   add_grade_count_       = 0;
+  int                   remove_grade_count_    = 0;
+  int                   rename_grade_count_    = 0;
+  NodeId                last_added_node_id_;
+  NodeId                last_removed_node_id_;
+  NodeId                last_renamed_node_id_;
 };
 
 class RecordingInteractionPolicy final : public QObject {

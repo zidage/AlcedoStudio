@@ -289,6 +289,7 @@ class AlcedoQanGraph : public QObject {
   void               DestroyMappedPrimitives();
   void               DestroyPrimitives(const std::vector<QPointer<qan::Edge>>& edges,
                                        const std::vector<QPointer<qan::Node>>& nodes);
+  void               AttachLiveVisuals();
 
   [[nodiscard]] auto RejectIfStale(const EditorNodeGraphSnapshot& snapshot) const -> QString;
   [[nodiscard]] auto ValidateSnapshot(const EditorNodeGraphSnapshot& snapshot) const -> QString;

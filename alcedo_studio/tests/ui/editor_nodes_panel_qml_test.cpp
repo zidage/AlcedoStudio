@@ -6,6 +6,7 @@
 #include <QPointF>
 #include <QQuickItem>
 #include <QuickQanava>
+#include <functional>
 
 #include "editor_history_versions_rail_qml_harness.hpp"
 #include "qanGraph.h"
@@ -227,17 +228,197 @@ TEST_F(EditorNodesPanelQmlTest, ReduceMotionMakesRelatedFoldsImmediate) {
   EXPECT_NEAR(drawer->property("foldProgress").toReal(), 0.0, 0.001);
 }
 
-TEST_F(EditorNodesPanelQmlTest, AddActionDoesNotMutateTheGraph) {
+TEST_F(EditorNodesPanelQmlTest, AddActionCreatesAndSelectsOneCleanColorGrade) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesAddButton")) != nullptr, 2000);
   auto* add = Find(QStringLiteral("editorNodesAddButton"));
   ASSERT_NE(add, nullptr);
-  EXPECT_FALSE(add->property("enabled").toBool());
+  EXPECT_TRUE(add->property("enabled").toBool());
   EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Color Grade"));
   const auto history_before = backend_.history_revision();
   Click(window_, add);
-  EXPECT_EQ(backend_.history_revision(), history_before);
+  QTRY_COMPARE_WITH_TIMEOUT(backend_.add_grade_count(), 1, 2000);
+  EXPECT_EQ(backend_.history_revision(), history_before + 1);
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_EQ(nodes->backbone_node_ids().size(), 4);
+  EXPECT_EQ(nodes->selected_node_id(), backend_.last_added_node_id());
+  EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Color Grade 2"));
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(backend_.last_added_node_id()) != nullptr, 2000);
+  ASSERT_NE(adapter->graph(), nullptr);
+  EXPECT_EQ(adapter->graph()->getNodeCount(), 4);
+  EXPECT_EQ(nodes->graph_adapter_object(), adapter);
+  EXPECT_NE(Find(QStringLiteral("editorNodesPageBody")), nullptr);
+}
+
+TEST_F(EditorNodesPanelQmlTest, OpenNodesPageBindsTheLiveQanAdapterOnTheController) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->graph_adapter_object() == adapter, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, CtrlPlusAddsTheNextCleanColorGrade) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* view  = Find(QStringLiteral("editorNodesGraphView"));
+  auto* nodes = Controller();
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(nodes, nullptr);
+  view->forceActiveFocus();
+
+  QTest::keyClick(window_, Qt::Key_Plus, Qt::ControlModifier);
+  ProcessEvents();
+
+  EXPECT_EQ(backend_.add_grade_count(), 1);
+  EXPECT_EQ(nodes->selected_node_id(), backend_.last_added_node_id());
+  EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Color Grade 2"));
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(backend_.last_added_node_id()) != nullptr, 2000);
+  ASSERT_NE(adapter->graph(), nullptr);
+  EXPECT_EQ(adapter->graph()->getNodeCount(), 4);
+  EXPECT_EQ(nodes->graph_adapter_object(), adapter);
+}
+
+TEST_F(EditorNodesPanelQmlTest, F2RenamesSelectedColorGradeAndKeepsItsIdentity) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* view  = Find(QStringLiteral("editorNodesGraphView"));
+  auto* nodes = Controller();
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(nodes, nullptr);
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_F2);
+  ProcessEvents();
+
+  auto* field = Find(QStringLiteral("editorNodeRenameField"));
+  ASSERT_NE(field, nullptr);
+  EXPECT_TRUE(field->isVisible());
+  field->setProperty("text", QStringLiteral("Sky"));
+  field->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_Return);
+  ProcessEvents();
+
+  EXPECT_EQ(backend_.rename_grade_count(), 1);
+  EXPECT_EQ(backend_.last_renamed_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Sky"));
+}
+
+TEST_F(EditorNodesPanelQmlTest, NodeContextMenuOffersRenameAndDeleteOnlyForColorGrades) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    grade_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+
+  auto* menu = window_->findChild<QObject*>(QStringLiteral("editorNodesNodeMenu"));
+  ASSERT_NE(menu, nullptr);
+  EXPECT_TRUE(menu->property("visible").toBool());
+  auto* rename = Find(QStringLiteral("editorNodesRenameMenuItem"));
+  auto* remove = Find(QStringLiteral("editorNodesDeleteMenuItem"));
+  ASSERT_NE(rename, nullptr);
+  ASSERT_NE(remove, nullptr);
+  EXPECT_TRUE(rename->property("enabled").toBool());
+  EXPECT_TRUE(remove->property("enabled").toBool());
+  EXPECT_EQ(Find(QStringLiteral("editorNodesEnableMenuItem")), nullptr);
+
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  nodes->selectDevelop();
+  ProcessEvents();
+  EXPECT_FALSE(rename->property("enabled").toBool());
+  EXPECT_FALSE(remove->property("enabled").toBool());
+}
+
+TEST_F(EditorNodesPanelQmlTest, DeleteKeyRemovesSelectedGradeAndSelectsItsSuccessor) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(view, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(backend_.last_added_node_id()) != nullptr, 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_Delete);
+  ProcessEvents();
+
+  EXPECT_EQ(backend_.remove_grade_count(), 1);
+  EXPECT_EQ(backend_.last_removed_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(nodes->selected_node_id(), backend_.last_added_node_id());
+  EXPECT_EQ(nodes->backbone_node_ids().size(), 3);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) == nullptr, 2000);
+  ASSERT_NE(adapter->graph(), nullptr);
+  EXPECT_EQ(adapter->graph()->getNodeCount(), 3);
+  const NodeId remaining[] = {NodeId{"develop"}, backend_.last_added_node_id(), NodeId{"drt"}};
+  for (const auto& id : remaining) {
+    QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(id) != nullptr, 2000);
+    auto* item = adapter->NodeFor(id)->getItem();
+    ASSERT_NE(item, nullptr);
+    EXPECT_TRUE(item->isVisible());
+    EXPECT_NE(item->parentItem(), nullptr);
+  }
+  const auto visible_on_view = [view]() {
+    int                              visible = 0;
+    std::function<void(QQuickItem*)> walk    = [&](QQuickItem* item) {
+      if (item == nullptr) {
+        return;
+      }
+      if (item->objectName() == QLatin1String("qan::NodeItem") && item->isVisible()) {
+        ++visible;
+      }
+      const auto children = item->childItems();
+      for (auto* child : children) {
+        walk(child);
+      }
+    };
+    walk(view);
+    return visible;
+  };
+  QTRY_COMPARE_WITH_TIMEOUT(visible_on_view(), 3, 2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, FailedAddKeepsPriorPermanentQanProjectionAndExactError) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  auto* nodes   = Controller();
+  auto* add     = Find(QStringLiteral("editorNodesAddButton"));
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(add, nullptr);
+  const auto ids_before      = nodes->backbone_node_ids();
+  const auto topology_before = adapter->topology_revision();
+  backend_.SetFailNodeCommands(true);
+
+  Click(window_, add);
+  ProcessEvents();
+
+  EXPECT_EQ(nodes->backbone_node_ids(), ids_before);
+  EXPECT_EQ(adapter->topology_revision(), topology_before);
+  EXPECT_EQ(nodes->last_error(), QStringLiteral("mini-Git journal append failed"));
+  auto* error = Find(QStringLiteral("editorNodesCommandError"));
+  ASSERT_NE(error, nullptr);
+  EXPECT_EQ(error->property("text").toString(), QStringLiteral("mini-Git journal append failed"));
 }
 
 }  // namespace
