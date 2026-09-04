@@ -56,6 +56,7 @@ TEST_F(EditorVersionsPanelQmlTest, ClickingNamedVersionChecksOutStableVersionId)
   ASSERT_FALSE(alternate_id.isEmpty());
 
   Click(window_, alternate_card, QPointF(12.0, alternate_card->height() / 2.0));
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == 1, 2000);
 
   EXPECT_EQ(backend_.checkout_count(), 1);
   EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
@@ -70,6 +71,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   EXPECT_TRUE(field->property("visible").toBool());
   // Modal naming dialog must not exist on the inline path.
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
@@ -139,6 +141,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineVersionDraftAcceptsEnterAndEscapeWithou
   auto* field     = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(draft_row, nullptr);
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   EXPECT_TRUE(draft_row->property("visible").toBool());
   EXPECT_TRUE(field->property("visible").toBool());
   EXPECT_TRUE(field->isEnabled());
@@ -252,6 +255,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   TypeText(window_, QStringLiteral("pendinglook"));
 
   // Simulate a pending-save lock without closing the draft: force the property
@@ -295,6 +299,7 @@ TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
 
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
   EXPECT_EQ(field->property("text").toString(), active->property("displayName").toString());
   TypeText(window_, QStringLiteral("renamedbase"));

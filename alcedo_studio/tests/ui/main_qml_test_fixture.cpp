@@ -5,13 +5,17 @@
 #include "ui/main_qml_test_fixture.hpp"
 
 #include <QQmlContext>
+#include <QQmlExtensionPlugin>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QString>
+#include <QuickQanava>
 #include <sstream>
 
 #include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace alcedo::ui::test {
 
@@ -35,6 +39,7 @@ auto MainQmlTestFixture::FinishLoad(std::unique_ptr<LoadedMainWindow> loaded)
   QQuickStyle::setStyle(QStringLiteral("Material"));
 
   loaded->engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&loaded->engine);
   loaded->language_manager.AttachEngine(&loaded->engine);
   loaded->host.AttachQmlEngine(&loaded->engine);
   loaded->engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &loaded->host);

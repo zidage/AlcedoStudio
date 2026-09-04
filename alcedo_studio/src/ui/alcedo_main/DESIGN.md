@@ -268,12 +268,12 @@ beside it so workspace routing remains available while the sidebar is folded.
 
 Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
 scales by DPR so they stay comfortable at 1.0 / 1.25 / 1.5 / 2.0. The preferred
-width unifies the adjustment stack and the History/Versions expanded panel so
+width unifies the adjustment stack and the History/Versions/Nodes expanded panel so
 the two side columns read as one family.
 
 | Token | px | Use |
 | --- | --- | --- |
-| `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
+| `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions/Nodes expanded panel |
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
@@ -349,6 +349,9 @@ Do not put raw graph colors in QML.
 | `graphPortBorderColor` | `textColor` | Square port outline |
 | `graphSelectionOutlineColor` | `textColor` | Selected node outline |
 | `graphNodeWidth` | 220 | Color Grade and endpoint width |
+| `graphNodeVerticalGap` | 48 | Vertical space between backbone nodes |
+| `graphNodeOriginX` | 48 | First-layout left origin |
+| `graphNodeOriginY` | 48 | First-layout top origin |
 | `graphEndpointHeight` | 40 | Develop / DRT/Post height |
 | `graphNameRowHeight` | 32 | Color Grade name row |
 | `graphMaskDrawerHeaderHeight` | 28 | `Masks` disclosure header |
@@ -573,7 +576,7 @@ blocking. Session identity is never recreated by a fold.
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
 
-**Fold rules (History/Versions, adjustment stack, filmstrip, collapsible section):**
+**Fold rules (History/Versions/Nodes, adjustment stack, filmstrip, collapsible section):**
 
 1. Logical expanded/collapsed (or session page) flips immediately.
 2. Persistent rail / handle / section header stays stationary.

@@ -11,6 +11,7 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -24,14 +25,20 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+
+#include <QuickQanava>
 
 namespace alcedo::ui::test {
 namespace rail_harness {
@@ -240,6 +247,17 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Pending navigation cancelled");
   }
 
+  auto Patch(EditorAdjustmentPatch) -> EditorSessionResult override {
+    ++patch_count_;
+    return Accepted("Patched");
+  }
+
+  auto RequestViewChange(EditorRenderReason, std::optional<ViewportRenderRegion>)
+      -> EditorSessionResult override {
+    ++view_change_count_;
+    return Accepted("View changed");
+  }
+
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
@@ -281,6 +299,9 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
   [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
+  [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
+    return document_.get();
+  }
 
   [[nodiscard]] auto last_checkout_id() const -> Hash128 { return last_checkout_id_; }
   [[nodiscard]] auto last_created_id() const -> Hash128 { return last_created_id_; }
@@ -303,6 +324,8 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto last_branch_name() const -> const std::string& { return last_branch_name_; }
   [[nodiscard]] auto blocked_create_count() const -> int { return blocked_create_count_; }
   [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
+  [[nodiscard]] auto patch_count() const -> int { return patch_count_; }
+  [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -343,6 +366,8 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   bool                  has_image_ = true;
   EditorSessionIdentity identity_{1, 2};
   EditorHistorySnapshot snapshot_;
+  std::shared_ptr<PipelineDocument> document_ =
+      std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   std::uint64_t         next_version_id_ = 20;
   Hash128               last_checkout_id_;
   Hash128               last_created_id_;
@@ -368,6 +393,8 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   bool                  block_version_ops_     = false;
   int                   blocked_create_count_  = 0;
   int                   blocked_rename_count_  = 0;
+  int                   patch_count_           = 0;
+  int                   view_change_count_     = 0;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -514,9 +541,11 @@ class RailQmlFixture : public ::testing::Test {
     AppTheme::RegisterFonts();
     AppTheme::Instance().setReduceMotion(true);
     RegisterEditorHistoryQmlTypes();
+    RegisterEditorNodeQmlTypes();
 
     engine_.addImportPath(QStringLiteral("qrc:/"));
     engine_.addImportPath(QmlDirectory());
+    QuickQanava::initialize(&engine_);
     engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
     engine_.rootContext()->setContextProperty(QStringLiteral("editorSessionFake"), &controller_);
     engine_.rootContext()->setContextProperty(QStringLiteral("interactionPolicyFake"), &policy_);
@@ -537,7 +566,13 @@ class RailQmlFixture : public ::testing::Test {
       }
     }
     ProcessEvents();
-    if (window_ != nullptr && Find(QStringLiteral("editorHistoryVersionsRail")) == nullptr &&
+    if (window_ != nullptr) {
+      QDeadlineTimer deadline{5000};
+      while (Find(QStringLiteral("editorWorkspaceRail")) == nullptr && !deadline.hasExpired()) {
+        ProcessEvents();
+      }
+    }
+    if (window_ != nullptr && Find(QStringLiteral("editorWorkspaceRail")) == nullptr &&
         !warnings_.isEmpty()) {
       ADD_FAILURE() << warnings_.join('\n').toStdString();
     }
@@ -577,9 +612,35 @@ class RailQmlFixture : public ::testing::Test {
     return delegates;
   }
 
-  void OpenVersionsPage() { Click(window_, Find(QStringLiteral("editorVersionsRailButton"))); }
+  void WaitForName(const QString& object_name, int timeout_ms = 8000) {
+    QDeadlineTimer deadline{timeout_ms};
+    while (Find(object_name) == nullptr && !deadline.hasExpired()) {
+      ProcessEvents();
+    }
+  }
 
-  void OpenHistoryPage() { Click(window_, Find(QStringLiteral("editorHistoryRailButton"))); }
+  void OpenVersionsPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("versions"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorVersionsPageBody"));
+    WaitForName(QStringLiteral("editorVersionsList"));
+    QDeadlineTimer deadline{2000};
+    while (Cards().isEmpty() && !deadline.hasExpired()) {
+      ProcessEvents();
+    }
+  }
+
+  void OpenHistoryPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("history"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorHistoryPageBody"));
+  }
+
+  void OpenNodesPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("nodes"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorNodesPageBody"));
+  }
 
   RecordingEditorSessionBackend backend_;
   EditorSessionController       controller_{&backend_};

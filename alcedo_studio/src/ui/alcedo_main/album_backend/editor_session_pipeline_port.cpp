@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 
 namespace alcedo::ui {
 
@@ -48,6 +49,15 @@ auto EditorSessionPipelinePort::CurrentGuard(sl_element_id_t element_id) const
   std::scoped_lock lock(mutex_);
   auto             it = guards_.find(element_id);
   return it == guards_.end() ? nullptr : it->second;
+}
+
+auto EditorSessionPipelinePort::CurrentDocument(sl_element_id_t element_id) const
+    -> const alcedo::PipelineDocument* {
+  auto guard = CurrentGuard(element_id);
+  if (!guard || !guard->document_) {
+    return nullptr;
+  }
+  return guard->document_.get();
 }
 
 auto EditorSessionPipelinePort::PipelineMapper() const

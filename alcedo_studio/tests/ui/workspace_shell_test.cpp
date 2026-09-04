@@ -1834,7 +1834,7 @@ TEST_F(WorkspaceShellTests, EditorDesktopOrderIsHistoryCenterAdjustments) {
   loaded->window->resize(1400, 900);
   ProcessEvents(40);
 
-  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   auto* right  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   auto* scope  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeSlot"));
@@ -1876,7 +1876,7 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
                                       static_cast<uint>(image.file_id_),
                                       static_cast<uint>(image.image_id_)));
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
 
   auto* history_btn =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
@@ -1888,9 +1888,9 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // Open History.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   auto* panel =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel, nullptr);
   EXPECT_TRUE(panel->isVisible());
   auto* history_body =
@@ -1902,7 +1902,7 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // (Loader loads only the active page), not merely hidden.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("versions"));
   auto* versions_body =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody"));
   ASSERT_NE(versions_body, nullptr);
@@ -1913,19 +1913,19 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   // Selecting the active action again collapses the panel; the rail remains.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
   // Closed rail: panel shell may be non-visible / zero-width; no page bodies.
   EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody")),
             nullptr);
   EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryPageBody")),
             nullptr);
-  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail")), nullptr);
 
   // Re-open History, then round-trip Library and confirm in-memory page survives
   // the editor Loader teardown/recreate.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   loaded->host.workspace_router()->OpenLibrary();
   ProcessEvents(40);
   loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
@@ -1933,14 +1933,41 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
                                       static_cast<uint>(image.file_id_),
                                       static_cast<uint>(image.image_id_)));
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   auto* panel_after =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel_after, nullptr);
   EXPECT_TRUE(panel_after->isVisible());
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  loaded->window->resize(960, 640);
+  ProcessEvents(40);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  session->set_editor_tool_panel_page(QStringLiteral("nodes"));
+  ProcessEvents(60);
+
+  auto* workspace  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* center_col = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* nodes_body = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(center_col, nullptr);
+  ASSERT_NE(nodes_body, nullptr);
+  EXPECT_EQ(workspace->property("minimumViewportWidth").toInt(), 360);
+  EXPECT_GE(center_col->width(), 360.0 - 1.0);
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("nodes"));
 }
 
 TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) {
@@ -2038,7 +2065,7 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
   loaded->window->resize(900, 700);
   ProcessEvents(60);
 
-  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* center     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   auto* center_col = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
   auto* right     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
@@ -2062,7 +2089,7 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
   ASSERT_NE(history_btn, nullptr);
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(60);
-  EXPECT_EQ(loaded->host.editor_session()->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(loaded->host.editor_session()->editor_tool_panel_page(), QStringLiteral("history"));
   EXPECT_LT(SceneX(left), SceneX(center));
   EXPECT_LT(SceneX(center), SceneX(right));
 
@@ -2122,7 +2149,7 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   EXPECT_EQ(expected_surface, alcedo::ui::AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(expected_border, alcedo::ui::AppTheme::Instance().cardBorderColor());
 
-  auto* rail      = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* rail      = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail"));
   auto* stack     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
   auto* viewport  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
@@ -2165,7 +2192,7 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
   ProcessEvents(40);
   auto* panel =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolPanel"));
   ASSERT_NE(panel, nullptr);
   EXPECT_TRUE(panel->isVisible());
 }
@@ -2182,12 +2209,15 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
   auto* versions_btn =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
+  auto* nodes_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesRailButton"));
   auto* tone_nav =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_tone"));
   auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(history_btn, nullptr);
   ASSERT_NE(versions_btn, nullptr);
+  ASSERT_NE(nodes_btn, nullptr);
   ASSERT_NE(tone_nav, nullptr);
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
@@ -2197,6 +2227,8 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   EXPECT_NEAR(history_btn->height(), 40.0, 0.5);
   EXPECT_NEAR(versions_btn->width(), 40.0, 0.5);
   EXPECT_NEAR(versions_btn->height(), 40.0, 0.5);
+  EXPECT_NEAR(nodes_btn->width(), 40.0, 0.5);
+  EXPECT_NEAR(nodes_btn->height(), 40.0, 0.5);
 
   // Rails and dense adjustment navigation share compact icon geometry.
   EXPECT_EQ(history_btn->property("opticalSize").toInt(),
@@ -2212,6 +2244,7 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   // Accessible names / tooltips present on structural actions.
   EXPECT_FALSE(history_btn->property("actionName").toString().isEmpty());
   EXPECT_FALSE(versions_btn->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(nodes_btn->property("actionName").toString().isEmpty());
   EXPECT_FALSE(tone_nav->property("actionName").toString().isEmpty());
   EXPECT_FALSE(library_nav->property("actionName").toString().isEmpty());
   EXPECT_FALSE(editor_nav->property("actionName").toString().isEmpty());
@@ -2232,7 +2265,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspaceRail"));
   auto* session = loaded->host.editor_session();
   ASSERT_NE(rail, nullptr);
   ASSERT_NE(session, nullptr);
@@ -2244,7 +2277,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ASSERT_GT(panel_width, 0);
 
   // Start collapsed.
-  session->set_history_panel_page(QString());
+  session->set_editor_tool_panel_page(QString());
   ProcessEvents(20);
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
@@ -2264,11 +2297,11 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_NEAR(rail->property("totalWidth").toReal(), mid_w, 1.5);
 
   // Open session page and complete the fold.
-  session->set_history_panel_page(QStringLiteral("history"));
+  session->set_editor_tool_panel_page(QStringLiteral("history"));
   ProcessEvents(10);
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("history"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
@@ -2276,9 +2309,9 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   // Layout width follows the driven progress (viewport grows with the fold).
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
-  session->set_history_panel_page(QString());
+  session->set_editor_tool_panel_page(QString());
   ProcessEvents(10);
-  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
   EXPECT_NEAR(rail->width(), mid_w, 1.5);
 
@@ -2290,14 +2323,14 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   // Release driver and re-open with reduced motion → terminal bounds.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "endFoldDrive"));
   ProcessEvents(10);
-  session->set_history_panel_page(QStringLiteral("versions"));
+  session->set_editor_tool_panel_page(QStringLiteral("versions"));
   ProcessEvents(40);
-  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("versions"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
   // Rail identity preserved.
-  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail")), nullptr);
 }
 
 TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeometry) {
@@ -2708,7 +2741,7 @@ TEST_F(WorkspaceShellTests, DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpa
   EXPECT_EQ(shell_color, alcedo::ui::AppTheme::Instance().cardSurfaceColor())
       << "Right panel shell must stay on the shared card surface when disabled";
 
-  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorToolRail"));
   ASSERT_NE(rail, nullptr);
   const QColor rail_color = rail->property("color").value<QColor>();
   EXPECT_EQ(rail_color.alpha(), 255);
@@ -2733,7 +2766,8 @@ TEST_F(WorkspaceShellTests, HistoryRailButtonsAreSquareWithSquareVisibleChrome) 
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  for (const char* name : {"editorHistoryRailButton", "editorVersionsRailButton"}) {
+  for (const char* name :
+       {"editorHistoryRailButton", "editorVersionsRailButton", "editorNodesRailButton"}) {
     auto* btn = loaded->window->findChild<QQuickItem*>(QString::fromUtf8(name));
     ASSERT_NE(btn, nullptr) << name;
     EXPECT_NEAR(btn->width(), btn->height(), 0.5) << name << " hit target not square";

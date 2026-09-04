@@ -507,6 +507,13 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   return snapshot;
 }
 
+auto EditorSessionService::pipeline_document() const -> const PipelineDocument* {
+  if (!dependencies_.pipeline || !lifecycle_.has_image()) {
+    return nullptr;
+  }
+  return dependencies_.pipeline->CurrentDocument(lifecycle_.identity().element_id);
+}
+
 auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
     return {};

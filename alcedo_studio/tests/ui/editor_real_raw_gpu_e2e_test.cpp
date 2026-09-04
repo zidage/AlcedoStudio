@@ -7,10 +7,12 @@
 #include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlExtensionPlugin>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTimer>
+#include <QuickQanava>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -28,6 +30,8 @@
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/qt_test_plugin_paths.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace alcedo::ui::test {
 namespace {
@@ -152,6 +156,7 @@ TEST_F(EditorRealRawGpuE2eTest, RealRawGpuFramesRemainReadyAcrossSustainedImageS
 #ifdef ALCEDO_QT_QML_IMPORT_PATH
   engine.addImportPath(QStringLiteral(ALCEDO_QT_QML_IMPORT_PATH));
 #endif
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);

@@ -12,7 +12,7 @@ import Alcedo.Main 1.0
 // icon column stays put; the panel host clips a full-width body.
 Item {
     id: root
-    objectName: "editorHistoryVersionsRail"
+    objectName: "editorWorkspaceRail"
 
     property var theme: null
     property var host: null
@@ -46,11 +46,17 @@ Item {
     readonly property int panelRadius: theme ? theme.panelRadius : appTheme.panelRadius
 
     readonly property string activePage: editorSession
-                                         ? String(editorSession.historyPanelPage || "")
+                                         ? String(editorSession.editorToolPanelPage || "")
                                          : ""
-    readonly property bool panelExpanded: activePage === "history" || activePage === "versions"
+    readonly property bool panelExpanded: activePage === "history"
+                                          || activePage === "versions"
+                                          || activePage === "nodes"
     readonly property int railWidth: 48
-    readonly property int expandedPanelWidth: appTheme.editorSidePanelWidth
+    readonly property int expandedPanelWidth: {
+        if (activePage === "nodes")
+            return nodesLayoutStore.preferredPanelWidth
+        return appTheme.editorSidePanelWidth
+    }
     readonly property int panelGap: appTheme.spaceSm
 
     // Visual fold progress (0 closed → 1 open). Drives layout width + body
@@ -64,7 +70,7 @@ Item {
     readonly property real panelRevealWidth: (panelGap + expandedPanelWidth) * panelOpenProgress
     readonly property real totalWidth: railWidth + panelRevealWidth
     readonly property string bodyPage: {
-        if (activePage === "history" || activePage === "versions")
+        if (activePage === "history" || activePage === "versions" || activePage === "nodes")
             return activePage
         return _lastBodyPage
     }
@@ -96,6 +102,15 @@ Item {
         editorSession: root.editorSession
     }
 
+    EditorNodeController {
+        id: nodesController
+        editorSession: root.editorSession
+    }
+
+    EditorNodeLayoutStore {
+        id: nodesLayoutStore
+    }
+
     function driveFoldProgress(value) {
         foldManualDrive = true
         panelOpenProgress = Math.max(0, Math.min(1, value))
@@ -108,10 +123,10 @@ Item {
 
     function selectPage(page) {
         if (!editorSession) return
-        if (String(editorSession.historyPanelPage || "") === page) {
-            editorSession.historyPanelPage = ""
+        if (String(editorSession.editorToolPanelPage || "") === page) {
+            editorSession.editorToolPanelPage = ""
         } else {
-            editorSession.historyPanelPage = page
+            editorSession.editorToolPanelPage = page
         }
     }
 
@@ -145,7 +160,7 @@ Item {
         // Keep the last non-empty page so a closing fold can clip that body
         // until panelOpenProgress reaches 0.
         captureBodyScroll()
-        if (activePage === "history" || activePage === "versions")
+        if (activePage === "history" || activePage === "versions" || activePage === "nodes")
             _lastBodyPage = activePage
     }
 
@@ -171,7 +186,7 @@ Item {
 
     Rectangle {
         id: rail
-        objectName: "editorHistoryRail"
+        objectName: "editorToolRail"
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
@@ -228,6 +243,26 @@ Item {
             }
 
             IconActionButton {
+                id: nodesRailButton
+                objectName: "editorNodesRailButton"
+                compact: true
+                enabled: true
+                selected: root.activePage === "nodes"
+                selectedOutline: true
+                selectedOutlineColor: root.colText
+                iconSrc: "qrc:/panel_icons/nodes.svg"
+                iconColorDefault: selected ? root.colText : root.colMuted
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: root.colCardSurface
+                focusRingColor: root.colText
+                actionName: selected ? qsTr("Hide Nodes") : qsTr("Show Nodes")
+                onClicked: root.selectPage("nodes")
+            }
+
+            IconActionButton {
                 id: backgroundTasksRailButton
                 objectName: "editorBackgroundTasksRailButton"
                 compact: true
@@ -249,7 +284,7 @@ Item {
     // so the viewport reflows with the fold (filmstrip mode).
     Item {
         id: historyPanelHost
-        objectName: "editorHistoryVersionsPanelHost"
+        objectName: "editorToolPanelHost"
         anchors.left: rail.right
         anchors.leftMargin: root.panelGap * root.panelOpenProgress
         anchors.top: parent.top
@@ -261,7 +296,7 @@ Item {
 
         Rectangle {
             id: historyPanel
-            objectName: "editorHistoryVersionsPanel"
+            objectName: "editorToolPanel"
             width: root.expandedPanelWidth
             height: parent.height
             x: 0
@@ -272,16 +307,23 @@ Item {
 
             Loader {
                 id: panelBodyLoader
-                objectName: "editorHistoryVersionsBodyLoader"
+                objectName: "editorToolBodyLoader"
                 anchors.fill: parent
                 // Keep the last body mounted while a close fold is in flight.
-                // A fully closed rail (progress ≈ 0) owns no list delegates.
+                // A fully closed rail (progress ≈ 0) owns no list or graph delegates.
                 active: root.layoutExpanded
-                        && (root.bodyPage === "history" || root.bodyPage === "versions")
+                        && (root.bodyPage === "history" || root.bodyPage === "versions"
+                            || root.bodyPage === "nodes")
                 asynchronous: false
-                sourceComponent: root.bodyPage === "history" ? historyBodyComponent
-                                 : (root.bodyPage === "versions" ? versionsBodyComponent
-                                                                   : null)
+                sourceComponent: {
+                    if (root.bodyPage === "history")
+                        return historyBodyComponent
+                    if (root.bodyPage === "versions")
+                        return versionsBodyComponent
+                    if (root.bodyPage === "nodes")
+                        return nodesBodyComponent
+                    return null
+                }
 
                 onLoaded: {
                     root._panelBodyCreateCount += 1
@@ -319,6 +361,19 @@ Item {
             Component.onDestruction: {
                 if (root._lastBodyPage === "versions" && listContentY !== undefined)
                     root.versionsListContentY = Number(listContentY || 0)
+                root._panelBodyDestroyCount += 1
+            }
+        }
+    }
+
+    Component {
+        id: nodesBodyComponent
+        EditorNodesPanel {
+            theme: root.theme
+            editorSession: root.editorSession
+            nodeController: nodesController
+            nodeLayoutStore: nodesLayoutStore
+            Component.onDestruction: {
                 root._panelBodyDestroyCount += 1
             }
         }

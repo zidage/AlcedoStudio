@@ -22,6 +22,7 @@
 namespace alcedo {
 
 class Hash128;
+class PipelineDocument;
 struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
 struct AdjustmentTransferPackage;
@@ -50,6 +51,12 @@ class IEditorPipelinePort {
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorPipelineGuardHandle                             = 0;
   virtual void Release(const EditorPipelineGuardHandle& guard) = 0;
+  /// Live PipelineDocument for the Nodes-page projection. Null when the image
+  /// has no loaded guard. Default fakes return nullptr.
+  [[nodiscard]] virtual auto CurrentDocument(sl_element_id_t /*element_id*/) const
+      -> const PipelineDocument* {
+    return nullptr;
+  }
 };
 
 class IEditorHistoryPort {

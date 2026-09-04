@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.4 complete; NM5.5–NM5.8 planned
+Status: NM5.1–NM5.5 complete; NM5.6–NM5.8 planned
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -1536,6 +1536,167 @@ Plan to modify:
 
 Record the date, pinned navigation API, commands, test count, success chain, and failure chain here.
 
+##### NM5.5 completion record (2026-09-03)
+
+**Status:** complete — Nodes is the third expandable tool-rail page. History,
+Versions, and Nodes share one Loader and one `editorToolPanelPage` key
+(`""` / `history` / `versions` / `nodes`). `EditorNodeController` owns
+`selectedNodeId` and publishes the immutable projection.
+`EditorNodeLayoutStore` owns view position, zoom, node positions, Mask-drawer
+open state, selection, and preferred panel width, keyed by project, image, and
+Version. A full close destroys GraphView delegates. Reopen and Version checkout
+restore local layout. Graph movement, Fit, and drawer folds do not write
+`PipelineDocument` or start a photo render. Add/Rename/Delete remain disabled
+until later work.
+
+**Revision:** base repository revision `a74dfe9c` (`NM5.4`), branch
+`feature/nodes-panel-rail-selection-layout`. QuickQanava remains submodule tag
+`2.50` at `56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`.
+
+**Pinned navigation API:**
+
+```text
+Qan.GraphView.navigable
+Qan.GraphView.fitContentInView()
+Qan.GraphView.zoom / containerItem / navigated / nodeClicked / rightClicked
+Qan.GraphView.selectionRectEnabled = false
+Qan.LineGrid via GraphView.grid / gridThickColor
+qan::Graph::setMultipleSelectionEnabled(false)
+qan::Graph::clearSelection / setNodeSelected
+qan::Graph::nodeMoved
+qan::Navigable::moveTo / centerOnPosition
+```
+
+**Primary success call chain:**
+
+```text
+Nodes rail action
+  -> EditorSessionController.editorToolPanelPage = "nodes"
+  -> existing fold opens the body
+  -> Loader creates EditorNodesPanel
+  -> EditorNodeController.refreshFromSession
+  -> EditorNodeGraphProjection::Build
+  -> AlcedoQanGraph::ApplySnapshot
+  -> EditorNodeLayoutStore.activate + EnsureDefaultPositions
+  -> GraphView zoom / pan / node positions / drawerOpen / one-node selection
+```
+
+```text
+documented Qan node click
+  -> AlcedoQanGraph.liveNodeId
+  -> EditorNodeController.selectNode
+  -> selectedNodeId changes
+  -> AlcedoQanGraph.applyProductSelection (one Qan selected node)
+```
+
+**Primary failure call chain:**
+
+```text
+stale session generation snapshot
+  -> EditorNodeController.PublishSnapshot rejects
+  -> live snapshot, selection, layout store, and Qan graph unchanged
+  -> lastError reports the real generation mismatch
+```
+
+```text
+unknown NodeId or Ctrl-click extra node
+  -> selectNode fails closed or replaces the one product selection
+  -> Qan multipleSelectionEnabled is false
+  -> product selectedNodeId remains a single NodeId
+```
+
+**Pinned API differences:**
+
+- Website Graph View samples leave `multipleSelectionEnabled` true and show a
+  Material-blue selection rectangle. Alcedo sets `multipleSelectionEnabled`
+  false and `selectionRectEnabled` false. Product selection is the controller
+  NodeId; the Alcedo card outline is the visible selected state.
+- `qan::Graph::setSelectionDelegate` is protected in pinned 2.50. QML sets
+  `selectionDelegate: null` on `Qan.Graph`. C++ does not call the protected
+  setter.
+- Official `GraphView.qml` ships AlwaysOn scrollbars and an origin cross.
+  The Nodes canvas turns both off. Fit uses pinned `fitContentInView()`.
+- Website `QuickQanava::initialize()` remains `initialize(QQmlEngine*)` as
+  recorded in NM5.1. Rail QML tests must add `qrc:/` to the engine import path
+  before initialize, or `Qan.LineGrid` does not resolve.
+- `EditorWorkspaceRail` owns a typed `Component { EditorNodesPanel { } }`.
+  QML parses that type when `Main.qml` loads, even before the Nodes Loader
+  creates the page. Every executable that loads production `Main.qml` must
+  link `QuickQanavaplugin` and call `QuickQanava::initialize` after
+  `addImportPath("qrc:/")`. Production `main.cpp` already does this. The
+  shared Main.qml test fixture now matches that startup order.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Only `""`, `history`, `versions`, `nodes` accepted | `EditorSessionToolPanelPage.AcceptsOnlyEmptyHistoryVersionsAndNodes` | PASS |
+| History, Versions, and Nodes are mutually exclusive | `EditorNodesPanelQmlTest.HistoryVersionsAndNodesAreMutuallyExclusive` | PASS |
+| Full close leaves no graph delegates | `EditorNodesPanelQmlTest.FullCloseDestroysGraphDelegates` | PASS |
+| Reopen restores positions, view, zoom, selection, drawer | `EditorNodesPanelQmlTest.ReopenRestoresPositionsViewZoomSelectionAndDrawerState` | PASS |
+| Two Versions keep separate layout values | `EditorNodesPanelQmlTest.TwoVersionsKeepSeparateLayoutValues` | PASS |
+| Undo restoration of a NodeId recovers position and drawer | `EditorNodeLayoutStore.RemovedNodeIdKeepsPriorPositionAndDrawerState` | PASS |
+| Ctrl-click cannot create a second product selection | `EditorNodesPanelQmlTest.CtrlClickCannotCreateASecondProductSelection` | PASS |
+| Graph movement and drawer folds do not start photo rendering | `EditorNodesPanelQmlTest.GraphMovementAndDrawerFoldsDoNotStartPhotoRendering` | PASS |
+| `reduceMotion` makes related folds immediate | `EditorNodesPanelQmlTest.ReduceMotionMakesRelatedFoldsImmediate` | PASS |
+| Stale generation snapshot rejected | `EditorNodeController.StaleGenerationSnapshotIsRejected` | PASS |
+| Rail Loader lifecycle (History/Versions) still holds | `EditorHistoryVersionsRailLifecycleQmlTest` | 5/5 PASS |
+| Versions panel after Nodes Component in the rail | `EditorVersionsPanelQmlTest` | 11/11 PASS |
+| History transactions panel after Nodes Component | `EditorHistoryTransactionsPanelQmlTest` | 6/6 PASS |
+| Adapter + delegate regression | `AlcedoQanGraphTest` + `EditorNodeDelegateQmlTest` | 9/9 + 9/9 PASS |
+| Viewer stays ≥ 360 logical pixels at 960×640 | `WorkspaceShellTests.NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640` | PASS |
+| Narrow window keeps left/center/right order | `WorkspaceShellTests.NarrowWindowKeepsSidePanelOrderAndMinViewport` | PASS |
+| Nodes rail button hit/optical/accessible name | `WorkspaceShellTests.StructuralIconActionsExposeHitOpticalAndAccessibleNames` | PASS |
+| History fold driver after Nodes page | `WorkspaceShellTests.HistoryFoldDriverPinsIntermediateAndTerminalGeometry` | PASS |
+| Production Main.qml still loads after Nodes import | `MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest EditorHistoryVersionsRailLifecycleQmlTest EditorVersionsPanelQmlTest EditorHistoryTransactionsPanelQmlTest AlcedoQanGraphTest EditorNodeDelegateQmlTest WorkspaceShellTest MainQmlWorkflowTest --parallel 4
+build/debug/alcedo_studio/tests/ui/EditorNodeSelectionLayoutTest_runtime/EditorNodeSelectionLayoutTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodesPanelQmlTest_runtime/EditorNodesPanelQmlTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorHistoryVersionsRailLifecycleQmlTest_runtime/EditorHistoryVersionsRailLifecycleQmlTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorVersionsPanelQmlTest_runtime/EditorVersionsPanelQmlTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorHistoryTransactionsPanelQmlTest_runtime/EditorHistoryTransactionsPanelQmlTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/MainQmlWorkflowTest_runtime/MainQmlWorkflowTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/WorkspaceShellTest_runtime/WorkspaceShellTest.exe --gtest_filter=*NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640*:*NarrowWindowKeepsSidePanelOrderAndMinViewport*:*HistoryFoldDriverPinsIntermediateAndTerminalGeometry*:*StructuralIconActionsExposeHitOpticalAndAccessibleNames* --gtest_color=no
+```
+
+Suite totals: **11/11** `EditorNodeSelectionLayoutTest`, **8/8** `EditorNodesPanelQmlTest`,
+**5/5** `EditorHistoryVersionsRailLifecycleQmlTest`, **11/11** `EditorVersionsPanelQmlTest`,
+**6/6** `EditorHistoryTransactionsPanelQmlTest`, **9/9** `AlcedoQanGraphTest`,
+**9/9** `EditorNodeDelegateQmlTest`, **1/1** `MainQmlWorkflowTest`,
+**4/4** filtered `WorkspaceShellTest`. Direct runtime execution: **64/64** on those
+cases. CTest discovery still hits the unrelated `SharedToneCurveTest` lensfun
+entry-point mismatch; binaries were run from their `_runtime` directories.
+
+**Checklist / exit condition:** all NM5.5 work and exit conditions are checked.
+Add, Rename, Delete, and Reconnect are not exposed. The Add header button exists
+and stays disabled.
+
+**LOC note (grill-code-review):** new `EditorNodeLayoutStore` 172+242 lines;
+`EditorNodeController` 145+310; `EditorNodesPanel.qml` 258; focused tests
+88+132+200. Adapter source 732 and header 294 after selection/layout helpers.
+`EditorWorkspaceRail.qml` 345 after the Nodes page and neutral object names.
+`app_theme.cpp` remains above the 1,000-line review threshold (three geometry
+token getters added; no responsibility split in this UI-state change). No new
+source file exceeds 1,000 lines.
+
+**Residual gaps:** NM5.6–NM5.8 still own Add/Rename/Delete, request-only
+Reconnect, accessibility of the full page, and package checks. Backbone
+keyboard methods are unit-tested; QML `Keys.onPressed` for Up/Down/Home/End
+and Ctrl+0 is implemented and Fit is invoked from the panel, but there is no
+QML keyClick assertion. Layout store keys include project id, but the panel
+passes an empty project string because the session has no project-identity
+field; element, image, and Version still separate layouts. The RAW-backed
+`HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavbar` case was not finished
+here because `WaitForInteractiveImage` did not return on this GPU path;
+History/Versions/Nodes exclusivity is proven by `EditorNodesPanelQmlTest`.
+macOS checks were not run on this Windows host. The unrelated CTest discovery
+runtime mismatch remains outside this sub-phase.
+
 ---
 
 ## 13. NM5.6 — Add, Rename, and Delete
@@ -1863,8 +2024,8 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] The production target links the pinned QuickQanava module.
 - [x] Production initializes QuickQanava before QML load.
 - [x] Production remains on Qt Quick Controls Basic.
-- [ ] Nodes is a page in the shared editor tool rail.
-- [ ] History, Versions, and Nodes share one page state and Loader.
+- [x] Nodes is a page in the shared editor tool rail.
+- [x] History, Versions, and Nodes share one page state and Loader.
 - [x] `PipelineDocument` remains the only product graph.
 - [x] The document stores the next default Color Grade name number.
 - [x] A new document names its primary Grade `Color Grade 1`.
@@ -1877,17 +2038,17 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] The user can close and reopen each drawer.
 - [x] Drawer state is local UI state and creates no history or render.
 - [x] Mask rows show only the approved type icon and type label.
-- [ ] The Nodes rail uses the approved `stack-2` path.
+- [x] The Nodes rail uses the approved `stack-2` path.
 - [x] Gradient, Radial, and Brush use the approved paths.
-- [ ] The page contains no unapproved pill, badge, or status dot.
-- [ ] The page contains no `xx · xx` compound label or equivalent substitute.
+- [x] The page contains no unapproved pill, badge, or status dot.
+- [x] The page contains no `xx · xx` compound label or equivalent substitute.
 - [x] Projection uses stable NodeId, MaskId, revisions, and session generation.
 - [x] No Qan pointer survives a generation replacement.
 - [x] Parameter edits do not rebuild the graph.
 - [x] Version checkout publishes the correct projection.
-- [ ] The initial layout is vertical and deterministic.
-- [ ] Node positions, view, zoom, selection, and drawer state are local UI state.
-- [ ] The product allows one selected node.
+- [x] The initial layout is vertical and deterministic.
+- [x] Node positions, view, zoom, selection, and drawer state are local UI state.
+- [x] The product allows one selected node.
 - [ ] Add creates a clean Color Grade.
 - [ ] Rename and Delete use NM4 typed history.
 - [ ] Reconnect uses the official visual connector.
@@ -1899,8 +2060,8 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [ ] All product text uses localization.
 - [ ] All visual values use AppTheme and `DESIGN.md`.
 - [x] Node delegates use no shadow, glow, gradient, or Material style.
-- [ ] Reduced-motion behavior passes.
-- [ ] The viewer keeps its 360 logical-pixel floor at 960×640.
+- [x] Reduced-motion behavior passes.
+- [x] The viewer keeps its 360 logical-pixel floor at 960×640.
 - [ ] Windows build, install, and package checks pass.
 - [ ] macOS build, install, and package checks pass when the environment is available.
 - [ ] Required third-party notices are in the package.

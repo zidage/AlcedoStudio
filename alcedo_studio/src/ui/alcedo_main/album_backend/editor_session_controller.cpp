@@ -1219,7 +1219,7 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   return QStringLiteral("tone");
 }
 
-auto EditorSessionController::NormalizeHistoryPanelPage(const QString& page) -> QString {
+auto EditorSessionController::NormalizeToolPanelPage(const QString& page) -> QString {
   const QString key = page.trimmed().toLower();
   if (key == QLatin1String("history")) {
     return QStringLiteral("history");
@@ -1227,7 +1227,16 @@ auto EditorSessionController::NormalizeHistoryPanelPage(const QString& page) -> 
   if (key == QLatin1String("versions")) {
     return QStringLiteral("versions");
   }
+  if (key == QLatin1String("nodes")) {
+    return QStringLiteral("nodes");
+  }
   return {};
+}
+
+auto EditorSessionController::session_generation() const -> qulonglong { return SessionEpoch(); }
+
+auto EditorSessionController::pipeline_document() const -> const alcedo::PipelineDocument* {
+  return session_backend_ ? session_backend_->pipeline_document() : nullptr;
 }
 
 void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
@@ -1247,12 +1256,12 @@ void EditorSessionController::set_active_adjustment_panel(const QString& panel) 
   emit DesktopUiChanged();
 }
 
-void EditorSessionController::set_history_panel_page(const QString& page) {
-  const QString normalized = NormalizeHistoryPanelPage(page);
-  if (history_panel_page_ == normalized) {
+void EditorSessionController::set_editor_tool_panel_page(const QString& page) {
+  const QString normalized = NormalizeToolPanelPage(page);
+  if (editor_tool_panel_page_ == normalized) {
     return;
   }
-  history_panel_page_ = normalized;
+  editor_tool_panel_page_ = normalized;
   emit DesktopUiChanged();
 }
 
@@ -1260,7 +1269,7 @@ void EditorSessionController::LoadDesktopUiPrefs() {
   QSettings settings;
   active_adjustment_panel_ = NormalizeAdjustmentPanel(
       settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone")).toString());
-  // historyPanelPage is intentionally not restored from disk: collapsed on
+  // editorToolPanelPage is intentionally not restored from disk: collapsed on
   // cold start, but kept in memory across library/editor workspace switches.
 }
 

@@ -27,6 +27,8 @@
 
 namespace alcedo {
 
+class PipelineDocument;
+
 /// Background-task restrictions pushed by the controller or task port into the
 /// session service for action evaluation.
 struct EditorBackgroundActionRestrictions {
@@ -80,6 +82,9 @@ class IEditorSessionBackend {
   /// instead of refreshing on every renderer event.
   [[nodiscard]] virtual auto history_revision() const -> std::uint64_t { return 0; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
+  /// Live PipelineDocument for the Nodes-page projection. Null when the backend
+  /// has no loaded image document. Default fakes return nullptr.
+  [[nodiscard]] virtual auto pipeline_document() const -> const PipelineDocument* { return nullptr; }
 
   /// Optional: notified after state/identity changes from async results.
   virtual void               SetChangeNotifier(ChangeNotifier notifier) {
@@ -321,6 +326,7 @@ class EditorSessionService final : public IEditorSessionBackend {
     return history_revision_.load(std::memory_order_acquire);
   }
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
+  [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
   }

@@ -988,6 +988,12 @@ auto AppTheme::graphSelectionOutlineColor() const -> QColor { return textColor()
 
 auto AppTheme::graphNodeWidth() const -> int { return 220; }
 
+auto AppTheme::graphNodeVerticalGap() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginX() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginY() const -> int { return 48; }
+
 auto AppTheme::graphEndpointHeight() const -> int { return 40; }
 
 auto AppTheme::graphNameRowHeight() const -> int { return 32; }

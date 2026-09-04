@@ -71,7 +71,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
   Q_PROPERTY(int iconButtonHitSizeCompact READ iconButtonHitSizeCompact CONSTANT)
   // Editor side-panel + scope geometry (Phase 4C comfort sizing). The preferred
-  // width unifies the adjustment stack and the History/Versions expanded panel;
+  // width unifies the adjustment stack and the History/Versions/Nodes expanded panel;
   // min/max bound only the adjustment stack. Scope height covers the
   // histogram/waveform slot. See src/ui/alcedo_main/DESIGN.md.
   Q_PROPERTY(int editorSidePanelWidth READ editorSidePanelWidth CONSTANT)
@@ -156,6 +156,9 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor graphPortBorderColor READ graphPortBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphSelectionOutlineColor READ graphSelectionOutlineColor NOTIFY ThemeChanged)
   Q_PROPERTY(int graphNodeWidth READ graphNodeWidth CONSTANT)
+  Q_PROPERTY(int graphNodeVerticalGap READ graphNodeVerticalGap CONSTANT)
+  Q_PROPERTY(int graphNodeOriginX READ graphNodeOriginX CONSTANT)
+  Q_PROPERTY(int graphNodeOriginY READ graphNodeOriginY CONSTANT)
   Q_PROPERTY(int graphEndpointHeight READ graphEndpointHeight CONSTANT)
   Q_PROPERTY(int graphNameRowHeight READ graphNameRowHeight CONSTANT)
   Q_PROPERTY(int graphMaskDrawerHeaderHeight READ graphMaskDrawerHeaderHeight CONSTANT)
@@ -322,6 +325,9 @@ class AppTheme final : public QObject {
   auto graphPortBorderColor() const -> QColor;
   auto graphSelectionOutlineColor() const -> QColor;
   auto graphNodeWidth() const -> int;
+  auto graphNodeVerticalGap() const -> int;
+  auto graphNodeOriginX() const -> int;
+  auto graphNodeOriginY() const -> int;
   auto graphEndpointHeight() const -> int;
   auto graphNameRowHeight() const -> int;
   auto graphMaskDrawerHeaderHeight() const -> int;

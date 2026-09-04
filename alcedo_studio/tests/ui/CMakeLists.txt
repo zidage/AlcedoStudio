@@ -19,6 +19,13 @@ add_compile_definitions(
   ALCEDO_QT_QML_IMPORT_PATH="${ALCEDO_QT_QML_IMPORT_DIR}"
 )
 
+# Production Main.qml now parses EditorNodesPanel, which imports QuickQanava.
+# Executables that load that tree must link the static plugin. Callers still
+# initialize after addImportPath("qrc:/").
+function(alcedo_link_quickqanava_qml target)
+  target_link_libraries(${target} PRIVATE QuickQanava QuickQanavaplugin)
+endfunction()
+
 function(alcedo_deploy_qt_offscreen_platform_plugin target_name)
   if(NOT WIN32 OR NOT TARGET ${target_name})
     return()
@@ -476,6 +483,7 @@ target_compile_definitions(MainQmlWorkflowTest
 )
 alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 alcedo_register_test_target(MainQmlWorkflowTest ui)
+alcedo_link_quickqanava_qml(MainQmlWorkflowTest)
 
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
 add_executable(EditorCheckpointQmlIntegrationTest
@@ -510,6 +518,7 @@ alcedo_ui_gtest_discover_tests(EditorCheckpointQmlIntegrationTest
     TEST_PREFIX "EditorCheckpointQmlIntegrationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy")
 alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
+alcedo_link_quickqanava_qml(EditorCheckpointQmlIntegrationTest)
 add_executable(WorkspaceShellTest
     ${ALCEDO_TEST_ROOT}/ui/workspace_shell_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
@@ -541,6 +550,7 @@ target_compile_definitions(WorkspaceShellTest
 alcedo_ui_gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
   PROPERTIES LABELS "workspace_qml")
 alcedo_register_test_target(WorkspaceShellTest ui)
+alcedo_link_quickqanava_qml(WorkspaceShellTest)
 
 # Phase 7C: horizontal filmstrip model reuse, selection/focus, thumbnail pin
 # lifetime, collapse scroll preservation, busy badges, and context-menu
@@ -654,6 +664,8 @@ target_include_directories(EditorVersionsPanelQmlTest
 target_link_libraries(EditorVersionsPanelQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -685,6 +697,8 @@ target_include_directories(EditorHistoryTransactionsPanelQmlTest
 target_link_libraries(EditorHistoryTransactionsPanelQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -716,6 +730,8 @@ target_include_directories(EditorHistoryVersionsRailLifecycleQmlTest
 target_link_libraries(EditorHistoryVersionsRailLifecycleQmlTest
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         GTest::gtest
         Qt6::Core
         Qt6::Test
@@ -839,6 +855,76 @@ alcedo_ui_gtest_discover_tests(EditorNodeDelegateQmlTest
     TEST_PREFIX "EditorNodeDelegateQmlTest."
     PROPERTIES LABELS "quickqanava;editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeDelegateQmlTest ui)
+
+# Nodes-page selection, layout store, and tool-page key tests (no Qan graph).
+add_executable(EditorNodeSelectionLayoutTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_layout_store_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_node_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorNodeSelectionLayoutTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorNodeSelectionLayoutTest
+    PRIVATE
+        AlbumBackendLib
+        EditorNodeGraphProjection
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodeSelectionLayoutTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorNodeSelectionLayoutTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
+    TEST_PREFIX "EditorNodeSelectionLayoutTest."
+    PROPERTIES LABELS "editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
+
+# Nodes rail page: Loader lifetime, selection, layout restore, Fit, no render.
+add_executable(EditorNodesPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_nodes_panel_qml_test.cpp
+    ${ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS}
+)
+target_include_directories(EditorNodesPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorNodesPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorNodesPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorNodesPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorNodesPanelQmlTest
+    TEST_PREFIX "EditorNodesPanelQmlTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes;workspace_qml")
+alcedo_register_test_target(EditorNodesPanelQmlTest ui)
 
 # Phase 7B: final-display identity stamping, stale-output rejection, and
 # hidden/resume analyzer lifecycle.
@@ -1071,6 +1157,7 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferRealProjectE2eTest
     TEST_PREFIX "EditorAdjustmentTransferRealProjectE2eTest."
     PROPERTIES LABELS "workspace_qml;real_project")
 alcedo_register_test_target(EditorAdjustmentTransferRealProjectE2eTest ui)
+alcedo_link_quickqanava_qml(EditorAdjustmentTransferRealProjectE2eTest)
 
 # Phase 1D: extracted editor action components. Each target loads one QML
 # component from source with only explicit fake collaborators.
@@ -1426,6 +1513,7 @@ target_compile_definitions(EditorRealRawGpuE2eTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
 alcedo_register_test_target(EditorRealRawGpuE2eTest ui)
+alcedo_link_quickqanava_qml(EditorRealRawGpuE2eTest)
 
 if(WIN32 AND ALCEDO_CUDA_ENABLED)
   add_test(NAME EditorRealRawGpuE2eTest.CudaSustainedImageSwitches
@@ -1507,3 +1595,4 @@ alcedo_ui_gtest_discover_tests(EditorCheckpointNavigationTest
     TEST_PREFIX "EditorCheckpointNavigationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy;integration")
 alcedo_register_test_target(EditorCheckpointNavigationTest ui)
+alcedo_link_quickqanava_qml(EditorCheckpointNavigationTest)
