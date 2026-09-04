@@ -357,6 +357,7 @@ Do not put raw graph colors in QML.
 | `graphNodeOriginY` | 48 | First-layout top origin |
 | `graphEndpointHeight` | 40 | Develop / DRT/Post height |
 | `graphNameRowHeight` | 32 | Color Grade name row |
+| `graphNameRowDividerHeight` | 1 | Hairline between name row and Masks drawer |
 | `graphMaskDrawerHeaderHeight` | 28 | `Masks` disclosure header |
 | `graphMaskRowHeight` | 28 | One Mask type row |
 | `graphPortSize` | 8 | Visible square port |

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -233,6 +234,9 @@ auto ChangeKindFromText(std::string_view text) -> PipelineEditChangeKind {
   }
   if (text == "reconnect_color_grade") {
     return PipelineEditChangeKind::ReconnectColorGrade;
+  }
+  if (text == "node_graph_topology_change") {
+    return PipelineEditChangeKind::NodeGraphTopologyChange;
   }
   if (text == "add_mask") {
     return PipelineEditChangeKind::AddMask;
@@ -543,6 +547,94 @@ void ValidateReconnect(const ReconnectColorGradeChange& change) {
                        "ReconnectColorGrade after_outgoing_edge");
 }
 
+auto RequireNonNegativeUint32(const nlohmann::json& json, const char* key, std::string_view context)
+    -> std::uint32_t {
+  const auto& value = json.at(key);
+  if (value.is_number_unsigned()) {
+    return value.get<std::uint32_t>();
+  }
+  if (value.is_number_integer() && value.get<std::int64_t>() >= 0) {
+    return static_cast<std::uint32_t>(value.get<std::int64_t>());
+  }
+  Fail(std::string{context} + ": '" + key + "' must be a non-negative integer");
+}
+
+auto EdgeIdentityKey(const PipelineSceneEdge& edge) -> std::string {
+  return std::string{edge.from_node.Value()} + "/" + std::string{edge.from_port.Value()} + "->" +
+         std::string{edge.to_node.Value()} + "/" + std::string{edge.to_port.Value()};
+}
+
+void ValidateNodeGraphTopology(const NodeGraphTopologyChange& change) {
+  if (change.before_next_color_grade_name_number == 0 ||
+      change.after_next_color_grade_name_number == 0) {
+    Fail("NodeGraphTopologyChange: name-counter values must be positive");
+  }
+  if (change.after_next_color_grade_name_number < change.before_next_color_grade_name_number) {
+    Fail("NodeGraphTopologyChange: after name-counter cannot be smaller than before");
+  }
+  if (change.inserted_nodes.empty() && change.removed_nodes.empty() &&
+      change.disconnected_edges.empty() && change.connected_edges.empty() &&
+      change.before_next_color_grade_name_number == change.after_next_color_grade_name_number) {
+    Fail("NodeGraphTopologyChange: net delta must not be empty");
+  }
+
+  std::set<std::string> inserted_ids;
+  std::set<std::uint32_t> inserted_indexes;
+  for (const auto& item : change.inserted_nodes) {
+    const auto node = CanonicalColorGradeNodeJson(item.node, "NodeGraphTopologyChange inserted node");
+    const auto id   = node.at("id").get<std::string>();
+    if (!inserted_ids.insert(id).second) {
+      Fail("NodeGraphTopologyChange: duplicate inserted NodeId");
+    }
+    if (!inserted_indexes.insert(item.final_node_index).second) {
+      Fail("NodeGraphTopologyChange: duplicate inserted node index");
+    }
+  }
+  std::set<std::string> removed_ids;
+  std::set<std::uint32_t> removed_indexes;
+  for (const auto& item : change.removed_nodes) {
+    const auto node = CanonicalColorGradeNodeJson(item.node, "NodeGraphTopologyChange removed node");
+    const auto id   = node.at("id").get<std::string>();
+    if (!removed_ids.insert(id).second) {
+      Fail("NodeGraphTopologyChange: duplicate removed NodeId");
+    }
+    if (inserted_ids.contains(id)) {
+      Fail("NodeGraphTopologyChange: NodeId is both inserted and removed");
+    }
+    if (!removed_indexes.insert(item.original_node_index).second) {
+      Fail("NodeGraphTopologyChange: duplicate removed node index");
+    }
+  }
+  std::set<std::string> disconnected_keys;
+  std::set<std::uint32_t> disconnected_indexes;
+  for (const auto& item : change.disconnected_edges) {
+    if (item.edge.from_node.Empty() || item.edge.to_node.Empty()) {
+      Fail("NodeGraphTopologyChange: disconnected edge endpoints are required");
+    }
+    const auto key = EdgeIdentityKey(item.edge);
+    if (!disconnected_keys.insert(key).second) {
+      Fail("NodeGraphTopologyChange: duplicate disconnected edge");
+    }
+    if (!disconnected_indexes.insert(item.original_edge_index).second) {
+      Fail("NodeGraphTopologyChange: duplicate disconnected edge index");
+    }
+  }
+  std::set<std::string> connected_keys;
+  std::set<std::uint32_t> connected_indexes;
+  for (const auto& item : change.connected_edges) {
+    if (item.edge.from_node.Empty() || item.edge.to_node.Empty()) {
+      Fail("NodeGraphTopologyChange: connected edge endpoints are required");
+    }
+    const auto key = EdgeIdentityKey(item.edge);
+    if (!connected_keys.insert(key).second) {
+      Fail("NodeGraphTopologyChange: duplicate connected edge");
+    }
+    if (!connected_indexes.insert(item.final_edge_index).second) {
+      Fail("NodeGraphTopologyChange: duplicate connected edge index");
+    }
+  }
+}
+
 void ValidateMaskOwner(const NodeId& node_id, const MaskId& mask_id, std::string_view context) {
   if (node_id.Empty() || mask_id.Empty()) {
     Fail(std::string{context} + ": node_id and mask_id are required");
@@ -634,6 +726,8 @@ void ValidateChange(const PipelineEditChange& change) {
           ValidateReplaceMaskSource(typed);
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
           ValidateReplaceMaskAsset(typed);
+        } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
+          ValidateNodeGraphTopology(typed);
         } else {
           ValidateSetMaskField(typed);
         }
@@ -643,7 +737,7 @@ void ValidateChange(const PipelineEditChange& change) {
 
 auto ChangeCompatible(PipelineEditOperationKind operation, PipelineEditChangeKind change) -> bool {
   if (operation == PipelineEditOperationKind::Paste) {
-    return true;
+    return change != PipelineEditChangeKind::NodeGraphTopologyChange;
   }
   switch (operation) {
     case PipelineEditOperationKind::SetParameter:
@@ -671,7 +765,9 @@ auto ChangeCompatible(PipelineEditOperationKind operation, PipelineEditChangeKin
     case PipelineEditOperationKind::SetMaskField:
       return change == PipelineEditChangeKind::SetMaskField;
     case PipelineEditOperationKind::Paste:
-      return true;
+      return change != PipelineEditChangeKind::NodeGraphTopologyChange;
+    case PipelineEditOperationKind::EditNodeGraph:
+      return change == PipelineEditChangeKind::NodeGraphTopologyChange;
   }
   return false;
 }
@@ -758,6 +854,33 @@ auto ChangeToJson(const PipelineEditChange& change) -> nlohmann::json {
                   {"kind", "replace_mask_asset"},
                   {"mask_id", std::string{typed.mask_id.Value()}},
                   {"node_id", std::string{typed.node_id.Value()}}};
+        } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
+          nlohmann::json inserted = nlohmann::json::array();
+          for (const auto& item : typed.inserted_nodes) {
+            inserted.push_back({{"final_node_index", item.final_node_index}, {"node", item.node}});
+          }
+          nlohmann::json removed = nlohmann::json::array();
+          for (const auto& item : typed.removed_nodes) {
+            removed.push_back(
+                {{"node", item.node}, {"original_node_index", item.original_node_index}});
+          }
+          nlohmann::json disconnected = nlohmann::json::array();
+          for (const auto& item : typed.disconnected_edges) {
+            disconnected.push_back({{"edge", EdgeToJson(item.edge)},
+                                    {"original_edge_index", item.original_edge_index}});
+          }
+          nlohmann::json connected = nlohmann::json::array();
+          for (const auto& item : typed.connected_edges) {
+            connected.push_back(
+                {{"edge", EdgeToJson(item.edge)}, {"final_edge_index", item.final_edge_index}});
+          }
+          return {{"after_next_color_grade_name_number", typed.after_next_color_grade_name_number},
+                  {"before_next_color_grade_name_number", typed.before_next_color_grade_name_number},
+                  {"connected_edges", std::move(connected)},
+                  {"disconnected_edges", std::move(disconnected)},
+                  {"inserted_nodes", std::move(inserted)},
+                  {"kind", "node_graph_topology_change"},
+                  {"removed_nodes", std::move(removed)}};
         } else {
           return {{"after_value", typed.after_value},
                   {"before_value", typed.before_value},
@@ -960,6 +1083,63 @@ auto ChangeFromJson(const nlohmann::json& json) -> PipelineEditChange {
       ValidateSetMaskField(change);
       return change;
     }
+    case PipelineEditChangeKind::NodeGraphTopologyChange: {
+      RequireExactObjectKeys(json,
+                             {"after_next_color_grade_name_number",
+                              "before_next_color_grade_name_number", "connected_edges",
+                              "disconnected_edges", "inserted_nodes", "kind", "removed_nodes"},
+                             "NodeGraphTopologyChange");
+      if (!json.at("inserted_nodes").is_array() || !json.at("removed_nodes").is_array() ||
+          !json.at("disconnected_edges").is_array() || !json.at("connected_edges").is_array()) {
+        Fail("NodeGraphTopologyChange: node and edge lists must be arrays");
+      }
+      NodeGraphTopologyChange change;
+      change.before_next_color_grade_name_number = RequirePositiveUint64(
+          json, "before_next_color_grade_name_number", "NodeGraphTopologyChange");
+      change.after_next_color_grade_name_number = RequirePositiveUint64(
+          json, "after_next_color_grade_name_number", "NodeGraphTopologyChange");
+      for (const auto& item : json.at("inserted_nodes")) {
+        RequireExactObjectKeys(item, {"final_node_index", "node"},
+                               "NodeGraphTopologyChange inserted node");
+        NodeGraphInsertedNode inserted;
+        inserted.final_node_index =
+            RequireNonNegativeUint32(item, "final_node_index", "NodeGraphTopologyChange");
+        inserted.node =
+            CanonicalColorGradeNodeJson(item.at("node"), "NodeGraphTopologyChange inserted node");
+        change.inserted_nodes.push_back(std::move(inserted));
+      }
+      for (const auto& item : json.at("removed_nodes")) {
+        RequireExactObjectKeys(item, {"node", "original_node_index"},
+                               "NodeGraphTopologyChange removed node");
+        NodeGraphRemovedNode removed;
+        removed.original_node_index =
+            RequireNonNegativeUint32(item, "original_node_index", "NodeGraphTopologyChange");
+        removed.node =
+            CanonicalColorGradeNodeJson(item.at("node"), "NodeGraphTopologyChange removed node");
+        change.removed_nodes.push_back(std::move(removed));
+      }
+      for (const auto& item : json.at("disconnected_edges")) {
+        RequireExactObjectKeys(item, {"edge", "original_edge_index"},
+                               "NodeGraphTopologyChange disconnected edge");
+        NodeGraphDisconnectedEdge disconnected;
+        disconnected.original_edge_index =
+            RequireNonNegativeUint32(item, "original_edge_index", "NodeGraphTopologyChange");
+        disconnected.edge =
+            EdgeFromJson(item.at("edge"), "NodeGraphTopologyChange disconnected edge");
+        change.disconnected_edges.push_back(std::move(disconnected));
+      }
+      for (const auto& item : json.at("connected_edges")) {
+        RequireExactObjectKeys(item, {"edge", "final_edge_index"},
+                               "NodeGraphTopologyChange connected edge");
+        NodeGraphConnectedEdge connected;
+        connected.final_edge_index =
+            RequireNonNegativeUint32(item, "final_edge_index", "NodeGraphTopologyChange");
+        connected.edge = EdgeFromJson(item.at("edge"), "NodeGraphTopologyChange connected edge");
+        change.connected_edges.push_back(std::move(connected));
+      }
+      ValidateNodeGraphTopology(change);
+      return change;
+    }
   }
   Fail("PipelineEditChange: unhandled kind");
 }
@@ -1001,6 +1181,8 @@ auto PipelineEditOperationKindText(PipelineEditOperationKind kind) -> std::strin
       return "set_mask_field";
     case PipelineEditOperationKind::Paste:
       return "paste";
+    case PipelineEditOperationKind::EditNodeGraph:
+      return "edit_node_graph";
   }
   Fail("PipelineEditOperationKind: unknown enum value");
 }
@@ -1045,6 +1227,9 @@ auto PipelineEditOperationKindFromText(std::string_view text) -> PipelineEditOpe
   if (text == "paste") {
     return PipelineEditOperationKind::Paste;
   }
+  if (text == "edit_node_graph") {
+    return PipelineEditOperationKind::EditNodeGraph;
+  }
   Fail("PipelineEditOperationKind: unknown operation_kind '" + std::string{text} + "'");
 }
 
@@ -1074,6 +1259,8 @@ auto PipelineEditChangeKindText(PipelineEditChangeKind kind) -> std::string_view
       return "replace_mask_asset";
     case PipelineEditChangeKind::SetMaskField:
       return "set_mask_field";
+    case PipelineEditChangeKind::NodeGraphTopologyChange:
+      return "node_graph_topology_change";
   }
   Fail("PipelineEditChangeKind: unknown enum value");
 }
@@ -1104,6 +1291,8 @@ auto PipelineEditChangeKindOf(const PipelineEditChange& change) -> PipelineEditC
           return PipelineEditChangeKind::ReplaceMaskSource;
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
           return PipelineEditChangeKind::ReplaceMaskAsset;
+        } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
+          return PipelineEditChangeKind::NodeGraphTopologyChange;
         } else {
           return PipelineEditChangeKind::SetMaskField;
         }
@@ -1266,6 +1455,16 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
           row.mask_id              = std::string{typed.mask_id.Value()};
           row.before_display_value = typed.before_source;
           row.after_display_value  = typed.after_source;
+        } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
+          if (!typed.inserted_nodes.empty()) {
+            row.node_id             = StringArg(typed.inserted_nodes.front().node, "id");
+            row.node_display_name   = StringArg(typed.inserted_nodes.front().node, "display_name");
+            row.after_display_value = typed.inserted_nodes.front().node;
+          } else if (!typed.removed_nodes.empty()) {
+            row.node_id             = StringArg(typed.removed_nodes.front().node, "id");
+            row.node_display_name   = StringArg(typed.removed_nodes.front().node, "display_name");
+            row.before_display_value = typed.removed_nodes.front().node;
+          }
         } else {
           row.node_id              = std::string{typed.node_id.Value()};
           row.mask_id              = std::string{typed.mask_id.Value()};

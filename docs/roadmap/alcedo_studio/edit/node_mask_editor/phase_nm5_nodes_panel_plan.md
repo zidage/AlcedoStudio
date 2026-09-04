@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.6 complete; NM5.7–NM5.8 planned
+Status: NM5.1–NM5.7R complete; NM5.8 follows NM5.7R
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -647,6 +647,7 @@ Remove and Rename do not modify the counter. Reinsertion from stored JSON does n
 | NM5.5 | Rail, navigation, selection, and layout state | Graph: `Graph View`, `Grid`; Nodes: `Node Resizing`, `Selection`; Utilities: `Navigable`; Samples: `Navigable Area: 'navigable'`, `Topology Sample: 'topology'` |
 | NM5.6 | Add, Rename, and Delete | Graph: `Data Model`; Nodes: `Adding content`, `Observing Topology`, `Selection`; Advanced: `Observation of Topological Modifications` |
 | NM5.7 | Request-only visual connector and Reconnect | Nodes: `Docks and Ports`; Edges: `Visual creation of edges`, `Visual Connectors`, `Custom Connectors` |
+| NM5.7R | Incremental draft topology and atomic automatic submission | Nodes: `Docks and Ports`, `Observing Topology`; Edges: `Visual creation of edges`, `Visual Connectors`, `Custom Connectors`; Advanced: `Defining Custom Topology`, `Observation of Topological Modifications` |
 | NM5.8 | Lifecycle, accessibility, build, install, and package checks | Installation; Graph: `QuickQanava Initialization`, `Graph View`; API Reference notice; Licence |
 
 Each sub-phase can use one or more PRs. Every PR must build and test its completed scope.
@@ -2162,28 +2163,716 @@ Verify the pinned forms of:
 
 ### 14.7 Completion record
 
-Record the date, pinned connector properties, commands, test count, success chain, and failure
-chain here.
+##### NM5.7 completion record (2026-09-04)
+
+**Status:** complete — the Nodes page enables the pinned QuickQanava visual connector in
+request-only mode. Only the selected Color Grade can start a move. A drop is resolved through
+generation-checked identity maps, the moving Grade is removed from an in-memory backbone order,
+and NM4 `ReconnectColorGrade` runs with the computed predecessor and successor. Permanent Qan
+edges update only after the accepted projection is published.
+
+**Revision and branch:** base repository revision `dcd9dce8` (`origin/main` with NM5.6 merged),
+branch `feature/nodes-panel-visual-connector-reconnect`.
+
+**Pinned connector properties (QuickQanava 2.50 `56bdf78d`):**
+
+| Property / signal | Pinned value used |
+| --- | --- |
+| `connectorEnabled` | `true` (pinned header default is `false`; website text says default `true`) |
+| `connectorCreateDefaultEdge` | `false` |
+| `connectorRequestEdgeCreation(src, dst, srcPort, dstPort)` | request-only path; official website omits the port arguments present in 2.50 |
+| `connectorEdgeColor` | `AppTheme.graphCandidateEdgeColor` |
+| `connectorColor` | `AppTheme.graphPortBorderColor` |
+| selected Color Grade `connectable` | `OutConnectable`; connector `sourcePort` is the bottom `image` output |
+| other Color Grades | `InConnectable` |
+| Develop | `UnConnectable` (no incoming move target) |
+| DRT/Post | `InConnectable` (no outgoing move source) |
+
+**Primary success call chain:**
+
+```text
+user drags the official visual connector from the selected Color Grade
+  -> Qan shows a temporary connector (no default insertEdge)
+  -> connectorRequestEdgeCreation(src, dst, srcPort, dstPort)
+  -> AlcedoQanGraph resolves live NodeIds and generation
+  -> EditorNodeController removes the moving Grade from remaining backbone order
+  -> compute predecessor and successor (insert before dest, or after an output port)
+  -> EditorSessionController::SubmitReconnectColorGrade
+  -> EditorSessionService queue admission as CommitAdjustment
+  -> EditorSessionHistoryPort::ReconnectColorGrade under the render lock
+  -> typed Reconnect batch and Mini-Git WAL append
+  -> topology projection revision
+  -> AlcedoQanGraph replaces permanent edges from the accepted snapshot
+  -> GraphTopologyChanged Quality render
+```
+
+**Primary failure call chain:**
+
+```text
+Develop incoming target, DRT outgoing source, unselected source, self-cycle,
+non-adjacent fan-in/fan-out, stale Qan primitive, stale generation, or backend failure
+  -> reject before or during history mutation
+  -> no PipelineDocument change
+  -> no history commit
+  -> hideConnectorPreview (temporary Qan edge closed)
+  -> permanent Qan edge set unchanged
+  -> EditorNodesPanel shows the exact error
+```
+
+A no-op drop onto the current successor returns success without a history commit.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Develop has no incoming move target; DRT has no outgoing source | `EditorNodeSelectionLayoutTest` | PASS |
+| Each Grade has one input and one output; request-only connector; theme colors | `AlcedoQanGraphTest` | PASS |
+| Valid move creates one commit and one topology Quality render | `EditorSessionNodeCommandTest`, `EditorNodeSelectionLayoutTest`, `EditorNodesPanelQmlTest` | PASS |
+| No-op move creates no commit | `EditorNodeSelectionLayoutTest` | PASS |
+| Cycle, fan-in, and fan-out requests fail | `EditorNodeSelectionLayoutTest` | PASS |
+| Stale Qan primitive cannot change the current Version | `AlcedoQanGraphTest` | PASS |
+| Backend failure leaves permanent edges and exact error | `EditorNodesPanelQmlTest` | PASS |
+| Undo restores exact order and selection | `EditorNodeSelectionLayoutTest` | PASS |
+| Drawer fold does not change port identity or reconnect neighbors | `AlcedoQanGraphTest`, `EditorNodesPanelQmlTest` | PASS |
+
+| Target or suite | Result |
+| --- | --- |
+| `EditorSessionNodeCommandTest` | 5/5 passed |
+| `EditorSessionActionPolicyCq3Test` | 12/12 passed |
+| `EditorNodeSelectionLayoutTest` | 25/25 passed |
+| `AlcedoQanGraphTest` | 15/15 passed |
+| `EditorNodesPanelQmlTest` | 19/19 passed |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionNodeCommandTest EditorSessionActionPolicyCq3Test EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest AlcedoQanGraphTest alcedo_main
+build\debug\alcedo_studio\tests\app\EditorSessionNodeCommandTest_runtime\EditorSessionNodeCommandTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionActionPolicyCq3Test_runtime\EditorSessionActionPolicyCq3Test.exe
+build\debug\alcedo_studio\tests\ui\EditorNodeSelectionLayoutTest_runtime\EditorNodeSelectionLayoutTest.exe
+build\debug\alcedo_studio\tests\ui\AlcedoQanGraphTest_runtime\AlcedoQanGraphTest.exe
+build\debug\alcedo_studio\tests\ui\EditorNodesPanelQmlTest_runtime\EditorNodesPanelQmlTest.exe
+```
+
+`alcedo_main` linked. macOS checks were not run on this Windows host.
+
+**Checklist / exit condition:** all boxes in 14.6 checked.
+
+**LOC note (grill-code-review):** `editor_node_controller.cpp` 761; `alcedo_qan_graph.cpp` 942;
+`EditorNodesPanel.qml` 455. `editor_session_service.cpp` 1547 and
+`editor_session_controller.cpp` 1263 were already above 1000; this sub-phase only added the
+Reconnect routing methods beside the existing Add/Remove/Rename paths and did not absorb more
+business rules into those facades.
+
+**Residual gaps:** NM5.7R supersedes this immediate-reconnect product behavior with incremental
+draft topology editing and atomic automatic submission. NM5.8 still owns lifecycle,
+accessibility, localization, install, and package checks. Keyboard topology editing is listed
+under NM5.8. Real-RAW and three-backend qualification remain NM8.
 
 ---
 
-## 15. NM5.8 — Lifecycle, accessibility, build, install, and package checks
+## 15. NM5.7R — Incremental draft topology and atomic automatic submission
 
-### 15.1 Input context
+### 15.1 Supersession and objective
 
-NM5.1–NM5.7 provide the Nodes page. This sub-phase adds no product feature. It closes lifecycle,
-accessibility, localization, build, and package gaps.
+NM5.7 proved the pinned request-only QuickQanava connector and the existing atomic
+`ReconnectColorGrade` path. Its completion record remains historical evidence. NM5.7R supersedes
+the NM5.7 product behavior that interprets every connector drop as an immediately valid backbone
+move with automatically computed predecessor and successor.
+
+NM5.7R makes the Nodes page a real topology editor:
+
+- Add creates one disconnected draft Color Grade below the main vertical DAG.
+- Connect changes only the requested source-output and destination-input relationship.
+- A supported edit may temporarily break the Develop-to-DRT path or leave Color Grades detached.
+- An unsupported edit is rejected before any draft state changes.
+- No draft operation changes `PipelineDocument`, history, Version state, or rendering while the
+  draft is incomplete.
+- The first accepted operation that produces a complete supported graph automatically submits the
+  accumulated change.
+- The UI has no Apply or Cancel action.
+- The product graph receives one atomic topology-delta instruction. It is never replaced with a
+  draft copy.
+- The canvas is created from a complete projection on initial load, and the draft is initialized
+  from that projection once at the first topology edit. Later ordinary operations update only
+  affected nodes, ports, edges, indexes, and presentation values.
+
+### 15.2 Fixed NM5.7R invariants
+
+- `PipelineDocument` remains the only writable product graph.
+- `EditorNodeGraphDraft` is UI editing state. It is not serialized product data and is not a render
+  input.
+- Creating a draft reads the current complete projection once and binds its project, image,
+  Version, session generation, projection revision, and topology revision.
+- Add, Delete, and Connect mutate the same draft object incrementally. They do not reconstruct it
+  from a snapshot after each operation.
+- Ordinary draft changes do not call full-graph `AlcedoQanGraph::ApplySnapshot` and do not replace
+  the Qan graph.
+- A rejected operation changes no draft node, edge, index, accumulated delta, layout value, or Qan
+  primitive.
+- An incomplete but structurally supported draft remains visible and produces no history commit,
+  WAL append, topology publication, or photo-render request.
+- A complete changed draft submits automatically. A complete draft whose accumulated delta is
+  empty ends node editing without a commit or render.
+- One automatic submission contains one `NodeGraphTopologyChange`, produces at most one history
+  commit, and requests exactly one `GraphTopologyChanged` Quality render after success.
+- The live `PipelineGraph` applies the change in place under the render lock. Unchanged
+  `INodeModel` object identities remain stable.
+- Forward failure and inverse replay failure restore exact node ownership, node order, edge order,
+  next-name counter, history head, and topology revision.
+- QuickQanava remains a view and input reporter. It never decides product validity or inserts a
+  permanent edge from a connector drop.
+- No degraded graph, automatic bridge, alternate backend, or other substitute is created after an
+  error.
+
+### 15.3 Draft ownership and incremental indexes
+
+Add a focused `EditorNodeGraphDraft` application/UI-backend type rather than adding draft mutation
+rules to QML or expanding `EditorNodeController` with graph-container responsibilities.
+
+The draft owns copied value data and incremental lookup indexes such as:
+
+```text
+base identity
+  project, element, image, Version
+  session generation
+  projection revision
+  topology revision
+
+current draft values
+  nodes by NodeId
+  edges by stable edge key
+  one edge by source output port
+  one edge by destination input port
+  adjacency by NodeId
+
+net product delta
+  inserted nodes
+  removed nodes
+  disconnected base edges
+  connected draft edges
+  before and after next-name counter
+```
+
+The controller creates this object lazily on the first Add, Delete, or Connect request. Initial
+construction may copy the complete immutable product projection. After construction, the object
+survives every ordinary edit for the same base identity.
+
+The accumulated delta is updated during each operation. Do not recalculate it by comparing two
+complete graphs after every operation:
+
+- removing an edge added by the draft cancels that connected-edge entry;
+- adding an edge removed from the base cancels that disconnected-edge entry;
+- adding and then deleting an uncommitted node cancels its inserted-node entry and all incident
+  draft-only edges;
+- restoring a removed base node and its exact base edges cancels its removal entries;
+- when every entry is canceled, the draft equals the base and node editing ends automatically.
+
+Full graph traversal is permitted for read-only validity checks. It must not allocate a replacement
+draft, replace the current containers, or republish a complete Qan topology.
+
+### 15.4 Incremental Add and default placement
+
+The Nodes header keeps its existing Add action and gains no Apply or Cancel action.
+
+Add performs only these draft changes:
+
+1. Create the draft once if none exists.
+2. Allocate one stable provisional NodeId.
+3. Create one clean draft Color Grade value.
+4. Add the node to the inserted-node accumulator.
+5. Assign a deterministic position below the main vertical DAG at the backbone origin x. Stack
+   multiple unconnected new nodes downward without moving existing nodes.
+6. Incrementally insert one Qan node and its input/output ports.
+7. Select the new draft node in the Nodes page.
+8. Run the read-only submission-validity check.
+
+Add does not choose an insertion point and does not create an edge. It does not call
+`SubmitAddColorGrade`, consume the product counter, write history, or request rendering.
+
+Draft names preview the names that the atomic product change will store. A draft that returns to
+the base without submission consumes no name number. The final atomic change stores explicit
+before and after counter values so success, failure, Undo, Redo, recovery, and Version checkout are
+deterministic.
+
+### 15.5 Incremental exclusive-port Connect
+
+Every supported Color Grade image port can participate in editing; starting a connection is not
+limited to the selected Color Grade. Develop exposes only its output role. DRT/Post exposes only
+its input role. QuickQanava remains in request-only mode with
+`connectorCreateDefaultEdge = false`.
+
+One accepted request from `source.output` to `destination.input` has this exact behavior:
+
+```text
+oldOutgoing = the current edge from source.output, if present
+oldIncoming = the current edge into destination.input, if present
+
+remove oldOutgoing
+remove oldIncoming when it is a different edge
+add source.output -> destination.input
+```
+
+This is exclusive-port replacement, not a request to move a whole Color Grade. It does not infer a
+new successor, infer a new predecessor, bridge the nodes left behind, or restore a complete
+backbone automatically.
+
+For an initial `A -> B -> C` graph with a detached new `D`:
+
+```text
+Connect A -> D
+  disconnect A -> B
+  connect A -> D
+  visible draft: A -> D and B -> C
+  result: incomplete; no submission and no render
+
+Connect D -> C
+  disconnect B -> C
+  connect D -> C
+  visible draft: A -> D -> C and detached B
+  result: incomplete; no submission and no render
+```
+
+The user must reconnect B into the unique path or delete B from the draft. The operation that first
+makes the full graph valid triggers automatic submission.
+
+Each accepted Connect updates only:
+
+- at most two removed draft edges;
+- one inserted draft edge;
+- the affected source-output and destination-input indexes;
+- the affected adjacency entries;
+- the accumulated delta;
+- the corresponding Qan edge primitives and their presentation.
+
+Unchanged draft and Qan node, port, and edge identities remain stable.
+
+### 15.6 Operation admission and submission validity
+
+Use two different checks. Do not reject an incomplete editing state as though it were an
+unsupported connection.
+
+#### 15.6.1 Operation admission
+
+Before mutating the draft, validate the small candidate edit against the current indexes. Check:
+
+- current base identity and session generation;
+- live source and destination identities;
+- output-to-input direction;
+- matching port data types;
+- supported source and destination node types;
+- supported runtime/compiler connection semantics;
+- Develop cannot be an input target;
+- DRT/Post cannot be an output source;
+- source and destination are distinct;
+- the candidate edge, after ignoring the edges it would replace, does not create a cycle.
+
+Cycle detection may traverse the current adjacency index while excluding the at-most-two edges
+scheduled for removal. It must not copy or temporarily overwrite the draft.
+
+When admission fails:
+
+```text
+reject before mutation
+  -> draft values and indexes unchanged
+  -> accumulated delta unchanged
+  -> Qan primitives unchanged
+  -> connector preview closes
+  -> EditorNodesPanel shows the exact error
+```
+
+An unknown or unsupported node type must name the unsupported type or connection in the displayed
+error. Do not collapse it into a generic Reconnect failure.
+
+#### 15.6.2 Submission validity
+
+After an admitted incremental operation, perform a read-only full check. A draft can submit only
+when it has:
+
+- exactly one Develop and one DRT/Post;
+- one unique Develop-to-DRT scene-image path;
+- no cycle, scene-image fan-in, or scene-image fan-out;
+- exactly one source for every required input;
+- every Color Grade on the unique image path;
+- only runtime/compiler-supported node types on the path;
+- valid port direction and data-type pairs.
+
+Missing required input, a broken Develop-to-DRT path, detached Color Grades, and multiple detached
+components are permitted draft states. They disable submission but do not undo an admitted edit.
+
+### 15.7 One atomic product topology change
+
+Add one stored change kind and one matching operation kind with a precise name such as
+`NodeGraphTopologyChange` and `EditNodeGraph`. One automatic submission contains exactly one of
+these stored changes; it is not a list of Add, Remove, and Reconnect commands.
+
+The stored change carries only the net delta from its bound base graph:
+
+```text
+inserted nodes
+  complete node JSON
+  final node index
+
+removed nodes
+  complete node JSON
+  original node index
+
+disconnected edges
+  exact endpoint and port IDs
+  original edge index
+
+connected edges
+  exact endpoint and port IDs
+  final edge index
+
+before and after next Color Grade name number
+```
+
+The live submission request separately carries the expected session generation and topology
+revision. These transient guards are not persisted as replay data.
+
+Add a single domain entry point such as `PipelineGraph::ApplyTopologyDelta`. It must:
+
+1. Require that every expected removed node and disconnected edge exactly matches the live graph.
+2. Require that inserted NodeIds and connected edge identities do not conflict.
+3. Reserve all forward and restoration storage before mutation.
+4. Retain removed `unique_ptr<INodeModel>` objects and exact indexes.
+5. Retain removed edges and exact indexes.
+6. Apply all removals and insertions in place to the same live `PipelineGraph` object.
+7. Set the after-name counter.
+8. Validate the complete final graph once, after the whole delta is present.
+9. Commit on success.
+10. On any validation error or exception, restore original node ownership, node order, edge order,
+    counter, and observable revision before returning the real error.
+
+Do not assign a draft `PipelineDocument` or draft `PipelineGraph` over the live object. Do not call
+the existing single-node Add/Remove/Reconnect commands sequentially. The live graph must never
+expose an intermediate partial delta outside the render lock.
+
+The current general history applier clones `PipelineDocument` as a broad restoration guard. That
+is not the application mechanism for `NodeGraphTopologyChange`. Route this one stored change
+through its self-restoring atomic entry point without `ClonePipelineDocument` or assignment from a
+copied document. The atomic entry point must either complete or restore the same live objects
+before it returns. A history-publication failure applies the stored inverse through the same atomic
+entry point.
+
+Forward history application uses the stored direction. Undo applies the exact inverse through the
+same atomic entry point. Redo applies the forward direction again. WAL failure, history-publication
+failure, live-pipeline publication failure, and recovery retain the existing NM4 restoration
+requirements.
+
+### 15.8 Automatic submission and canvas promotion
+
+After every admitted Add, Delete, or Connect:
+
+```text
+incrementally mutate the existing draft
+  -> incrementally update affected Qan primitives
+  -> run read-only submission validation
+  -> invalid: stay in node editing; no history and no render
+  -> valid with empty delta: discard draft metadata and return to committed state
+  -> valid with non-empty delta:
+       EditorNodeController::SubmitNodeGraphTopologyEdit
+       -> generation and topology-revision guard
+       -> EditorSessionService queue admission
+       -> render lock
+       -> one NodeGraphTopologyChange applied in place
+       -> one typed history batch and WAL append
+       -> one topology publication
+       -> promote the current canvas state to committed state
+       -> one GraphTopologyChanged Quality render
+```
+
+Successful submission must not rebuild the already-correct Qan topology. Update its applied
+revision metadata, clear the draft delta, and change affected edge presentation from candidate to
+permanent. Keep unaffected Qan objects and all stored node positions.
+
+The full product projection can rebuild the canvas only for initial load, image change, Version
+change, Undo, Redo, recovery, session-generation replacement, adapter recreation, or an explicit
+stale-state resynchronization. Ordinary draft edits and successful automatic submission do not use
+that path.
+
+### 15.9 Error and lifecycle behavior
+
+- An unsupported candidate operation keeps the draft byte-for-byte and identity-for-identity
+  unchanged and displays the exact error.
+- If an incremental Qan insertion or removal fails, reverse that operation's affected draft values,
+  indexes, accumulated delta, and Qan primitives. Keep the draft at its exact pre-operation state,
+  publish no product command, and show the real adapter error.
+- An incomplete draft may show one localized plain-text instruction to complete the Develop-to-DRT
+  path. Do not add a pill, badge, status dot, or separate status chrome.
+- If atomic product submission fails, restore the live graph and history, retain the current valid
+  draft and its delta, request no render, and show the exact error.
+- Do not continuously retry a failed submission. The next admitted draft edit performs the next
+  validity check and may submit the resulting delta.
+- Closing and reopening the Nodes Loader for the same bound base identity restores the same draft
+  values. No Qan pointer survives Loader destruction.
+- An image, Version, session-generation, or external topology change invalidates the old draft. It
+  cannot submit against the new graph. Discard its non-product state during the identity change and
+  create a new draft only after the next topology edit.
+- Escape cancels only an active connector preview or rename input. It does not provide a hidden
+  whole-draft Cancel action.
+- Restoring the base topology manually reduces the accumulated delta to empty and exits node
+  editing without a history commit or render.
+
+### 15.10 Files and responsibilities
+
+Expected implementation areas:
+
+- `EditorNodeGraphDraft`: incremental nodes, edges, port indexes, adjacency, validation, and net
+  delta.
+- `EditorNodeController`: draft lifetime, automatic-submission state machine, selection, errors,
+  and session guards.
+- `AlcedoQanGraph`: incremental insert/remove node and edge entry points, live identity checks, and
+  promotion from candidate to permanent presentation.
+- `EditorNodesPanel.qml`: no Apply/Cancel controls; plain editing guidance and exact errors.
+- `EditorNodeLayoutStore`: deterministic positions below the vertical DAG without moving stored
+  backbone positions.
+- `PipelineEditBatch`: the one new operation and stored change discriminator, canonical JSON,
+  validation, and history projection.
+- `PipelineGraph` and the history applier: one in-place atomic topology-delta application in both
+  directions.
+- editor session service/controller/history port: one automatic-submission route and one render
+  reason after successful publication.
+
+Keep QML free of topology mutation and validity rules. Keep the draft type free of QObject/Qan
+ownership. Keep the atomic domain change free of layout, selection, and canvas presentation data.
+
+### 15.11 Tests and exit criteria
+
+#### Draft and controller
+
+- The first topology edit creates one draft from the complete current projection.
+- Later ordinary operations keep the same draft object and incrementally mutate only affected
+  values and indexes.
+- Add inserts one disconnected clean Color Grade below the main vertical DAG and produces no
+  product command or render while the draft is incomplete.
+- Add does not move existing node positions.
+- `A -> D` replaces `A -> B` and preserves `B -> C` without submitting.
+- `D -> C` replaces `B -> C`, leaves B detached, and does not submit.
+- Reconnecting or deleting B so that the full path becomes valid automatically submits once.
+- An unsupported type, wrong port direction, type mismatch, endpoint violation, self-edge, or cycle
+  leaves the draft and delta unchanged and shows the exact error.
+- Failure of an affected Qan node or edge insertion restores the exact pre-operation draft, delta,
+  indexes, and Qan primitives without a product command.
+- Returning the draft to the base empties the delta and exits editing without commit or render.
+- An incomplete draft survives Nodes Loader destruction and recreation for the same base identity.
+- A stale generation or topology revision cannot submit the draft to a newer document.
+
+#### Qan adapter
+
+- An accepted connection removes at most two affected edge primitives and inserts one.
+- Unaffected Qan node, port, and edge QObject identities remain unchanged across Add, Connect,
+  Delete, and successful automatic submission.
+- Rejected operations change no Qan primitive.
+- Ordinary draft operations and successful automatic submission do not invoke full topology
+  replacement.
+- Successful submission promotes candidate presentation without recreating the topology.
+
+#### Atomic domain and history
+
+- One valid draft invokes one `SubmitNodeGraphTopologyEdit` request.
+- One request persists one `NodeGraphTopologyChange`, not a sequence of stored Add/Remove/Reconnect
+  changes.
+- The live `PipelineGraph` object and all unaffected `INodeModel` object addresses remain stable.
+- The final graph is validated only after the whole delta is applied.
+- Failure injection after each removal, insertion, counter update, WAL step, history-publication
+  step, and live-pipeline publication step restores exact state.
+- Forward, Undo, Redo, recovery, reopen, and Version checkout reproduce exact nodes, object data,
+  node order, edges, edge order, and next-name counter.
+- An incomplete draft produces zero commits and zero render requests across any number of edits.
+- Successful automatic submission produces one history commit and one
+  `GraphTopologyChanged` Quality render.
+
+#### UI and performance
+
+- The header contains no Apply or Cancel action.
+- The incomplete-state instruction and exact error use existing AppTheme text and danger roles.
+- No new badge, pill, status dot, gradient, shadow, glow, or Material style is introduced.
+- A 32-Grade graph operation cost scales with affected indexes and the required read-only validity
+  traversal; it does not include full draft or Qan reconstruction.
+- Drawer folding and node movement preserve port identity and do not affect the accumulated delta.
+
+### 15.12 Completion record
+
+Record the implementation revision, branch, exact atomic-change format, primary success and
+failure call chains, test commands and counts, failure-injection evidence, object-identity evidence,
+Qan incremental-update evidence, Windows build result, and unavailable macOS checks here.
+
+##### NM5.7R completion record (2026-09-04)
+
+**Status:** complete — the Nodes page is an incremental topology editor. Add inserts one
+disconnected draft Color Grade. Connect replaces only the source output edge and the destination
+input edge. Incomplete supported graphs stay editable with no product write, history commit, or
+render. The first admitted operation that restores a complete Develop-to-DRT path submits one
+`NodeGraphTopologyChange`. The live `PipelineGraph` applies that delta in place. The UI has no
+Apply or Cancel action.
+
+**Revision and branch:** working tree on `feature/nodes-panel-visual-connector-reconnect`
+(base `9a7a6625`). QuickQanava remains submodule tag `2.50` at
+`56bdf78d5b1d41fb60ae3b8ea2292df45787ecff`.
+
+**Atomic-change format:** typed batch `operation_kind = edit_node_graph` with exactly one
+`node_graph_topology_change`. Stored fields: inserted nodes (canonical Color Grade JSON +
+`final_node_index`), removed nodes (JSON + `original_node_index`), disconnected edges (exact
+endpoints + `original_edge_index`), connected edges (exact endpoints + `final_edge_index`),
+and before/after `next_color_grade_name_number`. Session generation and topology revision are
+transient submit guards and are not persisted. Batch format version remains `2`; unknown kinds
+still fail closed. No old-format migration was added.
+
+**Primary success call chain:**
+
+```text
+Add or exclusive-port Connect or Delete
+  -> EditorNodeController creates EditorNodeGraphDraft from the live document once
+  -> incremental draft mutation (indexes and net delta updated in place)
+  -> AlcedoQanGraph inserts/removes only affected primitives
+  -> read-only submission validity
+  -> incomplete: stay in node editing; no history; no render
+  -> valid empty delta: discard draft; no history; no render
+  -> valid non-empty delta:
+       EditorNodeController::MaybeSubmitDraft
+       -> EditorSessionController::SubmitNodeGraphTopologyEdit
+       -> EditorSessionService queue admission as CommitAdjustment
+       -> EditorSessionHistoryPort::EditNodeGraph under the render lock
+       -> PipelineGraph::ApplyTopologyDelta in place on the live graph
+       -> one typed EditNodeGraph batch and Mini-Git WAL append
+       -> PromoteCommittedSnapshot (no Qan topology replacement)
+       -> one GraphTopologyChanged Quality render
+```
+
+**Primary failure call chain:**
+
+```text
+unsupported port role, self-edge, cycle, unknown endpoint, or stale generation
+  -> reject before draft mutation
+  -> draft values, indexes, delta, layout, and Qan primitives unchanged
+  -> connector preview closes
+  -> EditorNodesPanel shows the exact error
+```
+
+```text
+Qan insert/remove failure
+  -> restore the pre-operation draft
+  -> reverse only the affected Qan primitives
+  -> no product command
+
+atomic submit / WAL failure
+  -> ApplyNodeGraphTopologyChange inverse restores live node objects, order, edges, and counter
+  -> retain the valid draft and its delta
+  -> no render
+  -> exact error text
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| First construction copies the document once; later ops keep the same draft object | `EditorNodeGraphDraftTest` | PASS |
+| Add inserts one disconnected Color Grade and does not consume the product counter | `EditorNodeGraphDraftTest`, `EditorNodeController`, `EditorNodesPanelQmlTest` | PASS |
+| `A -> D` then `D -> C` leaves the skipped Grade detached without submitting | `EditorNodeGraphDraftTest`, `EditorNodeController` | PASS |
+| Reconnecting or deleting the detached Grade makes the path valid | `EditorNodeGraphDraftTest` | PASS |
+| Completing the path submits one `NodeGraphTopologyChange` and one topology Quality render | `EditorNodeController`, `EditorSessionNodeCommandTest`, `EditorNodesPanelQmlTest` | PASS |
+| Unsupported connect leaves draft and delta unchanged with exact error | `EditorNodeGraphDraftTest`, `EditorNodeController` | PASS |
+| Returning to the base empties the delta and exits without a commit | `EditorNodeGraphDraftTest`, `EditorNodeController` | PASS |
+| In-place forward/inverse keeps unaffected `INodeModel` addresses | `PipelineGraphTopologyDeltaTest` | PASS |
+| Failure after counter, disconnect, insert, connect, and validate restores exact state | `PipelineGraphTopologyDeltaTest` | PASS |
+| Typed batch apply does not clone the live graph | `PipelineGraphTopologyDeltaTest` | PASS |
+| Incremental Qan insert/remove preserves unaffected QObject identities | `AlcedoQanGraphTest` | PASS |
+| Ordinary draft connect does not increment topology replacement | `EditorNodesPanelQmlTest` | PASS |
+| Header has no Apply or Cancel action | `EditorNodesPanelQmlTest` | PASS |
+| Submit failure keeps the product graph, shows the exact error, and retains the draft | `EditorNodesPanelQmlTest` | PASS |
+
+| Target or suite | Result |
+| --- | --- |
+| `EditorNodeGraphDraftTest` | 8/8 passed |
+| `PipelineGraphTopologyDeltaTest` | 5/5 passed |
+| `PipelineEditBatchTest` | 17/17 passed |
+| `PipelineHistoryApplierTest` | 12/12 passed |
+| `EditorSessionNodeCommandTest` | 6/6 passed |
+| `EditorSessionActionPolicyCq3Test` | 12/12 passed |
+| `EditorNodeSelectionLayoutTest` | 24/24 passed |
+| `AlcedoQanGraphTest` | 16/16 passed |
+| `EditorNodesPanelQmlTest` | 19/19 passed |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorNodeGraphDraftTest PipelineGraphTopologyDeltaTest PipelineEditBatchTest PipelineHistoryApplierTest EditorSessionNodeCommandTest EditorSessionActionPolicyCq3Test EditorNodeSelectionLayoutTest AlcedoQanGraphTest EditorNodesPanelQmlTest alcedo_main
+build\debug\alcedo_studio\tests\app\EditorNodeGraphDraftTest_runtime\EditorNodeGraphDraftTest.exe
+build\debug\alcedo_studio\tests\app\PipelineGraphTopologyDeltaTest_runtime\PipelineGraphTopologyDeltaTest.exe
+build\debug\alcedo_studio\tests\edit\PipelineEditBatchTest_runtime\PipelineEditBatchTest.exe
+build\debug\alcedo_studio\tests\app\PipelineHistoryApplierTest_runtime\PipelineHistoryApplierTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionNodeCommandTest_runtime\EditorSessionNodeCommandTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionActionPolicyCq3Test_runtime\EditorSessionActionPolicyCq3Test.exe
+build\debug\alcedo_studio\tests\ui\EditorNodeSelectionLayoutTest_runtime\EditorNodeSelectionLayoutTest.exe
+build\debug\alcedo_studio\tests\ui\AlcedoQanGraphTest_runtime\AlcedoQanGraphTest.exe
+build\debug\alcedo_studio\tests\ui\EditorNodesPanelQmlTest_runtime\EditorNodesPanelQmlTest.exe
+```
+
+`alcedo_main` linked. macOS checks were not run on this Windows host.
+
+**Pinned API differences:**
+
+- Request-only connector is unchanged: `connectorEnabled = true`,
+  `connectorCreateDefaultEdge = false`. The pinned 2.50
+  `connectorRequestEdgeCreation(src, dst, srcPort, dstPort)` still includes port
+  arguments omitted by the website.
+- Connectable policy now matches exclusive-port editing: Develop is
+  `OutConnectable`, every Color Grade is `Connectable`, DRT/Post is
+  `InConnectable`. Starting a connection is not limited to the selected Color Grade.
+- Incremental `insertEdge` + `bindEdge` on a live port with
+  `Multiplicity::Single` rejects the bind while the removed edge item remains in
+  the port list. Incremental edge removal therefore clears that port's in/out
+  edge items before `removeEdge`.
+
+**Checklist / exit condition:** all 15.11 draft, Qan, atomic-domain, and UI
+criteria in this sub-phase are covered by the executed tests above. Keyboard
+topology editing, accessibility matrix, install/package, and licence packaging
+remain NM5.8.
+
+**LOC note (grill-code-review):** `editor_node_graph_draft.cpp` 555;
+`editor_node_controller.cpp` 903; `EditorNodesPanel.qml` 509.
+`alcedo_qan_graph.cpp` is 1244 after incremental insert/remove/promote; the extra
+size is the incremental primitive API, not a second topology owner.
+`pipeline_edit_batch.cpp` remains 1486 as the typed-change serializer; this
+sub-phase added one change kind beside the existing variants and did not absorb
+new unrelated responsibilities.
+
+**Residual gaps:** NM5.8 still owns lifecycle, accessibility, localization
+expansion, install, and package checks. Dedicated Mini-Git recovery/reopen/
+Version-checkout cases for `EditNodeGraph` use the same
+`ApplyPipelineEditBatch` inverse path proven above and were not duplicated as a
+separate history-port suite. Keyboard topology editing remains NM5.8. Real-RAW
+and three-backend qualification remain NM8.
+
+##### Follow-up (2026-09-04): default Add placement
+
+Unconnected Add nodes use the backbone origin x and sit below the lowest existing
+card plus the vertical gap. Later unconnected Adds stack downward. They no longer
+use a right-side lane. Proven by `EditorNodeLayoutStore` and `EditorNodeController`
+placement tests in `EditorNodeSelectionLayoutTest`.
+
+---
+
+## 16. NM5.8 — Lifecycle, accessibility, build, install, and package checks
+
+### 16.1 Input context
+
+NM5.1–NM5.7 provide the original Nodes page. NM5.7R replaces the immediate-reconnect product
+behavior with incremental draft editing and atomic automatic submission. This sub-phase adds no
+product feature. It closes lifecycle, accessibility, localization, build, and package gaps.
 
 NM8 still owns final real-RAW and three-backend qualification.
 
-### 15.2 Official documentation
+### 16.2 Official documentation
 
 - [Installation](https://cneben.github.io/QuickQanava/installation.html): all sections.
 - [Graph](https://cneben.github.io/QuickQanava/graph.html): `QuickQanava Initialization` and `Graph View`.
 - [API Reference](https://cneben.github.io/QuickQanava/reference.html): the local-Doxygen notice.
 - [Licence](https://cneben.github.io/QuickQanava/licence.html): source and binary notice requirements.
 
-### 15.3 Work
+### 16.3 Work
 
 1. Complete empty, loading, pending-command, and error behavior.
 2. Complete localized text and accessible names.
@@ -2198,7 +2887,7 @@ NM8 still owns final real-RAW and three-backend qualification.
 11. Check QuickQanava and bezier licence notices.
 12. Run all affected graph, history, adapter, QML, and workspace tests.
 
-### 15.4 Main call chain
+### 16.4 Main call chain
 
 ```text
 packaged app start
@@ -2211,12 +2900,13 @@ packaged app start
   -> all visible product changes use typed history
 ```
 
-### 15.5 Tests and exit criteria
+### 16.5 Tests and exit criteria
 
 - No-image state uses localized plain text.
 - Loading never shows the previous image graph.
 - Command failure keeps the prior graph and exact counter state.
-- Keyboard input can select, open drawers, Add, Rename, Delete, Fit, and Reconnect.
+- Keyboard input can select, open drawers, Add, Rename, Delete, Fit, and start supported topology
+  connections without exposing an Apply or Cancel action.
 - A screen reader reads node names, Mask types, disclosure state, and actions.
 - It does not read topology numbers, On/Off state, adjustment summaries, or hidden Mask fields.
 - Both themes and all four target DPR values pass the visual matrix.
@@ -2226,14 +2916,14 @@ packaged app start
 - The package contains the required third-party notices.
 - Lifetime checks find no stale Qan pointer use.
 
-### 15.6 Completion record
+### 16.6 Completion record
 
 Record the date, commands, test count, visual matrix, package results, and unavailable environment
 checks here.
 
 ---
 
-## 16. Test target plan
+## 17. Test target plan
 
 Prefer an existing target when its responsibility matches. Add a target only when ownership stays
 clear.
@@ -2242,16 +2932,18 @@ clear.
 | --- | --- |
 | `PipelineDocumentDefaultNameTest` | Serialized counter, default names, format validation, and replay. |
 | `EditorNodeGraphProjectionTest` | Snapshot values, Mask kinds, revisions, NodeId, and generation. |
-| `EditorNodeControllerTest` | Selection, Add, Rename, Delete, Reconnect, failure, and render reasons. |
-| `AlcedoQanGraphTest` | Primitive mapping, ports, edges, selection, role updates, and stale-object rejection. |
-| `EditorNodesPanelQmlTest` | VI, node content, drawer behavior, icons, keyboard, accessibility, and layout restore. |
+| `EditorNodeGraphDraftTest` | One-time construction, incremental Add/Delete/Connect, net-delta cancellation, admission checks, and submission validity. |
+| `PipelineGraphTopologyDeltaTest` | In-place atomic forward/inverse application, exact restoration, object identity, and final validation. |
+| `EditorNodeControllerTest` | Selection, draft lifetime, automatic submission, stale guards, failure, and render reasons. |
+| `AlcedoQanGraphTest` | Primitive mapping, incremental node/edge updates, identity preservation, selection, role updates, and stale-object rejection. |
+| `EditorNodesPanelQmlTest` | VI, node content, drawer behavior, no Apply/Cancel action, exact errors, keyboard, accessibility, and layout restore. |
 | `EditorWorkspaceToolRailLifecycleQmlTest` | History, Versions, and Nodes mutual exclusion and Loader lifetime. |
 | `WorkspaceShellTest` | Column geometry, minimum window size, focus order, and production type registration. |
 | `EditorSessionHistoryPortTest` | Typed graph history, Undo, Redo, WAL failure restoration, and counter replay. |
 
 Every test name must state the behavior that it checks. Do not use `smoke` in a test name.
 
-### 16.1 Required visual matrix
+### 17.1 Required visual matrix
 
 Capture or assert:
 
@@ -2271,7 +2963,7 @@ summary, Mask count, pill, badge, shadow, glow, gradient, or Material chrome.
 
 ---
 
-## 17. Failure matrix
+## 18. Failure matrix
 
 | Failure point | Required result |
 | --- | --- |
@@ -2280,10 +2972,15 @@ summary, Mask count, pill, badge, shadow, glow, gradient, or Material chrome.
 | Stale session generation | Reject the snapshot or request. Do not touch the current session. |
 | Qan node creation | Roll back the adapter update. Keep the prior complete Qan projection. |
 | Qan edge creation or binding | Roll back the adapter update. Leave no orphan edge or port. |
-| Add validation | Do not create a node, consume a name number, commit history, or render. |
+| Incremental draft Qan update | Reverse only the affected draft and Qan changes. Preserve all unrelated object identities and issue no product command. |
+| Draft creation | Keep the prior committed canvas. Show the exact error. Do not create a partial draft. |
+| Draft Add | Keep existing draft objects and edges. Do not consume a product name number, commit history, or render while incomplete. |
+| Unsupported draft connection | Reject before mutation. Keep draft values, indexes, delta, layout, and Qan primitives unchanged. |
+| Incomplete draft | Keep the incremental draft visible. Do not change product state, history, Version, or rendering. |
+| Atomic topology validation | Restore exact node ownership, node order, edge order, counter, and live object identity. Keep the draft. |
 | Rename validation | Keep the prior name. Do not create history. |
-| Delete validation | Keep the node, edges, selection, counter, and layout. |
-| Reconnect validation | Close the preview. Keep the permanent edges. |
+| Draft Delete validation | Keep the node, edges, indexes, accumulated delta, selection, counter, and layout. |
+| Connector admission | Close the preview. Keep the current draft edges and exact error. |
 | WAL append | NM4 restores document and history. Restore counter, projection, and selection. |
 | Version checkout | NM4 restores the prior Version after failure. Keep its selection and layout. |
 | Loader teardown | Keep only plain controller and layout values. Keep no Qan pointer. |
@@ -2291,11 +2988,17 @@ summary, Mask count, pill, badge, shadow, glow, gradient, or Material chrome.
 
 ---
 
-## 18. Performance targets
+## 19. Performance targets
 
 - A parameter slider update does not rebuild the Qan graph.
 - A Mask drawer role update changes only its owner node.
-- A topology update scales with affected nodes and edges.
+- Draft construction reads one complete projection once per bound base identity.
+- An ordinary draft Add or Delete updates only the affected node, incident edges, and indexes.
+- An ordinary draft Connect removes at most two Qan edges and inserts one Qan edge.
+- An ordinary draft edit never reconstructs or overwrites the draft or Qan graph.
+- Successful automatic submission promotes the current canvas without a Qan topology rebuild.
+- Submission-validity traversal may scale with total draft nodes and edges; mutation work scales
+  with the affected nodes, edges, and indexes.
 - A fully closed panel retains no graph delegates.
 - The default graph shows input feedback within 100 ms after first open.
 - Node selection shows feedback within 100 ms.
@@ -2310,13 +3013,15 @@ Record:
 - projection apply time for a 32-Grade graph;
 - frame time for 100 selections;
 - frame time for opening and closing a node with many Mask rows;
+- frame time and changed Qan object count for 100 accepted draft connections;
+- draft and Qan object identity retention across 100 accepted draft connections;
 - live Qan object count after 100 panel open/close cycles.
 
 Do not reduce decode resolution, output quality, or backend behavior to meet these targets.
 
 ---
 
-## 19. NM5 completion criteria
+## 20. NM5 completion criteria
 
 - [x] The production target links the pinned QuickQanava module.
 - [x] Production initializes QuickQanava before QML load.
@@ -2348,11 +3053,27 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] The product allows one selected node.
 - [x] Add creates a clean Color Grade.
 - [x] Rename and Delete use NM4 typed history.
-- [ ] Reconnect uses the official visual connector.
-- [ ] `connectorCreateDefaultEdge` is false.
-- [ ] The backend accepts a request before permanent Qan edges change.
-- [ ] All command failures preserve the prior product and projected graph.
-- [ ] Add, Rename, Delete, and Reconnect support Undo and Redo.
+- [x] NM5.7 Reconnect uses the official visual connector in request-only mode.
+- [x] `connectorCreateDefaultEdge` is false.
+- [x] NM5.7R Add creates one disconnected draft Color Grade without a product change or render.
+- [x] One draft is created from the complete projection and then mutated incrementally.
+- [x] Ordinary draft operations do not reconstruct or overwrite the draft or Qan graph.
+- [x] Exclusive-port Connect replaces only the source's prior output edge and the destination's
+      prior input edge.
+- [x] Supported incomplete graphs remain editable without a product change, history commit, or
+      render request.
+- [x] Unsupported node types and connections are rejected before draft mutation with exact text.
+- [x] The first operation that restores a valid graph automatically submits; the UI has no Apply
+      or Cancel action.
+- [x] Automatic submission contains one `NodeGraphTopologyChange`, not stored
+      Add/Remove/Reconnect steps.
+- [x] The live `PipelineGraph` applies the topology delta atomically in place and is never replaced
+      by the draft.
+- [x] Successful automatic submission preserves unaffected Qan and `INodeModel` identities and
+      requests one Quality render.
+- [x] All command failures preserve the prior product graph, history, Version, revision, and
+      rendered state while retaining an applicable draft.
+- [x] Atomic topology edits support exact Undo, Redo, recovery, reopen, and Version checkout.
 - [ ] All visible actions support keyboard input and accessibility.
 - [ ] All product text uses localization.
 - [ ] All visual values use AppTheme and `DESIGN.md`.

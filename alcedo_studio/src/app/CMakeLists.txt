@@ -403,6 +403,13 @@ def_library(EditorNodeGraphProjection
     PUBLIC_DEPS EditGraph
 )
 
+def_library(EditorNodeGraphDraft
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_draft.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_draft.hpp"
+    PUBLIC_DEPS EditorNodeGraphProjection EditHistory EditGraph
+)
+
 def_library(PipelineHistoryApplier
     SOURCES
         "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"

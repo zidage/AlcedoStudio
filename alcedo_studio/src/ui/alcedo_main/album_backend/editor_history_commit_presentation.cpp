@@ -723,8 +723,10 @@ auto PresentGraphOperation(const alcedo::EditorHistoryCommit& commit)
       alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RenameColorGrade);
   const auto remove_key =
       alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::RemoveColorGrade);
+  const auto topology_key =
+      alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::EditNodeGraph);
   if (commit.presentation_key != add_key && commit.presentation_key != rename_key &&
-      commit.presentation_key != remove_key) {
+      commit.presentation_key != remove_key && commit.presentation_key != topology_key) {
     return std::nullopt;
   }
 
@@ -746,6 +748,13 @@ auto PresentGraphOperation(const alcedo::EditorHistoryCommit& commit)
     out.delta_text   = out.before_text.isEmpty()
                            ? out.after_text
                            : QStringLiteral("%1 \u2192 %2").arg(out.before_text, out.after_text);
+    out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
+    return out;
+  }
+  if (commit.presentation_key == topology_key) {
+    out.display_name = QStringLiteral("Edit Node Graph");
+    out.after_text   = name;
+    out.delta_text   = name;
     out.icon_key     = QStringLiteral(":/history_icons/workflow.svg");
     return out;
   }

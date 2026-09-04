@@ -154,7 +154,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor graphPortFillColor READ graphPortFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphPortBorderColor READ graphPortBorderColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphNodeBorderColor READ graphNodeBorderColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor graphMaskDrawerSurfaceColor READ graphMaskDrawerSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor graphMaskDrawerSurfaceColor READ graphMaskDrawerSurfaceColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor graphSelectionOutlineColor READ graphSelectionOutlineColor NOTIFY ThemeChanged)
   Q_PROPERTY(int graphNodeWidth READ graphNodeWidth CONSTANT)
   Q_PROPERTY(int graphNodeVerticalGap READ graphNodeVerticalGap CONSTANT)
@@ -162,6 +163,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int graphNodeOriginY READ graphNodeOriginY CONSTANT)
   Q_PROPERTY(int graphEndpointHeight READ graphEndpointHeight CONSTANT)
   Q_PROPERTY(int graphNameRowHeight READ graphNameRowHeight CONSTANT)
+  Q_PROPERTY(int graphNameRowDividerHeight READ graphNameRowDividerHeight CONSTANT)
   Q_PROPERTY(int graphMaskDrawerHeaderHeight READ graphMaskDrawerHeaderHeight CONSTANT)
   Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
   Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
@@ -332,6 +334,7 @@ class AppTheme final : public QObject {
   auto graphNodeOriginY() const -> int;
   auto graphEndpointHeight() const -> int;
   auto graphNameRowHeight() const -> int;
+  auto graphNameRowDividerHeight() const -> int;
   auto graphMaskDrawerHeaderHeight() const -> int;
   auto graphMaskRowHeight() const -> int;
   auto graphPortSize() const -> int;

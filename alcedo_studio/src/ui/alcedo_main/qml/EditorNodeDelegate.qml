@@ -73,7 +73,7 @@ Qan.NodeItem {
                 objectName: "editorNodeDrawerDivider"
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: parent.width - 2 * appTheme.graphSelectionOutlineWidth
-                height: 1
+                height: appTheme.graphNameRowDividerHeight
                 color: appTheme.cardBorderColor
             }
 

@@ -18,6 +18,7 @@
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -93,6 +94,19 @@ class IEditorHistoryPort {
   virtual auto RemoveColorGrade(const EditorHistoryGuardHandle& /*guard*/,
                                 const NodeId& /*node_id*/, std::string* error) -> bool {
     if (error != nullptr) *error = "Color Grade removal is not supported by this history port";
+    return false;
+  }
+  /// Move one Color Grade between a new scene-image predecessor and successor.
+  virtual auto ReconnectColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                                   const NodeId& /*node_id*/, const NodeId& /*new_predecessor_id*/,
+                                   const NodeId& /*new_successor_id*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade reconnect is not supported by this history port";
+    return false;
+  }
+  /// Apply one net node-graph topology delta in place. Default rejects.
+  virtual auto EditNodeGraph(const EditorHistoryGuardHandle& /*guard*/,
+                             NodeGraphTopologyChange /*change*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Node graph topology edit is not supported by this history port";
     return false;
   }
   /// Rename one Color Grade without requesting a pixel render.

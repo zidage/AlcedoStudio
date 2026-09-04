@@ -8,11 +8,12 @@ import QuickQanava 2.0 as Qan
 Qan.EdgeItem {
     id: edgeItem
     objectName: "editorNodeEdge"
+    property bool candidate: false
 
     Qan.EdgeStyle {
         id: alcedoEdgeStyle
         lineWidth: appTheme.graphEdgeWidth
-        lineColor: appTheme.graphEdgeColor
+        lineColor: edgeItem.candidate ? appTheme.graphCandidateEdgeColor : appTheme.graphEdgeColor
         lineType: Qan.EdgeStyle.Straight
         srcShape: Qan.EdgeStyle.None
         dstShape: Qan.EdgeStyle.None
@@ -27,6 +28,6 @@ Qan.EdgeItem {
     Qan.EdgeTemplate {
         anchors.fill: parent
         edgeItem: edgeItem
-        color: appTheme.graphEdgeColor
+        color: edgeItem.candidate ? appTheme.graphCandidateEdgeColor : appTheme.graphEdgeColor
     }
 }

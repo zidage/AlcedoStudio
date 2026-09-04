@@ -4,24 +4,28 @@
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 
+#include <QCoreApplication>
 #include <QDebug>
+#include <QEvent>
 #include <QMetaMethod>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QQuickItem>
 #include <QVariant>
 #include <QVariantMap>
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <string>
 
+#include "qanConnector.h"
 #include "qanEdge.h"
 #include "qanEdgeItem.h"
 #include "qanNode.h"
 #include "qanNodeItem.h"
 #include "qanPortItem.h"
 #include "qanStyle.h"
-
-#include <QQuickItem>
+#include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -47,9 +51,22 @@ void HideDetachedVisual(QQuickItem* item) {
   item->setParentItem(nullptr);
 }
 
+void FlushDeferredDeletes() { QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); }
+
 }  // namespace
 
-AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {}
+AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {
+  connect(&AppTheme::Instance(), &AppTheme::ThemeChanged, this, [this]() {
+    ConfigureConnector();
+    for (const auto& [key, candidate] : edge_candidate_) {
+      const auto it = edge_by_key_.find(key);
+      if (it == edge_by_key_.end() || it->second.isNull()) {
+        continue;
+      }
+      ApplyEdgePresentation(*it->second, candidate);
+    }
+  });
+}
 
 AlcedoQanGraph::~AlcedoQanGraph() {
   rebuild_in_progress_ = true;
@@ -253,6 +270,7 @@ void AlcedoQanGraph::ClearIdentityMaps() {
   ClearDrawerConnections();
   node_by_id_.clear();
   edge_by_key_.clear();
+  edge_candidate_.clear();
   ports_by_node_.clear();
   node_projections_.clear();
   node_from_qan_.clear();
@@ -417,8 +435,8 @@ auto AlcedoQanGraph::ApplyRoles(const EditorNodeGraphSnapshot& snapshot)
     ApplyNodePresentation(*qan_node, node);
     node_projections_[node.node_id] = node;
   }
-  applied_         = snapshot;
-  has_projection_  = true;
+  applied_        = snapshot;
+  has_projection_ = true;
   BindDrawerSignals();
   result.succeeded = true;
   return result;
@@ -428,6 +446,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     -> AlcedoQanGraphApplyResult {
   AlcedoQanGraphApplyResult result;
   result.rebuilt_topology = true;
+  ++topology_replace_count_;
 
   const auto previous     = applied_;
   const auto had_previous = has_projection_;
@@ -441,7 +460,8 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     has_projection_      = true;
     rebuild_in_progress_ = false;
     BindDrawerSignals();
-    result.succeeded     = true;
+    ApplyConnectablePolicy();
+    result.succeeded = true;
     return result;
   }
 
@@ -460,7 +480,8 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     }
   }
   rebuild_in_progress_ = false;
-  result.error         = error;
+  ApplyConnectablePolicy();
+  result.error = error;
   return result;
 }
 
@@ -549,8 +570,11 @@ auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString
   if (source == nullptr || dest == nullptr) {
     return QStringLiteral("snapshot edge references an unknown node");
   }
-  if (out == nullptr || in == nullptr) {
-    return QStringLiteral("Qan edge port binding failed");
+  if (out == nullptr) {
+    return QStringLiteral("Qan source port is missing");
+  }
+  if (in == nullptr) {
+    return QStringLiteral("Qan destination port is missing");
   }
   auto* qan_edge = graph_->insertEdge(source, dest, edge_component_.get());
   if (qan_edge == nullptr || qan_edge->getItem() == nullptr) {
@@ -564,10 +588,199 @@ auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString
   if (qan_edge->getItem()->getSourceItem() != out ||
       qan_edge->getItem()->getDestinationItem() != in) {
     graph_->removeEdge(qan_edge, true);
-    return QStringLiteral("Qan edge port binding failed");
+    return QStringLiteral("Qan edge did not bind to the requested ports");
   }
-  edge_by_key_[MakeEdgeKey(edge)] = qan_edge;
+  const auto key    = MakeEdgeKey(edge);
+  edge_by_key_[key] = qan_edge;
+  ApplyEdgePresentation(*qan_edge, false);
+  edge_candidate_[key] = false;
   return {};
+}
+
+auto AlcedoQanGraph::InsertProjectedNode(const EditorNodeProjection& node)
+    -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (graph_.isNull() || !has_projection_) {
+    result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return result;
+  }
+  if (NodeFor(node.node_id) != nullptr) {
+    result.error = QStringLiteral("Qan node already exists");
+    return result;
+  }
+  const auto delegate_error = EnsureDelegates();
+  if (!delegate_error.isEmpty()) {
+    result.error = delegate_error;
+    return result;
+  }
+  auto* qan_node = InsertQanNode(*graph_, node);
+  if (qan_node == nullptr || qan_node->getItem() == nullptr) {
+    if (qan_node != nullptr) {
+      graph_->removeNode(qan_node, true);
+    }
+    result.error = QStringLiteral("Qan node creation failed");
+    return result;
+  }
+  ApplyNodePresentation(*qan_node, node);
+  node_by_id_[node.node_id]       = qan_node;
+  node_projections_[node.node_id] = node;
+  node_from_qan_[qan_node]        = ReverseNode{node.node_id, applied_.session_generation};
+  const auto port_error           = InsertNodePorts(*qan_node, node);
+  if (!port_error.isEmpty()) {
+    (void)RemoveProjectedNode(node.node_id);
+    result.error = port_error;
+    return result;
+  }
+  BindDrawerSignal(qan_node->getItem(), node.node_id);
+  applied_.nodes.push_back(node);
+  AttachLiveVisuals();
+  ApplyConnectablePolicy();
+  result.succeeded = true;
+  return result;
+}
+
+auto AlcedoQanGraph::RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (graph_.isNull()) {
+    result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return result;
+  }
+  std::vector<EdgeKey> incident;
+  for (const auto& [key, edge] : edge_by_key_) {
+    if (key.source_node_id == node_id || key.destination_node_id == node_id) {
+      incident.push_back(key);
+    }
+  }
+  for (const auto& key : incident) {
+    EditorNodeEdgeProjection edge{key.source_node_id, key.source_port_id, key.destination_node_id,
+                                  key.destination_port_id};
+    (void)RemoveProjectedEdge(edge);
+  }
+  auto* qan_node = NodeFor(node_id);
+  if (qan_node != nullptr) {
+    node_from_qan_.erase(qan_node);
+    HideDetachedVisual(qan_node->getItem());
+    graph_->removeNode(qan_node, true);
+    FlushDeferredDeletes();
+  }
+  node_by_id_.erase(node_id);
+  node_projections_.erase(node_id);
+  ports_by_node_.erase(node_id);
+  applied_.nodes.erase(std::remove_if(applied_.nodes.begin(), applied_.nodes.end(),
+                                      [&](const auto& node) { return node.node_id == node_id; }),
+                       applied_.nodes.end());
+  ApplyConnectablePolicy();
+  result.succeeded = true;
+  return result;
+}
+
+auto AlcedoQanGraph::InsertProjectedEdge(const EditorNodeEdgeProjection& edge, bool candidate)
+    -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (graph_.isNull()) {
+    result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return result;
+  }
+  if (EdgeFor(edge) != nullptr) {
+    ApplyEdgePresentation(*EdgeFor(edge), candidate);
+    edge_candidate_[MakeEdgeKey(edge)] = candidate;
+    result.succeeded                   = true;
+    return result;
+  }
+  const auto error = InsertEdge(edge);
+  if (!error.isEmpty()) {
+    result.error = error;
+    return result;
+  }
+  auto* qan_edge = EdgeFor(edge);
+  if (qan_edge != nullptr) {
+    ApplyEdgePresentation(*qan_edge, candidate);
+  }
+  edge_candidate_[MakeEdgeKey(edge)] = candidate;
+  applied_.edges.push_back(edge);
+  AttachLiveVisuals();
+  result.succeeded = true;
+  return result;
+}
+
+auto AlcedoQanGraph::RemoveProjectedEdge(const EditorNodeEdgeProjection& edge)
+    -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (graph_.isNull()) {
+    result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return result;
+  }
+  const auto key = MakeEdgeKey(edge);
+  auto       it  = edge_by_key_.find(key);
+  if (it != edge_by_key_.end() && !it->second.isNull()) {
+    if (auto* item = it->second->getItem()) {
+      if (auto* src = qobject_cast<qan::PortItem*>(item->getSourceItem())) {
+        src->getOutEdgeItems().removeAll(item);
+      }
+      if (auto* dst = qobject_cast<qan::PortItem*>(item->getDestinationItem())) {
+        dst->getInEdgeItems().removeAll(item);
+      }
+    }
+    HideDetachedVisual(it->second->getItem());
+    graph_->removeEdge(it->second.data(), true);
+    FlushDeferredDeletes();
+  }
+  edge_by_key_.erase(key);
+  edge_candidate_.erase(key);
+  applied_.edges.erase(std::remove_if(applied_.edges.begin(), applied_.edges.end(),
+                                      [&](const auto& item) { return MakeEdgeKey(item) == key; }),
+                       applied_.edges.end());
+  result.succeeded = true;
+  return result;
+}
+
+void AlcedoQanGraph::PromoteCandidatePresentation() {
+  for (auto& [key, candidate] : edge_candidate_) {
+    candidate = false;
+    auto it   = edge_by_key_.find(key);
+    if (it != edge_by_key_.end() && !it->second.isNull()) {
+      ApplyEdgePresentation(*it->second, false);
+    }
+  }
+}
+
+auto AlcedoQanGraph::PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& snapshot)
+    -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (!has_projection_ || graph_.isNull()) {
+    result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
+    return result;
+  }
+  if (snapshot.session_generation != applied_.session_generation) {
+    result.error = QStringLiteral("snapshot session generation is stale");
+    return result;
+  }
+  if (snapshot.nodes.size() != node_by_id_.size() || snapshot.edges.size() != edge_by_key_.size()) {
+    result.error = QStringLiteral("committed snapshot does not match live Qan identities");
+    return result;
+  }
+  for (const auto& node : snapshot.nodes) {
+    if (NodeFor(node.node_id) == nullptr) {
+      result.error = QStringLiteral("committed snapshot does not match live Qan identities");
+      return result;
+    }
+  }
+  for (const auto& edge : snapshot.edges) {
+    if (EdgeFor(edge) == nullptr) {
+      result.error = QStringLiteral("committed snapshot does not match live Qan identities");
+      return result;
+    }
+  }
+  for (const auto& node : snapshot.nodes) {
+    auto* qan_node = NodeFor(node.node_id);
+    ApplyNodePresentation(*qan_node, node);
+    node_projections_[node.node_id] = node;
+  }
+  PromoteCandidatePresentation();
+  applied_         = snapshot;
+  has_projection_  = true;
+  result.succeeded = true;
+  return result;
 }
 
 auto AlcedoQanGraph::MakeEdgeKey(const EditorNodeEdgeProjection& edge) -> EdgeKey {
@@ -581,6 +794,21 @@ auto AlcedoQanGraph::ToQString(std::string_view text) -> QString {
 
 auto AlcedoQanGraph::QanPortId(bool is_input, const PortId& port_id) -> QString {
   return (is_input ? QStringLiteral("in:") : QStringLiteral("out:")) + ToQString(port_id.Value());
+}
+
+void AlcedoQanGraph::ApplyEdgePresentation(qan::Edge& qan_edge, bool candidate) {
+  auto* item = qan_edge.getItem();
+  if (item == nullptr) {
+    return;
+  }
+  const auto color = candidate ? AppTheme::Instance().graphCandidateEdgeColor()
+                               : AppTheme::Instance().graphEdgeColor();
+  item->setProperty("candidate", candidate);
+  if (auto* style = item->getStyle()) {
+    style->setLineColor(color);
+  }
+  item->setSrcShape(qan::EdgeStyle::ArrowShape::None);
+  item->setDstShape(qan::EdgeStyle::ArrowShape::None);
 }
 
 void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node) {
@@ -695,13 +923,11 @@ auto AlcedoQanGraph::InstallPortDockDelegate() -> QString {
   if (port_dock_delegate_graph_.data() == graph_.data()) {
     return {};
   }
-  auto loaded =
-      LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
+  auto loaded = LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
   if (!loaded.component) {
     return loaded.error;
   }
-  graph_->setProperty("horizontalDockDelegate",
-                      QVariant::fromValue(loaded.component.release()));
+  graph_->setProperty("horizontalDockDelegate", QVariant::fromValue(loaded.component.release()));
   port_dock_delegate_graph_ = graph_;
   return {};
 }
@@ -776,6 +1002,125 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
   }
   graph_->setMultipleSelectionEnabled(false);
   InstallInvisibleSelectionDelegate();
+  graph_->setConnectorCreateDefaultEdge(false);
+  graph_->setConnectorEnabled(true);
+  connect(graph_.data(), &qan::Graph::connectorChanged, this, &AlcedoQanGraph::ConfigureConnector,
+          Qt::UniqueConnection);
+  connect(graph_.data(), &qan::Graph::connectorRequestEdgeCreation, this,
+          &AlcedoQanGraph::OnConnectorRequestEdgeCreation, Qt::UniqueConnection);
+  ConfigureConnector();
+}
+
+void AlcedoQanGraph::ConfigureConnector() {
+  if (graph_.isNull()) {
+    return;
+  }
+  const auto& theme = AppTheme::Instance();
+  graph_->setConnectorCreateDefaultEdge(false);
+  graph_->setConnectorEnabled(true);
+  graph_->setConnectorEdgeColor(theme.graphCandidateEdgeColor());
+  graph_->setConnectorColor(theme.graphPortBorderColor());
+  if (auto* connector = graph_->getConnector()) {
+    connector->setProperty("createDefaultEdge", false);
+    if (connector->getSourceNode() == nullptr && connector->getSourcePort() == nullptr) {
+      connector->setVisible(false);
+    }
+  }
+  ApplyConnectablePolicy();
+}
+
+void AlcedoQanGraph::ApplyConnectablePolicy() {
+  if (graph_.isNull() || rebuild_in_progress_) {
+    return;
+  }
+  for (const auto& [node_id, node] : node_by_id_) {
+    if (node.isNull() || node->getItem() == nullptr) {
+      continue;
+    }
+    const auto* projection = NodeProjection(node_id);
+    if (projection == nullptr) {
+      continue;
+    }
+    auto connectable = qan::NodeItem::Connectable::UnConnectable;
+    if (projection->node_kind == EditorNodeKind::Drt) {
+      connectable = qan::NodeItem::Connectable::InConnectable;
+    } else if (projection->node_kind == EditorNodeKind::ColorGrade) {
+      connectable = qan::NodeItem::Connectable::Connectable;
+    } else if (projection->node_kind == EditorNodeKind::Develop) {
+      connectable = qan::NodeItem::Connectable::OutConnectable;
+    }
+    node->getItem()->setConnectable(connectable);
+  }
+
+  auto* connector = graph_->getConnector();
+  if (connector == nullptr) {
+    return;
+  }
+  const auto* selected = NodeProjection(product_selected_node_id_);
+  auto*       source   = NodeFor(product_selected_node_id_);
+  const bool  can_start =
+      selected != nullptr && selected->node_kind != EditorNodeKind::Drt && source != nullptr;
+  if (!can_start) {
+    connector->setSourcePort(nullptr);
+    connector->setSourceNode(nullptr);
+    connector->setVisible(false);
+    return;
+  }
+  auto* output = OutputPortFor(product_selected_node_id_, PortId{"image"});
+  if (output != nullptr) {
+    connector->setSourcePort(output);
+  } else {
+    connector->setSourceNode(source);
+  }
+  connector->setEnabled(true);
+  connector->setVisible(true);
+}
+
+void AlcedoQanGraph::hideConnectorPreview() {
+  if (graph_.isNull()) {
+    return;
+  }
+  auto* connector = graph_->getConnector();
+  if (connector == nullptr) {
+    return;
+  }
+  if (auto* edge = connector->getEdgeItem()) {
+    edge->setVisible(false);
+  }
+  if (auto* item = connector->getConnectorItem()) {
+    item->setProperty("state", QStringLiteral("NORMAL"));
+  }
+}
+
+void AlcedoQanGraph::OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst,
+                                                    qan::PortItem* /*src_port*/,
+                                                    qan::PortItem* dst_port) {
+  hideConnectorPreview();
+  const auto source_id = LiveNodeId(src);
+  if (!source_id.has_value()) {
+    emit ConnectorRequestRejected(
+        QStringLiteral("That graph item is no longer part of the current Version"));
+    return;
+  }
+  qan::Node* destination_node = qobject_cast<qan::Node*>(dst);
+  if (destination_node == nullptr && dst_port != nullptr) {
+    destination_node = dst_port->getNode();
+  }
+  if (destination_node == nullptr) {
+    if (auto* item = qobject_cast<qan::NodeItem*>(dst)) {
+      destination_node = item->getNode();
+    }
+  }
+  const auto destination_id = LiveNodeId(destination_node);
+  if (!destination_id.has_value()) {
+    emit ConnectorRequestRejected(
+        QStringLiteral("That graph item is no longer part of the current Version"));
+    return;
+  }
+  const bool destination_is_output =
+      dst_port != nullptr && dst_port->getType() == qan::PortItem::Type::Out;
+  emit ConnectorMoveRequested(ToQString(source_id->Value()), ToQString(destination_id->Value()),
+                              destination_is_output);
 }
 
 void AlcedoQanGraph::ClearDrawerConnections() {
@@ -828,13 +1173,13 @@ void AlcedoQanGraph::ApplyProductSelection(const std::optional<NodeId>& node_id)
   }
   product_selected_node_id_ = node_id.value_or(NodeId{});
   graph_->clearSelection();
-  if (!node_id.has_value() || node_id->Empty()) {
-    return;
+  if (node_id.has_value() && !node_id->Empty()) {
+    auto* node = NodeFor(*node_id);
+    if (node != nullptr) {
+      graph_->setNodeSelected(node, true);
+    }
   }
-  auto* node = NodeFor(*node_id);
-  if (node != nullptr) {
-    graph_->setNodeSelected(node, true);
-  }
+  ApplyConnectablePolicy();
 }
 
 void AlcedoQanGraph::SetNodeItemPosition(const NodeId& node_id, QPointF position) {

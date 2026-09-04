@@ -93,8 +93,13 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   int                            add_grade_count    = 0;
   int                            remove_grade_count = 0;
   int                            rename_grade_count = 0;
+  int                                             reconnect_grade_count = 0;
+  int                            edit_node_graph_count = 0;
+  NodeGraphTopologyChange        last_topology_change{};
   NodeId                         last_node_id;
   NodeId                         last_before_node_id;
+  NodeId                                          last_predecessor_id;
+  NodeId                                          last_successor_id;
   std::string                    last_grade_name;
   std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
@@ -166,6 +171,33 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     last_node_id       = node_id;
     last_grade_name    = std::move(display_name);
     last_render_reason = std::nullopt;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto ReconnectColorGrade(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                           const NodeId& new_predecessor_id, const NodeId& new_successor_id,
+                           std::string* error) -> bool override {
+    ++reconnect_grade_count;
+    last_node_id        = node_id;
+    last_predecessor_id = new_predecessor_id;
+    last_successor_id   = new_successor_id;
+    last_render_reason  = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto EditNodeGraph(const EditorHistoryGuardHandle&, NodeGraphTopologyChange change,
+                     std::string* error) -> bool override {
+    ++edit_node_graph_count;
+    last_topology_change = std::move(change);
+    last_render_reason   = EditorRenderReason::GraphTopologyChanged;
     if (fail_node_command) {
       if (error != nullptr) *error = "mini-Git journal append failed";
       return false;

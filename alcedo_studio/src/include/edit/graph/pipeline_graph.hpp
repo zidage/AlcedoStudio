@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -19,7 +20,40 @@ struct GraphEdge {
   PortId from_port;
   NodeId to_node;
   PortId to_port;
+
+  friend auto operator==(const GraphEdge& lhs, const GraphEdge& rhs) -> bool {
+    return lhs.from_node == rhs.from_node && lhs.from_port == rhs.from_port &&
+           lhs.to_node == rhs.to_node && lhs.to_port == rhs.to_port;
+  }
 };
+
+/// One node taken from a live graph by vector index.
+struct TopologyNodeRemoval {
+  NodeId      id;
+  std::size_t original_index = 0;
+};
+
+/// One node inserted into a live graph at a final vector index.
+struct TopologyNodeInsertion {
+  std::unique_ptr<INodeModel> node;
+  std::size_t                 final_index = 0;
+};
+
+/// One edge taken from a live graph by vector index.
+struct TopologyEdgeRemoval {
+  GraphEdge   edge;
+  std::size_t original_index = 0;
+};
+
+/// One edge inserted into a live graph at a final vector index.
+struct TopologyEdgeInsertion {
+  GraphEdge   edge;
+  std::size_t final_index = 0;
+};
+
+/// Test hook invoked after each in-place topology mutation step.
+/// @p step is disconnect, remove_node, insert_node, connect, or validate.
+using TopologyDeltaStepHook = std::function<void(std::string_view step, std::size_t index)>;
 
 /**
  * @brief Simple directed graph of INodeModel instances.
@@ -53,6 +87,27 @@ class PipelineGraph {
   auto ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected,
                          std::vector<GraphEdge>        connected,
                          std::unique_ptr<INodeModel> inserted = nullptr, const NodeId& removed = {})
+      -> std::vector<GraphValidationError>;
+
+  /**
+   * @brief Apply one net topology delta in place on this live graph object.
+   *
+   * Removed nodes and disconnected edges must match the live vectors at the
+   * stored original indexes. Inserted NodeIds and connected edge identities
+   * must not already exist after those removals. All restoration storage is
+   * reserved before mutation. Unaffected INodeModel addresses stay stable.
+   *
+   * @pre Caller holds the live executor render lock.
+   * @return Validation errors after restoring exact node ownership, node order,
+   *         and edge order, or empty on success. Exceptions restore the same
+   *         objects and propagate.
+   */
+  auto ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&     removed_nodes,
+                          std::vector<TopologyNodeInsertion>          inserted_nodes,
+                          const std::vector<TopologyEdgeRemoval>&     disconnected_edges,
+                          const std::vector<TopologyEdgeInsertion>&   connected_edges,
+                          TopologyDeltaStepHook                       after_step = {},
+                          std::vector<std::unique_ptr<INodeModel>>*   discarded_nodes = nullptr)
       -> std::vector<GraphValidationError>;
 
   [[nodiscard]] auto Validate() const -> std::vector<GraphValidationError>;

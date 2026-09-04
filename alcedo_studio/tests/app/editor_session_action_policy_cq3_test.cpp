@@ -136,12 +136,16 @@ TEST_F(EditorSessionActionPolicyCq3Test,
 }
 
 TEST(EditorSessionNodeCommandPolicy,
-     AddRenameAndRemoveUseTheSameAdmissionDecisionAsSettledAdjustments) {
+     AddRenameRemoveAndReconnectUseTheSameAdmissionDecisionAsSettledAdjustments) {
   EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::AddColorGrade),
             EditorAction::CommitAdjustment);
   EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RenameColorGrade),
             EditorAction::CommitAdjustment);
   EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::RemoveColorGrade),
+            EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::ReconnectColorGrade),
+            EditorAction::CommitAdjustment);
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::EditNodeGraph),
             EditorAction::CommitAdjustment);
 }
 

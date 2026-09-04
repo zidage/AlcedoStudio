@@ -48,24 +48,25 @@ struct EditorNodeLayoutKey {
 };
 
 /**
- * @brief Geometry tokens used to compute the first backbone layout.
+ * @brief Geometry used to compute the first backbone layout.
  *
- * Defaults match the DESIGN.md graph-node sizes. Tests may supply explicit
- * values. The QML default constructor uses these members as-is.
+ * The default EditorNodeLayoutStore constructor fills this from AppTheme.
+ * Tests may pass an explicit struct. Do not copy DESIGN.md literals here;
+ * AppTheme is the runtime source for graph and side-panel sizes.
  */
 struct EditorNodeLayoutMetrics {
-  int origin_x             = 48;
-  int origin_y             = 48;
-  int vertical_gap         = 48;
-  int node_width           = 220;
-  int endpoint_height      = 40;
-  int name_row_height      = 32;
-  int drawer_header_height = 28;
-  int mask_row_height      = 28;
-  int divider_height       = 1;
-  int panel_width_min      = 260;
-  int panel_width_max      = 460;
-  int panel_width_default  = 320;
+  int origin_x             = 0;
+  int origin_y             = 0;
+  int vertical_gap         = 0;
+  int node_width           = 0;
+  int endpoint_height      = 0;
+  int name_row_height      = 0;
+  int drawer_header_height = 0;
+  int mask_row_height      = 0;
+  int divider_height       = 0;
+  int panel_width_min      = 0;
+  int panel_width_max      = 0;
+  int panel_width_default  = 0;
 };
 
 /**
@@ -76,7 +77,7 @@ struct EditorNodeLayoutMetrics {
  * write PipelineDocument or history.
  */
 struct EditorNodeLayoutValue {
-  int                       preferred_panel_width = 320;
+  int                       preferred_panel_width = 0;
   QPointF                   view_position;
   qreal                     zoom = 1.0;
   NodeId                    selected_node_id;
@@ -161,20 +162,32 @@ class EditorNodeLayoutStore : public QObject {
   void                EnsureDefaultPositions(const EditorNodeGraphSnapshot& snapshot);
 
   /**
+   * @brief Place one unconnected draft node below the current vertical DAG.
+   *
+   * Uses the backbone origin x so the new card stays in the vertical view.
+   * Existing stored positions are left unchanged. Multiple unconnected draft
+   * nodes stack downward. Does not write PipelineDocument or history.
+   * @param node_id Draft Color Grade that has no stored position yet.
+   * @param snapshot Live or draft projection used for node heights and to fill
+   *        missing backbone positions before measuring the lowest card.
+   */
+  void AssignStagingPosition(const NodeId& node_id, const EditorNodeGraphSnapshot& snapshot);
+
+  /**
    * @brief QML entry that copies defaults from an EditorNodeController snapshot.
    * @param controller EditorNodeController, or ignored when the type does not match.
    */
-  Q_INVOKABLE void    ensureDefaultsFrom(QObject* controller);
+  Q_INVOKABLE void   ensureDefaultsFrom(QObject* controller);
 
   /**
    * @return Copied value for @p key, or a default-constructed value when absent.
    */
-  [[nodiscard]] auto  Value(const EditorNodeLayoutKey& key) const -> EditorNodeLayoutValue;
+  [[nodiscard]] auto Value(const EditorNodeLayoutKey& key) const -> EditorNodeLayoutValue;
 
   /**
    * @brief Height of one node in the first deterministic layout.
    */
-  [[nodiscard]] auto  DefaultHeight(EditorNodeKind kind, int mask_count, bool drawer_open) const
+  [[nodiscard]] auto DefaultHeight(EditorNodeKind kind, int mask_count, bool drawer_open) const
       -> qreal;
 
  signals:

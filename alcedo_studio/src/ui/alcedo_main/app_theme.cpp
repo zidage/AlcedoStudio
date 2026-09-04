@@ -21,12 +21,10 @@
 
 #include "alcedo_version.hpp"
 
-// resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
-// object unless something in the final executable references
-// qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
-static void InitAlcedoBundledResources() {
-  Q_INIT_RESOURCE(resource);
-}
+// resource.qrc is compiled into the AppTheme library. MSVC still drops that
+// object unless the final executable references qInitResources_resource().
+// Q_INIT_RESOURCE must sit outside any namespace.
+static void InitAlcedoBundledResources() { Q_INIT_RESOURCE(resource); }
 
 namespace alcedo::ui {
 namespace {
@@ -355,8 +353,8 @@ void AppTheme::RegisterFonts() {
   // Minigit / diagnostic monospace only (Versions commit ids, transaction
   // timeline hashes and before/after lines). Do not use for general metrics —
   // those stay on dataFontFamily (IBM Plex Sans).
-  families.mono = RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"),
-                                       QStringLiteral("DM Mono"));
+  families.mono =
+      RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"), QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is
   // "Noto Sans SC" (same family used for the rest of the UI's Chinese text);
   // we intentionally do NOT override it with the decorative Dinglie Song
@@ -1000,6 +998,8 @@ auto AppTheme::graphEndpointHeight() const -> int { return 40; }
 
 auto AppTheme::graphNameRowHeight() const -> int { return 32; }
 
+auto AppTheme::graphNameRowDividerHeight() const -> int { return 1; }
+
 auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
 
 auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
@@ -1044,9 +1044,7 @@ auto AppTheme::monoFontFamily() const -> QString {
   RegisterFonts();
   return FontState().mono;
 }
-auto AppTheme::appVersion() const -> QString {
-  return QStringLiteral(ALCEDO_APP_VERSION);
-}
+auto AppTheme::appVersion() const -> QString { return QStringLiteral(ALCEDO_APP_VERSION); }
 
 auto AppTheme::toneGold() const -> QColor { return GetTheme(current_theme_index_).tone_gold; }
 auto AppTheme::toneWine() const -> QColor { return GetTheme(current_theme_index_).tone_wine; }
@@ -1124,9 +1122,7 @@ auto AppTheme::spaceXl() const -> int { return 20; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
-auto AppTheme::motionEasing() const -> int {
-  return static_cast<int>(QEasingCurve::OutCubic);
-}
+auto AppTheme::motionEasing() const -> int { return static_cast<int>(QEasingCurve::OutCubic); }
 auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {

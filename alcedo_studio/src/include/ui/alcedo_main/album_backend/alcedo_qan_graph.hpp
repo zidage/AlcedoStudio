@@ -146,6 +146,40 @@ class AlcedoQanGraph : public QObject {
       -> AlcedoQanGraphApplyResult;
 
   /**
+   * @brief Insert one projected node and its ports without replacing the graph.
+   * @return Failure restores no other primitives. The new node is removed on error.
+   */
+  [[nodiscard]] auto InsertProjectedNode(const EditorNodeProjection& node)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Remove one mapped node and incident mapped edges.
+   */
+  [[nodiscard]] auto RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Insert one edge. @p candidate uses the request-preview color until promotion.
+   */
+  [[nodiscard]] auto InsertProjectedEdge(const EditorNodeEdgeProjection& edge, bool candidate)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Remove one mapped edge. Unknown edges succeed as no-ops.
+   */
+  [[nodiscard]] auto RemoveProjectedEdge(const EditorNodeEdgeProjection& edge)
+      -> AlcedoQanGraphApplyResult;
+  /**
+   * @brief Recolor every mapped edge to the permanent AppTheme stroke.
+   */
+  void PromoteCandidatePresentation();
+  /**
+   * @brief Record committed snapshot revisions without replacing Qan primitives.
+   *
+   * Requires live node and edge identities to match @p snapshot. Used after
+   * automatic topology submission and adapter recreation is not required.
+   */
+  [[nodiscard]] auto PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& snapshot)
+      -> AlcedoQanGraphApplyResult;
+  [[nodiscard]] auto topology_replace_count() const -> int { return topology_replace_count_; }
+
+  /**
    * @return Live Qan node for @p node_id in the current generation, or nullptr.
    */
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> qan::Node*;
@@ -215,10 +249,28 @@ class AlcedoQanGraph : public QObject {
   Q_INVOKABLE void    setDrawerOpen(const QString& node_id, bool open);
   Q_INVOKABLE bool    drawerOpen(const QString& node_id) const;
   Q_INVOKABLE void    applyProductSelection(const QString& node_id);
+  /**
+   * @brief Hide the official visual connector preview without inserting an edge.
+   *
+   * Call after a request is accepted or rejected. The adapter never creates a
+   * permanent Qan edge from a connector drop.
+   */
+  Q_INVOKABLE void    hideConnectorPreview();
 
  signals:
   void GraphChanged();
   void DelegatesChanged();
+  /**
+   * @brief Generation-checked connector drop ready for exclusive-port Connect.
+   *
+   * @p destinationIsOutput is true when the drop target is an output port.
+   */
+  void ConnectorMoveRequested(const QString& sourceNodeId, const QString& destinationNodeId,
+                              bool destinationIsOutput);
+  /**
+   * @brief Connector drop that could not be resolved to live product IDs.
+   */
+  void ConnectorRequestRejected(const QString& error);
   /**
    * @brief Emitted when a Color Grade Mask drawer is opened or closed.
    *
@@ -280,7 +332,11 @@ class AlcedoQanGraph : public QObject {
   void               BindDrawerSignals();
   void               BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
   void               ConfigureGraphPolicy();
+  void               ConfigureConnector();
+  void               ApplyConnectablePolicy();
   void               OnGraphDestroyed();
+  void OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst, qan::PortItem* src_port,
+                                      qan::PortItem* dst_port);
 
  private slots:
   void OnDrawerOpenChanged();
@@ -303,6 +359,7 @@ class AlcedoQanGraph : public QObject {
                                 bool is_input) -> qan::PortItem*;
   [[nodiscard]] auto InsertEdge(const EditorNodeEdgeProjection& edge) -> QString;
   void               ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node);
+  void               ApplyEdgePresentation(qan::Edge& qan_edge, bool candidate);
   [[nodiscard]] auto EnsureDelegates() -> QString;
   struct LoadedComponent {
     std::unique_ptr<QQmlComponent> component;
@@ -337,6 +394,8 @@ class AlcedoQanGraph : public QObject {
   std::unique_ptr<QQmlComponent>                    edge_component_;
   bool                                              has_projection_      = false;
   bool                                              rebuild_in_progress_ = false;
+  int                                               topology_replace_count_ = 0;
+  std::map<EdgeKey, bool>                           edge_candidate_;
   EditorNodeGraphSnapshot                           applied_;
   std::map<NodeId, QPointer<qan::Node>>             node_by_id_;
   std::map<EdgeKey, QPointer<qan::Edge>>            edge_by_key_;

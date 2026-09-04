@@ -10,7 +10,9 @@
 #include <QScopeGuard>
 #include <QUuid>
 #include <algorithm>
+#include <exception>
 #include <utility>
+#include <vector>
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
@@ -45,10 +47,10 @@ auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnaps
 EditorNodeController::EditorNodeController(QObject* parent) : QObject(parent) {}
 
 EditorNodeController::~EditorNodeController() {
-  if (graph_adapter_connection_) {
-    QObject::disconnect(graph_adapter_connection_);
-    graph_adapter_connection_ = {};
+  if (graph_adapter_ != nullptr) {
+    disconnect(graph_adapter_.data(), nullptr, this, nullptr);
   }
+  graph_adapter_connection_ = {};
   DisconnectSession();
 }
 
@@ -116,6 +118,7 @@ void EditorNodeController::SetLastError(QString error) {
 }
 
 void EditorNodeController::ClearSnapshot() {
+  DiscardDraft();
   snapshot_                  = {};
   has_snapshot_              = false;
   selected_node_id_          = {};
@@ -231,11 +234,28 @@ auto EditorNodeController::can_add_color_grade() const -> bool {
 }
 
 auto EditorNodeController::can_rename_selected_color_grade() const -> bool {
-  return can_add_color_grade() && IsColorGrade(selected_node_id_);
+  return can_add_color_grade() && IsColorGrade(selected_node_id_) && draft_ == nullptr;
 }
 
 auto EditorNodeController::can_delete_selected_color_grade() const -> bool {
-  return can_rename_selected_color_grade();
+  return can_add_color_grade() && IsColorGrade(selected_node_id_);
+}
+
+auto EditorNodeController::can_reconnect_selected_color_grade() const -> bool {
+  return can_rename_selected_color_grade() ||
+         (has_snapshot_ && NodeFor(selected_node_id_) != nullptr &&
+          NodeFor(selected_node_id_)->node_kind == EditorNodeKind::Develop);
+}
+
+auto EditorNodeController::incomplete_draft() const -> bool {
+  return draft_ != nullptr && !draft_->SubmissionValid();
+}
+
+auto EditorNodeController::incomplete_draft_instruction() const -> QString {
+  if (!incomplete_draft()) {
+    return {};
+  }
+  return tr("Connect Color Grades into one Develop to DRT path.");
 }
 
 auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> bool {
@@ -312,6 +332,12 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
     SetLastError(tr("The node graph has no snapshot"));
     return false;
   }
+  const auto promoted = graph->PromoteCommittedSnapshot(snapshot_);
+  if (promoted.succeeded) {
+    graph->ApplyProductSelection(selected_node_id_);
+    SetLastError({});
+    return true;
+  }
   const auto result = graph->ApplySnapshot(snapshot_);
   if (!result.succeeded) {
     SetLastError(result.error);
@@ -331,14 +357,18 @@ void EditorNodeController::set_graph_adapter(QObject* adapter) {
   if (graph_adapter_.data() == graph) {
     return;
   }
-  if (graph_adapter_connection_) {
-    QObject::disconnect(graph_adapter_connection_);
-    graph_adapter_connection_ = {};
+  if (graph_adapter_ != nullptr) {
+    disconnect(graph_adapter_.data(), nullptr, this, nullptr);
   }
-  graph_adapter_ = graph;
+  graph_adapter_connection_ = {};
+  graph_adapter_            = graph;
   if (graph_adapter_ != nullptr) {
     graph_adapter_connection_ = connect(graph_adapter_.data(), &AlcedoQanGraph::GraphChanged, this,
                                         [this] { QueueProjectionApply(); });
+    connect(graph_adapter_.data(), &AlcedoQanGraph::ConnectorMoveRequested, this,
+            &EditorNodeController::OnConnectorMoveRequested);
+    connect(graph_adapter_.data(), &AlcedoQanGraph::ConnectorRequestRejected, this,
+            &EditorNodeController::OnConnectorRequestRejected);
   }
   emit GraphAdapterChanged();
   if (graph_adapter_ != nullptr && has_snapshot_) {
@@ -413,7 +443,21 @@ bool EditorNodeController::refreshFromSession() {
   return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
 }
 
-void EditorNodeController::OnSessionChanged() { refreshFromSession(); }
+void EditorNodeController::OnSessionChanged() {
+  if (skip_next_session_refresh_) {
+    skip_next_session_refresh_ = false;
+    return;
+  }
+  if (session_ != nullptr && draft_ != nullptr) {
+    const auto* document = session_->pipeline_document();
+    if (document != nullptr && draft_->MatchesIdentity(CurrentDraftIdentity()) &&
+        draft_->MatchesBase(*document)) {
+      return;
+    }
+    DiscardDraft();
+  }
+  refreshFromSession();
+}
 
 void EditorNodeController::selectNode(const QString& node_id) {
   const auto id = NodeIdFromQString(node_id);
@@ -467,30 +511,39 @@ bool EditorNodeController::addCleanColorGrade() {
   if (!ValidateCommandGeneration()) {
     return false;
   }
-  NodeId    before_id{"drt"};
-  const int selected_index = IndexOf(selected_node_id_);
-  if (IsColorGrade(selected_node_id_) && selected_index >= 0 &&
-      selected_index + 1 < static_cast<int>(snapshot_.nodes.size())) {
-    before_id = snapshot_.nodes[static_cast<std::size_t>(selected_index + 1)].node_id;
+  if (!EnsureDraft()) {
+    return false;
   }
   const auto   uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
   const NodeId new_id{"grade." + uuid};
-
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitAddColorGrade(before_id, new_id);
-  if (EditorSessionResultIsFailure(result.kind)) {
-    SetLastError(QString::fromStdString(result.message));
+  auto       mutation     = draft_->AddColorGrade(new_id);
+  if (!mutation.succeeded) {
+    SetLastError(QString::fromStdString(mutation.error));
     return false;
   }
-  refreshFromSession();
+  if (!ApplyMutationToGraph(mutation)) {
+    return false;
+  }
+  if (layout_store_ != nullptr) {
+    layout_store_->AssignStagingPosition(new_id, snapshot_);
+    const auto pos = layout_store_->NodePosition(new_id);
+    if (graph_adapter_ != nullptr && pos.has_value()) {
+      graph_adapter_->SetNodeItemPosition(new_id, *pos);
+    }
+  }
+  SyncSnapshotFromDraft();
   selectNode(NodeIdToQString(new_id));
-  QueueProjectionApply();
-  return true;
+  return MaybeSubmitDraft();
 }
 
 bool EditorNodeController::renameColorGrade(const QString& node_id, const QString& display_name) {
   if (!ValidateCommandGeneration()) {
+    return false;
+  }
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before renaming"));
     return false;
   }
   const auto id = NodeIdFromQString(node_id);
@@ -507,7 +560,7 @@ bool EditorNodeController::renameColorGrade(const QString& node_id, const QStrin
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
   const auto result       = session_->SubmitRenameColorGrade(id, name.toStdString());
-  if (EditorSessionResultIsFailure(result.kind)) {
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
@@ -521,40 +574,278 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!ValidateCommandGeneration()) {
     return false;
   }
-  const auto id    = NodeIdFromQString(node_id);
-  const int  index = IndexOf(id);
-  if (!IsColorGrade(id) || index < 0) {
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
     SetLastError(tr("Only a Color Grade can be deleted"));
     return false;
   }
-  const NodeId successor = index + 1 < static_cast<int>(snapshot_.nodes.size())
-                               ? snapshot_.nodes[static_cast<std::size_t>(index + 1)].node_id
-                               : NodeId{};
-  const NodeId predecessor =
-      index > 0 ? snapshot_.nodes[static_cast<std::size_t>(index - 1)].node_id : NodeId{};
-
-  SetCommandActive(true);
-  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitRemoveColorGrade(id);
-  if (EditorSessionResultIsFailure(result.kind)) {
-    SetLastError(QString::fromStdString(result.message));
+  if (!EnsureDraft()) {
     return false;
   }
-  refreshFromSession();
-  NodeId live_selection = successor;
-  if (!ContainsNode(live_selection)) {
-    live_selection = predecessor;
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  auto       mutation     = draft_->RemoveColorGrade(id);
+  if (!mutation.succeeded) {
+    SetLastError(QString::fromStdString(mutation.error));
+    return false;
   }
-  if (!ContainsNode(live_selection)) {
-    live_selection = NodeId{"drt"};
+  if (!ApplyMutationToGraph(mutation)) {
+    return false;
   }
-  if (ContainsNode(live_selection) && selected_node_id_ != live_selection) {
-    selected_node_id_ = live_selection;
-    SetLastError({});
+  SyncSnapshotFromDraft();
+  if (!ContainsNode(selected_node_id_)) {
+    selected_node_id_ = DefaultSelectedNodeId();
     emit SelectionChanged();
     emit ActionAvailabilityChanged();
   }
-  QueueProjectionApply();
+  return MaybeSubmitDraft();
+}
+
+bool EditorNodeController::requestConnect(const QString& source_node_id,
+                                          const QString& destination_node_id) {
+  return requestConnect(source_node_id, destination_node_id, session_generation_);
+}
+
+bool EditorNodeController::requestConnect(const QString& source_node_id,
+                                          const QString& destination_node_id,
+                                          quint64        request_generation) {
+  if (!ValidateCommandGeneration()) {
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  if (request_generation != session_generation_) {
+    SetLastError(tr("The node command is from another editor session"));
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  if (!EnsureDraft()) {
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  auto       mutation =
+      draft_->Connect(NodeIdFromQString(source_node_id), NodeIdFromQString(destination_node_id));
+  if (graph_adapter_ != nullptr) {
+    graph_adapter_->hideConnectorPreview();
+  }
+  if (!mutation.succeeded) {
+    SetLastError(QString::fromStdString(mutation.error));
+    return false;
+  }
+  if (mutation.no_op) {
+    SetLastError({});
+    return true;
+  }
+  if (!ApplyMutationToGraph(mutation)) {
+    return false;
+  }
+  SyncSnapshotFromDraft();
+  return MaybeSubmitDraft();
+}
+
+bool EditorNodeController::requestConnectorMove(const QString& source_node_id,
+                                                const QString& destination_node_id,
+                                                bool           destination_is_output) {
+  if (destination_is_output) {
+    SetLastError(tr("Connections must go from an output port to an input port"));
+    if (graph_adapter_ != nullptr) {
+      graph_adapter_->hideConnectorPreview();
+    }
+    return false;
+  }
+  return requestConnect(source_node_id, destination_node_id, session_generation_);
+}
+
+void EditorNodeController::OnConnectorMoveRequested(const QString& source_node_id,
+                                                    const QString& destination_node_id,
+                                                    bool           destination_is_output) {
+  requestConnectorMove(source_node_id, destination_node_id, destination_is_output);
+}
+
+void EditorNodeController::OnConnectorRequestRejected(const QString& error) {
+  if (graph_adapter_ != nullptr) {
+    graph_adapter_->hideConnectorPreview();
+  }
+  SetLastError(error);
+}
+
+auto EditorNodeController::CurrentDraftIdentity() const -> alcedo::EditorNodeGraphDraftIdentity {
+  alcedo::EditorNodeGraphDraftIdentity identity;
+  identity.element_id          = element_id_;
+  identity.image_id            = image_id_;
+  identity.version_id          = version_id_.toStdString();
+  identity.session_generation  = session_generation_;
+  identity.projection_revision = projection_revision_;
+  identity.topology_revision   = topology_revision_;
+  return identity;
+}
+
+auto EditorNodeController::EnsureDraft() -> bool {
+  if (draft_ != nullptr) {
+    if (!draft_->MatchesIdentity(CurrentDraftIdentity())) {
+      SetLastError(tr("The node command is from another editor session"));
+      return false;
+    }
+    return true;
+  }
+  if (session_ == nullptr) {
+    SetLastError(tr("No editor session is bound"));
+    return false;
+  }
+  const auto* document = session_->pipeline_document();
+  if (document == nullptr) {
+    SetLastError(tr("No editable node graph is available"));
+    return false;
+  }
+  try {
+    draft_ = std::make_unique<alcedo::EditorNodeGraphDraft>(
+        alcedo::EditorNodeGraphDraft::FromDocument(*document, CurrentDraftIdentity()));
+  } catch (const std::exception& ex) {
+    SetLastError(QString::fromUtf8(ex.what()));
+    return false;
+  }
+  emit DraftStateChanged();
+  return true;
+}
+
+void EditorNodeController::DiscardDraft() {
+  if (draft_ == nullptr) {
+    return;
+  }
+  draft_.reset();
+  emit DraftStateChanged();
+}
+
+void EditorNodeController::SyncSnapshotFromDraft() {
+  if (draft_ == nullptr) {
+    return;
+  }
+  snapshot_     = draft_->CurrentSnapshot(session_generation_, projection_revision_,
+                                          topology_revision_);
+  has_snapshot_ = true;
+  emit DraftStateChanged();
+}
+
+auto EditorNodeController::ApplyMutationToGraph(const alcedo::EditorNodeGraphDraftMutation& mutation)
+    -> bool {
+  if (graph_adapter_ == nullptr || graph_adapter_->graph() == nullptr) {
+    return true;
+  }
+  std::vector<EditorNodeProjection>     applied_nodes;
+  std::vector<EditorNodeEdgeProjection> applied_edges;
+  auto fail = [&](const QString& error) {
+    SetLastError(error);
+    if (draft_ != nullptr) {
+      draft_->RestoreLastMutation();
+    }
+    for (auto it = applied_edges.rbegin(); it != applied_edges.rend(); ++it) {
+      (void)graph_adapter_->RemoveProjectedEdge(*it);
+    }
+    for (auto it = applied_nodes.rbegin(); it != applied_nodes.rend(); ++it) {
+      (void)graph_adapter_->RemoveProjectedNode(it->node_id);
+    }
+    if (draft_ != nullptr) {
+      for (const auto& node_id : mutation.removed_node_ids) {
+        const auto* node = draft_->FindNode(node_id);
+        if (node != nullptr) {
+          (void)graph_adapter_->InsertProjectedNode(*node);
+        }
+      }
+      for (const auto& edge : mutation.removed_edges) {
+        (void)graph_adapter_->InsertProjectedEdge(edge, true);
+      }
+    }
+    return false;
+  };
+  for (const auto& edge : mutation.removed_edges) {
+    const auto result = graph_adapter_->RemoveProjectedEdge(edge);
+    if (!result.succeeded) {
+      return fail(result.error);
+    }
+  }
+  for (const auto& node_id : mutation.removed_node_ids) {
+    const auto result = graph_adapter_->RemoveProjectedNode(node_id);
+    if (!result.succeeded) {
+      return fail(result.error);
+    }
+  }
+  for (const auto& node : mutation.inserted_nodes) {
+    const auto result = graph_adapter_->InsertProjectedNode(node);
+    if (!result.succeeded) {
+      return fail(result.error);
+    }
+    applied_nodes.push_back(node);
+  }
+  for (const auto& edge : mutation.inserted_edges) {
+    const auto result = graph_adapter_->InsertProjectedEdge(edge, true);
+    if (!result.succeeded) {
+      return fail(result.error);
+    }
+    applied_edges.push_back(edge);
+  }
+  graph_adapter_->ApplyProductSelection(selected_node_id_);
+  return true;
+}
+
+auto EditorNodeController::MaybeSubmitDraft() -> bool {
+  if (draft_ == nullptr) {
+    return true;
+  }
+  if (!draft_->SubmissionValid()) {
+    SetLastError({});
+    emit DraftStateChanged();
+    emit ActionAvailabilityChanged();
+    return true;
+  }
+  if (draft_->DeltaEmpty()) {
+    DiscardDraft();
+    SetLastError({});
+    emit ActionAvailabilityChanged();
+    return true;
+  }
+  auto change = draft_->MakeChange();
+  skip_next_session_refresh_ = true;
+  const auto result          = session_->SubmitNodeGraphTopologyEdit(change);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    skip_next_session_refresh_ = false;
+    SetLastError(QString::fromStdString(result.message));
+    emit DraftStateChanged();
+    return false;
+  }
+  DiscardDraft();
+  if (session_ != nullptr && session_->pipeline_document() != nullptr) {
+    try {
+      auto built = EditorNodeGraphProjection::Build(*session_->pipeline_document(),
+                                                    session_generation_, 0, 0);
+      topology_revision_   = topology_revision_ + 1;
+      projection_revision_ = projection_revision_ + 1;
+      built.session_generation  = session_generation_;
+      built.topology_revision   = topology_revision_;
+      built.projection_revision = projection_revision_;
+      snapshot_                 = std::move(built);
+      has_snapshot_             = true;
+    } catch (const std::exception& ex) {
+      SetLastError(QString::fromUtf8(ex.what()));
+    }
+  }
+  if (graph_adapter_ != nullptr) {
+    const auto promoted = graph_adapter_->PromoteCommittedSnapshot(snapshot_);
+    if (!promoted.succeeded) {
+      QueueProjectionApply();
+    } else {
+      graph_adapter_->ApplyProductSelection(selected_node_id_);
+    }
+  }
+  SetLastError({});
+  emit SnapshotChanged();
+  emit ActionAvailabilityChanged();
   return true;
 }
 

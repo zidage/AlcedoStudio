@@ -246,6 +246,25 @@ class IEditorSessionBackend {
     result.message  = "Color Grade rename is not supported by this backend";
     return result;
   }
+  /// Move a Color Grade between new backbone neighbors. Default backends reject.
+  virtual auto ReconnectColorGrade(const NodeId& /*node_id*/, const NodeId& /*new_predecessor_id*/,
+                                   const NodeId& /*new_successor_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade reconnect is not supported by this backend";
+    return result;
+  }
+  /// Apply one net node-graph topology delta as one history commit. Default rejects.
+  virtual auto EditNodeGraph(NodeGraphTopologyChange /*change*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Node graph topology edit is not supported by this backend";
+    return result;
+  }
   virtual auto RequestViewChange(EditorRenderReason /*reason*/,
                                  std::optional<ViewportRenderRegion> /*region*/)
       -> EditorSessionResult {
@@ -403,6 +422,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override;
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override;
+  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
+                           const NodeId& new_successor_id) -> EditorSessionResult override;
+  auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;

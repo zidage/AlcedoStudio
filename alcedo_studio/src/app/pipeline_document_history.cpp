@@ -102,6 +102,7 @@ auto RenderReasonForBatch(const PipelineEditBatch& batch) -> std::optional<Edito
     case PipelineEditOperationKind::AddColorGrade:
     case PipelineEditOperationKind::RemoveColorGrade:
     case PipelineEditOperationKind::ReconnectColorGrade:
+    case PipelineEditOperationKind::EditNodeGraph:
       return EditorRenderReason::GraphTopologyChanged;
     case PipelineEditOperationKind::AddMask:
     case PipelineEditOperationKind::RemoveMask:
@@ -382,6 +383,141 @@ auto MakeSetMaskFieldBatch(const NodeId& node_id, const MaskId& mask_id, std::st
 auto MakePasteBatch(std::vector<PipelineEditChange> changes) -> PipelineEditBatch {
   return PipelineEditBatch::Make(PipelineEditOperationKind::Paste, std::move(changes),
                                  PresentationKeyForOperation(PipelineEditOperationKind::Paste));
+}
+
+auto MakeEditNodeGraphBatch(NodeGraphTopologyChange change) -> PipelineEditBatch {
+  nlohmann::json args = nlohmann::json::object();
+  if (!change.inserted_nodes.empty()) {
+    args["node_display_name"] = change.inserted_nodes.front().node.value("display_name", "");
+  } else if (!change.removed_nodes.empty()) {
+    args["node_display_name"] = change.removed_nodes.front().node.value("display_name", "");
+  }
+  return PipelineEditBatch::Make(
+      PipelineEditOperationKind::EditNodeGraph, {std::move(change)},
+      PresentationKeyForOperation(PipelineEditOperationKind::EditNodeGraph), std::move(args));
+}
+
+namespace {
+
+auto NodeIdFromStoredJson(const nlohmann::json& node) -> NodeId {
+  return NodeId{node.at("id").get<std::string>()};
+}
+
+auto StoredNodeMatchesLive(const PipelineGraph& graph, std::size_t index, const nlohmann::json& node)
+    -> bool {
+  if (index >= graph.Nodes().size() || graph.Nodes()[index] == nullptr) {
+    return false;
+  }
+  const auto* live = graph.Nodes()[index].get();
+  return live->Id() == NodeIdFromStoredJson(node) && live->ToJson().dump() == node.dump();
+}
+
+auto InsertedFromStored(const std::vector<NodeGraphInsertedNode>& nodes)
+    -> std::vector<TopologyNodeInsertion> {
+  std::vector<TopologyNodeInsertion> inserted;
+  inserted.reserve(nodes.size());
+  for (const auto& item : nodes) {
+    TopologyNodeInsertion insertion;
+    insertion.node        = ColorGradeNodeModel::FromJson(item.node);
+    insertion.final_index = item.final_node_index;
+    inserted.push_back(std::move(insertion));
+  }
+  return inserted;
+}
+
+auto InsertedFromStored(const std::vector<NodeGraphRemovedNode>& nodes)
+    -> std::vector<TopologyNodeInsertion> {
+  std::vector<TopologyNodeInsertion> inserted;
+  inserted.reserve(nodes.size());
+  for (const auto& item : nodes) {
+    TopologyNodeInsertion insertion;
+    insertion.node        = ColorGradeNodeModel::FromJson(item.node);
+    insertion.final_index = item.original_node_index;
+    inserted.push_back(std::move(insertion));
+  }
+  return inserted;
+}
+
+}  // namespace
+
+auto ApplyNodeGraphTopologyChange(PipelineDocument& document, const NodeGraphTopologyChange& change,
+                                  PipelineEditApplyDirection direction,
+                                  TopologyDeltaStepHook after_step)
+    -> std::vector<GraphValidationError> {
+  auto error = [](std::string message) {
+    return std::vector<GraphValidationError>{
+        {GraphValidationCode::InvalidNodeValue, std::move(message)}};
+  };
+
+  const bool forward = direction == PipelineEditApplyDirection::Forward;
+  const auto expected_counter = forward ? change.before_next_color_grade_name_number
+                                        : change.after_next_color_grade_name_number;
+  const auto next_counter     = forward ? change.after_next_color_grade_name_number
+                                        : change.before_next_color_grade_name_number;
+  if (document.NextColorGradeNameNumber() != expected_counter) {
+    return error("NodeGraphTopologyChange expected the stored name-counter value");
+  }
+
+  std::vector<TopologyNodeRemoval>   removed;
+  std::vector<TopologyNodeInsertion> inserted;
+  std::vector<TopologyEdgeRemoval>   disconnected;
+  std::vector<TopologyEdgeInsertion> connected;
+  try {
+    if (forward) {
+      for (const auto& item : change.removed_nodes) {
+        if (!StoredNodeMatchesLive(document.Graph(), item.original_node_index, item.node)) {
+          return error("NodeGraphTopologyChange removed node does not match the live graph");
+        }
+        removed.push_back(
+            TopologyNodeRemoval{NodeIdFromStoredJson(item.node), item.original_node_index});
+      }
+      inserted = InsertedFromStored(change.inserted_nodes);
+      for (const auto& item : change.disconnected_edges) {
+        disconnected.push_back(
+            TopologyEdgeRemoval{ToGraphEdge(item.edge), item.original_edge_index});
+      }
+      for (const auto& item : change.connected_edges) {
+        connected.push_back(TopologyEdgeInsertion{ToGraphEdge(item.edge), item.final_edge_index});
+      }
+    } else {
+      for (const auto& item : change.inserted_nodes) {
+        if (!StoredNodeMatchesLive(document.Graph(), item.final_node_index, item.node)) {
+          return error("NodeGraphTopologyChange inserted node does not match the live graph");
+        }
+        removed.push_back(
+            TopologyNodeRemoval{NodeIdFromStoredJson(item.node), item.final_node_index});
+      }
+      inserted = InsertedFromStored(change.removed_nodes);
+      for (const auto& item : change.connected_edges) {
+        disconnected.push_back(TopologyEdgeRemoval{ToGraphEdge(item.edge), item.final_edge_index});
+      }
+      for (const auto& item : change.disconnected_edges) {
+        connected.push_back(
+            TopologyEdgeInsertion{ToGraphEdge(item.edge), item.original_edge_index});
+      }
+    }
+  } catch (const std::exception& ex) {
+    return error(ex.what());
+  }
+
+  const auto prior_counter = document.NextColorGradeNameNumber();
+  try {
+    document.SetNextColorGradeNameNumber(next_counter);
+    if (after_step) {
+      after_step("counter", 0);
+    }
+    auto errors = document.Graph().ApplyTopologyDelta(removed, std::move(inserted), disconnected,
+                                                      connected, after_step);
+    if (!errors.empty()) {
+      document.SetNextColorGradeNameNumber(prior_counter);
+      return errors;
+    }
+    document.MarkTopologyDirty();
+    return {};
+  } catch (...) {
+    document.SetNextColorGradeNameNumber(prior_counter);
+    throw;
+  }
 }
 
 auto PublishTypedPipelineEdit(MiniGitWorkingHistory& history, const PipelineEditBatch& batch)

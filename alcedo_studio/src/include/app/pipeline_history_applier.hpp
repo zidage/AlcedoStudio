@@ -14,6 +14,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph.hpp"
 #include "edit/mask/mask_asset.hpp"
 
 namespace alcedo {
@@ -32,6 +33,7 @@ class MaskStore;
 struct PipelineHistoryApplyContext {
   MaskStore* mask_store = nullptr;
   std::function<void(std::size_t applied_count)> after_successful_change;
+  TopologyDeltaStepHook after_topology_step;
 };
 
 /**

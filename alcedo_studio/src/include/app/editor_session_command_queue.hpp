@@ -21,6 +21,7 @@
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/history/commit_types.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 
 namespace alcedo {
 
@@ -61,6 +62,8 @@ enum class EditorSessionCommandKind : std::uint8_t {
   AddColorGrade,
   RemoveColorGrade,
   RenameColorGrade,
+  ReconnectColorGrade,
+  EditNodeGraph,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -110,6 +113,9 @@ struct EditorSessionCommand {
   bool                                    geometry_overlay_active = false;
   NodeId                                  node_id;
   NodeId                                  before_node_id;
+  NodeId                                  predecessor_node_id;
+  NodeId                                  successor_node_id;
+  NodeGraphTopologyChange                 topology_change{};
 };
 
 /// Typed worker completion envelope. Payload-specific values are kept as
