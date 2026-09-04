@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <QMetaObject>
 #include <QObject>
+#include <QPointF>
 #include <QPointer>
+#include <QQuickItem>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QString>
@@ -66,6 +69,8 @@ class AlcedoQanGraph : public QObject {
                  NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl portDelegateUrl READ port_delegate_url WRITE set_port_delegate_url NOTIFY
                  DelegatesChanged)
+  Q_PROPERTY(QUrl portDockDelegateUrl READ port_dock_delegate_url WRITE
+                 set_port_dock_delegate_url NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl edgeDelegateUrl READ edge_delegate_url WRITE set_edge_delegate_url NOTIFY
                  DelegatesChanged)
 
@@ -106,6 +111,16 @@ class AlcedoQanGraph : public QObject {
    */
   void               set_port_delegate_url(const QUrl& url);
   [[nodiscard]] auto port_delegate_url() const -> QUrl;
+
+  /**
+   * @brief Set the QML delegate URL for the horizontal port dock.
+   *
+   * The dock positions port items against the node card edge. Each bound Qan
+   * graph receives its own component instance because qan::Graph takes
+   * ownership of horizontalDockDelegate.
+   */
+  void               set_port_dock_delegate_url(const QUrl& url);
+  [[nodiscard]] auto port_dock_delegate_url() const -> QUrl;
 
   /**
    * @brief Set the QML delegate URL for backbone edges.
@@ -172,9 +187,45 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto topology_revision() const -> std::uint64_t;
   [[nodiscard]] auto has_projection() const -> bool;
 
+  /**
+   * @brief Apply the one-node product selection to live Qan visuals.
+   *
+   * Clears the Qan selected-node list, then selects at most one mapped node.
+   * A Qan selected-node list is never treated as a product selection source.
+   */
+  void ApplyProductSelection(const std::optional<NodeId>& node_id);
+
+  /**
+   * @brief Move a live node item. No-op for unknown or stale NodeIds.
+   */
+  void SetNodeItemPosition(const NodeId& node_id, QPointF position);
+  [[nodiscard]] auto NodeItemPosition(const NodeId& node_id) const -> std::optional<QPointF>;
+
+  /**
+   * @brief Set Color Grade Mask-drawer open state on the live delegate.
+   *
+   * Endpoints ignore the call. Missing NodeIds are no-ops.
+   */
+  void SetDrawerOpen(const NodeId& node_id, bool open);
+  [[nodiscard]] auto DrawerOpen(const NodeId& node_id) const -> bool;
+
+  Q_INVOKABLE QString liveNodeId(QObject* node) const;
+  Q_INVOKABLE void    setNodePosition(const QString& node_id, qreal x, qreal y);
+  Q_INVOKABLE QPointF nodePosition(const QString& node_id) const;
+  Q_INVOKABLE void    setDrawerOpen(const QString& node_id, bool open);
+  Q_INVOKABLE bool    drawerOpen(const QString& node_id) const;
+  Q_INVOKABLE void    applyProductSelection(const QString& node_id);
+
  signals:
   void GraphChanged();
   void DelegatesChanged();
+  /**
+   * @brief Emitted when a Color Grade Mask drawer is opened or closed.
+   *
+   * Local UI state only. Listeners must not write PipelineDocument or start a
+   * photo render.
+   */
+  void NodeDrawerOpenChanged(const QString& nodeId, bool open);
 
  protected:
   /**
@@ -225,7 +276,16 @@ class AlcedoQanGraph : public QObject {
   };
 
   void               ClearIdentityMaps();
+  void               ClearDrawerConnections();
+  void               BindDrawerSignals();
+  void               BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
+  void               ConfigureGraphPolicy();
   void               OnGraphDestroyed();
+
+ private slots:
+  void OnDrawerOpenChanged();
+
+ private:
   void               DestroyMappedPrimitives();
   void               DestroyPrimitives(const std::vector<QPointer<qan::Edge>>& edges,
                                        const std::vector<QPointer<qan::Node>>& nodes);
@@ -250,6 +310,8 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto        LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent;
   void                      DropCachedDelegates();
   [[nodiscard]] auto        InstallPortDelegate() -> QString;
+  [[nodiscard]] auto        InstallPortDockDelegate() -> QString;
+  void                      InstallInvisibleSelectionDelegate();
   [[nodiscard]] auto        ComponentFor(EditorNodeKind kind) const -> QQmlComponent*;
 
   [[nodiscard]] static auto MakeEdgeKey(const EditorNodeEdgeProjection& edge) -> EdgeKey;
@@ -264,9 +326,11 @@ class AlcedoQanGraph : public QObject {
   QUrl                                              color_grade_delegate_url_;
   QUrl                                              endpoint_delegate_url_;
   QUrl                                              port_delegate_url_;
+  QUrl                                              port_dock_delegate_url_;
   QUrl                                              edge_delegate_url_;
   QPointer<QQmlEngine>                              delegate_engine_;
   QPointer<qan::Graph>                              port_delegate_graph_;
+  QPointer<qan::Graph>                              port_dock_delegate_graph_;
   std::unique_ptr<QQmlComponent>                    color_grade_component_;
   std::unique_ptr<QQmlComponent>                    endpoint_component_;
   std::unique_ptr<QQmlComponent>                    edge_component_;
@@ -278,6 +342,8 @@ class AlcedoQanGraph : public QObject {
   std::map<NodeId, NodePorts>                       ports_by_node_;
   std::map<NodeId, EditorNodeProjection>            node_projections_;
   std::unordered_map<const qan::Node*, ReverseNode> node_from_qan_;
+  std::vector<QMetaObject::Connection>              drawer_connections_;
+  NodeId                                            product_selected_node_id_;
 };
 
 }  // namespace alcedo::ui

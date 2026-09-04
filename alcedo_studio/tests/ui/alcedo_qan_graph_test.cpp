@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
@@ -22,6 +23,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QuickQanava>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -157,6 +159,7 @@ void AttachAlcedoDelegates(alcedo::ui::AlcedoQanGraph& adapter, qan::Graph* grap
   adapter.set_color_grade_delegate_url(QmlFileUrl("EditorNodeDelegate.qml"));
   adapter.set_endpoint_delegate_url(QmlFileUrl("EditorEndpointNodeDelegate.qml"));
   adapter.set_port_delegate_url(QmlFileUrl("EditorNodePortDelegate.qml"));
+  adapter.set_port_dock_delegate_url(QmlFileUrl("EditorNodePortDock.qml"));
   adapter.set_edge_delegate_url(QmlFileUrl("EditorNodeEdgeDelegate.qml"));
   adapter.set_graph(graph);
 }
@@ -288,6 +291,41 @@ TEST_F(AlcedoQanGraph, BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts) {
             QStringLiteral("out:image"));
   EXPECT_EQ(adapter.InputPortFor(NodeId{"grade.second"}, PortId{"image"})->getId(),
             QStringLiteral("in:image"));
+}
+
+TEST_F(AlcedoQanGraph, InstallsFlushPortDockAndInvisibleSelectionDelegate) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4, 2, 1);
+  const auto result   = adapter.ApplySnapshot(snapshot);
+  ASSERT_TRUE(result.succeeded) << result.error.toStdString();
+
+  auto* graph = harness_->Graph();
+  ASSERT_NE(graph, nullptr);
+
+  const auto* dock_component = graph->property("horizontalDockDelegate").value<QQmlComponent*>();
+  ASSERT_NE(dock_component, nullptr);
+  EXPECT_TRUE(dock_component->url().toString().endsWith(QStringLiteral("EditorNodePortDock.qml")))
+      << dock_component->url().toString().toStdString();
+
+  const auto* selection_component =
+      graph->property("selectionDelegate").value<QQmlComponent*>();
+  ASSERT_NE(selection_component, nullptr);
+  EXPECT_TRUE(selection_component->url().isEmpty())
+      << "selection delegate must be the inline invisible Item, not "
+      << selection_component->url().toString().toStdString();
+
+  auto* out_port = adapter.OutputPortFor(NodeId{"develop"}, PortId{"image"});
+  ASSERT_NE(out_port, nullptr);
+  auto* dock = out_port->parentItem();
+  ASSERT_NE(dock, nullptr);
+  auto* node_item = adapter.NodeFor(NodeId{"develop"})->getItem();
+  ASSERT_NE(node_item, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    return std::abs(dock->y() - node_item->height()) < 0.5;
+  })) << "output port dock must sit flush against the node bottom edge, dock y="
+      << dock->y() << " node height=" << node_item->height();
 }
 
 TEST_F(AlcedoQanGraph, RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives) {

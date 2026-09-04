@@ -4,10 +4,14 @@
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 
+#include <QDebug>
+#include <QMetaMethod>
+#include <QQmlComponent>
 #include <QQmlEngine>
 #include <QVariant>
 #include <QVariantMap>
 #include <cstddef>
+#include <optional>
 #include <string>
 
 #include "qanEdge.h"
@@ -35,6 +39,7 @@ AlcedoQanGraph::AlcedoQanGraph(QObject* parent) : QObject(parent) {}
 
 AlcedoQanGraph::~AlcedoQanGraph() {
   rebuild_in_progress_ = true;
+  ClearDrawerConnections();
   ClearIdentityMaps();
   DropCachedDelegates();
 }
@@ -55,6 +60,7 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   graph_               = graph;
   if (!graph_.isNull()) {
     connect(graph_.data(), &QObject::destroyed, this, &AlcedoQanGraph::OnGraphDestroyed);
+    ConfigureGraphPolicy();
   }
   emit GraphChanged();
 }
@@ -91,6 +97,17 @@ void AlcedoQanGraph::set_port_delegate_url(const QUrl& url) {
 }
 
 auto AlcedoQanGraph::port_delegate_url() const -> QUrl { return port_delegate_url_; }
+
+void AlcedoQanGraph::set_port_dock_delegate_url(const QUrl& url) {
+  if (port_dock_delegate_url_ == url) {
+    return;
+  }
+  port_dock_delegate_url_ = url;
+  DropCachedDelegates();
+  emit DelegatesChanged();
+}
+
+auto AlcedoQanGraph::port_dock_delegate_url() const -> QUrl { return port_dock_delegate_url_; }
 
 void AlcedoQanGraph::set_edge_delegate_url(const QUrl& url) {
   if (edge_delegate_url_ == url) {
@@ -219,6 +236,7 @@ auto AlcedoQanGraph::InsertQanNode(qan::Graph& graph, const EditorNodeProjection
 }
 
 void AlcedoQanGraph::ClearIdentityMaps() {
+  ClearDrawerConnections();
   node_by_id_.clear();
   edge_by_key_.clear();
   ports_by_node_.clear();
@@ -357,6 +375,7 @@ auto AlcedoQanGraph::ApplyRoles(const EditorNodeGraphSnapshot& snapshot)
   }
   applied_         = snapshot;
   has_projection_  = true;
+  BindDrawerSignals();
   result.succeeded = true;
   return result;
 }
@@ -377,6 +396,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     applied_             = snapshot;
     has_projection_      = true;
     rebuild_in_progress_ = false;
+    BindDrawerSignals();
     result.succeeded     = true;
     return result;
   }
@@ -390,6 +410,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     if (restore_error.isEmpty()) {
       applied_        = previous;
       has_projection_ = true;
+      BindDrawerSignals();
     } else {
       error += QStringLiteral("; restoring the prior Qan projection failed: ") + restore_error;
     }
@@ -563,7 +584,11 @@ auto AlcedoQanGraph::EnsureDelegates() -> QString {
     }
     edge_component_ = std::move(loaded.component);
   }
-  return InstallPortDelegate();
+  const auto port_error = InstallPortDelegate();
+  if (!port_error.isEmpty()) {
+    return port_error;
+  }
+  return InstallPortDockDelegate();
 }
 
 auto AlcedoQanGraph::LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent {
@@ -599,6 +624,7 @@ void AlcedoQanGraph::DropCachedDelegates() {
   edge_component_.reset();
   delegate_engine_.clear();
   port_delegate_graph_.clear();
+  port_dock_delegate_graph_.clear();
 }
 
 auto AlcedoQanGraph::InstallPortDelegate() -> QString {
@@ -615,6 +641,44 @@ auto AlcedoQanGraph::InstallPortDelegate() -> QString {
   graph_->setProperty("portDelegate", QVariant::fromValue(loaded.component.release()));
   port_delegate_graph_ = graph_;
   return {};
+}
+
+auto AlcedoQanGraph::InstallPortDockDelegate() -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  if (port_dock_delegate_graph_.data() == graph_.data()) {
+    return {};
+  }
+  auto loaded =
+      LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
+  if (!loaded.component) {
+    return loaded.error;
+  }
+  graph_->setProperty("horizontalDockDelegate",
+                      QVariant::fromValue(loaded.component.release()));
+  port_dock_delegate_graph_ = graph_;
+  return {};
+}
+
+void AlcedoQanGraph::InstallInvisibleSelectionDelegate() {
+  if (graph_.isNull()) {
+    return;
+  }
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    return;
+  }
+  // Node delegates paint their own selection outline; the QuickQanava
+  // selection item must exist (qan::NodeItem expects one) but render nothing.
+  auto component = std::make_unique<QQmlComponent>(engine);
+  component->setData(QByteArrayLiteral("import QtQuick\nItem {}\n"), QUrl());
+  if (!component->isReady()) {
+    qWarning() << "AlcedoQanGraph: failed to create invisible selection delegate:"
+               << component->errorString();
+    return;
+  }
+  graph_->setProperty("selectionDelegate", QVariant::fromValue(component.release()));
 }
 
 auto AlcedoQanGraph::ComponentFor(EditorNodeKind kind) const -> QQmlComponent* {
@@ -659,6 +723,141 @@ auto AlcedoQanGraph::MasksToVariant(const std::vector<EditorNodeMaskProjection>&
     list.push_back(row);
   }
   return list;
+}
+
+void AlcedoQanGraph::ConfigureGraphPolicy() {
+  if (graph_.isNull()) {
+    return;
+  }
+  graph_->setMultipleSelectionEnabled(false);
+  InstallInvisibleSelectionDelegate();
+}
+
+void AlcedoQanGraph::ClearDrawerConnections() {
+  for (auto& connection : drawer_connections_) {
+    QObject::disconnect(connection);
+  }
+  drawer_connections_.clear();
+}
+
+void AlcedoQanGraph::BindDrawerSignal(QQuickItem* item, const NodeId& /*node_id*/) {
+  if (item == nullptr) {
+    return;
+  }
+  const auto* meta         = item->metaObject();
+  const int   signal_index = meta->indexOfSignal("drawerOpenChanged()");
+  if (signal_index < 0) {
+    return;
+  }
+  drawer_connections_.push_back(
+      QObject::connect(item, SIGNAL(drawerOpenChanged()), this, SLOT(OnDrawerOpenChanged())));
+}
+
+void AlcedoQanGraph::OnDrawerOpenChanged() {
+  auto* item = qobject_cast<QQuickItem*>(sender());
+  if (item == nullptr) {
+    return;
+  }
+  for (const auto& [node_id, node] : node_by_id_) {
+    if (node.isNull() || node->getItem() != item) {
+      continue;
+    }
+    emit NodeDrawerOpenChanged(ToQString(node_id.Value()), item->property("drawerOpen").toBool());
+    return;
+  }
+}
+
+void AlcedoQanGraph::BindDrawerSignals() {
+  ClearDrawerConnections();
+  for (const auto& [node_id, node] : node_by_id_) {
+    if (node.isNull() || node->getItem() == nullptr) {
+      continue;
+    }
+    BindDrawerSignal(node->getItem(), node_id);
+  }
+}
+
+void AlcedoQanGraph::ApplyProductSelection(const std::optional<NodeId>& node_id) {
+  if (graph_.isNull() || rebuild_in_progress_) {
+    return;
+  }
+  product_selected_node_id_ = node_id.value_or(NodeId{});
+  graph_->clearSelection();
+  if (!node_id.has_value() || node_id->Empty()) {
+    return;
+  }
+  auto* node = NodeFor(*node_id);
+  if (node != nullptr) {
+    graph_->setNodeSelected(node, true);
+  }
+}
+
+void AlcedoQanGraph::SetNodeItemPosition(const NodeId& node_id, QPointF position) {
+  auto* node = NodeFor(node_id);
+  if (node == nullptr || node->getItem() == nullptr) {
+    return;
+  }
+  node->getItem()->setPosition(position);
+}
+
+auto AlcedoQanGraph::NodeItemPosition(const NodeId& node_id) const -> std::optional<QPointF> {
+  auto* node = NodeFor(node_id);
+  if (node == nullptr || node->getItem() == nullptr) {
+    return std::nullopt;
+  }
+  return node->getItem()->position();
+}
+
+void AlcedoQanGraph::SetDrawerOpen(const NodeId& node_id, bool open) {
+  auto* node = NodeFor(node_id);
+  if (node == nullptr || node->getItem() == nullptr) {
+    return;
+  }
+  if (!node->getItem()->property("drawerOpen").isValid()) {
+    return;
+  }
+  node->getItem()->setProperty("drawerOpen", open);
+}
+
+auto AlcedoQanGraph::DrawerOpen(const NodeId& node_id) const -> bool {
+  auto* node = NodeFor(node_id);
+  if (node == nullptr || node->getItem() == nullptr) {
+    return true;
+  }
+  const auto value = node->getItem()->property("drawerOpen");
+  if (!value.isValid()) {
+    return true;
+  }
+  return value.toBool();
+}
+
+auto AlcedoQanGraph::liveNodeId(QObject* node) const -> QString {
+  const auto id = LiveNodeId(qobject_cast<qan::Node*>(node));
+  return id.has_value() ? ToQString(id->Value()) : QString();
+}
+
+void AlcedoQanGraph::setNodePosition(const QString& node_id, qreal x, qreal y) {
+  SetNodeItemPosition(NodeId{node_id.toStdString()}, QPointF(x, y));
+}
+
+auto AlcedoQanGraph::nodePosition(const QString& node_id) const -> QPointF {
+  return NodeItemPosition(NodeId{node_id.toStdString()}).value_or(QPointF());
+}
+
+void AlcedoQanGraph::setDrawerOpen(const QString& node_id, bool open) {
+  SetDrawerOpen(NodeId{node_id.toStdString()}, open);
+}
+
+auto AlcedoQanGraph::drawerOpen(const QString& node_id) const -> bool {
+  return DrawerOpen(NodeId{node_id.toStdString()});
+}
+
+void AlcedoQanGraph::applyProductSelection(const QString& node_id) {
+  if (node_id.isEmpty()) {
+    ApplyProductSelection(std::nullopt);
+    return;
+  }
+  ApplyProductSelection(NodeId{node_id.toStdString()});
 }
 
 }  // namespace alcedo::ui

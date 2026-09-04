@@ -9,9 +9,11 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQmlExtensionPlugin>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QUrl>
+#include <QuickQanava>
 #include <filesystem>
 #include <sstream>
 #include <vector>
@@ -19,6 +21,8 @@
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace alcedo::ui::test {
 namespace {
@@ -48,6 +52,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   host.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);

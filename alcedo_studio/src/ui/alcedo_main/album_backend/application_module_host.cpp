@@ -21,6 +21,7 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
@@ -70,6 +71,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
+  alcedo::ui::RegisterEditorNodeQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =

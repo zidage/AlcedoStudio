@@ -24,6 +24,7 @@
 namespace alcedo {
 class IFrameSink;
 class IEditorSessionBackend;
+class PipelineDocument;
 }  // namespace alcedo
 
 namespace alcedo::ui {
@@ -83,11 +84,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Survives workspace Loader teardown and application restart (QSettings).
   Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
                  set_active_adjustment_panel NOTIFY DesktopUiChanged)
-  // Left History/Versions rail page: empty string = collapsed; "history" or
-  // "versions" = expanded. Survives workspace round-trips within the process
+  // Left tool rail page: empty string = collapsed; "history", "versions", or
+  // "nodes" = expanded. Survives workspace round-trips within the process
   // (not persisted across application restart).
-  Q_PROPERTY(QString historyPanelPage READ history_panel_page WRITE set_history_panel_page NOTIFY
-                 DesktopUiChanged)
+  Q_PROPERTY(QString editorToolPanelPage READ editor_tool_panel_page WRITE set_editor_tool_panel_page
+                 NOTIFY DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
   Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
@@ -146,7 +147,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] double  filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
   [[nodiscard]] double  filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
   [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
-  [[nodiscard]] QString history_panel_page() const { return history_panel_page_; }
+  [[nodiscard]] QString editor_tool_panel_page() const { return editor_tool_panel_page_; }
+  [[nodiscard]] qulonglong session_generation() const;
+  [[nodiscard]] auto       pipeline_document() const -> const alcedo::PipelineDocument*;
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto    adjustment_snapshot() const -> QVariantMap;
   [[nodiscard]] auto    history_snapshot() const -> alcedo::EditorHistorySnapshot;
@@ -249,7 +252,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void               set_filmstrip_expanded_height(double height);
   void               set_filmstrip_scroll_position(double position);
   void               set_active_adjustment_panel(const QString& panel);
-  void               set_history_panel_page(const QString& page);
+  void               set_editor_tool_panel_page(const QString& page);
 
  signals:
   void StateChanged();
@@ -292,7 +295,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
-  [[nodiscard]] static auto       NormalizeHistoryPanelPage(const QString& page) -> QString;
+  [[nodiscard]] static auto       NormalizeToolPanelPage(const QString& page) -> QString;
 
   alcedo::IEditorSessionBackend*  session_backend_    = nullptr;
   InteractionPolicyController*    interaction_policy_ = nullptr;
@@ -328,7 +331,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
       -> QVariantMap;
 
   QString                                        active_adjustment_panel_ = QStringLiteral("tone");
-  QString                                        history_panel_page_;
+  QString                                        editor_tool_panel_page_;
   QPointer<QObject>                              presentation_viewport_;
   QPointer<QObject>                              interaction_controller_;
   QMetaObject::Connection                        interaction_view_change_connection_;

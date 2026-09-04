@@ -76,7 +76,7 @@ Item {
         spacing: appTheme.spaceMd
 
         // ── Main editor body ────────────────────────────────────────────
-        // Desktop order (non-negotiable): History/Versions left, viewport
+        // Desktop order (non-negotiable): tool rail left, viewport
         // center, scopes + adjustment stack right.
         RowLayout {
             id: editorDesktopRow
@@ -85,8 +85,8 @@ Item {
             Layout.fillHeight: true
             spacing: appTheme.spaceMd
 
-            // Left: editor tool rail (+ expandable History / Versions panel).
-            // objectName is set inside the component (editorHistoryVersionsRail).
+            // Left: editor tool rail (+ expandable History / Versions / Nodes panel).
+            // objectName is set inside the component (editorWorkspaceRail).
             EditorWorkspaceRail {
                 id: historyVersionsRail
                 Layout.fillHeight: true

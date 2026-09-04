@@ -21,6 +21,7 @@
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -164,6 +165,7 @@ void AttachAlcedoDelegates(alcedo::ui::AlcedoQanGraph& adapter, qan::Graph* grap
   adapter.set_color_grade_delegate_url(QmlFileUrl("EditorNodeDelegate.qml"));
   adapter.set_endpoint_delegate_url(QmlFileUrl("EditorEndpointNodeDelegate.qml"));
   adapter.set_port_delegate_url(QmlFileUrl("EditorNodePortDelegate.qml"));
+  adapter.set_port_dock_delegate_url(QmlFileUrl("EditorNodePortDock.qml"));
   adapter.set_edge_delegate_url(QmlFileUrl("EditorNodeEdgeDelegate.qml"));
   adapter.set_graph(graph);
 }
@@ -466,6 +468,64 @@ TEST_F(EditorNodeDelegateQml, OutputPortAndEdgesFollowOpenAndClosedDrawerHeight)
   EXPECT_EQ(outgoing->getItem()->getDstShape(), qan::EdgeStyle::ArrowShape::None);
 }
 
+TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurstAndDrawerFold) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+
+  // First-open burst: EditorNodesPanel.bindGraph applies the stored layout in
+  // the same event turn as the snapshot insert, before any polish pass has
+  // anchored the port docks to the node edges.
+  adapter.SetNodeItemPosition(NodeId{"develop"}, QPointF(48, 48));
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(48, 136));
+  adapter.SetNodeItemPosition(NodeId{"drt"}, QPointF(48, 329));
+
+  auto* container = harness_->Graph()->getContainerItem();
+  ASSERT_NE(container, nullptr);
+  auto* incoming = adapter.EdgeFor(snapshot.edges.front());
+  auto* outgoing = adapter.EdgeFor(snapshot.edges.back());
+  ASSERT_NE(incoming, nullptr);
+  ASSERT_NE(outgoing, nullptr);
+
+  // Straight backbone edge endpoints: p1 is the bottom-center of the source
+  // port rect, p2 the top-center of the destination port rect (container CS).
+  const auto glued = [container](qan::Edge* edge) {
+    if (edge == nullptr || edge->getItem() == nullptr) {
+      return false;
+    }
+    auto* item = edge->getItem();
+    auto* src  = item->getSourceItem();
+    auto* dst  = item->getDestinationItem();
+    if (src == nullptr || dst == nullptr || item->getHidden()) {
+      return false;
+    }
+    const QRectF src_br = src->mapRectToItem(container, src->boundingRect());
+    const QRectF dst_br = dst->mapRectToItem(container, dst->boundingRect());
+    const QPointF p1    = item->mapToItem(container, item->getP1());
+    const QPointF p2    = item->mapToItem(container, item->getP2());
+    return std::abs(p1.x() - src_br.center().x()) < 1.0 &&
+           std::abs(p1.y() - src_br.bottom()) < 1.0 &&
+           std::abs(p2.x() - dst_br.center().x()) < 1.0 &&
+           std::abs(p2.y() - dst_br.top()) < 1.0;
+  };
+
+  ASSERT_TRUE(WaitFor([&] { return glued(incoming) && glued(outgoing); }))
+      << "edges must re-anchor to the docked ports once the docks settle";
+
+  auto* grade_item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  const qreal open_height = grade_item->height();
+
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  ASSERT_TRUE(WaitFor([&] {
+    return grade_item->height() < open_height - 1.0 && glued(incoming) && glued(outgoing);
+  })) << "edges must follow the output port when the drawer fold moves the dock";
+}
+
 TEST_F(EditorNodeDelegateQml, EndpointDelegatesOmitMaskDrawerAndKeepCompactHeight) {
   ui::AlcedoQanGraph adapter;
   ApplyDefault(&adapter);
@@ -547,7 +607,8 @@ TEST_F(EditorNodeDelegateQml, MaskTypeIconsStayReadyForCompactSourceSizeAcrossTh
 TEST_F(EditorNodeDelegateQml, ProductionNodeQmlHasNoMaterialImportOrEffectChrome) {
   const char* files[] = {"EditorNodeDelegate.qml",     "EditorEndpointNodeDelegate.qml",
                          "EditorNodeMaskDrawer.qml",   "EditorNodeMaskTypeRow.qml",
-                         "EditorNodePortDelegate.qml", "EditorNodeEdgeDelegate.qml"};
+                         "EditorNodePortDelegate.qml", "EditorNodePortDock.qml",
+                         "EditorNodeEdgeDelegate.qml"};
   for (const auto* file : files) {
     const auto source = ReadQmlFile(file);
     ASSERT_FALSE(source.isEmpty()) << file;
@@ -567,6 +628,116 @@ TEST_F(EditorNodeDelegateQml, ProductionNodeQmlHasNoMaterialImportOrEffectChrome
   EXPECT_EQ(port->property("radius").toInt(), 0);
   EXPECT_EQ(port->width(), ui::AppTheme::Instance().graphPortSize());
   EXPECT_EQ(port->height(), ui::AppTheme::Instance().graphPortSize());
+}
+
+TEST_F(EditorNodeDelegateQml, PortSquareIsHollowGreenOutlineAcrossThemes) {
+  ui::AlcedoQanGraph adapter;
+  ApplyDefault(&adapter);
+  auto* port = FindDescendant(adapter.OutputPortFor(NodeId{"develop"}, PortId{"image"}),
+                              QStringLiteral("editorNodePortSquare"));
+  ASSERT_NE(port, nullptr);
+
+  for (int theme = 0; theme <= 1; ++theme) {
+    ui::AppTheme::Instance().setCurrentThemeIndex(theme);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    EXPECT_EQ(port->property("color").value<QColor>().alpha(), 0)
+        << "port square is hollow; the canvas shows through, theme " << theme;
+    EXPECT_EQ(QQmlProperty::read(port, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphPortBorderColor())
+        << "theme " << theme;
+    EXPECT_GT(QQmlProperty::read(port, QStringLiteral("border.width")).toDouble(), 1.0)
+        << "hollow outline needs a visible stroke, theme " << theme;
+  }
+}
+
+TEST_F(EditorNodeDelegateQml, BackboneEdgeStrokeMatchesGraphEdgeTokens) {
+  ui::AlcedoQanGraph adapter;
+  const auto           snapshot = ApplyDefault(&adapter);
+  ASSERT_FALSE(snapshot.edges.empty());
+
+  for (const auto& edge : snapshot.edges) {
+    auto* qan_edge = adapter.EdgeFor(edge);
+    ASSERT_NE(qan_edge, nullptr);
+    ASSERT_NE(qan_edge->getItem(), nullptr);
+    ASSERT_NE(qan_edge->getItem()->getStyle(), nullptr);
+    EXPECT_EQ(qan_edge->getItem()->getStyle()->getLineWidth(),
+              ui::AppTheme::Instance().graphEdgeWidth());
+    EXPECT_EQ(qan_edge->getItem()->getStyle()->getLineColor(),
+              ui::AppTheme::Instance().graphEdgeColor());
+  }
+}
+
+TEST_F(EditorNodeDelegateQml, MaskDrawerWellIsInsetInsideVisibleCardBorder) {
+  ui::AlcedoQanGraph adapter;
+  ApplyDefault(&adapter);
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  auto* card = FindDescendant(item, QStringLiteral("editorNodeCard"));
+  auto* well = FindDescendant(item, QStringLiteral("editorNodeMaskDrawerWell"));
+  ASSERT_NE(card, nullptr);
+  ASSERT_NE(well, nullptr);
+
+  for (int theme = 0; theme <= 1; ++theme) {
+    ui::AppTheme::Instance().setCurrentThemeIndex(theme);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    EXPECT_EQ(QQmlProperty::read(card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphNodeBorderColor())
+        << "unselected card keeps a visible border, theme " << theme;
+    EXPECT_EQ(well->property("color").value<QColor>(),
+              ui::AppTheme::Instance().graphMaskDrawerSurfaceColor())
+        << "theme " << theme;
+    EXPECT_NE(ui::AppTheme::Instance().graphMaskDrawerSurfaceColor(),
+              ui::AppTheme::Instance().cardSurfaceColor())
+        << "drawer well must read as a distinct inset surface, theme " << theme;
+  }
+
+  const auto border_width = QQmlProperty::read(card, QStringLiteral("border.width")).toDouble();
+  EXPECT_NEAR(well->mapToItem(card, QPointF(0, 0)).x(), border_width, 0.5);
+  EXPECT_NEAR(well->width(), card->width() - 2.0 * border_width, 0.5);
+  EXPECT_NEAR(well->mapToItem(card, QPointF(0, well->height())).y(),
+              card->height() - border_width, 0.5)
+      << "well leaves the card border visible along the bottom edge";
+}
+
+TEST_F(EditorNodeDelegateQml, MaskDrawerHeaderWashKeepsCardBorderVisibleOnHover) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  ApplyDocument(&adapter, std::move(document));
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  auto* drawer = FindDescendant(item, QStringLiteral("editorNodeMaskDrawer"));
+  auto* wash   = FindDescendant(item, QStringLiteral("editorNodeMaskDrawerHeaderWash"));
+  ASSERT_NE(drawer, nullptr);
+  ASSERT_NE(wash, nullptr);
+
+  const auto& theme       = ui::AppTheme::Instance();
+  const qreal inset       = theme.graphSelectionOutlineWidth();
+  const qreal well_radius = theme.controlRadiusSmall() - inset;
+
+  EXPECT_NEAR(QQmlProperty::read(wash, QStringLiteral("anchors.leftMargin")).toDouble(), inset,
+              0.01);
+  EXPECT_NEAR(QQmlProperty::read(wash, QStringLiteral("anchors.rightMargin")).toDouble(), inset,
+              0.01);
+  EXPECT_NEAR(QQmlProperty::read(wash, QStringLiteral("anchors.bottomMargin")).toDouble(), inset,
+              0.01);
+
+  // Open with Mask rows: the header sits mid-drawer with square bottom corners.
+  ASSERT_TRUE(drawer->property("expanded").toBool());
+  EXPECT_NEAR(wash->property("bottomLeftRadius").toDouble(), 0.0, 0.01);
+
+  // Closed: the header spans the whole drawer. The wash must stay off the card
+  // border row and round its bottom corners to the well radius.
+  ASSERT_TRUE(QMetaObject::invokeMethod(drawer, "toggle", Qt::DirectConnection));
+  ASSERT_TRUE(WaitFor([&] {
+    return !drawer->property("expanded").toBool() &&
+           drawer->property("foldProgress").toReal() < 0.001;
+  }));
+  EXPECT_NEAR(wash->property("bottomLeftRadius").toDouble(), well_radius, 0.01);
+  EXPECT_NEAR(wash->property("bottomRightRadius").toDouble(), well_radius, 0.01);
+  EXPECT_LE(wash->mapToItem(drawer, QPointF(0, wash->height())).y(),
+            drawer->height() - inset + 0.5)
+      << "hover wash must not paint over the card border row";
 }
 
 }  // namespace alcedo

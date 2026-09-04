@@ -38,7 +38,7 @@ Qan.NodeItem {
         color: appTheme.cardSurfaceColor
         border.width: appTheme.graphSelectionOutlineWidth
         border.color: root.selected ? appTheme.graphSelectionOutlineColor
-                                    : appTheme.cardBorderColor
+                                    : appTheme.graphNodeBorderColor
 
         Label {
             id: nameLabel

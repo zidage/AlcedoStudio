@@ -25,12 +25,13 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
        ClosedRailOwnsNoTransactionOrVersionDelegates) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
 
-  auto* rail = Find(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = Find(QStringLiteral("editorWorkspaceRail"));
   ASSERT_NE(rail, nullptr);
   EXPECT_FALSE(rail->property("panelExpanded").toBool());
   EXPECT_FALSE(rail->property("panelBodyActive").toBool());
   EXPECT_EQ(Find(QStringLiteral("editorHistoryPageBody")), nullptr);
   EXPECT_EQ(Find(QStringLiteral("editorVersionsPageBody")), nullptr);
+  EXPECT_EQ(Find(QStringLiteral("editorNodesPageBody")), nullptr);
   EXPECT_TRUE(HistoryCards().isEmpty());
   EXPECT_TRUE(Cards().isEmpty());
   EXPECT_EQ(Find(QStringLiteral("editorHistoryList")), nullptr);
@@ -40,7 +41,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
 TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
        SwitchingPanelsDestroysInactiveBodyAndRestoresScroll) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  auto* rail = Find(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = Find(QStringLiteral("editorWorkspaceRail"));
   ASSERT_NE(rail, nullptr);
 
   // Seed enough Versions that contentY is meaningful.
@@ -69,7 +70,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   // Switch to History: Versions body must be destroyed (not merely hidden).
   OpenHistoryPage();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryPageBody")) != nullptr, 2000);
-  EXPECT_EQ(Find(QStringLiteral("editorVersionsPageBody")), nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsPageBody")) == nullptr, 2000);
   EXPECT_TRUE(Cards().isEmpty());
   EXPECT_FALSE(HistoryCards().isEmpty());
   EXPECT_GE(rail->property("panelBodyDestroyCount").toInt(), destroys_before + 1);
@@ -79,7 +80,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   // Return to Versions: prior scroll restores from rail-owned state.
   OpenVersionsPage();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsPageBody")) != nullptr, 2000);
-  EXPECT_EQ(Find(QStringLiteral("editorHistoryPageBody")), nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryPageBody")) == nullptr, 2000);
   EXPECT_TRUE(HistoryCards().isEmpty());
   versions_list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(versions_list, nullptr);
@@ -90,7 +91,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
 TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
        CollapsingRailDestroysActiveBodyAndClearsDelegates) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  auto* rail = Find(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = Find(QStringLiteral("editorWorkspaceRail"));
   ASSERT_NE(rail, nullptr);
 
   OpenHistoryPage();
@@ -98,8 +99,9 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   ASSERT_FALSE(HistoryCards().isEmpty());
   const int destroys_before = rail->property("panelBodyDestroyCount").toInt();
 
-  // Toggle History closed.
-  OpenHistoryPage();
+  // Close the History page.
+  controller_.set_editor_tool_panel_page(QString());
+  ProcessEvents();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryPageBody")) == nullptr, 2000);
   EXPECT_FALSE(rail->property("panelBodyActive").toBool());
   EXPECT_TRUE(HistoryCards().isEmpty());
@@ -110,7 +112,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
 TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
        FoldProgressInterpolatesOuterLayoutWidthLikeFilmstrip) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  auto* rail = Find(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = Find(QStringLiteral("editorWorkspaceRail"));
   ASSERT_NE(rail, nullptr);
 
   const int rail_width = rail->property("railWidth").toInt();
@@ -133,7 +135,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   EXPECT_NEAR(rail->property("totalWidth").toReal(), mid_w, 1.5);
   EXPECT_TRUE(rail->property("layoutExpanded").toBool());
 
-  auto* host = Find(QStringLiteral("editorHistoryVersionsPanelHost"));
+  auto* host = Find(QStringLiteral("editorToolPanelHost"));
   ASSERT_NE(host, nullptr);
   EXPECT_NEAR(host->opacity(), 0.5, 0.001);
 
@@ -161,7 +163,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   auto* versions_list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(versions_list, nullptr);
   EXPECT_TRUE(versions_list->property("reuseItems").toBool());
-  EXPECT_EQ(Find(QStringLiteral("editorHistoryList")), nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryList")) == nullptr, 2000);
 }
 
 }  // namespace
