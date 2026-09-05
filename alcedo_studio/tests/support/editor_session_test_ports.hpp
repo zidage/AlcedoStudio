@@ -90,16 +90,10 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   EditorAdjustmentPatch          last_captured_patch{};
   EditorAdjustmentPatch          last_committed_patch{};
   bool                           fail_node_command  = false;
-  int                            add_grade_count    = 0;
-  int                            remove_grade_count = 0;
   int                            rename_grade_count = 0;
-  int                                             reconnect_grade_count = 0;
   int                            edit_node_graph_count = 0;
   NodeGraphTopologyChange        last_topology_change{};
   NodeId                         last_node_id;
-  NodeId                         last_before_node_id;
-  NodeId                                          last_predecessor_id;
-  NodeId                                          last_successor_id;
   std::string                    last_grade_name;
   std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
@@ -140,52 +134,12 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     return true;
   }
 
-  auto AddColorGrade(const EditorHistoryGuardHandle&, const NodeId& before_node_id,
-                     const NodeId& new_id, std::string* error) -> bool override {
-    ++add_grade_count;
-    last_before_node_id = before_node_id;
-    last_node_id        = new_id;
-    last_render_reason  = EditorRenderReason::GraphTopologyChanged;
-    if (fail_node_command) {
-      if (error != nullptr) *error = "mini-Git journal append failed";
-      return false;
-    }
-    return true;
-  }
-
-  auto RemoveColorGrade(const EditorHistoryGuardHandle&, const NodeId& node_id, std::string* error)
-      -> bool override {
-    ++remove_grade_count;
-    last_node_id       = node_id;
-    last_render_reason = EditorRenderReason::GraphTopologyChanged;
-    if (fail_node_command) {
-      if (error != nullptr) *error = "mini-Git journal append failed";
-      return false;
-    }
-    return true;
-  }
-
   auto RenameColorGrade(const EditorHistoryGuardHandle&, const NodeId& node_id,
                         std::string display_name, std::string* error) -> bool override {
     ++rename_grade_count;
     last_node_id       = node_id;
     last_grade_name    = std::move(display_name);
     last_render_reason = std::nullopt;
-    if (fail_node_command) {
-      if (error != nullptr) *error = "mini-Git journal append failed";
-      return false;
-    }
-    return true;
-  }
-
-  auto ReconnectColorGrade(const EditorHistoryGuardHandle&, const NodeId& node_id,
-                           const NodeId& new_predecessor_id, const NodeId& new_successor_id,
-                           std::string* error) -> bool override {
-    ++reconnect_grade_count;
-    last_node_id        = node_id;
-    last_predecessor_id = new_predecessor_id;
-    last_successor_id   = new_successor_id;
-    last_render_reason  = EditorRenderReason::GraphTopologyChanged;
     if (fail_node_command) {
       if (error != nullptr) *error = "mini-Git journal append failed";
       return false;

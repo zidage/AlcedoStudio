@@ -219,25 +219,6 @@ class IEditorSessionBackend {
     result.message = "Adjustment commit not supported by this backend";
     return result;
   }
-  /// Add a clean Color Grade through typed history. Default backends reject.
-  virtual auto AddColorGrade(const NodeId& /*before_node_id*/, const NodeId& /*new_id*/)
-      -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Color Grade creation is not supported by this backend";
-    return result;
-  }
-  /// Remove a Color Grade and bridge its backbone neighbors. Default backends reject.
-  virtual auto RemoveColorGrade(const NodeId& /*node_id*/) -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Color Grade removal is not supported by this backend";
-    return result;
-  }
   /// Rename a Color Grade as a metadata-only history change. Default backends reject.
   virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
       -> EditorSessionResult {
@@ -246,16 +227,6 @@ class IEditorSessionBackend {
     result.state    = state();
     result.identity = identity();
     result.message  = "Color Grade rename is not supported by this backend";
-    return result;
-  }
-  /// Move a Color Grade between new backbone neighbors. Default backends reject.
-  virtual auto ReconnectColorGrade(const NodeId& /*node_id*/, const NodeId& /*new_predecessor_id*/,
-                                   const NodeId& /*new_successor_id*/) -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Rejected;
-    result.state    = state();
-    result.identity = identity();
-    result.message  = "Color Grade reconnect is not supported by this backend";
     return result;
   }
   /// Apply one net node-graph topology delta as one history commit. Default rejects.
@@ -420,13 +391,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto               CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto               AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
-      -> EditorSessionResult override;
-  auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override;
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override;
-  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
-                           const NodeId& new_successor_id) -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
@@ -502,6 +468,19 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// move, Version ref change, image open/close, recovery). Never call for
   /// interactive preview, render routing, view changes, or presentation size.
   void BumpHistoryRevision() { history_revision_.fetch_add(1, std::memory_order_acq_rel); }
+
+  /**
+   * @brief Shared success tail for RenameColorGrade and EditNodeGraph.
+   *
+   * Reads the history port's last published render reason, routes a photo
+   * render only when that reason is present, bumps the history revision, and
+   * emits the session result. Owns no additional state. Queue admission and
+   * interactive-history checks stay in the calling command.
+   *
+   * @param message User-visible success message stored on the result.
+   * @pre Called on the session owner thread after a successful history mutation.
+   */
+  auto PublishTypedNodeHistorySuccess(std::string message) -> EditorSessionResult;
 
   /// Queue-owned publish flavor for one in-flight history save checkpoint.
   /// Set by StartHistoryCheckpoint and consumed by the matching

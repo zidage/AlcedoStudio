@@ -59,10 +59,7 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetPresentationTarget,
   SetPresentationSize,
   SetGeometryOverlay,
-  AddColorGrade,
-  RemoveColorGrade,
   RenameColorGrade,
-  ReconnectColorGrade,
   EditNodeGraph,
 };
 
@@ -112,9 +109,6 @@ struct EditorSessionCommand {
   int                                     presentation_height  = 0;
   bool                                    geometry_overlay_active = false;
   NodeId                                  node_id;
-  NodeId                                  before_node_id;
-  NodeId                                  predecessor_node_id;
-  NodeId                                  successor_node_id;
   NodeGraphTopologyChange                 topology_change{};
 };
 

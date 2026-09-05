@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <duckdb.h>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -107,6 +108,23 @@ auto DocumentExposureEv(const alcedo::PipelineDocument& document) -> float {
   return json.at("exposure_ev").get<float>();
 }
 
+auto CommitCapturedAddColorGrade(EditorSessionHistoryPort& history,
+                                 const alcedo::EditorHistoryGuardHandle& handle,
+                                 alcedo::PipelineDocument& document,
+                                 const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id,
+                                 std::string* error) -> bool {
+  try {
+    auto change = alcedo::CaptureAddColorGradeChange(document, before_node_id, new_id);
+    return history.CommitPipelineEditBatch(handle, alcedo::MakeAddColorGradeBatch(std::move(change)),
+                                           error);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
+}
+
 class EditorVersionCheckoutTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -147,8 +165,9 @@ TEST_F(EditorVersionCheckoutTest, RootVersionAlwaysRebuildsExactImmutableDocumen
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":2.25})", &error)) << error;
   ASSERT_TRUE(CommitPanelField(history_, handle, "clarity", R"({"clarity":18.0})", &error))
       << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.look"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.look"},
+                                          &error))
       << error;
   ASSERT_TRUE(history_.AddMask(handle, alcedo::NodeId{"grade.look"},
                                alcedo::grade_mask_test::MakeRadialMask(alcedo::MaskId{"mask.radial"}),
@@ -187,8 +206,9 @@ TEST_F(EditorVersionCheckoutTest, BranchVersionSharesCommitsAndKeepsIndependentH
   EXPECT_EQ(guard_->commit_graph_->GetAllVersionRefs().size(), 2u);
   EXPECT_EQ(guard_->working_head_commit_hash(), shared_head);
 
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.look"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.look"},
+                                          &error))
       << error;
   ASSERT_TRUE(history_.AddMask(handle, alcedo::NodeId{"grade.look"},
                                alcedo::grade_mask_test::MakeRadialMask(alcedo::MaskId{"mask.radial"}),
@@ -373,8 +393,9 @@ TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExa
     const auto  handle = history.Acquire(element_id, &error);
     ASSERT_TRUE(handle.valid) << error;
     ASSERT_TRUE(CommitSettled(history, handle, "exposure", R"({"exposure":1.25})", &error)) << error;
-    ASSERT_TRUE(history.AddColorGrade(handle, alcedo::NodeId{"drt"},
-                                      alcedo::NodeId{"grade.recovered"}, &error))
+    ASSERT_TRUE(CommitCapturedAddColorGrade(history, handle, *guard->document_,
+                                            alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.recovered"},
+                                            &error))
         << error;
     EXPECT_EQ(guard->commit_graph_->CommitCount(), 2u);
     const auto* recovered = dynamic_cast<const alcedo::ColorGradeNodeModel*>(

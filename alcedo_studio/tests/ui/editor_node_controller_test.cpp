@@ -8,7 +8,6 @@
 
 #include <QCoreApplication>
 #include <algorithm>
-#include <functional>
 #include <vector>
 
 #include "app/editor_action_policy.hpp"
@@ -106,26 +105,6 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   auto Undo() -> EditorSessionResult override { return {}; }
   auto Redo() -> EditorSessionResult override { return {}; }
 
-  auto AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
-      -> EditorSessionResult override {
-    if (before_add_) {
-      before_add_();
-    }
-    ++add_count_;
-    if (fail_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors = alcedo::AddCleanColorGrade(document_, before_node_id, new_id);
-    if (!errors.empty()) return Rejected(errors.front().message);
-    NotifyChange();
-    return Accepted("Color Grade created");
-  }
-  auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override {
-    ++remove_count_;
-    if (fail_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors = alcedo::RemoveColorGradeAndBridge(document_, node_id);
-    if (!errors.empty()) return Rejected(errors.front().message);
-    NotifyChange();
-    return Accepted("Color Grade removed");
-  }
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override {
     ++rename_count_;
@@ -134,19 +113,6 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     if (!errors.empty()) return Rejected(errors.front().message);
     NotifyChange();
     return Accepted("Color Grade renamed");
-  }
-  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
-                           const NodeId& new_successor_id) -> EditorSessionResult override {
-    ++reconnect_count_;
-    last_reconnect_node_        = node_id;
-    last_reconnect_predecessor_ = new_predecessor_id;
-    last_reconnect_successor_   = new_successor_id;
-    if (fail_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors =
-        alcedo::ReconnectColorGrade(document_, node_id, new_predecessor_id, new_successor_id);
-    if (!errors.empty()) return Rejected(errors.front().message);
-    NotifyChange();
-    return Accepted("Color Grade reconnected");
   }
   auto EditNodeGraph(alcedo::NodeGraphTopologyChange change) -> EditorSessionResult override {
     ++edit_node_graph_count_;
@@ -179,24 +145,13 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
       availability_observer_(availability_);
     }
   }
-  void SetBeforeAdd(std::function<void()> before_add) { before_add_ = std::move(before_add); }
-  [[nodiscard]] auto add_count() const -> int { return add_count_; }
-  [[nodiscard]] auto remove_count() const -> int { return remove_count_; }
   [[nodiscard]] auto rename_count() const -> int { return rename_count_; }
-  [[nodiscard]] auto reconnect_count() const -> int { return reconnect_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
   [[nodiscard]] auto active_version_read_count() const -> int {
     return active_version_read_count_;
   }
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
     return history_snapshot_read_count_;
-  }
-  [[nodiscard]] auto last_reconnect_node() const -> NodeId { return last_reconnect_node_; }
-  [[nodiscard]] auto last_reconnect_predecessor() const -> NodeId {
-    return last_reconnect_predecessor_;
-  }
-  [[nodiscard]] auto last_reconnect_successor() const -> NodeId {
-    return last_reconnect_successor_;
   }
 
  private:
@@ -219,20 +174,13 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   alcedo::ImageLoadRequestId                        request_{};
   alcedo::EditorActionAvailability                  availability_{};
   IEditorSessionBackend::ActionAvailabilityObserver availability_observer_;
-  std::function<void()>                             before_add_;
   bool                                              fail_commands_ = false;
-  int                                               add_count_     = 0;
-  int                                               remove_count_  = 0;
   int                                               rename_count_  = 0;
-  int                                               reconnect_count_ = 0;
   int                                               edit_node_graph_count_ = 0;
   std::uint64_t                                     history_revision_ = 0;
   mutable int                                       active_version_read_count_ = 0;
   int                                               history_snapshot_read_count_ = 0;
   alcedo::NodeGraphTopologyChange                   last_topology_change_{};
-  NodeId                                            last_reconnect_node_;
-  NodeId                                            last_reconnect_predecessor_;
-  NodeId                                            last_reconnect_successor_;
 };
 
 TEST(EditorNodeController, LayoutStoreBindingDoesNotPublishASnapshot) {
@@ -304,7 +252,6 @@ TEST(EditorNodeController, AddCreatesDisconnectedDraftGradeWithoutAProductComman
   controller.selectNode(QStringLiteral("grade.primary"));
 
   ASSERT_TRUE(controller.addCleanColorGrade());
-  EXPECT_EQ(backend.add_count(), 0);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), 2u);
   EXPECT_TRUE(controller.incomplete_draft());
@@ -358,7 +305,6 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   controller.selectNode(QStringLiteral("grade.primary"));
 
   ASSERT_TRUE(controller.deleteColorGrade(QStringLiteral("grade.primary")));
-  EXPECT_EQ(backend.remove_count(), 0);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_EQ(controller.ActiveNodes().size(), 3u);
@@ -378,8 +324,7 @@ TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBacken
   EXPECT_FALSE(controller.deleteColorGrade(QStringLiteral("grade.missing")));
   backend.SetGeneration(19);
   EXPECT_FALSE(controller.addCleanColorGrade());
-  EXPECT_EQ(backend.add_count(), 0);
-  EXPECT_EQ(backend.remove_count(), 0);
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_EQ(backend.rename_count(), 0);
 }
 
@@ -428,7 +373,7 @@ TEST(EditorNodeController, BlockedEditAvailabilityDisablesAddWithoutSnapshotChan
   EXPECT_FALSE(session.can_edit());
   EXPECT_FALSE(controller.can_add_color_grade());
   EXPECT_FALSE(controller.addCleanColorGrade());
-  EXPECT_EQ(backend.add_count(), 0);
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
 TEST(EditorNodeController, ActiveCommandRejectsNestedAddBeforeDraftMutation) {

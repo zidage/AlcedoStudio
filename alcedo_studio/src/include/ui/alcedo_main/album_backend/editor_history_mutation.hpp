@@ -53,14 +53,6 @@ class EditorHistoryMutation {
   auto CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
                                alcedo::PipelineEditBatch batch, std::string* error) -> bool;
 
-  auto AddColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
-                     const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id,
-                     std::string* error) -> bool;
-  auto RemoveColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                        std::string* error) -> bool;
-  auto ReconnectColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                           const alcedo::NodeId& new_predecessor_id,
-                           const alcedo::NodeId& new_successor_id, std::string* error) -> bool;
   auto EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,

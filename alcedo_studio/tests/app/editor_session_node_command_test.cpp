@@ -62,6 +62,23 @@ class EditorSessionNodeCommandTest : public ::testing::Test {
     ASSERT_EQ(service_->state(), EditorSessionState::Interactive);
   }
 
+  auto SampleTopologyChange() const -> NodeGraphTopologyChange {
+    NodeGraphTopologyChange change;
+    change.before_next_color_grade_name_number = 2;
+    change.after_next_color_grade_name_number  = 2;
+    NodeGraphDisconnectedEdge disconnected;
+    disconnected.edge                = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
+                                                         NodeId{"drt"}, PortId{"image"}};
+    disconnected.original_edge_index = 1;
+    change.disconnected_edges.push_back(disconnected);
+    NodeGraphConnectedEdge connected;
+    connected.edge             = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
+                                                   NodeId{"drt"}, PortId{"image"}};
+    connected.final_edge_index = 1;
+    change.connected_edges.push_back(connected);
+    return change;
+  }
+
   std::shared_ptr<test::ControllableEditorHistoryPort> history_;
   std::shared_ptr<test::FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<test::FakeEditorTaskPort>            tasks_;
@@ -72,20 +89,6 @@ class EditorSessionNodeCommandTest : public ::testing::Test {
   std::unique_ptr<EditorSessionRuntime>                runtime_;
   EditorSessionService*                                service_ = nullptr;
 };
-
-TEST_F(EditorSessionNodeCommandTest, AddCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
-  const auto renders_before  = scheduler_->requests.size();
-  const auto revision_before = service_->history_revision();
-  const auto result          = service_->AddColorGrade(NodeId{"drt"}, NodeId{"grade.extra"});
-
-  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
-  EXPECT_EQ(history_->add_grade_count, 1);
-  EXPECT_EQ(history_->last_before_node_id, NodeId{"drt"});
-  EXPECT_EQ(history_->last_node_id, NodeId{"grade.extra"});
-  EXPECT_EQ(service_->history_revision(), revision_before + 1);
-  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
-  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
-}
 
 TEST_F(EditorSessionNodeCommandTest, RenameCreatesOneHistoryChangeWithoutRender) {
   const auto renders_before  = scheduler_->requests.size();
@@ -100,57 +103,14 @@ TEST_F(EditorSessionNodeCommandTest, RenameCreatesOneHistoryChangeWithoutRender)
   EXPECT_EQ(scheduler_->requests.size(), renders_before);
 }
 
-TEST_F(EditorSessionNodeCommandTest, DeleteCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
-  const auto renders_before  = scheduler_->requests.size();
-  const auto revision_before = service_->history_revision();
-  const auto result          = service_->RemoveColorGrade(NodeId{"grade.primary"});
-
-  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
-  EXPECT_EQ(history_->remove_grade_count, 1);
-  EXPECT_EQ(history_->last_node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(service_->history_revision(), revision_before + 1);
-  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
-  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
-}
-
 TEST_F(EditorSessionNodeCommandTest,
        EditNodeGraphCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
   const auto renders_before  = scheduler_->requests.size();
   const auto revision_before = service_->history_revision();
-  NodeGraphTopologyChange change;
-  change.before_next_color_grade_name_number = 2;
-  change.after_next_color_grade_name_number  = 2;
-  NodeGraphDisconnectedEdge disconnected;
-  disconnected.edge                = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
-                                                       NodeId{"drt"}, PortId{"image"}};
-  disconnected.original_edge_index = 1;
-  change.disconnected_edges.push_back(disconnected);
-  NodeGraphConnectedEdge connected;
-  connected.edge             = PipelineSceneEdge{NodeId{"grade.primary"}, PortId{"image"},
-                                                 NodeId{"drt"}, PortId{"image"}};
-  connected.final_edge_index = 1;
-  change.connected_edges.push_back(connected);
-  const auto result = service_->EditNodeGraph(change);
+  const auto result          = service_->EditNodeGraph(SampleTopologyChange());
 
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
   EXPECT_EQ(history_->edit_node_graph_count, 1);
-  EXPECT_EQ(service_->history_revision(), revision_before + 1);
-  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
-  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
-}
-
-TEST_F(EditorSessionNodeCommandTest,
-       ReconnectCreatesOneHistoryChangeAndRoutesTopologyQualityRender) {
-  const auto renders_before  = scheduler_->requests.size();
-  const auto revision_before = service_->history_revision();
-  const auto result =
-      service_->ReconnectColorGrade(NodeId{"grade.primary"}, NodeId{"develop"}, NodeId{"drt"});
-
-  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
-  EXPECT_EQ(history_->reconnect_grade_count, 1);
-  EXPECT_EQ(history_->last_node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(history_->last_predecessor_id, NodeId{"develop"});
-  EXPECT_EQ(history_->last_successor_id, NodeId{"drt"});
   EXPECT_EQ(service_->history_revision(), revision_before + 1);
   ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
   EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
@@ -161,7 +121,7 @@ TEST_F(EditorSessionNodeCommandTest,
   history_->fail_node_command = true;
   const auto renders_before   = scheduler_->requests.size();
   const auto revision_before  = service_->history_revision();
-  const auto result           = service_->AddColorGrade(NodeId{"drt"}, NodeId{"grade.extra"});
+  const auto result           = service_->EditNodeGraph(SampleTopologyChange());
 
   EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
   EXPECT_EQ(result.message, "mini-Git journal append failed");
