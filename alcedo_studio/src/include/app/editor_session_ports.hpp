@@ -157,6 +157,17 @@ class IEditorHistoryPort {
     return false;
   }
 
+  /// Read only the active Version identity. This avoids constructing the
+  /// Versions/commits projection when a consumer only needs a layout key or
+  /// stale-session check.
+  virtual auto ReadActiveVersionId(const EditorHistoryGuardHandle& /*guard*/,
+                                   version_ref_id_t* /*version_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Active Version identity is not supported by this history port";
+    }
+    return false;
+  }
+
   /// Read named Version refs and the active Version's first-parent commit path.
   /// Journal frames are an internal recovery mechanism and are never returned
   /// as user-facing rows.

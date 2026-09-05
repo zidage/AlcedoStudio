@@ -4,21 +4,17 @@ This file provides guidance to AI agents (Kimi, Claude, Codex, etc.) when workin
 
 ## Project Overview
 
-**Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing, a DuckDB-backed asset management system ("Sleeve"), and a Qt 6 UI combining QML (album browser) and Qt Widgets (editor).
+**Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing and a DuckDB-backed asset management system ("Sleeve"). The entire UI uses Qt 6 QML / Qt Quick, including the album browser, editor workspace, adjustment panels, and dialogs, with C++ backends and rendering integration.
 
-## Agent Execution Posture
+## Execution and Product Rules
+
+### Complete the requested capability
 
 Agents working in this repository must be decisive and implementation-driven. Do not respond to product or engineering direction with passive staged deferrals such as "first avoid this", "later maybe add this", "medium term", "long term", or similar framing that delays the requested capability after the user has made the product goal clear.
 
-## Branch naming
-
-Branch names must describe the feature, fix, refactor, or other engineering purpose of the work.
-Do not include `codex` in a branch name. Use a functional name such as
-`fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
-
 When the user names a concrete integration or capability, treat it as the target and work out the implementation path, constraints, tests, and risks directly. If there are real blockers, state them as concrete engineering facts and propose the closest viable implementation, not a soft retreat to a weaker product.
 
-## No fallback unless the user explicitly allows it
+### No fallback without explicit authorization
 
 Do **not** add, restore, or "temporarily" use any fallback, degraded path, silent substitute, or weaker stand-in unless the user has **explicitly** allowed that specific fallback in this conversation (or in an existing, already-landed product rule they pointed at).
 
@@ -32,7 +28,121 @@ This includes, and is not limited to:
 
 If the requested path cannot be implemented, **fail with the real error** and state the engineering blocker. Do not ship a weaker product and call it a fix. Performance of a CUDA **debug** build is not a reason to change product decode or quality policy.
 
-## Temporary files and local workspace
+## Code Style and Data Updates
+
+These rules apply to all project-authored code, including tests and tooling. They are project-wide
+requirements and do not depend on a task-specific skill being activated.
+
+### Language, formatting, and member names
+
+- Use C++20 and the repository's clang-format configuration (Google style, 100-column limit).
+- Follow the repository's clang-tidy rules. Private members use a trailing `_`; public and
+  protected members do not.
+- Name types, functions, variables, and tests after the data they represent or the operation they
+  perform. Apply the terminology rules below to identifiers as well as prose.
+
+### Update existing data through its owner
+
+**Do not create snapshots, mirror structs, or temporary copies of existing data structures just
+to read, pass, or update their state.** Renaming a copy to `State`, `Context`, or `Payload` does not
+make it acceptable. The rule concerns duplicated state, not the spelling of `snapshot`.
+
+Use this order when implementing a read or update:
+
+1. Identify the existing data structure and the service or component that owns it.
+2. Read through the owner's API or a const reference/view with a valid lifetime and appropriate
+   synchronization. Do not expose mutable internals or retain references beyond their safe lifetime.
+3. Apply changes through a focused operation on that owner. Pass the fields or change description
+   needed for the operation instead of copying the entire object, editing the copy, and writing it back.
+4. Validate inputs before mutation and preserve the owner's invariants. Publish notifications only
+   after the complete update is visible.
+
+An **atomic operation** here means one logically indivisible update: observers cannot see partial
+state, and concurrent changes cannot be silently overwritten. Use the existing transaction, lock,
+or owning-thread mechanism as appropriate. This does not require `std::atomic` for every field and
+does not authorize unsynchronized in-place writes. Keep failure behavior explicit; a failed update
+must not leave partially applied state.
+
+### Necessary copies and snapshots
+
+A snapshot is allowed only when a concrete requirement needs independent state, such as a
+consistent point-in-time package export. Before introducing one:
+
+- Explain why an owner operation, scoped read, or minimal change description cannot satisfy the
+  requirement. Convenience, avoiding an API change, or a generic claim of thread safety is insufficient.
+- Document the purpose, captured fields, owner, lifetime, and consistency mechanism at the defining
+  type or creation site. Copy only the data the requirement needs.
+- Define whether the captured state is immutable or independently editable, and how it is released.
+  Do not write an old copy back over live state without explicit conflict handling.
+- Reuse an existing representation that meets the requirement rather than adding another parallel
+  representation. An existing snapshot API is not permission to introduce more snapshots.
+
+Ordinary scalar/value parameters and results are not prohibited. Review copies that duplicate an
+existing object's state, especially whole objects, containers, and image buffers. Required algorithm
+output buffers are not snapshots merely because they use separate storage.
+
+## Naming and Terminology
+
+### Scope and exceptions
+
+The table below defines the scope of each restriction. Matching is case-insensitive and includes
+compound identifiers and derived forms where applicable. Use names that state the actual operation,
+artifact, comparison, or guarantee; replacing one vague label with another does not satisfy the rule.
+
+Exact external API/framework/model identifiers are allowed where interoperability requires their
+spelling. Keep that spelling at the integration site; do not propagate it into Alcedo-owned names or
+surrounding prose. These rules may quote prohibited terms to define or explain the prohibition.
+
+### Prohibited terms and concrete replacements
+
+| Term | Scope | Required wording or behavior |
+| --- | --- | --- |
+| `hydration`, `hydrate`, and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the operation: read, load, populate, restore, or apply. |
+| `gesture` and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the actual input: drag, pinch, input sequence, pointer release, or settled edit. |
+| `golden` | Project-authored identifiers, test/target names, filenames, comments, documentation, plans, and user-facing text | State what is stored or verified: expected pixel values, serialized output, a reference image comparison with a stated tolerance, or a specific rendering result. |
+| `smoke` | Test names, targets, files, and documentation | State the behavior and expected result. A name that only means "something ran" is insufficient. |
+| `contract`, `contracts` | Everything under `docs/roadmap/`, including prose, headings, link labels, and filenames | Name the exact artifact or guarantee: interface, API, schema, protocol, invariant, behavior specification, acceptance criterion, compatibility requirement, or performance target. |
+| `seed` used as a verb for a non-random operation | Project-authored code identifiers, tests, and comments | Use populate, insert, initialize, restore, copy, or apply. Conventional inputs to random-number generators, cryptographic primitives, and deterministic fuzz runs remain allowed. |
+
+### Test and reference-data names
+
+Every test must state the behavior, regression, invariant, or property it verifies. Unit,
+integration, regression, property, and benchmark are useful categories, but each still needs an
+explicit assertion goal.
+
+Examples of concrete names:
+
+- `NeuralEngineDemosaicsRealBayerRawPatchToValidRgb`
+- `LoadFailureReportsErrorAndKeepsCacheCold`
+- `RenderedPixelsMatchReferenceWithinTolerance`
+- `SerializedEditHistoryMatchesExpectedJson`
+
+For stored expected results, name the actual contents and purpose, such as
+`expected_edit_history.json` or `exposure_plus_one_expected_pixels.exr`. A file comparison alone
+does not explain the behavior being checked: the test must identify the output, comparison rule,
+and tolerance where relevant. Do not mechanically replace `golden` with `baseline` or `reference`
+without making those details clear.
+
+### Checks before completing relevant edits
+
+- Search first-party source, tests, docs, and plans for prohibited project-wide terminology. Review
+  matches against the scope and external-identifier exception above.
+- Replace prohibited names in touched code and update their callers, test registrations, and links
+  together. When touching a non-conventional `seed` verb, rename it in the same change.
+- For roadmap edits, search the entire `docs/roadmap/` tree, including filenames. Rename violating
+  linked files and update their references.
+- Review added copies and snapshot types against the data-update rules above; verify that each
+  exception has a concrete need and a defined consistency mechanism.
+
+## Workspace and Branches
+
+### Branch names
+
+Branch names must describe the feature, fix, refactor, or other engineering purpose of the work.
+Do not include `codex` in a branch name. Use a functional name such as
+`fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
+
+### Temporary files and local state
 
 Do **not** create temporary directories or ad-hoc dump files at the repository root
 (for example `/tmp`, `tmp/`, root-level `*.log`, harness dumps, one-off scripts, or
@@ -105,35 +215,7 @@ ctest --test-dir build/debug --output-on-failure
 ./build/debug/tests/test_exposure_op
 ```
 
-**Test naming ban — no "smoke" tests.** Do not name tests, targets, files, or
-docs with `smoke` / `Smoke` / `SMOKE` (e.g. `*SmokeTest`, `FooSmokeOnBar`).
-Every test must state a concrete purpose: what behavior, contract, regression,
-or property it verifies (examples: `NeuralEngineDemosaicsRealBayerRawPatchToValidRgb`,
-`LoadFailureFallsBackToLegacyAndKeepsCacheCold`). Vague names that only mean
-"something ran" are not allowed. Prefer: unit / integration / regression /
-property / golden / benchmark, each with an explicit assertion goal.
-
-**Roadmap terminology ban.** Files under `docs/roadmap/` must not use `contract`,
-`contracts`, or casing variants in prose, headings, link labels, or filenames. Name the exact
-artifact or guarantee instead: interface, API, schema, protocol, invariant, behavior specification,
-acceptance criterion, compatibility requirement, or performance target. Before completing roadmap
-edits, search the entire roadmap tree and rename any linked file that violates this rule.
-
-**Project terminology ban.** Project-authored code identifiers, tests, comments, documentation,
-plans, and user-facing text must not use `hydration`, `hydrate`, `gesture`, or casing/derived
-variants. These words hide the concrete operation being performed. Use exact terms such as read,
-load, populate, apply, drag, pinch, input sequence, pointer release, or settled edit. External
-framework identifiers that require an exact spelling, such as Qt types, enum values, signals, or
-QML properties, are the only exception. Keep the exception at the call site and do not repeat the
-external wording in Alcedo-owned API names or surrounding prose. Before completing relevant edits,
-search first-party source, tests, docs, and plans for violations.
-
-**`Seed` verb ban in code.** Project-authored code identifiers, tests, and comments must not use
-`Seed` / `seed` as a verb for populate, insert, initialize, restore, copy, or apply operations. Name
-the concrete operation instead. Conventional seed usage remains allowed when it means an input to
-a random-number generator, cryptographic primitive, deterministic fuzz run, or an exact external
-API/model identifier. When touching code that contains a non-conventional `Seed` verb, replace it
-with the precise operation name in the same change.
+Test names and reference-data files must follow **Naming and Terminology** above.
 
 WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
@@ -165,10 +247,11 @@ These façade services are the **only** API surface the UI layer may call. They 
 - **Storage**: DuckDB ORM layer with mappers and controllers (`storage/`)
 
 ### Layer 5 — UI (`ui/`)
-- **AlbumBackendLib**: Reusable QML/C++ backend module for the album browser
-- **EditViewer**: Real-time editor viewport using Qt RHI (D3D11 / Metal / OpenGL fallback)
-- **editor_dialog**: Editor UI panels (tone, color, geometry, versioning, scope/histogram)
-- **alcedo_main**: Application entry point (QML + C++ shell)
+
+- **alcedo_main**: Application entry point and unified QML / Qt Quick shell
+- **alcedo_main/qml/**: Album browser, editor workspace, adjustment panels, version/history views, scopes, and dialogs
+- **alcedo_main/album_backend/**: C++ models and controllers exposed to QML for library and editor operations
+- **editor_rhi/**: `EditorViewportItem` and rendering integration for the Qt Quick editor viewport
 
 ## Key Technical Notes
 
@@ -176,8 +259,7 @@ These façade services are the **only** API surface the UI layer may call. They 
 - **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`, `third_party/QuickQanava`) must be initialized before configuring: `git submodule update --init --recursive` for lensfun/libultrahdr, and `git submodule update --init alcedo_studio/src/third_party/QuickQanava` (no nested checkout).
 - **Windows packages** are resolved via vcpkg; macOS via Homebrew.
 - **CUDA** requires Toolkit 12.8 and compute capability ≥ 6.0. CUDA files have their own compile database entry.
-- **C++ standard**: C++20 with AVX/AVX2 SIMD flags.
-- **Naming convention** (clang-tidy enforced): private members use a trailing `_` suffix; public/protected members do not.
+- **SIMD**: The C++ build uses AVX/AVX2 SIMD flags.
 - **32-bit float pipeline**: All internal image processing operates in 32-bit float; output rendering uses ACES 2.0 with optional CUBE LUT.
 
 ## Skills

@@ -222,6 +222,17 @@ class EditorSessionHistoryPortTest : public ::testing::Test {
   EditorSessionHistoryPort                   history_;
 };
 
+TEST_F(EditorSessionHistoryPortTest, ActiveVersionIdentityReadReturnsOnlyTheCheckedOutRef) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  alcedo::version_ref_id_t active_version_id;
+
+  ASSERT_TRUE(history_.ReadActiveVersionId(handle, &active_version_id, &error)) << error;
+
+  EXPECT_EQ(active_version_id, guard_->commit_graph_->GetActiveVersionId());
+}
+
 TEST(EditorHistoryPureReducerTest, ReplaysHeadWithoutConstructingRenderExecutor) {
   auto graph = alcedo::CommitGraph::CreateEmpty(43);
   auto root_snapshot = MakeEmptyCompleteAdjustmentSnapshot();

@@ -81,6 +81,8 @@ class IEditorSessionBackend {
   /// across backend change notifications to emit one dedicated history signal
   /// instead of refreshing on every renderer event.
   [[nodiscard]] virtual auto history_revision() const -> std::uint64_t { return 0; }
+  /// Lightweight active Version identity for session/layout comparisons.
+  [[nodiscard]] virtual auto active_version_id() const -> version_ref_id_t { return {}; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
   /// Live PipelineDocument for the Nodes-page projection. Null when the backend
   /// has no loaded image document. Default fakes return nullptr.
@@ -373,6 +375,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);
   }
+  [[nodiscard]] auto active_version_id() const -> version_ref_id_t override;
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
   [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {

@@ -194,6 +194,12 @@ auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardH
   return mutation_->CheckoutVersion(guard, version_id, error);
 }
 
+auto EditorSessionHistoryPort::ReadActiveVersionId(
+    const alcedo::EditorHistoryGuardHandle& guard, alcedo::version_ref_id_t* version_id,
+    std::string* error) -> bool {
+  return projection_->ReadActiveVersionId(guard, version_id, error);
+}
+
 auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                                                    alcedo::EditorHistorySnapshot* snapshot,
                                                    std::string* error) -> bool {

@@ -238,7 +238,8 @@ class EditorNodeController : public QObject {
 
  private:
   void               DisconnectSession();
-  void               OnSessionChanged();
+  void               OnSessionStateChanged();
+  void               OnSessionHistoryChanged();
   void               ClearSnapshot();
   void               SetLastError(QString error);
   void               RestoreSelectionAfterSnapshot();
@@ -278,6 +279,7 @@ class EditorNodeController : public QObject {
   void               PersistSavedSelection();
   void               ApplyLiveSelectionToAdapter();
   [[nodiscard]] auto SessionMatchesSubmittedIdentity() const -> bool;
+  [[nodiscard]] auto SessionLocationChanged() const -> bool;
   [[nodiscard]] auto SessionIdentityChanged() const -> bool;
   [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
   void               AdoptCommittedDocument(const PipelineDocument& document);
@@ -297,11 +299,15 @@ class EditorNodeController : public QObject {
   bool                                                command_active_          = false;
   bool                                                projection_apply_queued_ = false;
   quint64                                             session_generation_      = 0;
+  quint64                                             observed_history_revision_ = 0;
   quint64                                             projection_revision_     = 0;
   quint64                                             topology_revision_       = 0;
   quint64                                             element_id_              = 0;
   quint64                                             image_id_                = 0;
   QString                                             version_id_;
+  quint64                                             snapshot_element_id_ = 0;
+  quint64                                             snapshot_image_id_   = 0;
+  QString                                             snapshot_version_id_;
   QString                                             last_error_;
   std::unique_ptr<alcedo::EditorNodeGraphDraft>       draft_;
   std::optional<alcedo::EditorNodeGraphDraftIdentity> submitted_identity_;

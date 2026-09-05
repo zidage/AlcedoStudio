@@ -364,6 +364,9 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
   [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
+  [[nodiscard]] auto active_version_id() const -> version_ref_id_t override {
+    return snapshot_.active_version_id;
+  }
   [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
     return document_.get();
   }
