@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <QAccessible>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QPointF>
 #include <QQmlContext>
@@ -978,6 +979,40 @@ TEST_F(EditorNodesPanelQmlTest, FortyPercentTextExpansionKeepsTitleWrappingInsid
   EXPECT_TRUE(add->isVisible());
   QCoreApplication::removeTranslator(&expander);
   engine_.retranslate();
+}
+
+TEST_F(EditorNodesPanelQmlTest, FirstNodesLoaderShowsDefaultGraphDelegates) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  QElapsedTimer timer;
+  timer.start();
+  OpenNodesPage();
+  QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 3, 2000);
+  const auto loader_ms = static_cast<int>(timer.elapsed());
+  RecordProperty("first_nodes_loader_ms", loader_ms);
+  auto* view = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(view, nullptr);
+  EXPECT_TRUE(view->isVisible());
+  EXPECT_LT(loader_ms, 100);
+}
+
+TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopology) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  const auto replace_count = adapter->topology_replace_count();
+  QElapsedTimer timer;
+  timer.start();
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
+  const auto add_ms = static_cast<int>(timer.elapsed());
+  RecordProperty("add_color_grade_feedback_ms", add_ms);
+  EXPECT_EQ(adapter->topology_replace_count(), replace_count);
+  EXPECT_TRUE(nodes->incomplete_draft());
+  EXPECT_LT(add_ms, 100);
 }
 
 }  // namespace

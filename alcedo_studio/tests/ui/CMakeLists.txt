@@ -762,6 +762,7 @@ alcedo_register_test_target(QuickQanavaProductionIntegrationTest ui)
 # Read-only Qan adapter: NodeId maps, ports, role updates, generation replacement.
 add_executable(AlcedoQanGraphTest
     ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/alcedo_qan_graph_performance_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
 target_include_directories(AlcedoQanGraphTest

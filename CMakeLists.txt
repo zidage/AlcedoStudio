@@ -833,6 +833,39 @@ function(alcedo_install_metal_runtime_libs destination)
     install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
 endfunction()
 
+# Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
+# QuickQanava BSD-3-Clause and vendored bezier MIT notices required for binary
+# redistribution. @p destination is next to the Windows executable or inside
+# the macOS bundle Resources directory so THIRD_PARTY_NOTICE.txt relative paths
+# to third_party_licenses/ remain valid.
+function(alcedo_install_legal_notices destination)
+    set(_alcedo_notice_root "${CMAKE_SOURCE_DIR}")
+    set(_alcedo_required_notices
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-licence.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-bezier-LICENSE.txt"
+    )
+    foreach(_alcedo_notice IN LISTS _alcedo_required_notices)
+        if(NOT EXISTS "${_alcedo_notice}")
+            message(FATAL_ERROR
+                "[alcedo] Required legal notice is missing: ${_alcedo_notice}")
+        endif()
+    endforeach()
+    install(FILES
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        DESTINATION "${destination}"
+    )
+    install(DIRECTORY "${_alcedo_notice_root}/third_party_licenses/"
+        DESTINATION "${destination}/third_party_licenses"
+        FILES_MATCHING
+            PATTERN "*"
+    )
+endfunction()
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
@@ -879,6 +912,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${_bundle_macos_dest}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${_bundle_macos_dest}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
+        alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
         alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
@@ -996,6 +1030,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
+        alcedo_install_legal_notices("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
         alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")

@@ -53,6 +53,12 @@ TEST(EditorWindowColorManagementTest, PqAndHlgApplyEdrMetadataThenSdrClearsIt) {
   }
 }
 
+TEST(EditorWindowColorManagementTest, DummyPlatformWinIdReturnsFalseWithoutCrashing) {
+  EXPECT_FALSE(ColorManager::ApplyWindowColorSpace(nullptr, ViewerDisplayConfig{}));
+  EXPECT_FALSE(
+      ColorManager::ApplyWindowColorSpace(reinterpret_cast<void*>(1), ViewerDisplayConfig{}));
+}
+
 TEST(EditorWindowColorManagementTest, FindsMetalLayerBelowTheUnifiedContentView) {
   @autoreleasepool {
     NSView* root        = [[NSView alloc] initWithFrame:NSMakeRect(0.0, 0.0, 320.0, 180.0)];
