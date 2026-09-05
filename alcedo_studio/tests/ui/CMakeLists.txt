@@ -898,6 +898,28 @@ alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
     PROPERTIES LABELS "editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
 
+add_executable(ShortcutRegistryTest
+    ${ALCEDO_TEST_ROOT}/ui/shortcut_registry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(ShortcutRegistryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ShortcutRegistryTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+)
+set_target_properties(ShortcutRegistryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(ShortcutRegistryTest
+    TEST_PREFIX "ShortcutRegistryTest."
+    PROPERTIES LABELS "editor_nodes")
+alcedo_register_test_target(ShortcutRegistryTest ui)
+
 # Nodes rail page: Loader lifetime, selection, layout restore, Fit, no render.
 add_executable(EditorNodesPanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_nodes_panel_qml_test.cpp

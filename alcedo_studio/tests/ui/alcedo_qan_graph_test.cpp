@@ -1091,4 +1091,36 @@ TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {
   EXPECT_FALSE(adapter.has_projection());
 }
 
+TEST_F(AlcedoQanGraph, KeyboardConnectPinsTheSourceWhileSelectionMoves) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7, 2, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+  auto* graph = harness_->Graph();
+  ASSERT_TRUE(WaitFor([&] { return graph->getConnector() != nullptr; }));
+
+  EXPECT_TRUE(adapter.beginKeyboardConnect(QStringLiteral("grade.primary")));
+  EXPECT_TRUE(adapter.keyboard_connect_active());
+  EXPECT_EQ(adapter.keyboard_connect_source_id_string(), QStringLiteral("grade.primary"));
+  ASSERT_NE(graph->getConnector()->getSourcePort(), nullptr);
+  EXPECT_EQ(graph->getConnector()->getSourcePort(),
+            adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()));
+
+  adapter.ApplyProductSelection(NodeId{"drt"});
+  EXPECT_TRUE(adapter.keyboard_connect_active());
+  EXPECT_EQ(adapter.keyboard_connect_source_id_string(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(graph->getConnector()->getSourcePort(),
+            adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()));
+
+  EXPECT_FALSE(adapter.beginKeyboardConnect(QStringLiteral("drt")));
+  EXPECT_TRUE(adapter.keyboard_connect_active());
+  EXPECT_FALSE(adapter.beginKeyboardConnect(QStringLiteral("missing.node")));
+  EXPECT_TRUE(adapter.keyboard_connect_active());
+
+  adapter.cancelKeyboardConnect();
+  EXPECT_FALSE(adapter.keyboard_connect_active());
+  EXPECT_TRUE(adapter.keyboard_connect_source_id_string().isEmpty());
+}
+
 }  // namespace alcedo

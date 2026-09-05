@@ -8,10 +8,12 @@
 
 #include "app/ai_provider_profile.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
 
 void RegisterApplicationModuleTypes() {
+  RegisterShortcutRegistryQmlType();
   qmlRegisterUncreatableType<ProjectModule>("Alcedo.Main", 1, 0, "ProjectModule",
                                             "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryModule>("Alcedo.Main", 1, 0, "LibraryModule",

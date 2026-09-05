@@ -40,11 +40,13 @@ Item {
     }
 
     implicitWidth: appTheme.graphNodeWidth
-    implicitHeight: appTheme.graphMaskRowHeight
+    implicitHeight: Math.max(appTheme.graphMaskRowHeight, typeName.implicitHeight + appTheme.spaceXs)
     height: implicitHeight
+    activeFocusOnTab: false
 
     Accessible.role: Accessible.StaticText
     Accessible.name: root.typeLabel
+    Accessible.ignored: !root.visible || root.typeLabel.length === 0
 
     RowLayout {
         anchors.fill: parent
@@ -79,6 +81,7 @@ Item {
             font.pixelSize: appTheme.fontSizeBody
             font.weight: appTheme.fontWeightRegular
             elide: Text.ElideRight
+            wrapMode: Text.NoWrap
             Accessible.ignored: true
         }
     }

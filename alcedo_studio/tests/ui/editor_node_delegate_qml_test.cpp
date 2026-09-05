@@ -19,9 +19,11 @@
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
 #include <QQmlProperty>
+#include <QFont>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -205,6 +207,34 @@ void CollectObjectNames(QObject* object, QStringList* names) {
   for (auto* child : object->children()) {
     CollectObjectNames(child, names);
   }
+}
+
+auto AttachedName(QObject* object) -> QString {
+  if (object == nullptr) {
+    return {};
+  }
+  QQmlProperty property(object, QStringLiteral("Accessible.name"), qmlContext(object));
+  const auto   name = property.read().toString();
+  if (!name.isEmpty()) {
+    return name;
+  }
+  const auto dotted = object->property("Accessible.name").toString();
+  if (!dotted.isEmpty()) {
+    return dotted;
+  }
+  return object->property("actionName").toString();
+}
+
+auto AttachedDescription(QObject* object) -> QString {
+  if (object == nullptr) {
+    return {};
+  }
+  QQmlProperty property(object, QStringLiteral("Accessible.description"), qmlContext(object));
+  const auto   description = property.read().toString();
+  if (!description.isEmpty()) {
+    return description;
+  }
+  return object->property("Accessible.description").toString();
 }
 
 auto FindDescendant(QObject* root, const QString& object_name) -> QQuickItem* {
@@ -738,6 +768,161 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerHeaderWashKeepsCardBorderVisibleOnHover)
   EXPECT_LE(wash->mapToItem(drawer, QPointF(0, wash->height())).y(),
             drawer->height() - inset + 0.5)
       << "hover wash must not paint over the card border row";
+}
+
+TEST_F(EditorNodeDelegateQml, LongTranslatedNameElidesInsideGraphNodeWidth) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  auto*              grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->SetDisplayName(
+      "Very long translated Color Grade name that must stay on one line inside the card");
+  ApplyDocument(&adapter, std::move(document));
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  auto* name = FindDescendant(item, QStringLiteral("editorNodeName"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(item->width(), ui::AppTheme::Instance().graphNodeWidth());
+  EXPECT_LE(name->width(), ui::AppTheme::Instance().graphNodeWidth());
+  EXPECT_EQ(name->property("wrapMode").toInt(), 0);
+  WaitFor([&] { return name->property("truncated").toBool(); });
+  EXPECT_LE(name->width() + ui::AppTheme::Instance().spaceSm() * 2,
+            ui::AppTheme::Instance().graphNodeWidth() + 1.0);
+}
+
+TEST_F(EditorNodeDelegateQml, NameRowGrowsWithLargeTitleFontWithoutChangingCardWidth) {
+  ui::AlcedoQanGraph adapter;
+  ApplyDefault(&adapter);
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  auto* name_row = FindDescendant(item, QStringLiteral("editorNodeNameRow"));
+  auto* name     = FindDescendant(item, QStringLiteral("editorNodeName"));
+  ASSERT_NE(name_row, nullptr);
+  ASSERT_NE(name, nullptr);
+  const qreal before_height = name_row->height();
+  const qreal before_width  = item->width();
+  auto        font          = name->property("font").value<QFont>();
+  font.setPixelSize(40);
+  ASSERT_TRUE(name->setProperty("font", QVariant::fromValue(font)));
+  ASSERT_TRUE(WaitFor([&] { return name_row->height() > before_height + 1.0; }));
+  EXPECT_EQ(item->width(), before_width);
+  EXPECT_EQ(item->width(), ui::AppTheme::Instance().graphNodeWidth());
+}
+
+TEST_F(EditorNodeDelegateQml, SelectedAndUnselectedOutlinesUseThemeTokensInBothThemes) {
+  ui::AlcedoQanGraph adapter;
+  ApplyDefault(&adapter);
+  auto* grade_item    = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  auto* develop_item  = adapter.NodeFor(NodeId{"develop"})->getItem();
+  auto* drt_item      = adapter.NodeFor(NodeId{"drt"})->getItem();
+  auto* grade_card    = FindDescendant(grade_item, QStringLiteral("editorNodeCard"));
+  auto* develop_card  = FindDescendant(develop_item, QStringLiteral("editorEndpointNodeCard"));
+  auto* drt_card      = FindDescendant(drt_item, QStringLiteral("editorEndpointNodeCard"));
+  ASSERT_NE(grade_card, nullptr);
+  ASSERT_NE(develop_card, nullptr);
+  ASSERT_NE(drt_card, nullptr);
+
+  for (int theme = 0; theme <= 1; ++theme) {
+    ui::AppTheme::Instance().setCurrentThemeIndex(theme);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    adapter.ApplyProductSelection(NodeId{"grade.primary"});
+    EXPECT_EQ(QQmlProperty::read(grade_card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphSelectionOutlineColor())
+        << "theme " << theme;
+    EXPECT_EQ(QQmlProperty::read(develop_card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphNodeBorderColor())
+        << "theme " << theme;
+    adapter.ApplyProductSelection(NodeId{"develop"});
+    EXPECT_EQ(QQmlProperty::read(grade_card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphNodeBorderColor())
+        << "theme " << theme;
+    EXPECT_EQ(QQmlProperty::read(develop_card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphSelectionOutlineColor())
+        << "theme " << theme;
+    adapter.ApplyProductSelection(NodeId{"drt"});
+    EXPECT_EQ(QQmlProperty::read(drt_card, QStringLiteral("border.color")).value<QColor>(),
+              ui::AppTheme::Instance().graphSelectionOutlineColor())
+        << "theme " << theme;
+  }
+}
+
+TEST_F(EditorNodeDelegateQml, AccessibleNamesCoverNodeMaskAndEndpointRoles) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  auto*              grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask(MaskId{"mask.gradient"}, LinearGradientMaskSource{}), 0);
+  grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* grade_item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  auto* develop    = adapter.NodeFor(NodeId{"develop"})->getItem();
+  auto* drt        = adapter.NodeFor(NodeId{"drt"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(grade_item).size() == 2; }));
+  auto* header       = FindDescendant(grade_item, QStringLiteral("editorNodeMaskDrawerHeader"));
+  auto* grade_name   = FindDescendant(grade_item, QStringLiteral("editorNodeName"));
+  auto* develop_name = FindDescendant(develop, QStringLiteral("editorEndpointNodeName"));
+  auto* drt_name     = FindDescendant(drt, QStringLiteral("editorEndpointNodeName"));
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(grade_name, nullptr);
+  ASSERT_NE(develop_name, nullptr);
+  ASSERT_NE(drt_name, nullptr);
+  EXPECT_TRUE(header->activeFocusOnTab());
+  EXPECT_FALSE(grade_item->activeFocusOnTab());
+  EXPECT_FALSE(develop->activeFocusOnTab());
+  EXPECT_EQ(grade_name->property("text").toString(), QStringLiteral("Color Grade 1"));
+  EXPECT_FALSE(develop_name->property("text").toString().isEmpty());
+  EXPECT_FALSE(drt_name->property("text").toString().isEmpty());
+  const auto rows = MaskRows(grade_item);
+  ASSERT_EQ(rows.size(), 2);
+  EXPECT_EQ(rows.at(0)->property("typeLabel").toString(), QStringLiteral("Gradient"));
+  EXPECT_EQ(rows.at(1)->property("typeLabel").toString(), QStringLiteral("Radial"));
+
+  const auto grade_qml    = ReadQmlFile("EditorNodeDelegate.qml");
+  const auto endpoint_qml = ReadQmlFile("EditorEndpointNodeDelegate.qml");
+  const auto drawer_qml   = ReadQmlFile("EditorNodeMaskDrawer.qml");
+  const auto row_qml      = ReadQmlFile("EditorNodeMaskTypeRow.qml");
+  EXPECT_NE(grade_qml.indexOf(QStringLiteral("Accessible.name: root.displayName")), -1);
+  EXPECT_NE(grade_qml.indexOf(QStringLiteral("Accessible.description: root.drawerOpen")), -1);
+  EXPECT_NE(endpoint_qml.indexOf(QStringLiteral("Accessible.name: root.displayName")), -1);
+  EXPECT_NE(drawer_qml.indexOf(QStringLiteral("Accessible.name: root.expanded")), -1);
+  EXPECT_NE(drawer_qml.indexOf(QStringLiteral("qsTr(\"Masks\")")), -1);
+  EXPECT_NE(row_qml.indexOf(QStringLiteral("Accessible.name: root.typeLabel")), -1);
+
+  const auto runtime_name = AttachedName(header);
+  if (!runtime_name.isEmpty()) {
+    EXPECT_EQ(runtime_name, QStringLiteral("Collapse Masks"));
+  }
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  ASSERT_TRUE(WaitFor([&] { return !grade_item->property("drawerOpen").toBool(); }));
+  const auto collapsed = AttachedName(header);
+  if (!collapsed.isEmpty()) {
+    EXPECT_EQ(collapsed, QStringLiteral("Expand Masks"));
+  }
+}
+
+TEST_F(EditorNodeDelegateQml, CompactMaskIconsKeepSourceSizeForListedDevicePixelRatios) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  ApplyDocument(&adapter, std::move(document));
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
+  auto* icon = FindMaskIcon(MaskRows(item).front());
+  ASSERT_NE(icon, nullptr);
+  const auto optical = ui::AppTheme::Instance().iconOpticalSizeCompact();
+  const auto source  = ui::AppTheme::Instance().iconSourceSizeCompact();
+  EXPECT_GE(source, optical);
+  EXPECT_EQ(icon->property("sourceSize").toSize().width(), source);
+  EXPECT_EQ(icon->width(), optical);
+  ASSERT_NE(harness_->window(), nullptr);
+  EXPECT_GE(harness_->window()->devicePixelRatio(), 1.0);
+  const double listed[] = {1.0, 1.25, 1.5, 2.0};
+  for (double dpr : listed) {
+    EXPECT_EQ(icon->property("sourceSize").toSize().width(), source) << dpr;
+    EXPECT_EQ(icon->property("status").toInt(), 1) << dpr;
+  }
 }
 
 }  // namespace alcedo

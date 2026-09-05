@@ -40,6 +40,7 @@ Item {
     // remaining keyboard reachable through activeFocusOnTab.
     property bool focusOnPointerPress: true
     property string actionName: ""
+    property string toolTipText: actionName
     property url iconSrc: ""
     // Optional palette overrides when the parent shell uses a local theme mirror.
     property color iconColorDefault: appTheme.iconColor
@@ -224,7 +225,7 @@ Item {
         onClicked: control.clicked()
     }
 
-    ToolTip.visible: (hover.hovered || pressArea.containsMouse) && control.actionName.length > 0
-    ToolTip.text: control.actionName
+    ToolTip.visible: (hover.hovered || pressArea.containsMouse) && control.toolTipText.length > 0
+    ToolTip.text: control.toolTipText
     ToolTip.delay: 400
 }

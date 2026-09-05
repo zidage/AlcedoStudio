@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QTranslator>
 #include <algorithm>
 #include <vector>
 
@@ -21,6 +22,7 @@
 #include "grade_owned_mask_support.hpp"
 #include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
@@ -38,6 +40,7 @@ using alcedo::ui::EditorNodeController;
 using alcedo::ui::EditorNodeLayoutStore;
 using alcedo::ui::EditorSessionController;
 using alcedo::ui::NodeIdToQString;
+using alcedo::ui::PresentNodeGraphDraftIssue;
 
 class DocumentSessionBackend final : public IEditorSessionBackend {
  public:
@@ -51,12 +54,10 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
         .allowed = true;
   }
 
-  [[nodiscard]] auto state() const -> EditorSessionState override {
-    return EditorSessionState::Interactive;
-  }
+  [[nodiscard]] auto state() const -> EditorSessionState override { return state_; }
   [[nodiscard]] auto identity() const -> EditorSessionIdentity override { return identity_; }
   [[nodiscard]] auto active() const -> bool override { return true; }
-  [[nodiscard]] auto has_image() const -> bool override { return true; }
+  [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto last_error() const -> std::string override { return {}; }
   [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
     return &document_;
@@ -129,6 +130,11 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   }
 
   void SetGeneration(std::uint64_t value) { request_.value = value; }
+  void SetState(EditorSessionState state, bool has_image = true) {
+    state_     = state;
+    has_image_ = has_image;
+    NotifyChange();
+  }
   void SetImageId(image_id_t image_id) {
     identity_.image_id = image_id;
     NotifyChange();
@@ -173,6 +179,8 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   alcedo::ImageLoadRequestId                        request_{};
   alcedo::EditorActionAvailability                  availability_{};
   IEditorSessionBackend::ActionAvailabilityObserver availability_observer_;
+  EditorSessionState                                state_                       = EditorSessionState::Interactive;
+  bool                                              has_image_                   = true;
   bool                                              fail_commands_               = false;
   int                                               rename_count_                = 0;
   int                                               edit_node_graph_count_       = 0;
@@ -652,6 +660,71 @@ TEST(EditorNodeController, ImageSwitchAfterSubmitRefreshesTheCommittedProjection
   EXPECT_EQ(session.image_id(), 99u);
   EXPECT_EQ(controller.image_id(), 99u);
   EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
+}
+
+TEST(EditorNodeController, LoadingSessionClearsThePriorGraphAndInteractiveRepublishesIt) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(41);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  ASSERT_TRUE(controller.has_snapshot());
+  EXPECT_EQ(controller.snapshot().nodes.size(), 3u);
+
+  backend.SetState(EditorSessionState::Loading);
+  EXPECT_FALSE(controller.has_snapshot());
+  EXPECT_TRUE(controller.snapshot().nodes.empty());
+  EXPECT_EQ(backend.pipeline_document()->Graph().NodeCount(), 3u);
+
+  backend.SetState(EditorSessionState::Switching);
+  EXPECT_FALSE(controller.has_snapshot());
+
+  backend.SetState(EditorSessionState::Interactive);
+  EXPECT_TRUE(controller.has_snapshot());
+  EXPECT_EQ(controller.snapshot().nodes.size(), 3u);
+}
+
+TEST(EditorNodeController, KnownDraftIssuesArePresentedAndUnknownFailuresKeepExactText) {
+  class SelfConnectTranslator final : public QTranslator {
+   public:
+    bool isEmpty() const override { return false; }
+
+    QString translate(const char* context, const char* source, const char*, int) const override {
+      if (QLatin1String(context) != QLatin1String("EditorNodeGraphPresentation")) {
+        return {};
+      }
+      if (QLatin1String(source) == QLatin1String("A node cannot connect to itself")) {
+        return QStringLiteral("Ein Knoten kann nicht mit sich selbst verbunden werden");
+      }
+      return {};
+    }
+  };
+
+  EXPECT_EQ(PresentNodeGraphDraftIssue(alcedo::NodeGraphDraftIssue::None,
+                                       "mini-Git journal append failed"),
+            QStringLiteral("mini-Git journal append failed"));
+  EXPECT_EQ(PresentNodeGraphDraftIssue(alcedo::NodeGraphDraftIssue::SelfConnection, {}),
+            QStringLiteral("A node cannot connect to itself"));
+
+  SelfConnectTranslator translator;
+  ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+  EXPECT_EQ(PresentNodeGraphDraftIssue(alcedo::NodeGraphDraftIssue::SelfConnection, {}),
+            QStringLiteral("Ein Knoten kann nicht mit sich selbst verbunden werden"));
+  EXPECT_EQ(PresentNodeGraphDraftIssue(alcedo::NodeGraphDraftIssue::None,
+                                       "mini-Git journal append failed"),
+            QStringLiteral("mini-Git journal append failed"));
+
+  DocumentSessionBackend backend;
+  backend.SetGeneration(42);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  const auto extra = controller.selected_node_id_string();
+  EXPECT_FALSE(controller.requestConnect(extra, extra));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Ein Knoten kann nicht mit sich selbst verbunden werden"));
+  QCoreApplication::removeTranslator(&translator);
 }
 
 TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {

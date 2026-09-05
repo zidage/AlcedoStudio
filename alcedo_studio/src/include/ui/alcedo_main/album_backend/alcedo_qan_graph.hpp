@@ -76,6 +76,9 @@ class AlcedoQanGraph : public QObject {
                  NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl edgeDelegateUrl READ edge_delegate_url WRITE set_edge_delegate_url NOTIFY
                  DelegatesChanged)
+  Q_PROPERTY(bool keyboardConnectActive READ keyboard_connect_active NOTIFY KeyboardConnectChanged)
+  Q_PROPERTY(QString keyboardConnectSourceId READ keyboard_connect_source_id_string NOTIFY
+                 KeyboardConnectChanged)
 
  public:
   explicit AlcedoQanGraph(QObject* parent = nullptr);
@@ -273,11 +276,30 @@ class AlcedoQanGraph : public QObject {
    * Call after a request is accepted or rejected. The adapter never creates a
    * permanent Qan edge from a connector drop.
    */
-  Q_INVOKABLE void    hideConnectorPreview();
+  Q_INVOKABLE void hideConnectorPreview();
+  /**
+   * @brief Pin the official visual connector to @p source_node_id for keyboard Connect.
+   *
+   * Selection may then move to the destination with Up/Down. DRT/Post, unknown
+   * ids, and missing live nodes fail closed and leave the connector unpinned.
+   * @return false when the source cannot start an outgoing connection.
+   */
+  Q_INVOKABLE bool beginKeyboardConnect(const QString& source_node_id);
+  /**
+   * @brief Clear the keyboard Connect pin and hide the connector request preview.
+   *
+   * Does not write PipelineDocument, history, or start a photo render.
+   */
+  Q_INVOKABLE void cancelKeyboardConnect();
+  [[nodiscard]] auto keyboard_connect_active() const -> bool {
+    return !keyboard_connect_source_id_.Empty();
+  }
+  [[nodiscard]] auto keyboard_connect_source_id_string() const -> QString;
 
  signals:
   void GraphChanged();
   void DelegatesChanged();
+  void KeyboardConnectChanged();
   /**
    * @brief Generation-checked connector drop ready for exclusive-port Connect.
    *
@@ -468,6 +490,7 @@ class AlcedoQanGraph : public QObject {
   std::unordered_map<const qan::Node*, ReverseNode> node_from_qan_;
   std::vector<QMetaObject::Connection>              drawer_connections_;
   NodeId                                            product_selected_node_id_;
+  NodeId                                            keyboard_connect_source_id_;
 };
 
 }  // namespace alcedo::ui

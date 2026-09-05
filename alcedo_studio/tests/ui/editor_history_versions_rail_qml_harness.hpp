@@ -372,6 +372,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyHistoryChange();
   }
 
+  void SetSessionState(EditorSessionState state, bool has_image) {
+    state_     = state;
+    has_image_ = has_image;
+    NotifyChange();
+  }
+
   void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
   void SetFailNodeCommands(bool fail) { fail_node_commands_ = fail; }
 

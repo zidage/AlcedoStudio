@@ -10,6 +10,9 @@
 #include <QColor>
 #include <QEasingCurve>
 #include <QPoint>
+#include <QQmlContext>
+#include <QQmlEngine>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QSettings>
 #include <QTest>
@@ -2786,6 +2789,48 @@ TEST_F(WorkspaceShellTests, HistoryRailButtonsAreSquareWithSquareVisibleChrome) 
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NodesPageEmptyChromeExposesAccessibleNamesAndTabStops) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  session->set_editor_tool_panel_page(QStringLiteral("nodes"));
+  ProcessEvents(60);
+
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesEmptyState"));
+  auto* add   = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesAddButton"));
+  auto* view  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesGraphView"));
+  auto* rail  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesRailButton"));
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(rail, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("Select an image to edit nodes"));
+  const auto empty_name = QQmlProperty(empty, QStringLiteral("Accessible.name"), qmlContext(empty))
+                              .read()
+                              .toString();
+  if (!empty_name.isEmpty()) {
+    EXPECT_EQ(empty_name, QStringLiteral("Select an image to edit nodes"));
+  }
+  EXPECT_FALSE(add->isEnabled());
+  EXPECT_TRUE(add->activeFocusOnTab());
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Color Grade"));
+  EXPECT_FALSE(view->isVisible());
+  EXPECT_FALSE(view->activeFocusOnTab());
+  EXPECT_FALSE(rail->property("actionName").toString().isEmpty());
+  EXPECT_TRUE(rail->activeFocusOnTab());
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesApplyButton")),
+            nullptr);
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesCancelButton")),
+            nullptr);
 }
 
 }  // namespace
