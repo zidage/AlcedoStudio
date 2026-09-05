@@ -42,6 +42,19 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
   auto Adapter() -> AlcedoQanGraph* {
     return window_ == nullptr ? nullptr : window_->findChild<AlcedoQanGraph*>();
   }
+
+  auto LiveQanNodeItemCount() const -> int {
+    if (window_ == nullptr) {
+      return 0;
+    }
+    int count = 0;
+    for (auto* object : window_->findChildren<QObject*>()) {
+      if (object->objectName() == QLatin1String("qan::NodeItem")) {
+        ++count;
+      }
+    }
+    return count;
+  }
 };
 
 TEST_F(EditorNodesPanelQmlTest, HistoryVersionsAndNodesAreMutuallyExclusive) {
@@ -87,6 +100,30 @@ TEST_F(EditorNodesPanelQmlTest, FullCloseDestroysGraphDelegates) {
   EXPECT_EQ(Find(QStringLiteral("qan::NodeItem")), nullptr);
   EXPECT_EQ(Find(QStringLiteral("editorNodesQanGraph")), nullptr);
   EXPECT_GE(rail->property("panelBodyDestroyCount").toInt(), destroys_before + 1);
+}
+
+TEST_F(EditorNodesPanelQmlTest,
+       RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    OpenNodesPage();
+    QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 3, 2000);
+
+    const QString display_name = QStringLiteral("Cycle %1").arg(cycle);
+    const auto    result =
+        backend_.RenameColorGrade(NodeId{"grade.primary"}, display_name.toStdString());
+    ASSERT_FALSE(alcedo::EditorSessionResultIsFailure(result.kind));
+    controller_.set_editor_tool_panel_page(QString());
+    ProcessEvents();
+    QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 0, 2000);
+
+    OpenNodesPage();
+    QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 3, 2000);
+    auto* nodes = Controller();
+    ASSERT_NE(nodes, nullptr);
+    QTRY_COMPARE_WITH_TIMEOUT(nodes->selected_node_name(), display_name, 2000);
+  }
 }
 
 TEST_F(EditorNodesPanelQmlTest, ReopenRestoresPositionsViewZoomSelectionAndDrawerState) {
@@ -416,7 +453,7 @@ TEST_F(EditorNodesPanelQmlTest, VisualConnectorIsRequestOnlyWithThemeCandidateCo
   EXPECT_EQ(graph->getConnectorColor(), AppTheme::Instance().graphPortBorderColor());
 }
 
-TEST_F(EditorNodesPanelQmlTest, ConnectorMoveRebuildsPermanentEdgesFromAcceptedProjection) {
+TEST_F(EditorNodesPanelQmlTest, ConnectorMovePromotesPermanentEdgesFromAcceptedProjection) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();
   auto* nodes   = Controller();
@@ -471,8 +508,7 @@ TEST_F(EditorNodesPanelQmlTest, FailedReconnectKeepsPermanentEdgesAndShowsExactE
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(extra) != nullptr, 2000);
   ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
   backend_.SetFailNodeCommands(true);
-  EXPECT_FALSE(
-      nodes->requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
+  EXPECT_FALSE(nodes->requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
   EXPECT_EQ(nodes->last_error(), QStringLiteral("mini-Git journal append failed"));
   auto* error = Find(QStringLiteral("editorNodesCommandError"));
   ASSERT_NE(error, nullptr);
@@ -514,8 +550,8 @@ TEST_F(EditorNodesPanelQmlTest, OrdinaryDraftEditsDoNotReplaceQanTopology) {
   ASSERT_NE(adapter, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
   ProcessEvents();
-  const auto applies   = nodes->completed_projection_apply_count();
-  const auto replaces  = adapter->topology_replace_count();
+  const auto applies  = nodes->completed_projection_apply_count();
+  const auto replaces = adapter->topology_replace_count();
   ASSERT_TRUE(nodes->addCleanColorGrade());
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
   EXPECT_EQ(nodes->completed_projection_apply_count(), applies);

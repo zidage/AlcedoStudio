@@ -42,8 +42,8 @@ auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnaps
   return true;
 }
 
-auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs,
-                           const EditorNodeGraphSnapshot& rhs) -> bool {
+auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnapshot& rhs)
+    -> bool {
   return lhs.nodes == rhs.nodes && lhs.edges == rhs.edges;
 }
 
@@ -324,8 +324,7 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   }
   if (has_snapshot_ && snapshot.session_generation == session_generation_ &&
       element_id_ == snapshot_element_id_ && image_id_ == snapshot_image_id_ &&
-      version_id_ == snapshot_version_id_ &&
-      SameProjectionContent(snapshot, snapshot_)) {
+      version_id_ == snapshot_version_id_ && SameProjectionContent(snapshot, snapshot_)) {
     SetLastError({});
     return true;
   }
@@ -546,9 +545,9 @@ bool EditorNodeController::refreshFromSession() {
     SetLastError(tr("No editor session is bound"));
     return false;
   }
-  element_id_ = session_->element_id();
-  image_id_   = session_->image_id();
-  version_id_ = session_->active_version_id();
+  element_id_                = session_->element_id();
+  image_id_                  = session_->image_id();
+  version_id_                = session_->active_version_id();
   observed_history_revision_ = session_->history_revision();
   SyncLayoutKey();
   const auto* document = session_->pipeline_document();
@@ -955,23 +954,31 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     return false;
   }
   DiscardDraft();
+  QString projection_error;
   if (session_ != nullptr && session_->pipeline_document() != nullptr) {
     try {
       AdoptCommittedDocument(*session_->pipeline_document());
     } catch (const std::exception& ex) {
-      SetLastError(QString::fromUtf8(ex.what()));
+      projection_error = QString::fromUtf8(ex.what());
+      SetLastError(projection_error);
     }
   }
   if (graph_adapter_ != nullptr) {
     const auto promoted = graph_adapter_->PromoteCommittedSnapshot(snapshot_);
     if (!promoted.succeeded) {
+      if (!promoted.error.isEmpty()) {
+        projection_error = promoted.error;
+        SetLastError(projection_error);
+      }
       QueueProjectionApply();
     } else {
       ApplyLiveSelectionToAdapter();
     }
   }
   submitted_identity_.reset();
-  SetLastError({});
+  if (projection_error.isEmpty()) {
+    SetLastError({});
+  }
   emit SnapshotChanged();
   emit ActionAvailabilityChanged();
   return true;
