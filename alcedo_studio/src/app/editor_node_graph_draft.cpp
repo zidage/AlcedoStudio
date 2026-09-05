@@ -394,40 +394,45 @@ auto EditorNodeGraphDraft::WouldCreateCycle(const NodeId& source_id, const NodeI
 }
 
 auto EditorNodeGraphDraft::AdmitConnect(const NodeId& source_id, const NodeId& destination_id,
-                                        std::string* error) const -> bool {
-  auto fail = [&](std::string message) {
+                                        std::string* error, NodeGraphDraftIssue* issue) const
+    -> bool {
+  auto fail = [&](NodeGraphDraftIssue code, std::string message) {
     if (error != nullptr) {
       *error = std::move(message);
+    }
+    if (issue != nullptr) {
+      *issue = code;
     }
     return false;
   };
   const auto* source      = FindNode(source_id);
   const auto* destination = FindNode(destination_id);
   if (source == nullptr || destination == nullptr) {
-    return fail("That node is not in the current graph");
+    return fail(NodeGraphDraftIssue::NodeNotInGraph, "That node is not in the current graph");
   }
   if (source_id == destination_id) {
-    return fail("A node cannot connect to itself");
+    return fail(NodeGraphDraftIssue::SelfConnection, "A node cannot connect to itself");
   }
   if (destination->node_kind == EditorNodeKind::Develop) {
-    return fail("Develop has no incoming image port");
+    return fail(NodeGraphDraftIssue::DevelopHasNoIncomingPort,
+                "Develop has no incoming image port");
   }
   if (source->node_kind == EditorNodeKind::Drt) {
-    return fail("DRT/Post has no outgoing image port");
+    return fail(NodeGraphDraftIssue::DrtHasNoOutgoingPort, "DRT/Post has no outgoing image port");
   }
   if (source->node_kind != EditorNodeKind::Develop &&
       source->node_kind != EditorNodeKind::ColorGrade) {
-    return fail("Unsupported source node type: " + std::string{source->node_id.Value()});
+    return fail(NodeGraphDraftIssue::UnsupportedSourceType, std::string{source->node_id.Value()});
   }
   if (destination->node_kind != EditorNodeKind::Drt &&
       destination->node_kind != EditorNodeKind::ColorGrade) {
-    return fail("Unsupported destination node type: " +
+    return fail(NodeGraphDraftIssue::UnsupportedDestinationType,
                 std::string{destination->node_id.Value()});
   }
   const auto skip_out = outgoing_.at(source_id);
   const auto skip_in  = incoming_.at(destination_id);
   if (WouldCreateCycle(source_id, destination_id, skip_out, skip_in)) {
-    return fail("That connection would create a cycle");
+    return fail(NodeGraphDraftIssue::Cycle, "That connection would create a cycle");
   }
   return true;
 }
@@ -444,6 +449,7 @@ auto EditorNodeGraphDraft::FinishMutation(EditorNodeGraphDraftMutation mutation)
 auto EditorNodeGraphDraft::AddColorGrade(NodeId node_id) -> EditorNodeGraphDraftMutation {
   EditorNodeGraphDraftMutation result;
   if (node_id.Empty() || FindNode(node_id) != nullptr) {
+    result.issue = NodeGraphDraftIssue::DuplicateColorGradeIdentity;
     result.error = "A Color Grade with that identity already exists";
     return result;
   }
@@ -469,10 +475,12 @@ auto EditorNodeGraphDraft::RemoveColorGrade(const NodeId& node_id)
   EditorNodeGraphDraftMutation result;
   const auto*                  node = FindNode(node_id);
   if (node == nullptr) {
+    result.issue = NodeGraphDraftIssue::NodeNotInGraph;
     result.error = "That node is not in the current graph";
     return result;
   }
   if (node->node_kind != EditorNodeKind::ColorGrade) {
+    result.issue = NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted;
     result.error = "Only a Color Grade can be deleted";
     return result;
   }
@@ -515,7 +523,9 @@ auto EditorNodeGraphDraft::Connect(const NodeId& source_id, const NodeId& destin
     -> EditorNodeGraphDraftMutation {
   EditorNodeGraphDraftMutation result;
   std::string                  error;
-  if (!AdmitConnect(source_id, destination_id, &error)) {
+  NodeGraphDraftIssue          issue = NodeGraphDraftIssue::None;
+  if (!AdmitConnect(source_id, destination_id, &error, &issue)) {
+    result.issue = issue;
     result.error = std::move(error);
     return result;
   }

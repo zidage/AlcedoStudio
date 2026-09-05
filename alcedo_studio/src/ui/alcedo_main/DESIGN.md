@@ -331,7 +331,35 @@ dot to this icon.
 
 ### Graph canvas
 
-The graph uses a vertical Develop-to-DRT/Post backbone. The canvas is a uniform
+The graph uses a vertical Develop-to-DRT/Post backbone. With no image, the canvas
+shows the localized empty copy and no previous graph. While the session is
+Loading, Acquiring, or Switching, it shows the loading copy and still hides the
+previous image graph. A pending topology command shows muted plain text, not a
+pill, badge, or status dot.
+
+Keyboard input is scoped by focus. Nodes command ids and default sequences live
+in `ShortcutRegistry` (`RegisterNodesPanelShortcuts`). The graph matches a key
+through `commandIdForKey` in `EditorNodesPanel.handleGraphKey` with
+`Keys.priority: Keys.BeforeItem` so the navigable canvas does not swallow Home,
+arrows, or `C`. Masks disclosure keys stay on `EditorNodeMaskDrawer`. Add
+confirm stays on `IconActionButton`.
+
+| Input | Focus | Result |
+| --- | --- | --- |
+| `Tab` / `Shift+Tab` | Add, graph, Masks headers | Move between those targets |
+| `Up` / `Down` | Graph | Previous / next backbone node |
+| `Home` / `End` | Graph | Select Develop / DRT/Post |
+| `Enter` / `Space` | Masks header | Open or close that drawer |
+| `Enter` / `Space` | Add | Add a Color Grade |
+| `F2` | Graph | Rename the selected Color Grade |
+| `Delete` | Graph | Delete the selected Color Grade |
+| `Ctrl++` | Graph | Add a Color Grade |
+| `Ctrl+0` | Graph | Fit the graph |
+| `C` | Graph | Pin Connect from the selected Develop or Color Grade |
+| `Enter` | Graph, Connect active | Request the exclusive-port connection |
+| `Escape` | Graph | Cancel rename or Connect; otherwise keep graph focus |
+
+The canvas is a uniform
 deep AppTheme surface with no grid: the panel assigns `grid: null` on the
 `Qan.GraphView`, which swaps in QuickQanava's empty default grid. Do not add a
 line or point grid, a nested card, minimap, gradient, shadow, glow, or glass
@@ -573,6 +601,9 @@ Visible strings are product language only. Ban developer placeholders such as
 | Filmstrip empty | “No images” |
 | History empty | “No edit history yet” |
 | Versions empty | “No versions yet” |
+| Nodes empty | “Select an image to edit nodes” |
+| Nodes loading | “Loading node graph” |
+| Nodes pending command | “Updating node graph” |
 | Adjustment empty (no image) | “Select an image to enable adjustments” |
 | Adjustment empty (has image) | “No adjustments yet” |
 

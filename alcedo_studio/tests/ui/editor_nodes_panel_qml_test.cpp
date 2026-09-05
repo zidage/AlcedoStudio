@@ -2,10 +2,17 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <QAccessible>
 #include <QMetaObject>
 #include <QPointF>
+#include <QQmlContext>
+#include <QQmlEngine>
+#include <QQmlProperty>
 #include <QQuickItem>
+#include <QSignalSpy>
+#include <QTranslator>
 #include <QuickQanava>
+#include <algorithm>
 #include <functional>
 
 #include "app/editor_node_graph_projection.hpp"
@@ -26,6 +33,80 @@ namespace {
 using rail_harness::Click;
 using rail_harness::ProcessEvents;
 using rail_harness::RailQmlFixture;
+
+auto AttachedName(QObject* object) -> QString {
+  if (object == nullptr) {
+    return {};
+  }
+  QQmlProperty property(object, QStringLiteral("Accessible.name"), qmlContext(object));
+  const auto   name = property.read().toString();
+  if (!name.isEmpty()) {
+    return name;
+  }
+  const auto dotted = object->property("Accessible.name").toString();
+  if (!dotted.isEmpty()) {
+    return dotted;
+  }
+  return object->property("actionName").toString();
+}
+
+auto AttachedDescription(QObject* object) -> QString {
+  if (object == nullptr) {
+    return {};
+  }
+  QQmlProperty property(object, QStringLiteral("Accessible.description"), qmlContext(object));
+  const auto   description = property.read().toString();
+  if (!description.isEmpty()) {
+    return description;
+  }
+  return object->property("Accessible.description").toString();
+}
+
+void CollectAccessiblePhrases(QObject* object, QStringList* phrases) {
+  if (object == nullptr || phrases == nullptr) {
+    return;
+  }
+  const auto name = AttachedName(object);
+  if (!name.isEmpty()) {
+    phrases->push_back(name);
+  }
+  const auto description = AttachedDescription(object);
+  if (!description.isEmpty()) {
+    phrases->push_back(description);
+  }
+  for (auto* child : object->children()) {
+    CollectAccessiblePhrases(child, phrases);
+  }
+}
+
+class NodesPanelTextExpander final : public QTranslator {
+ public:
+  bool isEmpty() const override { return false; }
+
+  QString translate(const char* /*context*/, const char* source, const char*, int) const override {
+    const auto text = QString::fromUtf8(source);
+    static const QStringList owned = {
+        QStringLiteral("Nodes"),
+        QStringLiteral("Add Color Grade"),
+        QStringLiteral("Select an image to edit nodes"),
+        QStringLiteral("Loading node graph"),
+        QStringLiteral("Updating node graph"),
+        QStringLiteral("Select a destination node and press Enter"),
+        QStringLiteral("Nodes graph"),
+        QStringLiteral("Collapse Masks"),
+        QStringLiteral("Expand Masks"),
+        QStringLiteral("Masks"),
+        QStringLiteral("Fit"),
+        QStringLiteral("Rename Color Grade"),
+        QStringLiteral("Delete Color Grade"),
+    };
+    if (!owned.contains(text)) {
+      return {};
+    }
+    const int extra = std::max(2, static_cast<int>(text.size()) * 2 / 5);
+    return text + QString(extra, QLatin1Char('W'));
+  }
+};
 
 class EditorNodesPanelQmlTest : public RailQmlFixture {
  protected:
@@ -54,6 +135,15 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
       }
     }
     return count;
+  }
+
+  void WaitUntilGraphReady() {
+    auto* nodes = Controller();
+    auto* view  = Find(QStringLiteral("editorNodesGraphView"));
+    ASSERT_NE(nodes, nullptr);
+    ASSERT_NE(view, nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(view->isVisible() && view->isEnabled(), 2000);
   }
 };
 
@@ -273,6 +363,7 @@ TEST_F(EditorNodesPanelQmlTest, AddActionCreatesAndSelectsOneCleanColorGrade) {
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesAddButton")) != nullptr, 2000);
   auto* add = Find(QStringLiteral("editorNodesAddButton"));
   ASSERT_NE(add, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(add->property("enabled").toBool(), 2000);
   EXPECT_TRUE(add->property("enabled").toBool());
   EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Color Grade"));
   const auto history_before = backend_.history_revision();
@@ -315,7 +406,9 @@ TEST_F(EditorNodesPanelQmlTest, CtrlPlusAddsTheNextCleanColorGrade) {
   auto* nodes = Controller();
   ASSERT_NE(view, nullptr);
   ASSERT_NE(nodes, nullptr);
+  WaitUntilGraphReady();
   view->forceActiveFocus();
+  ASSERT_TRUE(view->hasActiveFocus());
 
   QTest::keyClick(window_, Qt::Key_Plus, Qt::ControlModifier);
   ProcessEvents();
@@ -337,6 +430,7 @@ TEST_F(EditorNodesPanelQmlTest, F2RenamesSelectedColorGradeAndKeepsItsIdentity) 
   auto* nodes = Controller();
   ASSERT_NE(view, nullptr);
   ASSERT_NE(nodes, nullptr);
+  WaitUntilGraphReady();
   view->forceActiveFocus();
   QTest::keyClick(window_, Qt::Key_F2);
   ProcessEvents();
@@ -360,6 +454,7 @@ TEST_F(EditorNodesPanelQmlTest, NodeContextMenuOffersRenameAndDeleteOnlyForColor
   OpenNodesPage();
   auto* adapter = Adapter();
   ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
   auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
   ASSERT_NE(grade_item, nullptr);
@@ -395,6 +490,7 @@ TEST_F(EditorNodesPanelQmlTest, DeleteKeyRemovesSelectedGradeAndSelectsItsSucces
   ASSERT_NE(nodes, nullptr);
   ASSERT_NE(adapter, nullptr);
   ASSERT_NE(view, nullptr);
+  WaitUntilGraphReady();
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
   ASSERT_TRUE(nodes->addCleanColorGrade());
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
@@ -586,6 +682,302 @@ TEST_F(EditorNodesPanelQmlTest, CloseWithQueuedApplyThenReopenRestoresOnce) {
   ProcessEvents();
   EXPECT_EQ(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, true);
   EXPECT_EQ(nodes->graph_adapter_object(), adapter);
+}
+
+TEST_F(EditorNodesPanelQmlTest, NoImageShowsLocalizedEmptyCopyAndHidesTheGraph) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesGraphView")) != nullptr, 2000);
+  QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 3, 2000);
+
+  backend_.SetSessionState(alcedo::EditorSessionState::NoImage, false);
+  ProcessEvents();
+
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(!nodes->has_snapshot(), 2000);
+  auto* empty   = Find(QStringLiteral("editorNodesEmptyState"));
+  auto* loading = Find(QStringLiteral("editorNodesLoadingState"));
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  auto* add     = Find(QStringLiteral("editorNodesAddButton"));
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(loading, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(add, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("Select an image to edit nodes"));
+  EXPECT_FALSE(loading->isVisible());
+  EXPECT_FALSE(view->isVisible());
+  EXPECT_FALSE(add->isEnabled());
+  EXPECT_EQ(Find(QStringLiteral("editorNodesApplyButton")), nullptr);
+  EXPECT_EQ(Find(QStringLiteral("editorNodesCancelButton")), nullptr);
+}
+
+TEST_F(EditorNodesPanelQmlTest, LoadingHidesThePreviousGraphAndShowsLocalizedCopy) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_COMPARE_WITH_TIMEOUT(LiveQanNodeItemCount(), 3, 2000);
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_TRUE(nodes->has_snapshot());
+
+  backend_.SetSessionState(alcedo::EditorSessionState::Loading, true);
+  ProcessEvents();
+
+  QTRY_VERIFY_WITH_TIMEOUT(!nodes->has_snapshot(), 2000);
+  auto* empty   = Find(QStringLiteral("editorNodesEmptyState"));
+  auto* loading = Find(QStringLiteral("editorNodesLoadingState"));
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(loading, nullptr);
+  ASSERT_NE(view, nullptr);
+  EXPECT_FALSE(empty->isVisible());
+  EXPECT_TRUE(loading->isVisible());
+  EXPECT_EQ(loading->property("text").toString(), QStringLiteral("Loading node graph"));
+  EXPECT_FALSE(view->isVisible());
+  EXPECT_EQ(AttachedName(loading), QStringLiteral("Loading node graph"));
+
+  backend_.SetSessionState(alcedo::EditorSessionState::Interactive, true);
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(view->isVisible(), 2000);
+  EXPECT_FALSE(loading->isVisible());
+}
+
+TEST_F(EditorNodesPanelQmlTest, PendingCommandShowsUpdatingCopyThenHidesItWhenIdle) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* pending = Find(QStringLiteral("editorNodesPendingCommand"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(pending, nullptr);
+  EXPECT_EQ(pending->property("text").toString(), QStringLiteral("Updating node graph"));
+  EXPECT_FALSE(pending->isVisible());
+  EXPECT_FALSE(nodes->command_active());
+
+  bool pending_visible_while_active = false;
+  QObject::connect(nodes, &EditorNodeController::CommandStateChanged, [&] {
+    if (nodes->command_active()) {
+      ProcessEvents();
+      pending_visible_while_active = pending->isVisible();
+    }
+  });
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  EXPECT_TRUE(pending_visible_while_active);
+  EXPECT_FALSE(nodes->command_active());
+  EXPECT_FALSE(pending->isVisible());
+}
+
+TEST_F(EditorNodesPanelQmlTest, KeyboardSelectsFitConnectsAndCancelsWithoutApplyCancel) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(view, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(view->isVisible() && view->isEnabled(), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  view->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(view->hasActiveFocus());
+
+  QTest::keyClick(window_, Qt::Key_Home);
+  ProcessEvents();
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"develop"});
+  QTest::keyClick(window_, Qt::Key_Down);
+  ProcessEvents();
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+  QTest::keyClick(window_, Qt::Key_End);
+  ProcessEvents();
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"drt"});
+  QTest::keyClick(window_, Qt::Key_Up);
+  ProcessEvents();
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+
+  ASSERT_TRUE(view->setProperty("zoom", 0.25));
+  ProcessEvents();
+  EXPECT_NEAR(view->property("zoom").toDouble(), 0.25, 0.01);
+  QTest::keyClick(window_, Qt::Key_0, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_NE(view->property("zoom").toDouble(), 0.25);
+
+  nodes->selectDevelop();
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_C);
+  ProcessEvents();
+  EXPECT_TRUE(adapter->keyboard_connect_active());
+  EXPECT_EQ(adapter->keyboard_connect_source_id_string(), QStringLiteral("develop"));
+  auto* guidance = Find(QStringLiteral("editorNodesEditingGuidance"));
+  ASSERT_NE(guidance, nullptr);
+  EXPECT_TRUE(guidance->isVisible());
+  EXPECT_EQ(guidance->property("text").toString(),
+            QStringLiteral("Select a destination node and press Enter"));
+
+  QTest::keyClick(window_, Qt::Key_Escape);
+  ProcessEvents();
+  EXPECT_FALSE(adapter->keyboard_connect_active());
+  EXPECT_FALSE(guidance->isVisible());
+
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  const auto extra = nodes->selected_node_id_string();
+  nodes->selectDevelop();
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_C);
+  ProcessEvents();
+  ASSERT_TRUE(adapter->keyboard_connect_active());
+  nodes->selectNode(extra);
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_Return);
+  ProcessEvents();
+  EXPECT_FALSE(adapter->keyboard_connect_active());
+  EXPECT_TRUE(nodes->incomplete_draft());
+
+  nodes->selectDrt();
+  view->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_C);
+  ProcessEvents();
+  EXPECT_FALSE(adapter->keyboard_connect_active());
+
+  EXPECT_EQ(Find(QStringLiteral("editorNodesApplyButton")), nullptr);
+  EXPECT_EQ(Find(QStringLiteral("editorNodesCancelButton")), nullptr);
+}
+
+TEST_F(EditorNodesPanelQmlTest, EnterAndSpaceToggleTheFocusedMaskDrawerHeader) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(view, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  auto* grade = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade, nullptr);
+  auto* header = grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskDrawerHeader"));
+  auto* drawer = grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskDrawer"));
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(drawer, nullptr);
+  EXPECT_TRUE(drawer->property("expanded").toBool());
+  EXPECT_EQ(AttachedName(header), QStringLiteral("Collapse Masks"));
+
+  header->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(header->hasActiveFocus());
+  QTest::keyClick(window_, Qt::Key_Space);
+  ProcessEvents();
+  EXPECT_FALSE(drawer->property("expanded").toBool());
+  EXPECT_EQ(AttachedName(header), QStringLiteral("Expand Masks"));
+
+  header->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(header->hasActiveFocus());
+  QTest::keyClick(window_, Qt::Key_Return);
+  ProcessEvents();
+  EXPECT_TRUE(drawer->property("expanded").toBool());
+  EXPECT_EQ(AttachedName(header), QStringLiteral("Collapse Masks"));
+}
+
+TEST_F(EditorNodesPanelQmlTest, TabOrderWalksAddGraphAndMaskDrawerHeader) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  auto* add    = Find(QStringLiteral("editorNodesAddButton"));
+  auto* view   = Find(QStringLiteral("editorNodesGraphView"));
+  auto* header = adapter->NodeFor(NodeId{"grade.primary"})
+                     ->getItem()
+                     ->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskDrawerHeader"));
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(header, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(view->isVisible() && view->activeFocusOnTab(), 2000);
+  EXPECT_TRUE(add->activeFocusOnTab());
+  EXPECT_TRUE(header->activeFocusOnTab());
+  EXPECT_EQ(QQmlProperty(add, QStringLiteral("KeyNavigation.tab"), qmlContext(add))
+                .read()
+                .value<QObject*>(),
+            view);
+  EXPECT_EQ(QQmlProperty(view, QStringLiteral("KeyNavigation.backtab"), qmlContext(view))
+                .read()
+                .value<QObject*>(),
+            add);
+
+  add->forceActiveFocus();
+  QTest::keyClick(window_, Qt::Key_Tab);
+  ProcessEvents();
+  EXPECT_TRUE(view->hasActiveFocus());
+}
+
+TEST_F(EditorNodesPanelQmlTest, AccessibleNamesCoverActionsAndOmitBannedNodeCopy) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* adapter = Adapter();
+  auto* add     = Find(QStringLiteral("editorNodesAddButton"));
+  auto* view    = Find(QStringLiteral("editorNodesGraphView"));
+  auto* title   = Find(QStringLiteral("editorNodesPanelTitle"));
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(title, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Color Grade"));
+  EXPECT_EQ(title->property("text").toString(), QStringLiteral("Nodes"));
+  const auto add_name = AttachedName(add);
+  if (!add_name.isEmpty()) {
+    EXPECT_EQ(add_name, QStringLiteral("Add Color Grade"));
+  }
+  const auto view_name = AttachedName(view);
+  if (!view_name.isEmpty()) {
+    EXPECT_EQ(view_name, QStringLiteral("Nodes graph"));
+  }
+
+  QStringList phrases;
+  CollectAccessiblePhrases(Find(QStringLiteral("editorNodesPageBody")), &phrases);
+  for (const auto& phrase : phrases) {
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" · ")));
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" | ")));
+    EXPECT_NE(phrase, QStringLiteral("On"));
+    EXPECT_NE(phrase, QStringLiteral("Off"));
+    EXPECT_NE(phrase, QStringLiteral("Active"));
+    EXPECT_NE(phrase, QStringLiteral("Inactive"));
+    EXPECT_FALSE(phrase.contains(QStringLiteral("1 masks"), Qt::CaseInsensitive));
+    EXPECT_FALSE(phrase.contains(QStringLiteral("Exposure")));
+    EXPECT_FALSE(phrase.contains(QStringLiteral("#1")));
+  }
+
+  if (QAccessible::isActive()) {
+    if (auto* iface = QAccessible::queryAccessibleInterface(add)) {
+      EXPECT_EQ(iface->text(QAccessible::Name), QStringLiteral("Add Color Grade"));
+    }
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, FortyPercentTextExpansionKeepsTitleWrappingInsideThePanel) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  NodesPanelTextExpander expander;
+  ASSERT_TRUE(QCoreApplication::installTranslator(&expander));
+  engine_.retranslate();
+  OpenNodesPage();
+  engine_.retranslate();
+  ProcessEvents();
+  auto* panel = Find(QStringLiteral("editorNodesPageBody"));
+  auto* title = Find(QStringLiteral("editorNodesPanelTitle"));
+  auto* add   = Find(QStringLiteral("editorNodesAddButton"));
+  ASSERT_NE(panel, nullptr);
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(add, nullptr);
+  EXPECT_TRUE(title->property("text").toString().endsWith(QLatin1Char('W')));
+  EXPECT_EQ(title->property("wrapMode").toInt(), 1);
+  EXPECT_LE(title->width() + add->width(), panel->width() + 1.0);
+  EXPECT_TRUE(add->isVisible());
+  QCoreApplication::removeTranslator(&expander);
+  engine_.retranslate();
 }
 
 }  // namespace

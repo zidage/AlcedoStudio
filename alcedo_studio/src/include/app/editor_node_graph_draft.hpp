@@ -29,12 +29,29 @@ struct EditorNodeGraphDraftIdentity {
   auto operator==(const EditorNodeGraphDraftIdentity&) const -> bool = default;
 };
 
+/// Domain admission result for one draft Add, Delete, or Connect attempt.
+/// The UI translates known values at the presentation boundary; unknown
+/// adapter and persistence failures keep their exact technical text.
+enum class NodeGraphDraftIssue {
+  None = 0,
+  DuplicateColorGradeIdentity,
+  NodeNotInGraph,
+  OnlyColorGradeCanBeDeleted,
+  SelfConnection,
+  DevelopHasNoIncomingPort,
+  DrtHasNoOutgoingPort,
+  UnsupportedSourceType,
+  UnsupportedDestinationType,
+  Cycle,
+};
+
 /// Incremental Qan operations produced by one admitted draft mutation.
 struct EditorNodeGraphDraftMutation {
   bool                                  succeeded        = false;
   bool                                  no_op            = false;
   bool                                  submission_valid = false;
   bool                                  delta_empty      = false;
+  NodeGraphDraftIssue                   issue            = NodeGraphDraftIssue::None;
   std::string                           error;
   std::vector<EditorNodeProjection>     inserted_nodes;
   std::vector<NodeId>                   removed_node_ids;
@@ -187,8 +204,8 @@ class EditorNodeGraphDraft {
 
   void BeginReversal();
   void RebuildIndexes();
-  auto AdmitConnect(const NodeId& source_id, const NodeId& destination_id, std::string* error) const
-      -> bool;
+  auto AdmitConnect(const NodeId& source_id, const NodeId& destination_id, std::string* error,
+                    NodeGraphDraftIssue* issue) const -> bool;
   auto WouldCreateCycle(const NodeId& source_id, const NodeId& destination_id,
                         const std::optional<std::string>& skip_outgoing,
                         const std::optional<std::string>& skip_incoming) const -> bool;

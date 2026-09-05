@@ -166,5 +166,31 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryList")) == nullptr, 2000);
 }
 
+TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
+       LoadingNodesPageHidesTheGraphAndCloseReleasesDelegates) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* nodes = window_->findChild<EditorNodeController*>();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  auto* view = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(view, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(view->isVisible(), 2000);
+
+  backend_.SetSessionState(alcedo::EditorSessionState::Loading, true);
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(!nodes->has_snapshot(), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(!view->isVisible(), 2000);
+  auto* loading = Find(QStringLiteral("editorNodesLoadingState"));
+  ASSERT_NE(loading, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(loading->isVisible(), 2000);
+  EXPECT_EQ(loading->property("text").toString(), QStringLiteral("Loading node graph"));
+
+  controller_.set_editor_tool_panel_page(QString());
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesPageBody")) == nullptr, 2000);
+  EXPECT_EQ(Find(QStringLiteral("qan::NodeItem")), nullptr);
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8e complete 2026-09-05; NM5.8f–NM5.8g pending
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8f complete 2026-09-05; NM5.8g pending
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -1498,6 +1498,8 @@ documented Qan node click
 | `Ctrl++` | Add a Color Grade after NM5.6. |
 | `Ctrl+0` | Fit the graph. |
 | `Escape` | Cancel rename or a connector request. Otherwise return focus to the canvas. |
+| `C` | Start keyboard Connect from the selected Develop or Color Grade. |
+| `Enter` during Connect | Complete the connection to the selected destination. |
 
 Every action needs localized tooltip text and `Accessible.name`. Every focus target needs a visible
 focus treatment. A screen reader must read the node name and Mask type rows. It must not announce
@@ -3442,6 +3444,78 @@ while preserving exact technical details for unknown failures.
 `WorkspaceShellTest` cover every visible action and all existing VI restrictions. Record real
 screen-reader checks separately from QML property assertions. No new Apply/Cancel UI is allowed.
 
+##### NM5.8f completion record (2026-09-05)
+
+**Status:** complete — keyboard Connect, empty/loading/pending overlays, accessible names,
+localization including 40 percent expansion, large-font name rows, and the Section 17.1 visual
+matrix via QML/token assertions. Native NVDA/Narrator/VoiceOver was not run.
+
+**Primary success call chain:**
+
+```text
+C on the focused Nodes graph
+  -> EditorNodesPanel Keys.onPressed
+  -> AlcedoQanGraph::beginKeyboardConnect
+  -> connector pinned to the source output port
+  -> Up/Down select destination
+  -> Enter
+  -> EditorNodeController::requestConnect
+  -> EditorNodeGraphDraft::AdmitConnect
+  -> incremental Qan mutation
+  -> MaybeSubmitDraft or incomplete-draft guidance
+```
+
+**Primary failure call chain:**
+
+```text
+unsupported Connect (DRT as source, self-connect, Develop as destination)
+  -> NodeGraphDraftIssue on the mutation
+  -> PresentNodeGraphDraftIssue / PresentNodeGraphDraftMutation
+  -> EditorNodeController lastError (known issues translated once)
+unknown infrastructure failure (WAL / adapter)
+  -> NodeGraphDraftIssue::None
+  -> exact technical text unchanged
+Loading / Acquiring / Switching
+  -> EditorNodeController::SessionHidesGraph
+  -> ClearSnapshot
+  -> GraphView hidden; localized loading copy; previous graph not shown
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Empty / loading / pending localized overlays; graph hidden | `EditorNodesPanelQmlTest` | PASS |
+| Keyboard select, Fit, Connect, Escape; no Apply/Cancel | `EditorNodesPanelQmlTest.KeyboardSelectsFitConnectsAndCancelsWithoutApplyCancel` | PASS |
+| Add, Ctrl++, F2, Delete, context menu, Tab, Mask drawer Enter/Space | `EditorNodesPanelQmlTest` | PASS |
+| 40 percent owned-string expansion stays in the panel | `EditorNodesPanelQmlTest.FortyPercentTextExpansionKeepsTitleWrappingInsideThePanel` | PASS |
+| 100 Loader open/close cycles | `EditorNodesPanelQmlTest.RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes` | PASS |
+| Long names, large title font, both themes, DPR 1.0/1.25/1.5/2.0, Accessible names | `EditorNodeDelegateQmlTest` | PASS |
+| Loading Nodes page hides the graph; close releases delegates | `EditorHistoryVersionsRailLifecycleQmlTest.LoadingNodesPageHidesTheGraphAndCloseReleasesDelegates` | PASS |
+| Empty Nodes chrome Accessible names and tab stops | `WorkspaceShellTest.NodesPageEmptyChromeExposesAccessibleNamesAndTabStops` | PASS |
+| Viewer ≥ 360 logical px at 960×640 | `WorkspaceShellTest.NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640` | PASS |
+| Keyboard connector pin while selection moves | `AlcedoQanGraphTest.KeyboardConnectPinsTheSourceWhileSelectionMoves` | PASS |
+| Loading clears snapshot; Interactive republishes | `EditorNodeSelectionLayoutTest.LoadingSessionClearsThePriorGraphAndInteractiveRepublishesIt` | PASS |
+| Known draft issues translated; unknown text exact | `EditorNodeSelectionLayoutTest.KnownDraftIssuesArePresentedAndUnknownFailuresKeepExactText` | PASS |
+| Domain admission issues on self-connect / Develop in / DRT out | `EditorNodeGraphDraftTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorNodesPanelQmlTest --target EditorNodeDelegateQmlTest --target EditorHistoryVersionsRailLifecycleQmlTest --target WorkspaceShellTest --target EditorNodeSelectionLayoutTest --target EditorNodeGraphDraftTest --target AlcedoQanGraphTest
+ctest --test-dir build/debug --output-on-failure -R "EditorNodesPanelQmlTest|EditorNodeDelegateQmlTest|EditorHistoryVersionsRailLifecycleQmlTest|WorkspaceShellTest.WorkspaceShellTests.NodesPage|EditorNodeSelectionLayoutTest|EditorNodeGraphDraftTest|AlcedoQanGraphTest"
+```
+
+Suite totals: 138/138 passed in 150.05 s (`EditorNodesPanelQmlTest` 31/31, `EditorNodeDelegateQmlTest` 19/19, `EditorHistoryVersionsRailLifecycleQmlTest` 6/6, `WorkspaceShellTest` NodesPage 2/2, `EditorNodeSelectionLayoutTest` 40/40, `AlcedoQanGraphTest` 26/26, `EditorNodeGraphDraftTest` 14/14). Logs: `build/tmp/nm5-8f/build.log`, `build/tmp/nm5-8f/ctest.log`.
+
+**Checklist / exit condition:** Section 16.3.6 acceptance and Section 16.5 keyboard, empty/loading, localization, visual-matrix, and no-Apply/Cancel items are satisfied by the executed tests above. Section 20 keyboard/accessibility, localization, and AppTheme/`DESIGN.md` boxes are marked. Native screen-reader narration and NM5.8g install/package/macOS remain open.
+
+**LOC note (grill-code-review):** Tracked diff is 1,105 insertions and 43 deletions across 22 files, plus untracked `editor_node_graph_presentation.hpp` (34 lines) and `editor_node_graph_presentation.cpp` (42 lines). After this stage: `alcedo_qan_graph.cpp` 1,526 (already above the approximate split threshold; keyboard Connect stayed on the adapter that owns the visual connector); `editor_node_controller.cpp` 985 after moving presentation strings out; `EditorNodesPanel.qml` 541. `workspace_shell_test.cpp` remains 2,456 lines; this stage added one Nodes empty-chrome test rather than growing a new god fixture.
+
+**Residual gaps:** Native NVDA/Narrator/VoiceOver was not executed; QML `Accessible.name` / visible-label assertions stand in for that check. NM5.8g still owns Windows/macOS configure-build-install-package, QuickQanava import on the installed app, third-party notices, and final regression. No QuickQanava submodule or Qt style change.
+
+**Pinned API differences:** `EditorNodeGraphDraftMutation` gained `NodeGraphDraftIssue issue`. `AdmitConnect` reports that discriminator alongside the existing `error` string. `AlcedoQanGraph` exposes `keyboardConnectActive`, `keyboardConnectSourceId`, `beginKeyboardConnect`, and `cancelKeyboardConnect` without changing QuickQanava. Presentation translation lives in `PresentNodeGraphDraftIssue` (`EditorNodeGraphPresentation` context). Unknown failures keep exact technical text.
+
 #### 16.3.7 NM5.8g — Build, install, package, and final regression
 
 Complete the original Windows/MSVC and available macOS builds, install/package QML import checks,
@@ -3511,7 +3585,7 @@ checks here.
 | NM5.8c | Complete 2026-09-04 | Delegate ownership; primitive failure and reversal matrix |
 | NM5.8d | Complete 2026-09-04 | Caller deletion audit; retained typed replay/paste |
 | NM5.8e | Complete 2026-09-05 | Persistent topology history; lifecycle and failure recovery |
-| NM5.8f | Pending | Keyboard, screen reader, localization, visual matrix |
+| NM5.8f | Complete 2026-09-05 | Keyboard, QML accessibility, localization, visual matrix |
 | NM5.8g | Pending | Fresh builds, regression, installed packages, notices |
 
 #### NM5.8e completion — 2026-09-05
@@ -3580,6 +3654,21 @@ have production evidence. The new persistent-history source is registered in
   substituted for the executable evidence above.
 - NM5.8f and NM5.8g remain pending for keyboard/accessibility/localization/visual qualification,
   fresh install/package checks, notices, available macOS evidence, and final regression coverage.
+
+#### NM5.8f completion — 2026-09-05
+
+**Status:** Complete. Keyboard Connect, empty/loading/pending overlays, QML accessible names,
+localization (including 40 percent expansion), large-font name rows, and the Section 17.1 visual
+matrix have executable evidence. The full call chains, test table, LOC note, and residuals are
+under section 16.3.6 in this document.
+
+- Wrapper build of the seven listed debug targets succeeded. `ctest` on the matching filter
+  passed **138/138** in 150.05 s. Per-binary: `EditorNodesPanelQmlTest` 31/31,
+  `EditorNodeDelegateQmlTest` 19/19, `EditorHistoryVersionsRailLifecycleQmlTest` 6/6,
+  `WorkspaceShellTest` NodesPage 2/2, `EditorNodeSelectionLayoutTest` 40/40,
+  `AlcedoQanGraphTest` 26/26, `EditorNodeGraphDraftTest` 14/14.
+- Native NVDA/Narrator/VoiceOver was not run. Install, package, notices, and macOS remain
+  NM5.8g. No package or macOS result is substituted here.
 
 ---
 
@@ -3755,9 +3844,9 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
       rendered state while retaining an applicable draft.
 - [x] Atomic topology edits have dedicated production-history evidence for exact Undo, Redo,
       recovery, reopen, and Version checkout (NM5.8e; direct inverse tests already pass).
-- [ ] All visible actions support keyboard input and accessibility.
-- [ ] All product text uses localization.
-- [ ] All visual values use AppTheme and `DESIGN.md`.
+- [x] All visible actions support keyboard input and accessibility.
+- [x] All product text uses localization.
+- [x] All visual values use AppTheme and `DESIGN.md`.
 - [x] Node delegates use no shadow, glow, gradient, or Material style.
 - [x] Reduced-motion behavior passes.
 - [x] The viewer keeps its 360 logical-pixel floor at 960×640.

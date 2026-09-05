@@ -18,7 +18,8 @@ Qan.NodeItem {
     resizable: false
     minimumSize: Qt.size(appTheme.graphNodeWidth, appTheme.graphEndpointHeight)
     width: appTheme.graphNodeWidth
-    height: appTheme.graphEndpointHeight
+    height: Math.max(appTheme.graphEndpointHeight, nameLabel.implicitHeight + appTheme.spaceXs)
+    activeFocusOnTab: false
 
     Accessible.role: Accessible.Grouping
     Accessible.name: root.displayName
@@ -43,7 +44,9 @@ Qan.NodeItem {
         Label {
             id: nameLabel
             objectName: "editorEndpointNodeName"
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: appTheme.spaceSm
             anchors.rightMargin: appTheme.spaceSm
             text: root.displayName
@@ -51,6 +54,7 @@ Qan.NodeItem {
             font.pixelSize: appTheme.fontSizeTitle
             font.weight: appTheme.fontWeightStrong
             elide: Text.ElideRight
+            wrapMode: Text.NoWrap
             verticalAlignment: Text.AlignVCenter
             horizontalAlignment: Text.AlignHCenter
             Accessible.ignored: true

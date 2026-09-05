@@ -87,6 +87,10 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   ClearIdentityMaps();
   has_projection_ = false;
   applied_        = {};
+  if (!keyboard_connect_source_id_.Empty()) {
+    keyboard_connect_source_id_ = {};
+    emit KeyboardConnectChanged();
+  }
   delegate_library_.Reset();
   rebuild_in_progress_ = false;
   graph_               = graph;
@@ -485,6 +489,10 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
   AlcedoQanGraphApplyResult result;
   result.rebuilt_topology = true;
   ++topology_replace_count_;
+  if (!keyboard_connect_source_id_.Empty()) {
+    keyboard_connect_source_id_ = {};
+    emit KeyboardConnectChanged();
+  }
 
   const auto previous     = applied_;
   const auto had_previous = has_projection_;
@@ -1401,8 +1409,15 @@ void AlcedoQanGraph::ApplyConnectablePolicy() {
   if (connector == nullptr) {
     return;
   }
-  const auto* selected = NodeProjection(product_selected_node_id_);
-  auto*       source   = NodeFor(product_selected_node_id_);
+  if (!keyboard_connect_source_id_.Empty() && NodeFor(keyboard_connect_source_id_) == nullptr) {
+    keyboard_connect_source_id_ = {};
+    emit KeyboardConnectChanged();
+  }
+  const NodeId connector_source_id = keyboard_connect_source_id_.Empty()
+                                         ? product_selected_node_id_
+                                         : keyboard_connect_source_id_;
+  const auto* selected = NodeProjection(connector_source_id);
+  auto*       source   = NodeFor(connector_source_id);
   const bool  can_start =
       selected != nullptr && selected->node_kind != EditorNodeKind::Drt && source != nullptr;
   if (!can_start) {
@@ -1411,7 +1426,7 @@ void AlcedoQanGraph::ApplyConnectablePolicy() {
     connector->setVisible(false);
     return;
   }
-  auto* output = OutputPortFor(product_selected_node_id_, PortId{"image"});
+  auto* output = OutputPortFor(connector_source_id, PortId{"image"});
   if (output != nullptr) {
     connector->setSourcePort(output);
   } else {
@@ -1435,6 +1450,40 @@ void AlcedoQanGraph::hideConnectorPreview() {
   if (auto* item = connector->getConnectorItem()) {
     item->setProperty("state", QStringLiteral("NORMAL"));
   }
+}
+
+auto AlcedoQanGraph::keyboard_connect_source_id_string() const -> QString {
+  return keyboard_connect_source_id_.Empty() ? QString{}
+                                             : ToQString(keyboard_connect_source_id_.Value());
+}
+
+bool AlcedoQanGraph::beginKeyboardConnect(const QString& source_node_id) {
+  const NodeId id{source_node_id.toStdString()};
+  const auto*  projection = NodeProjection(id);
+  auto*        node       = NodeFor(id);
+  if (projection == nullptr || node == nullptr || projection->node_kind == EditorNodeKind::Drt) {
+    return false;
+  }
+  if (keyboard_connect_source_id_ == id) {
+    ApplyConnectablePolicy();
+    return true;
+  }
+  keyboard_connect_source_id_ = id;
+  emit KeyboardConnectChanged();
+  ApplyConnectablePolicy();
+  return true;
+}
+
+void AlcedoQanGraph::cancelKeyboardConnect() {
+  if (keyboard_connect_source_id_.Empty()) {
+    hideConnectorPreview();
+    ApplyConnectablePolicy();
+    return;
+  }
+  keyboard_connect_source_id_ = {};
+  emit KeyboardConnectChanged();
+  hideConnectorPreview();
+  ApplyConnectablePolicy();
 }
 
 void AlcedoQanGraph::OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst,

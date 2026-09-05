@@ -106,7 +106,9 @@ Item {
             activeFocusOnTab: true
             Accessible.role: Accessible.Button
             Accessible.name: root.expanded ? qsTr("Collapse Masks") : qsTr("Expand Masks")
+            Accessible.description: qsTr("Masks")
             Accessible.onPressAction: root.toggle()
+            Keys.priority: Keys.BeforeItem
 
             Keys.onPressed: function (event) {
                 if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
@@ -152,6 +154,8 @@ Item {
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: appTheme.fontWeightStrong
                     elide: Text.ElideRight
+                    wrapMode: Text.NoWrap
+                    Accessible.ignored: true
                 }
 
                 Canvas {
@@ -193,6 +197,7 @@ Item {
                 id: headerMouse
                 anchors.fill: parent
                 hoverEnabled: true
+                focus: false
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.toggle()
             }
@@ -206,6 +211,7 @@ Item {
             visible: root.foldProgress > 0.001
             opacity: root.foldProgress
             clip: true
+            Accessible.ignored: root.foldProgress < 0.001
 
             Column {
                 id: maskList

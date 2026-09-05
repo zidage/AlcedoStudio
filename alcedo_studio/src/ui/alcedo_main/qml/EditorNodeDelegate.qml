@@ -21,9 +21,11 @@ Qan.NodeItem {
                          + appTheme.graphMaskDrawerHeaderHeight)
     width: appTheme.graphNodeWidth
     height: nameRow.height + divider.height + maskDrawer.height
+    activeFocusOnTab: false
 
     Accessible.role: Accessible.Grouping
     Accessible.name: root.displayName
+    Accessible.description: root.drawerOpen ? qsTr("Masks expanded") : qsTr("Masks collapsed")
 
     onWidthChanged: setDefaultBoundingShape()
     onHeightChanged: setDefaultBoundingShape()
@@ -50,12 +52,15 @@ Qan.NodeItem {
                 id: nameRow
                 objectName: "editorNodeNameRow"
                 width: parent.width
-                height: appTheme.graphNameRowHeight
+                height: Math.max(appTheme.graphNameRowHeight,
+                                 nameLabel.implicitHeight + appTheme.spaceXs)
 
                 Label {
                     id: nameLabel
                     objectName: "editorNodeName"
-                    anchors.fill: parent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: appTheme.spaceSm
                     anchors.rightMargin: appTheme.spaceSm
                     text: root.displayName
@@ -63,6 +68,7 @@ Qan.NodeItem {
                     font.pixelSize: appTheme.fontSizeTitle
                     font.weight: appTheme.fontWeightStrong
                     elide: Text.ElideRight
+                    wrapMode: Text.NoWrap
                     verticalAlignment: Text.AlignVCenter
                     Accessible.ignored: true
                 }

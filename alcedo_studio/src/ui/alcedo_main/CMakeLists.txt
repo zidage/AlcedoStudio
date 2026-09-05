@@ -78,6 +78,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_layout_store.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_commit_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_graph_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_geometry_math.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
@@ -145,6 +147,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_geometry_math.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
@@ -275,11 +279,9 @@ target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
 if(WIN32)

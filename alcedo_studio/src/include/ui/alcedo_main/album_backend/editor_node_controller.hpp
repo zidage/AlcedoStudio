@@ -278,6 +278,8 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto SessionMatchesSubmittedIdentity() const -> bool;
   [[nodiscard]] auto SessionLocationChanged() const -> bool;
   [[nodiscard]] auto SessionIdentityChanged() const -> bool;
+  /// True when the bound session must not show a node graph (empty, loading, switch, or failed).
+  [[nodiscard]] auto SessionHidesGraph() const -> bool;
   [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
   void               AdoptCommittedDocument(const PipelineDocument& document);
   [[nodiscard]] auto HasActiveGraph() const -> bool;

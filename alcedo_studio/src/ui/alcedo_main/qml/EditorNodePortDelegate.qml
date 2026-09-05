@@ -13,6 +13,7 @@ Qan.PortItem {
     minimumSize: Qt.size(appTheme.graphPortHitSize, appTheme.graphPortHitSize)
     width: appTheme.graphPortHitSize
     height: appTheme.graphPortHitSize
+    activeFocusOnTab: false
 
     Accessible.role: Accessible.Button
     Accessible.name: portItem.type === Qan.PortItem.Out ? qsTr("Output") : qsTr("Input")

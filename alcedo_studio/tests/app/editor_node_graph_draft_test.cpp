@@ -25,6 +25,7 @@ using alcedo::EditorNodeGraphDraft;
 using alcedo::EditorNodeGraphDraftIdentity;
 using alcedo::MaskId;
 using alcedo::MaskModel;
+using alcedo::NodeGraphDraftIssue;
 using alcedo::NodeId;
 using alcedo::PipelineDocument;
 using alcedo::PipelineEditApplyDirection;
@@ -187,14 +188,17 @@ TEST(EditorNodeGraphDraft, UnsupportedConnectLeavesValuesIndexesAndDeltaUnchange
 
   auto self = draft.Connect(NodeId{"grade.d"}, NodeId{"grade.d"});
   EXPECT_FALSE(self.succeeded);
+  EXPECT_EQ(self.issue, NodeGraphDraftIssue::SelfConnection);
   EXPECT_EQ(self.error, "A node cannot connect to itself");
 
   auto into_develop = draft.Connect(NodeId{"grade.d"}, NodeId{"develop"});
   EXPECT_FALSE(into_develop.succeeded);
+  EXPECT_EQ(into_develop.issue, NodeGraphDraftIssue::DevelopHasNoIncomingPort);
   EXPECT_EQ(into_develop.error, "Develop has no incoming image port");
 
   auto from_drt = draft.Connect(NodeId{"drt"}, NodeId{"grade.d"});
   EXPECT_FALSE(from_drt.succeeded);
+  EXPECT_EQ(from_drt.issue, NodeGraphDraftIssue::DrtHasNoOutgoingPort);
   EXPECT_EQ(from_drt.error, "DRT/Post has no outgoing image port");
 
   EXPECT_EQ(draft.Nodes().size(), before_nodes.size());

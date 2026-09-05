@@ -15,8 +15,10 @@
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -99,7 +101,11 @@ void EditorNodeController::set_editor_session(QObject* session) {
   submitted_identity_.reset();
   DiscardDraft();
   if (session_ != nullptr) {
-    refreshFromSession();
+    if (SessionHidesGraph()) {
+      ClearSnapshot();
+    } else {
+      refreshFromSession();
+    }
   } else {
     ClearSnapshot();
   }
@@ -585,6 +591,26 @@ auto EditorNodeController::SessionMatchesSubmittedIdentity() const -> bool {
          static_cast<quint64>(session_->session_generation()) != session_generation_;
 }
 
+auto EditorNodeController::SessionHidesGraph() const -> bool {
+  if (session_ == nullptr) {
+    return true;
+  }
+  switch (session_->session_state()) {
+    case alcedo::EditorSessionState::Interactive:
+    case alcedo::EditorSessionState::Saving:
+      return false;
+    case alcedo::EditorSessionState::NoImage:
+    case alcedo::EditorSessionState::Acquiring:
+    case alcedo::EditorSessionState::Loading:
+    case alcedo::EditorSessionState::Switching:
+    case alcedo::EditorSessionState::RetainedImageFailure:
+    case alcedo::EditorSessionState::Failed:
+    case alcedo::EditorSessionState::ShuttingDown:
+      return true;
+  }
+  return true;
+}
+
 void EditorNodeController::OnSessionStateChanged() {
   if (session_ == nullptr) {
     submitted_identity_.reset();
@@ -592,7 +618,13 @@ void EditorNodeController::OnSessionStateChanged() {
     ClearSnapshot();
     return;
   }
-  if (SessionLocationChanged()) {
+  if (SessionHidesGraph()) {
+    submitted_identity_.reset();
+    DiscardDraft();
+    ClearSnapshot();
+    return;
+  }
+  if (SessionLocationChanged() || !has_snapshot_) {
     submitted_identity_.reset();
     DiscardDraft();
     refreshFromSession();
@@ -600,7 +632,7 @@ void EditorNodeController::OnSessionStateChanged() {
 }
 
 void EditorNodeController::OnSessionHistoryChanged() {
-  if (session_ == nullptr) {
+  if (session_ == nullptr || SessionHidesGraph()) {
     return;
   }
   const auto history_revision = session_->history_revision();
@@ -694,7 +726,7 @@ bool EditorNodeController::addCleanColorGrade() {
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
   auto       mutation     = draft_->AddColorGrade(new_id);
   if (!mutation.succeeded) {
-    SetLastError(QString::fromStdString(mutation.error));
+    SetLastError(PresentNodeGraphDraftMutation(mutation));
     return false;
   }
   if (!ApplyDraftMutationToAdapter(mutation)) {
@@ -760,7 +792,7 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
   auto       mutation     = draft_->RemoveColorGrade(id);
   if (!mutation.succeeded) {
-    SetLastError(QString::fromStdString(mutation.error));
+    SetLastError(PresentNodeGraphDraftMutation(mutation));
     return false;
   }
   if (!ApplyDraftMutationToAdapter(mutation)) {
@@ -813,7 +845,7 @@ bool EditorNodeController::requestConnect(const QString& source_node_id,
     graph_adapter_->hideConnectorPreview();
   }
   if (!mutation.succeeded) {
-    SetLastError(QString::fromStdString(mutation.error));
+    SetLastError(PresentNodeGraphDraftMutation(mutation));
     return false;
   }
   if (mutation.no_op) {
@@ -1030,6 +1062,7 @@ void EditorNodeController::selectDevelop() { SelectByKind(EditorNodeKind::Develo
 void EditorNodeController::selectDrt() { SelectByKind(EditorNodeKind::Drt); }
 
 void RegisterEditorNodeQmlTypes() {
+  RegisterShortcutRegistryQmlType();
   qmlRegisterType<EditorNodeController>("Alcedo.Main", 1, 0, "EditorNodeController");
   qmlRegisterType<EditorNodeLayoutStore>("Alcedo.Main", 1, 0, "EditorNodeLayoutStore");
   qmlRegisterType<AlcedoQanGraph>("Alcedo.Main", 1, 0, "AlcedoQanGraph");
