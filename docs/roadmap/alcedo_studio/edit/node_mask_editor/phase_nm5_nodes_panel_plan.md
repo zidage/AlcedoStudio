@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8g complete 2026-09-05
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8g complete 2026-09-05, including macOS package evidence
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -3623,6 +3623,90 @@ The plan name `EditorWorkspaceToolRailLifecycleQmlTest` is the existing `EditorH
 
 **Remaining gaps:** macOS configure/build/install/package was not run (Windows environment). Native screen-reader narration remains the NM5.8f residual. A full editor window from the NSIS-installed Program Files tree was not opened; package acceptance used `--verify-qml-imports` on the cmake install tree and the CPack staging tree. `cmake --install build/release --prefix build/install` (relative prefix) failed Qt `qt.conf` absolute-path checking; the working install used the preset absolute `CMAKE_INSTALL_PREFIX`. NM8 still owns real-RAW and three-backend qualification.
 
+##### Phase NM5.8g macOS completion record (2026-09-05)
+
+**Status:** complete — macOS debug-test configure/build, affected graph/history/adapter/QML/workspace regression, release install/package QuickQanava import, and QuickQanava BSD-3-Clause plus bezier MIT notices in `Contents/Resources`.
+
+**Primary success call chain:**
+
+```text
+packaged/installed AlcedoStudio.app --verify-qml-imports
+  -> QQuickStyle Basic
+  -> QQmlEngine import path qrc:/
+  -> QuickQanava::initialize
+  -> import QuickQanava 2.0 as Qan
+  -> probe Item objectName quickQanavaImportProbe
+  -> stdout qml.imports.ok=QuickQanava
+```
+
+```text
+cmake --build build/macos-release --target install
+  -> qt_generate_deploy_qml_app_script / macdeployqt
+  -> alcedo_install_legal_notices(Contents/Resources)
+  -> scripts/verify_macos_install_tree.sh
+  -> LICENSE, NOTICE, THIRD_PARTY_NOTICE.txt, third_party_licenses/
+  -> installed AlcedoStudio --verify-qml-imports
+  -> cpack DragNDrop + ZIP staging trees pass the same verify
+```
+
+**Primary failure call chain:**
+
+```text
+missing or broken QuickQanava QML import, or dummy Qt winId color-space apply
+  -> QQmlComponent prints the real QML error, or ColorManager returns false
+  -> non-zero process status / SIGSEGV avoided for winId 1
+  -> ProductionBinaryLoadsQuickQanavaModule / verify_macos_install_tree.sh fail
+  -> no substitute canvas
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Debug `alcedo_main --verify-qml-imports` | `ProductionBinaryLoadsQuickQanavaModule` | PASS |
+| Source-tree QuickQanava/bezier notice text | `PackagedNoticeSourcesContainQuickQanavaAndBezierClauses` | PASS |
+| Dummy `QWindow::winId()` is not an NSWindow | `EditorWindowColorManagementTest.DummyPlatformWinIdReturnsFalseWithoutCrashing` | PASS |
+| Default graph 3 node / 2 edge delegates | `AlcedoQanGraphPerformance.DefaultGraphApplyCreatesThreeNodeDelegatesAndTwoEdges` | PASS (apply 260 ms) |
+| 32-Grade graph 34 node / 33 edge delegates | `AlcedoQanGraphPerformance.ThirtyTwoGradeGraphApplyRecordsDelegateCountsAndApplyTime` | PASS (apply 91 ms) |
+| 100 selections each under 100 ms | `AlcedoQanGraphPerformance.OneHundredSelectionsStayWithinOneHundredMillisecondsEach` | PASS (max 7 ms) |
+| Many-Mask drawer fold keeps owner identity | `AlcedoQanGraphPerformance.OpeningAndClosingAManyMaskNodeKeepsOwnerIdentity` | PASS (0 ms recorded) |
+| 100 accepted draft Connects keep Qan identities | `AlcedoQanGraphPerformance.OneHundredAcceptedDraftConnectsRetainQanIdentities` | PASS (17 ms, 200 edge mutations) |
+| First Nodes Loader under 100 ms | `EditorNodesPanelQmlTest.FirstNodesLoaderShowsDefaultGraphDelegates` | PASS (`EXPECT_LT(loader_ms, 100)`) |
+| Add pending without Qan topology replace | `EditorNodesPanelQmlTest.AddColorGradeShowsPendingWithoutReplacingQanTopology` | PASS (4 ms) |
+| Nodes page 360 px floor at 960×640 | `WorkspaceShellTests.NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640` | PASS |
+| Empty Nodes chrome accessible names | `WorkspaceShellTests.NodesPageEmptyChromeExposesAccessibleNamesAndTabStops` | PASS |
+| Installed-app QuickQanava import | `build/install/AlcedoStudio.app/.../AlcedoStudio --verify-qml-imports` | PASS (`qml.imports.ok=QuickQanava`) |
+| CPack DragNDrop staging QuickQanava import | `_CPack_Packages/Darwin/DragNDrop/.../AlcedoStudio.app` | PASS |
+| CPack ZIP staging QuickQanava import | `_CPack_Packages/Darwin/ZIP/.../AlcedoStudio.app` | PASS |
+| macOS packages | `AlcedoStudio-0.2.9-Darwin-arm64.dmg` (193 MB), `.zip` (212 MB) | generated |
+
+Commands:
+
+- `cmake --preset macos_debug_tests -DALCEDO_GENERATE_QMLTYPES=ON`
+- `cmake --build build/macos-debug-tests --parallel 8 --target alcedo_main AlcedoQanGraphTest EditorNodesPanelQmlTest EditorNodeDelegateQmlTest EditorHistoryVersionsRailLifecycleQmlTest WorkspaceShellTest EditorNodeSelectionLayoutTest EditorNodeGraphDraftTest EditorNodeGraphProjectionTest EditorSessionHistoryPortTest EditorSessionNodeCommandTest PipelineHistoryApplierTest PipelineEditBatchTest PipelineGraphTopologyDeltaTest PipelineDocumentDefaultNameTest QuickQanavaProductionIntegrationTest QanDelegateLibraryTest EditorWindowColorManagementTest`
+- `ctest --test-dir build/macos-debug-tests --output-on-failure --no-tests=error --output-junit build/tmp/nm5-8g-macos/ctest.xml -R "AlcedoQanGraphTest|EditorNodesPanelQmlTest|EditorNodeDelegateQmlTest|EditorHistoryVersionsRailLifecycleQmlTest|EditorNodeSelectionLayoutTest|EditorNodeGraphDraftTest|EditorNodeGraphProjectionTest|EditorSessionHistoryPortTest|EditorSessionNodeCommandTest|PipelineHistoryApplierTest|PipelineEditBatchTest|PipelineGraphTopologyDeltaTest|PipelineDocumentDefaultNameTest|QuickQanavaProductionIntegrationTest|QanDelegateLibraryTest|ProductionBinaryLoadsQuickQanavaModule|PackagedNoticeSourcesContainQuickQanavaAndBezierClauses|WorkspaceShellTests.NodesPage"`
+- `./scripts/package_macos.sh --channel beta --jobs 8 --package-out-dir build/tmp/nm5-8g-macos/package`
+- `scripts/verify_macos_install_tree.sh --install-dir build/install --bundle-name AlcedoStudio` (clean Qt env; see below)
+- `cpack --config build/macos-release/CPackConfig.cmake -B build/tmp/nm5-8g-macos/package`
+
+Suite totals: affected CTest filter **277/277** in 122.76 s after the color-space guard. Additional `EditorWindowColorManagementTest` **3/3**.
+
+Per-binary: `AlcedoQanGraphTest` 31/31, `EditorNodesPanelQmlTest` 33/33, `EditorNodeDelegateQmlTest` 19/19, `EditorHistoryVersionsRailLifecycleQmlTest` 6/6, `WorkspaceShellTest` NodesPage 2/2, `EditorNodeSelectionLayoutTest` 40/40, `EditorNodeGraphDraftTest` 14/14, `EditorNodeGraphProjectionTest` 7/7, `EditorSessionHistoryPortTest` 75/75, `EditorSessionNodeCommandTest` 3/3, `PipelineHistoryApplierTest` 12/12, `PipelineEditBatchTest` 17/17, `PipelineGraphTopologyDeltaTest` 5/5, `PipelineDocumentDefaultNameTest` 6/6, `QuickQanavaProductionIntegrationTest` 3/3, `QanDelegateLibraryTest` 2/2, `ProductionBinaryLoadsQuickQanavaModule` 1/1, `PackagedNoticeSourcesContainQuickQanavaAndBezierClauses` 1/1.
+
+**Section 19 recorded production-path timings** (macOS arm64 debug Homebrew Qt 6.9.2, gtest `RecordProperty` in `build/tmp/nm5-8g-macos/qan_perf.xml`): default apply 260 ms with 3/2 delegates; 32-Grade apply 91 ms with 34/33 delegates; 100 selections max 7 ms; many-Mask drawer fold 0 ms recorded; 100 draft Connects 17 ms with 200 changed Qan edges. First Nodes Loader asserted under 100 ms; Add pending feedback 4 ms. Decode resolution, output quality, and backend were not changed.
+
+**Checklist / exit condition:** original items 1–8 and 10–12 remain covered by the Windows record plus this macOS re-run. Item 9 passed: macOS debug-test configure/build, `macos_release` install (macdeployqt), `verify_macos_install_tree.sh` on the cmake install tree and both CPack staging apps, DragNDrop DMG and ZIP packages.
+
+**LOC note (grill-code-review):** macOS verification required a 19-line color-space guard: `color_manager.mm` 254 lines, `color_manager.hpp` 25 lines, `editor_window_color_management_test.mm` 82 lines. No file exceeded the ~1000-line split threshold.
+
+**Pinned API differences:** same `--verify-qml-imports` CLI and `alcedo_install_legal_notices` destination as Windows, installed into macOS `Contents/Resources`. `macos_debug_tests` keeps `ALCEDO_GENERATE_QMLTYPES=OFF` in the preset; this run overrode `-DALCEDO_GENERATE_QMLTYPES=ON` so `qml_register_types_Alcedo_Main` is generated. Official Qt 6.9.3 (`ALCEDO_QT_PREFIX=/Users/zidage/Qt/6.9.3/macos`) for the package; Homebrew Qt 6.9.2 for debug tests. No QuickQanava submodule pin or Qt style change.
+
+**Observed macOS defect and fix:** opening the Nodes page in `WorkspaceShellTest` (offscreen QPA) attached `EditorViewportItem` and passed Qt dummy `winId()` `1` into `ColorManager::ApplyWindowColorSpace`. `-isKindOfClass:` on that pointer was `EXC_BAD_ACCESS`. The function now returns false for native addresses below 4096 without sending ObjC messages. Isolated `EditorNodesPanelQmlTest` already passed before the guard.
+
+**Packaging note:** the first `package_macos.sh` verify aborted because `QT_QPA_PLATFORM=offscreen` and `QT_PLUGIN_PATH=/opt/homebrew/share/qt/plugins` leaked from the debug CTest process into the bundled Qt 6.9.3 app. Re-running `verify_macos_install_tree.sh` and CPack with those variables unset passed. macdeployqt itself completed; it was not re-run for the install tree.
+
+**Residual gaps:** Native VoiceOver was not executed. A full editor window was not opened from the mounted DMG; package acceptance used `--verify-qml-imports` on the cmake install tree and both CPack staging apps. `macos_debug_tests` still defaults `ALCEDO_GENERATE_QMLTYPES=OFF`. NM8 still owns real-RAW and three-backend qualification.
+
 ### 16.4 Main call chain
 
 ```text
@@ -3665,7 +3749,7 @@ checks here.
 | NM5.8d | Complete 2026-09-04 | Caller deletion audit; retained typed replay/paste |
 | NM5.8e | Complete 2026-09-05 | Persistent topology history; lifecycle and failure recovery |
 | NM5.8f | Complete 2026-09-05 | Keyboard, QML accessibility, localization, visual matrix |
-| NM5.8g | Complete 2026-09-05 | Fresh Windows builds, regression, install/package, notices |
+| NM5.8g | Complete 2026-09-05 | Fresh Windows and macOS builds, regression, install/package, notices |
 
 #### NM5.8e completion — 2026-09-05
 
@@ -3755,6 +3839,14 @@ under section 16.3.6 in this document.
 
 - Wrapper debug configure/build succeeded. The affected `ctest` filter is **277/277** after fixing QML delegate counting. Wrapper release configure/build of `alcedo_main`, `cmake --install build/release`, `scripts/verify_windows_install_tree.ps1`, and `cpack` NSIS all passed. Installed and CPack-staging `alcedo_main --verify-qml-imports` both printed `qml.imports.ok=QuickQanava`.
 - macOS was not available on this Windows host. No macOS package result is substituted here. No QuickQanava submodule or Qt style change.
+
+#### NM5.8g macOS completion — 2026-09-05
+
+**Status:** Complete. macOS `macos_debug_tests` configure/build, the same 277-test affected filter, `macos_release` install with macdeployqt, install-tree and CPack DragNDrop/ZIP QuickQanava import, and QuickQanava/bezier notices in `Contents/Resources` now have executable evidence. Call chains, test table, Section 19 timings, and residuals are under the 2026-09-05 macOS record in section 16.3.7.
+
+- `cmake --preset macos_debug_tests -DALCEDO_GENERATE_QMLTYPES=ON` and the affected debug targets built. The CTest filter is **277/277**. `EditorWindowColorManagementTest` is **3/3** after rejecting dummy `winId()` `1`.
+- `./scripts/package_macos.sh --channel beta` configured `macos_release` with Qt 6.9.3, built install (macdeployqt), then CPack produced `AlcedoStudio-0.2.9-Darwin-arm64.dmg` and `.zip`. `scripts/verify_macos_install_tree.sh` passed on `build/install/AlcedoStudio.app` and both CPack staging apps. Installed `AlcedoStudio --verify-qml-imports` printed `qml.imports.ok=QuickQanava`.
+- Opening Nodes in `WorkspaceShellTest` on offscreen QPA previously SIGSEGV'd in `ColorManager::ApplyWindowColorSpace`. That path now returns false for non-AppKit dummy handles. No QuickQanava submodule or Qt style change.
 
 ---
 
@@ -3937,7 +4029,7 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] Reduced-motion behavior passes.
 - [x] The viewer keeps its 360 logical-pixel floor at 960×640.
 - [x] Windows build, install, and package checks pass.
-- [ ] macOS build, install, and package checks pass when the environment is available.
+- [x] macOS build, install, and package checks pass when the environment is available.
 - [x] Required third-party notices are in the package.
 - [x] Every sub-phase completion record lists pinned API differences.
 

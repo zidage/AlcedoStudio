@@ -15,6 +15,7 @@
 #include <QString>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace alcedo {
 namespace {
@@ -190,7 +191,10 @@ auto ResolveEDRMetadata(const ViewerDisplayConfig& config) -> CAEDRMetadata* {
 
 auto ColorManager::ApplyWindowColorSpace(void*                      native_view_or_window,
                                          const ViewerDisplayConfig& config) -> bool {
-  if (!native_view_or_window) {
+  const auto native_address = reinterpret_cast<std::uintptr_t>(native_view_or_window);
+  // Qt offscreen `QWindow::winId()` can be a non-zero dummy such as 1. Sending
+  // -isKindOfClass: to that pointer is a SIGSEGV, not a clean ObjC miss.
+  if (native_address < 4096u) {
     return false;
   }
 
