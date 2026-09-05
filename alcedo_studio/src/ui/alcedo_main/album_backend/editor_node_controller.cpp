@@ -42,6 +42,11 @@ auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnaps
   return true;
 }
 
+auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs,
+                           const EditorNodeGraphSnapshot& rhs) -> bool {
+  return lhs.nodes == rhs.nodes && lhs.edges == rhs.edges;
+}
+
 }  // namespace
 
 EditorNodeController::EditorNodeController(QObject* parent) : QObject(parent) {}
@@ -83,15 +88,21 @@ void EditorNodeController::set_editor_session(QObject* session) {
   session_ = typed;
   if (session_ != nullptr) {
     state_connection_   = connect(session_.data(), &EditorSessionController::StateChanged, this,
-                                  &EditorNodeController::OnSessionChanged);
+                                  &EditorNodeController::OnSessionStateChanged);
     history_connection_ = connect(session_.data(), &EditorSessionController::HistoryChanged, this,
-                                  &EditorNodeController::OnSessionChanged);
+                                  &EditorNodeController::OnSessionHistoryChanged);
     availability_connection_ =
         connect(session_.data(), &EditorSessionController::ActionAvailabilityChanged, this,
                 &EditorNodeController::ActionAvailabilityChanged);
   }
   emit EditorSessionChanged();
-  OnSessionChanged();
+  submitted_identity_.reset();
+  DiscardDraft();
+  if (session_ != nullptr) {
+    refreshFromSession();
+  } else {
+    ClearSnapshot();
+  }
 }
 
 void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_id,
@@ -134,6 +145,9 @@ void EditorNodeController::ClearSnapshot() {
   session_generation_        = BoundSessionGeneration().value_or(0);
   projection_revision_       = 0;
   topology_revision_         = 0;
+  snapshot_element_id_       = 0;
+  snapshot_image_id_         = 0;
+  snapshot_version_id_.clear();
   emit SnapshotChanged();
   emit SelectionChanged();
   emit ActionAvailabilityChanged();
@@ -314,6 +328,13 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
     SetLastError(tr("The graph snapshot has no nodes"));
     return false;
   }
+  if (has_snapshot_ && snapshot.session_generation == session_generation_ &&
+      element_id_ == snapshot_element_id_ && image_id_ == snapshot_image_id_ &&
+      version_id_ == snapshot_version_id_ &&
+      SameProjectionContent(snapshot, snapshot_)) {
+    SetLastError({});
+    return true;
+  }
 
   const bool generation_changed =
       !has_snapshot_ || snapshot.session_generation != session_generation_;
@@ -333,6 +354,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   snapshot.projection_revision = projection_revision_;
   snapshot_                    = std::move(snapshot);
   has_snapshot_                = true;
+  snapshot_element_id_         = element_id_;
+  snapshot_image_id_           = image_id_;
+  snapshot_version_id_         = version_id_;
   SyncLayoutKey();
   RestoreSelectionAfterSnapshot();
   SetLastError({});
@@ -530,7 +554,8 @@ bool EditorNodeController::refreshFromSession() {
   }
   element_id_ = session_->element_id();
   image_id_   = session_->image_id();
-  version_id_ = QString::fromStdString(session_->history_snapshot().active_version_id.ToString());
+  version_id_ = session_->active_version_id();
+  observed_history_revision_ = session_->history_revision();
   SyncLayoutKey();
   const auto* document = session_->pipeline_document();
   if (document == nullptr) {
@@ -549,22 +574,47 @@ auto EditorNodeController::SessionMatchesSubmittedIdentity() const -> bool {
   const auto& submitted = *submitted_identity_;
   return submitted.element_id == static_cast<std::uint64_t>(session_->element_id()) &&
          submitted.image_id == static_cast<std::uint64_t>(session_->image_id()) &&
-         submitted.version_id == session_->history_snapshot().active_version_id.ToString() &&
+         QString::fromStdString(submitted.version_id) == session_->active_version_id() &&
          submitted.session_generation == static_cast<std::uint64_t>(session_->session_generation());
 }
 
 [[nodiscard]] auto EditorNodeController::SessionIdentityChanged() const -> bool {
+  return SessionLocationChanged() ||
+         (session_ != nullptr && session_->active_version_id() != version_id_);
+}
+
+[[nodiscard]] auto EditorNodeController::SessionLocationChanged() const -> bool {
   if (session_ == nullptr) {
     return false;
   }
   return static_cast<quint64>(session_->element_id()) != element_id_ ||
          static_cast<quint64>(session_->image_id()) != image_id_ ||
-         QString::fromStdString(session_->history_snapshot().active_version_id.ToString()) !=
-             version_id_ ||
          static_cast<quint64>(session_->session_generation()) != session_generation_;
 }
 
-void EditorNodeController::OnSessionChanged() {
+void EditorNodeController::OnSessionStateChanged() {
+  if (session_ == nullptr) {
+    submitted_identity_.reset();
+    DiscardDraft();
+    ClearSnapshot();
+    return;
+  }
+  if (SessionLocationChanged()) {
+    submitted_identity_.reset();
+    DiscardDraft();
+    refreshFromSession();
+  }
+}
+
+void EditorNodeController::OnSessionHistoryChanged() {
+  if (session_ == nullptr) {
+    return;
+  }
+  const auto history_revision = session_->history_revision();
+  if (history_revision == observed_history_revision_) {
+    return;
+  }
+  observed_history_revision_ = history_revision;
   if (SessionIdentityChanged()) {
     submitted_identity_.reset();
     DiscardDraft();
@@ -698,7 +748,6 @@ bool EditorNodeController::renameColorGrade(const QString& node_id, const QStrin
   }
   refreshFromSession();
   selectNode(node_id);
-  QueueProjectionApply();
   return true;
 }
 

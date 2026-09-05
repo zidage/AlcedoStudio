@@ -2921,7 +2921,33 @@ replacements; identity retention alone cannot detect duplicate role/layout work.
 ##### NM5.8a completion record (2026-09-04)
 
 **Status:** complete — one attach/apply route, live selection on the controller, layout-key restore,
-queued apply lifetime, image/Version identity not swallowed by submit echo
+queued apply lifetime, image/Version identity not swallowed by submit echo; workspace-switch
+projection regression corrected 2026-09-04
+
+**Workspace-switch regression correction:** NM5.8a initially connected both `StateChanged` and
+`HistoryChanged` to the same refresh route. Each identity check called `history_snapshot()`, which
+walks Version refs and the active first-parent commit path and formats every commit row on the GUI
+thread. Ordinary workspace/session notifications could therefore perform multiple full history
+projections, rebuild an unchanged Nodes value snapshot, and queue another Qan apply.
+
+The corrected route keeps the immutable Nodes snapshot only as the published boundary:
+
+```text
+StateChanged
+  -> compare element/image/session generation only
+  -> unchanged: no history read, no Nodes projection, no Qan work
+
+HistoryChanged
+  -> compare monotonic history revision
+  -> read active Version identity through ReadActiveVersionId (no ref/commit walk)
+  -> build a candidate Nodes projection only when the history revision changed
+  -> nodes/edges unchanged: keep the current projection revision and do not queue Qan
+  -> nodes/edges changed: publish once and queue one apply
+```
+
+`history_snapshot()` remains the History/Versions model API; it is no longer used as a session
+identity lookup by `EditorNodeController`. Repeated render, presentation, and workspace state
+notifications do not enter history projection or node publication.
 
 **Primary success call chain:**
 
@@ -2969,16 +2995,21 @@ session image/Version/generation differs from the cached Nodes identity
 | `CloseWithQueuedApplyThenReopenRestoresOnce` | `EditorNodesPanelQmlTest` | PASS |
 | `ReopenRestoresPositionsViewZoomSelectionAndDrawerState` | `EditorNodesPanelQmlTest` | PASS |
 | `TwoVersionsKeepSeparateLayoutValues` | `EditorNodesPanelQmlTest` | PASS |
-| `OneCommittedRevisionCoalescesQueuedProjectionApplies` | `EditorNodeSelectionLayoutTest` | PASS |
+| `IdenticalCommittedProjectionDoesNotPublishOrQueueAnotherApply` | `EditorNodeSelectionLayoutTest` | PASS |
+| `RepeatedSessionStateChangesDoNotReadHistoryOrRepublishNodes` | `EditorNodeSelectionLayoutTest` | PASS |
+| `UnchangedHistoryProjectionDoesNotPublishOrQueueAnotherApply` | `EditorNodeSelectionLayoutTest` | PASS |
+| `ChangedHistoryProjectionPublishesExactlyOneApply` | `EditorNodeSelectionLayoutTest` | PASS |
 | `QueuedProjectionApplyIgnoresStaleAdapterAfterDetach` | `EditorNodeSelectionLayoutTest` | PASS |
 | `LayoutKeyActivatesBeforeSavedSelectionRestore` | `EditorNodeSelectionLayoutTest` | PASS |
 | `SavedLayoutSelectionDoesNotOverrideLiveSelectionOnTheSameKey` | `EditorNodeSelectionLayoutTest` | PASS |
 | `OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot` | `EditorNodeSelectionLayoutTest` | PASS |
 | `ImageSwitchAfterSubmitRefreshesTheCommittedProjection` | `EditorNodeSelectionLayoutTest` | PASS |
 | `TwoVersionsKeepSeparatePositionsAndDrawerState` | `EditorNodeSelectionLayoutTest` | PASS |
+| `ActiveVersionIdentityReadReturnsOnlyTheCheckedOutRef` | `EditorSessionHistoryPortTest` | PASS |
 
-Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorNodeGraphDraftTest EditorNodeGraphProjectionTest EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest` then the four test executables under `build/debug/alcedo_studio/tests/`.
-Suite totals: `EditorNodesPanelQmlTest` 22/22; `EditorNodeSelectionLayoutTest` 34/34.
+Regression commands: `cmd /c scripts\msvc_env.cmd --build build\debug --target EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest EditorSessionHistoryPortTest --parallel 4`, then the three generated test executables.
+Suite totals after the correction: `EditorNodesPanelQmlTest` 22/22;
+`EditorNodeSelectionLayoutTest` 37/37; `EditorSessionHistoryPortTest` 73/73.
 
 **Checklist / exit condition:** 16.3.1 acceptance items covered by the tests above.
 

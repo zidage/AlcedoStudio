@@ -61,6 +61,17 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
     return &document_;
   }
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override {
+    return history_revision_;
+  }
+  [[nodiscard]] auto active_version_id() const -> alcedo::version_ref_id_t override {
+    ++active_version_read_count_;
+    return {};
+  }
+  [[nodiscard]] auto history_snapshot() -> alcedo::EditorHistorySnapshot override {
+    ++history_snapshot_read_count_;
+    return {};
+  }
   [[nodiscard]] auto active_image_load_request() const -> alcedo::ImageLoadRequestId override {
     return request_;
   }
@@ -155,6 +166,11 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     identity_.image_id = image_id;
     NotifyChange();
   }
+  void PublishStateChange() { NotifyChange(); }
+  void PublishHistoryChange() {
+    ++history_revision_;
+    NotifyChange();
+  }
   auto Document() -> PipelineDocument& { return document_; }
   void SetFailCommands(bool fail) { fail_commands_ = fail; }
   void PublishAvailability(alcedo::EditorActionAvailability availability) {
@@ -169,6 +185,12 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto rename_count() const -> int { return rename_count_; }
   [[nodiscard]] auto reconnect_count() const -> int { return reconnect_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
+  [[nodiscard]] auto active_version_read_count() const -> int {
+    return active_version_read_count_;
+  }
+  [[nodiscard]] auto history_snapshot_read_count() const -> int {
+    return history_snapshot_read_count_;
+  }
   [[nodiscard]] auto last_reconnect_node() const -> NodeId { return last_reconnect_node_; }
   [[nodiscard]] auto last_reconnect_predecessor() const -> NodeId {
     return last_reconnect_predecessor_;
@@ -204,6 +226,9 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   int                                               rename_count_  = 0;
   int                                               reconnect_count_ = 0;
   int                                               edit_node_graph_count_ = 0;
+  std::uint64_t                                     history_revision_ = 0;
+  mutable int                                       active_version_read_count_ = 0;
+  int                                               history_snapshot_read_count_ = 0;
   alcedo::NodeGraphTopologyChange                   last_topology_change_{};
   NodeId                                            last_reconnect_node_;
   NodeId                                            last_reconnect_predecessor_;
@@ -523,16 +548,72 @@ TEST(EditorNodeController, OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot) 
   EXPECT_EQ(controller.completed_projection_apply_count(), applies_before);
 }
 
-TEST(EditorNodeController, OneCommittedRevisionCoalescesQueuedProjectionApplies) {
+TEST(EditorNodeController, IdenticalCommittedProjectionDoesNotPublishOrQueueAnotherApply) {
   EditorNodeController controller;
   ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
   const auto queued_after_first = controller.queued_projection_apply_count();
+  const auto revision_after_first = controller.projection_revision();
   EXPECT_GE(queued_after_first, 1);
   ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
-  EXPECT_EQ(controller.queued_projection_apply_count(), queued_after_first + 1);
+  EXPECT_EQ(controller.queued_projection_apply_count(), queued_after_first);
+  EXPECT_EQ(controller.projection_revision(), revision_after_first);
   QCoreApplication::processEvents();
   EXPECT_EQ(controller.completed_projection_apply_count(), 0);
   EXPECT_GE(controller.skipped_stale_projection_apply_count(), 1);
+}
+
+TEST(EditorNodeController, RepeatedSessionStateChangesDoNotReadHistoryOrRepublishNodes) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(81);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto revision = controller.projection_revision();
+  const auto queued   = controller.queued_projection_apply_count();
+  const auto active_version_reads = backend.active_version_read_count();
+
+  for (int index = 0; index < 20; ++index) {
+    backend.PublishStateChange();
+  }
+
+  EXPECT_EQ(backend.history_snapshot_read_count(), 0);
+  EXPECT_EQ(backend.active_version_read_count(), active_version_reads);
+  EXPECT_EQ(controller.projection_revision(), revision);
+  EXPECT_EQ(controller.queued_projection_apply_count(), queued);
+}
+
+TEST(EditorNodeController, UnchangedHistoryProjectionDoesNotPublishOrQueueAnotherApply) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(82);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto revision = controller.projection_revision();
+  const auto queued   = controller.queued_projection_apply_count();
+
+  backend.PublishHistoryChange();
+
+  EXPECT_EQ(backend.history_snapshot_read_count(), 0);
+  EXPECT_EQ(controller.projection_revision(), revision);
+  EXPECT_EQ(controller.queued_projection_apply_count(), queued);
+}
+
+TEST(EditorNodeController, ChangedHistoryProjectionPublishesExactlyOneApply) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(83);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto revision = controller.projection_revision();
+  const auto queued   = controller.queued_projection_apply_count();
+  ASSERT_TRUE(alcedo::RenameColorGrade(backend.Document(), NodeId{"grade.primary"}, "Updated")
+                  .empty());
+
+  backend.PublishHistoryChange();
+
+  EXPECT_EQ(backend.history_snapshot_read_count(), 0);
+  EXPECT_EQ(controller.projection_revision(), revision + 1);
+  EXPECT_EQ(controller.queued_projection_apply_count(), queued + 1);
 }
 
 TEST(EditorNodeController, QueuedProjectionApplyIgnoresStaleAdapterAfterDetach) {

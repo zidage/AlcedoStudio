@@ -507,6 +507,17 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   return snapshot;
 }
 
+auto EditorSessionService::active_version_id() const -> version_ref_id_t {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) return {};
+  std::string      error;
+  version_ref_id_t version_id;
+  if (!dependencies_.history->ReadActiveVersionId(lifecycle_.history_guard(), &version_id,
+                                                   &error)) {
+    return {};
+  }
+  return version_id;
+}
+
 auto EditorSessionService::pipeline_document() const -> const PipelineDocument* {
   if (!dependencies_.pipeline || !lifecycle_.has_image()) {
     return nullptr;

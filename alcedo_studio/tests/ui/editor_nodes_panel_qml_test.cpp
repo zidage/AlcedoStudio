@@ -536,8 +536,8 @@ TEST_F(EditorNodesPanelQmlTest, CloseWithQueuedApplyThenReopenRestoresOnce) {
   QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
   const auto queued_before = nodes->queued_projection_apply_count();
   ASSERT_NE(backend_.pipeline_document(), nullptr);
-  ASSERT_TRUE(nodes->PublishDocument(*backend_.pipeline_document(),
-                                     static_cast<std::uint64_t>(nodes->session_generation())));
+  const auto result = backend_.RenameColorGrade(NodeId{"grade.primary"}, "Queued update");
+  ASSERT_FALSE(alcedo::EditorSessionResultIsFailure(result.kind));
   EXPECT_GT(nodes->queued_projection_apply_count(), queued_before);
 
   controller_.set_editor_tool_panel_page(QString());

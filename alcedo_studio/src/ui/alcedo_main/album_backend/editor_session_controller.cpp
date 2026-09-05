@@ -1299,6 +1299,16 @@ auto EditorSessionController::NormalizeToolPanelPage(const QString& page) -> QSt
 
 auto EditorSessionController::session_generation() const -> qulonglong { return SessionEpoch(); }
 
+auto EditorSessionController::history_revision() const -> qulonglong {
+  return session_backend_ ? session_backend_->history_revision() : 0;
+}
+
+auto EditorSessionController::active_version_id() const -> QString {
+  return session_backend_
+             ? QString::fromStdString(session_backend_->active_version_id().ToString())
+             : QString{};
+}
+
 auto EditorSessionController::pipeline_document() const -> const alcedo::PipelineDocument* {
   return session_backend_ ? session_backend_->pipeline_document() : nullptr;
 }

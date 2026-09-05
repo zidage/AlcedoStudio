@@ -151,6 +151,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
   [[nodiscard]] QString editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
+  [[nodiscard]] qulonglong history_revision() const;
+  [[nodiscard]] QString    active_version_id() const;
   [[nodiscard]] auto       pipeline_document() const -> const alcedo::PipelineDocument*;
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto    adjustment_snapshot() const -> QVariantMap;

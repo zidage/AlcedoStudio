@@ -102,6 +102,9 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       -> bool override;
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool override;
+  auto ReadActiveVersionId(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::version_ref_id_t* version_id,
+                           std::string* error) -> bool override;
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error)
       -> bool override;
