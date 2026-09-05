@@ -60,8 +60,8 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool canReconnectSelectedColorGrade READ can_reconnect_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
-  Q_PROPERTY(QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY
-                 DraftStateChanged)
+  Q_PROPERTY(
+      QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY DraftStateChanged)
   Q_PROPERTY(QString selectedNodeName READ selected_node_name NOTIFY SelectionChanged)
   Q_PROPERTY(QObject* graphAdapter READ graph_adapter_object WRITE set_graph_adapter NOTIFY
                  GraphAdapterChanged)
@@ -105,7 +105,7 @@ class EditorNodeController : public QObject {
    * No-op with a cleared snapshot when the session has no document. A build
    * error keeps the previous snapshot.
    */
-  Q_INVOKABLE bool   refreshFromSession();
+  Q_INVOKABLE bool refreshFromSession();
 
   /**
    * @brief Project the active graph onto an AlcedoQanGraph adapter.
@@ -119,7 +119,7 @@ class EditorNodeController : public QObject {
    *        missing snapshot.
    * @return false when ApplySnapshot fails; lastError holds the adapter error.
    */
-  Q_INVOKABLE bool   applyToGraph(QObject* adapter);
+  Q_INVOKABLE bool applyToGraph(QObject* adapter);
 
   /**
    * @brief Select one product node.
@@ -127,42 +127,42 @@ class EditorNodeController : public QObject {
    * Unknown or empty ids fail closed and leave the current selection unchanged.
    * @param node_id Product NodeId string.
    */
-  Q_INVOKABLE void   selectNode(const QString& node_id);
-  Q_INVOKABLE void   selectPreviousBackboneNode();
-  Q_INVOKABLE void   selectNextBackboneNode();
-  Q_INVOKABLE void   selectDevelop();
-  Q_INVOKABLE void   selectDrt();
+  Q_INVOKABLE void selectNode(const QString& node_id);
+  Q_INVOKABLE void selectPreviousBackboneNode();
+  Q_INVOKABLE void selectNextBackboneNode();
+  Q_INVOKABLE void selectDevelop();
+  Q_INVOKABLE void selectDrt();
   /**
    * @brief Add one disconnected clean Color Grade below the main node DAG.
    *
    * Does not write PipelineDocument or history while the draft is incomplete.
    */
-  Q_INVOKABLE bool   addCleanColorGrade();
+  Q_INVOKABLE bool addCleanColorGrade();
   /**
    * @brief Rename one Color Grade without changing its stable NodeId.
    * @return false for endpoints, blank names, stale generations, or history failure.
    */
-  Q_INVOKABLE bool   renameColorGrade(const QString& node_id, const QString& display_name);
+  Q_INVOKABLE bool renameColorGrade(const QString& node_id, const QString& display_name);
   /**
    * @brief Remove one Color Grade from the draft. Does not bridge neighbors.
    */
-  Q_INVOKABLE bool   deleteColorGrade(const QString& node_id);
+  Q_INVOKABLE bool deleteColorGrade(const QString& node_id);
   /**
    * @brief Exclusive-port connect from @p source output to @p destination input.
    */
-  Q_INVOKABLE bool   requestConnect(const QString& source_node_id,
-                                    const QString& destination_node_id);
-  Q_INVOKABLE bool   requestConnect(const QString& source_node_id,
-                                    const QString& destination_node_id, quint64 request_generation);
+  Q_INVOKABLE bool requestConnect(const QString& source_node_id,
+                                  const QString& destination_node_id);
+  Q_INVOKABLE bool requestConnect(const QString& source_node_id, const QString& destination_node_id,
+                                  quint64 request_generation);
   /**
    * @brief Resolve a visual-connector drop as exclusive-port Connect.
    *
    * Output-to-output drops are rejected. Any supported Color Grade or Develop
    * output may start a connection.
    */
-  Q_INVOKABLE bool   requestConnectorMove(const QString& source_node_id,
-                                          const QString& destination_node_id,
-                                          bool           destination_is_output);
+  Q_INVOKABLE bool requestConnectorMove(const QString& source_node_id,
+                                        const QString& destination_node_id,
+                                        bool           destination_is_output);
 
   [[nodiscard]] auto selected_node_id() const -> NodeId { return selected_node_id_; }
   [[nodiscard]] auto selected_node_id_string() const -> QString;
@@ -255,8 +255,8 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto CurrentDraftIdentity() const -> alcedo::EditorNodeGraphDraftIdentity;
   [[nodiscard]] auto EnsureDraft() -> bool;
   void               DiscardDraft();
-  [[nodiscard]] auto ApplyMutationToGraph(const alcedo::EditorNodeGraphDraftMutation& mutation)
-      -> bool;
+  [[nodiscard]] auto ApplyDraftMutationToAdapter(
+      const alcedo::EditorNodeGraphDraftMutation& mutation) -> bool;
   [[nodiscard]] auto MaybeSubmitDraft() -> bool;
   [[nodiscard]] auto TopologyChanged(const EditorNodeGraphSnapshot& snapshot) const -> bool;
   [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;
@@ -283,34 +283,34 @@ class EditorNodeController : public QObject {
   void               AdoptCommittedDocument(const PipelineDocument& document);
   [[nodiscard]] auto HasActiveGraph() const -> bool;
 
-  QPointer<EditorSessionController> session_;
-  QPointer<AlcedoQanGraph>          graph_adapter_;
-  QPointer<EditorNodeLayoutStore>   layout_store_;
-  QMetaObject::Connection           state_connection_;
-  QMetaObject::Connection           history_connection_;
-  QMetaObject::Connection           availability_connection_;
-  QMetaObject::Connection           graph_adapter_connection_;
-  EditorNodeGraphSnapshot           snapshot_{};
-  bool                              has_snapshot_ = false;
-  NodeId                            selected_node_id_;
-  NodeId                            selection_restore_node_id_;
-  bool                              command_active_          = false;
-  bool                              projection_apply_queued_ = false;
-  quint64                           session_generation_      = 0;
-  quint64                           projection_revision_     = 0;
-  quint64                           topology_revision_       = 0;
-  quint64                           element_id_              = 0;
-  quint64                           image_id_                = 0;
-  QString                           version_id_;
-  QString                           last_error_;
-  std::unique_ptr<alcedo::EditorNodeGraphDraft> draft_;
+  QPointer<EditorSessionController>                   session_;
+  QPointer<AlcedoQanGraph>                            graph_adapter_;
+  QPointer<EditorNodeLayoutStore>                     layout_store_;
+  QMetaObject::Connection                             state_connection_;
+  QMetaObject::Connection                             history_connection_;
+  QMetaObject::Connection                             availability_connection_;
+  QMetaObject::Connection                             graph_adapter_connection_;
+  EditorNodeGraphSnapshot                             snapshot_{};
+  bool                                                has_snapshot_ = false;
+  NodeId                                              selected_node_id_;
+  NodeId                                              selection_restore_node_id_;
+  bool                                                command_active_          = false;
+  bool                                                projection_apply_queued_ = false;
+  quint64                                             session_generation_      = 0;
+  quint64                                             projection_revision_     = 0;
+  quint64                                             topology_revision_       = 0;
+  quint64                                             element_id_              = 0;
+  quint64                                             image_id_                = 0;
+  QString                                             version_id_;
+  QString                                             last_error_;
+  std::unique_ptr<alcedo::EditorNodeGraphDraft>       draft_;
   std::optional<alcedo::EditorNodeGraphDraftIdentity> submitted_identity_;
-  EditorNodeLayoutKey                   last_layout_key_{};
-  quint64                           adapter_attach_generation_          = 0;
-  quint64                           pending_apply_attach_generation_    = 0;
-  int                               queued_projection_apply_count_      = 0;
-  int                               completed_projection_apply_count_   = 0;
-  int                               skipped_stale_projection_apply_count_ = 0;
+  EditorNodeLayoutKey                                 last_layout_key_{};
+  quint64                                             adapter_attach_generation_            = 0;
+  quint64                                             pending_apply_attach_generation_      = 0;
+  int                                                 queued_projection_apply_count_        = 0;
+  int                                                 completed_projection_apply_count_     = 0;
+  int                                                 skipped_stale_projection_apply_count_ = 0;
 };
 
 void RegisterEditorNodeQmlTypes();

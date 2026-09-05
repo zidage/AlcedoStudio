@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8b complete 2026-09-04; NM5.8c–NM5.8g pending
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8c complete 2026-09-04; NM5.8d–NM5.8g pending
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -3105,6 +3105,101 @@ constructing `EditorNodeController`; require unload/recreate with a different en
 production QML panel tests after registering all new files. Physical `.cpp` splitting alone does
 not complete this stage.
 
+##### NM5.8c completion record (2026-09-04)
+
+**Status:** complete — delegate ownership is isolated, full replacement and incremental visual
+operations share the same primitive helpers, and draft mutation reversal is adapter-owned.
+
+**Primary success call chains:**
+
+```text
+AlcedoQanGraph::InsertTopology / InsertProjectedNode
+  -> qmlEngine(bound graph)
+  -> QanDelegateLibrary::EnsureLoaded(engine, graph)
+  -> LoadComponent for node and edge delegates
+  -> install graph-owned port, dock, and invisible-selection components
+  -> InsertNodeVisual / InsertEdgeVisual
+  -> register NodeId/Qan and edge/port maps, presentation, and drawer signals
+
+EditorNodeController::ApplyDraftMutationToAdapter
+  -> AlcedoQanGraph::ApplyMutation
+  -> prevalidate mapped removals and insertions
+  -> RemoveEdgeVisual / RemoveNodeVisual for completed removals
+  -> InsertNodeVisual / InsertEdgeVisual for completed insertions
+  -> update the applied projection only after every visual step succeeds
+  -> preserve selection and layout, then return success
+```
+
+**Primary failure call chain:**
+
+```text
+Injected node/port/edge insertion, binding, or removal failure
+  -> return the actual Qan operation error
+  -> reverse only the completed visual operations in reverse order
+  -> restore QuickQanava port lists before an exclusive edge can be rebound
+  -> restore edge candidate state, drawer connections, selection, and layout
+  -> append every visual-reversal error to the original error
+  -> controller calls EditorNodeGraphDraft::RestoreLastMutation once
+  -> controller exposes the adapter error without submitting a product change
+```
+
+**What was proven (executed tests):**
+
+| Required behavior | Target / binary | Result |
+| --- | --- | --- |
+| Node, port, edge insertion and edge-binding failure preserve unrelated identities, edges, selection, and layout | `AlcedoQanGraphTest` | PASS |
+| Edge, port, and node removal failure restores the mapped projection | `AlcedoQanGraphTest` | PASS |
+| Visual reversal failure returns both the original and reversal errors | `AlcedoQanGraphTest` | PASS |
+| Failed visual mutation leaves `PipelineDocument` unchanged | `AlcedoQanGraphTest` | PASS |
+| Delegate loading and graph-owned installation without `EditorNodeController` | `QanDelegateLibraryTest` | PASS |
+| Reset followed by loading through a different `QQmlEngine` | `QanDelegateLibraryTest` | PASS |
+| Draft add/delete/connect behavior and no product command for an incomplete draft | `EditorNodeSelectionLayoutTest` | PASS |
+| Registered Nodes-page QML behavior after the adapter change | `EditorNodesPanelQmlTest` | PASS |
+
+**Commands and totals:**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlcedoQanGraphTest QanDelegateLibraryTest EditorNodesPanelQmlTest EditorNodeSelectionLayoutTest
+build/debug/alcedo_studio/tests/ui/AlcedoQanGraphTest_runtime/AlcedoQanGraphTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/QanDelegateLibraryTest_runtime/QanDelegateLibraryTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodesPanelQmlTest_runtime/EditorNodesPanelQmlTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodeSelectionLayoutTest_runtime/EditorNodeSelectionLayoutTest.exe --gtest_color=no
+```
+
+The MSVC build completed successfully. `AlcedoQanGraphTest` ran 25/25, `QanDelegateLibraryTest`
+ran 2/2, `EditorNodesPanelQmlTest` ran 22/22, and `EditorNodeSelectionLayoutTest` ran 34/34.
+The build and runtime logs were kept under `build/tmp/`. The runtime suites still print existing
+Qt/QuickQanava QML warnings about native-style customization, unmatched `Connections` handlers,
+and undefined dock properties; they did not affect pass/fail results and remain outside this
+stage's scope.
+
+**Checklist / exit condition:**
+
+- [x] `QanDelegateLibrary` owns delegate URLs, engine identity, cached components, and graph
+      installation markers; it has no controller or adapter parent and no shared context.
+- [x] Full replacement and incremental operations use shared node/edge creation, presentation,
+      registration, and cleanup helpers.
+- [x] Qan reversal tracks only completed visual operations and reports reversal errors.
+- [x] The adapter retains reverse Qan-pointer-to-`NodeId` maps and no redundant node projection
+      map; `applied_` is the authoritative node-card value store.
+- [x] The controller has one adapter mutation call and one draft reversal on adapter failure.
+- [x] Production and focused test CMake source lists register every new file.
+- [x] Failure injection covers every requested primitive boundary and a failing visual reversal.
+- [x] Delegate tests use separate engines and do not construct `EditorNodeController`.
+
+**LOC / diff note:** The working-tree diff is 1,275 insertions and 456 deletions across tracked
+files, plus 430 lines in the three new files (`qan_delegate_library.hpp` 109,
+`qan_delegate_library.cpp` 178, and `qan_delegate_library_test.cpp` 143). The adapter source is
+1,598 lines (1,159 before this stage) and its header is 473 lines (368 before); the delegate
+library is split into the new 109-line header and 178-line source. The controller source is 988
+lines (957 before), below the plan's approximate split threshold after Qan rollback moved out.
+
+**Residual gaps:** NM5.8d still owns obsolete command-entry cleanup. NM5.8e still owns persistent
+topology Undo/Redo, WAL recovery, reopen, checkout, and long-lived Loader evidence. NM5.8f still
+owns keyboard, accessibility, localization, large-font, and visual-state qualification. NM5.8g
+still owns fresh install/package, notices, available macOS, and final regression evidence. NM8
+retains real-RAW and three-backend qualification.
+
 #### 16.3.4 NM5.8d — Remove unused command entry points; preserve stored history
 
 **Files:** `editor_session_controller.{hpp,cpp}`, `editor_node_controller.{hpp,cpp}`,
@@ -3242,7 +3337,7 @@ checks here.
 | --- | --- | --- |
 | NM5.8a | Complete 2026-09-04 | One update route; queued teardown and layout restore |
 | NM5.8b | Complete 2026-09-04 | Bounded reversal/copy work; exact draft values and counters |
-| NM5.8c | Pending | Delegate ownership; primitive failure and reversal matrix |
+| NM5.8c | Complete 2026-09-04 | Delegate ownership; primitive failure and reversal matrix |
 | NM5.8d | Pending | Caller deletion audit; retained typed replay/paste |
 | NM5.8e | Pending | Persistent topology history; lifecycle and failure recovery |
 | NM5.8f | Pending | Keyboard, screen reader, localization, visual matrix |

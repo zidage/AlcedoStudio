@@ -772,6 +772,7 @@ target_link_libraries(AlcedoQanGraphTest
         AlcedoQanGraph
         QuickQanava
         QuickQanavaplugin
+        EditorNodeGraphDraft
         GTest::gtest
         Qt6::Core
         Qt6::Gui
@@ -791,6 +792,41 @@ alcedo_ui_gtest_discover_tests(AlcedoQanGraphTest
     TEST_PREFIX "AlcedoQanGraphTest."
     PROPERTIES LABELS "quickqanava;editor_nodes")
 alcedo_register_test_target(AlcedoQanGraphTest ui)
+
+# Delegate cache ownership and engine/graph recreation without the node controller.
+add_executable(QanDelegateLibraryTest
+    ${ALCEDO_TEST_ROOT}/ui/qan_delegate_library_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(QanDelegateLibraryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(QanDelegateLibraryTest
+    PRIVATE
+        AlcedoQanGraph
+        QuickQanava
+        QuickQanavaplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(QanDelegateLibraryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(QanDelegateLibraryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(QanDelegateLibraryTest
+    TEST_PREFIX "QanDelegateLibraryTest."
+    PROPERTIES LABELS "quickqanava;editor_nodes")
+alcedo_register_test_target(QanDelegateLibraryTest ui)
 
 # Alcedo node/endpoint/Mask-drawer delegates: VI bans, drawer fold, ports, icons.
 add_executable(EditorNodeDelegateQmlTest
