@@ -106,6 +106,25 @@ TEST(EditorNodeGraphProjection, TopologyChangeAppearsInNodeAndRevisionValues) {
   EXPECT_EQ(snapshot.edges.size(), 3u);
 }
 
+TEST(EditorNodeGraphProjection, ProjectNodeCopiesStoredMaskOrderForDetachedGrades) {
+  const auto  document = CreateDefaultPipelineDocument();
+  const auto* primary  = document.PrimaryGrade();
+  ASSERT_NE(primary, nullptr);
+  const auto  from_build = EditorNodeGraphProjection::Build(document, 1, 1, 1).nodes[1];
+  const auto  from_node  = EditorNodeGraphProjection::ProjectNode(*primary);
+  EXPECT_EQ(from_node, from_build);
+
+  auto extra = CreateCleanColorGradeNode(NodeId{"grade.detached"});
+  extra->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
+  extra->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 1);
+  const auto projected = EditorNodeGraphProjection::ProjectNode(*extra);
+  EXPECT_EQ(projected.node_id, NodeId{"grade.detached"});
+  EXPECT_EQ(projected.node_kind, EditorNodeKind::ColorGrade);
+  ASSERT_EQ(projected.masks.size(), 2u);
+  EXPECT_EQ(projected.masks[0].mask_id, MaskId{"mask.radial"});
+  EXPECT_EQ(projected.masks[1].mask_id, MaskId{"mask.brush"});
+}
+
 TEST(EditorNodeGraphProjection, InvalidBackboneIsRejected) {
   EXPECT_THROW(EditorNodeGraphProjection::Build(PipelineDocument{}, 1, 1, 1),
                std::invalid_argument);

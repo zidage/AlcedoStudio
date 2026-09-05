@@ -5,14 +5,39 @@
 #include "app/editor_node_graph_draft.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
+#include <utility>
 
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
+namespace {
+
+auto MaxInsertedNameNumber(const std::map<NodeId, nlohmann::json>& inserted,
+                           std::uint64_t                           base_number) -> std::uint64_t {
+  std::uint64_t max_inserted = base_number;
+  const auto    prefix       = std::string{"Color Grade "};
+  for (const auto& [id, stored] : inserted) {
+    (void)id;
+    if (!stored.contains("display_name") || !stored.at("display_name").is_string()) {
+      continue;
+    }
+    const auto name = stored.at("display_name").get<std::string>();
+    if (name.rfind(prefix, 0) != 0) {
+      continue;
+    }
+    try {
+      const auto number = std::stoull(name.substr(prefix.size()));
+      max_inserted      = std::max(max_inserted, number + 1);
+    } catch (...) {
+    }
+  }
+  return max_inserted;
+}
+
+}  // namespace
 
 auto EditorNodeGraphDraft::ImagePort() -> PortId { return PortId{"image"}; }
 
@@ -36,85 +61,88 @@ auto EditorNodeGraphDraft::ToProjection(const PipelineSceneEdge& edge) -> Editor
   return EditorNodeEdgeProjection{edge.from_node, edge.from_port, edge.to_node, edge.to_port};
 }
 
-auto EditorNodeGraphDraft::KindOf(const INodeModel& node) -> EditorNodeKind {
-  if (node.Type() == type_ids::DevelopNode()) {
-    return EditorNodeKind::Develop;
+template <class Map, class Key>
+void EditorNodeGraphDraft::Remember(
+    std::map<Key, std::optional<typename Map::mapped_type>>* prior, const Map& current,
+    const Key& key) {
+  if (prior->contains(key)) {
+    return;
   }
-  if (node.Type() == type_ids::DrtNode()) {
-    return EditorNodeKind::Drt;
+  const auto it = current.find(key);
+  if (it == current.end()) {
+    prior->emplace(key, std::nullopt);
+    return;
   }
-  if (node.Type() == type_ids::ColorGradeNode()) {
-    return EditorNodeKind::ColorGrade;
+  prior->emplace(key, it->second);
+  if constexpr (std::is_same_v<typename Map::mapped_type, nlohmann::json>) {
+    ++work_stats_.json_entry_copies;
   }
-  throw std::invalid_argument("Unsupported node type: " + std::string{node.Type().Text()});
 }
 
-auto EditorNodeGraphDraft::ProjectNode(const INodeModel& node) const -> EditorNodeProjection {
-  EditorNodeProjection projected;
-  projected.node_id      = node.Id();
-  projected.node_kind    = KindOf(node);
-  projected.display_name = std::string{node.DisplayName()};
-  if (projected.node_kind == EditorNodeKind::ColorGrade) {
-    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(&node);
-    if (grade == nullptr) {
-      throw std::invalid_argument("Color Grade type has an invalid model");
-    }
-    projected.masks.reserve(grade->MaskCount());
-    for (const auto& mask : grade->Masks()) {
-      projected.masks.push_back({mask.id, GetMaskSourceKind(mask.source)});
+template <class Map, class Key>
+void EditorNodeGraphDraft::RestoreMap(
+    Map* current, const std::map<Key, std::optional<typename Map::mapped_type>>& prior) {
+  for (const auto& [key, value] : prior) {
+    if (!value.has_value()) {
+      current->erase(key);
+    } else {
+      (*current)[key] = *value;
     }
   }
-  return projected;
 }
 
 auto EditorNodeGraphDraft::FromDocument(const PipelineDocument& document,
                                         EditorNodeGraphDraftIdentity identity)
     -> EditorNodeGraphDraft {
   EditorNodeGraphDraft draft;
-  draft.identity_                = std::move(identity);
-  draft.base_next_name_number_   = document.NextColorGradeNameNumber();
-  draft.draft_next_name_number_  = draft.base_next_name_number_;
-  const auto& graph              = document.Graph();
+  draft.identity_               = std::move(identity);
+  draft.base_next_name_number_  = document.NextColorGradeNameNumber();
+  draft.draft_next_name_number_ = draft.base_next_name_number_;
+  const auto& graph             = document.Graph();
   draft.nodes_.reserve(graph.Nodes().size());
   for (std::size_t index = 0; index < graph.Nodes().size(); ++index) {
     const auto* node = graph.Nodes()[index].get();
     if (node == nullptr) {
       throw std::invalid_argument("Pipeline graph contains a null node");
     }
-    auto projected = draft.ProjectNode(*node);
-    draft.node_json_[projected.node_id]      = node->ToJson();
-    draft.base_node_json_[projected.node_id] = draft.node_json_[projected.node_id];
+    auto projected = EditorNodeGraphProjection::ProjectNode(*node);
+    auto json      = node->ToJson();
+    draft.node_json_[projected.node_id]      = json;
+    draft.base_node_json_[projected.node_id] = std::move(json);
     draft.base_node_index_[projected.node_id] = index;
     draft.nodes_.push_back(std::move(projected));
   }
   draft.edges_.reserve(graph.Edges().size());
   draft.base_edges_.reserve(graph.Edges().size());
   for (std::size_t index = 0; index < graph.Edges().size(); ++index) {
-    const auto& edge = graph.Edges()[index];
+    const auto& edge  = graph.Edges()[index];
     const auto  scene = PipelineSceneEdge{edge.from_node, edge.from_port, edge.to_node, edge.to_port};
     draft.base_edges_.push_back(scene);
     draft.base_edge_index_[EdgeKey(scene)] = index;
     draft.edges_.push_back(ToProjection(scene));
   }
   draft.RebuildIndexes();
+  draft.submission_valid_ = draft.ComputeSubmissionValid();
   return draft;
 }
 
 void EditorNodeGraphDraft::RebuildIndexes() {
+  ++work_stats_.complete_index_rebuilds;
   node_index_.clear();
-  edge_index_.clear();
   outgoing_.clear();
   incoming_.clear();
   for (std::size_t index = 0; index < nodes_.size(); ++index) {
-    node_index_[nodes_[index].node_id] = index;
-    outgoing_[nodes_[index].node_id]   = std::nullopt;
-    incoming_[nodes_[index].node_id]   = std::nullopt;
+    const auto& id         = nodes_[index].node_id;
+    node_index_[id]        = index;
+    outgoing_[id]          = std::nullopt;
+    incoming_[id]          = std::nullopt;
+    work_stats_.index_entry_updates += 3;
   }
-  for (std::size_t index = 0; index < edges_.size(); ++index) {
-    const auto& edge = edges_[index];
-    edge_index_[EdgeKey(edge)]              = index;
-    outgoing_[edge.source_node_id]          = index;
-    incoming_[edge.destination_node_id]     = index;
+  for (const auto& edge : edges_) {
+    const auto key                 = EdgeKey(edge);
+    outgoing_[edge.source_node_id] = key;
+    incoming_[edge.destination_node_id] = key;
+    work_stats_.index_entry_updates += 2;
   }
 }
 
@@ -132,6 +160,25 @@ auto EditorNodeGraphDraft::NodeJson(const NodeId& node_id) const -> const nlohma
     return nullptr;
   }
   return &it->second;
+}
+
+auto EditorNodeGraphDraft::FindEdgeIndex(const std::string& key) const
+    -> std::optional<std::size_t> {
+  for (std::size_t index = 0; index < edges_.size(); ++index) {
+    if (EdgeKey(edges_[index]) == key) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
+auto EditorNodeGraphDraft::FindEdgeByKey(const std::string& key) const
+    -> const EditorNodeEdgeProjection* {
+  const auto index = FindEdgeIndex(key);
+  if (!index.has_value()) {
+    return nullptr;
+  }
+  return &edges_[*index];
 }
 
 auto EditorNodeGraphDraft::MatchesBase(const PipelineDocument& document) const -> bool {
@@ -161,53 +208,158 @@ auto EditorNodeGraphDraft::MatchesBase(const PipelineDocument& document) const -
   return true;
 }
 
-void EditorNodeGraphDraft::CaptureCheckpoint() {
-  checkpoint_.nodes                        = nodes_;
-  checkpoint_.edges                        = edges_;
-  checkpoint_.node_json                    = node_json_;
-  checkpoint_.node_index                   = node_index_;
-  checkpoint_.edge_index                   = edge_index_;
-  checkpoint_.outgoing                     = outgoing_;
-  checkpoint_.incoming                     = incoming_;
-  checkpoint_.inserted_json                = inserted_json_;
-  checkpoint_.removed_original_index       = removed_original_index_;
-  checkpoint_.removed_json                 = removed_json_;
-  checkpoint_.disconnected_original_index  = disconnected_original_index_;
-  checkpoint_.disconnected_edge            = disconnected_edge_;
-  checkpoint_.connected_edge               = connected_edge_;
-  checkpoint_.draft_next_name_number       = draft_next_name_number_;
-  has_checkpoint_                          = true;
+void EditorNodeGraphDraft::BeginReversal() {
+  reversal_                        = {};
+  reversal_.valid                  = true;
+  reversal_.prior_next_name_number = draft_next_name_number_;
+  reversal_.prior_submission_valid = submission_valid_;
+}
+
+void EditorNodeGraphDraft::InsertNodeAt(std::size_t index, EditorNodeProjection node) {
+  const auto id = node.node_id;
+  nodes_.insert(nodes_.begin() + static_cast<std::ptrdiff_t>(index), std::move(node));
+  ++work_stats_.node_entry_copies;
+  for (auto& [nid, idx] : node_index_) {
+    if (idx >= index) {
+      ++idx;
+      ++work_stats_.index_entry_updates;
+    }
+  }
+  node_index_[id] = index;
+  outgoing_[id]   = std::nullopt;
+  incoming_[id]   = std::nullopt;
+  work_stats_.index_entry_updates += 3;
+}
+
+void EditorNodeGraphDraft::EraseNodeAt(std::size_t index) {
+  const auto id = nodes_[index].node_id;
+  nodes_.erase(nodes_.begin() + static_cast<std::ptrdiff_t>(index));
+  node_index_.erase(id);
+  outgoing_.erase(id);
+  incoming_.erase(id);
+  for (auto& [nid, idx] : node_index_) {
+    if (idx > index) {
+      --idx;
+      ++work_stats_.index_entry_updates;
+    }
+  }
+}
+
+void EditorNodeGraphDraft::InsertEdge(EditorNodeEdgeProjection edge) {
+  InsertEdgeAt(edges_.size(), std::move(edge));
+}
+
+void EditorNodeGraphDraft::InsertEdgeAt(std::size_t index, EditorNodeEdgeProjection edge) {
+  const auto key = EdgeKey(edge);
+  outgoing_[edge.source_node_id]        = key;
+  incoming_[edge.destination_node_id]   = key;
+  work_stats_.index_entry_updates += 2;
+  ++work_stats_.edge_entry_copies;
+  edges_.insert(edges_.begin() + static_cast<std::ptrdiff_t>(index), std::move(edge));
+}
+
+auto EditorNodeGraphDraft::RemoveEdgeByKey(const std::string& key) -> EditorNodeEdgeProjection {
+  const auto index = FindEdgeIndex(key);
+  if (!index.has_value()) {
+    throw std::logic_error("Draft edge key is missing: " + key);
+  }
+  auto edge = edges_[*index];
+  outgoing_[edge.source_node_id]      = std::nullopt;
+  incoming_[edge.destination_node_id] = std::nullopt;
+  work_stats_.index_entry_updates += 2;
+  ++work_stats_.edge_entry_copies;
+  edges_.erase(edges_.begin() + static_cast<std::ptrdiff_t>(*index));
+  return edge;
+}
+
+void EditorNodeGraphDraft::DisconnectDraftKeys(const std::vector<std::string>& keys,
+                                               EditorNodeGraphDraftMutation*   mutation) {
+  struct Pending {
+    std::string key;
+    std::size_t index = 0;
+  };
+  std::vector<Pending> pending;
+  pending.reserve(keys.size());
+  for (const auto& key : keys) {
+    const auto index = FindEdgeIndex(key);
+    if (!index.has_value()) {
+      continue;
+    }
+    pending.push_back(Pending{key, *index});
+  }
+  std::sort(pending.begin(), pending.end(),
+            [](const Pending& lhs, const Pending& rhs) { return lhs.index > rhs.index; });
+  for (const auto& item : pending) {
+    auto edge = RemoveEdgeByKey(item.key);
+    if (mutation != nullptr) {
+      mutation->removed_edges.push_back(edge);
+    }
+    reversal_.removed_edge_indexes.push_back(item.index);
+    reversal_.removed_edges.push_back(edge);
+    Remember(&reversal_.prior_connected, connected_edge_, item.key);
+    Remember(&reversal_.prior_disconnected, disconnected_, item.key);
+    const auto connected = connected_edge_.find(item.key);
+    if (connected != connected_edge_.end()) {
+      connected_edge_.erase(connected);
+    } else if (base_edge_index_.contains(item.key)) {
+      disconnected_[item.key] =
+          DisconnectedEdgeDelta{base_edge_index_.at(item.key), ToSceneEdge(edge)};
+    }
+  }
 }
 
 void EditorNodeGraphDraft::RestoreLastMutation() {
-  if (!has_checkpoint_) {
+  if (!reversal_.valid) {
     return;
   }
-  nodes_                       = checkpoint_.nodes;
-  edges_                       = checkpoint_.edges;
-  node_json_                   = checkpoint_.node_json;
-  node_index_                  = checkpoint_.node_index;
-  edge_index_                  = checkpoint_.edge_index;
-  outgoing_                    = checkpoint_.outgoing;
-  incoming_                    = checkpoint_.incoming;
-  inserted_json_               = checkpoint_.inserted_json;
-  removed_original_index_      = checkpoint_.removed_original_index;
-  removed_json_                = checkpoint_.removed_json;
-  disconnected_original_index_ = checkpoint_.disconnected_original_index;
-  disconnected_edge_           = checkpoint_.disconnected_edge;
-  connected_edge_              = checkpoint_.connected_edge;
-  draft_next_name_number_      = checkpoint_.draft_next_name_number;
-  has_checkpoint_              = false;
+  for (auto it = reversal_.added_edge_keys.rbegin(); it != reversal_.added_edge_keys.rend(); ++it) {
+    (void)RemoveEdgeByKey(*it);
+  }
+  for (auto it = reversal_.added_node_ids.rbegin(); it != reversal_.added_node_ids.rend(); ++it) {
+    const auto index = node_index_.at(*it);
+    EraseNodeAt(index);
+  }
+
+  std::vector<std::size_t> node_order(reversal_.removed_node_indexes.size());
+  for (std::size_t i = 0; i < node_order.size(); ++i) {
+    node_order[i] = i;
+  }
+  std::sort(node_order.begin(), node_order.end(), [&](std::size_t lhs, std::size_t rhs) {
+    return reversal_.removed_node_indexes[lhs] < reversal_.removed_node_indexes[rhs];
+  });
+  for (const auto i : node_order) {
+    InsertNodeAt(reversal_.removed_node_indexes[i], reversal_.removed_nodes[i]);
+  }
+
+  std::vector<std::size_t> edge_order(reversal_.removed_edge_indexes.size());
+  for (std::size_t i = 0; i < edge_order.size(); ++i) {
+    edge_order[i] = i;
+  }
+  std::sort(edge_order.begin(), edge_order.end(), [&](std::size_t lhs, std::size_t rhs) {
+    return reversal_.removed_edge_indexes[lhs] < reversal_.removed_edge_indexes[rhs];
+  });
+  for (const auto i : edge_order) {
+    InsertEdgeAt(reversal_.removed_edge_indexes[i], reversal_.removed_edges[i]);
+  }
+
+  RestoreMap(&node_json_, reversal_.prior_node_json);
+  RestoreMap(&inserted_json_, reversal_.prior_inserted_json);
+  RestoreMap(&removed_, reversal_.prior_removed);
+  RestoreMap(&disconnected_, reversal_.prior_disconnected);
+  RestoreMap(&connected_edge_, reversal_.prior_connected);
+  draft_next_name_number_ = reversal_.prior_next_name_number;
+  submission_valid_       = reversal_.prior_submission_valid;
+  reversal_               = {};
 }
 
 auto EditorNodeGraphDraft::DeltaEmpty() const -> bool {
-  return inserted_json_.empty() && removed_json_.empty() && disconnected_edge_.empty() &&
+  return inserted_json_.empty() && removed_.empty() && disconnected_.empty() &&
          connected_edge_.empty() && draft_next_name_number_ == base_next_name_number_;
 }
 
 auto EditorNodeGraphDraft::WouldCreateCycle(const NodeId& source_id, const NodeId& destination_id,
-                                            const std::optional<std::size_t>& skip_outgoing,
-                                            const std::optional<std::size_t>& skip_incoming) const
+                                            const std::optional<std::string>& skip_outgoing,
+                                            const std::optional<std::string>& skip_incoming) const
     -> bool {
   std::unordered_set<std::string> visited;
   std::vector<NodeId>             stack{destination_id};
@@ -225,14 +377,18 @@ auto EditorNodeGraphDraft::WouldCreateCycle(const NodeId& source_id, const NodeI
     if (out == outgoing_.end() || !out->second.has_value()) {
       continue;
     }
-    const auto index = *out->second;
-    if (skip_outgoing.has_value() && index == *skip_outgoing) {
+    const auto& edge_key = *out->second;
+    if (skip_outgoing.has_value() && edge_key == *skip_outgoing) {
       continue;
     }
-    if (skip_incoming.has_value() && index == *skip_incoming) {
+    if (skip_incoming.has_value() && edge_key == *skip_incoming) {
       continue;
     }
-    stack.push_back(edges_[index].destination_node_id);
+    const auto* edge = FindEdgeByKey(edge_key);
+    if (edge == nullptr) {
+      continue;
+    }
+    stack.push_back(edge->destination_node_id);
   }
   return false;
 }
@@ -265,7 +421,8 @@ auto EditorNodeGraphDraft::AdmitConnect(const NodeId& source_id, const NodeId& d
   }
   if (destination->node_kind != EditorNodeKind::Drt &&
       destination->node_kind != EditorNodeKind::ColorGrade) {
-    return fail("Unsupported destination node type: " + std::string{destination->node_id.Value()});
+    return fail("Unsupported destination node type: " +
+                std::string{destination->node_id.Value()});
   }
   const auto skip_out = outgoing_.at(source_id);
   const auto skip_in  = incoming_.at(destination_id);
@@ -275,22 +432,11 @@ auto EditorNodeGraphDraft::AdmitConnect(const NodeId& source_id, const NodeId& d
   return true;
 }
 
-auto EditorNodeGraphDraft::RemoveEdgeAt(std::size_t index) -> EditorNodeEdgeProjection {
-  auto edge = edges_[index];
-  edges_.erase(edges_.begin() + static_cast<std::ptrdiff_t>(index));
-  RebuildIndexes();
-  return edge;
-}
-
-void EditorNodeGraphDraft::InsertEdge(EditorNodeEdgeProjection edge) {
-  edges_.push_back(std::move(edge));
-  RebuildIndexes();
-}
-
 auto EditorNodeGraphDraft::FinishMutation(EditorNodeGraphDraftMutation mutation)
     -> EditorNodeGraphDraftMutation {
   mutation.delta_empty      = DeltaEmpty();
-  mutation.submission_valid = SubmissionValid();
+  mutation.submission_valid = ComputeSubmissionValid();
+  submission_valid_         = mutation.submission_valid;
   mutation.succeeded        = true;
   return mutation;
 }
@@ -301,16 +447,19 @@ auto EditorNodeGraphDraft::AddColorGrade(NodeId node_id) -> EditorNodeGraphDraft
     result.error = "A Color Grade with that identity already exists";
     return result;
   }
-  CaptureCheckpoint();
+  BeginReversal();
   auto model = CreateCleanColorGradeNode(node_id);
   model->SetDisplayName(DefaultColorGradeDisplayName(draft_next_name_number_));
   auto json      = model->ToJson();
-  auto projected = ProjectNode(*model);
-  nodes_.push_back(projected);
-  node_json_[node_id]      = json;
-  inserted_json_[node_id]  = json;
+  auto projected = EditorNodeGraphProjection::ProjectNode(*model);
+  Remember(&reversal_.prior_node_json, node_json_, node_id);
+  Remember(&reversal_.prior_inserted_json, inserted_json_, node_id);
+  reversal_.added_node_ids.push_back(node_id);
+  InsertNodeAt(nodes_.size(), projected);
+  node_json_[node_id]     = json;
+  inserted_json_[node_id] = json;
+  work_stats_.json_entry_copies += 2;
   ++draft_next_name_number_;
-  RebuildIndexes();
   result.inserted_nodes.push_back(std::move(projected));
   return FinishMutation(std::move(result));
 }
@@ -318,7 +467,7 @@ auto EditorNodeGraphDraft::AddColorGrade(NodeId node_id) -> EditorNodeGraphDraft
 auto EditorNodeGraphDraft::RemoveColorGrade(const NodeId& node_id)
     -> EditorNodeGraphDraftMutation {
   EditorNodeGraphDraftMutation result;
-  const auto* node = FindNode(node_id);
+  const auto*                  node = FindNode(node_id);
   if (node == nullptr) {
     result.error = "That node is not in the current graph";
     return result;
@@ -327,59 +476,38 @@ auto EditorNodeGraphDraft::RemoveColorGrade(const NodeId& node_id)
     result.error = "Only a Color Grade can be deleted";
     return result;
   }
-  CaptureCheckpoint();
-  const auto out = outgoing_[node_id];
-  const auto in  = incoming_[node_id];
-  std::vector<std::size_t> remove_indexes;
+  BeginReversal();
+  const auto out = outgoing_.at(node_id);
+  const auto in  = incoming_.at(node_id);
+  std::vector<std::string> remove_keys;
   if (out.has_value()) {
-    remove_indexes.push_back(*out);
+    remove_keys.push_back(*out);
   }
   if (in.has_value() && (!out.has_value() || *in != *out)) {
-    remove_indexes.push_back(*in);
+    remove_keys.push_back(*in);
   }
-  std::sort(remove_indexes.begin(), remove_indexes.end(), std::greater<>());
-  for (const auto index : remove_indexes) {
-    const auto edge = RemoveEdgeAt(index);
-    result.removed_edges.push_back(edge);
-    const auto key = EdgeKey(edge);
-    const auto connected = connected_edge_.find(key);
-    if (connected != connected_edge_.end()) {
-      connected_edge_.erase(connected);
-    } else if (base_edge_index_.contains(key)) {
-      disconnected_original_index_[key] = base_edge_index_.at(key);
-      disconnected_edge_[key]           = ToSceneEdge(edge);
-    }
-  }
+  DisconnectDraftKeys(remove_keys, &result);
 
   const auto node_pos = node_index_.at(node_id);
   const auto json     = node_json_.at(node_id);
-  nodes_.erase(nodes_.begin() + static_cast<std::ptrdiff_t>(node_pos));
+  reversal_.removed_node_indexes.push_back(node_pos);
+  reversal_.removed_nodes.push_back(*node);
+  Remember(&reversal_.prior_node_json, node_json_, node_id);
+  Remember(&reversal_.prior_inserted_json, inserted_json_, node_id);
+  Remember(&reversal_.prior_removed, removed_, node_id);
+  EraseNodeAt(node_pos);
   node_json_.erase(node_id);
   result.removed_node_ids.push_back(node_id);
   const auto inserted = inserted_json_.find(node_id);
   if (inserted != inserted_json_.end()) {
     inserted_json_.erase(inserted);
-    std::uint64_t max_inserted = base_next_name_number_;
-    for (const auto& [id, stored] : inserted_json_) {
-      (void)id;
-      if (stored.contains("display_name") && stored.at("display_name").is_string()) {
-        const auto name = stored.at("display_name").get<std::string>();
-        const auto prefix = std::string{"Color Grade "};
-        if (name.rfind(prefix, 0) == 0) {
-          try {
-            const auto number = std::stoull(name.substr(prefix.size()));
-            max_inserted      = std::max(max_inserted, number + 1);
-          } catch (...) {
-          }
-        }
-      }
-    }
-    draft_next_name_number_ = inserted_json_.empty() ? base_next_name_number_ : max_inserted;
+    draft_next_name_number_ =
+        inserted_json_.empty() ? base_next_name_number_
+                               : MaxInsertedNameNumber(inserted_json_, base_next_name_number_);
   } else {
-    removed_original_index_[node_id] = base_node_index_.at(node_id);
-    removed_json_[node_id]           = json;
+    removed_[node_id] = RemovedNodeDelta{base_node_index_.at(node_id), json};
+    ++work_stats_.json_entry_copies;
   }
-  RebuildIndexes();
   return FinishMutation(std::move(result));
 }
 
@@ -394,55 +522,49 @@ auto EditorNodeGraphDraft::Connect(const NodeId& source_id, const NodeId& destin
   const auto skip_out = outgoing_.at(source_id);
   const auto skip_in  = incoming_.at(destination_id);
   EditorNodeEdgeProjection proposed{source_id, ImagePort(), destination_id, ImagePort()};
-  if (skip_out.has_value() && edges_[*skip_out].destination_node_id == destination_id &&
-      edges_[*skip_out].source_node_id == source_id) {
-    result.no_op      = true;
-    result.succeeded  = true;
-    result.delta_empty = DeltaEmpty();
-    result.submission_valid = SubmissionValid();
-    return result;
-  }
-
-  CaptureCheckpoint();
-  std::vector<std::size_t> remove_indexes;
   if (skip_out.has_value()) {
-    remove_indexes.push_back(*skip_out);
-  }
-  if (skip_in.has_value() && (!skip_out.has_value() || *skip_in != *skip_out)) {
-    remove_indexes.push_back(*skip_in);
-  }
-  std::sort(remove_indexes.begin(), remove_indexes.end(), std::greater<>());
-  for (const auto index : remove_indexes) {
-    const auto edge = RemoveEdgeAt(index);
-    result.removed_edges.push_back(edge);
-    const auto key = EdgeKey(edge);
-    const auto connected = connected_edge_.find(key);
-    if (connected != connected_edge_.end()) {
-      connected_edge_.erase(connected);
-    } else if (base_edge_index_.contains(key)) {
-      disconnected_original_index_[key] = base_edge_index_.at(key);
-      disconnected_edge_[key]           = ToSceneEdge(edge);
+    const auto* current = FindEdgeByKey(*skip_out);
+    if (current != nullptr && current->destination_node_id == destination_id &&
+        current->source_node_id == source_id) {
+      result.no_op            = true;
+      result.succeeded        = true;
+      result.delta_empty      = DeltaEmpty();
+      result.submission_valid = submission_valid_;
+      return result;
     }
   }
 
+  BeginReversal();
+  std::vector<std::string> remove_keys;
+  if (skip_out.has_value()) {
+    remove_keys.push_back(*skip_out);
+  }
+  if (skip_in.has_value() && (!skip_out.has_value() || *skip_in != *skip_out)) {
+    remove_keys.push_back(*skip_in);
+  }
+  DisconnectDraftKeys(remove_keys, &result);
+
   const auto key = EdgeKey(proposed);
+  Remember(&reversal_.prior_connected, connected_edge_, key);
+  Remember(&reversal_.prior_disconnected, disconnected_, key);
   InsertEdge(proposed);
+  reversal_.added_edge_keys.push_back(key);
   result.inserted_edges.push_back(proposed);
-  const auto disconnected = disconnected_edge_.find(key);
-  if (disconnected != disconnected_edge_.end()) {
-    disconnected_edge_.erase(disconnected);
-    disconnected_original_index_.erase(key);
+  const auto disconnected = disconnected_.find(key);
+  if (disconnected != disconnected_.end()) {
+    disconnected_.erase(disconnected);
   } else {
     connected_edge_[key] = ToSceneEdge(proposed);
   }
   return FinishMutation(std::move(result));
 }
 
-auto EditorNodeGraphDraft::SubmissionValid() const -> bool {
-  int develop_count = 0;
-  int drt_count     = 0;
-  const EditorNodeProjection* develop = nullptr;
-  const EditorNodeProjection* drt     = nullptr;
+auto EditorNodeGraphDraft::ComputeSubmissionValid() -> bool {
+  ++work_stats_.validity_traversals;
+  int                             develop_count = 0;
+  int                             drt_count     = 0;
+  const EditorNodeProjection*     develop       = nullptr;
+  const EditorNodeProjection*     drt           = nullptr;
   for (const auto& node : nodes_) {
     if (node.node_kind == EditorNodeKind::Develop) {
       ++develop_count;
@@ -488,7 +610,11 @@ auto EditorNodeGraphDraft::SubmissionValid() const -> bool {
     if (out == outgoing_.end() || !out->second.has_value()) {
       return false;
     }
-    current = edges_[*out->second].destination_node_id;
+    const auto* edge = FindEdgeByKey(*out->second);
+    if (edge == nullptr) {
+      return false;
+    }
+    current = edge->destination_node_id;
   }
   if (!on_path.contains(std::string{drt->node_id.Value()})) {
     return false;
@@ -512,28 +638,36 @@ auto EditorNodeGraphDraft::MakeChange() const -> NodeGraphTopologyChange {
   NodeGraphTopologyChange change;
   change.before_next_color_grade_name_number = base_next_name_number_;
   change.after_next_color_grade_name_number  = draft_next_name_number_;
+  std::map<NodeId, std::uint32_t> node_order;
+  for (std::size_t index = 0; index < nodes_.size(); ++index) {
+    node_order[nodes_[index].node_id] = static_cast<std::uint32_t>(index);
+  }
+  std::map<std::string, std::uint32_t> edge_order;
+  for (std::size_t index = 0; index < edges_.size(); ++index) {
+    edge_order[EdgeKey(edges_[index])] = static_cast<std::uint32_t>(index);
+  }
   for (const auto& [id, json] : inserted_json_) {
     NodeGraphInsertedNode item;
-    item.node              = json;
-    item.final_node_index  = static_cast<std::uint32_t>(node_index_.at(id));
+    item.node             = json;
+    item.final_node_index = node_order.at(id);
     change.inserted_nodes.push_back(std::move(item));
   }
-  for (const auto& [id, json] : removed_json_) {
+  for (const auto& [id, record] : removed_) {
     NodeGraphRemovedNode item;
-    item.node                 = json;
-    item.original_node_index  = static_cast<std::uint32_t>(removed_original_index_.at(id));
+    item.node                = record.json;
+    item.original_node_index = static_cast<std::uint32_t>(record.original_index);
     change.removed_nodes.push_back(std::move(item));
   }
-  for (const auto& [key, edge] : disconnected_edge_) {
+  for (const auto& [key, record] : disconnected_) {
     NodeGraphDisconnectedEdge item;
-    item.edge                 = edge;
-    item.original_edge_index  = static_cast<std::uint32_t>(disconnected_original_index_.at(key));
+    item.edge                = record.edge;
+    item.original_edge_index = static_cast<std::uint32_t>(record.original_index);
     change.disconnected_edges.push_back(std::move(item));
   }
   for (const auto& [key, edge] : connected_edge_) {
     NodeGraphConnectedEdge item;
     item.edge             = edge;
-    item.final_edge_index = static_cast<std::uint32_t>(edge_index_.at(key));
+    item.final_edge_index = edge_order.at(key);
     change.connected_edges.push_back(std::move(item));
   }
   return change;

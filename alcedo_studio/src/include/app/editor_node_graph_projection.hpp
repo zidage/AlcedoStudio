@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/mask_model.hpp"
 
@@ -83,6 +84,24 @@ struct EditorNodeGraphSnapshot {
  */
 class EditorNodeGraphProjection {
  public:
+  /**
+   * @brief Map a live node model to Develop, Color Grade, or DRT/Post.
+   * @throws std::invalid_argument when @p node is not a supported Nodes-page type.
+   */
+  [[nodiscard]] static auto KindOf(const INodeModel& node) -> EditorNodeKind;
+
+  /**
+   * @brief Copy node identity, kind, display name, and Mask rows in stored order.
+   *
+   * Mask rows keep document display order. Parameter values, enabled state, mix,
+   * and Mask presentation metadata are omitted. Detached Color Grades are valid
+   * inputs; callers choose backbone-only or full-graph traversal.
+   *
+   * @throws std::invalid_argument when @p node is an unsupported type or a Color
+   *         Grade whose model cannot be read.
+   */
+  [[nodiscard]] static auto ProjectNode(const INodeModel& node) -> EditorNodeProjection;
+
   /**
    * @param document Valid PipelineDocument whose image backbone is projected.
    * @param session_generation Session value copied into the snapshot.

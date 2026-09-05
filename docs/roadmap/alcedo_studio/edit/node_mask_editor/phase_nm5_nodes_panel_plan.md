@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R complete; NM5.8 follows NM5.7R
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8b complete 2026-09-04; NM5.8c–NM5.8g pending
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -2855,13 +2855,21 @@ placement tests in `EditorNodeSelectionLayoutTest`.
 
 ---
 
-## 16. NM5.8 — Lifecycle, accessibility, build, install, and package checks
+## 16. NM5.8 — Code simplification and final Nodes-page checks
 
 ### 16.1 Input context
 
 NM5.1–NM5.7 provide the original Nodes page. NM5.7R replaces the immediate-reconnect product
-behavior with incremental draft editing and atomic automatic submission. This sub-phase adds no
-product feature. It closes lifecycle, accessibility, localization, build, and package gaps.
+behavior with incremental draft editing and atomic automatic submission. The
+[2026-09-04 implementation review](node_panel_simplification_review.md) found duplicated
+QML/controller update paths, whole-draft rollback copies, repeated index construction, and obsolete
+command entry candidates. NM5.8 now removes that maintenance cost before closing lifecycle,
+accessibility, localization, build, and package gaps. Existing product behavior remains required.
+
+Earlier completion records are historical execution records. A passing object-address assertion
+does not prove bounded copying, and direct inverse application does not prove product reopen or
+Version checkout. The evidence gaps below remain open even where NM5.7R previously marked them
+complete.
 
 NM8 still owns final real-RAW and three-backend qualification.
 
@@ -2873,6 +2881,315 @@ NM8 still owns final real-RAW and three-backend qualification.
 - [Licence](https://cneben.github.io/QuickQanava/licence.html): source and binary notice requirements.
 
 ### 16.3 Work
+
+Execute NM5.8a through NM5.8g in order. Each stage must leave a usable, tested Nodes page.
+Use responsibility boundaries for commits; approximately 500 changed lines is a review target,
+not a reason to leave half a state transition in another commit. Do not introduce generic command
+frameworks, a second product graph, a second selection owner, or a new rendering backend path.
+
+#### 16.3.1 NM5.8a — One projection, selection, and layout update path
+
+**Files:** `EditorNodesPanel.qml`, `editor_node_controller.{hpp,cpp}`,
+`editor_node_layout_store.{hpp,cpp}`, `editor_node_controller_test.cpp`,
+`editor_node_layout_store_test.cpp`, and `editor_nodes_panel_qml_test.cpp`.
+Existing files live under the source/test directories listed in the review.
+
+- Keep committed projection identity, revisions, selection, command availability, and the queued
+  projection update in `EditorNodeController`. Keep per-image/Version positions, zoom, view,
+  saved selection, and drawer values in `EditorNodeLayoutStore`; saved selection is restoration
+  data, not a second live selection source.
+- Keep GraphView navigation and rename focus/text in QML. The controller owns applying node
+  positions, drawers, and live selection to the adapter. QML restores only GraphView zoom/view.
+- Replace the combination of `Binding`, `bindControllerAdapter`, `bindGraph`, `GraphChanged`,
+  `SnapshotChanged`, and completion-time rebinding with one attach/detach route. Remove the QML
+  node traversal duplicated by `ApplyBoundGraph`; preserve layout-key activation before restore.
+- Consolidate committed revision publication used by `PublishSnapshot` and `MaybeSubmitDraft`.
+  Keep draft changes on the incremental route. Do not turn each mutation into `ApplySnapshot`.
+- Audit `ContainsNode`, `IndexOf`, and `NodeFor` for one lookup implementation. Do not introduce
+  another index unless a measured use requires it.
+- Give deferred updates an explicit lifetime/identity check. Replace the unqualified
+  `skip_next_session_refresh_` suppression with completion matching if event-order tests show
+  it is needed; do not suppress unrelated image/Version notifications.
+
+**Acceptance:** extend `EditorNodeSelectionLayoutTest` and `EditorNodesPanelQmlTest` to assert one
+logical projection apply per committed revision, no replacement for ordinary draft edits, one
+live selection, layout-key ordering, and close/reopen with an update already queued. Existing
+`ReopenRestoresPositionsViewZoomSelectionAndDrawerState` and
+`TwoVersionsKeepSeparateLayoutValues` remain required. Count apply requests as well as topology
+replacements; identity retention alone cannot detect duplicate role/layout work.
+
+##### NM5.8a completion record (2026-09-04)
+
+**Status:** complete — one attach/apply route, live selection on the controller, layout-key restore,
+queued apply lifetime, image/Version identity not swallowed by submit echo
+
+**Primary success call chain:**
+
+```text
+Nodes Loader creates EditorNodesPanel
+  -> attachAdapter / set_graph_adapter
+  -> ApplyBoundGraph (immediate if the Qan graph exists, else queued on GraphChanged)
+  -> SyncLayoutKey then applyToGraph
+  -> EnsureDefaultPositions, node positions, drawers, ApplyProductSelection
+  -> QML restoreGraphView (zoom and pan only)
+```
+
+Ordinary draft edits stay on the incremental route:
+
+```text
+addCleanColorGrade / deleteColorGrade / requestConnect
+  -> EditorNodeGraphDraft mutation
+  -> ApplyMutationToGraph (insert/remove projected primitives)
+  -> ActiveNodes/ActiveEdges read the draft
+  -> snapshot_ stays the last committed projection
+```
+
+**Primary failure call chain:**
+
+```text
+PublishSnapshot queues ApplyBoundGraph, then the page unloads
+  -> set_graph_adapter(null) increments attach generation
+  -> ApplyBoundGraphIfCurrent sees a stale generation or null adapter
+  -> skipped_stale_projection_apply_count, no ApplySnapshot
+```
+
+```text
+session image/Version/generation differs from the cached Nodes identity
+  -> SessionIdentityChanged
+  -> discard draft, refreshFromSession
+  -> submitted-echo skip does not apply
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OpenPageAppliesCommittedProjectionOnce` | `EditorNodesPanelQmlTest` | PASS |
+| `OrdinaryDraftEditsDoNotReplaceQanTopology` | `EditorNodesPanelQmlTest` | PASS |
+| `CloseWithQueuedApplyThenReopenRestoresOnce` | `EditorNodesPanelQmlTest` | PASS |
+| `ReopenRestoresPositionsViewZoomSelectionAndDrawerState` | `EditorNodesPanelQmlTest` | PASS |
+| `TwoVersionsKeepSeparateLayoutValues` | `EditorNodesPanelQmlTest` | PASS |
+| `OneCommittedRevisionCoalescesQueuedProjectionApplies` | `EditorNodeSelectionLayoutTest` | PASS |
+| `QueuedProjectionApplyIgnoresStaleAdapterAfterDetach` | `EditorNodeSelectionLayoutTest` | PASS |
+| `LayoutKeyActivatesBeforeSavedSelectionRestore` | `EditorNodeSelectionLayoutTest` | PASS |
+| `SavedLayoutSelectionDoesNotOverrideLiveSelectionOnTheSameKey` | `EditorNodeSelectionLayoutTest` | PASS |
+| `OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot` | `EditorNodeSelectionLayoutTest` | PASS |
+| `ImageSwitchAfterSubmitRefreshesTheCommittedProjection` | `EditorNodeSelectionLayoutTest` | PASS |
+| `TwoVersionsKeepSeparatePositionsAndDrawerState` | `EditorNodeSelectionLayoutTest` | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorNodeGraphDraftTest EditorNodeGraphProjectionTest EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest` then the four test executables under `build/debug/alcedo_studio/tests/`.
+Suite totals: `EditorNodesPanelQmlTest` 22/22; `EditorNodeSelectionLayoutTest` 34/34.
+
+**Checklist / exit condition:** 16.3.1 acceptance items covered by the tests above.
+
+**LOC note (grill-code-review):** `editor_node_controller.cpp` 957 lines (under the ~1000-line split threshold; NM5.8c moves Qan mutation reversal out of this file). `EditorNodesPanel.qml` 414 lines. Layout store sources were not split; the controller now activates the layout key and applies positions, drawers, and live selection.
+
+**Residual gaps:** `EditorNodeLayoutStore::ensureDefaultsFrom` still reads committed `snapshot()` and has no QML caller. NM5.8c still owns adapter `ApplyMutation` and delegate-library extraction. Keyboard, persistent history, and package checks remain NM5.8e–g. NM8 retains real-RAW and three-backend qualification.
+
+#### 16.3.2 NM5.8b — Bounded draft rollback and one node projection implementation
+
+**Files:** `app/editor_node_graph_draft.cpp`, `include/app/editor_node_graph_draft.hpp`,
+`app/editor_node_graph_projection.cpp`, `include/app/editor_node_graph_projection.hpp`,
+`editor_node_controller.{hpp,cpp}`, `editor_node_graph_draft_test.cpp`, and
+`editor_node_graph_projection_test.cpp`.
+
+- Keep `EditorNodeGraphDraft` as the sole owner of draft topology, base identity, default-name
+  counter, indexes, net delta, and last-operation reversal data. Preserve the immutable base data
+  needed to serialize removed nodes and restore original ordering.
+- Replace `Checkpoint` copies of all nodes, edges, JSON, indexes, and accumulated deltas with an
+  operation reversal record containing only affected entries and prior counter/order values.
+  First land reversal with existing storage; then simplify indexing in a separate coherent commit.
+- Replace per-edge `RebuildIndexes` calls with affected-entry updates. Prefer stable edge keys or
+  stable storage so removing an edge does not renumber every adjacency entry. Materialize ordered
+  serialized indexes at `MakeChange`, where full traversal is acceptable.
+- Remove unused `EdgeRecord` and unused conversion/accessor surfaces after a repository caller
+  scan. Consolidate paired key/value maps only where both have identical ownership and lifetime.
+- Share node-kind/name/Mask-row projection through `EditorNodeGraphProjection::ProjectNode`.
+  Keep committed backbone traversal and draft traversal distinct: detached nodes are legitimate
+  draft content, and Mask display order must remain the stored order.
+- Stop copying `CurrentSnapshot` into controller `snapshot_` after each draft operation. The
+  controller exposes the active read view from the draft or committed snapshot; materialize a
+  complete value snapshot only at an explicit projection boundary such as page recreation.
+- Compute submission validity once per admitted mutation and expose the result. QML availability
+  reads must not repeat graph traversals; invalid requests must retain the prior cached result.
+
+**Acceptance:** `EditorNodeGraphDraftTest` must cover Add/Delete/Connect reversal, net cancellation,
+multiple detached nodes, exact counter/order/JSON restoration, and a 32-Grade graph with large
+Mask payloads over 100 connections. Add deterministic work/copy instrumentation that asserts no
+whole-draft checkpoint or per-edge complete index rebuild. Record validity traversal separately;
+it may visit the whole graph. Compare serialized forward/inverse results with
+`PipelineGraphTopologyDeltaTest`. Do not claim this stage complete based on `&draft` equality.
+
+##### NM5.8b completion record (2026-09-04)
+
+**Status:** complete — bounded last-mutation reversal, stable edge keys, shared `ProjectNode`/`KindOf`,
+cached submission validity, no per-edit copy into controller `snapshot_`
+
+**Primary success call chain:**
+
+```text
+EditorNodeGraphDraft::FromDocument
+  -> ProjectNode for every live node (including detached Color Grades)
+  -> RebuildIndexes once
+  -> ComputeSubmissionValid once
+AddColorGrade / RemoveColorGrade / Connect
+  -> BeginReversal of affected entries and prior counter/validity
+  -> InsertNodeAt / EraseNodeAt / InsertEdgeAt / RemoveEdgeByKey / DisconnectDraftKeys
+  -> FinishMutation ComputeSubmissionValid once
+RestoreLastMutation
+  -> reverse added/removed nodes and edges, restore JSON/delta maps and counters
+MakeChange
+  -> materialize ordered serialized indexes
+  -> ApplyNodeGraphTopologyChange Forward then Inverse restores document JSON and name counter
+```
+
+**Primary failure call chain:**
+
+```text
+Connect rejected (self-connect, cycle, unknown node, unsupported port)
+  -> AdmitConnect fails before BeginReversal
+  -> indexes, delta, and cached SubmissionValid unchanged
+  -> validity_traversals does not increase
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `AddDeleteConnectReversalRestoresExactCounterOrderAndJson` | `EditorNodeGraphDraftTest` | PASS |
+| `NetCancellationRestoresBaseWithoutWholeDraftCopy` | `EditorNodeGraphDraftTest` | PASS |
+| `MultipleDetachedGradesKeepIndependentNodesAndEdges` | `EditorNodeGraphDraftTest` | PASS |
+| `RejectedConnectRetainsCachedSubmissionValidity` | `EditorNodeGraphDraftTest` | PASS |
+| `SerializedDraftChangeMatchesInPlaceForwardAndInverse` | `EditorNodeGraphDraftTest` | PASS |
+| `ThirtyTwoGradeGraphRepeatedConnectStaysBounded` | `EditorNodeGraphDraftTest` | PASS |
+| `ProjectNodeCopiesStoredMaskOrderForDetachedGrades` | `EditorNodeGraphProjectionTest` | PASS |
+| `OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot` | `EditorNodeSelectionLayoutTest` | PASS |
+
+Commands: same MSVC debug build as NM5.8a, then `EditorNodeGraphDraftTest.exe` and `EditorNodeGraphProjectionTest.exe`.
+Suite totals: `EditorNodeGraphDraftTest` 14/14; `EditorNodeGraphProjectionTest` 7/7. Work stats assert `complete_state_copies == 0` and `complete_index_rebuilds == 0` after construction; 32-Grade × 8 Masks × 100 connects recorded `validity_traversals == 101`.
+
+**Checklist / exit condition:** 16.3.2 acceptance items covered. Forward/inverse comparison uses `ApplyNodeGraphTopologyChange` (the same in-place applier as `PipelineGraphTopologyDeltaTest`), not `&draft` equality.
+
+**LOC note (grill-code-review):** `editor_node_graph_draft.cpp` 642 lines; header 213. `editor_node_graph_projection.cpp` 82 lines; header 110.
+
+**Residual gaps:** NM5.8c still owns Qan primitive reversal. Persistent Undo/Redo/WAL/reopen/checkout evidence remains NM5.8e. NM8 retains real-RAW and three-backend qualification.
+
+#### 16.3.3 NM5.8c — Qan primitive ownership and atomic visual mutation
+
+**Files:** `alcedo_qan_graph.{hpp,cpp}`, new
+`qan_delegate_library.{hpp,cpp}` in the matching `album_backend` source/include directories,
+`editor_node_controller.cpp`, `alcedo_qan_graph_test.cpp`, focused
+`qan_delegate_library_test.cpp`, and the production/UI-test CMake source lists.
+
+- Extract `QanDelegateLibrary` with `Configure`, `EnsureLoaded`, `ComponentFor`, and `Reset` APIs.
+  It owns delegate URLs, engine identity, cached components, and per-graph delegate-install state.
+  Move `EnsureDelegates`, `LoadComponent`, `DropCachedDelegates`, and delegate installation with
+  that state. It receives explicit engine/graph arguments and never a controller/adapter parent
+  pointer, shared mutable context, or friend access.
+- `AlcedoQanGraph` retains graph lifetime, NodeId/Qan maps, ports, candidate edges, applied
+  projection, drawer connections, and applied selection. Full replacement and incremental insert
+  must share primitive creation, presentation, registration, and cleanup helpers. Preserve pinned
+  QuickQanava port-list cleanup needed before rebinding an exclusive port.
+- Move Qan-operation reversal out of `EditorNodeController::ApplyMutationToGraph` into an adapter
+  `ApplyMutation` API. Track only successfully completed visual changes. On failure return the
+  original error plus any reversal error; the controller reverses the draft once.
+- Remove redundant stored node-projection copies where one authoritative value plus lookup is
+  sufficient. Keep reverse pointer-to-NodeId maps: they enforce generation/lifetime safety.
+- Preserve separate full replacement and incremental mutation operations. They have different
+  lifetime guarantees and must not be collapsed into a rebuild on every edit.
+
+**Acceptance:** `AlcedoQanGraphTest` injects failure at each node/port/edge insertion, removal, and
+binding step, and during visual reversal. Assert unrelated QObject identities, exact edges,
+selection/layout, error visibility, and no product submission. Test `QanDelegateLibrary` without
+constructing `EditorNodeController`; require unload/recreate with a different engine. Re-run the
+production QML panel tests after registering all new files. Physical `.cpp` splitting alone does
+not complete this stage.
+
+#### 16.3.4 NM5.8d — Remove unused command entry points; preserve stored history
+
+**Files:** `editor_session_controller.{hpp,cpp}`, `editor_node_controller.{hpp,cpp}`,
+`app/editor_session_service.cpp`, `include/app/editor_session_service.hpp`,
+`include/app/editor_session_ports.hpp`, `include/app/editor_session_command_queue.hpp`,
+`app/editor_action_policy.cpp`, `editor_session_history_port.{hpp,cpp}`,
+`editor_history_mutation.{hpp,cpp}`, and their existing command/history tests.
+
+- Inventory callers of `SubmitAddColorGrade`, `SubmitRemoveColorGrade`, and
+  `SubmitReconnectColorGrade`; the review found only declarations/definitions in production.
+  Delete unused controller wrappers and the unused `canReconnectSelectedColorGrade` surface.
+  Audit service, queue, port, and mutation methods independently before removing the corresponding
+  obsolete interactive entry chain. Existing tests must move to the supported path or the actual
+  retained domain API; do not keep a production entry point solely for an old test.
+- Keep `RenameColorGrade` and `EditNodeGraph` as distinct commands. Consolidate their common
+  success publication/render-reason/revision tail in a small service helper. The service retains
+  queue admission and lifecycle policy; the helper owns no new state.
+- Preserve Add/Remove/Reconnect typed payload parsing, serialization, inverse replay, presentation,
+  and Mask reachability where stored data requires them. `document_transfer.cpp` still constructs
+  Add/Remove changes. Preserve its producers and the supporting domain operations.
+- Do not change stored kind strings, hashes, format versions, name-counter semantics, or paste
+  behavior as a cleanup side effect. Do not remove current-panel projection of document values
+  from NM1/NM4; NM6 must still receive a working adjustment panel.
+- Limit this stage to node command ownership. The oversized session/pipeline/history files do not
+  justify a general service rewrite. Any wider split needs its own state inventory and acceptance.
+
+**Acceptance:** run `EditorSessionNodeCommandTest`, action-policy tests, `PipelineEditBatchTest`,
+`PipelineHistoryApplierTest`, document-transfer tests, and Mask reachability tests. Prove that one
+topology command publishes one batch/revision/Quality render, Rename publishes no photo render,
+and old payloads still replay with exact names/counters and pasted Mask assets. Record a final
+production caller scan for every removed public symbol.
+
+#### 16.3.5 NM5.8e — Real history and lifecycle evidence
+
+**Files:** `editor_nodes_panel_qml_test.cpp`, `editor_node_controller_test.cpp`,
+`editor_session_node_command_test.cpp`, new `tests/edit/history/editor_node_topology_history_test.cpp`,
+`pipeline_history_applier_test.cpp`, `tests/edit/history/editor_version_checkout_test.cpp`, and
+their focused fixtures. Register the new persistent-history source in the matching history test
+target. Reuse the storage setup patterns in `editor_session_history_port_test.cpp` without growing
+that oversized file or the shared 754-line rail harness with unrelated storage and GPU setup.
+
+- Submit a real `NodeGraphTopologyChange` through the production history port and temporary
+  storage, then Undo, Redo, recover the WAL, reopen, and checkout a second Version.
+- Assert document serialization, node/edge order, counters, head/Version, Mask asset values,
+  projection identity, and render reason/count. Direct domain inverse tests and fake-history call
+  counters remain useful unit evidence but do not satisfy this acceptance.
+- Inject WAL failure, post-commit projection failure, and projection-promotion failure. Require
+  exact errors; no success result may silently erase a projection error. Assert product commit
+  state separately from visual state when the failure occurs after publication.
+- Exercise queued refresh after image switch, same-image Version switch, incomplete draft during
+  parameter/Mask-role changes, panel replacement, and 100 Loader open/close cycles. Record live
+  Qan object counts and prove no stale callback mutates the next page/session.
+- Correct test names that still describe immediate reconnect/rebuild or bridge-on-delete when
+  their assertions now exercise draft editing. Keep assertions on the actual user-visible result.
+
+**Acceptance:** all new persistent-history tests run from registered targets. Fill the matrix in
+Sections 17–19 with executable evidence, including recovery failure and subsequent usable state.
+Only then mark exact topology Undo/Redo/recovery/reopen/checkout complete in Section 20.
+
+#### 16.3.6 NM5.8f — Keyboard, accessibility, localization, and visual states
+
+Complete the original empty/loading/pending/error states, keyboard connection flow, drawer focus,
+accessible names, localization, 30–40 percent text expansion, large system fonts, and the full
+Section 17.1 visual matrix. Use the Alcedo QML skills before implementation. Keep domain validation
+in the domain; translate structured known errors once at the application presentation boundary
+while preserving exact technical details for unknown failures.
+
+**Acceptance:** `EditorNodesPanelQmlTest`, delegate tests, rail lifecycle tests, and
+`WorkspaceShellTest` cover every visible action and all existing VI restrictions. Record real
+screen-reader checks separately from QML property assertions. No new Apply/Cancel UI is allowed.
+
+#### 16.3.7 NM5.8g — Build, install, package, and final regression
+
+Complete the original Windows/MSVC and available macOS builds, install/package QML import checks,
+and QuickQanava/bezier notices. Run the affected graph, history, adapter, QML, workspace, and
+NM1–NM4 regression targets after the cleanup. Native runtime tests remain required if runtime
+source changes; this split does not authorize backend algorithm or quality changes.
+
+**Acceptance:** record exact configure/build/test/install/package commands, target registration,
+test counts, installed-app startup, licence contents, visual matrix, and unavailable environments.
+Run the Section 19 performance checks on the resulting production path. Fresh build evidence is
+required; the review's existing-binary reruns are only a baseline. NM8 retains real-RAW and final
+three-backend qualification.
+
+**Original acceptance checklist, retained across NM5.8a–NM5.8g:**
 
 1. Complete empty, loading, pending-command, and error behavior.
 2. Complete localized text and accessible names.
@@ -2920,6 +3237,16 @@ packaged app start
 
 Record the date, commands, test count, visual matrix, package results, and unavailable environment
 checks here.
+
+| Stage | Status | Required evidence |
+| --- | --- | --- |
+| NM5.8a | Complete 2026-09-04 | One update route; queued teardown and layout restore |
+| NM5.8b | Complete 2026-09-04 | Bounded reversal/copy work; exact draft values and counters |
+| NM5.8c | Pending | Delegate ownership; primitive failure and reversal matrix |
+| NM5.8d | Pending | Caller deletion audit; retained typed replay/paste |
+| NM5.8e | Pending | Persistent topology history; lifecycle and failure recovery |
+| NM5.8f | Pending | Keyboard, screen reader, localization, visual matrix |
+| NM5.8g | Pending | Fresh builds, regression, installed packages, notices |
 
 ---
 
@@ -3073,7 +3400,8 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
       requests one Quality render.
 - [x] All command failures preserve the prior product graph, history, Version, revision, and
       rendered state while retaining an applicable draft.
-- [x] Atomic topology edits support exact Undo, Redo, recovery, reopen, and Version checkout.
+- [ ] Atomic topology edits have dedicated production-history evidence for exact Undo, Redo,
+      recovery, reopen, and Version checkout (NM5.8e; direct inverse tests already pass).
 - [ ] All visible actions support keyboard input and accessibility.
 - [ ] All product text uses localization.
 - [ ] All visual values use AppTheme and `DESIGN.md`.

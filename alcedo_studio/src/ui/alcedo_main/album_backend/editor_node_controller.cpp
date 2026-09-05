@@ -96,9 +96,17 @@ void EditorNodeController::set_editor_session(QObject* session) {
 
 void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_id,
                                              QString version_id) {
+  const bool identity_changed =
+      element_id_ != element_id || image_id_ != image_id || version_id_ != version_id;
   element_id_ = element_id;
   image_id_   = image_id;
   version_id_ = std::move(version_id);
+  if (identity_changed) {
+    SyncLayoutKey();
+    if (has_snapshot_) {
+      RestoreSelectionAfterSnapshot();
+    }
+  }
   emit SnapshotChanged();
 }
 
@@ -131,41 +139,52 @@ void EditorNodeController::ClearSnapshot() {
   emit ActionAvailabilityChanged();
 }
 
+auto EditorNodeController::HasActiveGraph() const -> bool {
+  return draft_ != nullptr || has_snapshot_;
+}
+
+auto EditorNodeController::ActiveNodes() const -> const std::vector<EditorNodeProjection>& {
+  if (draft_ != nullptr) {
+    return draft_->Nodes();
+  }
+  return snapshot_.nodes;
+}
+
+auto EditorNodeController::ActiveEdges() const -> const std::vector<EditorNodeEdgeProjection>& {
+  if (draft_ != nullptr) {
+    return draft_->Edges();
+  }
+  return snapshot_.edges;
+}
+
 auto EditorNodeController::ContainsNode(const NodeId& node_id) const -> bool {
-  if (!has_snapshot_ || node_id.Empty()) {
-    return false;
-  }
-  for (const auto& node : snapshot_.nodes) {
-    if (node.node_id == node_id) {
-      return true;
-    }
-  }
-  return false;
+  return NodeFor(node_id) != nullptr;
 }
 
 auto EditorNodeController::DefaultSelectedNodeId() const -> NodeId {
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     return {};
   }
-  for (const auto& node : snapshot_.nodes) {
+  for (const auto& node : ActiveNodes()) {
     if (node.node_kind == EditorNodeKind::ColorGrade) {
       return node.node_id;
     }
   }
-  for (const auto& node : snapshot_.nodes) {
+  for (const auto& node : ActiveNodes()) {
     if (node.node_kind == EditorNodeKind::Drt) {
       return node.node_id;
     }
   }
-  return snapshot_.nodes.front().node_id;
+  return ActiveNodes().empty() ? NodeId{} : ActiveNodes().front().node_id;
 }
 
 auto EditorNodeController::IndexOf(const NodeId& node_id) const -> int {
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     return -1;
   }
-  for (int i = 0; i < static_cast<int>(snapshot_.nodes.size()); ++i) {
-    if (snapshot_.nodes[static_cast<std::size_t>(i)].node_id == node_id) {
+  const auto& nodes = ActiveNodes();
+  for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+    if (nodes[static_cast<std::size_t>(i)].node_id == node_id) {
       return i;
     }
   }
@@ -173,8 +192,11 @@ auto EditorNodeController::IndexOf(const NodeId& node_id) const -> int {
 }
 
 auto EditorNodeController::NodeFor(const NodeId& node_id) const -> const EditorNodeProjection* {
-  if (!has_snapshot_) {
+  if (node_id.Empty() || !HasActiveGraph()) {
     return nullptr;
+  }
+  if (draft_ != nullptr) {
+    return draft_->FindNode(node_id);
   }
   const auto it = std::find_if(snapshot_.nodes.begin(), snapshot_.nodes.end(),
                                [&](const auto& node) { return node.node_id == node_id; });
@@ -194,6 +216,19 @@ auto EditorNodeController::TopologyChanged(const EditorNodeGraphSnapshot& snapsh
 }
 
 void EditorNodeController::RestoreSelectionAfterSnapshot() {
+  if (layout_store_ != nullptr) {
+    const auto key         = layout_store_->current_key();
+    const bool key_changed = key != last_layout_key_;
+    last_layout_key_       = key;
+    if (key_changed) {
+      const auto stored = layout_store_->selected_node_id();
+      if (ContainsNode(stored)) {
+        selected_node_id_          = stored;
+        selection_restore_node_id_ = {};
+        return;
+      }
+    }
+  }
   if (ContainsNode(selection_restore_node_id_)) {
     selected_node_id_          = selection_restore_node_id_;
     selection_restore_node_id_ = {};
@@ -214,11 +249,12 @@ auto EditorNodeController::selected_node_id_string() const -> QString {
 
 auto EditorNodeController::backbone_node_ids() const -> QStringList {
   QStringList ids;
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     return ids;
   }
-  ids.reserve(static_cast<qsizetype>(snapshot_.nodes.size()));
-  for (const auto& node : snapshot_.nodes) {
+  const auto& nodes = ActiveNodes();
+  ids.reserve(static_cast<qsizetype>(nodes.size()));
+  for (const auto& node : nodes) {
     ids.push_back(NodeIdToQString(node.node_id));
   }
   return ids;
@@ -297,6 +333,7 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   snapshot.projection_revision = projection_revision_;
   snapshot_                    = std::move(snapshot);
   has_snapshot_                = true;
+  SyncLayoutKey();
   RestoreSelectionAfterSnapshot();
   SetLastError({});
   emit SnapshotChanged();
@@ -328,22 +365,30 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
     SetLastError(tr("The graph adapter is missing"));
     return false;
   }
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     SetLastError(tr("The node graph has no snapshot"));
     return false;
   }
-  const auto promoted = graph->PromoteCommittedSnapshot(snapshot_);
+  EditorNodeGraphSnapshot view;
+  const EditorNodeGraphSnapshot* projected = &snapshot_;
+  if (draft_ != nullptr) {
+    view      = draft_->CurrentSnapshot(session_generation_, projection_revision_,
+                                        topology_revision_);
+    projected = &view;
+  } else if (!has_snapshot_) {
+    SetLastError(tr("The node graph has no snapshot"));
+    return false;
+  }
+  const auto promoted = graph->PromoteCommittedSnapshot(*projected);
   if (promoted.succeeded) {
-    graph->ApplyProductSelection(selected_node_id_);
     SetLastError({});
     return true;
   }
-  const auto result = graph->ApplySnapshot(snapshot_);
+  const auto result = graph->ApplySnapshot(*projected);
   if (!result.succeeded) {
     SetLastError(result.error);
     return false;
   }
-  graph->ApplyProductSelection(selected_node_id_);
   SetLastError({});
   return true;
 }
@@ -362,6 +407,7 @@ void EditorNodeController::set_graph_adapter(QObject* adapter) {
   }
   graph_adapter_connection_ = {};
   graph_adapter_            = graph;
+  ++adapter_attach_generation_;
   if (graph_adapter_ != nullptr) {
     graph_adapter_connection_ = connect(graph_adapter_.data(), &AlcedoQanGraph::GraphChanged, this,
                                         [this] { QueueProjectionApply(); });
@@ -371,7 +417,7 @@ void EditorNodeController::set_graph_adapter(QObject* adapter) {
             &EditorNodeController::OnConnectorRequestRejected);
   }
   emit GraphAdapterChanged();
-  if (graph_adapter_ != nullptr && has_snapshot_) {
+  if (graph_adapter_ != nullptr && HasActiveGraph() && graph_adapter_->graph() != nullptr) {
     ApplyBoundGraph();
   }
 }
@@ -385,43 +431,100 @@ void EditorNodeController::set_layout_store(QObject* store) {
   }
   layout_store_ = layout;
   emit LayoutStoreChanged();
+  SyncLayoutKey();
+}
+
+void EditorNodeController::SyncLayoutKey() {
+  if (layout_store_ == nullptr) {
+    return;
+  }
+  layout_store_->activate(QString(), element_id_, image_id_, version_id_);
+}
+
+void EditorNodeController::PersistSavedSelection() {
+  if (layout_store_ == nullptr) {
+    return;
+  }
+  layout_store_->set_selected_node_id(selected_node_id_);
+}
+
+void EditorNodeController::ApplyLiveSelectionToAdapter() {
+  if (graph_adapter_ == nullptr) {
+    return;
+  }
+  graph_adapter_->ApplyProductSelection(selected_node_id_);
+}
+
+auto EditorNodeController::AdapterShowsCurrentCommittedProjection() const -> bool {
+  if (draft_ != nullptr || graph_adapter_.isNull() || !graph_adapter_->has_projection()) {
+    return false;
+  }
+  return graph_adapter_->session_generation() == session_generation_ &&
+         graph_adapter_->topology_revision() == topology_revision_ &&
+         graph_adapter_->projection_revision() == projection_revision_;
 }
 
 void EditorNodeController::ApplyBoundGraph() {
-  if (graph_adapter_.isNull() || !has_snapshot_ || graph_adapter_->graph() == nullptr) {
+  if (graph_adapter_.isNull() || graph_adapter_->graph() == nullptr || !HasActiveGraph()) {
+    return;
+  }
+  const auto bound = BoundSessionGeneration();
+  if (bound.has_value() && session_generation_ != *bound) {
+    ++skipped_stale_projection_apply_count_;
+    return;
+  }
+  SyncLayoutKey();
+  if (AdapterShowsCurrentCommittedProjection()) {
+    ApplyLiveSelectionToAdapter();
     return;
   }
   if (!applyToGraph(graph_adapter_.data())) {
     return;
   }
+  ++completed_projection_apply_count_;
   auto* layout = layout_store_.data();
-  if (layout == nullptr) {
-    return;
-  }
-  layout->ensureDefaultsFrom(this);
-  for (const auto& node : snapshot_.nodes) {
-    const auto id = NodeIdToQString(node.node_id);
-    if (layout->hasNodePosition(id)) {
-      const auto pos = layout->nodePosition(id);
-      graph_adapter_->setNodePosition(id, pos.x(), pos.y());
+  if (layout != nullptr) {
+    layout->EnsureDefaultPositions(draft_ == nullptr
+                                       ? snapshot_
+                                       : draft_->CurrentSnapshot(session_generation_,
+                                                                 projection_revision_,
+                                                                 topology_revision_));
+    for (const auto& node : ActiveNodes()) {
+      const auto id = NodeIdToQString(node.node_id);
+      if (layout->hasNodePosition(id)) {
+        const auto pos = layout->nodePosition(id);
+        graph_adapter_->setNodePosition(id, pos.x(), pos.y());
+      }
+      graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
     }
-    graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
   }
-  graph_adapter_->applyProductSelection(selected_node_id_string());
+  ApplyLiveSelectionToAdapter();
 }
 
 void EditorNodeController::QueueProjectionApply() {
+  ++queued_projection_apply_count_;
+  pending_apply_attach_generation_ = adapter_attach_generation_;
   if (projection_apply_queued_) {
     return;
   }
   projection_apply_queued_ = true;
   QMetaObject::invokeMethod(
       this,
-      [this] {
-        projection_apply_queued_ = false;
-        ApplyBoundGraph();
-      },
+      [this] { ApplyBoundGraphIfCurrent(); },
       Qt::QueuedConnection);
+}
+
+void EditorNodeController::ApplyBoundGraphIfCurrent() {
+  projection_apply_queued_ = false;
+  if (graph_adapter_.isNull() || graph_adapter_->graph() == nullptr) {
+    ++skipped_stale_projection_apply_count_;
+    return;
+  }
+  if (adapter_attach_generation_ != pending_apply_attach_generation_) {
+    ++skipped_stale_projection_apply_count_;
+    return;
+  }
+  ApplyBoundGraph();
 }
 
 bool EditorNodeController::refreshFromSession() {
@@ -433,6 +536,7 @@ bool EditorNodeController::refreshFromSession() {
   element_id_ = session_->element_id();
   image_id_   = session_->image_id();
   version_id_ = QString::fromStdString(session_->history_snapshot().active_version_id.ToString());
+  SyncLayoutKey();
   const auto* document = session_->pipeline_document();
   if (document == nullptr) {
     ClearSnapshot();
@@ -443,11 +547,39 @@ bool EditorNodeController::refreshFromSession() {
   return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
 }
 
+auto EditorNodeController::SessionMatchesSubmittedIdentity() const -> bool {
+  if (!submitted_identity_.has_value() || session_ == nullptr) {
+    return false;
+  }
+  const auto& submitted = *submitted_identity_;
+  return submitted.element_id == static_cast<std::uint64_t>(session_->element_id()) &&
+         submitted.image_id == static_cast<std::uint64_t>(session_->image_id()) &&
+         submitted.version_id == session_->history_snapshot().active_version_id.ToString() &&
+         submitted.session_generation == static_cast<std::uint64_t>(session_->session_generation());
+}
+
+[[nodiscard]] auto EditorNodeController::SessionIdentityChanged() const -> bool {
+  if (session_ == nullptr) {
+    return false;
+  }
+  return static_cast<quint64>(session_->element_id()) != element_id_ ||
+         static_cast<quint64>(session_->image_id()) != image_id_ ||
+         QString::fromStdString(session_->history_snapshot().active_version_id.ToString()) !=
+             version_id_ ||
+         static_cast<quint64>(session_->session_generation()) != session_generation_;
+}
+
 void EditorNodeController::OnSessionChanged() {
-  if (skip_next_session_refresh_) {
-    skip_next_session_refresh_ = false;
+  if (SessionIdentityChanged()) {
+    submitted_identity_.reset();
+    DiscardDraft();
+    refreshFromSession();
     return;
   }
+  if (submitted_identity_.has_value() && SessionMatchesSubmittedIdentity()) {
+    return;
+  }
+  submitted_identity_.reset();
   if (session_ != nullptr && draft_ != nullptr) {
     const auto* document = session_->pipeline_document();
     if (document != nullptr && draft_->MatchesIdentity(CurrentDraftIdentity()) &&
@@ -468,11 +600,15 @@ void EditorNodeController::selectNode(const QString& node_id) {
   if (selected_node_id_ == id) {
     selection_restore_node_id_ = {};
     SetLastError({});
+    PersistSavedSelection();
+    ApplyLiveSelectionToAdapter();
     return;
   }
   selected_node_id_          = id;
   selection_restore_node_id_ = {};
   SetLastError({});
+  PersistSavedSelection();
+  ApplyLiveSelectionToAdapter();
   emit SelectionChanged();
   emit ActionAvailabilityChanged();
 }
@@ -533,7 +669,8 @@ bool EditorNodeController::addCleanColorGrade() {
       graph_adapter_->SetNodeItemPosition(new_id, *pos);
     }
   }
-  SyncSnapshotFromDraft();
+  emit DraftStateChanged();
+  emit ActionAvailabilityChanged();
   selectNode(NodeIdToQString(new_id));
   return MaybeSubmitDraft();
 }
@@ -592,9 +729,12 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!ApplyMutationToGraph(mutation)) {
     return false;
   }
-  SyncSnapshotFromDraft();
+  emit DraftStateChanged();
+  emit ActionAvailabilityChanged();
   if (!ContainsNode(selected_node_id_)) {
     selected_node_id_ = DefaultSelectedNodeId();
+    PersistSavedSelection();
+    ApplyLiveSelectionToAdapter();
     emit SelectionChanged();
     emit ActionAvailabilityChanged();
   }
@@ -646,7 +786,8 @@ bool EditorNodeController::requestConnect(const QString& source_node_id,
   if (!ApplyMutationToGraph(mutation)) {
     return false;
   }
-  SyncSnapshotFromDraft();
+  emit DraftStateChanged();
+  emit ActionAvailabilityChanged();
   return MaybeSubmitDraft();
 }
 
@@ -723,14 +864,15 @@ void EditorNodeController::DiscardDraft() {
   emit DraftStateChanged();
 }
 
-void EditorNodeController::SyncSnapshotFromDraft() {
-  if (draft_ == nullptr) {
-    return;
-  }
-  snapshot_     = draft_->CurrentSnapshot(session_generation_, projection_revision_,
-                                          topology_revision_);
-  has_snapshot_ = true;
-  emit DraftStateChanged();
+void EditorNodeController::AdoptCommittedDocument(const PipelineDocument& document) {
+  auto built = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
+  topology_revision_            = topology_revision_ + 1;
+  projection_revision_          = projection_revision_ + 1;
+  built.session_generation      = session_generation_;
+  built.topology_revision       = topology_revision_;
+  built.projection_revision     = projection_revision_;
+  snapshot_                     = std::move(built);
+  has_snapshot_                 = true;
 }
 
 auto EditorNodeController::ApplyMutationToGraph(const alcedo::EditorNodeGraphDraftMutation& mutation)
@@ -810,11 +952,11 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     emit ActionAvailabilityChanged();
     return true;
   }
-  auto change = draft_->MakeChange();
-  skip_next_session_refresh_ = true;
-  const auto result          = session_->SubmitNodeGraphTopologyEdit(change);
+  auto change                  = draft_->MakeChange();
+  submitted_identity_          = CurrentDraftIdentity();
+  const auto result            = session_->SubmitNodeGraphTopologyEdit(change);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
-    skip_next_session_refresh_ = false;
+    submitted_identity_.reset();
     SetLastError(QString::fromStdString(result.message));
     emit DraftStateChanged();
     return false;
@@ -822,15 +964,7 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
   DiscardDraft();
   if (session_ != nullptr && session_->pipeline_document() != nullptr) {
     try {
-      auto built = EditorNodeGraphProjection::Build(*session_->pipeline_document(),
-                                                    session_generation_, 0, 0);
-      topology_revision_   = topology_revision_ + 1;
-      projection_revision_ = projection_revision_ + 1;
-      built.session_generation  = session_generation_;
-      built.topology_revision   = topology_revision_;
-      built.projection_revision = projection_revision_;
-      snapshot_                 = std::move(built);
-      has_snapshot_             = true;
+      AdoptCommittedDocument(*session_->pipeline_document());
     } catch (const std::exception& ex) {
       SetLastError(QString::fromUtf8(ex.what()));
     }
@@ -840,9 +974,10 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     if (!promoted.succeeded) {
       QueueProjectionApply();
     } else {
-      graph_adapter_->ApplyProductSelection(selected_node_id_);
+      ApplyLiveSelectionToAdapter();
     }
   }
+  submitted_identity_.reset();
   SetLastError({});
   emit SnapshotChanged();
   emit ActionAvailabilityChanged();
@@ -850,10 +985,10 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
 }
 
 void EditorNodeController::SelectAt(int index) {
-  if (!has_snapshot_ || index < 0 || index >= static_cast<int>(snapshot_.nodes.size())) {
+  if (!HasActiveGraph() || index < 0 || index >= static_cast<int>(ActiveNodes().size())) {
     return;
   }
-  selectNode(NodeIdToQString(snapshot_.nodes[static_cast<std::size_t>(index)].node_id));
+  selectNode(NodeIdToQString(ActiveNodes()[static_cast<std::size_t>(index)].node_id));
 }
 
 void EditorNodeController::selectPreviousBackboneNode() {
@@ -867,10 +1002,10 @@ void EditorNodeController::selectPreviousBackboneNode() {
 
 void EditorNodeController::selectNextBackboneNode() {
   const int index = IndexOf(selected_node_id_);
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     return;
   }
-  const int last = static_cast<int>(snapshot_.nodes.size()) - 1;
+  const int last = static_cast<int>(ActiveNodes().size()) - 1;
   if (index < 0) {
     SelectAt(last);
     return;
@@ -879,10 +1014,10 @@ void EditorNodeController::selectNextBackboneNode() {
 }
 
 void EditorNodeController::SelectByKind(EditorNodeKind kind) {
-  if (!has_snapshot_) {
+  if (!HasActiveGraph()) {
     return;
   }
-  for (const auto& node : snapshot_.nodes) {
+  for (const auto& node : ActiveNodes()) {
     if (node.node_kind == kind) {
       selectNode(NodeIdToQString(node.node_id));
       return;

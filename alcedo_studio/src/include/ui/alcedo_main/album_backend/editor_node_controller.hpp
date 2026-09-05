@@ -17,11 +17,11 @@
 #include "app/editor_node_graph_projection.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 
 namespace alcedo::ui {
 
 class AlcedoQanGraph;
-class EditorNodeLayoutStore;
 class EditorSessionController;
 
 /**
@@ -108,9 +108,15 @@ class EditorNodeController : public QObject {
   Q_INVOKABLE bool   refreshFromSession();
 
   /**
-   * @brief Project the current snapshot onto an AlcedoQanGraph adapter.
+   * @brief Project the active graph onto an AlcedoQanGraph adapter.
+   *
+   * Uses the committed snapshot, or materializes a draft snapshot at this
+   * explicit projection boundary (page recreation). Does not apply selection;
+   * ApplyBoundGraph applies layout and live selection after a successful
+   * projection.
+   *
    * @param adapter AlcedoQanGraph instance. Rejects null, wrong types, and a
-   *        missing snapshot. On success, applies the one-node product selection.
+   *        missing snapshot.
    * @return false when ApplySnapshot fails; lastError holds the adapter error.
    */
   Q_INVOKABLE bool   applyToGraph(QObject* adapter);
@@ -178,6 +184,27 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
   [[nodiscard]] auto selected_node_name() const -> QString;
   [[nodiscard]] auto snapshot() const -> const EditorNodeGraphSnapshot& { return snapshot_; }
+  /**
+   * @brief Nodes and edges currently shown on the page.
+   *
+   * Reads the incremental draft while it exists; otherwise the committed
+   * snapshot. Does not copy the draft into snapshot_.
+   */
+  [[nodiscard]] auto ActiveNodes() const -> const std::vector<EditorNodeProjection>&;
+  [[nodiscard]] auto ActiveEdges() const -> const std::vector<EditorNodeEdgeProjection>&;
+  /// Queued ApplyBoundGraph requests, including coalesced repeats.
+  [[nodiscard]] auto queued_projection_apply_count() const -> int {
+    return queued_projection_apply_count_;
+  }
+  /// Successful adapter projection applies. Duplicate applies of the same
+  /// committed revision are not counted.
+  [[nodiscard]] auto completed_projection_apply_count() const -> int {
+    return completed_projection_apply_count_;
+  }
+  /// Queued applies dropped because the adapter, generation, or attach identity was stale.
+  [[nodiscard]] auto skipped_stale_projection_apply_count() const -> int {
+    return skipped_stale_projection_apply_count_;
+  }
 
   /**
    * @brief Bind the live Qan adapter owned by the open Nodes page.
@@ -228,7 +255,6 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto CurrentDraftIdentity() const -> alcedo::EditorNodeGraphDraftIdentity;
   [[nodiscard]] auto EnsureDraft() -> bool;
   void               DiscardDraft();
-  void               SyncSnapshotFromDraft();
   [[nodiscard]] auto ApplyMutationToGraph(const alcedo::EditorNodeGraphDraftMutation& mutation)
       -> bool;
   [[nodiscard]] auto MaybeSubmitDraft() -> bool;
@@ -236,10 +262,26 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;
   void               SelectByKind(EditorNodeKind kind);
   void               SelectAt(int index);
+  /**
+   * @brief Apply the committed or draft projection, then layout and live selection.
+   *
+   * Activates the layout key before reading stored positions and drawers. QML
+   * restores GraphView zoom and pan. Ordinary draft edits must not call this;
+   * they use incremental adapter mutation.
+   */
   void               ApplyBoundGraph();
   /// Apply the bound Qan adapter after the current GUI event so Add/Delete are
   /// not nested inside a GraphView key or menu handler.
   void               QueueProjectionApply();
+  void               ApplyBoundGraphIfCurrent();
+  void               SyncLayoutKey();
+  void               PersistSavedSelection();
+  void               ApplyLiveSelectionToAdapter();
+  [[nodiscard]] auto SessionMatchesSubmittedIdentity() const -> bool;
+  [[nodiscard]] auto SessionIdentityChanged() const -> bool;
+  [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
+  void               AdoptCommittedDocument(const PipelineDocument& document);
+  [[nodiscard]] auto HasActiveGraph() const -> bool;
 
   QPointer<EditorSessionController> session_;
   QPointer<AlcedoQanGraph>          graph_adapter_;
@@ -262,7 +304,13 @@ class EditorNodeController : public QObject {
   QString                           version_id_;
   QString                           last_error_;
   std::unique_ptr<alcedo::EditorNodeGraphDraft> draft_;
-  bool                              skip_next_session_refresh_ = false;
+  std::optional<alcedo::EditorNodeGraphDraftIdentity> submitted_identity_;
+  EditorNodeLayoutKey                   last_layout_key_{};
+  quint64                           adapter_attach_generation_          = 0;
+  quint64                           pending_apply_attach_generation_    = 0;
+  int                               queued_projection_apply_count_      = 0;
+  int                               completed_projection_apply_count_   = 0;
+  int                               skipped_stale_projection_apply_count_ = 0;
 };
 
 void RegisterEditorNodeQmlTypes();
