@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
 #include <algorithm>
 #include <functional>
 #include <vector>
@@ -74,8 +75,20 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
 
   void SetPresentationSinkId(alcedo::PresentationSinkId) override {}
   void SetPresentationSize(int, int) override {}
-  auto Open(sl_element_id_t, image_id_t) -> EditorSessionResult override { return {}; }
-  auto Switch(sl_element_id_t, image_id_t) -> EditorSessionResult override { return {}; }
+  auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
+    identity_.element_id = element_id;
+    identity_.image_id   = image_id;
+    ++request_.value;
+    NotifyChange();
+    return Accepted("opened");
+  }
+  auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
+    identity_.element_id = element_id;
+    identity_.image_id   = image_id;
+    ++request_.value;
+    NotifyChange();
+    return Accepted("switched");
+  }
   auto Close(bool) -> EditorSessionResult override { return {}; }
   auto Shutdown() -> EditorSessionResult override { return {}; }
   auto Discard() -> EditorSessionResult override { return {}; }
@@ -138,6 +151,10 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   }
 
   void SetGeneration(std::uint64_t value) { request_.value = value; }
+  void SetImageId(image_id_t image_id) {
+    identity_.image_id = image_id;
+    NotifyChange();
+  }
   auto Document() -> PipelineDocument& { return document_; }
   void SetFailCommands(bool fail) { fail_commands_ = fail; }
   void PublishAvailability(alcedo::EditorActionAvailability availability) {
@@ -268,7 +285,7 @@ TEST(EditorNodeController, AddCreatesDisconnectedDraftGradeWithoutAProductComman
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_EQ(controller.backbone_node_ids().size(), 4);
   EXPECT_EQ(controller.selected_node_name(), QStringLiteral("Color Grade 2"));
-  EXPECT_EQ(controller.snapshot().edges.size(), 2u);
+  EXPECT_EQ(controller.ActiveEdges().size(), 2u);
 }
 
 TEST(EditorNodeController, AddPlacesTheDisconnectedGradeBelowTheBackbone) {
@@ -319,7 +336,7 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   EXPECT_EQ(backend.remove_count(), 0);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_TRUE(controller.incomplete_draft());
-  EXPECT_EQ(controller.snapshot().nodes.size(), 3u);
+  EXPECT_EQ(controller.ActiveNodes().size(), 3u);
 }
 
 TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBackendMutation) {
@@ -433,6 +450,8 @@ TEST(EditorNodeController, CompletingThePathSubmitsOneTopologyChange) {
   EXPECT_FALSE(controller.incomplete_draft());
   EXPECT_EQ(backend.Document().Graph().FindNode(extra) != nullptr, true);
   EXPECT_EQ(backend.Document().NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
+  EXPECT_EQ(controller.ActiveNodes().size(), 4u);
 }
 
 TEST(EditorNodeController, DevelopAndDrtRejectUnsupportedPortRoles) {
@@ -462,14 +481,14 @@ TEST(EditorNodeController, SelfConnectAndStaleGenerationLeaveTheDraftUnchanged) 
   controller.set_editor_session(&session);
   ASSERT_TRUE(controller.addCleanColorGrade());
   const auto extra = controller.selected_node_id_string();
-  const auto before = controller.snapshot().edges.size();
+  const auto before = controller.ActiveEdges().size();
 
   EXPECT_FALSE(controller.requestConnect(extra, extra));
   EXPECT_EQ(controller.last_error(), QStringLiteral("A node cannot connect to itself"));
   EXPECT_FALSE(controller.requestConnect(QStringLiteral("develop"), extra, 1));
   EXPECT_EQ(controller.last_error(),
             QStringLiteral("The node command is from another editor session"));
-  EXPECT_EQ(controller.snapshot().edges.size(), before);
+  EXPECT_EQ(controller.ActiveEdges().size(), before);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
@@ -485,6 +504,104 @@ TEST(EditorNodeController, ReturningADraftToTheBaseExitsEditingWithoutACommit) {
   EXPECT_FALSE(controller.incomplete_draft());
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_EQ(controller.backbone_node_ids().size(), 3);
+}
+
+TEST(EditorNodeController, OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(36);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto committed_nodes = controller.snapshot().nodes.size();
+  const auto committed_edges = controller.snapshot().edges.size();
+  const auto applies_before  = controller.completed_projection_apply_count();
+
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  EXPECT_EQ(controller.snapshot().nodes.size(), committed_nodes);
+  EXPECT_EQ(controller.snapshot().edges.size(), committed_edges);
+  EXPECT_EQ(controller.ActiveNodes().size(), committed_nodes + 1);
+  EXPECT_EQ(controller.completed_projection_apply_count(), applies_before);
+}
+
+TEST(EditorNodeController, OneCommittedRevisionCoalescesQueuedProjectionApplies) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+  const auto queued_after_first = controller.queued_projection_apply_count();
+  EXPECT_GE(queued_after_first, 1);
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+  EXPECT_EQ(controller.queued_projection_apply_count(), queued_after_first + 1);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(controller.completed_projection_apply_count(), 0);
+  EXPECT_GE(controller.skipped_stale_projection_apply_count(), 1);
+}
+
+TEST(EditorNodeController, QueuedProjectionApplyIgnoresStaleAdapterAfterDetach) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 2));
+  controller.set_graph_adapter(nullptr);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(controller.completed_projection_apply_count(), 0);
+  EXPECT_GE(controller.skipped_stale_projection_apply_count(), 1);
+}
+
+TEST(EditorNodeController, LayoutKeyActivatesBeforeSavedSelectionRestore) {
+  EditorNodeLayoutStore store;
+  EditorNodeController  controller;
+  controller.set_layout_store(&store);
+  controller.SetLayoutIdentity(1, 2, QStringLiteral("version-a"));
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 3));
+  controller.selectNode(QStringLiteral("develop"));
+  store.SetNodePosition(NodeId{"grade.primary"}, QPointF(11, 22));
+  EXPECT_EQ(store.selected_node_id(), NodeId{"develop"});
+
+  controller.SetLayoutIdentity(1, 2, QStringLiteral("version-b"));
+  EXPECT_EQ(store.current_key().version_id, QStringLiteral("version-b"));
+  EXPECT_TRUE(store.selected_node_id().Empty());
+  EXPECT_FALSE(store.hasNodePosition(QStringLiteral("grade.primary")));
+
+  controller.SetLayoutIdentity(1, 2, QStringLiteral("version-a"));
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 3));
+  EXPECT_EQ(store.current_key().version_id, QStringLiteral("version-a"));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"develop"});
+  EXPECT_EQ(store.NodePosition(NodeId{"grade.primary"}), QPointF(11, 22));
+}
+
+TEST(EditorNodeController, SavedLayoutSelectionDoesNotOverrideLiveSelectionOnTheSameKey) {
+  EditorNodeLayoutStore store;
+  EditorNodeController  controller;
+  controller.set_layout_store(&store);
+  controller.SetLayoutIdentity(4, 5, QStringLiteral("v"));
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 4));
+  controller.selectNode(QStringLiteral("develop"));
+  store.set_selected_node_id(NodeId{"grade.primary"});
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 4));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"develop"});
+}
+
+TEST(EditorNodeController, ImageSwitchAfterSubmitRefreshesTheCommittedProjection) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(37);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  EXPECT_EQ(controller.image_id(), 9u);
+  backend.SetImageId(50);
+  EXPECT_EQ(session.image_id(), 50u);
+  EXPECT_EQ(controller.image_id(), 50u);
+
+  backend.SetImageId(9);
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  const auto extra = controller.selected_node_id();
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("grade.primary"), QStringLiteral("drt")));
+  EXPECT_FALSE(controller.incomplete_draft());
+  EXPECT_EQ(controller.image_id(), 9u);
+
+  backend.SetImageId(99);
+  EXPECT_EQ(session.image_id(), 99u);
+  EXPECT_EQ(controller.image_id(), 99u);
+  EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
 }
 
 TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {

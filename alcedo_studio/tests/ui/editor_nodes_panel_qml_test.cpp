@@ -492,5 +492,68 @@ TEST_F(EditorNodesPanelQmlTest, HeaderHasNoApplyOrCancelAction) {
   EXPECT_EQ(Find(QStringLiteral("editorNodesCancelButton")), nullptr);
 }
 
+TEST_F(EditorNodesPanelQmlTest, OpenPageAppliesCommittedProjectionOnce) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->has_projection(), 2000);
+  ProcessEvents();
+  EXPECT_EQ(nodes->completed_projection_apply_count(), 1);
+  EXPECT_EQ(adapter->topology_replace_count(), 1);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, OrdinaryDraftEditsDoNotReplaceQanTopology) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  ProcessEvents();
+  const auto applies   = nodes->completed_projection_apply_count();
+  const auto replaces  = adapter->topology_replace_count();
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(nodes->selected_node_id()) != nullptr, 2000);
+  EXPECT_EQ(nodes->completed_projection_apply_count(), applies);
+  EXPECT_EQ(adapter->topology_replace_count(), replaces);
+  EXPECT_EQ(nodes->snapshot().nodes.size(), 3u);
+  EXPECT_EQ(nodes->ActiveNodes().size(), 4u);
+}
+
+TEST_F(EditorNodesPanelQmlTest, CloseWithQueuedApplyThenReopenRestoresOnce) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  const auto queued_before = nodes->queued_projection_apply_count();
+  ASSERT_NE(backend_.pipeline_document(), nullptr);
+  ASSERT_TRUE(nodes->PublishDocument(*backend_.pipeline_document(),
+                                     static_cast<std::uint64_t>(nodes->session_generation())));
+  EXPECT_GT(nodes->queued_projection_apply_count(), queued_before);
+
+  controller_.set_editor_tool_panel_page(QString());
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorNodesPageBody")) == nullptr, 2000);
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  nodes         = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->has_projection(), 2000);
+  ProcessEvents();
+  EXPECT_EQ(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, true);
+  EXPECT_EQ(nodes->graph_adapter_object(), adapter);
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

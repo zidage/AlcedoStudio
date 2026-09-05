@@ -477,9 +477,9 @@ TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurst
   const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
 
-  // First-open burst: EditorNodesPanel.bindGraph applies the stored layout in
-  // the same event turn as the snapshot insert, before any polish pass has
-  // anchored the port docks to the node edges.
+  // First-open burst: EditorNodeController applies stored layout in the same
+  // event turn as the snapshot insert, before any polish pass has anchored the
+  // port docks to the node edges.
   adapter.SetNodeItemPosition(NodeId{"develop"}, QPointF(48, 48));
   adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(48, 136));
   adapter.SetNodeItemPosition(NodeId{"drt"}, QPointF(48, 329));

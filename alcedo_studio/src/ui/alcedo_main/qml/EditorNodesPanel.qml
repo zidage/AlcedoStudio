@@ -34,8 +34,6 @@ Item {
                 + String(root.nodeController.versionId)
     }
 
-    onLayoutIdentityKeyChanged: activateLayoutKey()
-
     function addColorGrade() {
         if (!root.nodeController || !root.nodeController.canAddColorGrade) {
             return
@@ -108,61 +106,28 @@ Item {
         }
     }
 
-    function applyLayout() {
-        if (!root.nodeController || !root.nodeLayoutStore || !qanAdapter) {
+    function restoreGraphView() {
+        if (!graphView || !root.nodeLayoutStore) {
             return
         }
-        root.nodeLayoutStore.ensureDefaultsFrom(root.nodeController)
-        const ids = root.nodeController.backboneNodeIds
-        for (var i = 0; i < ids.length; ++i) {
-            const id = ids[i]
-            if (root.nodeLayoutStore.hasNodePosition(id)) {
-                const pos = root.nodeLayoutStore.nodePosition(id)
-                qanAdapter.setNodePosition(id, pos.x, pos.y)
-            }
-            qanAdapter.setDrawerOpen(id, root.nodeLayoutStore.drawerOpen(id))
-        }
-        if (graphView) {
-            graphView.zoom = root.nodeLayoutStore.zoom
-            if (graphView.containerItem) {
-                graphView.containerItem.x = root.nodeLayoutStore.viewPosition.x
-                graphView.containerItem.y = root.nodeLayoutStore.viewPosition.y
-            }
-        }
-        qanAdapter.applyProductSelection(root.nodeController.selectedNodeId)
-    }
-
-    function bindControllerAdapter() {
-        if (!root.nodeController) {
-            return
-        }
-        if (qanAdapter && qanAdapter.graph) {
-            root.nodeController.graphAdapter = qanAdapter
+        graphView.zoom = root.nodeLayoutStore.zoom
+        if (graphView.containerItem) {
+            graphView.containerItem.x = root.nodeLayoutStore.viewPosition.x
+            graphView.containerItem.y = root.nodeLayoutStore.viewPosition.y
         }
     }
 
-    function clearControllerAdapter() {
+    function attachAdapter() {
+        if (!root.nodeController || !qanAdapter) {
+            return
+        }
+        root.nodeController.graphAdapter = qanAdapter
+    }
+
+    function detachAdapter() {
         if (root.nodeController) {
             root.nodeController.graphAdapter = null
         }
-    }
-
-    Binding {
-        target: root.nodeController
-        property: "graphAdapter"
-        value: (qanAdapter && qanAdapter.graph) ? qanAdapter : null
-        when: root.nodeController !== null && root.nodeController !== undefined
-    }
-
-    function bindGraph() {
-        bindControllerAdapter()
-        if (!root.nodeController || !qanAdapter || !qanAdapter.graph) {
-            return
-        }
-        if (!root.nodeController.applyToGraph(qanAdapter)) {
-            return
-        }
-        applyLayout()
     }
 
     function fitGraph() {
@@ -173,35 +138,18 @@ Item {
         captureView()
     }
 
-    function activateLayoutKey() {
-        if (!root.nodeLayoutStore || !root.nodeController) {
-            return
-        }
-        root.nodeLayoutStore.activate("", root.nodeController.elementId,
-                                      root.nodeController.imageId,
-                                      root.nodeController.versionId)
-        const stored = root.nodeLayoutStore.selectedNodeId
-        if (stored && stored.length > 0) {
-            root.nodeController.selectNode(stored)
-        }
-    }
+    onLayoutIdentityKeyChanged: restoreGraphView()
 
     Connections {
         target: root.nodeController
-        function onSnapshotChanged() {
-            Qt.callLater(function () { root.bindGraph() })
-        }
         function onSelectionChanged() {
-            if (qanAdapter) {
-                qanAdapter.applyProductSelection(root.nodeController.selectedNodeId)
-            }
-            if (root.nodeLayoutStore) {
-                root.nodeLayoutStore.selectedNodeId = root.nodeController.selectedNodeId
-            }
             if (root.renameVisible
                     && root.renameNodeId !== root.nodeController.selectedNodeId) {
                 root.cancelRename()
             }
+        }
+        function onSnapshotChanged() {
+            root.restoreGraphView()
         }
     }
 
@@ -213,15 +161,13 @@ Item {
             }
         }
         function onGraphChanged() {
-            root.bindControllerAdapter()
-            Qt.callLater(function () { root.bindGraph() })
+            root.attachAdapter()
         }
     }
 
     Component.onCompleted: {
-        activateLayoutKey()
-        bindControllerAdapter()
-        bindGraph()
+        attachAdapter()
+        restoreGraphView()
         if (graphView.originCross) {
             graphView.originCross.visible = false
         }
@@ -231,7 +177,7 @@ Item {
 
     Component.onDestruction: {
         captureView()
-        clearControllerAdapter()
+        detachAdapter()
     }
 
     ColumnLayout {

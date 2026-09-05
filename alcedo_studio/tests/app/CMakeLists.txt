@@ -81,7 +81,7 @@ add_executable(EditorNodeGraphDraftTest
     ${ALCEDO_TEST_ROOT}/app/editor_node_graph_draft_test.cpp)
 target_include_directories(EditorNodeGraphDraftTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorNodeGraphDraftTest
-    PRIVATE GTest::gtest_main EditorNodeGraphDraft EditGraph)
+    PRIVATE GTest::gtest_main EditorNodeGraphDraft EditGraph PipelineHistoryApplier)
 gtest_discover_tests(EditorNodeGraphDraftTest
     TEST_PREFIX "EditorNodeGraphDraftTest."
     PROPERTIES LABELS "ci_core_flow;edit;nodes")

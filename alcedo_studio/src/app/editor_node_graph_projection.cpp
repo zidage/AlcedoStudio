@@ -15,7 +15,13 @@
 namespace alcedo {
 namespace {
 
-auto NodeKindOf(const INodeModel& node) -> EditorNodeKind {
+auto ContainsNode(const std::vector<NodeId>& ids, const NodeId& id) -> bool {
+  return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+}  // namespace
+
+auto EditorNodeGraphProjection::KindOf(const INodeModel& node) -> EditorNodeKind {
   if (node.Type() == type_ids::DevelopNode()) {
     return EditorNodeKind::Develop;
   }
@@ -25,14 +31,28 @@ auto NodeKindOf(const INodeModel& node) -> EditorNodeKind {
   if (node.Type() == type_ids::DrtNode()) {
     return EditorNodeKind::Drt;
   }
-  throw std::invalid_argument("EditorNodeGraphProjection encountered an unsupported node type");
+  throw std::invalid_argument("Unsupported Nodes-page node type: " +
+                              std::string{node.Type().Text()});
 }
 
-auto ContainsNode(const std::vector<NodeId>& ids, const NodeId& id) -> bool {
-  return std::find(ids.begin(), ids.end(), id) != ids.end();
+auto EditorNodeGraphProjection::ProjectNode(const INodeModel& node) -> EditorNodeProjection {
+  EditorNodeProjection projected;
+  projected.node_id      = node.Id();
+  projected.node_kind    = KindOf(node);
+  projected.display_name = std::string{node.DisplayName()};
+  if (projected.node_kind != EditorNodeKind::ColorGrade) {
+    return projected;
+  }
+  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(&node);
+  if (grade == nullptr) {
+    throw std::invalid_argument("Color Grade type has an invalid model");
+  }
+  projected.masks.reserve(grade->MaskCount());
+  for (const auto& mask : grade->Masks()) {
+    projected.masks.push_back({mask.id, GetMaskSourceKind(mask.source)});
+  }
+  return projected;
 }
-
-}  // namespace
 
 auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
                                       std::uint64_t           session_generation,
@@ -56,23 +76,7 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
           "EditorNodeGraphProjection image backbone contains an unknown node");
     }
 
-    EditorNodeProjection projected;
-    projected.node_id      = node->Id();
-    projected.node_kind    = NodeKindOf(*node);
-    projected.display_name = std::string{node->DisplayName()};
-
-    if (projected.node_kind == EditorNodeKind::ColorGrade) {
-      const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
-      if (grade == nullptr) {
-        throw std::invalid_argument(
-            "EditorNodeGraphProjection Color Grade type has an invalid model");
-      }
-      projected.masks.reserve(grade->MaskCount());
-      for (const auto& mask : grade->Masks()) {
-        projected.masks.push_back({mask.id, GetMaskSourceKind(mask.source)});
-      }
-    }
-    snapshot.nodes.push_back(std::move(projected));
+    snapshot.nodes.push_back(ProjectNode(*node));
   }
 
   snapshot.edges.reserve(document.Graph().Edges().size());
