@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -412,12 +413,66 @@ auto BackboneNodeIds(const alcedo::PipelineDocument& document) -> std::vector<st
   return ids;
 }
 
+auto CommitCapturedAddColorGrade(EditorSessionHistoryPort& history,
+                                 const alcedo::EditorHistoryGuardHandle& handle,
+                                 alcedo::PipelineDocument& document,
+                                 const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id,
+                                 std::string* error) -> bool {
+  try {
+    auto change = alcedo::CaptureAddColorGradeChange(document, before_node_id, new_id);
+    return history.CommitPipelineEditBatch(handle, alcedo::MakeAddColorGradeBatch(std::move(change)),
+                                           error);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
+}
+
+auto CommitCapturedRemoveColorGrade(EditorSessionHistoryPort& history,
+                                    const alcedo::EditorHistoryGuardHandle& handle,
+                                    alcedo::PipelineDocument& document, const alcedo::NodeId& node_id,
+                                    std::string* error) -> bool {
+  try {
+    auto change = alcedo::CaptureRemoveColorGradeChange(document, node_id);
+    return history.CommitPipelineEditBatch(
+        handle, alcedo::MakeRemoveColorGradeBatch(std::move(change)), error);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
+}
+
+auto CommitCapturedReconnectColorGrade(EditorSessionHistoryPort& history,
+                                       const alcedo::EditorHistoryGuardHandle& handle,
+                                       alcedo::PipelineDocument& document,
+                                       const alcedo::NodeId& node_id,
+                                       const alcedo::NodeId& new_predecessor_id,
+                                       const alcedo::NodeId& new_successor_id, std::string* error)
+    -> bool {
+  try {
+    auto change = alcedo::CaptureReconnectColorGradeChange(document, node_id, new_predecessor_id,
+                                                           new_successor_id);
+    return history.CommitPipelineEditBatch(
+        handle, alcedo::MakeReconnectColorGradeBatch(std::move(change)), error);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
+}
+
 TEST_F(EditorDocumentHistoryTest, AddGradeUndoRedoPreservesStableIdsAndCleanValues) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
+                                          &error))
       << error;
   const auto* extra = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
@@ -443,8 +498,9 @@ TEST_F(EditorDocumentHistoryTest, DeleteGradeUndoRestoresNodeMasksAndExactEdges)
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
+                                          &error))
       << error;
   auto* extra = dynamic_cast<alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
@@ -456,7 +512,9 @@ TEST_F(EditorDocumentHistoryTest, DeleteGradeUndoRestoresNodeMasksAndExactEdges)
                                                            alcedo::NodeId{"grade.extra"});
   const auto outgoing  = *alcedo::FindSceneImageSuccessor(guard_->document_->Graph(),
                                                          alcedo::NodeId{"grade.extra"});
-  ASSERT_TRUE(history_.RemoveColorGrade(handle, alcedo::NodeId{"grade.extra"}, &error)) << error;
+  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, *guard_->document_,
+                                             alcedo::NodeId{"grade.extra"}, &error))
+      << error;
   EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   const auto* restored = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
@@ -481,16 +539,16 @@ TEST_F(EditorDocumentHistoryTest, ReconnectUndoRedoRestoresBackboneOrder) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.a"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.a"}, &error))
       << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"}, &error))
       << error;
   const auto before = BackboneNodeIds(*guard_->document_);
-  ASSERT_TRUE(history_.ReconnectColorGrade(handle, alcedo::NodeId{"grade.b"},
-                                           alcedo::NodeId{"develop"},
-                                           alcedo::NodeId{"grade.primary"}, &error))
+  ASSERT_TRUE(CommitCapturedReconnectColorGrade(history_, handle, *guard_->document_,
+                                                alcedo::NodeId{"grade.b"}, alcedo::NodeId{"develop"},
+                                                alcedo::NodeId{"grade.primary"}, &error))
       << error;
   const auto moved = BackboneNodeIds(*guard_->document_);
   EXPECT_NE(moved, before);
@@ -504,15 +562,16 @@ TEST_F(EditorDocumentHistoryTest, InvalidReconnectLeavesDocumentHashAndHistoryHe
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"}, &error))
       << error;
   const auto before_hash  = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
   const auto before_count = guard_->commit_graph_->CommitCount();
   const auto before_head  = guard_->working_head_commit_hash();
-  EXPECT_FALSE(history_.ReconnectColorGrade(handle, alcedo::NodeId{"grade.primary"},
-                                            alcedo::NodeId{"develop"}, alcedo::NodeId{"drt"},
-                                            &error));
+  EXPECT_FALSE(CommitCapturedReconnectColorGrade(history_, handle, *guard_->document_,
+                                                 alcedo::NodeId{"grade.primary"},
+                                                 alcedo::NodeId{"develop"}, alcedo::NodeId{"drt"},
+                                                 &error));
   EXPECT_FALSE(error.empty());
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count);
@@ -538,8 +597,9 @@ TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistory
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
-                                     &error))
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                          alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
+                                          &error))
       << error;
   alcedo::EditorHistorySnapshot added;
   ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &added, &error)) << error;
@@ -559,7 +619,9 @@ TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistory
   EXPECT_EQ(rename_pres.display_name.toStdString(), "Rename Color Grade");
   EXPECT_EQ(rename_pres.after_text.toStdString(), "Sky");
 
-  ASSERT_TRUE(history_.RemoveColorGrade(handle, alcedo::NodeId{"grade.extra"}, &error)) << error;
+  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, *guard_->document_,
+                                             alcedo::NodeId{"grade.extra"}, &error))
+      << error;
   alcedo::EditorHistorySnapshot removed;
   ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &removed, &error)) << error;
   ASSERT_FALSE(removed.commits.empty());
@@ -581,8 +643,9 @@ TEST_F(EditorDocumentHistoryTest,
   const auto before_reason   = history_.LastPublishedRenderReason();
   ASSERT_TRUE(std::filesystem::create_directory(journal_path_));
 
-  EXPECT_FALSE(history_.AddColorGrade(handle, alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.failed"},
-                                      &error));
+  EXPECT_FALSE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.failed"},
+                                           &error));
   EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_document);
   EXPECT_EQ(guard_->working_head_commit_hash(), before_head);

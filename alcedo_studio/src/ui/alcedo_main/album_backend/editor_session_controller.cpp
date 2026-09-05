@@ -651,31 +651,6 @@ void EditorSessionController::Redo() {
   PublishHistoryInvokableReturn(action, result);
 }
 
-auto EditorSessionController::SubmitAddColorGrade(const alcedo::NodeId& before_node_id,
-                                                  const alcedo::NodeId& new_id)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) {
-    alcedo::EditorSessionResult result;
-    result.kind    = alcedo::EditorSessionResultKind::Rejected;
-    result.state   = session_state();
-    result.message = "Editor session backend is unavailable";
-    return result;
-  }
-  return session_backend_->AddColorGrade(before_node_id, new_id);
-}
-
-auto EditorSessionController::SubmitRemoveColorGrade(const alcedo::NodeId& node_id)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) {
-    alcedo::EditorSessionResult result;
-    result.kind    = alcedo::EditorSessionResultKind::Rejected;
-    result.state   = session_state();
-    result.message = "Editor session backend is unavailable";
-    return result;
-  }
-  return session_backend_->RemoveColorGrade(node_id);
-}
-
 auto EditorSessionController::SubmitRenameColorGrade(const alcedo::NodeId& node_id,
                                                      std::string           display_name)
     -> alcedo::EditorSessionResult {
@@ -687,20 +662,6 @@ auto EditorSessionController::SubmitRenameColorGrade(const alcedo::NodeId& node_
     return result;
   }
   return session_backend_->RenameColorGrade(node_id, std::move(display_name));
-}
-
-auto EditorSessionController::SubmitReconnectColorGrade(const alcedo::NodeId& node_id,
-                                                        const alcedo::NodeId& new_predecessor_id,
-                                                        const alcedo::NodeId& new_successor_id)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) {
-    alcedo::EditorSessionResult result;
-    result.kind    = alcedo::EditorSessionResultKind::Rejected;
-    result.state   = session_state();
-    result.message = "Editor session backend is unavailable";
-    return result;
-  }
-  return session_backend_->ReconnectColorGrade(node_id, new_predecessor_id, new_successor_id);
 }
 
 auto EditorSessionController::SubmitNodeGraphTopologyEdit(

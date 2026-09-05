@@ -1066,70 +1066,15 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   return Emit(std::move(result));
 }
 
-auto EditorSessionService::AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
+auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
     -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind           = EditorSessionCommandKind::AddColorGrade;
-    command.before_node_id = before_node_id;
-    command.node_id        = new_id;
-    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return AddColorGrade(queued.before_node_id, queued.node_id);
-    });
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
-      !lifecycle_.has_history_guard()) {
-    return Reject("Color Grade creation requires an interactive history session");
-  }
-  std::string error;
-  if (!dependencies_.history->AddColorGrade(lifecycle_.history_guard(), before_node_id, new_id,
-                                            &error)) {
-    return Reject(error.empty() ? "Color Grade creation failed" : std::move(error));
-  }
-
   const auto          reason = dependencies_.history->LastPublishedRenderReason();
   EditorSessionResult result;
   result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
                                        : EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
-  result.message  = "Color Grade created";
-  if (reason.has_value()) {
-    EditorRenderCommand render_command;
-    render_command.reason       = *reason;
-    render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
-  }
-  BumpHistoryRevision();
-  return Emit(std::move(result));
-}
-
-auto EditorSessionService::RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind    = EditorSessionCommandKind::RemoveColorGrade;
-    command.node_id = node_id;
-    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return RemoveColorGrade(queued.node_id);
-    });
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
-      !lifecycle_.has_history_guard()) {
-    return Reject("Color Grade removal requires an interactive history session");
-  }
-  std::string error;
-  if (!dependencies_.history->RemoveColorGrade(lifecycle_.history_guard(), node_id, &error)) {
-    return Reject(error.empty() ? "Color Grade removal failed" : std::move(error));
-  }
-
-  const auto          reason = dependencies_.history->LastPublishedRenderReason();
-  EditorSessionResult result;
-  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
-                                       : EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Color Grade removed";
+  result.message  = std::move(message);
   if (reason.has_value()) {
     EditorRenderCommand render_command;
     render_command.reason       = *reason;
@@ -1161,73 +1106,14 @@ auto EditorSessionService::RenameColorGrade(const NodeId& node_id, std::string d
                                                std::move(display_name), &error)) {
     return Reject(error.empty() ? "Color Grade rename failed" : std::move(error));
   }
-
-  const auto          reason = dependencies_.history->LastPublishedRenderReason();
-  EditorSessionResult result;
-  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
-                                       : EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Color Grade renamed";
-  if (reason.has_value()) {
-    EditorRenderCommand render_command;
-    render_command.reason       = *reason;
-    render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
-  }
-  BumpHistoryRevision();
-  return Emit(std::move(result));
-}
-
-auto EditorSessionService::ReconnectColorGrade(const NodeId& node_id,
-                                               const NodeId& new_predecessor_id,
-                                               const NodeId& new_successor_id)
-    -> EditorSessionResult {
-  if (!reducing_command_) {
-    EditorSessionCommand command;
-    command.kind                = EditorSessionCommandKind::ReconnectColorGrade;
-    command.node_id             = node_id;
-    command.predecessor_node_id = new_predecessor_id;
-    command.successor_node_id   = new_successor_id;
-    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
-      return ReconnectColorGrade(queued.node_id, queued.predecessor_node_id,
-                                 queued.successor_node_id);
-    });
-  }
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
-      !lifecycle_.has_history_guard()) {
-    return Reject("Color Grade reconnect requires an interactive history session");
-  }
-  std::string error;
-  if (!dependencies_.history->ReconnectColorGrade(lifecycle_.history_guard(), node_id,
-                                                  new_predecessor_id, new_successor_id, &error)) {
-    return Reject(error.empty() ? "Color Grade reconnect failed" : std::move(error));
-  }
-
-  const auto          reason = dependencies_.history->LastPublishedRenderReason();
-  EditorSessionResult result;
-  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
-                                       : EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Color Grade reconnected";
-  if (reason.has_value()) {
-    EditorRenderCommand render_command;
-    render_command.reason       = *reason;
-    render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
-  }
-  BumpHistoryRevision();
-  return Emit(std::move(result));
+  return PublishTypedNodeHistorySuccess("Color Grade renamed");
 }
 
 auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult {
   if (!reducing_command_) {
     EditorSessionCommand command;
-    command.kind             = EditorSessionCommandKind::EditNodeGraph;
-    command.topology_change  = std::move(change);
+    command.kind            = EditorSessionCommandKind::EditNodeGraph;
+    command.topology_change = std::move(change);
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       return EditNodeGraph(queued.topology_change);
     });
@@ -1241,23 +1127,7 @@ auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> Edit
                                             &error)) {
     return Reject(error.empty() ? "Node graph topology edit failed" : std::move(error));
   }
-
-  const auto          reason = dependencies_.history->LastPublishedRenderReason();
-  EditorSessionResult result;
-  result.kind     = reason.has_value() ? EditorSessionResultKind::RenderRouted
-                                       : EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = "Node graph topology updated";
-  if (reason.has_value()) {
-    EditorRenderCommand render_command;
-    render_command.reason       = *reason;
-    render_command.operation_id = current_operation_id_;
-    render_.RouteInitialRender(render_command, result.identity,
-                               lifecycle_.active_image_load_request());
-  }
-  BumpHistoryRevision();
-  return Emit(std::move(result));
+  return PublishTypedNodeHistorySuccess("Node graph topology updated");
 }
 
 auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {

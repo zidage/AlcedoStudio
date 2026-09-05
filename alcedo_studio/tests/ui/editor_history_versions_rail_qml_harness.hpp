@@ -264,27 +264,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("View changed");
   }
 
-  auto AddColorGrade(const NodeId& before_node_id, const NodeId& new_id)
-      -> EditorSessionResult override {
-    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors = AddCleanColorGrade(*document_, before_node_id, new_id);
-    if (!errors.empty()) return Rejected(errors.front().message.c_str());
-    last_added_node_id_ = new_id;
-    ++add_grade_count_;
-    NotifyHistoryChange();
-    return Accepted("Color Grade created");
-  }
-
-  auto RemoveColorGrade(const NodeId& node_id) -> EditorSessionResult override {
-    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors = RemoveColorGradeAndBridge(*document_, node_id);
-    if (!errors.empty()) return Rejected(errors.front().message.c_str());
-    last_removed_node_id_ = node_id;
-    ++remove_grade_count_;
-    NotifyHistoryChange();
-    return Accepted("Color Grade removed");
-  }
-
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override {
     if (fail_node_commands_) return Rejected("mini-Git journal append failed");
@@ -294,20 +273,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++rename_grade_count_;
     NotifyHistoryChange();
     return Accepted("Color Grade renamed");
-  }
-
-  auto ReconnectColorGrade(const NodeId& node_id, const NodeId& new_predecessor_id,
-                           const NodeId& new_successor_id) -> EditorSessionResult override {
-    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors =
-        alcedo::ReconnectColorGrade(*document_, node_id, new_predecessor_id, new_successor_id);
-    if (!errors.empty()) return Rejected(errors.front().message.c_str());
-    last_reconnected_node_id_      = node_id;
-    last_reconnect_predecessor_id_ = new_predecessor_id;
-    last_reconnect_successor_id_   = new_successor_id;
-    ++reconnect_grade_count_;
-    NotifyHistoryChange();
-    return Accepted("Color Grade reconnected");
   }
 
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override {
@@ -394,26 +359,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
   [[nodiscard]] auto patch_count() const -> int { return patch_count_; }
   [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
-  [[nodiscard]] auto add_grade_count() const -> int { return add_grade_count_; }
-  [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
   [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
-  [[nodiscard]] auto reconnect_grade_count() const -> int { return reconnect_grade_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
   [[nodiscard]] auto last_topology_change() const -> const NodeGraphTopologyChange& {
     return last_topology_change_;
   }
-  [[nodiscard]] auto last_added_node_id() const -> NodeId { return last_added_node_id_; }
-  [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
   [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
-  [[nodiscard]] auto last_reconnected_node_id() const -> NodeId {
-    return last_reconnected_node_id_;
-  }
-  [[nodiscard]] auto last_reconnect_predecessor_id() const -> NodeId {
-    return last_reconnect_predecessor_id_;
-  }
-  [[nodiscard]] auto last_reconnect_successor_id() const -> NodeId {
-    return last_reconnect_successor_id_;
-  }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -485,18 +436,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   blocked_rename_count_  = 0;
   int                   patch_count_           = 0;
   int                   view_change_count_     = 0;
-  int                   add_grade_count_       = 0;
-  int                   remove_grade_count_    = 0;
   int                   rename_grade_count_    = 0;
-  int                   reconnect_grade_count_ = 0;
   int                   edit_node_graph_count_ = 0;
   NodeGraphTopologyChange last_topology_change_{};
-  NodeId                last_added_node_id_;
-  NodeId                last_removed_node_id_;
   NodeId                last_renamed_node_id_;
-  NodeId                last_reconnected_node_id_;
-  NodeId                last_reconnect_predecessor_id_;
-  NodeId                last_reconnect_successor_id_;
 };
 
 class RecordingInteractionPolicy final : public QObject {

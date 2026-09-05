@@ -57,8 +57,6 @@ class EditorNodeController : public QObject {
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool canDeleteSelectedColorGrade READ can_delete_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
-  Q_PROPERTY(bool canReconnectSelectedColorGrade READ can_reconnect_selected_color_grade NOTIFY
-                 ActionAvailabilityChanged)
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
   Q_PROPERTY(
       QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY DraftStateChanged)
@@ -179,7 +177,6 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto can_add_color_grade() const -> bool;
   [[nodiscard]] auto can_rename_selected_color_grade() const -> bool;
   [[nodiscard]] auto can_delete_selected_color_grade() const -> bool;
-  [[nodiscard]] auto can_reconnect_selected_color_grade() const -> bool;
   [[nodiscard]] auto incomplete_draft() const -> bool;
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
   [[nodiscard]] auto selected_node_name() const -> QString;

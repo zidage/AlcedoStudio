@@ -207,18 +207,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
 
-  /** Route a clean Color Grade creation through the active session backend. */
-  auto SubmitAddColorGrade(const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id)
-      -> alcedo::EditorSessionResult;
-  /** Route an atomic Color Grade removal through the active session backend. */
-  auto SubmitRemoveColorGrade(const alcedo::NodeId& node_id) -> alcedo::EditorSessionResult;
   /** Route a metadata-only Color Grade rename through the active session backend. */
   auto SubmitRenameColorGrade(const alcedo::NodeId& node_id, std::string display_name)
-      -> alcedo::EditorSessionResult;
-  /** Route a Color Grade backbone move through the active session backend. */
-  auto SubmitReconnectColorGrade(const alcedo::NodeId& node_id,
-                                 const alcedo::NodeId& new_predecessor_id,
-                                 const alcedo::NodeId& new_successor_id)
       -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)

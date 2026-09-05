@@ -291,12 +291,6 @@ auto EditorNodeController::can_delete_selected_color_grade() const -> bool {
   return can_add_color_grade() && IsColorGrade(selected_node_id_);
 }
 
-auto EditorNodeController::can_reconnect_selected_color_grade() const -> bool {
-  return can_rename_selected_color_grade() ||
-         (has_snapshot_ && NodeFor(selected_node_id_) != nullptr &&
-          NodeFor(selected_node_id_)->node_kind == EditorNodeKind::Develop);
-}
-
 auto EditorNodeController::incomplete_draft() const -> bool {
   return draft_ != nullptr && !draft_->SubmissionValid();
 }

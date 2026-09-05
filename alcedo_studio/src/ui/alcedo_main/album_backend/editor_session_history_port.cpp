@@ -77,27 +77,6 @@ auto EditorSessionHistoryPort::CommitPipelineEditBatch(const alcedo::EditorHisto
   return mutation_->CommitPipelineEditBatch(guard, std::move(batch), error);
 }
 
-auto EditorSessionHistoryPort::AddColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
-                                             const alcedo::NodeId& before_node_id,
-                                             const alcedo::NodeId& new_id, std::string* error)
-    -> bool {
-  return mutation_->AddColorGrade(guard, before_node_id, new_id, error);
-}
-
-auto EditorSessionHistoryPort::RemoveColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
-                                                const alcedo::NodeId& node_id, std::string* error)
-    -> bool {
-  return mutation_->RemoveColorGrade(guard, node_id, error);
-}
-
-auto EditorSessionHistoryPort::ReconnectColorGrade(const alcedo::EditorHistoryGuardHandle& guard,
-                                                   const alcedo::NodeId& node_id,
-                                                   const alcedo::NodeId& new_predecessor_id,
-                                                   const alcedo::NodeId& new_successor_id,
-                                                   std::string* error) -> bool {
-  return mutation_->ReconnectColorGrade(guard, node_id, new_predecessor_id, new_successor_id, error);
-}
-
 auto EditorSessionHistoryPort::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
                                              alcedo::NodeGraphTopologyChange change,
                                              std::string* error) -> bool {

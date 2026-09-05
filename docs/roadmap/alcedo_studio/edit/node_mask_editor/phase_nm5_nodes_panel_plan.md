@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8c complete 2026-09-04; NM5.8d–NM5.8g pending
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8d complete 2026-09-04; NM5.8e–NM5.8g pending
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -3263,6 +3263,148 @@ topology command publishes one batch/revision/Quality render, Rename publishes n
 and old payloads still replay with exact names/counters and pasted Mask assets. Record a final
 production caller scan for every removed public symbol.
 
+##### NM5.8d completion record (2026-09-04)
+
+**Status:** complete — unused interactive Add/Remove/Reconnect session entries deleted; stored
+typed payloads, Capture/Make helpers, document-transfer producers, inverse replay, paste, and
+Mask reachability retained; Rename and EditNodeGraph share one success-publication helper
+
+**Primary success call chain:**
+
+```text
+EditorNodeController draft AddColorGrade / RemoveColorGrade / Connect
+  -> MaybeSubmitDraft
+  -> EditorSessionController::SubmitNodeGraphTopologyEdit
+  -> EditorSessionService::EditNodeGraph
+  -> IEditorHistoryPort::EditNodeGraph
+  -> EditorHistoryMutation::EditNodeGraph
+  -> EditorSessionService::PublishTypedNodeHistorySuccess
+  -> LastPublishedRenderReason GraphTopologyChanged
+  -> one Quality RouteInitialRender + BumpHistoryRevision + Emit
+```
+
+**Rename success call chain:**
+
+```text
+EditorNodeController::renameColorGrade
+  -> EditorSessionController::SubmitRenameColorGrade
+  -> EditorSessionService::RenameColorGrade
+  -> IEditorHistoryPort::RenameColorGrade
+  -> EditorSessionService::PublishTypedNodeHistorySuccess
+  -> LastPublishedRenderReason empty
+  -> Accepted, no photo render, BumpHistoryRevision + Emit
+```
+
+**Stored typed-payload replay (not an interactive session command):**
+
+```text
+CaptureAddColorGradeChange / CaptureRemoveColorGradeChange / CaptureReconnectColorGradeChange
+  -> MakeAddColorGradeBatch / MakeRemoveColorGradeBatch / MakeReconnectColorGradeBatch
+  -> EditorSessionHistoryPort::CommitPipelineEditBatch
+  -> EditorHistoryMutation::CommitPipelineEditBatch
+  -> PublishAppliedTypedBatch
+  -> Undo / Redo / WAL reopen / paste restore names, counters, and Mask assets
+```
+
+**Primary failure call chain:**
+
+```text
+RenameColorGrade or EditNodeGraph history mutation returns false (for example journal append)
+  -> EditorSessionService::Reject with the exact mutation error
+  -> no BumpHistoryRevision, no RouteInitialRender
+```
+
+**Production caller scan (removed public symbols; `alcedo_studio/src` matches: none):**
+
+- `SubmitAddColorGrade`, `SubmitRemoveColorGrade`, `SubmitReconnectColorGrade`
+- `canReconnectSelectedColorGrade` / `can_reconnect_selected_color_grade`
+- `IEditorSessionBackend` / `EditorSessionService` `AddColorGrade`, `RemoveColorGrade`,
+  `ReconnectColorGrade`
+- `EditorSessionCommandKind::{Add,Remove,Reconnect}ColorGrade` and the extra
+  `before_node_id` / `predecessor_node_id` / `successor_node_id` command fields
+- `IEditorHistoryPort` / `EditorSessionHistoryPort` / `EditorHistoryMutation`
+  interactive Add/Remove/Reconnect methods
+- `EditorActionPolicy` cases for those three kinds
+
+Retained names that still have production callers: draft
+`EditorNodeGraphDraft::AddColorGrade` / `RemoveColorGrade`; domain
+`ReconnectColorGrade`; typed `AddColorGradeChange` / `RemoveColorGradeChange` /
+`ReconnectColorGradeChange`; Capture/Make helpers; `document_transfer.cpp` Add/Remove
+producers; codec, applier, presentation keys, and Mask reachability.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RenameCreatesOneHistoryChangeWithoutRender` | `EditorSessionNodeCommandTest` | PASS |
+| `EditNodeGraphCreatesOneHistoryChangeAndRoutesTopologyQualityRender` | `EditorSessionNodeCommandTest` | PASS |
+| `JournalFailurePublishesExactErrorWithoutHistoryOrRenderChange` | `EditorSessionNodeCommandTest` | PASS |
+| `RenameAndEditNodeGraphUseTheSameAdmissionDecisionAsSettledAdjustments` | `EditorSessionActionPolicyCq3Test` | PASS |
+| Typed Add/Remove/Reconnect parse, serialize, inverse, and presentation | `PipelineEditBatchTest` | PASS |
+| Applier replay of stored typed batches | `PipelineHistoryApplierTest` | PASS |
+| `PasteRemapsEveryNodeAdjustmentAndMaskId` | `DocumentTransferTest` | PASS |
+| Inactive Version and WAL keep referenced Mask assets | `MaskAssetReachabilityTest` | PASS |
+| `AddGradeUndoRedoPreservesStableIdsAndCleanValues` | `EditorSessionHistoryPortTest` | PASS |
+| `DeleteGradeUndoRestoresNodeMasksAndExactEdges` | `EditorSessionHistoryPortTest` | PASS |
+| `ReconnectUndoRedoRestoresBackboneOrder` | `EditorSessionHistoryPortTest` | PASS |
+| `AddRenameAndDeleteSnapshotsPresentTypedHistoryTitles` | `EditorSessionHistoryPortTest` | PASS |
+| `AddJournalFailureRestoresDocumentHeadCounterAndPublishedRenderReason` | `EditorSessionHistoryPortTest` | PASS |
+| `RecoveryAppliesCommittedTypedSuffixExactlyOnce` (exact name and counter) | `EditorSessionHistoryPortTest` | PASS |
+| Incomplete draft still publishes no product topology command | `EditorNodeSelectionLayoutTest` | PASS |
+| Incomplete draft still publishes no product topology command | `EditorNodesPanelQmlTest` | PASS |
+
+**Commands:**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionNodeCommandTest EditorSessionActionPolicyCq3Test PipelineEditBatchTest PipelineHistoryApplierTest DocumentTransferTest MaskAssetReachabilityTest EditorSessionHistoryPortTest EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest
+build/debug/alcedo_studio/tests/app/EditorSessionNodeCommandTest_runtime/EditorSessionNodeCommandTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/app/EditorSessionActionPolicyCq3Test_runtime/EditorSessionActionPolicyCq3Test.exe --gtest_color=no
+build/debug/alcedo_studio/tests/edit/PipelineEditBatchTest_runtime/PipelineEditBatchTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/app/PipelineHistoryApplierTest_runtime/PipelineHistoryApplierTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/app/DocumentTransferTest_runtime/DocumentTransferTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/app/MaskAssetReachabilityTest_runtime/MaskAssetReachabilityTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorSessionHistoryPortTest_runtime/EditorSessionHistoryPortTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodeSelectionLayoutTest_runtime/EditorNodeSelectionLayoutTest.exe --gtest_color=no
+build/debug/alcedo_studio/tests/ui/EditorNodesPanelQmlTest_runtime/EditorNodesPanelQmlTest.exe --gtest_color=no
+```
+
+Suite totals: `EditorSessionNodeCommandTest` 3/3; `EditorSessionActionPolicyCq3Test` 12/12;
+`PipelineEditBatchTest` 17/17; `PipelineHistoryApplierTest` 12/12; `DocumentTransferTest` 6/6;
+`MaskAssetReachabilityTest` 2/2; `EditorSessionHistoryPortTest` 73/73 (includes
+`EditorDocumentHistoryTest` and `EditorVersionCheckoutTest`); `EditorNodeSelectionLayoutTest`
+37/37; `EditorNodesPanelQmlTest` 22/22. Logs under `build/tmp/nm5-8d/`. Existing Qt/QuickQanava
+QML warnings about native-style customization, unmatched `Connections` handlers, and undefined
+dock properties did not affect pass/fail.
+
+**Checklist / exit condition:**
+
+- [x] Unused `SubmitAddColorGrade` / `SubmitRemoveColorGrade` / `SubmitReconnectColorGrade`
+      wrappers and `canReconnectSelectedColorGrade` deleted after a production caller scan.
+- [x] Matching unused service, queue, action-policy, history-port, and mutation interactive
+      entries removed; tests moved to `EditNodeGraph` or `CommitPipelineEditBatch`.
+- [x] `RenameColorGrade` and `EditNodeGraph` remain distinct commands; shared success tail is
+      `PublishTypedNodeHistorySuccess` with no extra state.
+- [x] One topology command publishes one history change, one revision bump, and one Quality
+      `GraphTopologyChanged` render; Rename publishes no photo render.
+- [x] Stored Add/Remove/Reconnect parsing, serialization, inverse replay, presentation,
+      document-transfer producers, paste Mask remapping, and Mask reachability retained.
+- [x] Stored kind strings, hashes, format versions, name-counter semantics, and paste behavior
+      unchanged as a cleanup side effect.
+- [x] No general session/pipeline/history rewrite.
+
+**LOC note (grill-code-review):** Working-tree diff is 153 insertions and 629 deletions across
+21 tracked files. After this stage: `editor_session_service.cpp` 1,560 lines (header 517);
+`editor_history_mutation.cpp` 978 (header 85); `editor_session_controller.cpp` 1,351;
+`editor_node_controller.cpp` 1,031. The session service remains above the approximate split
+threshold; this stage only deleted unused command entries and added a small success helper, as
+the plan required. No general service rewrite.
+
+**Residual gaps:** NM5.8e still owns persistent topology Undo/Redo, WAL recovery, reopen,
+checkout, and long-lived Loader evidence for `NodeGraphTopologyChange` submitted through the
+production history port. NM5.8f still owns keyboard, accessibility, localization, large-font,
+and visual-state qualification. NM5.8g still owns fresh install/package, notices, available
+macOS, and final regression evidence. NM8 retains real-RAW and three-backend qualification.
+
 #### 16.3.5 NM5.8e — Real history and lifecycle evidence
 
 **Files:** `editor_nodes_panel_qml_test.cpp`, `editor_node_controller_test.cpp`,
@@ -3369,7 +3511,7 @@ checks here.
 | NM5.8a | Complete 2026-09-04 | One update route; queued teardown and layout restore |
 | NM5.8b | Complete 2026-09-04 | Bounded reversal/copy work; exact draft values and counters |
 | NM5.8c | Complete 2026-09-04 | Delegate ownership; primitive failure and reversal matrix |
-| NM5.8d | Pending | Caller deletion audit; retained typed replay/paste |
+| NM5.8d | Complete 2026-09-04 | Caller deletion audit; retained typed replay/paste |
 | NM5.8e | Pending | Persistent topology history; lifecycle and failure recovery |
 | NM5.8f | Pending | Keyboard, screen reader, localization, visual matrix |
 | NM5.8g | Pending | Fresh builds, regression, installed packages, notices |

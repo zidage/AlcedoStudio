@@ -245,7 +245,6 @@ TEST_F(EditorNodesPanelQmlTest, AddActionCreatesAndSelectsOneCleanColorGrade) {
   ASSERT_NE(nodes, nullptr);
   ASSERT_NE(adapter, nullptr);
   QTRY_COMPARE_WITH_TIMEOUT(nodes->backbone_node_ids().size(), 4, 2000);
-  EXPECT_EQ(backend_.add_grade_count(), 0);
   EXPECT_EQ(backend_.edit_node_graph_count(), 0);
   EXPECT_EQ(backend_.history_revision(), history_before);
   EXPECT_TRUE(nodes->incomplete_draft());
@@ -284,7 +283,6 @@ TEST_F(EditorNodesPanelQmlTest, CtrlPlusAddsTheNextCleanColorGrade) {
   QTest::keyClick(window_, Qt::Key_Plus, Qt::ControlModifier);
   ProcessEvents();
 
-  EXPECT_EQ(backend_.add_grade_count(), 0);
   EXPECT_EQ(backend_.edit_node_graph_count(), 0);
   EXPECT_EQ(nodes->selected_node_name(), QStringLiteral("Color Grade 2"));
   auto* adapter = Adapter();
@@ -369,7 +367,6 @@ TEST_F(EditorNodesPanelQmlTest, DeleteKeyRemovesSelectedGradeAndSelectsItsSucces
   QTest::keyClick(window_, Qt::Key_Delete);
   ProcessEvents();
 
-  EXPECT_EQ(backend_.remove_grade_count(), 0);
   EXPECT_EQ(backend_.edit_node_graph_count(), 0);
   EXPECT_TRUE(nodes->incomplete_draft());
   EXPECT_NE(nodes->selected_node_id(), NodeId{"grade.primary"});
