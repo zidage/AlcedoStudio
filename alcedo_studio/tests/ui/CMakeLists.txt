@@ -595,6 +595,39 @@ target_link_libraries(EditorAdjustmentModelTest
 alcedo_ui_gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
 alcedo_register_test_target(EditorAdjustmentModelTest ui)
 
+# Slider-to-history-to-coordinator ownership boundaries. Uses a latch-blocked
+# renderer and the live Mini-Git history port; no GPU.
+add_executable(EditorSerialInputBoundaryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_serial_input_boundary_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(EditorSerialInputBoundaryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorSerialInputBoundaryTest
+  PRIVATE
+    AlbumBackendLib
+    EditorSessionService
+    Operators
+    EditPipeline
+    EditHistory
+    EditorAdjustmentPipeline
+    EditorPipelineCommandService
+    GTest::gtest
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorSerialInputBoundaryTest
+    TEST_PREFIX "EditorSerialInputBoundaryTest."
+    PROPERTIES LABELS "editor_session"
+)
+alcedo_register_test_target(EditorSerialInputBoundaryTest ui)
+
 # Phase 6A: shared QML adjustment controls. Loads the controls from source via
 # an inline harness; a RecordingSubmitter stands in for editorSession.
 add_executable(EditorAdjustmentControlQmlTest

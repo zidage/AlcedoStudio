@@ -234,7 +234,7 @@ alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 # EditorSessionCommandQueue is linked explicitly because the service's public
 # header exposes the queue types while linking the queue library privately.
 add_executable(EditorRenderCoordinatorTest ${ALCEDO_TEST_ROOT}/app/editor_render_coordinator_test.cpp)
-target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorRenderCoordinatorTest
   EditorSessionService EditorSessionCommandQueue GTest::gtest_main)
 gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."

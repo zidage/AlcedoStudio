@@ -2,7 +2,7 @@
 
 Date: 2026-08-29
 
-Status: NM0, NM2, NM3, and NM4 complete; NM1 in progress; NM5-NM8 planned. NML was
+Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1 complete; NM1 status retained below; NM6.2-NM8 planned. NML was
 cancelled on 2026-08-30.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
@@ -17,6 +17,14 @@ disk cache service 拥有写回/失效机制；不在 R 中实施，也不作为
 2026-09-02 UI revision: NM4 is complete. The approved node-editor UI, VI mapping,
 QuickQanava boundary, and official documentation sources for NM5-NM8 are fixed before NM5 starts.
 See the [NM5 execution plan](node_mask_editor/phase_nm5_nodes_panel_plan.md) for its sub-phases.
+
+2026-09-05 NM6 design approval: NM5 is complete. The
+[NM6 execution plan](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) now defines
+serial render-paced input consumption, the Interactive 16 ms total target, shared three-backend
+Grade/LLF execution, dependency-version session caches, and the node-name/EXIF header.
+These decisions replace per-frame whole-parameter hashing and retaining old results for Undo.
+NM6.1 characterization of current input, ownership, and completion boundaries is complete.
+NM6.2+ has not started. Earlier NM1 status is not re-qualified by this documentation update.
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -1226,16 +1234,18 @@ not create three Geometry instances.
 The adjustment stack has one fixed context header below the scope area and above the adjustment
 navigation.
 
-The header shows:
+The header has two columns separated by a structural vertical divider:
 
-- the current node display name;
-- the node kind on a separate plain-text line;
-- the selected Mask name when the Masks panel has a valid Mask selection.
+- left: only the current node display name, vertically centered, with at most two lines;
+- right: current-image shutter speed, ISO, aperture, and focal length, in that order, one per row.
 
-The header uses a flat layout and a bottom divider. It does not use a new panel surface. It does not
-use a pill, badge, chip, tag, or status dot. It does not join values with a decorative separator.
-The node display name uses `fontSizeTitle` and `fontWeightStrong`. The node kind and Mask name use
-caption tokens.
+Do not add a node-kind, Mask-name, or current-node subtitle. Missing EXIF values display an em dash
+in the same four-row layout. Node selection changes the name and adjustment content; EXIF changes
+only with the image or its metadata. Focal length is the actual lens focal length, not its 35 mm equivalent.
+
+The header uses the existing flat surface and bottom divider. It does not add a pill, badge, chip,
+tag, status dot, or decorative combined label. The node name uses `fontSizeTitle` and
+`fontWeightStrong`; EXIF labels use caption tokens and values use `dataFontFamily`.
 
 The header identifies the owner of the visible parameters. It does not store a second selection.
 It does not show or change a Color Grade On/Off value.
@@ -1292,6 +1302,29 @@ The adjustment stack continues to use `editorSidePanelWidthMin` and
 width. User-visible text uses `qsTr()`. The header elides a long name and exposes the full name to
 assistive technology. A large system font does not cover the navigation or the first panel
 control.
+
+### 17.5 Serial input, rendering and cache validity
+
+UI motion updates local control values and enqueues minimal typed changes. It does not synchronously
+take the live render lock or mutate history/document state. The existing owner consumes queued input
+only between frames: apply parameters once, update dependency invalidation, render, complete safely,
+then consume the next batch. Release is an ordered boundary that commits the final edit once and
+requests Quality base. A pure selection remains UI-only; finishing an existing edit retains its own
+history/render semantics. Do not design concurrent live-parameter writes during rendering.
+
+Interactive consumption and rendering have a 16 ms total target. Count parameter application,
+invalidation and necessary GPU/handoff work in the same cycle. Use only the remaining pacing time;
+an over-budget cycle waits for completion without an extra 16 ms or a quality reduction.
+Quality requests bypass that pacing wait after existing ownership completes. Qt presentation
+wakeups alone do not establish this producer budget.
+
+Session result validity uses owner-maintained dependency revisions plus source/document identity
+and representation conditions. Do not serialize or hash whole node parameters on each frame.
+Shared templates own Grade/LLF decisions and dependency propagation; backend specializations own
+individual GPU operations. LLF source/result validity follows actual upstream operations, including
+sensor parameters and active raster changes. Each workspace retains only the current result per
+output. Undo/Redo requests normal Quality base; GPU leases may temporarily retain replaced buffers
+but do not form a history cache. See the NM6 plan for precise ownership, failure and test requirements.
 
 ---
 
@@ -1453,7 +1486,7 @@ project and does not recalculate an old commit.
 
 NM1 uses the development graph format to complete model and document I/O. NM2 and NM3 change node
 fields and ownership. These changes do not require NM1 to publish the final project format. NM4
-proves golden JSON, round-trip behavior, error handling, history recovery, and real-project reopen
+proves expected serialized JSON, round-trip behavior, error handling, history recovery, and real-project reopen
 for the new format. Validate data at the read boundary. Do not distribute format checks across
 render callers.
 
@@ -1564,8 +1597,8 @@ path with a Markdown link when the file exists.
 | NM2 — Multi-Grade Runtime and Ownership | complete | [node_mask_editor/phase_nm2_multi_grade_runtime_plan.md](node_mask_editor/phase_nm2_multi_grade_runtime_plan.md) | Execute multiple Color Grade nodes in all three backends and apply parameter ownership. |
 | NM3 — Multi-Mask Model and Runtime | complete | [node_mask_editor/phase_nm3_multi_mask_runtime_plan.md](node_mask_editor/phase_nm3_multi_mask_runtime_plan.md) | Support multiple Masks per node, Union, range fields, and immutable raster assets. |
 | NM4 — History, Version, Recovery, and Paste | complete | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | Complete typed history, one DAG per Version, recovery, and Paste-only transfer. |
-| NM5 — QuickQanava Nodes Panel | planned | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
-| NM6 — Node-aware Adjustment Stack | planned | `node_mask_editor/phase_nm6_node_aware_adjustments_plan.md` | Make the right adjustment panel use Develop, Color Grade, and DRT/Post context. |
+| NM5 — QuickQanava Nodes Panel | complete 2026-09-05 | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
+| NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
 | NM7 — Viewer Mask Authoring | planned | `node_mask_editor/phase_nm7_viewer_mask_authoring_plan.md` | Connect Brush, Radial, and Linear Gradient authoring to QSG overlays, Interactive and Quality rendering, and history. |
 | NM8 — Product Qualification and Cutover | planned | `node_mask_editor/phase_nm8_product_qualification_plan.md` | Qualify all three backends, real RAW files, reopen, Version, Paste, performance, and package behavior. |
 
@@ -1818,15 +1851,21 @@ metadata, reduced-motion behavior, and package load pass their tests.
 post-delete selection rule, and Version-checkout selection restore. An earlier change to the right
 panel would continue to depend on an implicit primary Color Grade.
 
-**Scope:** Add `EditorAdjustmentContext`. Show only the valid panels for Develop, Color Grade, and
-DRT/Post. Keep Geometry at document scope. Make each panel `loadFromSnapshot()` read the current
-context. Make the shared slider interface capture `NodeId` and `AdjustmentInstanceId`. A node
-selection change updates the UI and does not request a photo render. The context header does not
-show a Color Grade On/Off value, pill, badge, chip, tag, status dot, or decorative separator label.
+**Scope:** Follow the [NM6 execution plan](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md).
+Add read-only `EditorAdjustmentContext`, supported Develop/Color Grade/DRT/Post panels, shared
+document Geometry and a node-name/EXIF header. Capture exact input targets and load values without
+submitting edits. Establish queued UI input and serial owner apply/render cycles with a 16 ms
+Interactive total target. Unify three-backend Grade/LLF orchestration and replace whole-parameter
+session result hashes with dependency revisions. Retain only current results, not Undo history caches.
+A pure node selection does not request a photo render. The header has no node-type subtitle,
+Color Grade On/Off value, pill, badge, chip, tag, status dot, or decorative combined label.
 
 **Exit criteria:** Tests pass for all three node contexts, selection restore, panel re-entry,
 Version checkout, load-only paths, provisional and settled input, and full history targets. A Color
-Grade context does not contain RAW Decode or DRT/Post-only controls.
+Grade context does not contain RAW Decode or DRT/Post-only controls. Tests prove no live mutation
+during rendering, no GUI render-lock wait from input, correct pacing and final-value delivery,
+shared backend decisions, LLF dependency completeness, cached/fresh pixel agreement, and bounded
+current-result storage. Runtime/platform evidence is required; this design approval is not test evidence.
 
 **Required official QuickQanava documentation:**
 
@@ -2054,7 +2093,11 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - Brush provisional update 合并 dirty rectangle；
 - settled stroke 只保存一次完整新 asset；
 - graph static plan 只在 topology/adjustment structure 改变时重建；
-- 多 Color Grade 结果缓存按 NodeId + input content + node params/mask content 分层；
+- 多 Color Grade 会话结果按输出身份、依赖变化版本和表示条件验证；不逐帧序列化或哈希整个节点参数体；
+- UI 滑动只更新局部显示并入队；owner 在帧间消费参数，应用、失效处理与渲染严格串行；
+- Interactive 16 ms 为消费到安全完成的一轮总目标；超时不重叠、不额外等待 16 ms、不降低质量；
+- 三后端共用 Grade/LLF 编排与有效性决策，具体 GPU 操作由 backend 特化；
+- 每个工作区每个输出只保留当前有效结果；不为 Undo 保存旧参数结果，临时 GPU lease 保留单独计量；
 - node deletion/reconnect 允许淘汰不可达 node cache，但必须遵守 GPU submission lease；
 - panel close 后没有残留 Qan delegates 或 QML connection 泄漏；
 - NM8 必须记录同一真实 RAW、同一 viewport、同一 backend 的单节点基线和多节点/多 Mask 数据。
@@ -2087,7 +2130,7 @@ NM1.4 删除整图复制和产品 Apply 的 stage 覆盖，再复用后台 execu
 
 症状：控制点显示范围与最终导出 coverage 不一致。
 
-处理：共享坐标、参数和公式；golden/reference tests 同时验证 overlay 输入与 evaluator 输出。
+处理：共享坐标、参数和公式；使用有明确容差的参考结果测试同时验证 overlay 输入与 evaluator 输出。
 
 ### 25.4 Brush asset 可变导致 Undo 损坏
 

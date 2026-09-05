@@ -151,6 +151,21 @@ TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSett
   EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.3);
 }
 
+// Control value and submitted live patch are the same object-state at return:
+// updateDrag writes value_ then calls submitPatch before returning. There is no
+// queued-but-unapplied live value on this path.
+TEST(EditorAdjustmentModelTest, PointerDragWritesControlValueAndSubmitsLivePatchBeforeReturn) {
+  RecordingSubmitter sub;
+  auto               m = makeValueModel(sub);
+  m->beginDrag();
+  m->updateDrag(0.4);
+  ASSERT_EQ(sub.calls.size(), 1u);
+  EXPECT_FALSE(sub.calls.front().settled);
+  EXPECT_DOUBLE_EQ(m->value(), 0.4);
+  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.calls.front().params), m->value());
+  m->finishDrag();
+}
+
 // 2. A wheel/keyboard burst submits one interactive patch per value and one
 // settled patch after the debounce stabilizes.
 TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettledAfterDebounce) {
