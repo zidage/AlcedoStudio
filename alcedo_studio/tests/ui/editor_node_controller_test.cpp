@@ -20,6 +20,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "type/type.hpp"
+#include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
@@ -147,9 +148,7 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto rename_count() const -> int { return rename_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
-  [[nodiscard]] auto active_version_read_count() const -> int {
-    return active_version_read_count_;
-  }
+  [[nodiscard]] auto active_version_read_count() const -> int { return active_version_read_count_; }
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
     return history_snapshot_read_count_;
   }
@@ -174,11 +173,11 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   alcedo::ImageLoadRequestId                        request_{};
   alcedo::EditorActionAvailability                  availability_{};
   IEditorSessionBackend::ActionAvailabilityObserver availability_observer_;
-  bool                                              fail_commands_ = false;
-  int                                               rename_count_  = 0;
-  int                                               edit_node_graph_count_ = 0;
-  std::uint64_t                                     history_revision_ = 0;
-  mutable int                                       active_version_read_count_ = 0;
+  bool                                              fail_commands_               = false;
+  int                                               rename_count_                = 0;
+  int                                               edit_node_graph_count_       = 0;
+  std::uint64_t                                     history_revision_            = 0;
+  mutable int                                       active_version_read_count_   = 0;
   int                                               history_snapshot_read_count_ = 0;
   alcedo::NodeGraphTopologyChange                   last_topology_change_{};
 };
@@ -424,6 +423,31 @@ TEST(EditorNodeController, CompletingThePathSubmitsOneTopologyChange) {
   EXPECT_EQ(controller.ActiveNodes().size(), 4u);
 }
 
+TEST(EditorNodeController, ProductTopologyCommitKeepsProjectionFailureVisible) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(33);
+  EditorSessionController    session(&backend);
+  EditorNodeController       controller;
+  alcedo::ui::AlcedoQanGraph adapter;
+  controller.set_editor_session(&session);
+  controller.set_graph_adapter(&adapter);
+
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  const auto extra = controller.selected_node_id();
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
+
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_NE(backend.Document().Graph().FindNode(extra), nullptr);
+  EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
+  EXPECT_FALSE(adapter.has_projection());
+  EXPECT_EQ(controller.last_error(), QStringLiteral("AlcedoQanGraph has no Qan graph"));
+
+  QCoreApplication::processEvents();
+  EXPECT_EQ(controller.last_error(), QStringLiteral("AlcedoQanGraph has no Qan graph"));
+  EXPECT_EQ(controller.snapshot().nodes.size(), 4u);
+}
+
 TEST(EditorNodeController, DevelopAndDrtRejectUnsupportedPortRoles) {
   DocumentSessionBackend backend;
   backend.SetGeneration(32);
@@ -450,7 +474,7 @@ TEST(EditorNodeController, SelfConnectAndStaleGenerationLeaveTheDraftUnchanged) 
   EditorNodeController    controller;
   controller.set_editor_session(&session);
   ASSERT_TRUE(controller.addCleanColorGrade());
-  const auto extra = controller.selected_node_id_string();
+  const auto extra  = controller.selected_node_id_string();
   const auto before = controller.ActiveEdges().size();
 
   EXPECT_FALSE(controller.requestConnect(extra, extra));
@@ -496,7 +520,7 @@ TEST(EditorNodeController, OrdinaryDraftEditsDoNotCopyIntoTheCommittedSnapshot) 
 TEST(EditorNodeController, IdenticalCommittedProjectionDoesNotPublishOrQueueAnotherApply) {
   EditorNodeController controller;
   ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
-  const auto queued_after_first = controller.queued_projection_apply_count();
+  const auto queued_after_first   = controller.queued_projection_apply_count();
   const auto revision_after_first = controller.projection_revision();
   EXPECT_GE(queued_after_first, 1);
   ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
@@ -513,8 +537,8 @@ TEST(EditorNodeController, RepeatedSessionStateChangesDoNotReadHistoryOrRepublis
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
-  const auto revision = controller.projection_revision();
-  const auto queued   = controller.queued_projection_apply_count();
+  const auto revision             = controller.projection_revision();
+  const auto queued               = controller.queued_projection_apply_count();
   const auto active_version_reads = backend.active_version_read_count();
 
   for (int index = 0; index < 20; ++index) {
@@ -551,8 +575,8 @@ TEST(EditorNodeController, ChangedHistoryProjectionPublishesExactlyOneApply) {
   controller.set_editor_session(&session);
   const auto revision = controller.projection_revision();
   const auto queued   = controller.queued_projection_apply_count();
-  ASSERT_TRUE(alcedo::RenameColorGrade(backend.Document(), NodeId{"grade.primary"}, "Updated")
-                  .empty());
+  ASSERT_TRUE(
+      alcedo::RenameColorGrade(backend.Document(), NodeId{"grade.primary"}, "Updated").empty());
 
   backend.PublishHistoryChange();
 

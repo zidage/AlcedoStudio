@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8d complete 2026-09-04; NM5.8e–NM5.8g pending
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8e complete 2026-09-05; NM5.8f–NM5.8g pending
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -3399,11 +3399,9 @@ dock properties did not affect pass/fail.
 threshold; this stage only deleted unused command entries and added a small success helper, as
 the plan required. No general service rewrite.
 
-**Residual gaps:** NM5.8e still owns persistent topology Undo/Redo, WAL recovery, reopen,
-checkout, and long-lived Loader evidence for `NodeGraphTopologyChange` submitted through the
-production history port. NM5.8f still owns keyboard, accessibility, localization, large-font,
-and visual-state qualification. NM5.8g still owns fresh install/package, notices, available
-macOS, and final regression evidence. NM8 retains real-RAW and three-backend qualification.
+**Residual gaps:** NM5.8f still owns keyboard, accessibility, localization, large-font, and
+visual-state qualification. NM5.8g still owns fresh install/package, notices, available macOS,
+and final regression evidence. NM8 retains real-RAW and three-backend qualification.
 
 #### 16.3.5 NM5.8e — Real history and lifecycle evidence
 
@@ -3512,9 +3510,76 @@ checks here.
 | NM5.8b | Complete 2026-09-04 | Bounded reversal/copy work; exact draft values and counters |
 | NM5.8c | Complete 2026-09-04 | Delegate ownership; primitive failure and reversal matrix |
 | NM5.8d | Complete 2026-09-04 | Caller deletion audit; retained typed replay/paste |
-| NM5.8e | Pending | Persistent topology history; lifecycle and failure recovery |
+| NM5.8e | Complete 2026-09-05 | Persistent topology history; lifecycle and failure recovery |
 | NM5.8f | Pending | Keyboard, screen reader, localization, visual matrix |
 | NM5.8g | Pending | Fresh builds, regression, installed packages, notices |
+
+#### NM5.8e completion — 2026-09-05
+
+**Status:** Complete. The exact topology history path and the long-lived Nodes Loader path now
+have production evidence. The new persistent-history source is registered in
+`alcedo_studio/tests/ui/CMakeLists.txt` under `EditorSessionHistoryPortTest`.
+
+**Implementation and primary call chains:**
+
+- `EditorNodeController::MaybeSubmitDraft` → `EditorSessionController::SubmitNodeGraphTopologyEdit`
+  → `EditorSessionHistoryPort::EditNodeGraph` → `EditorHistoryMutation::EditNodeGraph` → typed
+  Mini-Git publication and `ApplyHistoryCommitToLivePipeline`. A successful product commit now
+  retains a projection-promotion error instead of clearing it after queuing the refresh.
+- `EditorNodeGraphDraft::FromDocument` → `MakeChange` → the production history port → temporary
+  DuckDB project storage. The persistent test asserts exact serialized documents, ordered nodes and
+  edges, the Color Grade counter, active Version/head, Brush Mask values, and render reasons across
+  Undo, Redo, WAL recovery, reopen, and checkout of a root Version.
+- `EditorNodesPanel.qml` Loader → `AlcedoQanGraph` → `qan::NodeItem` ownership. The lifecycle test
+  queues a rename before each teardown, reopens the page, checks the new selection, and observes
+  three live Qan node items while open and zero after close for 100 cycles.
+
+**Executable evidence:**
+
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest`
+  completed successfully. The focused `NodeGraphTopologyHistory.*` run passed 2/2, including the
+  exact WAL append failure and the complete production persistence path.
+- Runtime commands used the wrapper-built executables with `--gtest_color=no`: the complete
+  `EditorSessionHistoryPortTest`, `PipelineHistoryApplierTest`, `EditorSessionNodeCommandTest`,
+  `EditorNodeSelectionLayoutTest`, and `EditorNodesPanelQmlTest` binaries, plus focused filters
+  `NodeGraphTopologyHistory.*`,
+  `EditorNodeController.ProductTopologyCommitKeepsProjectionFailureVisible`, and
+  `EditorNodesPanelQmlTest.RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes`.
+- The complete `EditorSessionHistoryPortTest` binary passed 75/75. This includes the new topology
+  source, existing typed-history coverage, `EditorVersionCheckoutTest`, and storage reopen cases.
+- `PipelineHistoryApplierTest` passed 12/12; `EditorSessionNodeCommandTest` passed 3/3;
+  `EditorNodeSelectionLayoutTest` passed 38/38; and `EditorNodesPanelQmlTest` passed 23/23.
+- `EditorNodeController.ProductTopologyCommitKeepsProjectionFailureVisible` passed with the exact
+  `AlcedoQanGraph has no Qan graph` error still visible after event processing, while the product
+  document contains the committed topology.
+- `EditorNodesPanelQmlTest.RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes`
+  passed all 100 open/close cycles. Each cycle asserted three live `qan::NodeItem` objects while
+  open, zero after teardown, and the newly queued display name after reopening.
+
+**Failure and state evidence:**
+
+- `NodeGraphTopologyHistory.JournalFailureRestoresTopologyDocumentHeadAndRenderState` asserted the
+  exact `mini-Git journal file could not be opened for append` error, unchanged document hash,
+  history head, commit count, counter, and published render reason.
+- The production topology test asserted the product document and history head separately from the
+  visual projection after publication. Undo and Redo both restored the exact ordered topology and
+  emitted `UndoRedo`; checkout emitted `VersionDocumentChanged`.
+- The QML run also passed queued-refresh teardown and reconnect-failure cases, including the exact
+  `mini-Git journal append failed` presentation.
+
+**Scope totals and pinned APIs:**
+
+- Four existing implementation/test files and one new 457-line persistent-history fixture changed,
+  plus the history-target registration; tracked edits add 97 lines and remove 28 lines, excluding
+  the new file from the Git numstat output.
+- No QuickQanava revision or API change, no new Qt control style, and no CMake preset/toolchain
+  change. The new test uses the existing `AlcedoQanGraph::PromoteCommittedSnapshot` result and
+  existing Loader object lifetime; no new parallel product graph or selection source was added.
+- The visual matrix, install/package checks, third-party notices, and macOS environment were not
+  claimed for NM5.8e; they remain explicit NM5.8f/NM5.8g work. No package or macOS result was
+  substituted for the executable evidence above.
+- NM5.8f and NM5.8g remain pending for keyboard/accessibility/localization/visual qualification,
+  fresh install/package checks, notices, available macOS evidence, and final regression coverage.
 
 ---
 
@@ -3536,7 +3601,15 @@ clear.
 | `WorkspaceShellTest` | Column geometry, minimum window size, focus order, and production type registration. |
 | `EditorSessionHistoryPortTest` | Typed graph history, Undo, Redo, WAL failure restoration, and counter replay. |
 
-Every test name must state the behavior that it checks. Do not use `smoke` in a test name.
+**NM5.8e registered-target evidence (2026-09-05):** `editor_node_topology_history_test.cpp` is
+compiled into `EditorSessionHistoryPortTest`, alongside `editor_version_checkout_test.cpp` and
+the existing history sources. The wrapper-built runtime passed 75/75 history tests. The related
+registered runtimes passed `PipelineHistoryApplierTest` 12/12, `EditorSessionNodeCommandTest`
+3/3, `EditorNodeSelectionLayoutTest` 38/38, and `EditorNodesPanelQmlTest` 23/23. The focused
+topology filter passed 2/2 and the focused 100-cycle Loader test passed 1/1.
+
+Every test name must state the behavior that it checks. Do not use a generic run-only label in a
+test name.
 
 ### 17.1 Required visual matrix
 
@@ -3581,6 +3654,12 @@ summary, Mask count, pill, badge, shadow, glow, gradient, or Material chrome.
 | Loader teardown | Keep only plain controller and layout values. Keep no Qan pointer. |
 | Package QML module load | Fail package acceptance. Do not release a build with a hidden Nodes page. |
 
+**NM5.8e executable failure evidence:** the production WAL append test preserved the document,
+head, commit count, counter, and render reason after the exact append-open error. The controller
+test preserved the committed product topology while keeping the exact Qan projection-promotion
+error visible. The full Nodes runtime passed the queued-refresh teardown, failed reconnect, and
+100-cycle Loader tests; every stale rename was observed only by the page that reopened it.
+
 ---
 
 ## 19. Performance targets
@@ -3611,6 +3690,12 @@ Record:
 - frame time and changed Qan object count for 100 accepted draft connections;
 - draft and Qan object identity retention across 100 accepted draft connections;
 - live Qan object count after 100 panel open/close cycles.
+
+**NM5.8e measured lifecycle result (2026-09-05):**
+`RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes` recorded 3 live
+`qan::NodeItem` objects after each Nodes open and 0 after each close for 100 cycles. It also
+asserted the queued display name after reopening each page. This is executable object-count and
+stale-callback evidence; it does not claim the remaining frame-time or package targets.
 
 Do not reduce decode resolution, output quality, or backend behavior to meet these targets.
 
@@ -3668,7 +3753,7 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
       requests one Quality render.
 - [x] All command failures preserve the prior product graph, history, Version, revision, and
       rendered state while retaining an applicable draft.
-- [ ] Atomic topology edits have dedicated production-history evidence for exact Undo, Redo,
+- [x] Atomic topology edits have dedicated production-history evidence for exact Undo, Redo,
       recovery, reopen, and Version checkout (NM5.8e; direct inverse tests already pass).
 - [ ] All visible actions support keyboard input and accessibility.
 - [ ] All product text uses localization.

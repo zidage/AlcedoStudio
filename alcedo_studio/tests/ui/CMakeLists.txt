@@ -183,6 +183,7 @@ add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_node_topology_history_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
@@ -198,6 +199,7 @@ target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
+  EditorNodeGraphDraft
   EditorNodeGraphProjection
   EditorAdjustmentPipeline
   EditorPipelineCommandService
