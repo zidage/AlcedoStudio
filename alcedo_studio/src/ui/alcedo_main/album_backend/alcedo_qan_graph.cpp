@@ -15,6 +15,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <string>
 
@@ -72,7 +73,7 @@ AlcedoQanGraph::~AlcedoQanGraph() {
   rebuild_in_progress_ = true;
   ClearDrawerConnections();
   ClearIdentityMaps();
-  DropCachedDelegates();
+  delegate_library_.Reset();
 }
 
 void AlcedoQanGraph::set_graph(qan::Graph* graph) {
@@ -86,7 +87,7 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   ClearIdentityMaps();
   has_projection_ = false;
   applied_        = {};
-  DropCachedDelegates();
+  delegate_library_.Reset();
   rebuild_in_progress_ = false;
   graph_               = graph;
   if (!graph_.isNull()) {
@@ -97,59 +98,74 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
 }
 
 void AlcedoQanGraph::set_color_grade_delegate_url(const QUrl& url) {
-  if (color_grade_delegate_url_ == url) {
+  if (delegate_library_.ColorGradeDelegateUrl() == url) {
     return;
   }
-  color_grade_delegate_url_ = url;
-  DropCachedDelegates();
+  delegate_library_.Configure(
+      url, delegate_library_.EndpointDelegateUrl(), delegate_library_.PortDelegateUrl(),
+      delegate_library_.PortDockDelegateUrl(), delegate_library_.EdgeDelegateUrl());
   emit DelegatesChanged();
 }
 
-auto AlcedoQanGraph::color_grade_delegate_url() const -> QUrl { return color_grade_delegate_url_; }
+auto AlcedoQanGraph::color_grade_delegate_url() const -> QUrl {
+  return delegate_library_.ColorGradeDelegateUrl();
+}
 
 void AlcedoQanGraph::set_endpoint_delegate_url(const QUrl& url) {
-  if (endpoint_delegate_url_ == url) {
+  if (delegate_library_.EndpointDelegateUrl() == url) {
     return;
   }
-  endpoint_delegate_url_ = url;
-  DropCachedDelegates();
+  delegate_library_.Configure(
+      delegate_library_.ColorGradeDelegateUrl(), url, delegate_library_.PortDelegateUrl(),
+      delegate_library_.PortDockDelegateUrl(), delegate_library_.EdgeDelegateUrl());
   emit DelegatesChanged();
 }
 
-auto AlcedoQanGraph::endpoint_delegate_url() const -> QUrl { return endpoint_delegate_url_; }
+auto AlcedoQanGraph::endpoint_delegate_url() const -> QUrl {
+  return delegate_library_.EndpointDelegateUrl();
+}
 
 void AlcedoQanGraph::set_port_delegate_url(const QUrl& url) {
-  if (port_delegate_url_ == url) {
+  if (delegate_library_.PortDelegateUrl() == url) {
     return;
   }
-  port_delegate_url_ = url;
-  DropCachedDelegates();
+  delegate_library_.Configure(
+      delegate_library_.ColorGradeDelegateUrl(), delegate_library_.EndpointDelegateUrl(), url,
+      delegate_library_.PortDockDelegateUrl(), delegate_library_.EdgeDelegateUrl());
   emit DelegatesChanged();
 }
 
-auto AlcedoQanGraph::port_delegate_url() const -> QUrl { return port_delegate_url_; }
+auto AlcedoQanGraph::port_delegate_url() const -> QUrl {
+  return delegate_library_.PortDelegateUrl();
+}
 
 void AlcedoQanGraph::set_port_dock_delegate_url(const QUrl& url) {
-  if (port_dock_delegate_url_ == url) {
+  if (delegate_library_.PortDockDelegateUrl() == url) {
     return;
   }
-  port_dock_delegate_url_ = url;
-  DropCachedDelegates();
+  delegate_library_.Configure(
+      delegate_library_.ColorGradeDelegateUrl(), delegate_library_.EndpointDelegateUrl(),
+      delegate_library_.PortDelegateUrl(), url, delegate_library_.EdgeDelegateUrl());
   emit DelegatesChanged();
 }
 
-auto AlcedoQanGraph::port_dock_delegate_url() const -> QUrl { return port_dock_delegate_url_; }
+auto AlcedoQanGraph::port_dock_delegate_url() const -> QUrl {
+  return delegate_library_.PortDockDelegateUrl();
+}
 
 void AlcedoQanGraph::set_edge_delegate_url(const QUrl& url) {
-  if (edge_delegate_url_ == url) {
+  if (delegate_library_.EdgeDelegateUrl() == url) {
     return;
   }
-  edge_delegate_url_ = url;
-  DropCachedDelegates();
+  delegate_library_.Configure(
+      delegate_library_.ColorGradeDelegateUrl(), delegate_library_.EndpointDelegateUrl(),
+      delegate_library_.PortDelegateUrl(), delegate_library_.PortDockDelegateUrl(), url);
   emit DelegatesChanged();
 }
 
-auto AlcedoQanGraph::edge_delegate_url() const -> QUrl { return edge_delegate_url_; }
+auto AlcedoQanGraph::edge_delegate_url() const -> QUrl {
+  return delegate_library_.EdgeDelegateUrl();
+}
 
 auto AlcedoQanGraph::graph() const -> qan::Graph* { return graph_.data(); }
 
@@ -236,11 +252,12 @@ auto AlcedoQanGraph::LiveNodeId(const qan::Node* node) const -> std::optional<No
 }
 
 auto AlcedoQanGraph::NodeProjection(const NodeId& node_id) const -> const EditorNodeProjection* {
-  const auto it = node_projections_.find(node_id);
-  if (it == node_projections_.end()) {
+  const auto it = std::find_if(applied_.nodes.begin(), applied_.nodes.end(),
+                               [&](const auto& node) { return node.node_id == node_id; });
+  if (it == applied_.nodes.end()) {
     return nullptr;
   }
-  return &it->second;
+  return &*it;
 }
 
 auto AlcedoQanGraph::session_generation() const -> std::uint64_t {
@@ -266,13 +283,45 @@ auto AlcedoQanGraph::InsertQanNode(qan::Graph& graph, const EditorNodeProjection
   return graph.insertNode(component);
 }
 
+auto AlcedoQanGraph::InsertQanPort(qan::Graph& graph, qan::Node& node, bool is_input,
+                                   const QString& port_id) -> qan::PortItem* {
+  const auto dock = is_input ? qan::NodeItem::Dock::Top : qan::NodeItem::Dock::Bottom;
+  const auto type = is_input ? qan::PortItem::Type::In : qan::PortItem::Type::Out;
+  return graph.insertPort(&node, dock, type, QString(), port_id);
+}
+
+auto AlcedoQanGraph::InsertQanEdge(qan::Graph& graph, qan::Node& source, qan::Node& destination,
+                                   QQmlComponent* component) -> qan::Edge* {
+  return graph.insertEdge(&source, &destination, component);
+}
+
+auto AlcedoQanGraph::BindQanEdge(qan::Graph& graph, qan::Edge& edge, qan::PortItem& source,
+                                 qan::PortItem& destination) -> bool {
+  graph.bindEdge(&edge, &source, &destination);
+  return true;
+}
+
+auto AlcedoQanGraph::RemoveQanEdge(qan::Graph& graph, qan::Edge& edge) -> bool {
+  return graph.removeEdge(&edge, true);
+}
+
+auto AlcedoQanGraph::RemoveQanPort(qan::Graph& graph, qan::Node& node, qan::PortItem& port)
+    -> bool {
+  graph.removePort(&node, &port);
+  return true;
+}
+
+auto AlcedoQanGraph::RemoveQanNode(qan::Graph& graph, qan::Node& node) -> bool {
+  HideDetachedVisual(node.getItem());
+  return graph.removeNode(&node, true);
+}
+
 void AlcedoQanGraph::ClearIdentityMaps() {
   ClearDrawerConnections();
   node_by_id_.clear();
   edge_by_key_.clear();
   edge_candidate_.clear();
   ports_by_node_.clear();
-  node_projections_.clear();
   node_from_qan_.clear();
 }
 
@@ -281,42 +330,32 @@ void AlcedoQanGraph::OnGraphDestroyed() {
   ClearIdentityMaps();
   has_projection_ = false;
   applied_        = {};
-  DropCachedDelegates();
+  delegate_library_.Reset();
   graph_.clear();
   rebuild_in_progress_ = false;
   emit GraphChanged();
 }
 
 void AlcedoQanGraph::DestroyMappedPrimitives() {
-  std::vector<QPointer<qan::Edge>> edges;
+  std::vector<EditorNodeEdgeProjection> edges;
   edges.reserve(edge_by_key_.size());
   for (const auto& [key, edge] : edge_by_key_) {
-    edges.push_back(edge);
-  }
-  std::vector<QPointer<qan::Node>> nodes;
-  nodes.reserve(node_by_id_.size());
-  for (const auto& [id, node] : node_by_id_) {
-    nodes.push_back(node);
-  }
-  DestroyPrimitives(edges, nodes);
-}
-
-void AlcedoQanGraph::DestroyPrimitives(const std::vector<QPointer<qan::Edge>>& edges,
-                                       const std::vector<QPointer<qan::Node>>& nodes) {
-  if (graph_.isNull()) {
-    return;
+    Q_UNUSED(edge);
+    edges.push_back(EditorNodeEdgeProjection{key.source_node_id, key.source_port_id,
+                                             key.destination_node_id, key.destination_port_id});
   }
   for (const auto& edge : edges) {
-    if (!edge.isNull()) {
-      HideDetachedVisual(edge->getItem());
-      graph_->removeEdge(edge.data(), true);
-    }
+    (void)RemoveEdgeVisual(edge);
   }
-  for (const auto& node : nodes) {
-    if (!node.isNull()) {
-      HideDetachedVisual(node->getItem());
-      graph_->removeNode(node.data(), true);
-    }
+
+  std::vector<NodeId> nodes;
+  nodes.reserve(node_by_id_.size());
+  for (const auto& [id, node] : node_by_id_) {
+    Q_UNUSED(node);
+    nodes.push_back(id);
+  }
+  for (const auto& node_id : nodes) {
+    (void)RemoveNodeVisual(node_id);
   }
 }
 
@@ -433,7 +472,6 @@ auto AlcedoQanGraph::ApplyRoles(const EditorNodeGraphSnapshot& snapshot)
       return result;
     }
     ApplyNodePresentation(*qan_node, node);
-    node_projections_[node.node_id] = node;
   }
   applied_        = snapshot;
   has_projection_ = true;
@@ -489,31 +527,18 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
   if (graph_.isNull()) {
     return QStringLiteral("AlcedoQanGraph has no Qan graph");
   }
-  const auto delegate_error = EnsureDelegates();
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    return QStringLiteral("Qan graph has no QML engine");
+  }
+  const auto delegate_error = delegate_library_.EnsureLoaded(*engine, *graph_);
   if (!delegate_error.isEmpty()) {
     return delegate_error;
   }
   for (const auto& node : snapshot.nodes) {
-    auto* qan_node = InsertQanNode(*graph_, node);
-    if (qan_node == nullptr) {
-      if (ComponentFor(node.node_kind) == nullptr) {
-        return node.node_kind == EditorNodeKind::ColorGrade
-                   ? QStringLiteral("Alcedo color-grade node delegate is not set")
-                   : QStringLiteral("Alcedo endpoint node delegate is not set");
-      }
-      return QStringLiteral("Qan node creation failed");
-    }
-    if (qan_node->getItem() == nullptr) {
-      graph_->removeNode(qan_node, true);
-      return QStringLiteral("Qan node is missing a visual item");
-    }
-    ApplyNodePresentation(*qan_node, node);
-    node_by_id_[node.node_id]       = qan_node;
-    node_projections_[node.node_id] = node;
-    node_from_qan_[qan_node]        = ReverseNode{node.node_id, snapshot.session_generation};
-    const auto port_error           = InsertNodePorts(*qan_node, node);
-    if (!port_error.isEmpty()) {
-      return port_error;
+    const auto error = InsertNodeVisual(node, snapshot.session_generation);
+    if (!error.isEmpty()) {
+      return error;
     }
   }
   for (const auto& edge : snapshot.edges) {
@@ -523,6 +548,58 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
     }
   }
   AttachLiveVisuals();
+  return {};
+}
+
+auto AlcedoQanGraph::InsertNodeVisual(const EditorNodeProjection& node,
+                                      std::uint64_t               session_generation,
+                                      const NodeVisualState*      restore_state) -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  if (NodeFor(node.node_id) != nullptr) {
+    return QStringLiteral("Qan node already exists");
+  }
+
+  auto* qan_node = InsertQanNode(*graph_, node);
+  if (qan_node == nullptr) {
+    if (ComponentFor(node.node_kind) == nullptr) {
+      return node.node_kind == EditorNodeKind::ColorGrade
+                 ? QStringLiteral("Alcedo color-grade node delegate is not set")
+                 : QStringLiteral("Alcedo endpoint node delegate is not set");
+    }
+    return QStringLiteral("Qan node creation failed");
+  }
+  if (qan_node->getItem() == nullptr) {
+    QString error = QStringLiteral("Qan node is missing a visual item");
+    if (!RemoveQanNode(*graph_, *qan_node)) {
+      error += QStringLiteral("; reversing the incomplete Qan node failed");
+    }
+    return error;
+  }
+
+  ApplyNodePresentation(*qan_node, node);
+  node_by_id_[node.node_id]    = qan_node;
+  node_from_qan_[qan_node]     = ReverseNode{node.node_id, session_generation};
+  ports_by_node_[node.node_id] = {};
+  const auto port_error        = InsertNodePorts(*qan_node, node);
+  if (!port_error.isEmpty()) {
+    const auto cleanup_error = RemoveNodeVisual(node.node_id);
+    if (!cleanup_error.isEmpty()) {
+      return port_error + QStringLiteral("; reversing the incomplete Qan node failed: ") +
+             cleanup_error;
+    }
+    return port_error;
+  }
+
+  if (restore_state != nullptr && qan_node->getItem() != nullptr) {
+    if (restore_state->has_position) {
+      qan_node->getItem()->setPosition(restore_state->position);
+    }
+    if (qan_node->getItem()->property("drawerOpen").isValid()) {
+      qan_node->getItem()->setProperty("drawerOpen", restore_state->drawer_open);
+    }
+  }
   return {};
 }
 
@@ -547,9 +624,7 @@ auto AlcedoQanGraph::InsertPort(qan::Node& qan_node, const NodeId& node_id, cons
   if (graph_.isNull()) {
     return nullptr;
   }
-  const auto dock = is_input ? qan::NodeItem::Dock::Top : qan::NodeItem::Dock::Bottom;
-  const auto type = is_input ? qan::PortItem::Type::In : qan::PortItem::Type::Out;
-  auto* port = graph_->insertPort(&qan_node, dock, type, QString(), QanPortId(is_input, port_id));
+  auto* port = InsertQanPort(*graph_, qan_node, is_input, QanPortId(is_input, port_id));
   if (port == nullptr) {
     return nullptr;
   }
@@ -563,6 +638,20 @@ auto AlcedoQanGraph::InsertPort(qan::Node& qan_node, const NodeId& node_id, cons
 }
 
 auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString {
+  return InsertEdgeVisual(edge, false);
+}
+
+auto AlcedoQanGraph::InsertEdgeVisual(const EditorNodeEdgeProjection& edge, bool candidate)
+    -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  if (EdgeFor(edge) != nullptr) {
+    return QStringLiteral("Qan edge already exists");
+  }
+  if (delegate_library_.EdgeComponent() == nullptr) {
+    return QStringLiteral("Alcedo edge delegate is not loaded");
+  }
   auto* source = NodeFor(edge.source_node_id);
   auto* dest   = NodeFor(edge.destination_node_id);
   auto* out    = OutputPortFor(edge.source_node_id, edge.source_port_id);
@@ -576,24 +665,35 @@ auto AlcedoQanGraph::InsertEdge(const EditorNodeEdgeProjection& edge) -> QString
   if (in == nullptr) {
     return QStringLiteral("Qan destination port is missing");
   }
-  auto* qan_edge = graph_->insertEdge(source, dest, edge_component_.get());
-  if (qan_edge == nullptr || qan_edge->getItem() == nullptr) {
+  auto* qan_edge = InsertQanEdge(*graph_, *source, *dest, delegate_library_.EdgeComponent());
+  if (qan_edge == nullptr) {
     return QStringLiteral("Qan edge creation failed");
+  }
+  auto cleanup_created_edge = [&](const QString& error) {
+    const auto cleanup_error = RemoveCreatedEdge(*qan_edge);
+    if (cleanup_error.isEmpty()) {
+      return error;
+    }
+    return error + QStringLiteral("; reversing the incomplete Qan edge failed: ") + cleanup_error;
+  };
+  if (qan_edge->getItem() == nullptr) {
+    return cleanup_created_edge(QStringLiteral("Qan edge is missing a visual item"));
   }
   if (auto* item = qan_edge->getItem()) {
     item->setSrcShape(qan::EdgeStyle::ArrowShape::None);
     item->setDstShape(qan::EdgeStyle::ArrowShape::None);
   }
-  graph_->bindEdge(qan_edge, out, in);
+  if (!BindQanEdge(*graph_, *qan_edge, *out, *in)) {
+    return cleanup_created_edge(QStringLiteral("Qan edge binding failed"));
+  }
   if (qan_edge->getItem()->getSourceItem() != out ||
       qan_edge->getItem()->getDestinationItem() != in) {
-    graph_->removeEdge(qan_edge, true);
-    return QStringLiteral("Qan edge did not bind to the requested ports");
+    return cleanup_created_edge(QStringLiteral("Qan edge did not bind to the requested ports"));
   }
   const auto key    = MakeEdgeKey(edge);
   edge_by_key_[key] = qan_edge;
-  ApplyEdgePresentation(*qan_edge, false);
-  edge_candidate_[key] = false;
+  ApplyEdgePresentation(*qan_edge, candidate);
+  edge_candidate_[key] = candidate;
   return {};
 }
 
@@ -608,29 +708,22 @@ auto AlcedoQanGraph::InsertProjectedNode(const EditorNodeProjection& node)
     result.error = QStringLiteral("Qan node already exists");
     return result;
   }
-  const auto delegate_error = EnsureDelegates();
+  auto* engine = qmlEngine(graph_.data());
+  if (engine == nullptr) {
+    result.error = QStringLiteral("Qan graph has no QML engine");
+    return result;
+  }
+  const auto delegate_error = delegate_library_.EnsureLoaded(*engine, *graph_);
   if (!delegate_error.isEmpty()) {
     result.error = delegate_error;
     return result;
   }
-  auto* qan_node = InsertQanNode(*graph_, node);
-  if (qan_node == nullptr || qan_node->getItem() == nullptr) {
-    if (qan_node != nullptr) {
-      graph_->removeNode(qan_node, true);
-    }
-    result.error = QStringLiteral("Qan node creation failed");
+  const auto error = InsertNodeVisual(node, applied_.session_generation);
+  if (!error.isEmpty()) {
+    result.error = error;
     return result;
   }
-  ApplyNodePresentation(*qan_node, node);
-  node_by_id_[node.node_id]       = qan_node;
-  node_projections_[node.node_id] = node;
-  node_from_qan_[qan_node]        = ReverseNode{node.node_id, applied_.session_generation};
-  const auto port_error           = InsertNodePorts(*qan_node, node);
-  if (!port_error.isEmpty()) {
-    (void)RemoveProjectedNode(node.node_id);
-    result.error = port_error;
-    return result;
-  }
+  auto* qan_node = NodeFor(node.node_id);
   BindDrawerSignal(qan_node->getItem(), node.node_id);
   applied_.nodes.push_back(node);
   AttachLiveVisuals();
@@ -645,31 +738,77 @@ auto AlcedoQanGraph::RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGrap
     result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
     return result;
   }
-  std::vector<EdgeKey> incident;
+  if (NodeFor(node_id) == nullptr) {
+    result.succeeded = true;
+    return result;
+  }
+  struct RemovedEdge {
+    EditorNodeEdgeProjection edge;
+    bool                     candidate = false;
+  };
+  auto append_reversal_error = [](QString* all_errors, const QString& error) {
+    if (error.isEmpty()) {
+      return;
+    }
+    if (!all_errors->isEmpty()) {
+      *all_errors += QStringLiteral("; ");
+    }
+    *all_errors += error;
+  };
+  std::vector<RemovedEdge> incident;
   for (const auto& [key, edge] : edge_by_key_) {
     if (key.source_node_id == node_id || key.destination_node_id == node_id) {
-      incident.push_back(key);
+      incident.push_back(
+          RemovedEdge{{key.source_node_id, key.source_port_id, key.destination_node_id,
+                       key.destination_port_id},
+                      edge_candidate_.contains(key) ? edge_candidate_.at(key) : false});
     }
   }
-  for (const auto& key : incident) {
-    EditorNodeEdgeProjection edge{key.source_node_id, key.source_port_id, key.destination_node_id,
-                                  key.destination_port_id};
-    (void)RemoveProjectedEdge(edge);
+  std::vector<RemovedEdge> removed_edges;
+  for (const auto& item : incident) {
+    const auto error = RemoveEdgeVisual(item.edge);
+    if (!error.isEmpty()) {
+      QString reversal_error;
+      for (auto it = removed_edges.rbegin(); it != removed_edges.rend(); ++it) {
+        append_reversal_error(&reversal_error, InsertEdgeVisual(it->edge, it->candidate));
+      }
+      result.error = error;
+      if (!reversal_error.isEmpty()) {
+        result.error += QStringLiteral("; visual reversal failed: ") + reversal_error;
+      }
+      result.succeeded = false;
+      return result;
+    }
+    removed_edges.push_back(item);
   }
-  auto* qan_node = NodeFor(node_id);
-  if (qan_node != nullptr) {
-    node_from_qan_.erase(qan_node);
-    HideDetachedVisual(qan_node->getItem());
-    graph_->removeNode(qan_node, true);
-    FlushDeferredDeletes();
+  const bool selection_removed = product_selected_node_id_ == node_id;
+  const auto node_error        = RemoveNodeVisual(node_id);
+  if (!node_error.isEmpty()) {
+    QString reversal_error;
+    for (auto it = removed_edges.rbegin(); it != removed_edges.rend(); ++it) {
+      const auto error = InsertEdgeVisual(it->edge, it->candidate);
+      if (!error.isEmpty()) {
+        reversal_error += (reversal_error.isEmpty() ? QString() : QStringLiteral("; ")) + error;
+      }
+    }
+    result.error = node_error;
+    if (!reversal_error.isEmpty()) {
+      result.error += QStringLiteral("; visual reversal failed: ") + reversal_error;
+    }
+    result.succeeded = false;
+    return result;
   }
-  node_by_id_.erase(node_id);
-  node_projections_.erase(node_id);
-  ports_by_node_.erase(node_id);
-  applied_.nodes.erase(std::remove_if(applied_.nodes.begin(), applied_.nodes.end(),
-                                      [&](const auto& node) { return node.node_id == node_id; }),
-                       applied_.nodes.end());
-  ApplyConnectablePolicy();
+  for (const auto& item : removed_edges) {
+    EraseAppliedEdge(item.edge);
+  }
+  EraseAppliedNode(node_id);
+  ClearDrawerConnections();
+  BindDrawerSignals();
+  if (selection_removed) {
+    ApplyProductSelection(std::nullopt);
+  } else {
+    ApplyConnectablePolicy();
+  }
   result.succeeded = true;
   return result;
 }
@@ -687,7 +826,7 @@ auto AlcedoQanGraph::InsertProjectedEdge(const EditorNodeEdgeProjection& edge, b
     result.succeeded                   = true;
     return result;
   }
-  const auto error = InsertEdge(edge);
+  const auto error = InsertEdgeVisual(edge, candidate);
   if (!error.isEmpty()) {
     result.error = error;
     return result;
@@ -710,26 +849,367 @@ auto AlcedoQanGraph::RemoveProjectedEdge(const EditorNodeEdgeProjection& edge)
     result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
     return result;
   }
-  const auto key = MakeEdgeKey(edge);
-  auto       it  = edge_by_key_.find(key);
-  if (it != edge_by_key_.end() && !it->second.isNull()) {
-    if (auto* item = it->second->getItem()) {
-      if (auto* src = qobject_cast<qan::PortItem*>(item->getSourceItem())) {
-        src->getOutEdgeItems().removeAll(item);
+  if (EdgeFor(edge) == nullptr) {
+    result.succeeded = true;
+    return result;
+  }
+  const auto error = RemoveEdgeVisual(edge);
+  if (!error.isEmpty()) {
+    result.error = error;
+    return result;
+  }
+  EraseAppliedEdge(edge);
+  result.succeeded = true;
+  return result;
+}
+
+auto AlcedoQanGraph::RestoreNodePorts(const NodeId& node_id, qan::Node& node,
+                                      const std::vector<PortVisualSpec>& ports) -> QString {
+  QString error;
+  for (const auto& spec : ports) {
+    const auto& node_ports = ports_by_node_[node_id];
+    const auto& map        = spec.is_input ? node_ports.inputs : node_ports.outputs;
+    const auto  found      = map.find(spec.port_id);
+    if (found != map.end() && !found->second.isNull()) {
+      continue;
+    }
+    if (InsertPort(node, node_id, spec.port_id, spec.is_input) == nullptr) {
+      if (!error.isEmpty()) {
+        error += QStringLiteral("; ");
       }
-      if (auto* dst = qobject_cast<qan::PortItem*>(item->getDestinationItem())) {
-        dst->getInEdgeItems().removeAll(item);
+      error += QStringLiteral("Qan port restoration failed");
+    }
+  }
+  return error;
+}
+
+auto AlcedoQanGraph::RemoveNodeVisual(const NodeId& node_id, NodeVisualState* removed_state)
+    -> QString {
+  const auto found = node_by_id_.find(node_id);
+  if (found == node_by_id_.end() || found->second.isNull()) {
+    return QStringLiteral("Qan node is missing");
+  }
+  auto* const                 qan_node = found->second.data();
+  const auto                  ports_it = ports_by_node_.find(node_id);
+  std::vector<PortVisualSpec> ports;
+  if (ports_it != ports_by_node_.end()) {
+    ports.reserve(ports_it->second.inputs.size() + ports_it->second.outputs.size());
+    for (const auto& [port_id, port] : ports_it->second.inputs) {
+      if (!port.isNull()) {
+        ports.push_back(PortVisualSpec{port_id, true});
       }
     }
-    HideDetachedVisual(it->second->getItem());
-    graph_->removeEdge(it->second.data(), true);
-    FlushDeferredDeletes();
+    for (const auto& [port_id, port] : ports_it->second.outputs) {
+      if (!port.isNull()) {
+        ports.push_back(PortVisualSpec{port_id, false});
+      }
+    }
   }
-  edge_by_key_.erase(key);
+
+  if (removed_state != nullptr) {
+    const auto* projection = NodeProjection(node_id);
+    if (projection != nullptr) {
+      removed_state->projection = *projection;
+    }
+    const auto applied_node =
+        std::find_if(applied_.nodes.begin(), applied_.nodes.end(),
+                     [&](const auto& item) { return item.node_id == node_id; });
+    if (applied_node != applied_.nodes.end()) {
+      removed_state->applied_index =
+          static_cast<std::size_t>(std::distance(applied_.nodes.begin(), applied_node));
+    }
+    if (qan_node->getItem() != nullptr) {
+      removed_state->position     = qan_node->getItem()->position();
+      removed_state->has_position = true;
+      const auto drawer           = qan_node->getItem()->property("drawerOpen");
+      if (drawer.isValid()) {
+        removed_state->drawer_open = drawer.toBool();
+      }
+    }
+  }
+
+  auto restore_ports = [&]() {
+    const auto restore_error = RestoreNodePorts(node_id, *qan_node, ports);
+    AttachLiveVisuals();
+    return restore_error;
+  };
+
+  for (const auto& spec : ports) {
+    auto&      node_ports = ports_by_node_[node_id];
+    auto&      map        = spec.is_input ? node_ports.inputs : node_ports.outputs;
+    const auto found_port = map.find(spec.port_id);
+    if (found_port == map.end() || found_port->second.isNull()) {
+      continue;
+    }
+    if (!RemoveQanPort(*graph_, *qan_node, *found_port->second)) {
+      QString    error         = QStringLiteral("Qan port removal failed");
+      const auto restore_error = restore_ports();
+      if (!restore_error.isEmpty()) {
+        error += QStringLiteral("; restoring ports failed: ") + restore_error;
+      }
+      return error;
+    }
+    map.erase(found_port);
+  }
+
+  const auto* raw_node = qan_node;
+  if (!RemoveQanNode(*graph_, *qan_node)) {
+    QString    error         = QStringLiteral("Qan node removal failed");
+    const auto restore_error = restore_ports();
+    if (!restore_error.isEmpty()) {
+      error += QStringLiteral("; restoring ports failed: ") + restore_error;
+    }
+    AttachLiveVisuals();
+    return error;
+  }
+  node_from_qan_.erase(raw_node);
+  node_by_id_.erase(node_id);
+  ports_by_node_.erase(node_id);
+  FlushDeferredDeletes();
+  return {};
+}
+
+void AlcedoQanGraph::DetachEdgeFromPorts(qan::Edge& edge) {
+  auto* item = edge.getItem();
+  if (item == nullptr) {
+    return;
+  }
+  if (auto* source = qobject_cast<qan::PortItem*>(item->getSourceItem())) {
+    source->getOutEdgeItems().removeAll(item);
+  }
+  if (auto* destination = qobject_cast<qan::PortItem*>(item->getDestinationItem())) {
+    destination->getInEdgeItems().removeAll(item);
+  }
+}
+
+void AlcedoQanGraph::RestoreEdgeToPorts(qan::Edge& edge) {
+  auto* item = edge.getItem();
+  if (item == nullptr) {
+    return;
+  }
+  if (auto* source = qobject_cast<qan::PortItem*>(item->getSourceItem())) {
+    source->addOutEdgeItem(*item);
+  }
+  if (auto* destination = qobject_cast<qan::PortItem*>(item->getDestinationItem())) {
+    destination->addInEdgeItem(*item);
+  }
+}
+
+auto AlcedoQanGraph::RemoveCreatedEdge(qan::Edge& edge) -> QString {
+  if (graph_.isNull()) {
+    return QStringLiteral("AlcedoQanGraph has no Qan graph");
+  }
+  DetachEdgeFromPorts(edge);
+  HideDetachedVisual(edge.getItem());
+  if (!RemoveQanEdge(*graph_, edge)) {
+    RestoreEdgeToPorts(edge);
+    return QStringLiteral("Qan edge removal failed");
+  }
+  FlushDeferredDeletes();
+  return {};
+}
+
+auto AlcedoQanGraph::RemoveEdgeVisual(const EditorNodeEdgeProjection& edge, bool require_present)
+    -> QString {
+  const auto key = MakeEdgeKey(edge);
+  const auto it  = edge_by_key_.find(key);
+  if (it == edge_by_key_.end()) {
+    return require_present ? QStringLiteral("Qan edge is missing") : QString();
+  }
+  if (it->second.isNull()) {
+    return QStringLiteral("Qan edge is missing");
+  }
+  auto* const qan_edge = it->second.data();
+  DetachEdgeFromPorts(*qan_edge);
+  HideDetachedVisual(qan_edge->getItem());
+  if (!RemoveQanEdge(*graph_, *qan_edge)) {
+    RestoreEdgeToPorts(*qan_edge);
+    return QStringLiteral("Qan edge removal failed");
+  }
+  edge_by_key_.erase(it);
   edge_candidate_.erase(key);
+  FlushDeferredDeletes();
+  return {};
+}
+
+void AlcedoQanGraph::EraseAppliedNode(const NodeId& node_id) {
+  applied_.nodes.erase(std::remove_if(applied_.nodes.begin(), applied_.nodes.end(),
+                                      [&](const auto& node) { return node.node_id == node_id; }),
+                       applied_.nodes.end());
+}
+
+void AlcedoQanGraph::EraseAppliedEdge(const EditorNodeEdgeProjection& edge) {
+  const auto key = MakeEdgeKey(edge);
   applied_.edges.erase(std::remove_if(applied_.edges.begin(), applied_.edges.end(),
                                       [&](const auto& item) { return MakeEdgeKey(item) == key; }),
                        applied_.edges.end());
+}
+
+auto AlcedoQanGraph::ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& mutation)
+    -> AlcedoQanGraphApplyResult {
+  AlcedoQanGraphApplyResult result;
+  if (!mutation.succeeded) {
+    result.error = QString::fromStdString(mutation.error);
+    return result;
+  }
+  if (mutation.no_op) {
+    result.succeeded = true;
+    return result;
+  }
+  if (graph_.isNull() || !has_projection_) {
+    result.error = QStringLiteral("AlcedoQanGraph has no complete projection");
+    return result;
+  }
+
+  struct RemovedEdgeState {
+    EditorNodeEdgeProjection edge;
+    bool                     candidate = false;
+  };
+  std::vector<NodeVisualState>  removed_nodes;
+  std::vector<RemovedEdgeState> removed_edges;
+  removed_nodes.reserve(mutation.removed_node_ids.size());
+  removed_edges.reserve(mutation.removed_edges.size());
+
+  for (const auto& node_id : mutation.removed_node_ids) {
+    const auto* projection = NodeProjection(node_id);
+    if (projection == nullptr || NodeFor(node_id) == nullptr) {
+      result.error = QStringLiteral("Qan mutation references a missing node");
+      return result;
+    }
+    NodeVisualState state;
+    state.projection = *projection;
+    const auto applied_node =
+        std::find_if(applied_.nodes.begin(), applied_.nodes.end(),
+                     [&](const auto& item) { return item.node_id == node_id; });
+    if (applied_node != applied_.nodes.end()) {
+      state.applied_index =
+          static_cast<std::size_t>(std::distance(applied_.nodes.begin(), applied_node));
+    }
+    if (auto* node = NodeFor(node_id); node != nullptr && node->getItem() != nullptr) {
+      state.position     = node->getItem()->position();
+      state.has_position = true;
+      const auto drawer  = node->getItem()->property("drawerOpen");
+      if (drawer.isValid()) {
+        state.drawer_open = drawer.toBool();
+      }
+    }
+    removed_nodes.push_back(std::move(state));
+  }
+  for (const auto& edge : mutation.removed_edges) {
+    if (EdgeFor(edge) == nullptr) {
+      result.error = QStringLiteral("Qan mutation references a missing edge");
+      return result;
+    }
+    const auto key = MakeEdgeKey(edge);
+    const auto it  = edge_candidate_.find(key);
+    removed_edges.push_back(RemovedEdgeState{edge, it != edge_candidate_.end() && it->second});
+  }
+  for (const auto& node : mutation.inserted_nodes) {
+    if (NodeFor(node.node_id) != nullptr) {
+      result.error = QStringLiteral("Qan mutation inserts an existing node");
+      return result;
+    }
+  }
+  for (const auto& edge : mutation.inserted_edges) {
+    if (EdgeFor(edge) != nullptr) {
+      result.error = QStringLiteral("Qan mutation inserts an existing edge");
+      return result;
+    }
+  }
+
+  const NodeId                          prior_selection = product_selected_node_id_;
+  std::vector<RemovedEdgeState>         completed_removed_edges;
+  std::vector<NodeVisualState>          completed_removed_nodes;
+  std::vector<NodeId>                   completed_inserted_nodes;
+  std::vector<EditorNodeEdgeProjection> completed_inserted_edges;
+
+  auto append_reversal_error = [](QString* all_errors, const QString& error) {
+    if (error.isEmpty()) {
+      return;
+    }
+    if (!all_errors->isEmpty()) {
+      *all_errors += QStringLiteral("; ");
+    }
+    *all_errors += error;
+  };
+  auto apply_prior_selection = [&]() {
+    if (prior_selection.Empty() || NodeFor(prior_selection) == nullptr) {
+      ApplyProductSelection(std::nullopt);
+      return;
+    }
+    ApplyProductSelection(prior_selection);
+  };
+  auto fail = [&](QString original_error) {
+    QString reversal_errors;
+    for (auto it = completed_inserted_edges.rbegin(); it != completed_inserted_edges.rend(); ++it) {
+      append_reversal_error(&reversal_errors, RemoveEdgeVisual(*it));
+    }
+    for (auto it = completed_inserted_nodes.rbegin(); it != completed_inserted_nodes.rend(); ++it) {
+      append_reversal_error(&reversal_errors, RemoveNodeVisual(*it));
+    }
+    for (auto it = completed_removed_nodes.rbegin(); it != completed_removed_nodes.rend(); ++it) {
+      append_reversal_error(&reversal_errors,
+                            InsertNodeVisual(it->projection, applied_.session_generation, &*it));
+    }
+    for (auto it = completed_removed_edges.rbegin(); it != completed_removed_edges.rend(); ++it) {
+      append_reversal_error(&reversal_errors, InsertEdgeVisual(it->edge, it->candidate));
+    }
+    ClearDrawerConnections();
+    BindDrawerSignals();
+    AttachLiveVisuals();
+    apply_prior_selection();
+    result.error = std::move(original_error);
+    if (!reversal_errors.isEmpty()) {
+      result.error += QStringLiteral("; visual reversal failed: ") + reversal_errors;
+    }
+    result.succeeded = false;
+    return result;
+  };
+
+  for (const auto& edge : removed_edges) {
+    const auto error = RemoveEdgeVisual(edge.edge);
+    if (!error.isEmpty()) {
+      return fail(error);
+    }
+    completed_removed_edges.push_back(edge);
+  }
+  for (const auto& state : removed_nodes) {
+    const auto error = RemoveNodeVisual(state.projection.node_id);
+    if (!error.isEmpty()) {
+      return fail(error);
+    }
+    completed_removed_nodes.push_back(state);
+  }
+  for (const auto& node : mutation.inserted_nodes) {
+    const auto error = InsertNodeVisual(node, applied_.session_generation);
+    if (!error.isEmpty()) {
+      return fail(error);
+    }
+    completed_inserted_nodes.push_back(node.node_id);
+  }
+  for (const auto& edge : mutation.inserted_edges) {
+    const auto error = InsertEdgeVisual(edge, true);
+    if (!error.isEmpty()) {
+      return fail(error);
+    }
+    completed_inserted_edges.push_back(edge);
+  }
+
+  for (const auto& edge : mutation.removed_edges) {
+    EraseAppliedEdge(edge);
+  }
+  for (const auto& node_id : mutation.removed_node_ids) {
+    EraseAppliedNode(node_id);
+  }
+  for (const auto& node : mutation.inserted_nodes) {
+    applied_.nodes.push_back(node);
+    BindDrawerSignal(NodeFor(node.node_id)->getItem(), node.node_id);
+  }
+  for (const auto& edge : mutation.inserted_edges) {
+    applied_.edges.push_back(edge);
+  }
+  AttachLiveVisuals();
+  apply_prior_selection();
   result.succeeded = true;
   return result;
 }
@@ -774,7 +1254,6 @@ auto AlcedoQanGraph::PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& sna
   for (const auto& node : snapshot.nodes) {
     auto* qan_node = NodeFor(node.node_id);
     ApplyNodePresentation(*qan_node, node);
-    node_projections_[node.node_id] = node;
   }
   PromoteCandidatePresentation();
   applied_         = snapshot;
@@ -822,141 +1301,8 @@ void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNode
   item->setProperty("masks", MasksToVariant(node.masks));
 }
 
-auto AlcedoQanGraph::EnsureDelegates() -> QString {
-  if (graph_.isNull()) {
-    return QStringLiteral("AlcedoQanGraph has no Qan graph");
-  }
-  auto* engine = qmlEngine(graph_.data());
-  if (engine == nullptr) {
-    return QStringLiteral("Qan graph has no QML engine");
-  }
-  if (delegate_engine_.data() != engine) {
-    DropCachedDelegates();
-    delegate_engine_ = engine;
-  }
-  if (!color_grade_component_) {
-    auto loaded = LoadComponent(color_grade_delegate_url_,
-                                QStringLiteral("Alcedo color-grade node delegate"));
-    if (!loaded.component) {
-      return loaded.error;
-    }
-    color_grade_component_ = std::move(loaded.component);
-  }
-  if (!endpoint_component_) {
-    auto loaded =
-        LoadComponent(endpoint_delegate_url_, QStringLiteral("Alcedo endpoint node delegate"));
-    if (!loaded.component) {
-      return loaded.error;
-    }
-    endpoint_component_ = std::move(loaded.component);
-  }
-  if (!edge_component_) {
-    auto loaded = LoadComponent(edge_delegate_url_, QStringLiteral("Alcedo edge delegate"));
-    if (!loaded.component) {
-      return loaded.error;
-    }
-    edge_component_ = std::move(loaded.component);
-  }
-  const auto port_error = InstallPortDelegate();
-  if (!port_error.isEmpty()) {
-    return port_error;
-  }
-  return InstallPortDockDelegate();
-}
-
-auto AlcedoQanGraph::LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent {
-  LoadedComponent loaded;
-  if (url.isEmpty()) {
-    loaded.error = role + QStringLiteral(" URL is empty");
-    return loaded;
-  }
-  if (graph_.isNull()) {
-    loaded.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
-    return loaded;
-  }
-  auto* engine = qmlEngine(graph_.data());
-  if (engine == nullptr) {
-    loaded.error = QStringLiteral("Qan graph has no QML engine");
-    return loaded;
-  }
-  auto component = std::make_unique<QQmlComponent>(engine, url, QQmlComponent::PreferSynchronous);
-  if (component->isError() || !component->isReady()) {
-    loaded.error = role + QStringLiteral(" failed to load");
-    if (!component->errorString().isEmpty()) {
-      loaded.error += QStringLiteral(": ") + component->errorString().trimmed();
-    }
-    return loaded;
-  }
-  loaded.component = std::move(component);
-  return loaded;
-}
-
-void AlcedoQanGraph::DropCachedDelegates() {
-  color_grade_component_.reset();
-  endpoint_component_.reset();
-  edge_component_.reset();
-  delegate_engine_.clear();
-  port_delegate_graph_.clear();
-  port_dock_delegate_graph_.clear();
-}
-
-auto AlcedoQanGraph::InstallPortDelegate() -> QString {
-  if (graph_.isNull()) {
-    return QStringLiteral("AlcedoQanGraph has no Qan graph");
-  }
-  if (port_delegate_graph_.data() == graph_.data()) {
-    return {};
-  }
-  auto loaded = LoadComponent(port_delegate_url_, QStringLiteral("Alcedo port delegate"));
-  if (!loaded.component) {
-    return loaded.error;
-  }
-  graph_->setProperty("portDelegate", QVariant::fromValue(loaded.component.release()));
-  port_delegate_graph_ = graph_;
-  return {};
-}
-
-auto AlcedoQanGraph::InstallPortDockDelegate() -> QString {
-  if (graph_.isNull()) {
-    return QStringLiteral("AlcedoQanGraph has no Qan graph");
-  }
-  if (port_dock_delegate_graph_.data() == graph_.data()) {
-    return {};
-  }
-  auto loaded = LoadComponent(port_dock_delegate_url_, QStringLiteral("Alcedo port dock delegate"));
-  if (!loaded.component) {
-    return loaded.error;
-  }
-  graph_->setProperty("horizontalDockDelegate", QVariant::fromValue(loaded.component.release()));
-  port_dock_delegate_graph_ = graph_;
-  return {};
-}
-
-void AlcedoQanGraph::InstallInvisibleSelectionDelegate() {
-  if (graph_.isNull()) {
-    return;
-  }
-  auto* engine = qmlEngine(graph_.data());
-  if (engine == nullptr) {
-    return;
-  }
-  // Node delegates paint their own selection outline; the QuickQanava
-  // selection item must exist (qan::NodeItem expects one) but render nothing.
-  auto component = std::make_unique<QQmlComponent>(engine);
-  component->setData(QByteArrayLiteral("import QtQuick\nItem {}\n"), QUrl());
-  if (!component->isReady()) {
-    qWarning() << "AlcedoQanGraph: failed to create invisible selection delegate:"
-               << component->errorString();
-    return;
-  }
-  graph_->setProperty("selectionDelegate", QVariant::fromValue(component.release()));
-}
-
 auto AlcedoQanGraph::ComponentFor(EditorNodeKind kind) const -> QQmlComponent* {
-  if (kind == EditorNodeKind::ColorGrade) {
-    return color_grade_component_.get();
-  }
-  return endpoint_component_.get();
+  return delegate_library_.ComponentFor(kind);
 }
 
 auto AlcedoQanGraph::NodeKindKey(EditorNodeKind kind) -> QString {
@@ -1001,7 +1347,6 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
     return;
   }
   graph_->setMultipleSelectionEnabled(false);
-  InstallInvisibleSelectionDelegate();
   graph_->setConnectorCreateDefaultEdge(false);
   graph_->setConnectorEnabled(true);
   connect(graph_.data(), &qan::Graph::connectorChanged, this, &AlcedoQanGraph::ConfigureConnector,

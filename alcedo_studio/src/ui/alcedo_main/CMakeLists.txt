@@ -249,6 +249,8 @@ target_compile_definitions(AppTheme PRIVATE
 add_library(AlcedoQanGraph STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/alcedo_qan_graph.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/qan_delegate_library.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/qan_delegate_library.hpp"
 )
 target_include_directories(AlcedoQanGraph
     PUBLIC

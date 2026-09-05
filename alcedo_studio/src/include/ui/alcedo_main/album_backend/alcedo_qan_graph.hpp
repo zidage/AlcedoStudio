@@ -8,12 +8,13 @@
 #include <QObject>
 #include <QPointF>
 #include <QPointer>
-#include <QQuickItem>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QQuickItem>
 #include <QString>
 #include <QUrl>
 #include <QVariantList>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -22,9 +23,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "app/editor_node_graph_draft.hpp"
 #include "app/editor_node_graph_projection.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "qanGraph.h"
+#include "ui/alcedo_main/album_backend/qan_delegate_library.hpp"
 
 namespace qan {
 class Edge;
@@ -69,8 +72,8 @@ class AlcedoQanGraph : public QObject {
                  NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl portDelegateUrl READ port_delegate_url WRITE set_port_delegate_url NOTIFY
                  DelegatesChanged)
-  Q_PROPERTY(QUrl portDockDelegateUrl READ port_dock_delegate_url WRITE
-                 set_port_dock_delegate_url NOTIFY DelegatesChanged)
+  Q_PROPERTY(QUrl portDockDelegateUrl READ port_dock_delegate_url WRITE set_port_dock_delegate_url
+                 NOTIFY DelegatesChanged)
   Q_PROPERTY(QUrl edgeDelegateUrl READ edge_delegate_url WRITE set_edge_delegate_url NOTIFY
                  DelegatesChanged)
 
@@ -146,6 +149,21 @@ class AlcedoQanGraph : public QObject {
       -> AlcedoQanGraphApplyResult;
 
   /**
+   * @brief Apply one admitted draft mutation to the live Qan projection.
+   *
+   * The operation is atomic from the adapter's perspective. Only completed
+   * visual steps are reversed when a later step fails. The adapter never
+   * changes the product draft, history, or render state; the controller owns
+   * the one corresponding draft reversal.
+   *
+   * @pre GUI thread, a bound graph, and a complete current projection.
+   * @return Failure contains the original Qan error and any visual-reversal
+   *         error encountered while restoring the prior projection.
+   */
+  [[nodiscard]] auto ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& mutation)
+      -> AlcedoQanGraphApplyResult;
+
+  /**
    * @brief Insert one projected node and its ports without replacing the graph.
    * @return Failure restores no other primitives. The new node is removed on error.
    */
@@ -168,7 +186,7 @@ class AlcedoQanGraph : public QObject {
   /**
    * @brief Recolor every mapped edge to the permanent AppTheme stroke.
    */
-  void PromoteCandidatePresentation();
+  void               PromoteCandidatePresentation();
   /**
    * @brief Record committed snapshot revisions without replacing Qan primitives.
    *
@@ -209,17 +227,17 @@ class AlcedoQanGraph : public QObject {
    * identity the adapter exposes; a raw Qan selected-node list is not a
    * product selection source.
    */
-  [[nodiscard]] auto LiveNodeId(const qan::Node* node) const -> std::optional<NodeId>;
+  [[nodiscard]] auto  LiveNodeId(const qan::Node* node) const -> std::optional<NodeId>;
 
   /**
    * @return Copied node-card values for @p node_id, or nullptr when unmapped.
    */
-  [[nodiscard]] auto NodeProjection(const NodeId& node_id) const -> const EditorNodeProjection*;
+  [[nodiscard]] auto  NodeProjection(const NodeId& node_id) const -> const EditorNodeProjection*;
 
-  [[nodiscard]] auto session_generation() const -> std::uint64_t;
-  [[nodiscard]] auto projection_revision() const -> std::uint64_t;
-  [[nodiscard]] auto topology_revision() const -> std::uint64_t;
-  [[nodiscard]] auto has_projection() const -> bool;
+  [[nodiscard]] auto  session_generation() const -> std::uint64_t;
+  [[nodiscard]] auto  projection_revision() const -> std::uint64_t;
+  [[nodiscard]] auto  topology_revision() const -> std::uint64_t;
+  [[nodiscard]] auto  has_projection() const -> bool;
 
   /**
    * @brief Apply the one-node product selection to live Qan visuals.
@@ -227,21 +245,21 @@ class AlcedoQanGraph : public QObject {
    * Clears the Qan selected-node list, then selects at most one mapped node.
    * A Qan selected-node list is never treated as a product selection source.
    */
-  void ApplyProductSelection(const std::optional<NodeId>& node_id);
+  void                ApplyProductSelection(const std::optional<NodeId>& node_id);
 
   /**
    * @brief Move a live node item. No-op for unknown or stale NodeIds.
    */
-  void SetNodeItemPosition(const NodeId& node_id, QPointF position);
-  [[nodiscard]] auto NodeItemPosition(const NodeId& node_id) const -> std::optional<QPointF>;
+  void                SetNodeItemPosition(const NodeId& node_id, QPointF position);
+  [[nodiscard]] auto  NodeItemPosition(const NodeId& node_id) const -> std::optional<QPointF>;
 
   /**
    * @brief Set Color Grade Mask-drawer open state on the live delegate.
    *
    * Endpoints ignore the call. Missing NodeIds are no-ops.
    */
-  void SetDrawerOpen(const NodeId& node_id, bool open);
-  [[nodiscard]] auto DrawerOpen(const NodeId& node_id) const -> bool;
+  void                SetDrawerOpen(const NodeId& node_id, bool open);
+  [[nodiscard]] auto  DrawerOpen(const NodeId& node_id) const -> bool;
 
   Q_INVOKABLE QString liveNodeId(QObject* node) const;
   Q_INVOKABLE void    setNodePosition(const QString& node_id, qreal x, qreal y);
@@ -290,6 +308,45 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] virtual auto InsertQanNode(qan::Graph& graph, const EditorNodeProjection& node)
       -> qan::Node*;
 
+  /**
+   * @brief Insert one visual port through the pinned QuickQanava graph.
+   *
+   * Tests may override this operation to return nullptr. Production forwards
+   * to qan::Graph::insertPort and does not substitute another delegate.
+   */
+  [[nodiscard]] virtual auto InsertQanPort(qan::Graph& graph, qan::Node& node, bool is_input,
+                                           const QString& port_id) -> qan::PortItem*;
+
+  /**
+   * @brief Insert one visual edge through the pinned QuickQanava graph.
+   */
+  [[nodiscard]] virtual auto InsertQanEdge(qan::Graph& graph, qan::Node& source,
+                                           qan::Node& destination, QQmlComponent* component)
+      -> qan::Edge*;
+
+  /**
+   * @brief Bind an edge to its source and destination ports.
+   * @return false when the visual binding operation was not completed.
+   */
+  [[nodiscard]] virtual auto BindQanEdge(qan::Graph& graph, qan::Edge& edge, qan::PortItem& source,
+                                         qan::PortItem& destination) -> bool;
+
+  /**
+   * @brief Remove one visual edge. Tests may reject the operation.
+   */
+  [[nodiscard]] virtual auto RemoveQanEdge(qan::Graph& graph, qan::Edge& edge) -> bool;
+
+  /**
+   * @brief Remove one visual port. Tests may reject the operation.
+   */
+  [[nodiscard]] virtual auto RemoveQanPort(qan::Graph& graph, qan::Node& node, qan::PortItem& port)
+      -> bool;
+
+  /**
+   * @brief Remove one visual node. Tests may reject the operation.
+   */
+  [[nodiscard]] virtual auto RemoveQanNode(qan::Graph& graph, qan::Node& node) -> bool;
+
  private:
   struct EdgeKey {
     NodeId      source_node_id;
@@ -327,14 +384,14 @@ class AlcedoQanGraph : public QObject {
     std::uint64_t session_generation = 0;
   };
 
-  void               ClearIdentityMaps();
-  void               ClearDrawerConnections();
-  void               BindDrawerSignals();
-  void               BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
-  void               ConfigureGraphPolicy();
-  void               ConfigureConnector();
-  void               ApplyConnectablePolicy();
-  void               OnGraphDestroyed();
+  void ClearIdentityMaps();
+  void ClearDrawerConnections();
+  void BindDrawerSignals();
+  void BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
+  void ConfigureGraphPolicy();
+  void ConfigureConnector();
+  void ApplyConnectablePolicy();
+  void OnGraphDestroyed();
   void OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst, qan::PortItem* src_port,
                                       qan::PortItem* dst_port);
 
@@ -342,10 +399,38 @@ class AlcedoQanGraph : public QObject {
   void OnDrawerOpenChanged();
 
  private:
-  void               DestroyMappedPrimitives();
-  void               DestroyPrimitives(const std::vector<QPointer<qan::Edge>>& edges,
-                                       const std::vector<QPointer<qan::Node>>& nodes);
-  void               AttachLiveVisuals();
+  void DestroyMappedPrimitives();
+  void AttachLiveVisuals();
+
+  struct NodeVisualState {
+    EditorNodeProjection projection;
+    std::size_t          applied_index = 0;
+    QPointF              position;
+    bool                 has_position = false;
+    bool                 drawer_open  = true;
+  };
+
+  struct PortVisualSpec {
+    PortId port_id;
+    bool   is_input = false;
+  };
+
+  [[nodiscard]] auto InsertNodeVisual(const EditorNodeProjection& node,
+                                      std::uint64_t               session_generation,
+                                      const NodeVisualState* restore_state = nullptr) -> QString;
+  [[nodiscard]] auto RemoveNodeVisual(const NodeId&    node_id,
+                                      NodeVisualState* removed_state = nullptr) -> QString;
+  [[nodiscard]] auto RestoreNodePorts(const NodeId& node_id, qan::Node& node,
+                                      const std::vector<PortVisualSpec>& ports) -> QString;
+  [[nodiscard]] auto InsertEdgeVisual(const EditorNodeEdgeProjection& edge, bool candidate)
+      -> QString;
+  [[nodiscard]] auto RemoveEdgeVisual(const EditorNodeEdgeProjection& edge,
+                                      bool require_present = true) -> QString;
+  [[nodiscard]] auto RemoveCreatedEdge(qan::Edge& edge) -> QString;
+  void               DetachEdgeFromPorts(qan::Edge& edge);
+  void               RestoreEdgeToPorts(qan::Edge& edge);
+  void               EraseAppliedNode(const NodeId& node_id);
+  void               EraseAppliedEdge(const EditorNodeEdgeProjection& edge);
 
   [[nodiscard]] auto RejectIfStale(const EditorNodeGraphSnapshot& snapshot) const -> QString;
   [[nodiscard]] auto ValidateSnapshot(const EditorNodeGraphSnapshot& snapshot) const -> QString;
@@ -360,17 +445,7 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto InsertEdge(const EditorNodeEdgeProjection& edge) -> QString;
   void               ApplyNodePresentation(qan::Node& qan_node, const EditorNodeProjection& node);
   void               ApplyEdgePresentation(qan::Edge& qan_edge, bool candidate);
-  [[nodiscard]] auto EnsureDelegates() -> QString;
-  struct LoadedComponent {
-    std::unique_ptr<QQmlComponent> component;
-    QString                        error;
-  };
-  [[nodiscard]] auto        LoadComponent(const QUrl& url, const QString& role) -> LoadedComponent;
-  void                      DropCachedDelegates();
-  [[nodiscard]] auto        InstallPortDelegate() -> QString;
-  [[nodiscard]] auto        InstallPortDockDelegate() -> QString;
-  void                      InstallInvisibleSelectionDelegate();
-  [[nodiscard]] auto        ComponentFor(EditorNodeKind kind) const -> QQmlComponent*;
+  [[nodiscard]] auto ComponentFor(EditorNodeKind kind) const -> QQmlComponent*;
 
   [[nodiscard]] static auto MakeEdgeKey(const EditorNodeEdgeProjection& edge) -> EdgeKey;
   [[nodiscard]] static auto ToQString(std::string_view text) -> QString;
@@ -381,26 +456,15 @@ class AlcedoQanGraph : public QObject {
       -> QVariantList;
 
   QPointer<qan::Graph>                              graph_;
-  QUrl                                              color_grade_delegate_url_;
-  QUrl                                              endpoint_delegate_url_;
-  QUrl                                              port_delegate_url_;
-  QUrl                                              port_dock_delegate_url_;
-  QUrl                                              edge_delegate_url_;
-  QPointer<QQmlEngine>                              delegate_engine_;
-  QPointer<qan::Graph>                              port_delegate_graph_;
-  QPointer<qan::Graph>                              port_dock_delegate_graph_;
-  std::unique_ptr<QQmlComponent>                    color_grade_component_;
-  std::unique_ptr<QQmlComponent>                    endpoint_component_;
-  std::unique_ptr<QQmlComponent>                    edge_component_;
-  bool                                              has_projection_      = false;
-  bool                                              rebuild_in_progress_ = false;
+  QanDelegateLibrary                                delegate_library_;
+  bool                                              has_projection_         = false;
+  bool                                              rebuild_in_progress_    = false;
   int                                               topology_replace_count_ = 0;
   std::map<EdgeKey, bool>                           edge_candidate_;
   EditorNodeGraphSnapshot                           applied_;
   std::map<NodeId, QPointer<qan::Node>>             node_by_id_;
   std::map<EdgeKey, QPointer<qan::Edge>>            edge_by_key_;
   std::map<NodeId, NodePorts>                       ports_by_node_;
-  std::map<NodeId, EditorNodeProjection>            node_projections_;
   std::unordered_map<const qan::Node*, ReverseNode> node_from_qan_;
   std::vector<QMetaObject::Connection>              drawer_connections_;
   NodeId                                            product_selected_node_id_;

@@ -25,6 +25,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QuickQanava>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -196,6 +197,103 @@ class FailAfterInsertsGraph final : public alcedo::ui::AlcedoQanGraph {
   std::optional<int> remaining_success_;
 };
 
+enum class QanOperation : std::size_t {
+  InsertNode = 0,
+  InsertPort,
+  InsertEdge,
+  BindEdge,
+  RemoveEdge,
+  RemovePort,
+  RemoveNode,
+};
+
+class FailureInjectingQanGraph final : public alcedo::ui::AlcedoQanGraph {
+ public:
+  void FailOnNext(QanOperation operation) { FailOnCall(operation, 1); }
+
+  void FailOnCall(QanOperation operation, int call_number) {
+    failure_calls_.fill(std::nullopt);
+    failure_calls_[static_cast<std::size_t>(operation)] = call_number;
+    operation_calls_.fill(0);
+  }
+
+  void FailOnCalls(QanOperation first_operation, int first_call, QanOperation second_operation,
+                   int second_call) {
+    failure_calls_.fill(std::nullopt);
+    failure_calls_[static_cast<std::size_t>(first_operation)]  = first_call;
+    failure_calls_[static_cast<std::size_t>(second_operation)] = second_call;
+    operation_calls_.fill(0);
+  }
+
+ protected:
+  auto InsertQanNode(qan::Graph& graph, const alcedo::EditorNodeProjection& node)
+      -> qan::Node* override {
+    if (ShouldFail(QanOperation::InsertNode)) {
+      return nullptr;
+    }
+    return AlcedoQanGraph::InsertQanNode(graph, node);
+  }
+
+  auto InsertQanPort(qan::Graph& graph, qan::Node& node, bool is_input, const QString& port_id)
+      -> qan::PortItem* override {
+    if (ShouldFail(QanOperation::InsertPort)) {
+      return nullptr;
+    }
+    return AlcedoQanGraph::InsertQanPort(graph, node, is_input, port_id);
+  }
+
+  auto InsertQanEdge(qan::Graph& graph, qan::Node& source, qan::Node& destination,
+                     QQmlComponent* component) -> qan::Edge* override {
+    if (ShouldFail(QanOperation::InsertEdge)) {
+      return nullptr;
+    }
+    return AlcedoQanGraph::InsertQanEdge(graph, source, destination, component);
+  }
+
+  auto BindQanEdge(qan::Graph& graph, qan::Edge& edge, qan::PortItem& source,
+                   qan::PortItem& destination) -> bool override {
+    if (ShouldFail(QanOperation::BindEdge)) {
+      return false;
+    }
+    return AlcedoQanGraph::BindQanEdge(graph, edge, source, destination);
+  }
+
+  auto RemoveQanEdge(qan::Graph& graph, qan::Edge& edge) -> bool override {
+    if (ShouldFail(QanOperation::RemoveEdge)) {
+      return false;
+    }
+    return AlcedoQanGraph::RemoveQanEdge(graph, edge);
+  }
+
+  auto RemoveQanPort(qan::Graph& graph, qan::Node& node, qan::PortItem& port) -> bool override {
+    if (ShouldFail(QanOperation::RemovePort)) {
+      return false;
+    }
+    return AlcedoQanGraph::RemoveQanPort(graph, node, port);
+  }
+
+  auto RemoveQanNode(qan::Graph& graph, qan::Node& node) -> bool override {
+    if (ShouldFail(QanOperation::RemoveNode)) {
+      return false;
+    }
+    return AlcedoQanGraph::RemoveQanNode(graph, node);
+  }
+
+ private:
+  [[nodiscard]] auto ShouldFail(QanOperation operation) -> bool {
+    const auto index = static_cast<std::size_t>(operation);
+    ++operation_calls_[index];
+    if (!failure_calls_[index].has_value() || operation_calls_[index] != *failure_calls_[index]) {
+      return false;
+    }
+    failure_calls_[index].reset();
+    return true;
+  }
+
+  std::array<std::optional<int>, 7> failure_calls_{};
+  std::array<int, 7>                operation_calls_{};
+};
+
 }  // namespace
 
 namespace alcedo {
@@ -238,6 +336,54 @@ auto ExpectLiveBackbone(const ui::AlcedoQanGraph& adapter, const EditorNodeGraph
     EXPECT_EQ(qan_edge->getItem()->getSourceItem(), source_port);
     EXPECT_EQ(qan_edge->getItem()->getDestinationItem(), dest_port);
     EXPECT_TRUE(qan_edge->getLabel().isEmpty());
+  }
+}
+
+auto MakeAddedColorGradeMutation() -> EditorNodeGraphDraftMutation {
+  auto document = CreateDefaultPipelineDocument();
+  auto draft    = EditorNodeGraphDraft::FromDocument(document, {});
+  return draft.AddColorGrade(NodeId{"grade.extra"});
+}
+
+auto MakeEdgeMutation(const EditorNodeEdgeProjection& first_removed,
+                      const EditorNodeEdgeProjection& second_removed)
+    -> EditorNodeGraphDraftMutation {
+  EditorNodeGraphDraftMutation mutation;
+  mutation.succeeded = true;
+  mutation.removed_edges.push_back(first_removed);
+  mutation.removed_edges.push_back(second_removed);
+  mutation.inserted_edges.push_back(EditorNodeEdgeProjection{
+      NodeId{"develop"}, PortId{"image"}, NodeId{"grade.extra.a"}, PortId{"image"}});
+  mutation.inserted_edges.push_back(EditorNodeEdgeProjection{
+      NodeId{"grade.extra.a"}, PortId{"image"}, NodeId{"grade.extra.b"}, PortId{"image"}});
+  return mutation;
+}
+
+auto MakeExtraNode(const char* node_id) -> EditorNodeProjection {
+  EditorNodeProjection node;
+  node.node_id      = NodeId{node_id};
+  node.node_kind    = EditorNodeKind::ColorGrade;
+  node.display_name = "Detached Color Grade";
+  return node;
+}
+
+void ExpectSelectedNode(const qan::Graph& graph, const qan::Node* expected) {
+  const auto& selected = graph.getSelectedNodes();
+  ASSERT_EQ(selected.size(), 1u);
+  EXPECT_EQ(selected.at(0).data(), expected);
+}
+
+void ExpectMappedEdges(const ui::AlcedoQanGraph&                    adapter,
+                       const std::vector<EditorNodeEdgeProjection>& edges) {
+  ASSERT_EQ(adapter.graph()->get_edge_count(), static_cast<int>(edges.size()));
+  for (const auto& edge : edges) {
+    auto* qan_edge = adapter.EdgeFor(edge);
+    ASSERT_NE(qan_edge, nullptr);
+    ASSERT_NE(qan_edge->getItem(), nullptr);
+    EXPECT_EQ(qan_edge->getItem()->getSourceItem(),
+              adapter.OutputPortFor(edge.source_node_id, edge.source_port_id));
+    EXPECT_EQ(qan_edge->getItem()->getDestinationItem(),
+              adapter.InputPortFor(edge.destination_node_id, edge.destination_port_id));
   }
 }
 
@@ -311,8 +457,7 @@ TEST_F(AlcedoQanGraph, InstallsFlushPortDockAndInvisibleSelectionDelegate) {
   EXPECT_TRUE(dock_component->url().toString().endsWith(QStringLiteral("EditorNodePortDock.qml")))
       << dock_component->url().toString().toStdString();
 
-  const auto* selection_component =
-      graph->property("selectionDelegate").value<QQmlComponent*>();
+  const auto* selection_component = graph->property("selectionDelegate").value<QQmlComponent*>();
   ASSERT_NE(selection_component, nullptr);
   EXPECT_TRUE(selection_component->url().isEmpty())
       << "selection delegate must be the inline invisible Item, not "
@@ -395,9 +540,9 @@ TEST_F(AlcedoQanGraph, RemovingAColorGradeReplacesQanPrimitivesAndHidesTheRemove
   const auto first = EditorNodeGraphProjection::Build(document, 9, 1, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(first).succeeded) << "initial apply";
 
-  QPointer<qan::Node>      removed_node = adapter.NodeFor(NodeId{"grade.primary"});
+  QPointer<qan::Node> removed_node = adapter.NodeFor(NodeId{"grade.primary"});
   ASSERT_FALSE(removed_node.isNull());
-  QPointer<QQuickItem>     removed_item = removed_node->getItem();
+  QPointer<QQuickItem> removed_item = removed_node->getItem();
   ASSERT_FALSE(removed_item.isNull());
   EXPECT_TRUE(removed_item->isVisible());
 
@@ -495,6 +640,283 @@ TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection
   EXPECT_EQ(adapter.projection_revision(), 7u);
   ExpectLiveBackbone(adapter, prior);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.second"}), nullptr);
+}
+
+TEST_F(AlcedoQanGraph, FailedNodeInsertionPreservesUnrelatedIdentitySelectionAndLayout) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 20, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+
+  auto* develop = adapter.NodeFor(NodeId{"develop"});
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  auto* drt     = adapter.NodeFor(NodeId{"drt"});
+  ASSERT_NE(develop, nullptr);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(drt, nullptr);
+  QPointer<qan::Edge> first_edge = adapter.EdgeFor(prior.edges.front());
+  QPointer<qan::Edge> last_edge  = adapter.EdgeFor(prior.edges.back());
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(131, 247));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  adapter.FailOnNext(QanOperation::InsertNode);
+  const auto result = adapter.ApplyMutation(MakeAddedColorGradeMutation());
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan node creation failed")), -1);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), develop);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"drt"}), drt);
+  EXPECT_EQ(adapter.EdgeFor(prior.edges.front()), first_edge.data());
+  EXPECT_EQ(adapter.EdgeFor(prior.edges.back()), last_edge.data());
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(131, 247));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedPortInsertionRemovesThePartialNodeAndRestoresSelection) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 21, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  ASSERT_NE(primary, nullptr);
+  QPointer<qan::Edge> first_edge = adapter.EdgeFor(prior.edges.front());
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(163, 281));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  adapter.FailOnNext(QanOperation::InsertPort);
+  const auto result = adapter.ApplyMutation(MakeAddedColorGradeMutation());
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan port insertion failed")), -1);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(adapter.EdgeFor(prior.edges.front()), first_edge.data());
+  EXPECT_EQ(harness_->Graph()->getNodeCount(), 3);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(163, 281));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedEdgeInsertionRestoresRemovedEdgesAndPreservesNodeIdentity) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 22, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
+
+  auto* develop = adapter.NodeFor(NodeId{"develop"});
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  auto* drt     = adapter.NodeFor(NodeId{"drt"});
+  auto* extra_a = adapter.NodeFor(NodeId{"grade.extra.a"});
+  auto* extra_b = adapter.NodeFor(NodeId{"grade.extra.b"});
+  ASSERT_NE(develop, nullptr);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(drt, nullptr);
+  ASSERT_NE(extra_a, nullptr);
+  ASSERT_NE(extra_b, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(191, 313));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  auto mutation = MakeEdgeMutation(prior.edges.front(), prior.edges.back());
+  adapter.FailOnNext(QanOperation::InsertEdge);
+  const auto result = adapter.ApplyMutation(mutation);
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan edge creation failed")), -1);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"develop"}), develop);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"drt"}), drt);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra.a"}), extra_a);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra.b"}), extra_b);
+  EXPECT_EQ(adapter.EdgeFor(mutation.inserted_edges.front()), nullptr);
+  EXPECT_EQ(adapter.EdgeFor(mutation.inserted_edges.back()), nullptr);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(191, 313));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedEdgeBindingRemovesTheIncompleteEdgeAndRestoresTopology) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 23, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  ASSERT_NE(primary, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(223, 349));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  auto mutation = MakeEdgeMutation(prior.edges.front(), prior.edges.back());
+  adapter.FailOnNext(QanOperation::BindEdge);
+  const auto result = adapter.ApplyMutation(mutation);
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan edge binding failed")), -1);
+  EXPECT_EQ(adapter.EdgeFor(mutation.inserted_edges.front()), nullptr);
+  EXPECT_EQ(adapter.EdgeFor(mutation.inserted_edges.back()), nullptr);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(223, 349));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedEdgeRemovalRestoresPortListsAndPreservesVisualIdentity) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 24, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  auto* first   = adapter.EdgeFor(prior.edges.front());
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(first, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(251, 383));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  adapter.FailOnNext(QanOperation::RemoveEdge);
+  const auto result = adapter.RemoveProjectedEdge(prior.edges.front());
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan edge removal failed")), -1);
+  EXPECT_EQ(adapter.EdgeFor(prior.edges.front()), first);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(251, 383));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedPortRemovalRestoresTheNodeWithoutChangingOtherIdentities) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 25, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra")).succeeded);
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  auto* extra   = adapter.NodeFor(NodeId{"grade.extra"});
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(extra, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(277, 419));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  adapter.FailOnNext(QanOperation::RemovePort);
+  const auto result = adapter.RemoveProjectedNode(NodeId{"grade.extra"});
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan port removal failed")), -1);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), extra);
+  EXPECT_NE(adapter.InputPortFor(NodeId{"grade.extra"}, kImagePort()), nullptr);
+  EXPECT_NE(adapter.OutputPortFor(NodeId{"grade.extra"}, kImagePort()), nullptr);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(277, 419));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedNodeRemovalRestoresItsPortsAndKeepsTheProjectionUsable) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 26, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra")).succeeded);
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  auto* extra   = adapter.NodeFor(NodeId{"grade.extra"});
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(extra, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(299, 457));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  adapter.FailOnNext(QanOperation::RemoveNode);
+  const auto result = adapter.RemoveProjectedNode(NodeId{"grade.extra"});
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan node removal failed")), -1);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), extra);
+  EXPECT_NE(adapter.InputPortFor(NodeId{"grade.extra"}, kImagePort()), nullptr);
+  EXPECT_NE(adapter.OutputPortFor(NodeId{"grade.extra"}, kImagePort()), nullptr);
+  ExpectMappedEdges(adapter, prior.edges);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(299, 457));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, VisualReversalFailureReportsBothTheOriginalAndReversalErrors) {
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 27, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
+  ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
+
+  auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
+  ASSERT_NE(primary, nullptr);
+  adapter.SetNodeItemPosition(NodeId{"grade.primary"}, QPointF(317, 491));
+  adapter.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  const auto mutation = MakeEdgeMutation(prior.edges.front(), prior.edges.back());
+  adapter.FailOnCalls(QanOperation::InsertEdge, 2, QanOperation::RemoveEdge, 3);
+  const auto result = adapter.ApplyMutation(mutation);
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("Qan edge creation failed")), -1);
+  EXPECT_NE(result.error.indexOf(QStringLiteral("visual reversal failed")), -1);
+  EXPECT_NE(adapter.EdgeFor(mutation.inserted_edges.front()), nullptr);
+  EXPECT_EQ(adapter.EdgeFor(mutation.inserted_edges.back()), nullptr);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), primary);
+  ASSERT_TRUE(adapter.NodeItemPosition(NodeId{"grade.primary"}).has_value());
+  EXPECT_EQ(adapter.NodeItemPosition(NodeId{"grade.primary"}).value(), QPointF(317, 491));
+  EXPECT_FALSE(adapter.DrawerOpen(NodeId{"grade.primary"}));
+  ExpectSelectedNode(*harness_->Graph(), primary);
+}
+
+TEST_F(AlcedoQanGraph, FailedVisualMutationLeavesTheProductDocumentUntouched) {
+  PipelineDocument document = CreateDefaultPipelineDocument();
+  auto             draft    = EditorNodeGraphDraft::FromDocument(document, {});
+  const auto       mutation = draft.AddColorGrade(NodeId{"grade.extra"});
+  ASSERT_TRUE(mutation.succeeded);
+  ASSERT_NE(draft.FindNode(NodeId{"grade.extra"}), nullptr);
+  ASSERT_EQ(document.Graph().FindNode(NodeId{"grade.extra"}), nullptr);
+
+  FailureInjectingQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto prior = EditorNodeGraphProjection::Build(document, 28, 1, 1);
+  ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
+  adapter.FailOnNext(QanOperation::InsertNode);
+  const auto result = adapter.ApplyMutation(mutation);
+
+  EXPECT_FALSE(result.succeeded);
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(document.NextColorGradeNameNumber(), 2u);
+  EXPECT_NE(draft.FindNode(NodeId{"grade.extra"}), nullptr);
+  draft.RestoreLastMutation();
+  EXPECT_EQ(draft.Nodes(), prior.nodes);
+  EXPECT_EQ(draft.Edges(), prior.edges);
 }
 
 TEST_F(AlcedoQanGraph, GraphDestructionClearsIdentityMaps) {
@@ -643,9 +1065,9 @@ TEST_F(AlcedoQanGraph, IncrementalInsertAndRemovePreserveUnaffectedIdentities) {
 
   EditorNodeEdgeProjection edge{NodeId{"develop"}, PortId{"image"}, NodeId{"grade.extra"},
                                 PortId{"image"}};
-  ASSERT_TRUE(adapter.RemoveProjectedEdge(EditorNodeEdgeProjection{
-                                              NodeId{"develop"}, PortId{"image"},
-                                              NodeId{"grade.primary"}, PortId{"image"}})
+  ASSERT_TRUE(adapter
+                  .RemoveProjectedEdge(EditorNodeEdgeProjection{
+                      NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"}, PortId{"image"}})
                   .succeeded);
   EXPECT_NE(adapter.OutputPortFor(NodeId{"develop"}, PortId{"image"}), nullptr);
   EXPECT_NE(adapter.InputPortFor(NodeId{"grade.extra"}, PortId{"image"}), nullptr);

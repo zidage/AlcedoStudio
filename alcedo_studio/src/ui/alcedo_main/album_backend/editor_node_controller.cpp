@@ -369,11 +369,10 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
     SetLastError(tr("The node graph has no snapshot"));
     return false;
   }
-  EditorNodeGraphSnapshot view;
+  EditorNodeGraphSnapshot        view;
   const EditorNodeGraphSnapshot* projected = &snapshot_;
   if (draft_ != nullptr) {
-    view      = draft_->CurrentSnapshot(session_generation_, projection_revision_,
-                                        topology_revision_);
+    view = draft_->CurrentSnapshot(session_generation_, projection_revision_, topology_revision_);
     projected = &view;
   } else if (!has_snapshot_) {
     SetLastError(tr("The node graph has no snapshot"));
@@ -484,11 +483,10 @@ void EditorNodeController::ApplyBoundGraph() {
   ++completed_projection_apply_count_;
   auto* layout = layout_store_.data();
   if (layout != nullptr) {
-    layout->EnsureDefaultPositions(draft_ == nullptr
-                                       ? snapshot_
-                                       : draft_->CurrentSnapshot(session_generation_,
-                                                                 projection_revision_,
-                                                                 topology_revision_));
+    layout->EnsureDefaultPositions(draft_ == nullptr ? snapshot_
+                                                     : draft_->CurrentSnapshot(session_generation_,
+                                                                               projection_revision_,
+                                                                               topology_revision_));
     for (const auto& node : ActiveNodes()) {
       const auto id = NodeIdToQString(node.node_id);
       if (layout->hasNodePosition(id)) {
@@ -508,10 +506,7 @@ void EditorNodeController::QueueProjectionApply() {
     return;
   }
   projection_apply_queued_ = true;
-  QMetaObject::invokeMethod(
-      this,
-      [this] { ApplyBoundGraphIfCurrent(); },
-      Qt::QueuedConnection);
+  QMetaObject::invokeMethod(this, [this] { ApplyBoundGraphIfCurrent(); }, Qt::QueuedConnection);
 }
 
 void EditorNodeController::ApplyBoundGraphIfCurrent() {
@@ -659,7 +654,7 @@ bool EditorNodeController::addCleanColorGrade() {
     SetLastError(QString::fromStdString(mutation.error));
     return false;
   }
-  if (!ApplyMutationToGraph(mutation)) {
+  if (!ApplyDraftMutationToAdapter(mutation)) {
     return false;
   }
   if (layout_store_ != nullptr) {
@@ -726,7 +721,7 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
     SetLastError(QString::fromStdString(mutation.error));
     return false;
   }
-  if (!ApplyMutationToGraph(mutation)) {
+  if (!ApplyDraftMutationToAdapter(mutation)) {
     return false;
   }
   emit DraftStateChanged();
@@ -783,7 +778,7 @@ bool EditorNodeController::requestConnect(const QString& source_node_id,
     SetLastError({});
     return true;
   }
-  if (!ApplyMutationToGraph(mutation)) {
+  if (!ApplyDraftMutationToAdapter(mutation)) {
     return false;
   }
   emit DraftStateChanged();
@@ -865,75 +860,30 @@ void EditorNodeController::DiscardDraft() {
 }
 
 void EditorNodeController::AdoptCommittedDocument(const PipelineDocument& document) {
-  auto built = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
-  topology_revision_            = topology_revision_ + 1;
-  projection_revision_          = projection_revision_ + 1;
-  built.session_generation      = session_generation_;
-  built.topology_revision       = topology_revision_;
-  built.projection_revision     = projection_revision_;
-  snapshot_                     = std::move(built);
-  has_snapshot_                 = true;
+  auto built                = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
+  topology_revision_        = topology_revision_ + 1;
+  projection_revision_      = projection_revision_ + 1;
+  built.session_generation  = session_generation_;
+  built.topology_revision   = topology_revision_;
+  built.projection_revision = projection_revision_;
+  snapshot_                 = std::move(built);
+  has_snapshot_             = true;
 }
 
-auto EditorNodeController::ApplyMutationToGraph(const alcedo::EditorNodeGraphDraftMutation& mutation)
-    -> bool {
+auto EditorNodeController::ApplyDraftMutationToAdapter(
+    const alcedo::EditorNodeGraphDraftMutation& mutation) -> bool {
   if (graph_adapter_ == nullptr || graph_adapter_->graph() == nullptr) {
     return true;
   }
-  std::vector<EditorNodeProjection>     applied_nodes;
-  std::vector<EditorNodeEdgeProjection> applied_edges;
-  auto fail = [&](const QString& error) {
-    SetLastError(error);
-    if (draft_ != nullptr) {
-      draft_->RestoreLastMutation();
-    }
-    for (auto it = applied_edges.rbegin(); it != applied_edges.rend(); ++it) {
-      (void)graph_adapter_->RemoveProjectedEdge(*it);
-    }
-    for (auto it = applied_nodes.rbegin(); it != applied_nodes.rend(); ++it) {
-      (void)graph_adapter_->RemoveProjectedNode(it->node_id);
-    }
-    if (draft_ != nullptr) {
-      for (const auto& node_id : mutation.removed_node_ids) {
-        const auto* node = draft_->FindNode(node_id);
-        if (node != nullptr) {
-          (void)graph_adapter_->InsertProjectedNode(*node);
-        }
-      }
-      for (const auto& edge : mutation.removed_edges) {
-        (void)graph_adapter_->InsertProjectedEdge(edge, true);
-      }
-    }
-    return false;
-  };
-  for (const auto& edge : mutation.removed_edges) {
-    const auto result = graph_adapter_->RemoveProjectedEdge(edge);
-    if (!result.succeeded) {
-      return fail(result.error);
-    }
+  const auto result = graph_adapter_->ApplyMutation(mutation);
+  if (result.succeeded) {
+    return true;
   }
-  for (const auto& node_id : mutation.removed_node_ids) {
-    const auto result = graph_adapter_->RemoveProjectedNode(node_id);
-    if (!result.succeeded) {
-      return fail(result.error);
-    }
+  if (draft_ != nullptr) {
+    draft_->RestoreLastMutation();
   }
-  for (const auto& node : mutation.inserted_nodes) {
-    const auto result = graph_adapter_->InsertProjectedNode(node);
-    if (!result.succeeded) {
-      return fail(result.error);
-    }
-    applied_nodes.push_back(node);
-  }
-  for (const auto& edge : mutation.inserted_edges) {
-    const auto result = graph_adapter_->InsertProjectedEdge(edge, true);
-    if (!result.succeeded) {
-      return fail(result.error);
-    }
-    applied_edges.push_back(edge);
-  }
-  graph_adapter_->ApplyProductSelection(selected_node_id_);
-  return true;
+  SetLastError(result.error);
+  return false;
 }
 
 auto EditorNodeController::MaybeSubmitDraft() -> bool {
@@ -952,9 +902,9 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     emit ActionAvailabilityChanged();
     return true;
   }
-  auto change                  = draft_->MakeChange();
-  submitted_identity_          = CurrentDraftIdentity();
-  const auto result            = session_->SubmitNodeGraphTopologyEdit(change);
+  auto change         = draft_->MakeChange();
+  submitted_identity_ = CurrentDraftIdentity();
+  const auto result   = session_->SubmitNodeGraphTopologyEdit(change);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     submitted_identity_.reset();
     SetLastError(QString::fromStdString(result.message));
