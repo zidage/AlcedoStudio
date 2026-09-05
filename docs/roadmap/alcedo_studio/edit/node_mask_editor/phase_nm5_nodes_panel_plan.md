@@ -2,7 +2,7 @@
 
 Date: 2026-09-02
 
-Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8f complete 2026-09-05; NM5.8g pending
+Status: NM5.1–NM5.7R implementation recorded; NM5.8a–NM5.8g complete 2026-09-05
 
 Prerequisites: NM4 is complete. NM1.4R and NM1.5 behavior remains required.
 
@@ -3544,6 +3544,85 @@ three-backend qualification.
 11. Check QuickQanava and bezier licence notices.
 12. Run all affected graph, history, adapter, QML, and workspace tests.
 
+##### Phase NM5.8g completion record (2026-09-05)
+
+**Status:** complete — Windows MSVC configure/build, graph/history/adapter/QML/workspace regression, install-tree and NSIS package QuickQanava import, and QuickQanava BSD-3-Clause plus bezier MIT notices. macOS package checks were not run on this host.
+
+**Primary success call chain:**
+
+```text
+packaged/installed alcedo_main --verify-qml-imports
+  -> QQuickStyle Basic
+  -> QQmlEngine import path qrc:/
+  -> QuickQanava::initialize
+  -> import QuickQanava 2.0 as Qan
+  -> probe Item objectName quickQanavaImportProbe
+  -> stdout qml.imports.ok=QuickQanava
+```
+
+```text
+cmake --install (absolute CMAKE_INSTALL_PREFIX)
+  -> alcedo_install_legal_notices(bin)
+  -> LICENSE, NOTICE, THIRD_PARTY_NOTICE.txt, third_party_licenses/
+  -> verify_windows_install_tree.ps1 asserts BSD-3-Clause binary clause and bezier MIT text
+  -> installed alcedo_main --verify-qml-imports
+```
+
+**Primary failure call chain:**
+
+```text
+missing or broken QuickQanava QML import
+  -> QQmlComponent prints the real QML error
+  -> non-zero process status
+  -> ProductionBinaryLoadsQuickQanavaModule / install-tree verify fail
+  -> no substitute canvas
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Debug `alcedo_main --verify-qml-imports` | `ProductionBinaryLoadsQuickQanavaModule` | PASS |
+| Source-tree QuickQanava/bezier notice text | `PackagedNoticeSourcesContainQuickQanavaAndBezierClauses` | PASS |
+| Default graph 3 node / 2 edge delegates | `AlcedoQanGraphPerformance.DefaultGraphApplyCreatesThreeNodeDelegatesAndTwoEdges` | PASS (apply 97 ms) |
+| 32-Grade graph 34 node / 33 edge delegates | `AlcedoQanGraphPerformance.ThirtyTwoGradeGraphApplyRecordsDelegateCountsAndApplyTime` | PASS (apply 918 ms) |
+| 100 selections each under 100 ms | `AlcedoQanGraphPerformance.OneHundredSelectionsStayWithinOneHundredMillisecondsEach` | PASS (max 54 ms) |
+| Many-Mask drawer fold keeps owner identity | `AlcedoQanGraphPerformance.OpeningAndClosingAManyMaskNodeKeepsOwnerIdentity` | PASS (4 ms) |
+| 100 accepted draft Connects keep Qan identities | `AlcedoQanGraphPerformance.OneHundredAcceptedDraftConnectsRetainQanIdentities` | PASS (415 ms, 200 edge mutations) |
+| First Nodes Loader under 100 ms | `EditorNodesPanelQmlTest.FirstNodesLoaderShowsDefaultGraphDelegates` | PASS (`EXPECT_LT(loader_ms, 100)`) |
+| Add pending without Qan topology replace | `EditorNodesPanelQmlTest.AddColorGradeShowsPendingWithoutReplacingQanTopology` | PASS (25 ms) |
+| 100 open/close Qan lifetime | `EditorNodesPanelQmlTest.RepeatedNodesPageOpenAndCloseCyclesReleaseQanItemsAndIgnoreStaleRefreshes` | PASS |
+| Installed-app QuickQanava import | `build/install/bin/alcedo_main.exe --verify-qml-imports` | PASS (`qml.imports.ok=QuickQanava`) |
+| CPack staging QuickQanava import | `_CPack_Packages/.../bin/alcedo_main.exe --verify-qml-imports` | PASS |
+| Windows NSIS package | `AlcedoStudio-0.2.9-Windows-AMD64.exe` | generated (136.94 MB) |
+
+Commands:
+
+- `cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/misc/Qt/6.9.3/msvc2022_64/lib/cmake"`
+- `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main AlcedoQanGraphTest EditorNodesPanelQmlTest EditorNodeDelegateQmlTest EditorHistoryVersionsRailLifecycleQmlTest WorkspaceShellTest EditorNodeSelectionLayoutTest EditorNodeGraphDraftTest EditorNodeGraphProjectionTest EditorSessionHistoryPortTest EditorSessionNodeCommandTest PipelineHistoryApplierTest PipelineEditBatchTest PipelineGraphTopologyDeltaTest PipelineDocumentDefaultNameTest QuickQanavaProductionIntegrationTest QanDelegateLibraryTest`
+- `ctest --test-dir build/debug --output-on-failure --no-tests=error -R "AlcedoQanGraphTest|EditorNodesPanelQmlTest|EditorNodeDelegateQmlTest|EditorHistoryVersionsRailLifecycleQmlTest|EditorNodeSelectionLayoutTest|EditorNodeGraphDraftTest|EditorNodeGraphProjectionTest|EditorSessionHistoryPortTest|EditorSessionNodeCommandTest|PipelineHistoryApplierTest|PipelineEditBatchTest|PipelineGraphTopologyDeltaTest|PipelineDocumentDefaultNameTest|QuickQanavaProductionIntegrationTest|QanDelegateLibraryTest|ProductionBinaryLoadsQuickQanavaModule|PackagedNoticeSourcesContainQuickQanavaAndBezierClauses|WorkspaceShellTests.NodesPage"`
+- `cmd /c scripts\msvc_env.cmd --preset win_release -DCMAKE_PREFIX_PATH="D:/misc/Qt/6.9.3/msvc2022_64/lib/cmake"`
+- `cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target alcedo_main`
+- `cmd /c scripts\msvc_env.cmd --install build/release`
+- `powershell -ExecutionPolicy Bypass -File scripts/verify_windows_install_tree.ps1 -InstallDir build/install`
+- `cpack --config build/release/CPackConfig.cmake -B build/tmp/nm5-8g/package`
+
+Suite totals: first debug filter **275/277** in 224.35 s (two new delegate-count waits used `findChildren<qan::NodeItem*>`, which does not see QML-created items). After counting live `getItem()` delegates, those two cases passed **2/2**. Combined affected set **277/277**.
+
+Per-binary after the fix: `AlcedoQanGraphTest` 31/31, `EditorNodesPanelQmlTest` 33/33, `EditorNodeDelegateQmlTest` 19/19, `EditorHistoryVersionsRailLifecycleQmlTest` 6/6, `WorkspaceShellTest` NodesPage 2/2, `EditorNodeSelectionLayoutTest` 40/40 (includes `editor_node_controller_test.cpp`), `EditorNodeGraphDraftTest` 14/14, `EditorNodeGraphProjectionTest` 7/7, `EditorSessionHistoryPortTest` 75/75, `EditorSessionNodeCommandTest` 3/3, `PipelineHistoryApplierTest` 12/12, `PipelineEditBatchTest` 17/17, `PipelineGraphTopologyDeltaTest` 5/5, `PipelineDocumentDefaultNameTest` 6/6, `QuickQanavaProductionIntegrationTest` 3/3, `QanDelegateLibraryTest` 2/2, `ProductionBinaryLoadsQuickQanavaModule` 1/1, `PackagedNoticeSourcesContainQuickQanavaAndBezierClauses` 1/1.
+
+The plan name `EditorWorkspaceToolRailLifecycleQmlTest` is the existing `EditorHistoryVersionsRailLifecycleQmlTest` binary.
+
+**Section 19 recorded production-path timings** (debug MSVC, gtest `RecordProperty` in `build/tmp/nm5-8g/qan_perf.xml`): default apply 97 ms with 3/2 delegates; 32-Grade apply 918 ms with 34/33 delegates; 100 selections max 54 ms; many-Mask drawer fold 4 ms; 100 draft Connects 415 ms with 200 changed Qan edges and retained Develop/primary/DRT identities. First Nodes Loader asserted under 100 ms on a fresh process; Add pending feedback 25 ms without incrementing `topology_replace_count`. Decode resolution, output quality, and backend were not changed.
+
+**Checklist / exit condition:** original items 1–7 remain covered by the re-run QML/workspace/history binaries and the NM5.8f visual-matrix record. Item 8 passed (Windows wrapper configure/build). Item 9 is open: this host is Windows, so no macOS configure/build/install/package was executed. Items 10–12 passed (install + CPack staging `--verify-qml-imports`, notice files in `bin/` and the NSIS staging tree, affected regression filter).
+
+**LOC note (grill-code-review):** tracked edits +235 lines across 8 files. New `alcedo_qan_graph_performance_test.cpp` is 407 lines; `check_quickqanava_legal_notices.cmake` is 50 lines. `editor_nodes_panel_qml_test.cpp` is 1019 lines after two timing tests; those tests stay on the existing Nodes Loader fixture rather than a second binary. `main.cpp` is 377 lines.
+
+**Pinned API differences:** production CLI `--verify-qml-imports` (Basic style, no editor backend, no window, no render). CMake `alcedo_install_legal_notices(destination)` installs `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICE.txt` / `third_party_licenses/` next to the Windows executable and into macOS `Contents/Resources`. CTest names `ProductionBinaryLoadsQuickQanavaModule` and `PackagedNoticeSourcesContainQuickQanavaAndBezierClauses`. Verify scripts assert `Redistributions in binary form must reproduce` and bezier `MIT License`. No QuickQanava submodule pin or Qt style change.
+
+**Remaining gaps:** macOS configure/build/install/package was not run (Windows environment). Native screen-reader narration remains the NM5.8f residual. A full editor window from the NSIS-installed Program Files tree was not opened; package acceptance used `--verify-qml-imports` on the cmake install tree and the CPack staging tree. `cmake --install build/release --prefix build/install` (relative prefix) failed Qt `qt.conf` absolute-path checking; the working install used the preset absolute `CMAKE_INSTALL_PREFIX`. NM8 still owns real-RAW and three-backend qualification.
+
 ### 16.4 Main call chain
 
 ```text
@@ -3586,7 +3665,7 @@ checks here.
 | NM5.8d | Complete 2026-09-04 | Caller deletion audit; retained typed replay/paste |
 | NM5.8e | Complete 2026-09-05 | Persistent topology history; lifecycle and failure recovery |
 | NM5.8f | Complete 2026-09-05 | Keyboard, QML accessibility, localization, visual matrix |
-| NM5.8g | Pending | Fresh builds, regression, installed packages, notices |
+| NM5.8g | Complete 2026-09-05 | Fresh Windows builds, regression, install/package, notices |
 
 #### NM5.8e completion — 2026-09-05
 
@@ -3669,6 +3748,13 @@ under section 16.3.6 in this document.
   `AlcedoQanGraphTest` 26/26, `EditorNodeGraphDraftTest` 14/14.
 - Native NVDA/Narrator/VoiceOver was not run. Install, package, notices, and macOS remain
   NM5.8g. No package or macOS result is substituted here.
+
+#### NM5.8g completion — 2026-09-05
+
+**Status:** Complete. Fresh Windows/MSVC configure and build, the affected graph/history/adapter/QML/workspace regression filter, install-tree and NSIS package QuickQanava import, and QuickQanava/bezier notices now have executable evidence. The full call chains, test table, Section 19 timings, LOC note, and residuals are under section 16.3.7 in this document.
+
+- Wrapper debug configure/build succeeded. The affected `ctest` filter is **277/277** after fixing QML delegate counting. Wrapper release configure/build of `alcedo_main`, `cmake --install build/release`, `scripts/verify_windows_install_tree.ps1`, and `cpack` NSIS all passed. Installed and CPack-staging `alcedo_main --verify-qml-imports` both printed `qml.imports.ok=QuickQanava`.
+- macOS was not available on this Windows host. No macOS package result is substituted here. No QuickQanava submodule or Qt style change.
 
 ---
 
@@ -3850,9 +3936,9 @@ Do not reduce decode resolution, output quality, or backend behavior to meet the
 - [x] Node delegates use no shadow, glow, gradient, or Material style.
 - [x] Reduced-motion behavior passes.
 - [x] The viewer keeps its 360 logical-pixel floor at 960×640.
-- [ ] Windows build, install, and package checks pass.
+- [x] Windows build, install, and package checks pass.
 - [ ] macOS build, install, and package checks pass when the environment is available.
-- [ ] Required third-party notices are in the package.
-- [ ] Every sub-phase completion record lists pinned API differences.
+- [x] Required third-party notices are in the package.
+- [x] Every sub-phase completion record lists pinned API differences.
 
 NM6 must use NM5 `selectedNodeId`. NM6 must not create another node selection source.

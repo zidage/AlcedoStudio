@@ -246,4 +246,39 @@ if [[ "${#missing_deps[@]}" -gt 0 ]]; then
   exit 1
 fi
 
+assert_file_contains() {
+  local path="$1"
+  local needle="$2"
+  assert_file "$path"
+  if ! grep -F -q -- "$needle" "$path"; then
+    fail "required notice text is missing from $path: $needle"
+  fi
+}
+
+assert_file "${resources_dir}/LICENSE"
+assert_file "${resources_dir}/NOTICE"
+assert_file "${resources_dir}/THIRD_PARTY_NOTICE.txt"
+assert_dir "${resources_dir}/third_party_licenses"
+assert_file_contains "${resources_dir}/NOTICE" "QuickQanava"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "QuickQanava"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "bezier"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-licence.txt" \
+  "Redistributions in binary form must reproduce"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-bezier-LICENSE.txt" \
+  "MIT License"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/QuickQanava-bezier-LICENSE.txt" \
+  "Permission is hereby granted"
+
+qml_probe_out="$(mktemp "${TMPDIR:-/tmp}/alcedo_qml_import.XXXXXX")"
+if ! "$main_exe" --verify-qml-imports >"$qml_probe_out" 2>&1; then
+  fail "installed app --verify-qml-imports failed: $(cat "$qml_probe_out")"
+fi
+if ! grep -F -q "qml.imports.ok=QuickQanava" "$qml_probe_out"; then
+  fail "installed app did not report a QuickQanava QML import: $(cat "$qml_probe_out")"
+fi
+rm -f "$qml_probe_out"
+
 echo "[alcedo] macOS install tree verification passed: $app_dir"

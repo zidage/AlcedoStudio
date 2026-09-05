@@ -135,4 +135,51 @@ if ($LASTEXITCODE -ne 0) {
     throw "Windows EXE PE icon does not match the committed ICO."
 }
 
+function Assert-FileContains {
+    param(
+        [string]$Path,
+        [string]$Needle
+    )
+    Assert-File $Path
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($null -eq $text -or $text.IndexOf($Needle) -lt 0) {
+        throw "Required notice text '$Needle' is missing from: $Path"
+    }
+}
+
+$noticeDir = Join-Path $binDir 'third_party_licenses'
+Assert-File (Join-Path $binDir 'LICENSE')
+Assert-File (Join-Path $binDir 'NOTICE')
+Assert-File (Join-Path $binDir 'THIRD_PARTY_NOTICE.txt')
+Assert-Directory $noticeDir
+Assert-FileContains -Path (Join-Path $binDir 'NOTICE') -Needle 'QuickQanava'
+Assert-FileContains -Path (Join-Path $binDir 'THIRD_PARTY_NOTICE.txt') -Needle 'QuickQanava'
+Assert-FileContains -Path (Join-Path $binDir 'THIRD_PARTY_NOTICE.txt') -Needle 'bezier'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'QuickQanava-licence.txt') `
+    -Needle 'Redistributions in binary form must reproduce'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'QuickQanava-bezier-LICENSE.txt') `
+    -Needle 'MIT License'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'QuickQanava-bezier-LICENSE.txt') `
+    -Needle 'Permission is hereby granted'
+
+$mainExe = Join-Path $binDir 'alcedo_main.exe'
+$qmlStdoutPath = Join-Path $installRoot 'qml_import_probe_stdout.txt'
+$qmlStderrPath = Join-Path $installRoot 'qml_import_probe_stderr.txt'
+$qmlProbe = Start-Process -FilePath $mainExe -ArgumentList '--verify-qml-imports' `
+    -WorkingDirectory $binDir -Wait -PassThru -NoNewWindow `
+    -RedirectStandardOutput $qmlStdoutPath `
+    -RedirectStandardError $qmlStderrPath
+$qmlStdout = Get-Content -LiteralPath $qmlStdoutPath -Raw -ErrorAction SilentlyContinue
+$qmlStderr = Get-Content -LiteralPath $qmlStderrPath -Raw -ErrorAction SilentlyContinue
+$qmlOutput = "$qmlStdout`n$qmlStderr"
+if ($qmlProbe.ExitCode -ne 0) {
+    throw "Installed alcedo_main.exe --verify-qml-imports exited $($qmlProbe.ExitCode): $qmlOutput"
+}
+if ($qmlOutput -notmatch 'qml\.imports\.ok=QuickQanava') {
+    throw "Installed alcedo_main.exe did not report a QuickQanava QML import: $qmlOutput"
+}
+
 Write-Host "[alcedo] Windows install tree verification passed: $binDir" -ForegroundColor Green

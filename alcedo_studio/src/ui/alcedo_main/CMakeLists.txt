@@ -1017,3 +1017,14 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND
         VERBATIM
     )
 endif()
+
+add_test(NAME ProductionBinaryLoadsQuickQanavaModule
+    COMMAND alcedo_main --verify-qml-imports
+)
+set_tests_properties(ProductionBinaryLoadsQuickQanavaModule PROPERTIES
+    PASS_REGULAR_EXPRESSION "qml.imports.ok=QuickQanava"
+    FAIL_REGULAR_EXPRESSION "module .*QuickQanava"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:alcedo_main>"
+    LABELS "quickqanava;package"
+    TIMEOUT 60
+)
