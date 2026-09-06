@@ -75,6 +75,23 @@ class IEditorHistoryPort {
                                               std::string* /*error*/) -> bool {
     return true;
   }
+  /**
+   * @brief Restore applied provisional fields without committing history.
+   *
+   * Clears the current input-sequence before-values and writes them back to the
+   * live document and executor. Does not move the working head. Default is a
+   * no-op success so fakes can opt in.
+   *
+   * @return false on restore failure. @p live_changed is true when any
+   *         provisional field was present before the restore.
+   */
+  virtual auto RestoreUnsettledPreview(const EditorHistoryGuardHandle& /*guard*/,
+                                       bool* live_changed, std::string* /*error*/) -> bool {
+    if (live_changed != nullptr) {
+      *live_changed = false;
+    }
+    return true;
+  }
   /// Finalize one settled adjustment into the checked-out Version's working
   /// history. Production appends the mini-Git journal record before advancing
   /// the working head and transaction-chain hash.
@@ -445,6 +462,9 @@ struct EditorRenderCommand {
   std::uint64_t                       operation_id = 0;
   EditorRenderAdjustmentSnapshot      adjustment{};
   std::optional<ViewportRenderRegion> view_region;
+  /// True when live document/executor already hold this batch. Configure skips
+  /// snapshot application.
+  bool                                live_parameters_applied = false;
 };
 
 /// Sole path from the session service into pipeline work. Production wraps

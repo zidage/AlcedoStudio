@@ -113,6 +113,9 @@ struct EditorRenderIntent {
   // carried by the intent, but the scheduler disables CROP_ROTATE for this
   // preview frame so its aspect matches the overlay's source-image UV space.
   bool                                           geometry_overlay_only = false;
+  /// True when consume already wrote live document and CPU operators under the
+  /// render lock. Configure must not apply `adjustment` again.
+  bool                                           live_parameters_applied = false;
 };
 
 struct EditorRenderRequest {

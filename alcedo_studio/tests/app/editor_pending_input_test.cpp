@@ -152,5 +152,60 @@ TEST(EditorPendingInputTest, RejectsEmptyFieldKeyAndMissingIdentity) {
   EXPECT_FALSE(queue.AdmitFieldChange(missing, MakePatch("exposure", "{}")).accepted);
 }
 
+TEST(EditorPendingInputTest, TakeReadyBatchRemovesOpenFieldsAndLeavesSequenceOpen) {
+  EditorPendingInputQueue queue;
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("exposure", R"({"value":0.2})"))
+                  .accepted);
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("contrast", R"({"value":4})"))
+                  .accepted);
+
+  const auto batch = queue.TakeReadyBatch();
+  ASSERT_TRUE(batch.has_value());
+  EXPECT_EQ(batch->seal, EditorPendingInputBoundaryKind::None);
+  EXPECT_EQ(batch->fields.size(), 2u);
+  EXPECT_FALSE(queue.HasConsumableWork());
+  const auto leftover = queue.Peek();
+  ASSERT_EQ(leftover.sequences.size(), 1u);
+  EXPECT_TRUE(leftover.sequences.front().fields.empty());
+
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("exposure", R"({"value":0.9})"))
+                  .accepted);
+  EXPECT_TRUE(queue.HasConsumableWork());
+  const auto second = queue.TakeReadyBatch();
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second->fields.size(), 1u);
+  EXPECT_EQ(second->fields.front().params_json, R"({"value":0.9})");
+}
+
+TEST(EditorPendingInputTest, TakeReadyBatchPrefersSealedSequenceOverOpenWrites) {
+  EditorPendingInputQueue queue;
+  auto                    first = MakePatch("exposure", R"({"value":0.4})", true);
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), first).accepted);
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("contrast", R"({"value":8})"))
+                  .accepted);
+
+  const auto sealed = queue.TakeReadyBatch();
+  ASSERT_TRUE(sealed.has_value());
+  EXPECT_EQ(sealed->seal, EditorPendingInputBoundaryKind::Release);
+  EXPECT_EQ(sealed->fields.front().params_json, R"({"value":0.4})");
+  const auto open_batch = queue.TakeReadyBatch();
+  ASSERT_TRUE(open_batch.has_value());
+  EXPECT_EQ(open_batch->seal, EditorPendingInputBoundaryKind::None);
+  EXPECT_EQ(open_batch->fields.front().params_json, R"({"value":8})");
+  EXPECT_FALSE(queue.TakeReadyBatch().has_value());
+}
+
+TEST(EditorPendingInputTest, TakeReadyBatchKeepsEmptyCancelSeal) {
+  EditorPendingInputQueue queue;
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), MakePatch("exposure", R"({"value":0.5})"))
+                  .accepted);
+  ASSERT_TRUE(queue.AdmitBoundary(TestIdentity(), EditorPendingInputBoundaryKind::Cancel).accepted);
+  const auto batch = queue.TakeReadyBatch();
+  ASSERT_TRUE(batch.has_value());
+  EXPECT_EQ(batch->seal, EditorPendingInputBoundaryKind::Cancel);
+  EXPECT_TRUE(batch->fields.empty());
+  EXPECT_FALSE(queue.HasConsumableWork());
+}
+
 }  // namespace
 }  // namespace alcedo

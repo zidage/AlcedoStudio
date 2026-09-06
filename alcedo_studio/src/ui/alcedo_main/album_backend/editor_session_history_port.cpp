@@ -65,6 +65,12 @@ auto EditorSessionHistoryPort::CaptureAdjustmentBeforePreview(
   return mutation_->CaptureAdjustmentBeforePreview(guard, patch, error);
 }
 
+auto EditorSessionHistoryPort::RestoreUnsettledPreview(
+    const alcedo::EditorHistoryGuardHandle& guard, bool* live_changed, std::string* error)
+    -> bool {
+  return mutation_->RestoreUnsettledPreview(guard, live_changed, error);
+}
+
 auto EditorSessionHistoryPort::CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                                                 const alcedo::EditorAdjustmentPatch& patch,
                                                 std::string* error) -> bool {

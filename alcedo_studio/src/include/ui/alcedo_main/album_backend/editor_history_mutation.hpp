@@ -28,18 +28,23 @@ class EditorHistoryState;
 /// Extracted mutation/navigation unit. Handles adjustment capture, settled
 /// commit, graph and Mask commands, Undo, Redo, explicit head movement, and
 /// Version checkout. Parameter operations run on the history queue and hold the
-/// executor render lock across document access and WAL publication. They never
-/// copy the document or update stage params.
+/// executor render lock across document access, CPU operator remirror, and WAL
+/// publication. They never copy the document.
 class EditorHistoryMutation {
  public:
   explicit EditorHistoryMutation(EditorHistoryState& state);
 
   /// Capture the target Model value once and apply preview under the render lock.
   /// Unspecified current-panel targets are completed from the live document.
-  /// Explicit incomplete targets are rejected.
+  /// Explicit incomplete targets are rejected. The matching CPU operator is
+  /// updated in the same lock so configure does not apply the patch again.
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool;
+
+  /// Restore applied provisional fields without committing. Used by Cancel.
+  auto RestoreUnsettledPreview(const alcedo::EditorHistoryGuardHandle& guard, bool* live_changed,
+                               std::string* error) -> bool;
 
   /// Append one settled typed-batch adjustment and advance the live working head.
   /// The live document already holds after values from preview. WAL failure restores

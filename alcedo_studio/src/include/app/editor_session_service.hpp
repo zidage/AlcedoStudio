@@ -15,6 +15,7 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_pending_input.hpp"
+#include "app/editor_serial_frame_admission.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
@@ -258,6 +259,16 @@ class IEditorSessionBackend {
    * The view is the pending-input queue itself, not a live parameter-body copy.
    */
   [[nodiscard]] virtual auto PeekPendingInput() const -> EditorPendingInputView { return {}; }
+  /**
+   * @brief Consume the next pending-input batch when the owner is idle.
+   *
+   * No-op on backends that do not own a pending-input queue. Must run on the
+   * session owner thread. Does not take the render lock from a GUI input
+   * callback.
+   */
+  virtual void TryConsumePendingInput() {}
+  virtual void SetAdmissionDeadlineHandler(std::function<void(std::int64_t /*delay_ns*/)> /*handler*/) {
+  }
   /// Rename a Color Grade as a metadata-only history change. Default backends reject.
   virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
       -> EditorSessionResult {
@@ -434,6 +445,15 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
       -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
+  void               TryConsumePendingInput() override;
+  void SetAdmissionDeadlineHandler(std::function<void(std::int64_t delay_ns)> handler) override;
+  void SetMonotonicClock(std::shared_ptr<IEditorMonotonicClock> clock);
+  [[nodiscard]] auto serial_frame_admission() const -> const EditorSerialFrameAdmission& {
+    return serial_admission_;
+  }
+  [[nodiscard]] auto serial_frame_admission() -> EditorSerialFrameAdmission& {
+    return serial_admission_;
+  }
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
@@ -525,6 +545,12 @@ class EditorSessionService final : public IEditorSessionBackend {
    */
   auto PublishTypedNodeHistorySuccess(std::string message) -> EditorSessionResult;
 
+  void RequestPendingInputConsume();
+  void FinishSerialFrameIfNeeded(const EditorRenderResult& render_result);
+  auto DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry, std::string message)
+      -> std::optional<EditorSessionResult>;
+  auto ConsumeTakenSequence(const EditorPendingSequence& sequence) -> EditorSessionResult;
+
   /// Queue-owned publish flavor for one in-flight history save checkpoint.
   /// Set by StartHistoryCheckpoint and consumed by the matching
   /// SaveCheckpointFinished completion.
@@ -542,6 +568,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorSessionEditController             edit_;
   EditorSessionNavigationController       navigation_;
   EditorPendingInputQueue                 pending_input_;
+  EditorSerialFrameAdmission              serial_admission_;
   bool                                    reducing_command_     = false;
   std::uint64_t                           current_operation_id_ = 0;
   std::size_t                             publication_depth_    = 0;

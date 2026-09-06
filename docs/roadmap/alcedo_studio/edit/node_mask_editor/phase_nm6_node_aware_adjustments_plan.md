@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.2 complete; NM6.3–NM6.9 planned.
+Status: NM6.1–NM6.3 complete; NM6.4–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -327,7 +327,7 @@ belong to their active input sequence; an older completion cannot overwrite them
 
 ## 7. Ordered implementation phases
 
-NM6.1 and NM6.2 are complete. NM6.3–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.3 are complete. NM6.4–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -557,6 +557,74 @@ overrun; release bypasses pacing after current completion; first-before/final-af
 Cancel/exception/hidden viewport cannot strand ownership or deadlock GUI presentation. Quality requests
 remain distinct from Interactive; no quality reduction or input loss is accepted to meet timing.
 
+##### Phase NM6.3 completion record (2026-09-05)
+
+**Status:** complete — session owner consumes one pending-input batch, applies/captures/commits once, renders one inflight frame, then admits the next; Interactive uses remaining time inside 16 ms; failed/cancelled cycles and Undo/Checkout do not strand ownership or block the GUI.
+
+**Primary success call chain:**
+
+```text
+GUI submitPatch / EnqueueAdjustmentInput
+  -> EditorPendingInputQueue::AdmitFieldChange (no live write)
+  -> EditorSessionService::RequestPendingInputConsume (PostCompletion)
+  -> TryConsumePendingInput
+  -> EditorSerialFrameAdmission::TryBeginCycle (Interactive wait or Release bypass)
+  -> TakeReadyBatch
+  -> EditorSessionEditController::HandlePendingSequence
+  -> IEditorHistoryPort::CaptureAdjustmentBeforePreview (document + executor remirror)
+  -> CommitAdjustment on Release/NodeSwitch
+  -> RouteInitialRender (live_parameters_applied, skip configure re-apply)
+  -> coordinator Schedule -> scheduler Complete (Present-wait in production adapters)
+  -> NotifyRenderResult -> FinishSerialFrameIfNeeded -> CompleteIfMatches
+  -> next TryConsumePendingInput or QTimer deadline wakeup
+```
+
+**Primary failure call chain:**
+
+```text
+scheduler Complete(false) / Cancelled
+  -> NotifySchedulerCompleted emits Failed|Cancelled (ready_count unchanged)
+  -> FinishSerialFrameIfNeeded CompleteIfMatches(published=false)
+  -> ownership released, Interactive cadence cleared
+  -> next queued batch may start immediately
+Undo/Checkout while HoldsOwnership
+  -> DeferIfLiveOwnershipHeld returns Accepted on the GUI stack
+  -> after CompleteIfMatches, deferred owner work runs on the session thread
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ReleaseBeforeFirstPreviewCommitsFinalValuesOnce` | `EditorSerialFrameConsumptionTest`, `EditorSerialInputBoundaryTest` | PASS |
+| `InteractiveCycleUsesRemainingTimeWithinSixteenMilliseconds` | `EditorSerialFrameConsumptionTest` | PASS |
+| `OverBudgetInteractiveCycleStartsNextOnlyAfterCompletion` | `EditorSerialFrameConsumptionTest` | PASS |
+| `QualityReleaseBypassesPacingAfterCurrentFrameCompletes` | `EditorSerialFrameConsumptionTest` | PASS |
+| `FailedOrCancelledRenderReleasesOwnerWithoutPublishingResult` | `EditorSerialFrameConsumptionTest` | PASS |
+| `GuiRemainsResponsiveWhilePresentNeedsAnUpdate` | `EditorSerialFrameConsumptionTest` | PASS |
+| `UndoAndCheckoutWaitForOwnerWithoutBlockingGui` | `EditorSerialFrameConsumptionTest` | PASS |
+| empty-queue deadline does not invent a frame | `DeadlineWithEmptyQueueDoesNotScheduleAnEmptyFrame` | PASS |
+| hidden viewport aborts without stranding ownership | `HiddenViewportAbortsCycleWithoutStrandingOwnership` | PASS |
+| NM6.1/6.2 queue cases (`SliderMovesWhileBlocked…`, coalescing, node-switch) | `EditorSerialInputBoundaryTest` / `EditorPendingInputTest` | PASS |
+| first-before / final-after on live Mini-Git document | `EditorSerialInputBoundaryTest.ReleaseBeforeFirstPreviewCommitsFinalValuesOnce` (Undo restores default EV) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPendingInputTest EditorPendingInputSessionTest EditorInteractivePacingTest EditorSerialFrameAdmissionTest EditorSerialFrameConsumptionTest EditorSessionEditControllerTest EditorAdjustmentPipelineTest EditorSerialInputBoundaryTest EditorSessionHistoryPortTest
+ctest --test-dir build/debug --output-on-failure -C Debug -R "EditorSessionHistoryPortTest|EditorSerialInputBoundaryTest|EditorAdjustmentPipelineTest|EditorSessionEditControllerTest|EditorPendingInputTest|EditorPendingInputSessionTest|EditorInteractivePacingTest"
+ctest --test-dir build/debug --output-on-failure -C Debug -R "EditorSerialFrameAdmissionTest|EditorSerialFrameConsumptionTest"
+```
+
+Suite totals: `EditorSessionHistoryPortTest` 75/75 PASS; remaining focused (pending input, pacing, edit controller, adjustment pipeline, serial input boundary) 48/48 PASS; serial admission+consumption 14/14 PASS after failed-cycle pacing fix. Combined 137/137 PASS.
+
+**Checklist / exit condition:** all NM6.3 acceptance items above have executed tests. Section 8.1 names are implemented (NM6.2 queue names remain in the existing harnesses).
+
+**LOC note (grill-code-review):** `editor_session_service.cpp` is 1785 lines. Consume routing stays on the facade; `EditorSerialFrameAdmission` (~128 lines) owns cycle ownership, 16 ms cadence, deadline arming, and deferred Undo/Checkout. History remirror/restore stays in `EditorHistoryMutation`. Edit-controller batch apply stays in `EditorSessionEditController`.
+
+**Remaining gaps:** GPU-safe completion is the existing Present-wait (`cudaStreamSynchronize` / Metal `waitUntilCompleted` / OpenCL presentation events) plus coordinator `NotifySchedulerCompleted`; no new fence type. Multi-field Release still commits per field (a later WAL failure restores unsettled preview). Production `submitPatch` still does not stamp NodeId/AdjustmentInstanceId (NM6.6). Cache versions are NM6.4. Pixel/backend qualification is NM6.9. Debug-build Interactive cost is not a product quality change.
+
 ### NM6.4 — Replace session parameter hashes with dependency versions
 
 **Changes:** add owner-maintained invalidation metadata and compiled downstream edges; update cache
@@ -756,7 +824,7 @@ and any renamed linked files together. No runtime metadata is written into docum
 | --- | --- | --- | --- | --- | --- |
 | NM6.1 | complete 2026-09-05 | `feature/queued-typed-adjustment-input` @ `ee6247c8` | slider → Patch → `LockLivePipeline` + live apply → coordinator; completion `(bool, string)`, no GPU fence | 10/10 focused PASS; see NM6.1 completion record | Queue/pacing/GPU-safe completion are NM6.2/3 |
 | NM6.2 | complete 2026-09-05 | uncommitted on `feature/queued-typed-adjustment-input` @ `3a7a3825` | slider/model → `submitPatch` → `EnqueueAdjustmentInput` → `EditorPendingInputQueue::AdmitFieldChange`; live document/history unchanged | 90/90 focused PASS excluding pre-existing RapidImageSelection; see NM6.2 completion record | Consume, 16 ms pacing, GPU-safe completion are NM6.3 |
-| NM6.3 | planned | — | — | — | Serial consumption and pacing |
+| NM6.3 | complete 2026-09-05 | uncommitted on `feature/nm6-serial-adjustment-consumption` @ `8ed06f88` | enqueue → PostCompletion consume → HandlePendingSequence → history capture/commit → RouteInitialRender → Present-wait completion → next admission | 137/137 focused PASS; see NM6.3 completion record | Cache versions NM6.4; node targeting NM6.6 |
 | NM6.4 | planned | — | — | — | Dependency validity/current results |
 | NM6.5 | planned | — | — | — | Shared three-backend execution |
 | NM6.6 | planned | — | — | — | Node context/target routing |

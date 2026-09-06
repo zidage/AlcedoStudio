@@ -356,7 +356,7 @@ def_library(EditorSessionEditController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
-    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} EditorPendingInput
     PRIVATE_DEPS EditHistory EditorAdjustmentPipeline
 )
 
@@ -432,6 +432,14 @@ def_library(EditorPendingInput
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
 )
 
+def_library(EditorSerialFrameAdmission
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_serial_frame_admission.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_serial_frame_admission.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_interactive_pacing.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_monotonic_clock.hpp"
+)
+
 def_library(EditorSessionService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_service.cpp"
@@ -451,6 +459,7 @@ def_library(EditorSessionService
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
+                 EditorSerialFrameAdmission
 )
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp

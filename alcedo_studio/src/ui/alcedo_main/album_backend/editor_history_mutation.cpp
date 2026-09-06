@@ -15,6 +15,7 @@
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -94,6 +95,24 @@ auto RestoreDocumentFields(HistoryWorkingState&                                 
     }
   }
   return true;
+}
+
+auto MirrorPatchToExecutor(CPUPipelineExecutor& executor, const alcedo::EditorAdjustmentPatch& patch,
+                           std::string* error) -> bool {
+  nlohmann::json parsed;
+  try {
+    parsed = patch.params_json.empty() ? nlohmann::json::object()
+                                       : nlohmann::json::parse(patch.params_json);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  alcedo::EditorAdjustmentPatch executor_patch = patch;
+  executor_patch.params_json =
+      alcedo::EditorAdjustmentExecutorParamsFromWrite(patch.field_key, std::move(parsed)).dump();
+  alcedo::EditorRenderAdjustmentSnapshot snapshot;
+  snapshot.patches = {std::move(executor_patch)};
+  return alcedo::ApplyEditorAdjustmentSnapshot(executor, snapshot, error);
 }
 
 auto ApplyContext(MaskStore* mask_store) -> PipelineHistoryApplyContext {
@@ -361,14 +380,66 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   } else {
     edit = sequence->second;
   }
-  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target, patch_params,
+  const auto document_params =
+      alcedo::EditorAdjustmentDocumentParamsFromWrite(patch.field_key, patch_params);
+  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target, document_params,
                                  error)) {
+    return false;
+  }
+  if (!MirrorPatchToExecutor(*state->pipeline_guard->pipeline_, patch, error)) {
+    (void)ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
+                                    edit.before_model_json, error);
     return false;
   }
   // Only the first successful patch locks a target. Rejected input does not capture state.
   if (sequence == state->pending_document_sequence.end()) {
     state->pending_document_sequence.emplace(patch.field_key, std::move(edit));
   }
+  SyncUnsettledPreviewFlag(*state);
+  return true;
+}
+
+auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryGuardHandle& guard,
+                                                    bool* live_changed, std::string* error)
+    -> bool {
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+  if (!state->pipeline_guard->pipeline_) {
+    if (error) *error = "Live pipeline executor is unavailable";
+    return false;
+  }
+  const bool changed = !state->pending_document_sequence.empty();
+  if (live_changed != nullptr) {
+    *live_changed = changed;
+  }
+  if (!changed) {
+    return true;
+  }
+  auto                                                      render_lock =
+      LockLivePipeline(*state->pipeline_guard->pipeline_);
+  std::vector<HistoryWorkingState::DocumentFieldEdit> fields;
+  fields.reserve(state->pending_document_sequence.size());
+  for (const auto& [_, edit] : state->pending_document_sequence) {
+    fields.push_back(edit);
+  }
+  if (!RestoreDocumentFields(*state, fields, error)) {
+    return false;
+  }
+  for (const auto& edit : fields) {
+    alcedo::EditorAdjustmentPatch patch;
+    patch.field_key   = edit.target.field_key;
+    patch.target      = edit.target;
+    patch.params_json = edit.before_model_json.dump();
+    if (!MirrorPatchToExecutor(*state->pipeline_guard->pipeline_, patch, error)) {
+      return false;
+    }
+    ProjectDocumentEdit(*state, edit, true);
+  }
+  state->pending_document_sequence.clear();
   SyncUnsettledPreviewFlag(*state);
   return true;
 }
@@ -423,7 +494,9 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   }
   auto       render_lock   = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto locked_target = sequence->second.target;
-  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, locked_target, after_params,
+  const auto document_after =
+      alcedo::EditorAdjustmentDocumentParamsFromWrite(patch.field_key, after_params);
+  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, locked_target, document_after,
                                  error))
     return false;
   HistoryWorkingState::DocumentFieldEdit recorded = sequence->second;

@@ -83,6 +83,7 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.priority              = DefaultPriorityForReason(command.reason);
   intent.frame_role            = FrameRoleForQuality(intent.quality);
   intent.adjustment            = command.adjustment;
+  intent.live_parameters_applied = command.live_parameters_applied;
   intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
   intent.requested_width       = presentation_width_;
   intent.requested_height      = presentation_height_;

@@ -171,5 +171,33 @@ TEST_F(EditorAdjustmentPipelineTest, GeometryOverlayPreviewKeepsCropParametersBu
                   35.0f);
 }
 
+TEST_F(EditorAdjustmentPipelineTest, WritePayloadMapsOntoDocumentAndExecutorKeys) {
+  const auto from_field = EditorAdjustmentDocumentParamsFromWrite("exposure", {{"exposure", 1.25}});
+  EXPECT_FLOAT_EQ(from_field.at("exposure_ev").get<float>(), 1.25f);
+  EXPECT_FALSE(from_field.contains("exposure"));
+
+  const auto from_value = EditorAdjustmentDocumentParamsFromWrite("exposure", {{"value", 0.5}});
+  EXPECT_FLOAT_EQ(from_value.at("exposure_ev").get<float>(), 0.5f);
+
+  const auto from_model =
+      EditorAdjustmentExecutorParamsFromWrite("exposure", {{"exposure_ev", -0.75}});
+  EXPECT_FLOAT_EQ(from_model.at("exposure").get<float>(), -0.75f);
+  EXPECT_FALSE(from_model.contains("exposure_ev"));
+
+  CPUPipelineExecutor executor;
+  executor.ResetToCleanBaselineAdjustments();
+  EditorRenderAdjustmentSnapshot snapshot;
+  snapshot.patches = {EditorAdjustmentPatch{
+      "exposure", EditorAdjustmentExecutorParamsFromWrite("exposure", {{"value", 2.0}}).dump(),
+      false}};
+  std::string error;
+  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
+  const auto exposure =
+      executor.GetStage(PipelineStageName::Basic_Adjustment).GetOperator(OperatorType::EXPOSURE);
+  ASSERT_TRUE(exposure.has_value());
+  EXPECT_FLOAT_EQ(exposure.value()->ExportOperatorParams()["params"]["exposure"].get<float>(),
+                  2.0f);
+}
+
 }  // namespace
 }  // namespace alcedo

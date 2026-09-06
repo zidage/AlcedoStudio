@@ -450,15 +450,17 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.options_.is_blocking_                                         = false;
     const bool apply_adjustment =
         alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
+    const bool live_parameters_applied = job.request.intent.live_parameters_applied;
     task.configure_under_render_lock_ = [snapshot = job.request.intent.adjustment, sink,
                                          geometry_overlay_only =
                                              job.request.intent.geometry_overlay_only,
-                                         apply_adjustment](alcedo::PipelineTask& locked_task) {
+                                         apply_adjustment,
+                                         live_parameters_applied](alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) {
         return false;
       }
-      if (apply_adjustment) {
+      if (apply_adjustment && !live_parameters_applied) {
         std::string apply_error;
         if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
           throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
