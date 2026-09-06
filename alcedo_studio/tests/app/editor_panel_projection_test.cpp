@@ -43,6 +43,7 @@ class SerializationCountingModel : public IOperatorModel {
   auto Type() const -> OperatorTypeId override { return value_.Type(); }
   auto IsDefault() const -> bool override { return value_.IsDefault(); }
   auto IsDirty() const -> bool override { return value_.IsDirty(); }
+  auto DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
   auto MakeFullDto() const -> OperatorParamDto override {
     ++dto_reads;
     return value_.MakeFullDto();
