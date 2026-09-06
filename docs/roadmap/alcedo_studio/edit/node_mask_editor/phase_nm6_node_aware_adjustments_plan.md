@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.3 complete; NM6.4–NM6.9 planned.
+Status: NM6.1–NM6.4 complete; NM6.P and NM6.5–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -28,7 +28,11 @@ Sections 17, 21.7, 23, and 24.
    不检索旧参数结果，不增加历史结果索引或 Undo 缓存策略。
 7. 右侧 scope 下方：左边仅节点名称，右边从上到下为快门、ISO、光圈、焦距，
    中间竖线分隔。没有节点类型副标题、额外说明标题或 Mask 名称副标题。
-8. Geometry 是文档级参数；节点选择只改变编辑上下文，不单独发起图像渲染。
+8. Geometry 仍由文档拥有且作用于整张图像，但编辑入口只属于 Develop；Color Grade 和
+   DRT/Post 不显示 Geometry，也不能从其上下文提交 Geometry 修改。
+9. 参数读取/面板投射直接使用 Graph Node 中的类型化 Model，不经过 Node/Model 的
+   ToJson/LoadJson 中转。保留 Patch/Commit 更新单位；禁止为合并一个 Patch 而把整个
+   Model 序列化、复制、合并、再反序列化写回。具体边界见 6.2 节。
 
 ### 1.1 Scope exclusions
 
@@ -282,11 +286,14 @@ Never write that projection wholesale back into live state.
 | Selection | Panels |
 | --- | --- |
 | Develop | RAW Decode, Develop-owned controls including WB/lens as appropriate, Geometry |
-| Color Grade | Tone, Look, LUT, Masks context, Geometry |
-| DRT/Post | Display, Detail containing Clarity/Sharpen/Halation/Film Grain, Geometry |
+| Color Grade | Tone, Look, LUT, Masks context |
+| DRT/Post | Display, Detail containing Clarity/Sharpen/Halation/Film Grain |
 
-Use one capability/panel-key registry for navigation and body lookup. Keep Geometry if active;
-otherwise keep a supported active page; otherwise choose RAW, Tone or Display respectively.
+Use one capability/panel-key registry for navigation and body lookup. Keep a supported active page;
+otherwise choose RAW, Tone or Display respectively. Geometry stays active only in Develop. Leaving
+Develop while Geometry is active resolves the current input boundary and opens the new node's
+default supported page. A hidden navigation item alone is insufficient: reject Geometry edits from
+non-Develop panel contexts. Retain explicit document ownership in the actual parameter target.
 NM6 Masks content identifies the current node's Mask context; no new viewer authoring controls.
 An absent adjustment instance must be handled by an explicit owner operation if creation is legal;
 never target another node or silently submit by type to the first matching Grade.
@@ -320,14 +327,82 @@ Spacing uses existing space tokens. Keep editorSidePanelWidthMin/Max and minimum
 Any required new header geometry tokens must be added to AppTheme and DESIGN.md together during
 implementation. Register new QML in ALCEDO_MAIN_QML_FILES. Preserve Basic style and shared controls.
 
-Geometry body explicitly states whole-image scope. Context reloads on initial construction,
+Geometry is available only in Develop and its body states whole-image scope. Context reloads on initial construction,
 session rebind, node selection, panel re-entry, Undo/Redo and checkout. Loading never submits an edit,
 restarts an input timer, rebuilds a stable LUT list or triggers photo rendering. UI draft values
 belong to their active input sequence; an older completion cannot overwrite them.
 
+### 6.2 Direct typed projection and focused Patch application
+
+Implementation is now a separate prerequisite:
+[Phase NM6.P — Native parameter access](phase_nm6p_native_parameter_access_plan.md).
+It includes historical evidence, six ordered sub-phases, removal of superseded production paths
+and human-readable maintenance criteria. This work must not be absorbed into NM6.6. Section 6.2
+defines the desired behavior; NM6.P owns its foundational implementation and production cutover.
+
+User clarification after NM6.4: the concern is repeated full-state JSON conversion, not the
+existence of Patch/Commit units. Preserve completed serial queue and dependency-version work.
+NM6.2's historical acceptance of field JSON records what landed; it does not authorize a final
+Graph Node -> JSON -> Panel read path or whole-Model JSON merge/write-back.
+
+```text
+Read: selected NodeId -> application owner scoped Graph Node read
+      -> actual adjustment instances / typed Model getters
+      -> registered panel adapter -> existing QML presentation models
+
+Write: changed panel value -> targeted Patch -> serial owner consume
+       -> validate changed fields -> focused Model update -> existing Commit/history
+```
+
+Keep Graph Node/Model classes independent of Qt UI. Adapters resolve actual AdjustmentInstanceIds
+and use existing TypeId/field enums and concrete Model APIs such as ScalarOperatorModel::Value().
+Extend the single capability/panel registry with typed read/apply adapters, reusing existing
+registration where possible. An adapter declares supported node kind, adjustment types/instances,
+destination panel model and focused operations. A new panel adds its adapter and capability;
+it must not require another global JSON shape/parser or another independent panel-order switch.
+Do not build a generic RPC dispatcher, dynamic property bag or new reflection framework.
+
+On node switch, populate all supported panels' required values in one coherent owner read.
+Copying necessary UI values is allowed; cloning the node or an entire parallel parameter collection
+is not. Use existing presentation models, not a new SelectedNodeState mirror. If asynchronous Qt
+delivery requires an independent load-only message, document at its definition the displayed
+fields/instance IDs, source owner, consistency boundary, immutable delivery lifetime and release.
+Reject an obsolete selection/session message. Do not retain borrowed Model pointers across queued
+callbacks, deletion, checkout or rendering. Do not replace JSON with MakeFullDto copies of every
+operator followed by another copied panel DTO collection. Core state stays authoritative.
+
+After edits, publish only affected UI fields when needed; preserve newer local input values and
+suppress edit signals during loading. loadFromSnapshot may remain a transitional method name,
+but production readers must use typed projection, not serialized Model JSON nested in QVariantMap.
+
+New C++ entry points use IDs, field enums and typed values/change structs. Preserve Patch/Commit
+as update units. JSON remains valid for persistence, import and external serialized Patch boundaries;
+decode such a Patch once into the same typed change. Applying it must not call ToJson on current
+Model state, merge a full state copy, and LoadJson the result. Validate related fields before the
+complete owner mutation. Keep necessary NM4 undo before/after data, not a full-Model JSON backup
+on every provisional update. Queue consumption transfers owned changes instead of copying whole
+batches and strings just to pass them onward. A real replace-curve operation may carry the new
+curve; moving one point must not read/replace unrelated operator state.
+
+NM6.P owns runtime parameter packing/MakeFullDto cleanup, typed projection, focused owner Patch
+application and production reader/writer cutover. NM6.5 then shares Grade/LLF execution decisions;
+NM6.6 connects the finished APIs to selected-node context; NM6.7 builds the approved layout.
+Preserve project/WAL/history formats. No completed phase is re-labelled as having done this work.
+
+Additional acceptance requirements:
+
+- Node selection loads all supported panels while node/operator ToJson, LoadJson and full DTO
+  creation are forbidden in the projection call chain by test instrumentation.
+- Scalar and related-field edits use focused owner updates without full-state JSON read/merge/reload.
+  Instrumentation separates persistence serialization from projection and parameter application.
+- Complex changes preserve unrelated fields and maintain atomic validation/update behavior.
+- A new panel test uses the common typed adapter registration without a global JSON parser change.
+- Geometry is visible and accepts panel input only in Develop; switching to Color Grade or DRT/Post
+  selects the legal default. Its stored document-owned data remains one unchanged representation.
+
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.3 are complete. NM6.4–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.4 are complete. NM6.P is a separate prerequisite before NM6.5–NM6.9. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -644,10 +719,96 @@ and all pixel-affecting Develop changes reach downstream LLF; quality/extent mis
 recompute; dirty upload consumption cannot clear invalidation; checkout same NodeIds cannot reuse
 old-document output. Repeated edits/Undo do not increase retained historical result count.
 
+##### Phase NM6.4 completion record (2026-09-05)
+
+**Status:** complete — session result validity is owner-maintained required/completed revisions plus
+representation identity; GPU caches keep one current result per output; PlanExecutor skip/publish no
+longer hashes full node parameter JSON on the hot path.
+
+**Primary success call chain:**
+
+```text
+owner mutation (SetValue / ReplaceParams / Mask setter / topology / Renderer::SetDocument)
+  -> RuntimeInvalidationState::CollectAndPropagate (once per BeginRender)
+  -> BindCompiledPlan + CollectStructureChanges + CollectDevelop/Grade/DrtChanges
+  -> InvalidateFrom (one change_version; compiled downstream including LLF ports)
+  -> PlanExecutor BindValidResult(required_revision, ResultRepresentation)
+  -> encode miss path / skip hit path
+  -> RecordUnpublished(revision) -> PublishResults
+  -> CompleteMatchingImages / MarkCompleted
+```
+
+**Primary failure call chain:**
+
+```text
+encode / upload / present failure
+  -> CancelRender / DiscardUnpublished
+  -> required stays ahead of completed; unpublished writes are dropped
+  -> retry BindValidResult cannot treat partial LLF metadata as current
+GPU upload TakeDirtyPatch failure
+  -> dirty bits restored; CollectAndPropagate still does not consume operator dirty
+checkout / new PipelineDocument pointer
+  -> AdvanceDocumentEpoch bumps every required revision
+  -> same NodeIds miss until the new generation is published
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| dirty consume leaves required ahead; no-op SetValue stays valid | `RuntimeInvalidation.*` in `GpuDagRawInputTest` | PASS |
+| pre-LLF / LLF / post-LLF / Mix reuse matrix | `RuntimeInvalidation.PreLlfExposure…`, `LlfSlider…`, `PostLlfSaturationAndMix…` | PASS |
+| WB / demosaic / highlights / lens reach LLF | `RuntimeInvalidation.WhiteBalance…`, `Demosaic…`, `HighlightReconstruction…`, `LensCorrection…` | PASS |
+| middle Grade; sibling Mask; active raster | `MiddleGradeEditLeavesUpstreamValid`, `SiblingMaskSourceStaysValidWhenOneMaskChanges`, `ActiveRasterRevisionInvalidatesOnlyThatMaskSource`; `CudaMultiGradeFixture.MiddleGradeEditReusesUpstreamResults`; `CudaMaskFixture.OneMaskEditReusesSiblingAndUpstreamResults` | PASS |
+| viewport vs crop; render_scale; Export quality | `ViewportChangeKeepsCanonicalLlf…`, `CropChangeMismatchesCanonicalLlf…`, `RenderScaleMismatch…`, `ExportQualityMismatch…` | PASS |
+| checkout / document pointer cannot reuse old output | `DocumentEpochPreventsReuseOfSameNodeIds` | PASS |
+| repeated edits do not grow retained result count | `RepeatedEditsDoNotGrowTrackedValueCount`; `CudaWorkspaceFixture.ResultCacheDoesNotTreatReusedTextureAllocationAsContentHit` (`PublishedCount()==1`) | PASS |
+| new workspace after dirty already consumed still assigns required | `FreshStateAssignsRequiredWhenOperatorDirtyAlreadyConsumed`; `OpenClDevelopFixture.RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache` | PASS |
+| structure: add Grade / remove Mask | `AddedGradeLeavesUpstreamValidAndInvalidatesDisplay`; `RemovingMaskInvalidatesGradeOutputNotDevelop`; `CudaMultiGradeFixture.ReconnectChangesNoncommutingGradeResult` | PASS |
+| failed write does not publish; retry cannot use unpublished | `CudaWorkspaceFixture.FailedSubmissionDoesNotPublishResultRevision`; `UnpublishedWriteIsNotValidUntilPublish`; `CudaResultCacheProductFixture.RendererFailureDoesNotPublishUnfinishedRevisions`; `OpenClGradeFixture.OpenClLlfFailedSubmissionDoesNotPublishReference` | PASS |
+| LLF slider retains source, rebuilds result (GPU) | `OpenClGradeFixture.OpenClLlfSliderEditReusesCanonicalReference` | PASS |
+| image switch: one current GPU result, prepared-source hit | `CudaResultCacheProductFixture.ImageSwitchBackReusesMatchingPreparedSourceAndGpuResults` | PASS |
+| display-name / selection does not invalidate | `DisplayNameDoesNotInvalidateResults` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest --target GpuDagCudaWorkspaceTest --target GpuDagCudaDrtProductTest --target GpuDagCudaPrimaryGradeTest --target GpuDagCudaMaskTest --target GpuDagCudaDevelopTest --target GpuDagOpenClWorkspaceTest --target GpuDagOpenClGradeTest --target GpuDagOpenClDevelopTest --target EditorPipelineCommandServiceTest
+build/debug/alcedo_studio/tests/edit/GpuDagRawInputTest_runtime/GpuDagRawInputTest.exe
+build/debug/alcedo_studio/tests/app/EditorPipelineCommandServiceTest_runtime/EditorPipelineCommandServiceTest.exe
+build/debug/alcedo_studio/tests/edit/GpuDagOpenClWorkspaceTest_runtime/GpuDagOpenClWorkspaceTest.exe
+GpuDagCudaWorkspaceTest.exe --gtest_filter=*ResultCache*:*FailedSubmission*:*CancelledSubmission*:*UnpublishedWrite*:*SinkFailure*:*RepeatedNodeRemoval*:*DoNotInclude*:*InstantiatesCuda*
+GpuDagCudaDevelopTest.exe --gtest_filter=*RgbDngWarp*
+GpuDagOpenClDevelopTest.exe --gtest_filter=*RgbDngWarp*:*OpenClSecondDevelop*
+GpuDagCudaDrtProductTest.exe --gtest_filter=*ImageSwitchBack*:*FailedSubmission*:*RendererFailure*
+GpuDagCudaPrimaryGradeTest.exe --gtest_filter=*GradeWithoutPrimary*:*Reconnect*:*EmptyMask*:*MultiGrade*
+GpuDagOpenClGradeTest.exe --gtest_filter=*Llf*:*GradeWithoutPrimary*:*Reconnect*
+GpuDagCudaMaskTest.exe --gtest_filter=*Sibling*:*EmptyMask*
+```
+
+Suite totals: `GpuDagRawInputTest` 106/106 PASS; `EditorPipelineCommandServiceTest` 10/10 PASS; `GpuDagOpenClWorkspaceTest` 23/23 PASS; focused CUDA/OpenCL GPU slices 41/41 PASS. Combined 180/180 PASS. Metal execution was not run (Windows host).
+
+**Checklist / exit condition:** NM6.4 acceptance items above have executed tests. Section 8.2 three-Grade real-RAW cached-versus-fresh pixel matrix remains NM6.9. Shared Grade/LLF host executors remain NM6.5.
+
+**LOC note (grill-code-review):** new `runtime_invalidation.cpp` ~381 lines and `runtime_invalidation.hpp` ~163 lines own validity; `graph_image_cache.hpp` ~366 lines stays one cache type (rewritten in place for revision+representation lookup). `plan_executor.hpp` ~277 lines. Validity tests live in `runtime_invalidation_test.cpp` ~486 lines. No file crossed 1000 lines.
+
+**Remaining gaps:** `HashLlf*` / `MixGrade` / `BuildFrameResultContentKeys` remain for identity tests and are not used by PlanExecutor or GPU LLF passes. OpenCL signed-distance metadata still stamps `completed_revision` 1 and matches via `ResultRepresentation.identity`. Camera-profile dirty is still lumped into `DevelopDirty::WhiteBalance`. Metal LLF/mask sources were updated with the same revision API and were not executed here. Shared three-backend Grade/LLF orchestration is NM6.5. Node targeting is NM6.6.
+
+### NM6.P — Native parameter access prerequisite
+
+**Status:** planned. Execute the [separate NM6.P plan](phase_nm6p_native_parameter_access_plan.md).
+Its scope is direct Model read/update, minimal queued changes, typed panel projection, runtime
+parameter packing and deletion of old full-state JSON/DTO intermediary paths. Preserve NM6.2–4
+queue, pacing and invalidation behavior. This is an independent acceptance gate, not an extra list
+of tasks inside NM6.6. It must finish before shared-executor/context implementation starts.
+
 ### NM6.5 — Share Grade and LLF decisions across all three backends
 
+**Prerequisite:** NM6.P complete. Use its parameter read/packing APIs; do not refactor parameter
+transport or UI projection again as part of backend orchestration.
+
 **Changes:** introduce common template orchestration and per-step backend operations; unify LLF
-source/result reuse, scratch policy, parameter packing and publication. Remove replaced independent
+source/result reuse, scratch policy and publication. Reuse NM6.P parameter packing. Remove replaced independent
 decision loops in the same phase. Maintain present submission/resource ownership guarantees.
 
 **Primary call chain:** PlanExecutor<Backend> → GradeExecutor<Backend> → LocalToneExecutor<Backend>
@@ -665,30 +826,40 @@ behavior and fresh execution. Backend-native submission APIs may differ, decisio
 
 ### NM6.6 — Resolve context and exact node-owned edits
 
+**Prerequisite:** NM6.P and NM6.5 complete. This phase connects selection and capabilities to the
+already implemented typed readers/writers. It does not own the cross-layer parameter refactor.
+
 **Changes:** implement read-only EditorAdjustmentContext, selected-target resolution and one panel
 capability registry. Reuse NM5 selection restoration and NM4 exact history targets. Provide focused
 application reads of selected parameters and current image's four EXIF fields.
+Connect the Section 6.2 APIs delivered by NM6.P. Correct NodeId alone does not satisfy NM6.6
+if this new integration reintroduces whole-state JSON projection or merge/write-back.
 
-**Primary call chain:** EditorNodeController.SelectionChanged → application context read → atomic
-GUI projection → selected model; input sequence captures target → NM6.2 queue → NM6.3 owner.
+**Primary call chain:** EditorNodeController.SelectionChanged → owner scoped Graph Node/typed
+Model read → registered panel adapter → coherent GUI values; targeted Patch → NM6.2 queue
+→ NM6.3 owner → focused Model update → existing Commit/history.
 
 **Files/APIs:** editor_node_controller, editor_session_controller/service,
 editor_pipeline_command_service, editor_adjustment_pipeline, image metadata application API;
 new context implementation/header if needed. Reuse Image/ExifDisplayMetaData owner access instead
 of cloning image_controller JSON parsing into every panel load.
+Use NM6.P getters/update operations and panel adapters. Missing foundational coverage blocks this
+phase and returns to NM6.P acceptance; do not hide another broad parameter migration here.
 
 **Acceptance:** two Grades with the same operator type edit independently; no implicit PrimaryGrade
 target in panel submit/read; missing/wrong-owner instance fails explicitly. Selection does not
 render or commit; queued old-target input cannot land on the new selection. EXIF is image-scoped.
+Section 6.2 JSON/copy instrumentation passes. Geometry capability belongs only to Develop while
+its actual target remains document-owned. Preserve Patch/Commit as the update unit.
 
 ### NM6.7 — Build node-name/EXIF header and capability-filtered panels
 
 **Changes:** implement Section 6 header in the existing stack; bind navigation/body to the registry;
-separate Develop, Grade, DRT/Post controls; make Geometry ownership explicit; retain Mask context
-without NM7 authoring. Integrate sequence-aware UI values and load-only restore.
+separate Develop, Grade, DRT/Post controls; expose Geometry only in Develop; retain Mask context
+without NM7 authoring. Integrate sequence-aware UI values and typed load-only restore from Section 6.2.
 
-**Primary call chain:** published context → header/EXIF + supported navigation → panel
-loadFromSnapshot → plain model setters; user edit alone enters the queued command path.
+**Primary call chain:** typed context → header/EXIF + supported navigation → panel presentation
+setters; user edit alone enters the targeted Patch queue. No full-state JSON projection adapter.
 
 **Files/APIs:** EditorAdjustmentStack.qml, EditorTonePanel.qml, Look/LUT/RAW/Display/Geometry
 components, any new Detail/header component, AppTheme, DESIGN.md, alcedo_main/CMakeLists.txt.
@@ -772,7 +943,7 @@ from existing backend/operator numerical evidence. Do not invent passing toleran
 
 ### 8.3 UI and persistence cases
 
-Test all three contexts, two same-type Grades, shared Geometry, EXIF missing/invalid formatting,
+Test all three contexts, two same-type Grades, Develop-only Geometry access, EXIF missing/invalid formatting,
 read-only loads, selection restore and rapid sequences. Run production Basic QML and real-project
 history/reopen tests. Verify parameter echoes never reset an active newer UI value. Scope/EXIF/UI
 updates must not generate parameter input or photo renders.
@@ -804,7 +975,7 @@ planning document was created.
 
 ## 9. Delivery order and risk controls
 
-NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
+NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
 Split reviewable PRs by these engineering boundaries. NM6.1 red-test evidence and its immediate
 fix can share a PR. Do not expose node-aware controls until their exact-target serial write path works.
 
@@ -825,8 +996,9 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.1 | complete 2026-09-05 | `feature/queued-typed-adjustment-input` @ `ee6247c8` | slider → Patch → `LockLivePipeline` + live apply → coordinator; completion `(bool, string)`, no GPU fence | 10/10 focused PASS; see NM6.1 completion record | Queue/pacing/GPU-safe completion are NM6.2/3 |
 | NM6.2 | complete 2026-09-05 | uncommitted on `feature/queued-typed-adjustment-input` @ `3a7a3825` | slider/model → `submitPatch` → `EnqueueAdjustmentInput` → `EditorPendingInputQueue::AdmitFieldChange`; live document/history unchanged | 90/90 focused PASS excluding pre-existing RapidImageSelection; see NM6.2 completion record | Consume, 16 ms pacing, GPU-safe completion are NM6.3 |
 | NM6.3 | complete 2026-09-05 | uncommitted on `feature/nm6-serial-adjustment-consumption` @ `8ed06f88` | enqueue → PostCompletion consume → HandlePendingSequence → history capture/commit → RouteInitialRender → Present-wait completion → next admission | 137/137 focused PASS; see NM6.3 completion record | Cache versions NM6.4; node targeting NM6.6 |
-| NM6.4 | planned | — | — | — | Dependency validity/current results |
-| NM6.5 | planned | — | — | — | Shared three-backend execution |
+| NM6.4 | complete 2026-09-05 | uncommitted on `feature/runtime-dependency-result-versions` | mutation → CollectAndPropagate → BindValidResult(required, representation) → skip/encode → RecordUnpublished → PublishResults / MarkCompleted | 180/180 focused PASS; see NM6.4 completion record | Shared Grade/LLF executors NM6.5; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
+| NM6.P | planned | — | — | [Separate execution plan](phase_nm6p_native_parameter_access_plan.md) | Native parameter read/write and production cutover |
+| NM6.5 | planned | — | — | — | Shared three-backend execution after NM6.P |
 | NM6.6 | planned | — | — | — | Node context/target routing |
 | NM6.7 | planned | — | — | — | Approved header and panel UI |
 | NM6.8 | planned | — | — | — | Lifecycle/history integration |

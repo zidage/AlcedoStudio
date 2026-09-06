@@ -2,7 +2,8 @@
 
 Date: 2026-08-29
 
-Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1 complete; NM1 status retained below; NM6.2-NM8 planned. NML was
+Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4 complete per execution records;
+NM6.P and NM6.5–NM6.9 planned; NM1 status retained below; NM7–NM8 planned. NML was
 cancelled on 2026-08-30.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
@@ -24,7 +25,8 @@ serial render-paced input consumption, the Interactive 16 ms total target, share
 Grade/LLF execution, dependency-version session caches, and the node-name/EXIF header.
 These decisions replace per-frame whole-parameter hashing and retaining old results for Undo.
 NM6.1 characterization of current input, ownership, and completion boundaries is complete.
-NM6.2+ has not started. Earlier NM1 status is not re-qualified by this documentation update.
+NM6.1–NM6.4 now have completion records in the NM6 plan. NM6.P is the next prerequisite;
+its production parameter cutover has not started. Earlier NM1 status is not re-qualified here.
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore
@@ -1223,11 +1225,12 @@ It shows only the panels that the selected node supports.
 | Selected object | Available panels |
 | --- | --- |
 | Develop | RAW Decode, Develop-owned controls, Geometry |
-| Color Grade | Tone, Look, LUT, Masks, Geometry |
-| DRT/Post | DRT/Display, Clarity, Sharpen, Halation, Film Grain, Geometry |
+| Color Grade | Tone, Look, LUT, Masks |
+| DRT/Post | DRT/Display, Clarity, Sharpen, Halation, Film Grain |
 
-Geometry is a document-level parameter group. All three contexts can open it. Node selection does
-not create three Geometry instances.
+Geometry remains a document-level parameter group, but its editing entry is available only in
+Develop. Color Grade and DRT/Post cannot open it or submit Geometry from their panel contexts.
+This UI capability change does not move/duplicate Geometry data or change the stored project format.
 
 ### 17.1 Right-panel wayfinding
 
@@ -1257,7 +1260,7 @@ that the selected node supports. It does not present an unsupported panel as edi
 
 When the selected node changes, routing uses these rules:
 
-1. Keep Geometry when Geometry is still valid.
+1. Keep Geometry only when the new context is Develop; otherwise select the new context's default page.
 2. Keep the current panel when the new node supports it.
 3. Select RAW by default for Develop.
 4. Select Tone by default for Color Grade.
@@ -1269,6 +1272,21 @@ hard-coded orders.
 Each panel `loadFromSnapshot()` operation reads the current context snapshot. It loads the correct
 values after initial construction, session rebind, Version checkout, node selection, and Undo/Redo.
 A load-only path does not submit history or request a render.
+
+After NM6.4, the approved projection is a scoped read of the actual Graph Node and typed operator
+Models through application panel adapters, directly populating existing UI presentation models.
+Do not use node/Model ToJson or LoadJson as a panel mapping layer, or replace it with full-node DTO
+copies. The loadFromSnapshot method name may remain during migration; it does not require JSON.
+Preserve Patch/Commit units and serialization at real storage/import boundaries. Parameter updates
+validate changed fields and invoke focused owner operations, not full-state JSON merge/write-back.
+See NM6 plan Section 6.2 for lifetime, extension and instrumentation requirements.
+
+The cross-layer parameter work has a separate prerequisite phase,
+[NM6.P — Native parameter access](node_mask_editor/phase_nm6p_native_parameter_access_plan.md),
+after NM6.4 and before NM6.5/6.6. It owns typed Model read/update, panel projection, runtime
+parameter packing and removal of superseded production paths. NM6.6 only integrates the completed
+APIs with selected-node context. Preserve existing serial rendering; do not add a general message
+protocol, another scheduling layer or a CRUD-style property framework for in-process parameter edits.
 
 When the user selects a different node:
 
@@ -1853,7 +1871,7 @@ panel would continue to depend on an implicit primary Color Grade.
 
 **Scope:** Follow the [NM6 execution plan](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md).
 Add read-only `EditorAdjustmentContext`, supported Develop/Color Grade/DRT/Post panels, shared
-document Geometry and a node-name/EXIF header. Capture exact input targets and load values without
+document-owned Geometry accessible only in Develop and a node-name/EXIF header. Capture exact input targets and load values without
 submitting edits. Establish queued UI input and serial owner apply/render cycles with a 16 ms
 Interactive total target. Unify three-backend Grade/LLF orchestration and replace whole-parameter
 session result hashes with dependency revisions. Retain only current results, not Undo history caches.

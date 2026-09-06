@@ -20,6 +20,7 @@ namespace {
 class SerializationCountingModel : public IOperatorModel {
  public:
   mutable int reads = 0;
+  int         loads = 0;
   auto        Type() const -> OperatorTypeId override { return value_.Type(); }
   auto        IsDefault() const -> bool override { return value_.IsDefault(); }
   auto        IsDirty() const -> bool override { return value_.IsDirty(); }
@@ -33,7 +34,11 @@ class SerializationCountingModel : public IOperatorModel {
     ++reads;
     return value_.ToJson();
   }
-  void LoadJson(const nlohmann::json& json) override { value_.LoadJson(json); }
+  void LoadJson(const nlohmann::json& json) override {
+    ++loads;
+    value_.LoadJson(json);
+  }
+  [[nodiscard]] auto value() const -> float { return value_.Value(); }
 
  private:
   ExposureModel value_;
@@ -104,6 +109,47 @@ TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
   EXPECT_FLOAT_EQ(exposure->Value(), 9.75f);
   EXPECT_TRUE(exposure->IsDirty());
   EXPECT_EQ(document.ToJson().at("edges"), edges);
+}
+
+TEST(EditorPipelineCommandServiceTest, ApplyingScalarPatchReadsAndReloadsTargetModelJson) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto  counted  = std::make_unique<SerializationCountingModel>();
+  auto* observed = counted.get();
+  document.InsertAdjustment(NodeId{"grade.primary"}, 0, AdjustmentInstanceId{"counted"},
+                            std::move(counted));
+
+  auto target                       = test::ColorGradeFieldTarget("exposure");
+  target.adjustment_instance_id    = AdjustmentInstanceId{"counted"};
+  std::string error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, target, {{"exposure_ev", 2.5}}, &error))
+      << error;
+
+  EXPECT_EQ(observed->reads, 1);
+  EXPECT_EQ(observed->loads, 1);
+  EXPECT_FLOAT_EQ(observed->value(), 2.5f);
+}
+
+TEST(EditorPipelineCommandServiceTest,
+     ReadingScalarParameterUsesModelJsonWhileDocumentPersistenceUsesDocumentJson) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto  counted  = std::make_unique<SerializationCountingModel>();
+  auto* observed = counted.get();
+  document.InsertAdjustment(NodeId{"grade.primary"}, 0, AdjustmentInstanceId{"counted"},
+                            std::move(counted));
+  auto target                    = test::ColorGradeFieldTarget("exposure");
+  target.adjustment_instance_id = AdjustmentInstanceId{"counted"};
+
+  std::string     error;
+  nlohmann::json  json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &json, &error)) << error;
+  EXPECT_EQ(observed->reads, 1);
+  EXPECT_EQ(observed->loads, 0);
+  EXPECT_TRUE(json.contains("exposure_ev"));
+
+  const auto reads_after_projection = observed->reads;
+  const auto persisted              = CanonicalPipelineDocumentJson(document);
+  EXPECT_FALSE(persisted.empty());
+  EXPECT_GT(observed->reads, reads_after_projection);
 }
 
 TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyApplyOrDirtyModel) {
