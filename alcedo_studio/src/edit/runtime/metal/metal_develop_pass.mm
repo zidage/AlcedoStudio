@@ -481,7 +481,7 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteMetalCameraColor: missing develop node");
   }
-  auto pending = TakePendingParameterPatch(develop->Params());
+  auto pending = TakePendingDirtyFields(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {

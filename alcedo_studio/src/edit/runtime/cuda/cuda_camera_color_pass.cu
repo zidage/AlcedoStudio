@@ -13,6 +13,7 @@
 #include "cuda_acescc.cuh"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
@@ -61,7 +62,7 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
   }
-  auto pending = TakePendingParameterPatch(develop->Params());
+  auto pending = TakePendingDirtyFields(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
