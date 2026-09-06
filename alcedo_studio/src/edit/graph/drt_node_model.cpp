@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -91,33 +92,80 @@ auto EotfFromString(std::string_view text) -> DrtEotf {
   return DrtEotf::Gamma22;
 }
 
+auto DetailedEqual(const OpenDrtDetailedParams& lhs, const OpenDrtDetailedParams& rhs) -> bool {
+  return std::tie(lhs.tn_con, lhs.tn_sh, lhs.tn_toe, lhs.tn_off, lhs.tn_hcon, lhs.tn_hcon_pv,
+                  lhs.tn_hcon_st, lhs.tn_lcon, lhs.tn_lcon_w, lhs.cwp_lm, lhs.rs_sa, lhs.rs_rw,
+                  lhs.rs_bw, lhs.pt_lml, lhs.pt_lml_r, lhs.pt_lml_g, lhs.pt_lml_b, lhs.pt_lmh,
+                  lhs.pt_lmh_r, lhs.pt_lmh_b, lhs.ptl_c, lhs.ptl_m, lhs.ptl_y, lhs.ptm_low,
+                  lhs.ptm_low_rng, lhs.ptm_low_st, lhs.ptm_high, lhs.ptm_high_rng, lhs.ptm_high_st,
+                  lhs.brl, lhs.brl_r, lhs.brl_g, lhs.brl_b, lhs.brl_rng, lhs.brl_st, lhs.brlp,
+                  lhs.brlp_r, lhs.brlp_g, lhs.brlp_b, lhs.hc_r, lhs.hc_r_rng, lhs.hs_r,
+                  lhs.hs_r_rng, lhs.hs_g, lhs.hs_g_rng, lhs.hs_b, lhs.hs_b_rng, lhs.hs_c,
+                  lhs.hs_c_rng, lhs.hs_m, lhs.hs_m_rng, lhs.hs_y, lhs.hs_y_rng) ==
+         std::tie(rhs.tn_con, rhs.tn_sh, rhs.tn_toe, rhs.tn_off, rhs.tn_hcon, rhs.tn_hcon_pv,
+                  rhs.tn_hcon_st, rhs.tn_lcon, rhs.tn_lcon_w, rhs.cwp_lm, rhs.rs_sa, rhs.rs_rw,
+                  rhs.rs_bw, rhs.pt_lml, rhs.pt_lml_r, rhs.pt_lml_g, rhs.pt_lml_b, rhs.pt_lmh,
+                  rhs.pt_lmh_r, rhs.pt_lmh_b, rhs.ptl_c, rhs.ptl_m, rhs.ptl_y, rhs.ptm_low,
+                  rhs.ptm_low_rng, rhs.ptm_low_st, rhs.ptm_high, rhs.ptm_high_rng, rhs.ptm_high_st,
+                  rhs.brl, rhs.brl_r, rhs.brl_g, rhs.brl_b, rhs.brl_rng, rhs.brl_st, rhs.brlp,
+                  rhs.brlp_r, rhs.brlp_g, rhs.brlp_b, rhs.hc_r, rhs.hc_r_rng, rhs.hs_r,
+                  rhs.hs_r_rng, rhs.hs_g, rhs.hs_g_rng, rhs.hs_b, rhs.hs_b_rng, rhs.hs_c,
+                  rhs.hs_c_rng, rhs.hs_m, rhs.hs_m_rng, rhs.hs_y, rhs.hs_y_rng);
+}
+
 auto DetailedToJson(const OpenDrtDetailedParams& params) -> nlohmann::json {
-  return {{"tn_con", params.tn_con},       {"tn_sh", params.tn_sh},
-          {"tn_toe", params.tn_toe},       {"tn_off", params.tn_off},
-          {"tn_hcon", params.tn_hcon},     {"tn_hcon_pv", params.tn_hcon_pv},
-          {"tn_hcon_st", params.tn_hcon_st}, {"tn_lcon", params.tn_lcon},
-          {"tn_lcon_w", params.tn_lcon_w}, {"cwp_lm", params.cwp_lm},
-          {"rs_sa", params.rs_sa},         {"rs_rw", params.rs_rw},
-          {"rs_bw", params.rs_bw},         {"pt_lml", params.pt_lml},
-          {"pt_lml_r", params.pt_lml_r},   {"pt_lml_g", params.pt_lml_g},
-          {"pt_lml_b", params.pt_lml_b},   {"pt_lmh", params.pt_lmh},
-          {"pt_lmh_r", params.pt_lmh_r},   {"pt_lmh_b", params.pt_lmh_b},
-          {"ptl_c", params.ptl_c},         {"ptl_m", params.ptl_m},
-          {"ptl_y", params.ptl_y},         {"ptm_low", params.ptm_low},
-          {"ptm_low_rng", params.ptm_low_rng}, {"ptm_low_st", params.ptm_low_st},
-          {"ptm_high", params.ptm_high},   {"ptm_high_rng", params.ptm_high_rng},
-          {"ptm_high_st", params.ptm_high_st}, {"brl", params.brl},
-          {"brl_r", params.brl_r},         {"brl_g", params.brl_g},
-          {"brl_b", params.brl_b},         {"brl_rng", params.brl_rng},
-          {"brl_st", params.brl_st},       {"brlp", params.brlp},
-          {"brlp_r", params.brlp_r},       {"brlp_g", params.brlp_g},
-          {"brlp_b", params.brlp_b},       {"hc_r", params.hc_r},
-          {"hc_r_rng", params.hc_r_rng},   {"hs_r", params.hs_r},
-          {"hs_r_rng", params.hs_r_rng},   {"hs_g", params.hs_g},
-          {"hs_g_rng", params.hs_g_rng},   {"hs_b", params.hs_b},
-          {"hs_b_rng", params.hs_b_rng},   {"hs_c", params.hs_c},
-          {"hs_c_rng", params.hs_c_rng},   {"hs_m", params.hs_m},
-          {"hs_m_rng", params.hs_m_rng},   {"hs_y", params.hs_y},
+  return {{"tn_con", params.tn_con},
+          {"tn_sh", params.tn_sh},
+          {"tn_toe", params.tn_toe},
+          {"tn_off", params.tn_off},
+          {"tn_hcon", params.tn_hcon},
+          {"tn_hcon_pv", params.tn_hcon_pv},
+          {"tn_hcon_st", params.tn_hcon_st},
+          {"tn_lcon", params.tn_lcon},
+          {"tn_lcon_w", params.tn_lcon_w},
+          {"cwp_lm", params.cwp_lm},
+          {"rs_sa", params.rs_sa},
+          {"rs_rw", params.rs_rw},
+          {"rs_bw", params.rs_bw},
+          {"pt_lml", params.pt_lml},
+          {"pt_lml_r", params.pt_lml_r},
+          {"pt_lml_g", params.pt_lml_g},
+          {"pt_lml_b", params.pt_lml_b},
+          {"pt_lmh", params.pt_lmh},
+          {"pt_lmh_r", params.pt_lmh_r},
+          {"pt_lmh_b", params.pt_lmh_b},
+          {"ptl_c", params.ptl_c},
+          {"ptl_m", params.ptl_m},
+          {"ptl_y", params.ptl_y},
+          {"ptm_low", params.ptm_low},
+          {"ptm_low_rng", params.ptm_low_rng},
+          {"ptm_low_st", params.ptm_low_st},
+          {"ptm_high", params.ptm_high},
+          {"ptm_high_rng", params.ptm_high_rng},
+          {"ptm_high_st", params.ptm_high_st},
+          {"brl", params.brl},
+          {"brl_r", params.brl_r},
+          {"brl_g", params.brl_g},
+          {"brl_b", params.brl_b},
+          {"brl_rng", params.brl_rng},
+          {"brl_st", params.brl_st},
+          {"brlp", params.brlp},
+          {"brlp_r", params.brlp_r},
+          {"brlp_g", params.brlp_g},
+          {"brlp_b", params.brlp_b},
+          {"hc_r", params.hc_r},
+          {"hc_r_rng", params.hc_r_rng},
+          {"hs_r", params.hs_r},
+          {"hs_r_rng", params.hs_r_rng},
+          {"hs_g", params.hs_g},
+          {"hs_g_rng", params.hs_g_rng},
+          {"hs_b", params.hs_b},
+          {"hs_b_rng", params.hs_b_rng},
+          {"hs_c", params.hs_c},
+          {"hs_c_rng", params.hs_c_rng},
+          {"hs_m", params.hs_m},
+          {"hs_m_rng", params.hs_m_rng},
+          {"hs_y", params.hs_y},
           {"hs_y_rng", params.hs_y_rng}};
 }
 
@@ -186,8 +234,119 @@ void DetailedFromJson(const nlohmann::json& json, OpenDrtDetailedParams& params)
 
 auto DrtParamsModel::IsDefault() const -> bool {
   return Read([](const DrtPayload& payload) {
-    return payload.method == DrtMethod::OpenDrt && payload.encoding_space == DrtColorSpace::Rec709 &&
+    return payload.method == DrtMethod::OpenDrt &&
+           payload.encoding_space == DrtColorSpace::Rec709 &&
            payload.encoding_eotf == DrtEotf::Gamma22 && payload.peak_luminance == 100.0f;
+  });
+}
+
+auto DrtParamsModel::Method() const -> DrtMethod {
+  return Read([](const DrtPayload& payload) { return payload.method; });
+}
+
+auto DrtParamsModel::EncodingSpace() const -> DrtColorSpace {
+  return Read([](const DrtPayload& payload) { return payload.encoding_space; });
+}
+
+auto DrtParamsModel::EncodingEotf() const -> DrtEotf {
+  return Read([](const DrtPayload& payload) { return payload.encoding_eotf; });
+}
+
+auto DrtParamsModel::LimitingSpace() const -> DrtColorSpace {
+  return Read([](const DrtPayload& payload) { return payload.limiting_space; });
+}
+
+auto DrtParamsModel::PeakLuminance() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.peak_luminance; });
+}
+
+auto DrtParamsModel::LookPreset() const -> std::string {
+  return Read([](const DrtPayload& payload) { return payload.look_preset; });
+}
+
+auto DrtParamsModel::TonescalePreset() const -> std::string {
+  return Read([](const DrtPayload& payload) { return payload.tonescale_preset; });
+}
+
+auto DrtParamsModel::CreativeWhite() const -> std::string {
+  return Read([](const DrtPayload& payload) { return payload.creative_white; });
+}
+
+auto DrtParamsModel::CreativeWhiteLimit() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.creative_white_limit; });
+}
+
+auto DrtParamsModel::DisplayGreyLuminance() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.display_grey_luminance; });
+}
+
+auto DrtParamsModel::HdrGreyBoost() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.hdr_grey_boost; });
+}
+
+auto DrtParamsModel::HdrPurity() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.hdr_purity; });
+}
+
+void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
+  MutateWithDirtyFields([update = std::move(update)](DrtPayload& payload) mutable {
+    DirtyFieldMask changed;
+    if (update.method.has_value() && payload.method != *update.method) {
+      payload.method = *update.method;
+      changed |= DirtyFieldMask{DrtDirty::Method};
+    }
+    if (update.encoding_space.has_value() && payload.encoding_space != *update.encoding_space) {
+      payload.encoding_space = *update.encoding_space;
+      changed |= DirtyFieldMask{DrtDirty::Encoding};
+    }
+    if (update.encoding_eotf.has_value() && payload.encoding_eotf != *update.encoding_eotf) {
+      payload.encoding_eotf = *update.encoding_eotf;
+      changed |= DirtyFieldMask{DrtDirty::Encoding};
+    }
+    if (update.limiting_space.has_value() && payload.limiting_space != *update.limiting_space) {
+      payload.limiting_space = *update.limiting_space;
+      changed |= DirtyFieldMask{DrtDirty::Encoding};
+    }
+    if (update.peak_luminance.has_value() && payload.peak_luminance != *update.peak_luminance) {
+      payload.peak_luminance = *update.peak_luminance;
+      changed |= DirtyFieldMask{DrtDirty::Encoding};
+    }
+    if (update.look_preset.has_value() && payload.look_preset != *update.look_preset) {
+      payload.look_preset = std::move(*update.look_preset);
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.tonescale_preset.has_value() &&
+        payload.tonescale_preset != *update.tonescale_preset) {
+      payload.tonescale_preset = std::move(*update.tonescale_preset);
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.creative_white.has_value() && payload.creative_white != *update.creative_white) {
+      payload.creative_white = std::move(*update.creative_white);
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.creative_white_limit.has_value() &&
+        payload.creative_white_limit != *update.creative_white_limit) {
+      payload.creative_white_limit = *update.creative_white_limit;
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.display_grey_luminance.has_value() &&
+        payload.display_grey_luminance != *update.display_grey_luminance) {
+      payload.display_grey_luminance = *update.display_grey_luminance;
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.hdr_grey_boost.has_value() && payload.hdr_grey_boost != *update.hdr_grey_boost) {
+      payload.hdr_grey_boost = *update.hdr_grey_boost;
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.hdr_purity.has_value() && payload.hdr_purity != *update.hdr_purity) {
+      payload.hdr_purity = *update.hdr_purity;
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    if (update.parameters.has_value() && !DetailedEqual(payload.parameters, *update.parameters)) {
+      payload.parameters = *update.parameters;
+      changed |= DirtyFieldMask{DrtDirty::OpenDrt};
+    }
+    return changed;
   });
 }
 
@@ -211,22 +370,28 @@ auto DrtParamsModel::ToJson() const -> nlohmann::json {
 
 void DrtParamsModel::LoadJson(const nlohmann::json& json) {
   Mutate(DrtDirty::All, [&json](DrtPayload& payload) {
-    payload.method         = MethodFromString(json_util::ReadString(json, "method", "open_drt"));
-    payload.encoding_space = SpaceFromString(json_util::ReadString(json, "encoding_space", "rec709"));
-    payload.encoding_eotf  = EotfFromString(json_util::ReadString(json, "encoding_eotf", "gamma_2_2"));
-    payload.limiting_space = SpaceFromString(json_util::ReadString(json, "limiting_space", "rec709"));
+    payload.method = MethodFromString(json_util::ReadString(json, "method", "open_drt"));
+    payload.encoding_space =
+        SpaceFromString(json_util::ReadString(json, "encoding_space", "rec709"));
+    payload.encoding_eotf =
+        EotfFromString(json_util::ReadString(json, "encoding_eotf", "gamma_2_2"));
+    payload.limiting_space =
+        SpaceFromString(json_util::ReadString(json, "limiting_space", "rec709"));
     payload.peak_luminance = json_util::ReadFloat(json, "peak_luminance", payload.peak_luminance);
     if (json.contains("open_drt") && json["open_drt"].is_object()) {
-      const auto& open_drt       = json["open_drt"];
-      payload.look_preset        = json_util::ReadString(open_drt, "look_preset", payload.look_preset);
-      payload.tonescale_preset   = json_util::ReadString(open_drt, "tonescale_preset", payload.tonescale_preset);
-      payload.creative_white     = json_util::ReadString(open_drt, "creative_white", payload.creative_white);
+      const auto& open_drt = json["open_drt"];
+      payload.look_preset  = json_util::ReadString(open_drt, "look_preset", payload.look_preset);
+      payload.tonescale_preset =
+          json_util::ReadString(open_drt, "tonescale_preset", payload.tonescale_preset);
+      payload.creative_white =
+          json_util::ReadString(open_drt, "creative_white", payload.creative_white);
       payload.creative_white_limit =
           json_util::ReadFloat(open_drt, "creative_white_limit", payload.creative_white_limit);
       payload.display_grey_luminance =
           json_util::ReadFloat(open_drt, "display_grey_luminance", payload.display_grey_luminance);
-      payload.hdr_grey_boost = json_util::ReadFloat(open_drt, "hdr_grey_boost", payload.hdr_grey_boost);
-      payload.hdr_purity     = json_util::ReadFloat(open_drt, "hdr_purity", payload.hdr_purity);
+      payload.hdr_grey_boost =
+          json_util::ReadFloat(open_drt, "hdr_grey_boost", payload.hdr_grey_boost);
+      payload.hdr_purity = json_util::ReadFloat(open_drt, "hdr_purity", payload.hdr_purity);
       if (open_drt.contains("parameters")) {
         DetailedFromJson(open_drt["parameters"], payload.parameters);
       }
@@ -303,7 +468,8 @@ auto DrtNodeModel::FromJson(const nlohmann::json& json) -> std::unique_ptr<DrtNo
       model->LoadJson(item["params"]);
     }
     node->InsertAdjustment(node->AdjustmentCount(),
-                           AdjustmentInstanceId{item.at("id").get<std::string>()}, std::move(model));
+                           AdjustmentInstanceId{item.at("id").get<std::string>()},
+                           std::move(model));
   }
   std::vector<OperatorTypeId> types;
   types.reserve(node->AdjustmentCount());

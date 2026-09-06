@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.P1 complete; NM6.P2–NM6.P6 remain planned.
+Status: NM6.P1–NM6.P2 complete; NM6.P3–NM6.P6 remain planned.
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
 Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
@@ -208,6 +208,96 @@ history 参数读取/应用边界及现有 Model tests。MakeFullDto 不作为�
 **验收：** 普通和复杂修改不转换整个 Model JSON；失败不留部分更新；不影响无关字段；
 相同规范化值不触发新失效。旧完整状态更新 helper 的生产调用者有明确迁移结果。
 
+#### NM6.P2 完成记录（2026-09-06）
+
+**状态：** complete。
+
+**交付内容：**
+
+- 为 scalar、Curve、LMT、HLS、Color Wheel、CAT02、Sharpen、Develop、Geometry 和 DRT/ODT
+  补足具名读取与更新入口。`OperatorModelBase::MutateWithDirtyFields` 在同一 owner 锁内
+  完成字段更新和 dirty mask 计算；等价规范化值返回空 mask，不触发新的 dirty/invalidation。
+- `ApplyEditorParameterPatch` 改为按字段解析 JSON 边界对象，再调用具体 Model 操作；普通
+  应用路径不再执行 `ToJson → merge → LoadJson`，也不构造完整 Model JSON 作为写入中转。
+  复合输入先完整校验，再执行一次 owner update，因此非法数组、别名冲突、枚举或字段类型
+  错误都在 Model 修改前返回。
+- Color Grade 的 scalar/curve/LUT/色轮/HLS/CAT02、DRT/Post 的 scalar/Sharpen、Develop
+  的 RAW/color temperature/lens calibration、Document Geometry 和 ODT 均已接入对应
+  owner。无关字段与其它 Model 保持不变。
+- `ReadEditorParameterJson`、Model `ToJson`/`LoadJson` 和历史 before/after 表示继续作为
+  项目、历史、WAL、导入导出的 JSON 边界；历史回放先做现值校验，再把目标值交给 typed
+  update。`MakeFullDto` 没有被用作新 getter 的实现。
+
+**成功调用链：**
+
+```text
+QML/session pending edit
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview
+  -> ApplyEditorParameterPatch
+  -> field parser / target owner lookup
+  -> ScalarOperatorModel::SetValue, CurveModel::SetPoints, or the matching typed ApplyUpdate
+  -> OperatorModelBase::MutateWithDirtyFields
+  -> dirty patch -> existing render and history flow
+
+Develop field
+  -> ApplyEditorParameterPatch
+  -> DevelopParamsModel::ApplyRawDecodeUpdate /
+     ApplyColorTemperatureUpdate /
+     ApplyLensCalibrationUpdate
+  -> MutateWithDirtyFields
+
+ODT field
+  -> ApplyEditorParameterPatch
+  -> DrtParamsModel::ApplyUpdate
+  -> MutateWithDirtyFields
+
+History replay
+  -> pipeline_history_applier.cpp::ApplySetParameter
+  -> ReadEditorParameterJson (expected-side JSON boundary)
+  -> ApplyEditorParameterPatch
+  -> typed owner update
+```
+
+失败链为：目标校验或 field parser 失败 → 在 owner update 前返回；复合值的所有字段均已
+解析并校验后才进入一次 typed update。历史或 executor 后续步骤失败时，现有调用方继续使用
+原有的 document restore/rejection 路径，不会把部分字段作为成功结果发布。
+
+**验证命令与结果：**
+
+```text
+cmd /c scripts\msvc_env.cmd --build build/debug --target EditorPipelineCommandServiceTest --parallel 4
+  -> PASS
+ctest --test-dir build/debug -R '^EditorPipelineCommandServiceTest\.' --output-on-failure
+  -> 19/19 passed
+
+cmd /c scripts\msvc_env.cmd --build build/debug --target EditorSessionHistoryPortTest --parallel 4
+  -> PASS
+ctest --test-dir build/debug -R '^EditorSessionHistoryPortTest\.' --output-on-failure
+  -> 75/75 passed
+ctest --test-dir build/debug -R '^PipelineHistoryApplierTest\.' --output-on-failure
+  -> 12/12 passed
+```
+
+构建输出只有仓库已有的 `vswhere` 查找、MSVC `getenv`、CUDA 架构和第三方头文件 warning，
+没有编译或测试错误。
+
+**P2 退出检查：**
+
+- [x] scalar 与复杂字段都通过具体 owner 的 typed read/update API 读写。
+- [x] 普通 `ApplyEditorParameterPatch` 不再对目标 Model 做完整 JSON 转换、合并和回写。
+- [x] 复合输入在第一次 owner mutation 前完成完整解析；非法输入不会留下部分更新。
+- [x] 无关字段、无关 Model 和 graph topology 保持不变；相同规范化 scalar 不触发 dirty。
+- [x] 历史/项目/WAL/import/export 的 JSON 表示仍在明确边界保留，历史回放已接入 typed apply。
+- [x] 目标测试、历史端口测试和历史回放测试均以实际目标构建并通过。
+
+**LOC 与维护说明：** 本次实现涉及 21 个 C++ 源/头/测试文件，另更新本计划记录；新增的
+JSON 代码是字段边界解析器，不是新的全量 State/Context/Payload 镜像。字段更新载体只保留
+调用一次 owner operation 所需的 optional 字段；完整 JSON 只在既有持久化/历史边界出现。
+
+**残留范围：** P2 有意不改队列中的 `params_json` 载体、P4 的 typed panel projection、
+P5 的 runtime full DTO narrowing 和 P6 的旧路径清理；这些仍由 P3–P6 完成。历史和项目
+持久化的 JSON 边界是本阶段保留的明确接口，不属于普通 live Model 写入路径。
+
 ### NM6.P3 — 队列直接持有最小修改，完整切换写入路径
 
 **修改范围：** 既有队列采用最小类型化值/操作，消费时转移字段集合。删除多次转换和
@@ -287,7 +377,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | Sub-phase | Status | Actual call chain / revision | Evidence | Deleted/replaced paths |
 | --- | --- | --- | --- | --- |
 | NM6.P1 | complete 2026-09-05 | `feature/nm6-native-parameter-access`, base `main` @ `5c8acc56`; QML → session → pending input → owner consume → history/model → render；live state → snapshot → panel | inventory + `EditorPipelineCommandServiceTest` 的 2 个新增计数断言；7 个相关测试目标共 54/54 passed | P1 未删除生产路径；普通 JSON 应用/投射迁移到 P2/P4，队列载体迁移到 P3，运行时 DTO 清理迁移到 P5，最终删除迁移到 P6；项目/WAL/checkpoint/import/export JSON 保留 |
-| NM6.P2 | planned | — | — | — |
+| NM6.P2 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/session pending edit → `EditorHistoryMutation::CaptureAdjustmentBeforePreview` → `ApplyEditorParameterPatch` → field parser → concrete Model typed update → dirty patch/render/history；history replay 的 expected-side JSON boundary → typed apply | `EditorPipelineCommandServiceTest` 19/19、`EditorSessionHistoryPortTest` 75/75、`PipelineHistoryApplierTest` 12/12；Windows/MSVC target builds passed | 普通 Model 写入的完整 JSON merge/LoadJson 已替换为 typed owner operations；`ReadEditorParameterJson`、ToJson/LoadJson、history/project/WAL/import/export JSON boundary 保留；P3 queue、P4 projection、P5 runtime DTO、P6 cleanup remain planned |
 | NM6.P3 | planned | — | — | — |
 | NM6.P4 | planned | — | — | — |
 | NM6.P5 | planned | — | — | — |

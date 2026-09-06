@@ -17,30 +17,43 @@ auto Cat02WhiteBalanceModel::IsDefault() const -> bool {
 }
 
 void Cat02WhiteBalanceModel::SetEnabled(bool enabled) {
-  if (Enabled() == enabled) {
-    return;
-  }
-  Mutate(Cat02WhiteBalanceDirty::Enabled,
-         [enabled](Cat02WhiteBalancePayload& payload) { payload.enabled = enabled; });
+  ApplyUpdate(Cat02WhiteBalanceUpdate{enabled, std::nullopt, std::nullopt});
 }
 
 void Cat02WhiteBalanceModel::SetTemperatureOffset(float offset) {
   const float clamped = std::clamp(offset, -100.0f, 100.0f);
-  if (TemperatureOffset() == clamped) {
-    return;
-  }
-  Mutate(Cat02WhiteBalanceDirty::Temperature, [clamped](Cat02WhiteBalancePayload& payload) {
-    payload.temperature_offset = clamped;
-  });
+  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, clamped, std::nullopt});
 }
 
 void Cat02WhiteBalanceModel::SetTintOffset(float offset) {
   const float clamped = std::clamp(offset, -100.0f, 100.0f);
-  if (TintOffset() == clamped) {
-    return;
+  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, std::nullopt, clamped});
+}
+
+void Cat02WhiteBalanceModel::ApplyUpdate(Cat02WhiteBalanceUpdate update) {
+  if (update.temperature_offset.has_value()) {
+    update.temperature_offset = std::clamp(*update.temperature_offset, -100.0f, 100.0f);
   }
-  Mutate(Cat02WhiteBalanceDirty::Tint,
-         [clamped](Cat02WhiteBalancePayload& payload) { payload.tint_offset = clamped; });
+  if (update.tint_offset.has_value()) {
+    update.tint_offset = std::clamp(*update.tint_offset, -100.0f, 100.0f);
+  }
+  MutateWithDirtyFields([update = std::move(update)](Cat02WhiteBalancePayload& payload) {
+    DirtyFieldMask changed;
+    if (update.enabled.has_value() && payload.enabled != *update.enabled) {
+      payload.enabled = *update.enabled;
+      changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Enabled};
+    }
+    if (update.temperature_offset.has_value() &&
+        payload.temperature_offset != *update.temperature_offset) {
+      payload.temperature_offset = *update.temperature_offset;
+      changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Temperature};
+    }
+    if (update.tint_offset.has_value() && payload.tint_offset != *update.tint_offset) {
+      payload.tint_offset = *update.tint_offset;
+      changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Tint};
+    }
+    return changed;
+  });
 }
 
 auto Cat02WhiteBalanceModel::Enabled() const -> bool {

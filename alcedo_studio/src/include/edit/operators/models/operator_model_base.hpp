@@ -71,6 +71,18 @@ class OperatorModelBase : public IOperatorModel {
     dirty_ |= DirtyFieldMask{bit};
   }
 
+  /**
+   * @brief Apply one focused update while computing the changed dirty fields under the same lock.
+   *
+   * The callback must update only the supplied owner fields and return the dirty bits for fields
+   * that changed. Returning an empty mask makes an equivalent normalized update a no-op.
+   */
+  template <class Fn>
+  void MutateWithDirtyFields(Fn&& fn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dirty_ |= fn(payload_);
+  }
+
   template <class Fn>
   auto Read(Fn&& fn) const {
     std::lock_guard<std::mutex> lock(mutex_);

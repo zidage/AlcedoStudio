@@ -17,6 +17,10 @@ struct CurvePoint {
   float y = 0.0f;
 };
 
+inline auto operator==(const CurvePoint& lhs, const CurvePoint& rhs) -> bool {
+  return lhs.x == rhs.x && lhs.y == rhs.y;
+}
+
 struct CurvePayload {
   std::vector<CurvePoint> points{{0.0f, 0.0f}, {1.0f, 1.0f}};
 };
@@ -32,16 +36,16 @@ enum class CurveDirty : std::uint32_t {
  */
 class CurveModel final : public OperatorModelBase<CurveModel, CurvePayload, CurveDirty> {
  public:
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::Curve(); }
+  static auto                       TypeId() -> const OperatorTypeId& { return type_ids::Curve(); }
   static constexpr std::string_view kInstanceSuffix = "curve";
 
-  [[nodiscard]] auto IsDefault() const -> bool override;
+  [[nodiscard]] auto                IsDefault() const -> bool override;
 
-  void SetPoints(std::vector<CurvePoint> points);
-  [[nodiscard]] auto Points() const -> std::vector<CurvePoint>;
+  void                              SetPoints(std::vector<CurvePoint> points);
+  [[nodiscard]] auto                Points() const -> std::vector<CurvePoint>;
 
-  [[nodiscard]] auto ToJson() const -> nlohmann::json override;
-  void               LoadJson(const nlohmann::json& json) override;
+  [[nodiscard]] auto                ToJson() const -> nlohmann::json override;
+  void                              LoadJson(const nlohmann::json& json) override;
 };
 
 }  // namespace alcedo

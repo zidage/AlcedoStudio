@@ -25,8 +25,13 @@ void CurveModel::SetPoints(std::vector<CurvePoint> points) {
   if (points.size() < 2) {
     points = {{0.0f, 0.0f}, {1.0f, 1.0f}};
   }
-  Mutate(CurveDirty::Points,
-         [points = std::move(points)](CurvePayload& payload) mutable { payload.points = std::move(points); });
+  MutateWithDirtyFields([points = std::move(points)](CurvePayload& payload) mutable {
+    if (payload.points == points) {
+      return DirtyFieldMask{};
+    }
+    payload.points = std::move(points);
+    return DirtyFieldMask{CurveDirty::Points};
+  });
 }
 
 auto CurveModel::Points() const -> std::vector<CurvePoint> {

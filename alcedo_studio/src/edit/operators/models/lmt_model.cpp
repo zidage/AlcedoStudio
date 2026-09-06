@@ -13,8 +13,12 @@ auto LmtModel::IsDefault() const -> bool {
 }
 
 void LmtModel::SetCubePath(std::string path) {
-  Mutate(LmtDirty::Path, [path = std::move(path)](LmtPayload& payload) mutable {
+  MutateWithDirtyFields([path = std::move(path)](LmtPayload& payload) mutable {
+    if (payload.cube_path == path) {
+      return DirtyFieldMask{};
+    }
     payload.cube_path = std::move(path);
+    return DirtyFieldMask{LmtDirty::Path};
   });
 }
 
