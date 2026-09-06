@@ -15,13 +15,12 @@ class QTimer;
 
 namespace alcedo::ui {
 
-/// Phase 6A typed adjustment models. Focused QObjects carrying value/range/enum/
-/// toggle state, defaults, validation, and pointer-drag state. The models submit
-/// one `EditorAdjustmentPatch` at a time through the
-/// `IEditorAdjustmentSubmitter` seam; they never touch the pipeline scheduler,
-/// the render coordinator, or the journal. One `settled=true` submit per
-/// completed pointer drag is required. Interactive previews while dragging use
-/// `settled=false` and are coalesced by the Phase 5D coordinator.
+/// Typed adjustment models. Focused QObjects carrying value/range/enum/
+/// toggle state, defaults, validation, and pointer-drag state. The models
+/// enqueue one field write at a time through the `IEditorAdjustmentSubmitter`
+/// seam; they never touch the pipeline scheduler, the render coordinator, or
+/// the journal. One `settled=true` enqueue per completed pointer drag seals
+/// that sequence. Interactive previews while dragging use `settled=false`.
 ///
 /// `fieldKey` is the stable history identifier; `label` is the display name the
 /// panel shows. The history layer derives the human-readable row label from
@@ -77,10 +76,11 @@ class EditorAdjustmentModelBase : public QObject {
   /// otherwise return `defaultJson`.
   [[nodiscard]] auto resolveParams(const QJSValue& arg, const QString& defaultJson) const
       -> QString;
-  /// Submit one patch through the seam. Defensive: no-op (returns false) when
-  /// there is no submitter or the session cannot accept patches (canEdit()
-  /// false). `settled=false` requests an interactive preview; `settled=true`
-  /// finalizes one committed transaction.
+  /// Enqueue one field write through the seam. Defensive: no-op (returns false)
+  /// when there is no submitter or the session cannot accept input
+  /// (`canEdit()` false). `settled=false` continues the sequence;
+  /// `settled=true` seals it with Release. True means accepted for processing,
+  /// not live-applied or history-committed.
   auto submitNow(const QString& paramsJson, bool settled) -> bool;
   [[nodiscard]] auto submitterHandle() const -> IEditorAdjustmentSubmitter* {
     return submitter_;
@@ -191,9 +191,9 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   bool valid_ = true;
   QString errorMessage_;
   bool dragActive_ = false;
-  /// True when updateDrag changed the value during the current gesture. A
+  /// True when updateDrag changed the value during the current pointer drag. A
   /// press+release without movement (including half of a double-click) must not
-  /// emit a settled commit; double-click reset owns that path instead.
+  /// emit a settled seal; double-click reset owns that path instead.
   bool dragMoved_ = false;
 };
 

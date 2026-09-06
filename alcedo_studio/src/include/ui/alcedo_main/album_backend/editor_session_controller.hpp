@@ -15,6 +15,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
@@ -181,12 +182,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] bool can_edit() const;
   [[nodiscard]] bool can_discard_current_commit() const;
 
-  // Phase 6A: IEditorAdjustmentSubmitter. The typed adjustment models call
-  // submitPatch to route one patch through the session service (interactive
-  // preview when settled=false, one committed transaction when settled=true).
-  // The same method is the QML-visible entry (Q_INVOKABLE) and the interface
-  // override; both forward to the same backend call.
+  // IEditorAdjustmentSubmitter. Typed adjustment models call submitPatch to
+  // enqueue one field write (and a Release seal when settled=true). True means
+  // the session accepted the write for later owner processing, not that live
+  // parameters or history were updated.
   Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
+  /// Queue a node-switch seal so later writes start a new sequence. Old
+  /// sequence ids keep their captured target. No live mutation.
+  Q_INVOKABLE bool   enqueueNodeSwitchBoundary();
   [[nodiscard]] auto canEdit() const -> bool override { return can_edit(); }
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
@@ -329,8 +332,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6C-7: cached adjustment snapshot for QML panel loading.
   mutable QVariantMap             adjustment_snapshot_;
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
-  /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
-  /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
+  /// does not emit AdjustmentSnapshotChanged. Kept so a later owner completion
+  /// can suppress panel reload while a pointer drag is still on the stack.
   bool                            suppress_snapshot_publish_ = false;
   // Phase 7A R2: last history revision observed from the backend. OnBackendChanged
   // emits HistoryChanged only when the backend's history_revision advances, so

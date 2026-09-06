@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1 complete; NM6.2–NM6.9 planned.
+Status: NM6.1–NM6.2 complete; NM6.3–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -327,7 +327,7 @@ belong to their active input sequence; an older completion cannot overwrite them
 
 ## 7. Ordered implementation phases
 
-NM6.1 is complete. NM6.2–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1 and NM6.2 are complete. NM6.3–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -467,6 +467,76 @@ where it still follows the approved queue, never as a second production mutation
 **Acceptance:** with renderer paused, many UI updates return and update controls while live values
 remain fixed. Independent parameters survive merging; release and node boundaries are not dropped.
 Mouse, keyboard, wheel, reset, enum, toggle, curve and LUT entry paths use the same owner rule.
+
+##### Phase NM6.2 completion record (2026-09-05)
+
+**Status:** complete — GUI typed input enqueues change descriptions; live document and history stay unchanged until NM6.3 consume.
+
+**Snapshot / copy decision (AGENTS.md owner-update rule):** Section 3.2 is a change description, not a live-parameter snapshot, when implemented as session/image ids, `EditorParameterTarget` ids captured at sequence start, the caller's field write payload, and ordered Release/Cancel/NodeSwitch seals. That path is what landed.
+
+Forbidden copies that were not added:
+
+- queueing `EditorRenderAdjustmentSnapshot` or full pipeline/panel `params_json`
+- `CaptureAdjustmentBeforePreview` / `ReadEditorParameterJson` / `MakeAdjustmentSnapshotFromLivePipeline` on enqueue
+- cloning `PipelineDocument` or `GetParams()` into the queue
+- storing history `before_model_json` at enqueue
+- using `EditorSessionIntent.adjustment` as the queue item
+
+Allowed and used: `EditorAdjustmentPatch.params_json` as the UI field write payload (including nested ODT/lens/RAW JSON that QML already builds from local control models). That is not a copy of live document state. `PeekPendingInput` copies the queue's own contents for inspection.
+
+Nested ODT/RAW/lens builders still send one field_key's full nested write object assembled from panel models. That pre-existed; NM6.2 stores the same write payload instead of capturing a live param body. History before-values remain NM6.3.
+
+**Primary success call chain:**
+
+```text
+updateDrag / editValue / finishDrag / selectIndex / commitValue / curve drag / LUT selectPath
+  -> typed model local value
+  -> IEditorAdjustmentSubmitter::submitPatch
+  -> EditorSessionController (present wakeup only; no Patch/CommitAdjustment)
+  -> EditorSessionService::EnqueueAdjustmentInput
+  -> EditorPendingInputQueue::AdmitFieldChange
+  -> Accepted; live PipelineDocument and history unchanged
+```
+
+**Primary failure call chain:**
+
+```text
+canEdit false / not Interactive / empty field / missing image identity / in-sequence node retarget
+  -> Reject; queue unchanged (or prior sequence preserved)
+  -> UI control value may still update locally; live document unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Slider moves while render lock held leave live parameters and full document JSON unchanged | `EditorSerialInputBoundaryTest.SliderMovesWhileBlockedRenderLeaveLiveParametersUnchanged` | PASS |
+| Distinct fields survive same-sequence coalescing | `EditorPendingInputTest` + `EditorSerialInputBoundaryTest.PendingDifferentFieldsSurviveInputCoalescing` | PASS |
+| Release before consume keeps the final queued write once (commit is NM6.3) | `ReleaseBeforeFirstPreviewKeepsFinalQueuedValuesOnce` (maps 8.1 `ReleaseBeforeFirstPreviewCommitsFinalValuesOnce`) | PASS |
+| Node switch seals the original target; later writes start a new sequence | `NodeSwitchKeepsQueuedEditOnOriginalTarget` + session/controller NodeSwitch cases | PASS |
+| Value/enum/toggle/curve/LUT/color-temp enqueue without live write | `TypedModelsEnqueueThroughSameOwnerRuleWithoutLiveWrite` | PASS |
+| Wheel/keyboard debounce still uses the same submitter seam | `EditorAdjustmentModelTest.WheelBurstSubmitsInteractivePerValueAndOneSettledAfterDebounce` | PASS |
+| Enqueue does not capture history or copy `current_snapshot` | `EditorPendingInputSessionTest.EnqueueDoesNotCaptureHistoryOrApplyLivePatch` | PASS |
+| Queued item is the changed-field payload only | `EditorPendingInputTest.QueuedItemCarriesOnlyChangedFieldPayload` | PASS |
+| Interactive `submitPatch` does not emit `AdjustmentSnapshotChanged` or call Patch | `EditorSessionControllerPhase5ATest.InteractiveSubmitPatchDoesNotEmitAdjustmentSnapshotChanged` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPendingInputTest --target EditorPendingInputSessionTest --target EditorSerialInputBoundaryTest --target EditorAdjustmentModelTest --target EditorSessionControllerPhase5ATest --target EditorSessionCommandQueueBaselineTest
+ctest --test-dir build/debug --output-on-failure -R "EditorPendingInputTest|EditorPendingInputSessionTest|EditorSerialInputBoundaryTest|EditorAdjustmentModelTest|EditorSessionControllerPhase5ATest|EditorSessionCommandQueueBaselineTest" -E "RapidImageSelectionKeepsRunningTarget"
+```
+
+Focused suite: 90/90 PASS.
+
+Related: `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` still fails at identity 30 vs 50. Recorded as pre-existing on NM6.1 (`ee6247c8`); not caused by this enqueue path (`Patch` remains the live-apply API).
+
+**Checklist / exit condition:** NM6.2 acceptance items met. GUI callbacks do not take the render lock or capture history. Same-field replacement is bounded; independent fields and Release/Cancel/NodeSwitch seals are retained. `submitPatch` is not a second live-mutation path.
+
+**LOC note (grill-code-review):** new queue type is 174 header + 188 cpp. Session facade `editor_session_service.cpp` remains 1609 lines and `editor_session_controller.cpp` 1354; NM6.2 only added enqueue methods and rerouted `submitPatch`. Pending-input rules live in `EditorPendingInputQueue`, not a method split of the facade. Largest touched test file `editor_session_controller_phase5a_test.cpp` is 1493 lines (pre-existing concentration plus one NodeSwitch case).
+
+**Remaining gaps:** owner consume, history before/apply/commit, 16 ms pacing, and GPU-safe completion are NM6.3. Production `submitPatch` still does not stamp NodeId/AdjustmentInstanceId; sequence target capture from selection is NM6.6. `Patch`/`CommitAdjustment` still live-apply when called directly so NM6.3 can consume through them. Present-loop wakeup is presentation-only and does not apply queued fields.
 
 ### NM6.3 — Consume one batch, render one frame, then consume again
 
@@ -685,7 +755,7 @@ and any renamed linked files together. No runtime metadata is written into docum
 | Phase | Status | Implementation revision/PR | Actual call chain | Tests/evidence | Remaining work |
 | --- | --- | --- | --- | --- | --- |
 | NM6.1 | complete 2026-09-05 | `feature/queued-typed-adjustment-input` @ `ee6247c8` | slider → Patch → `LockLivePipeline` + live apply → coordinator; completion `(bool, string)`, no GPU fence | 10/10 focused PASS; see NM6.1 completion record | Queue/pacing/GPU-safe completion are NM6.2/3 |
-| NM6.2 | planned | — | — | — | Typed pending input |
+| NM6.2 | complete 2026-09-05 | uncommitted on `feature/queued-typed-adjustment-input` @ `3a7a3825` | slider/model → `submitPatch` → `EnqueueAdjustmentInput` → `EditorPendingInputQueue::AdmitFieldChange`; live document/history unchanged | 90/90 focused PASS excluding pre-existing RapidImageSelection; see NM6.2 completion record | Consume, 16 ms pacing, GPU-safe completion are NM6.3 |
 | NM6.3 | planned | — | — | — | Serial consumption and pacing |
 | NM6.4 | planned | — | — | — | Dependency validity/current results |
 | NM6.5 | planned | — | — | — | Shared three-backend execution |

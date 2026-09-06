@@ -342,6 +342,25 @@ alcedo_register_test_target(EditorSessionEditControllerTest app ci_core)
 # EditorSessionService facade routing tests. Limited to
 # routing and externally visible result ordering; component behavior belongs in
 # the five module test targets above.
+add_executable(EditorPendingInputTest ${ALCEDO_TEST_ROOT}/app/editor_pending_input_test.cpp)
+target_include_directories(EditorPendingInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorPendingInputTest PRIVATE EditorPendingInput GTest::gtest_main)
+gtest_discover_tests(EditorPendingInputTest TEST_PREFIX "EditorPendingInputTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorPendingInputTest app ci_core)
+
+add_executable(EditorPendingInputSessionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_pending_input_session_test.cpp)
+target_include_directories(EditorPendingInputSessionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPendingInputSessionTest
+    PRIVATE EditorSessionService EditorSessionCommandQueue xxHash JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorPendingInputSessionTest
+    TEST_PREFIX "EditorPendingInputSessionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorPendingInputSessionTest app ci_core)
+
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionServiceFacadeTest

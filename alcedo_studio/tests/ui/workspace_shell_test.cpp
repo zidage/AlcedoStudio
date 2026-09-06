@@ -22,6 +22,7 @@
 
 #include <chrono>
 
+#include "app/editor_pending_input.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 #ifdef HAVE_CUDA
@@ -1095,13 +1096,12 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
   EXPECT_TRUE(viewport->interactivePresentLoopActive())
       << "unsettled adjustment must arm vsync-sampled consume";
-  const auto interactive_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-  while (viewport->presentedFrameCount() <= composed_before_drag &&
-         std::chrono::steady_clock::now() < interactive_deadline) {
-    ProcessEvents(20);
-  }
-  EXPECT_GT(viewport->presentedFrameCount(), composed_before_drag)
-      << "Interactive adjustment did not compose until pointer release";
+  const auto pending = loaded->host.editor_session_service()->PeekPendingInput();
+  const auto* exposure = alcedo::FindPendingField(pending, "exposure");
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_NE(exposure->params_json.find("0.30"), std::string::npos);
+  EXPECT_EQ(composed_before_drag, viewport->presentedFrameCount())
+      << "queued input must not apply or render until the owner consumes it";
 
   // A→B→A: late frame from the first A session must not replace the current A.
   const auto gen_a1 = viewport->sessionEpoch();

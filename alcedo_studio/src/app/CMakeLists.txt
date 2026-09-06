@@ -424,12 +424,21 @@ def_library(PipelineHistoryApplier
 
 target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
 
+def_library(EditorPendingInput
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pending_input.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
+)
+
 def_library(EditorSessionService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_service.cpp"
         "${ALCEDO_APP_ROOT}/editor_render_coordinator.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_render_intent.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_ports.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_service.hpp"
@@ -438,7 +447,7 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
-    PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
+    PRIVATE_DEPS EditorPendingInput xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy

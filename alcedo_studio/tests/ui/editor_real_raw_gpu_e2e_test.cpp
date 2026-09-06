@@ -21,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "ui/album_backend_test_fixture.hpp"
@@ -389,10 +390,12 @@ TEST_F(EditorRealRawGpuE2eTest, RealRawGpuFramesRemainReadyAcrossSustainedImageS
       EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
       EXPECT_TRUE(viewport->interactivePresentLoopActive())
           << "unsettled adjustment must arm vsync-sampled consume";
-      ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() > composed_before_drag; },
-                            std::chrono::minutes(2)))
-          << "FAST adjustment frame was not composed before pointer release; status="
-          << viewport->statusText().toStdString() << " liveTargets=" << viewport->liveTargetCount();
+      const auto pending = host.editor_session_service()->PeekPendingInput();
+      const auto* exposure = alcedo::FindPendingField(pending, "exposure");
+      ASSERT_NE(exposure, nullptr);
+      EXPECT_NE(exposure->params_json.find("0.30"), std::string::npos);
+      EXPECT_EQ(viewport->presentedFrameCount(), composed_before_drag)
+          << "queued input must not apply or render until the owner consumes it";
     }
 
     EXPECT_EQ(viewport->lastPresentedSessionEpoch(), viewport->sessionEpoch());
