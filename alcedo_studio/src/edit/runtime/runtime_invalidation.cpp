@@ -382,6 +382,12 @@ auto RuntimeInvalidationState::IsSatisfied(const GraphValueId& id,
          RepresentationSatisfies(record.published, needed);
 }
 
+auto RuntimeInvalidationState::HasCurrentRevision(const GraphValueId& id,
+                                                  RuntimeRevision published_revision) const
+    -> bool {
+  return published_revision != 0 && RequiredRevision(id) == published_revision;
+}
+
 auto RuntimeInvalidationState::MakeImageRepresentation(const GraphValueId& id, ImageExtent extent,
                                                        TextureFormat format,
                                                        std::uint32_t source_detail) const

@@ -1,11 +1,15 @@
-# Phase NM6.P — 原生参数读写与面板投射
+# Phase NM6.P — 原生参数读写、面板投射与结果缓存修正
 
 Date: 2026-09-05
 
-Status: NM6.P1–NM6.P6 complete.
+Status: NM6.P1–NM6.P7 complete (NM6.4P implemented).
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
-Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
+Dependency: NM6.4 → NM6.P1–P6 → NM6.4P (NM6.P7) → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
+
+2026-09-06 范围补充：P1–P6 的完成记录保留。新增 P7 作为 NM6.4P 的唯一实施工作，
+修正依赖版本与结果保留脱节的问题，并落实 QualityBase 在 RAW Develop 之后旁路结果缓存。
+P7 已完成；NM6.5/6.6 仍未开始。
 
 ## 1. 为什么单列阶段
 
@@ -696,6 +700,157 @@ Logs: `build/tmp/nm6p/p6_*.txt`.
 
 **Residual gaps:** DRT GPU 表仍经 `ToJson` → `ODT_Op`（GPU 准备边界，不是 live Model 写入）。CameraColor 每帧重写 packed slot（`const PipelineDocument&`，无 dirty-take）。CPU remirror 仍 `ReadEditorParameterJson`。`submitPatch` 仍是 QML 收集边界。Geometry `source_size` / lens maker-model 仍是 CPU extras。无 `grade.primary` 时 `PrimaryGrade()` 仍回退到第一个 Color Grade。Metal packing 未在本机执行。`GpuDagOpenClWorkspace.RendererTemplateInstantiatesOpenClWithoutCudaOrMetalHeaders` 因 `renderer.hpp` 注释含 `Metal/` 失败，本阶段未改该头文件，与参数路径无关。NM6.5/6.6 未开始。
 
+### NM6.P7 — NM6.4P 依赖驱动的结果保留与 QualityBase 缓存旁路
+
+**状态：** complete 2026-09-06。产品规则已落地；验收矩阵在 Windows/MSVC 上执行（CUDA/OpenCL/CPU session）。Metal 测试已写入 `metal_renderer_test.cpp`，本机未执行。
+
+**问题与证据：** NM6.4 提交 `90f6cca2` 删除 `current_` 的当前结果保护，改为只跳过
+有 write slot 的输出。`GraphImageCache::EvictCompletedUnleased` 不读取依赖失效状态，
+下游分配可以按 LRU 删除有效 Develop。其调用先于 `TexturePool::Acquire` 的空闲复用，
+且删除 published lease 不立即减少 UsedBytes，导致额外删除甚至清空结果。
+2026-09-06 审查使用生产缓存头文件与轻量测试纹理后端，新编译的最小复现分别观察到：
+已有匹配空闲纹理仍删除 Develop；只需回收一个分配却删除全部三个已发布结果。
+临时证据位于 `build/tmp/nm64-cache-review/cache_retention_check.cpp`，不作为永久测试依赖。
+现有 debug 二进制中 RuntimeInvalidation 23/23 与所选 CUDA 缓存 3/3 通过，不能证明预算
+压力下的结果保留。实施时在实际基点重建测试，加入永久回归用例。
+
+**确定的产品规则：**
+
+1. 结果是否需要重算由现有 owner 依赖版本和像素表示决定，不由最近访问时间决定。
+   当前图像的有效 `develop:sensor_linear` 必须保留；下游参数变化或纹理申请不得淘汰它。
+   有效的 Interactive `geometry:scene_source`（2560px）及其余保留结果同样不参加预算 LRU。
+   Develop、Geometry 或源数据实际变化时，按真实依赖使相应结果失效，不保留错误旧结果。
+2. 已失效的下游旧结果，在最后一个 GPU/显示读者释放后回收或复用。有效内容、未发布写入、
+   正在读取的旧输出和空闲分配具有不同生命周期；不得以旧内容失效为由覆盖仍被读取的内存。
+   不保留历史参数版本，也不增加全量参数副本或独立失效图。
+3. QualityBase 可以读取有效 RAW Develop；需要重算 Develop 时按相同成功发布规则更新它。
+   旁路边界是 `develop:sensor_linear` 之后、Geometry/resize 之前，不是名称为
+   `develop:image` 的 CameraToAP1 输出之后。
+4. QualityBase 的 Geometry、CameraToAP1、Grade、LLF source/result、Mask 及 DRT/Post
+   全部旁路持久结果缓存的读取与写入，涵盖图像、缓冲区和结果元数据。结果仅供本次提交
+   内部消费者和显示端使用；按最后使用点释放，最终输出保留至显示端归还使用权。
+   任务内部传递刚产生的结果不是跨帧缓存读取。参数槽上传与空闲纹理分配复用仍可使用。
+5. 不为 QualityBase/4K 保留跨帧结果槽位，也不按输出角色复制整套参数或执行器。
+   QualityBase 不得替换、驱逐、清空 Interactive 结果，亦不得把其下游 completed revision
+   标记为已完成。真正的参数修改仍先传播失效；旁路不掩盖 Interactive 缓存已经过期的事实。
+6. 连续 QualityBase 多见于 Develop/Geometry 调整，下游本就需要重算；另一条生产序列是
+   QualityBase → Interactive → QualityBase，Interactive 使用自身 resize 后的结果，
+   无需保留 QualityBase 下游缓存。不得以兼容此序列为由增加 4K 常驻槽位。
+7. 先复用空闲分配，再回收已失效且无读者的结果。底层只可对无结果所有者且无读者的空闲
+   分配选择回收次序；不能反过来扩大管线重算范围。必需保留结果和在用资源无法满足新分配时，
+   返回真实资源不足错误，不删除有效 Develop，不降低分辨率或改用其他后端继续。
+
+**实施顺序与职责：**
+
+| 工作 | 现有归属与修改位置 | 必须交付的行为 |
+| --- | --- | --- |
+| 固定回归证据 | `graph_image_cache_test.cpp`、`runtime_invalidation_test.cpp`、`cuda_result_cache_test.cpp` | 将临时复现转成永久断言；加入近预算、混合尺寸、连续输入和角色切换 |
+| 依赖驱动的保留与回收 | `runtime_invalidation.hpp/.cpp`、`graph_image_cache.hpp`、`texture_pool.hpp`、`basic_render_workspace.hpp` | 通过现有 owner 的版本/表示查询决定回收；删除有效结果 LRU；正确处理共享 lease、读者和实际可释放字节 |
+| 明确传递任务策略 | 现有 render request/role、产品 renderer、`plan_executor.hpp` | 从 QualityBase 的实际角色导出有限结果读写策略，传到共享执行路径；不得按 4096 尺寸猜角色，不新增调度器 |
+| 下游执行与存储 | CUDA/OpenCL/Metal 的 pass encoder、local tone、Mask，`node_result_cache.hpp` 等实际结果所有者 | 下游仅使用本次提交的输出；不读写 Interactive 持久结果；临时结果不复制已有图像内容 |
+| 完成与失败处理 | 现有 PublishResults、CompleteMatchingImages、CancelRender、present 完成路径 | 仅发布允许保留且真正完成的写入；失败不发布半成品；最后读者完成后释放 QualityBase 结果 |
+| 删除被替代路径 | 上述生产文件及测试注册 | 删除 result `lru_tick`/淘汰决策和无条件下游 cache bind/record/publish；保留依赖版本与现有 GPU 完成机制 |
+
+不要直接把整次 QualityBase 切到现有全量 BypassSessionCache：那会一并失去 Develop 复用。
+也不能只关闭 PlanExecutor 的外层命中判断；LLF、Mask 等内部路径和批量发布必须遵守
+同一策略。复用提交内写入/资源所有权能力，不为旁路创建另一个 live document 或长期工作区。
+每个新操作说明 owner、线程、可变状态、读者完成点、失败与释放规则。
+
+**主调用链：**
+
+```text
+owner 应用修改 → CollectAndPropagate → 识别任务角色与结果保留策略
+  → Develop 有效则复用，失效则执行并按完成规则发布
+  → Interactive：复用有效 2560px/上游结果，只重算失效下游，发布当前结果
+  → QualityBase：Geometry 起只执行提交内计算，不查找/发布持久结果
+  → present 完成 → 释放本次临时输出与已无读者的失效结果
+失败/取消 → 不发布未完成结果 → 保留未受影响的上游与 Interactive 结果
+```
+
+**必须执行的验收矩阵（已实现并在下方完成记录中执行）：**
+
+| 测试/场景 | 关键断言 |
+| --- | --- |
+| `DownstreamEditsPreserveValidDevelopAndInteractiveResizeNearBudget` | 真实尺寸输入或等价受限预算，连续下游写入；Develop/resize revision 和资源保持有效，首次后 execute 为 0，缓存像素与独立重算一致 |
+| `FreeMatchingAllocationPreservesAllValidPipelineResults` | 存在空闲匹配分配时直接复用；不删除有效结果、不额外分配 |
+| `InvalidMixedSizeResultsReleaseOnlyRequiredUnleasedAllocations` | 混合尺寸与共享 lease；仅回收无读者失效存储，满足请求就停止，有效结果不变 |
+| `QualityBaseBypassesEveryResultCacheAfterSensorDevelop` | 预置可命中的下游结果；Geometry 起所有图像/LLF/Mask/值元数据持久缓存查找与发布调用计数均为 0；Develop 可命中 |
+| `InteractiveQualityBaseInteractiveReuses2560PixelResults` | 首次 Interactive 建立缓存；QualityBase 不替换 handle、表示或 completed revision；返回 Interactive 复用仍有效结果；无跨帧 4K 条目 |
+| `QualityBaseMutationInvalidatesOnlyDependentInteractiveResults` | 下游改动保留 Develop/resize；Geometry 改动保留 RAW Develop 并使几何依赖失效；RAW Develop 改动到达全部后代；不能靠旁路掩盖 stale 结果 |
+| `RepeatedQualityBaseRendersReleaseDownstreamStorageAfterPresentation` | Develop/Geometry 连续调整及 QualityBase/Interactive 交替；持久下游无 QualityBase 条目，临时占用在最后读者完成后归还，不随帧数增长 |
+| `QualityBaseFailurePreservesUnchangedInteractiveResults` | encode/upload/present 失败与取消；不错误推进 completed，不清除未受影响缓存，显示中旧输出不被覆盖 |
+| `RequiredLiveResourcesReportAllocationFailureWithoutEvictingDevelop` | 注入资源不足；真实错误可观察，无有效上游淘汰、降质或后端替换 |
+| `QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance` | 多 Grade、LLF、Mask、DRT/Post、crop/resize 的旁路输出与同参数同质量独立执行比较；测试声明误差容限与输入，禁止只有 no-throw/有限值断言 |
+
+用真实 session 调度验证角色传递，并在 CUDA/OpenCL/Metal 检查共享规则与后端内部路径。
+Windows/MSVC 与 macOS 按现有构建技能执行；记录每个后端通过、失败、跳过及未执行范围，
+不能用头文件检查替代 Metal 运行证据。计数区分版本失效、表示不匹配、任务主动旁路和资源
+生命周期释放，不把主动旁路算成异常 cache miss。保留原 NM6.9 的更广泛像素资格矩阵，
+但本修复需要的上述行为与像素测试必须在 P7 完成，不能推迟。
+
+**退出条件：** 产品路径使用以上规则、旧淘汰/发布路径删除、永久测试注册且执行，完成记录
+包含实际基点/文件/调用链/命令/结果/占用数据与残留限制。
+
+##### Phase NM6.P7 completion record (2026-09-06)
+
+**Status:** complete — dependency-owned result retention and QualityBase cache bypass after `develop:sensor_linear`.
+
+**Primary success call chain:**
+
+```text
+owner mutation
+  -> RuntimeInvalidationState::CollectAndPropagate
+  -> Renderer::Render (FrameRole -> ResultPersistenceScopeForRole)
+  -> PlanExecutor::Execute (SetResultPersistence)
+  -> BindOrMiss: persist sensor_linear only on QualityBase; Interactive binds all current results
+  -> GraphImageCache::AcquireTextureForWrite: free matching alloc, then invalid unleased reclaim
+  -> Encode / RecordUnpublished
+  -> Present or host download
+  -> PublishSuccessfulSubmission (SensorDevelopOnly publishes sensor_linear only)
+  -> DiscardUnpublished / ReleaseUnpublishedExcept(display)
+```
+
+**Primary failure call chain:**
+
+```text
+Present/Download/encode throws
+  -> CancelRender or WaitIdle + DiscardUnpublished
+  -> Interactive published revisions unchanged
+  -> std::runtime_error (no Develop eviction, no quality/backend substitute)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DownstreamEditsPreserveValidDevelopAndInteractiveResizeNearBudget` | `GpuDagCudaDrtProductTest` | PASS |
+| `FreeMatchingAllocationPreservesAllValidPipelineResults` | `GpuDagCudaWorkspaceTest` | PASS |
+| `InvalidMixedSizeResultsReleaseOnlyRequiredUnleasedAllocations` | `GpuDagCudaWorkspaceTest` | PASS |
+| `RequiredLiveResourcesReportAllocationFailureWithoutEvictingDevelop` | `GpuDagCudaWorkspaceTest` | PASS |
+| `QualityBaseBypassesEveryResultCacheAfterSensorDevelop` | CUDA + OpenCL product | PASS |
+| `InteractiveQualityBaseInteractiveReuses2560PixelResults` | CUDA + OpenCL product | PASS |
+| `QualityBaseMutationInvalidatesOnlyDependentInteractiveResults` | `GpuDagRawInputTest` + CUDA product | PASS |
+| `RepeatedQualityBaseRendersReleaseDownstreamStorageAfterPresentation` | `GpuDagCudaDrtProductTest` | PASS |
+| `QualityBaseFailurePreservesUnchangedInteractiveResults` | `GpuDagCudaDrtProductTest` | PASS |
+| `QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance` | CUDA + OpenCL product | PASS |
+| `QualityBasePreviewUsesSessionCacheAndSensorDevelopPersistence` | `PipelineFrameSinkTest` | PASS |
+| `QualityBaseRolePersistsOnlySensorDevelop` | `GpuDagRawInputTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaWorkspaceTest --target GpuDagCudaDrtProductTest --target GpuDagRawInputTest --target PipelineFrameSinkTest --target GpuDagOpenClDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R GraphImageCacheRetention|ResultPersistence.QualityBase|QualityBaseMutationInvalidates|QualityBasePreviewUsesSessionCache|DownstreamEditsPreserveValidDevelop|QualityBaseBypassesEveryResultCache|InteractiveQualityBaseInteractiveReuses|RepeatedQualityBaseRendersRelease|QualityBaseFailurePreserves|QualityBasePixelsMatchFresh --timeout 180
+```
+
+Suite totals: focused P7 filter 17/17 PASS; `CudaResultCacheProductFixture` 30/30 PASS. Pixel comparison: 32×32 Bayer fixture, QualityBase `max_edge=32`, absolute RGB tolerance `1e-4` on host `CV_32FC4` ACES download versus `BypassSessionCache` of the same request. Near-budget CUDA case kept Develop/geometry execute at 0 after the first Interactive fill. Texture pool `UsedBytes` after Interactive cycles did not grow past the first-cycle high-water.
+
+**Checklist / exit condition:** all P7 acceptance names above executed on Windows/MSVC. Metal counterparts are compiled into `GpuDagMetalRendererTest` source and were not run on this host.
+
+**LOC note (grill-code-review):** `graph_image_cache.hpp` ~502 lines (one cache type); `plan_executor.hpp` ~301; `basic_render_workspace.hpp` ~296; `result_persistence.hpp` ~48; `cuda_result_cache_test.cpp` ~950 (under 1000, still one product-cache fixture). No new snapshot/mirror of live document state.
+
+**Remaining gaps:** Metal GPU execution of the three QualityBase tests was not run (Windows host, Metal target not built). NM6.9 wider RAW pixel matrix is unchanged. Session scheduler still uses `kQualityBasePreviewMaxLongEdge` 4096 with `UseSessionCache`; QualityBase is not switched to `BypassSessionCache`. Texture-pool LRU remains only for unowned, unleased textures.
+
 ## 5. 人类可读与长期维护的退出条件
 
 - 开发者从滑块开始能沿直接调用读到一次Model更新；每次线程切换均有具体原因。
@@ -726,8 +881,9 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | NM6.P4 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner lock → typed adapter (`NodeId`+instance) → `EditorPanelProjection` → session stamp → controller discard/merge/replace → existing QML `loadFromSnapshot` | `EditorPanelProjectionTest` 5/5、`EditorSessionControllerPhase5ATest` 49/49、`EditorAdjustmentSnapshotQmlTest` 2/2、`EditorSessionHistoryPortTest` 77/77；Windows/MSVC target builds passed | GUI 面板加载不再经 `params_json` / `BuildSnapshotMap`；`ToJson`/`MakeFullDto` 不在投射路径；render snapshot JSON 与 history/WAL/project JSON 保留至 P6；NM6.6 所选节点尚未接入 |
 | NM6.P5 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner `Read` → `MakeGradeRuntimeParams` / `MakeGradeNeighborParams` → `BindOrRefreshGradeRuntimeSlot` → `ParameterArena::WritePackedSlot` → `UploadDirty`; LLF/Metal enable from packed host slot | `GpuDagAdjustmentRuntime` 9/9、dirty-field 4/4、`GpuDagCudaWorkspaceTest` 24/24、`GpuDagCudaPrimaryGradeTest` 36/36、`GpuDagOpenClGradeTest` 60/60；Windows/MSVC target builds passed | Grade 生产路径不再 `MakeFullDto` 或把 `GradeAdjustmentParams` 包成 OperatorParamDto；未改槽位不重新打包；Develop/DRT JSON-resolved GPU params 与 `InitializeFromFullDto` 留待 P6 |
 | NM6.P6 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot` | history 77/77、CUDA Grade 38/38、OpenCL Grade 61/61、CUDA DRT 52/52、OpenCL DRT 16/16、session 49/49、QML snapshot 2/2；见 P6 completion record | 删除 `PublishEditorParameterPatch`、`InitializeFromFullDto`/`ApplyPatch`/`CopyFields`、live `ExportPipelineParams` dump、CameraColor/DRT DTO wrap；JSON 仅保留序列化/CPU remirror/`submitPatch`/DRT `ODT_Op` 边界 |
+| NM6.P7 / NM6.4P | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner 依赖失效 → `ResultPersistenceScopeForRole` → GraphImageCache 保留/回收 → QualityBase Develop 后旁路 → present/release | P7 filter 17/17 PASS; CUDA product cache 30/30 PASS; Metal tests present, not executed | 删除 published-result LRU (`EvictCompletedUnleased`)；QualityBase 不查找/发布 Geometry 及下游；无 4K 保留槽位 |
 
-NM6.P整体完成后才能把NM6.5/6.6标记为可开始。保留NM6.1–NM6.4原完成记录；新的范围和
+NM6.P整体（含P7）完成后才能把NM6.5/6.6标记为可开始。保留NM6.1–NM6.4原完成记录；新的范围和
 证据写在这里。NM6.P 使用同一个 `feature/nm6-native-parameter-access` 分支作为整体
 reviewable PR，NM6.Px 不单独创建分支或 PR；每个切换仍必须删除对应被替代的生产路径，
 不保留双轨入口或未授权的替代实现。

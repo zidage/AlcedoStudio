@@ -311,6 +311,7 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
   auto&      invalidation = workspace.ResultInvalidation();
   const auto source_id    = SourceId(grade_id);
   const auto result_id    = ResultId(grade_id);
+  const bool persist_llf  = workspace.PersistsResult(source_id);
   const auto source_needed = invalidation.MakeImageRepresentation(
       source_id, canonical_extent, TextureFormat::R32f,
       static_cast<std::uint32_t>(current_long_edge));
@@ -318,8 +319,13 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
       result_id, canonical_extent, TextureFormat::R32f,
       static_cast<std::uint32_t>(current_long_edge));
   auto* cached_source =
-      images.BindValidResult(source_id, invalidation.RequiredRevision(source_id), source_needed,
-                             workspace.Device().CompletedSubmission());
+      persist_llf
+          ? images.BindValidResult(source_id, invalidation.RequiredRevision(source_id),
+                                   source_needed, workspace.Device().CompletedSubmission())
+          : nullptr;
+  if (!persist_llf) {
+    device.PassStats().result_policy_bypass += 2;
+  }
   const auto source_long_edge = images.PublishedAuxiliary(source_id);
   const bool source_valid =
       cached_source != nullptr && source_long_edge > 0 &&
@@ -506,7 +512,7 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
   ApplyAdjusted(device, input, output, source[0], result[0], width, height, layout.widths[0],
                 layout.heights[0], apply_uv);
 
-  if (canonical_frame || reuse_source) {
+  if (persist_llf && (canonical_frame || reuse_source)) {
     const ImageExtent extent{static_cast<std::uint32_t>(layout.widths[0]),
                              static_cast<std::uint32_t>(layout.heights[0])};
     if (!reuse_source) {

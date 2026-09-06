@@ -95,6 +95,16 @@ class RuntimeInvalidationState {
                                  const ResultRepresentation& needed) const -> bool;
 
   /**
+   * @brief True when @p published_revision is the current required revision of @p id.
+   *
+   * Used to retain a live GPU result. Representation is checked at bind time;
+   * a QualityBase frame must not treat an Interactive result as reclaimable
+   * just because this frame's extent differs.
+   */
+  [[nodiscard]] auto HasCurrentRevision(const GraphValueId& id,
+                                        RuntimeRevision published_revision) const -> bool;
+
+  /**
    * @brief Frame representation for an image result of @p id.
    *
    * Sensor uses source identity. Canonical LLF ports use the crop/reference

@@ -18,6 +18,7 @@
 #include "edit/runtime/frame_presenter.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/renderer.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "image/image_buffer.hpp"
 
@@ -119,11 +120,14 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   plan.output_color_override = request.output_color;
   detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
   const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
-  const auto  output_id = render_device->Execute(
+  const auto persistence =
+      use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
+                        : ResultPersistenceScope::AllCurrentResults;
+  const auto output_id = render_device->Execute(
       plan, prepared, *document_, mask_store_.get(), false,
       use_session_cache ? TransientAllocationPolicy::SessionPacked
                         : TransientAllocationPolicy::ExactRelease,
-      request.active_raster_masks);
+      request.active_raster_masks, persistence);
   const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;
@@ -143,6 +147,25 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
     display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
   }
 
+  const auto finish_successful_session = [&]() {
+    if (!use_session_cache) {
+      release_one_shot_resources();
+      return;
+    }
+    render_device->PublishResults();
+    render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
+        render_device->Workspace().Images());
+    if (persistence != ResultPersistenceScope::SensorDevelopOnly) {
+      return;
+    }
+    render_device->WaitIdle();
+    if (request.sink == nullptr) {
+      render_device->Workspace().Images().DiscardUnpublished();
+    } else {
+      render_device->Workspace().Images().ReleaseUnpublishedExcept(output_id);
+    }
+  };
+
   try {
     if (request.sink != nullptr) {
       FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, request.submission,
@@ -150,22 +173,10 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
     }
     if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
-    if (use_session_cache) {
-      render_device->PublishResults();
-      render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
-          render_device->Workspace().Images());
-    } else {
-      release_one_shot_resources();
+      finish_successful_session();
+      return host;
     }
-    return host;
-  }
-  if (use_session_cache) {
-    render_device->PublishResults();
-    render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
-        render_device->Workspace().Images());
-  } else {
-      release_one_shot_resources();
-    }
+    finish_successful_session();
   } catch (const std::exception& ex) {
     try {
       if (render_device->Workspace().IsRendering()) {

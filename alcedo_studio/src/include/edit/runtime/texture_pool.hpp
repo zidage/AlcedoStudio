@@ -147,6 +147,20 @@ class TexturePool {
     return Find(handle) != nullptr;
   }
 
+  /**
+   * @brief True when an unleased, matching texture can be reused without allocating.
+   *
+   * Result owners must call this before reclaiming published GPU results.
+   */
+  [[nodiscard]] auto HasReusable(const TextureRequest& request) const -> bool {
+    return FindReusable(request) != nullptr;
+  }
+
+  [[nodiscard]] auto LeaseCount(std::uint64_t handle) const -> std::uint32_t {
+    const auto* entry = Find(handle);
+    return entry == nullptr ? 0 : entry->lease_count;
+  }
+
   [[nodiscard]] auto EntryCount() const -> std::size_t {
     std::size_t count = 0;
     for (const auto& entry : entries_) {
@@ -294,7 +308,11 @@ class TexturePool {
   }
 
   auto FindReusable(const TextureRequest& request) -> Entry* {
-    for (auto& entry : entries_) {
+    return const_cast<Entry*>(static_cast<const TexturePool*>(this)->FindReusable(request));
+  }
+
+  auto FindReusable(const TextureRequest& request) const -> const Entry* {
+    for (const auto& entry : entries_) {
       if (!entry.alive || entry.lease_count > 0) {
         continue;
       }

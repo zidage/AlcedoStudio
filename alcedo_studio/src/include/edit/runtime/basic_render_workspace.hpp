@@ -15,6 +15,7 @@
 #include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
@@ -74,6 +75,24 @@ class BasicRenderWorkspace {
   }
 
   /**
+   * @brief Persistence used by the current @ref BeginRender until End/Cancel.
+   *
+   * QualityBase sets @ref ResultPersistenceScope::SensorDevelopOnly so Geometry
+   * and downstream writes stay unpublished. Interactive keeps every current result.
+   */
+  void SetResultPersistence(ResultPersistenceScope scope, GraphValueId sensor_linear) {
+    persistence_scope_ = scope;
+    persist_sensor_    = std::move(sensor_linear);
+  }
+  [[nodiscard]] auto ResultPersistence() const -> ResultPersistenceScope {
+    return persistence_scope_;
+  }
+  [[nodiscard]] auto PersistSensorLinear() const -> const GraphValueId& { return persist_sensor_; }
+  [[nodiscard]] auto PersistsResult(const GraphValueId& id) const -> bool {
+    return PersistsGraphValue(persistence_scope_, id, persist_sensor_);
+  }
+
+  /**
    * @brief Collect dependency revisions once for the current @ref BeginRender.
    *
    * PlanExecutor and standalone grade encodes share this so a frame cannot assign
@@ -125,10 +144,14 @@ class BasicRenderWorkspace {
 
   /**
    * @brief Allocate an unpublished write texture for @p id. See GraphImageCache.
+   *
+   * Retention uses this workspace's invalidation state and result persistence.
    */
   auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
       -> ResourceLease<Backend>& {
-    auto&      lease = images_.AcquireTextureForWrite(textures_, backend_, id, request);
+    auto&      lease = images_.AcquireTextureForWrite(textures_, backend_, id, request,
+                                                      invalidation_, persistence_scope_,
+                                                      persist_sensor_);
     const auto bytes = static_cast<std::size_t>(request.width) * request.height *
                        TextureFormatBytesPerPixel(request.format);
     if (ShouldTraceGpuPoolAlloc(bytes)) {
@@ -184,6 +207,8 @@ class BasicRenderWorkspace {
    */
   void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
 
+  [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+
   /**
    * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.
    * @throws std::runtime_error if called re-entrantly.
@@ -199,8 +224,10 @@ class BasicRenderWorkspace {
     mask_textures_.BeginFrame();
     active_raster_textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
-    rendering_           = true;
-    validity_prepared_   = false;
+    rendering_         = true;
+    validity_prepared_ = false;
+    persistence_scope_ = ResultPersistenceScope::AllCurrentResults;
+    persist_sensor_    = {};
   }
 
   /**
@@ -217,7 +244,16 @@ class BasicRenderWorkspace {
     rendering_ = false;
   }
 
-  [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+  /**
+   * @brief Publish recorded writes allowed by the current result persistence.
+   *
+   * QualityBase publishes only `develop:sensor_linear`. Other recorded writes
+   * stay until @ref DiscardUnpublished after present/download. Interactive
+   * publishes every recorded write and drops leftover slots.
+   */
+  void PublishImageResults(std::uint64_t submission_id) {
+    images_.PublishSuccessfulSubmission(submission_id, persistence_scope_, persist_sensor_);
+  }
 
   /**
    * @brief Leave a failed encode without submitting. Unpublished writes are discarded.
@@ -277,7 +313,9 @@ class BasicRenderWorkspace {
   GraphImageCache<Backend>       images_{};
   RuntimeInvalidationState       invalidation_{};
   DevelopTransientHighWaterCache develop_high_water_{};
+  GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
+  ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;
   bool                           rendering_             = false;
   bool                           validity_prepared_     = false;
 };

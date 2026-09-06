@@ -2,8 +2,9 @@
 
 Date: 2026-08-29
 
-Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4 complete per execution records;
-NM6.P and NM6.5–NM6.9 planned; NM1 status retained below; NM7–NM8 planned. NML was
+Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P complete
+per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
+NM7–NM8 planned. NML was
 cancelled on 2026-08-30.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
@@ -25,8 +26,13 @@ serial render-paced input consumption, the Interactive 16 ms total target, share
 Grade/LLF execution, dependency-version session caches, and the node-name/EXIF header.
 These decisions replace per-frame whole-parameter hashing and retaining old results for Undo.
 NM6.1 characterization of current input, ownership, and completion boundaries is complete.
-NM6.1–NM6.4 now have completion records in the NM6 plan. NM6.P is the next prerequisite;
-its production parameter cutover has not started. Earlier NM1 status is not re-qualified here.
+NM6.1–NM6.4 and NM6.P now have completion records. On 2026-09-06 the user approved
+NM6.4P, implemented as [NM6.P7](node_mask_editor/phase_nm6p_native_parameter_access_plan.md#nm6p7--nm64p-依赖驱动的结果保留与-qualitybase-缓存旁路),
+before NM6.5/6.6: retain valid pipeline results by dependency and reader lifetime, remove valid-result
+LRU eviction, and bypass persistent result caches after RAW Develop for QualityBase. Preserve
+valid 2560px Interactive results; do not allocate persistent 4K result slots. NM6.P7 completed
+2026-09-06 on Windows/MSVC (CUDA/OpenCL); Metal GPU execution of those tests was not run here.
+Earlier NM1 status is not re-qualified here.
 
 本方案承接 [GPU DAG 编辑管线重构 Phase 计划](gpu_dag_pipeline_rebuild_phase_plan.md)。前一份
 计划建立了 `PipelineDocument`、`PipelineGraph`、GPU execution plan、三后端管线、MaskStore

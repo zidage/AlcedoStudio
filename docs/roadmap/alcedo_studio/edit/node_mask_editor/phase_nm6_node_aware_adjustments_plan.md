@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.4 and NM6.P complete; NM6.5–NM6.9 planned.
+Status: NM6.1–NM6.4, NM6.4P, and NM6.P complete; NM6.5–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -237,11 +237,22 @@ reuse an incompatible reference. A higher source-detail requirement invalidates 
 
 ### 4.3 Allocation, failure and cache count
 
-Refactor GraphImageCache to one current result per output in a workspace, with an unpublished
-write while replacement is produced. Old buffers can survive only while GPU/presentation leases
-require them; release/recycle afterward. No map of previous parameter-content identities.
-Retain existing resource budget/eviction behavior for current reusable results. Eviction causes
-recomputation with unchanged quality; it does not authorize an alternate execution path.
+2026-09-06 NM6.4P revision: keep one current retained result per output, with an unpublished
+write while replacement is produced. Retention follows dependency validity and explicit lifecycle,
+not LRU. Downstream allocations must not evict valid Develop, Interactive resize, or other retained
+upstream results. Recycle invalid results only after GPU/presentation readers release them; reuse
+free allocations before allocating more. Do not retain historical parameter-content identities.
+This replaces the earlier rule permitting budget eviction of current reusable results.
+
+QualityBase shares the valid RAW Develop result (`develop:sensor_linear`). Starting with Geometry,
+it bypasses all persistent result-cache reads and writes, including CameraToAP1, Grade, LLF, Mask,
+and DRT image/buffer/metadata results. Its downstream outputs are submission-local and released
+after their last GPU/presentation consumer. They cannot replace, evict, clear, or mark completed
+the Interactive results. Keep the valid 2560px Interactive representation; do not add persistent
+4K slots. Parameter changes still propagate dependency invalidation before either render role.
+Backend allocation reuse and parameter uploads remain separate from result-cache bypass.
+If required retained results plus live work cannot fit available resources, report the real
+allocation error; do not evict valid upstream results or lower quality to continue.
 
 Publish completed_revision only after the result's producer succeeds and the GPU completion rule
 is satisfied. A failed write must not leave newly stamped LLF metadata pointing at incomplete data.
@@ -402,7 +413,7 @@ Additional acceptance requirements:
 
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.4 and NM6.P are complete. NM6.5–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.4, NM6.4P, and NM6.P are complete. NM6.5–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -794,13 +805,35 @@ Suite totals: `GpuDagRawInputTest` 106/106 PASS; `EditorPipelineCommandServiceTe
 
 **Remaining gaps:** `HashLlf*` / `MixGrade` / `BuildFrameResultContentKeys` remain for identity tests and are not used by PlanExecutor or GPU LLF passes. OpenCL signed-distance metadata still stamps `completed_revision` 1 and matches via `ResultRepresentation.identity`. Camera-profile dirty is still lumped into `DevelopDirty::WhiteBalance`. Metal LLF/mask sources were updated with the same revision API and were not executed here. Shared three-backend Grade/LLF orchestration is NM6.5. Node targeting is NM6.6.
 
-### NM6.P — Native parameter access prerequisite
+### NM6.4P — Dependency-owned result retention and QualityBase cache bypass
 
-**Status:** complete 2026-09-06. Execute and evidence are in the
+**Status:** complete 2026-09-06. Implementation and executable acceptance are in
+[NM6.P7](phase_nm6p_native_parameter_access_plan.md#nm6p7--nm64p-依赖驱动的结果保留与-qualitybase-缓存旁路).
+NM6.4P names the correction to NM6.4; NM6.P7 is its single implementation work item, not a second
+parallel phase. Execute after P6 and before NM6.5/6.6. Preserve the original NM6.4 completion record
+as historical evidence; its tests did not establish retention under realistic memory pressure.
+
+**Required behavior:** valid Develop and Interactive resize results survive downstream edits and
+allocations. Reclaim by dependency invalidation and reader lifetime. QualityBase retains/reuses
+RAW Develop only; Geometry and every downstream result bypass persistent cache lookup/publication.
+No 4K retained slots, weighted result LRU, extra parameter mirrors, or alternate processing path.
+
+**Primary call chain:** owner mutation → dependency propagation → render-role result policy →
+retain valid upstream / retire invalid results after readers → shared pass execution → publish
+retained results or present/release submission-local QualityBase output.
+
+**Acceptance:** P7 must prove near-budget upstream retention, mixed-size free-allocation reuse,
+QualityBase downstream zero cache reads/writes, Interactive → QualityBase → Interactive 2560px
+reuse, exact mutation boundaries, failure/presentation lifetime, bounded storage, and pixel agreement.
+
+### NM6.P — Native parameter access and cache correction prerequisite
+
+**Status:** complete 2026-09-06 including P7/NM6.4P. Execution and evidence are in the
 [separate NM6.P plan](phase_nm6p_native_parameter_access_plan.md).
 Its scope is direct Model read/update, minimal queued changes, typed panel projection, runtime
-parameter packing and deletion of old full-state JSON/DTO intermediary paths. Preserve NM6.2–4
-queue, pacing and invalidation behavior. This is an independent acceptance gate, not an extra list
+parameter packing and deletion of old full-state JSON/DTO intermediary paths, plus P7 result
+retention and QualityBase bypass. Preserve NM6.2–4 queue, pacing and dependency versions while
+replacing the superseded result eviction policy. This is an independent acceptance gate, not an extra list
 of tasks inside NM6.6. It must finish before shared-executor/context implementation starts.
 
 ### NM6.5 — Share Grade and LLF decisions across all three backends
@@ -976,7 +1009,7 @@ planning document was created.
 
 ## 9. Delivery order and risk controls
 
-NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
+NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.P1–P6 → NM6.4P (NM6.P7) → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
 Split reviewable PRs by these engineering boundaries. NM6.1 red-test evidence and its immediate
 fix can share a PR. Do not expose node-aware controls until their exact-target serial write path works.
 
@@ -998,7 +1031,8 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.2 | complete 2026-09-05 | uncommitted on `feature/queued-typed-adjustment-input` @ `3a7a3825` | slider/model → `submitPatch` → `EnqueueAdjustmentInput` → `EditorPendingInputQueue::AdmitFieldChange`; live document/history unchanged | 90/90 focused PASS excluding pre-existing RapidImageSelection; see NM6.2 completion record | Consume, 16 ms pacing, GPU-safe completion are NM6.3 |
 | NM6.3 | complete 2026-09-05 | uncommitted on `feature/nm6-serial-adjustment-consumption` @ `8ed06f88` | enqueue → PostCompletion consume → HandlePendingSequence → history capture/commit → RouteInitialRender → Present-wait completion → next admission | 137/137 focused PASS; see NM6.3 completion record | Cache versions NM6.4; node targeting NM6.6 |
 | NM6.4 | complete 2026-09-05 | uncommitted on `feature/runtime-dependency-result-versions` | mutation → CollectAndPropagate → BindValidResult(required, representation) → skip/encode → RecordUnpublished → PublishResults / MarkCompleted | 180/180 focused PASS; see NM6.4 completion record | Shared Grade/LLF executors NM6.5; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
-| NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot` | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
+| NM6.4P | complete 2026-09-06 | implementation owned by NM6.P7 on `feature/nm6-native-parameter-access` | dependency validity → result retention; QualityBase Develop → downstream cache bypass | P7 filter 17/17 PASS; CUDA product cache 30/30 PASS | No valid-result LRU; no retained 4K slots |
+| NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot`; P7 result retention / QualityBase bypass | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
 | NM6.5 | planned | — | — | — | Shared three-backend execution after NM6.P |
 | NM6.6 | planned | — | — | — | Node context/target routing |
 | NM6.7 | planned | — | — | — | Approved header and panel UI |

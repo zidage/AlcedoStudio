@@ -34,10 +34,12 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
 #include "multi_grade_runtime_test_support.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 namespace {
@@ -84,6 +86,45 @@ auto RenderHostWithoutSessionCache(CudaProductRenderer&                renderer,
                          CudaProductCachePolicy::BypassSessionCache);
 }
 
+auto CompareHostRgba(const std::shared_ptr<ImageBuffer>& left,
+                     const std::shared_ptr<ImageBuffer>& right, float max_abs)
+    -> bool {
+  if (!left || !right || !left->cpu_data_valid_ || !right->cpu_data_valid_) {
+    return false;
+  }
+  const auto& a = left->GetCPUData();
+  const auto& b = right->GetCPUData();
+  if (a.empty() || b.empty() || a.size() != b.size() || a.type() != CV_32FC4 ||
+      b.type() != CV_32FC4) {
+    return false;
+  }
+  for (int row = 0; row < a.rows; ++row) {
+    const auto* pa = a.ptr<cv::Vec4f>(row);
+    const auto* pb = b.ptr<cv::Vec4f>(row);
+    for (int col = 0; col < a.cols; ++col) {
+      for (int channel = 0; channel < 3; ++channel) {
+        if (!std::isfinite(pa[col][channel]) || !std::isfinite(pb[col][channel])) {
+          return false;
+        }
+        if (std::abs(pa[col][channel] - pb[col][channel]) > max_abs) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+class RejectingPresentSink final : public IFrameSink {
+ public:
+  void EnsureSize(int, int) override {}
+  auto MapResourceForWrite(FrameMemoryDomain) -> FrameWriteMapping override { return {}; }
+  void UnmapResource() override {}
+  void NotifyFrameReady(const FrameCompletionSubmission&) override {}
+  auto GetWidth() const -> int override { return 0; }
+  auto GetHeight() const -> int override { return 0; }
+};
+
 auto OutputIsFinite(const std::shared_ptr<ImageBuffer>& image) -> bool {
   if (!image || !image->cpu_data_valid_) {
     return false;
@@ -119,6 +160,21 @@ class CudaResultCacheProductFixture : public ::testing::Test {
 
   auto Render(const RenderRequest& request = {}) -> std::shared_ptr<ImageBuffer> {
     return RenderHost(*renderer_, image_, DecodeRes::FULL, request);
+  }
+
+  auto RenderRole(FrameRole role, std::uint32_t max_edge) -> std::shared_ptr<ImageBuffer> {
+    RenderRequest request;
+    request.resolution.max_edge = max_edge;
+    FrameCompletionSubmission submission;
+    submission.metadata.frame_role = role;
+    return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
+  }
+
+  auto GeometryId() const -> GraphValueId {
+    return {NodeId{"geometry"}, PortId{"scene_source"}};
+  }
+  auto SensorId() const -> GraphValueId {
+    return {NodeId{"develop"}, PortId{"sensor_linear"}};
   }
 
   auto Exposure() -> ExposureModel* {
@@ -691,6 +747,216 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedRev
   EXPECT_NE(invalidation.RequiredRevision(first_plan.sensor_linear_output), published_sensor);
   EXPECT_NE(invalidation.RequiredRevision(first_plan.display_output), published_display);
   EXPECT_EQ(images.UnpublishedCount(), 0U);
+}
+
+TEST_F(CudaResultCacheProductFixture,
+       DownstreamEditsPreserveValidDevelopAndInteractiveResizeNearBudget) {
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto sensor_handle = images.Find(SensorId())->Handle();
+  const auto sensor_rev    = images.PublishedRevision(SensorId());
+  const auto geometry_rev  = images.PublishedRevision(GeometryId());
+  const auto used          = renderer_->Device().Workspace().Textures().UsedBytes();
+  renderer_->Device().Workspace().Textures().SetByteBudget(used + 32U * 32U * 16U);
+  renderer_->ResetStats();
+  auto* exposure = Exposure();
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.35f);
+  const auto after_first = RenderRole(FrameRole::InteractivePrimary, 16);
+  ASSERT_TRUE(OutputIsFinite(after_first));
+  exposure->SetValue(0.55f);
+  const auto after_second = RenderRole(FrameRole::InteractivePrimary, 16);
+  ASSERT_TRUE(OutputIsFinite(after_second));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_EQ(images.Find(SensorId())->Handle(), sensor_handle);
+  EXPECT_EQ(images.PublishedRevision(SensorId()), sensor_rev);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  const auto fresh = RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, [] {
+    RenderRequest request;
+    request.resolution.max_edge = 16;
+    return request;
+  }());
+  ASSERT_TRUE(OutputIsFinite(fresh));
+  EXPECT_TRUE(CompareHostRgba(after_second, fresh, 1.0e-4f));
+}
+
+TEST_F(CudaResultCacheProductFixture, QualityBaseBypassesEveryResultCacheAfterSensorDevelop) {
+  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(40.0f);
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto published_before = images.CurrentValueIds();
+  const auto geometry_handle  = images.Find(GeometryId())->Handle();
+  const auto geometry_rev     = images.PublishedRevision(GeometryId());
+  const auto lookups_before   = images.LookupCount();
+  const auto publishes_before = images.PersistentPublishCount();
+  const auto values_before    = renderer_->Device().Workspace().Values().Size();
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
+  EXPECT_EQ(stats.pass.geometry_skip, 0U);
+  EXPECT_GE(stats.pass.geometry_execute, 1U);
+  EXPECT_EQ(stats.pass.camera_color_skip, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_skip, 0U);
+  EXPECT_EQ(stats.pass.drt_skip, 0U);
+  EXPECT_EQ(stats.pass.mask_skip, 0U);
+  EXPECT_GT(stats.pass.result_policy_bypass, 0U);
+  EXPECT_EQ(stats.pass.persistent_result_lookups, 1U);
+  EXPECT_EQ(images.LookupCount() - lookups_before, 1U);
+  EXPECT_EQ(images.PersistentPublishCount(), publishes_before);
+  EXPECT_EQ(images.UnpublishedCount(), 0U);
+  EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent.width, 16U);
+  EXPECT_EQ(renderer_->Device().Workspace().Values().Size(), values_before);
+  auto ids = images.CurrentValueIds();
+  ASSERT_EQ(ids.size(), published_before.size());
+}
+
+TEST_F(CudaResultCacheProductFixture, InteractiveQualityBaseInteractiveReuses2560PixelResults) {
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto geometry_handle = images.Find(GeometryId())->Handle();
+  const auto geometry_rev    = images.PublishedRevision(GeometryId());
+  const auto geometry_repr   = images.PublishedRepresentation(GeometryId());
+  const auto sensor_handle   = images.Find(SensorId())->Handle();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent, geometry_repr.extent);
+  EXPECT_EQ(images.Find(SensorId())->Handle(), sensor_handle);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_EQ(stats.pass.camera_color_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.drt_execute, 0U);
+  EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent.width, 16U);
+}
+
+TEST_F(CudaResultCacheProductFixture,
+       QualityBaseMutationInvalidatesOnlyDependentInteractiveResults) {
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto* exposure = Exposure();
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.45f);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_GE(stats.pass.primary_grade_execute, 1U);
+
+  document_->Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_GE(stats.pass.geometry_execute, 1U);
+
+  auto develop                   = document_->Develop()->Params().Params();
+  develop.highlights_reconstruct = !develop.highlights_reconstruct;
+  document_->Develop()->Params().ReplaceParams(develop);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  EXPECT_GE(renderer_->Stats().pass.sensor_develop_execute, 1U);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_GE(stats.pass.geometry_execute, 1U);
+}
+
+TEST_F(CudaResultCacheProductFixture,
+       RepeatedQualityBaseRendersReleaseDownstreamStorageAfterPresentation) {
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  const auto published = renderer_->Device().Workspace().Images().PublishedCount();
+  const auto values    = renderer_->Device().Workspace().Values().Size();
+  std::size_t used_after_first_cycle = 0;
+  std::size_t entries_after_first    = 0;
+  for (int round = 0; round < 4; ++round) {
+    auto* exposure = Exposure();
+    ASSERT_NE(exposure, nullptr);
+    exposure->SetValue(0.1f * static_cast<float>(round + 1));
+    ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+    EXPECT_EQ(renderer_->Device().Workspace().Images().PublishedCount(), published);
+    EXPECT_EQ(renderer_->Device().Workspace().Images().UnpublishedCount(), 0U);
+    EXPECT_EQ(renderer_->Device().Workspace().Values().Size(), values);
+    ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+    const auto used    = renderer_->Device().Workspace().Textures().UsedBytes();
+    const auto entries = renderer_->Device().Workspace().Textures().EntryCount();
+    if (round == 0) {
+      used_after_first_cycle = used;
+      entries_after_first    = entries;
+    } else {
+      EXPECT_LE(used, used_after_first_cycle);
+      EXPECT_LE(entries, entries_after_first);
+    }
+  }
+}
+
+TEST_F(CudaResultCacheProductFixture, QualityBaseFailurePreservesUnchangedInteractiveResults) {
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto geometry_handle = images.Find(GeometryId())->Handle();
+  const auto geometry_rev    = images.PublishedRevision(GeometryId());
+  const auto sensor_rev      = images.PublishedRevision(SensorId());
+  const auto completed_geo =
+      renderer_->Device().Workspace().ResultInvalidation().CompletedRevision(GeometryId());
+  RejectingPresentSink sink;
+  RenderRequest request;
+  request.resolution.max_edge = 32;
+  FrameCompletionSubmission submission;
+  submission.metadata.frame_role = FrameRole::QualityBase;
+  EXPECT_THROW((void)renderer_->Render(image_, DecodeRes::FULL, request, &sink, submission, false),
+               std::runtime_error);
+  EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  EXPECT_EQ(images.PublishedRevision(SensorId()), sensor_rev);
+  EXPECT_EQ(renderer_->Device().Workspace().ResultInvalidation().CompletedRevision(GeometryId()),
+            completed_geo);
+  EXPECT_EQ(images.UnpublishedCount(), 0U);
+}
+
+TEST_F(CudaResultCacheProductFixture, QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance) {
+  // Same 32x32 fixture, QualityBase long-edge 32. Compare bypass-cache pixels
+  // against a one-shot execution of the same request. Absolute tolerance 1e-4
+  // on RGB in the renderer host RGBA32F download (ACES display encoding).
+  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(35.0f);
+  document_->Geometry().SetCropRect({0.05f, 0.05f, 0.9f, 0.9f});
+  auto* exposure = Exposure();
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.4f);
+  ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  const auto quality = RenderRole(FrameRole::QualityBase, 32);
+  ASSERT_TRUE(OutputIsFinite(quality));
+  RenderRequest fresh_request;
+  fresh_request.resolution.max_edge = 32;
+  const auto fresh =
+      RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, fresh_request);
+  ASSERT_TRUE(OutputIsFinite(fresh));
+  EXPECT_EQ(quality->GetCPUData().cols, fresh->GetCPUData().cols);
+  EXPECT_EQ(quality->GetCPUData().rows, fresh->GetCPUData().rows);
+  EXPECT_TRUE(CompareHostRgba(quality, fresh, 1.0e-4f));
 }
 
 class CudaResultCacheDeviceFixture : public ::testing::Test {

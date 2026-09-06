@@ -21,6 +21,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/result_content_key.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 
@@ -506,6 +507,71 @@ TEST(RuntimeInvalidation, RemovingMaskInvalidatesGradeOutputNotDevelop) {
   EXPECT_EQ(harness.Required(harness.plan.develop_output), develop);
   EXPECT_TRUE(harness.Current(harness.plan.develop_output));
   EXPECT_GT(harness.Required(harness.Primary().scene_output), grade);
+}
+
+TEST(ResultPersistence, QualityBaseRolePersistsOnlySensorDevelop) {
+  const GraphValueId sensor{NodeId{"develop"}, PortId{"sensor_linear"}};
+  const GraphValueId geometry{NodeId{"geometry"}, PortId{"scene_source"}};
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::InteractivePrimary),
+            ResultPersistenceScope::AllCurrentResults);
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::DetailPatch),
+            ResultPersistenceScope::AllCurrentResults);
+  EXPECT_EQ(ResultPersistenceScopeForRole(FrameRole::QualityBase),
+            ResultPersistenceScope::SensorDevelopOnly);
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, sensor, sensor));
+  EXPECT_FALSE(PersistsGraphValue(ResultPersistenceScope::SensorDevelopOnly, geometry, sensor));
+  EXPECT_TRUE(PersistsGraphValue(ResultPersistenceScope::AllCurrentResults, geometry, sensor));
+}
+
+TEST(RuntimeInvalidation, QualityBaseMutationInvalidatesOnlyDependentInteractiveResults) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto sensor_repr = harness.invalidation.MakeImageRepresentation(
+      harness.plan.sensor_linear_output,
+      {harness.plan.source.develop_output_extent.width,
+       harness.plan.source.develop_output_extent.height},
+      TextureFormat::Rgba32f);
+  const auto geometry_repr = harness.invalidation.MakeImageRepresentation(
+      harness.plan.geometry_output,
+      {harness.plan.geometry.render_extent.width, harness.plan.geometry.render_extent.height},
+      TextureFormat::Rgba32f);
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 0.25f);
+  harness.Collect();
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+  EXPECT_TRUE(harness.Current(harness.plan.geometry_output));
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(harness.plan.sensor_linear_output, sensor_repr));
+  EXPECT_TRUE(harness.invalidation.IsSatisfied(harness.plan.geometry_output, geometry_repr));
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  EXPECT_FALSE(harness.Current(harness.plan.display_output));
+
+  ValidityHarness crop;
+  crop.PublishCurrent();
+  crop.document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
+  crop.Recompile();
+  crop.Collect();
+  EXPECT_TRUE(crop.Current(crop.plan.sensor_linear_output));
+  const auto cropped_geometry = crop.invalidation.MakeImageRepresentation(
+      crop.plan.geometry_output,
+      {crop.plan.geometry.render_extent.width, crop.plan.geometry.render_extent.height},
+      TextureFormat::Rgba32f);
+  EXPECT_FALSE(crop.invalidation.IsSatisfied(crop.plan.geometry_output, cropped_geometry));
+  EXPECT_FALSE(crop.invalidation.IsSatisfied(crop.plan.develop_output, cropped_geometry));
+
+  ValidityHarness raw;
+  raw.PublishCurrent();
+  auto develop                   = raw.document.Develop()->Params().Params();
+  develop.highlights_reconstruct = !develop.highlights_reconstruct;
+  raw.document.Develop()->Params().ReplaceParams(develop);
+  raw.Collect();
+  EXPECT_FALSE(raw.Current(raw.plan.sensor_linear_output));
+  EXPECT_FALSE(raw.Current(raw.plan.geometry_output));
+  EXPECT_FALSE(raw.Current(raw.plan.develop_output));
+  EXPECT_FALSE(raw.Current(raw.Primary().scene_output));
+  EXPECT_FALSE(raw.Current(raw.plan.display_output));
 }
 
 TEST(RuntimeInvalidation, CanonicalIdentityIgnoresViewportAndFollowsCrop) {
