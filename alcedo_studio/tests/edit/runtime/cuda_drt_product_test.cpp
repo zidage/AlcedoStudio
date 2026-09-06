@@ -19,6 +19,7 @@
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -101,6 +102,13 @@ TEST_F(CudaDrtProductFixture, CudaDrtOpenDrtProducesFiniteDisplayReferredOutput)
   const auto pixels   = Render(document);
   EXPECT_TRUE(AllFiniteDisplayValues(pixels));
   EXPECT_NEAR(pixels.front().a, 1.0f, 1.0e-6f);
+}
+
+TEST_F(CudaDrtProductFixture, CudaDrtPackedWriteDoesNotCopyFullDto) {
+  auto document = CreateDefaultPipelineDocument();
+  OperatorModelFullDtoCopyCount::Reset();
+  EXPECT_TRUE(AllFiniteDisplayValues(Render(document)));
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
 TEST_F(CudaDrtProductFixture, CudaDrtAces20ProducesFiniteDisplayReferredOutput) {

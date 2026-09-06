@@ -60,12 +60,19 @@ inline auto BindSharpen(ParameterArena<MetalBackend>& arena, ParameterSlotKey ke
   return arena.BindSlot(key, static_cast<std::uint32_t>(sizeof(SharpenPayload)), fields);
 }
 
-inline auto UploadFullAndClearDirty(MetalRenderDevice& device, ParameterSlotKey key,
-                                    IOperatorModel& model) -> bool {
+template <class Model>
+void WritePackedOwnerBytes(ParameterArena<MetalBackend>& arena, const ParameterSlotKey& key,
+                           Model& model) {
+  model.Read([&](const auto& payload) { arena.WritePackedSlot(key, payload); });
+}
+
+template <class Model>
+auto UploadPackedAndClearDirty(MetalRenderDevice& device, ParameterSlotKey key, Model& model)
+    -> bool {
   auto& arena = device.Workspace().Parameters();
-  arena.InitializeFromFullDto(key, model.MakeFullDto());
+  WritePackedOwnerBytes(arena, key, model);
   arena.UploadDirty(device.CommandContext());
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   if (!pending.has_value()) {
     return false;
   }

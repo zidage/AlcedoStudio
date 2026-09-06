@@ -23,6 +23,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #include "edit/scope/detail/scope_opencl_shared.hpp"
@@ -204,6 +205,12 @@ TEST_F(OpenClDrtFixture, OpenClDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
   ASSERT_TRUE(AllFinite(cuda_pixels));
   EXPECT_LT(MaxAbsError(opencl_pixels, cuda_pixels), 5.0e-3f);
 #endif
+}
+
+TEST_F(OpenClDrtFixture, OpenClDrtPackedWriteDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)Render();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
 TEST_F(OpenClDrtFixture, OpenClDrtEditRunsOnlyDrtPass) {

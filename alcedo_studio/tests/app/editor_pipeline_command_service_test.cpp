@@ -59,7 +59,7 @@ TEST(EditorPipelineCommandServiceTest, InvalidCurveInputLeavesTargetModelUnchang
   (void)model->TakeDirtyPatch();
 
   std::string error;
-  EXPECT_FALSE(PublishEditorParameterPatch(
+  EXPECT_FALSE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("curve"),
       {{"curve", {{"points", {{{"x", 0.0}, {"y", "invalid"}}, {{"x", 1.0}, {"y", 1.0}}}}}}},
       &error));
@@ -87,7 +87,7 @@ TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
   document.ClearTopologyDirty();
   std::string error;
   for (int i = 0; i < 40; ++i) {
-    ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
+    ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                             {{"exposure_ev", i / 4.0}}, &error))
         << error;
   }
@@ -162,7 +162,7 @@ TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyA
                                    {{"amount", 12}, {"unknown", 1}},
                                    {{"amount", std::numeric_limits<double>::infinity()}}}) {
     EXPECT_FALSE(
-        PublishEditorParameterPatch(document, test::DrtPostFieldTarget("sharpen"), patch, &error));
+        ApplyEditorParameterPatch(document, test::DrtPostFieldTarget("sharpen"), patch, &error));
     EXPECT_FALSE(error.empty());
     EXPECT_EQ(model->ToJson(), before);
     EXPECT_FALSE(model->IsDirty());
@@ -176,13 +176,13 @@ TEST(EditorPipelineCommandServiceTest, EquivalentNormalizedScalarDoesNotDirtyMod
   ASSERT_NE(exposure, nullptr);
   (void)exposure->TakeDirtyPatch();
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                           {{"exposure_ev", 100.0}}, &error))
       << error;
   EXPECT_FLOAT_EQ(exposure->Value(), 16.0f);
   (void)exposure->TakeDirtyPatch();
 
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                           {{"exposure_ev", 200.0}}, &error))
       << error;
   EXPECT_FLOAT_EQ(exposure->Value(), 16.0f);
@@ -201,7 +201,7 @@ TEST(EditorPipelineCommandServiceTest, ApplyingCurvePatchPreservesUnrelatedModel
   (void)exposure->TakeDirtyPatch();
 
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("curve"),
       {{"curve",
         {{"points",
@@ -226,14 +226,14 @@ TEST(EditorPipelineCommandServiceTest, ApplyingHlsPatchUpdatesOneTypedTable) {
     table.push_back({index == 0 ? 0.25f : 0.0f, 0.0f, 0.0f});
   }
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("hls"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("hls"),
                                           {{"HLS", {{"hls_adj_table", table}}}}, &error))
       << error;
   EXPECT_FLOAT_EQ(model->AdjustmentTable()[0].h, 0.25f);
   EXPECT_TRUE(model->IsDirty());
   (void)model->TakeDirtyPatch();
 
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("hls"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("hls"),
                                           {{"HLS", {{"hls_adj_table", table}}}}, &error))
       << error;
   EXPECT_FALSE(model->IsDirty());
@@ -246,7 +246,7 @@ TEST(EditorPipelineCommandServiceTest, ApplyingColorWheelPatchUpdatesOneTypedCon
   ASSERT_NE(model, nullptr);
   (void)model->TakeDirtyPatch();
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("color_wheel"),
       {{"color_wheel", {{"lift", {{"disc", {{"x", 0.25}, {"y", -0.1}}}}}}}}, &error))
       << error;
@@ -255,7 +255,7 @@ TEST(EditorPipelineCommandServiceTest, ApplyingColorWheelPatchUpdatesOneTypedCon
   EXPECT_TRUE(model->IsDirty());
   (void)model->TakeDirtyPatch();
 
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("color_wheel"),
       {{"color_wheel", {{"lift", {{"disc", {{"x", 0.25}, {"y", -0.1}}}}}}}}, &error))
       << error;
@@ -276,7 +276,7 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
   raw.node_id    = develop->Id();
   raw.field_key  = "raw_decode";
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, raw, {{"raw", {{"method", "neural_engine"}, {"highlights_reconstruct", false}}}},
       &error))
       << error;
@@ -286,7 +286,7 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
 
   EditorParameterTarget color_temp = raw;
   color_temp.field_key             = "color_temp";
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, color_temp,
       {{"color_temp", {{"mode", "custom"}, {"custom_cct", 4800.0}, {"custom_tint", 12.0}}}},
       &error))
@@ -298,7 +298,7 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
   odt.owner_kind = EditorParameterOwnerKind::DrtPost;
   odt.node_id    = drt->Id();
   odt.field_key  = "odt";
-  ASSERT_TRUE(PublishEditorParameterPatch(document, odt,
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, odt,
                                           {{"odt",
                                             {{"method", "aces_2_0"},
                                              {"encoding_space", "rec2020"},
@@ -327,7 +327,7 @@ TEST(EditorPipelineCommandServiceTest, FullDevelopHistoryJsonUpdatesOnlySelected
   target.node_id    = develop->Id();
   target.field_key  = "raw_decode";
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(document, target, full_params, &error)) << error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, target, full_params, &error)) << error;
   EXPECT_EQ(develop->Params().DemosaicMethod(), "legacy");
   EXPECT_FLOAT_EQ(develop->Params().CustomCct(), 6500.0f);
 }
@@ -338,7 +338,7 @@ TEST(EditorPipelineCommandServiceTest, GeometryPatchUsesAliasesAndPreservesFocus
   target.owner_kind = EditorParameterOwnerKind::Document;
   target.field_key  = "crop_rotate";
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(
+  ASSERT_TRUE(ApplyEditorParameterPatch(
       document, target,
       {{"crop_rotate",
         {{"crop_rect", {{"x", 0.1}, {"y", 0.2}, {"w", 0.6}, {"h", 0.7}}},
@@ -379,7 +379,7 @@ TEST(EditorPipelineCommandServiceTest,
   auto        document = CreateDefaultPipelineDocument();
   const auto  before   = CanonicalPipelineDocumentJson(document);
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                           {{"exposure_ev", 2.25}}, &error))
       << error;
   nlohmann::json json;
@@ -396,13 +396,13 @@ TEST(EditorPipelineCommandServiceTest, IncompleteTargetIsRejectedWithoutMutation
   EditorParameterTarget target;
   target.field_key = "exposure";
   std::string error;
-  EXPECT_FALSE(PublishEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
   EXPECT_EQ(error, "Editor parameter target requires owner_kind");
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 
   auto missing_node    = test::ColorGradeFieldTarget("exposure");
   missing_node.node_id = NodeId{};
-  EXPECT_FALSE(PublishEditorParameterPatch(document, missing_node, {{"exposure_ev", 3.0}}, &error));
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, missing_node, {{"exposure_ev", 3.0}}, &error));
   EXPECT_EQ(error, "Editor parameter target requires node_id");
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
@@ -417,7 +417,7 @@ TEST(EditorPipelineCommandServiceTest, MaskTargetWriteIsRejected) {
   target.mask_id                = "mask.1";
   target.field_key              = "exposure";
   std::string error;
-  EXPECT_FALSE(PublishEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
   EXPECT_EQ(error, "Mask parameter targets are rejected until NM3");
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
@@ -441,7 +441,7 @@ TEST(EditorPipelineCommandServiceTest, CompleteCurrentPanelRoutesClarityToDrtPos
 TEST(EditorPipelineCommandServiceTest, PublishClarityWritesDrtModelAndRejectsGradeOwner) {
   auto        document = CreateDefaultPipelineDocument();
   std::string error;
-  ASSERT_TRUE(PublishEditorParameterPatch(document, test::DrtPostFieldTarget("clarity"),
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, test::DrtPostFieldTarget("clarity"),
                                           {{"clarity", 40.0}}, &error))
       << error;
   nlohmann::json json;
@@ -455,7 +455,7 @@ TEST(EditorPipelineCommandServiceTest, PublishClarityWritesDrtModelAndRejectsGra
   EXPECT_EQ(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Clarity()), nullptr);
 
   const auto before = CanonicalPipelineDocumentJson(document);
-  EXPECT_FALSE(PublishEditorParameterPatch(document, test::ColorGradeFieldTarget("clarity"),
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("clarity"),
                                            {{"clarity", 12.0}}, &error));
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
@@ -466,7 +466,7 @@ TEST(EditorPipelineCommandServiceTest, MissingAdjustmentInstanceLeavesDocumentUn
   auto       target             = test::ColorGradeFieldTarget("exposure");
   target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.missing"};
   std::string error;
-  EXPECT_FALSE(PublishEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target, {{"exposure_ev", 3.0}}, &error));
   EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
 

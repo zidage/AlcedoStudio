@@ -16,7 +16,6 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/GPU_kernels/opencl_param.hpp"
-#include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
@@ -171,7 +170,7 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
       throw std::runtime_error(
           "ExecuteOpenClDrt: DRT/Post adjustment is not a neighborhood operation");
     }
-    if (auto change = TakePendingParameterPatch(*model)) {
+    if (auto change = TakePendingDirtyFields(*model)) {
       post_pending.push_back(std::move(*change));
     }
     auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
@@ -222,30 +221,19 @@ auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
     }
   }
 
-  auto&                       arena = workspace.Parameters();
-  const ParameterSlotKey      key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
-  const ParameterFieldBinding field{DirtyFieldMask{kDrtDirtyBits}, 0, 0,
-                                    sizeof(OpenClToOutputParams)};
-  auto                        pending          = plan.output_color_override.has_value()
-                                ? decltype(TakePendingParameterPatch(drt->Params())){}
-                                : TakePendingParameterPatch(drt->Params());
-  const bool                  needs_initialize = !arena.Contains(key);
+  auto&                  arena = workspace.Parameters();
+  const ParameterSlotKey key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
+  auto                   pending = plan.output_color_override.has_value()
+                                       ? decltype(TakePendingDirtyFields(drt->Params())){}
+                                       : TakePendingDirtyFields(drt->Params());
+  const bool             needs_initialize = !arena.Contains(key);
   if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
     auto drt_json = drt->Params().ToJson();
     if (plan.output_color_override.has_value()) {
       OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
     }
     const auto runtime = ResolveOpenClDrtParams(drt_json);
-    auto       payload = std::make_shared<TypedOperatorParamPayload<OpenClToOutputParams>>(
-        drt->Params().Type(), 1, runtime);
-    if (needs_initialize) {
-      arena.BindSlot(key, sizeof(OpenClToOutputParams), std::span{&field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{drt->Params().Type(), 1, payload});
-    } else {
-      arena.ApplyPatch(
-          key, OperatorParamPatchDto{drt->Id(), AdjustmentInstanceId{"drt.output"},
-                                     drt->Params().Type(), DirtyFieldMask{kDrtDirtyBits}, payload});
-    }
+    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
   }
   arena.UploadDirty(context);
   if (pending) {

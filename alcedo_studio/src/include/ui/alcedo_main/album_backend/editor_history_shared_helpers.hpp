@@ -53,7 +53,8 @@ auto MakeAdjustmentSnapshotFromPipelineParams(
     std::string* error) -> bool;
 
 /// Build the committed adjustment snapshot by reading each field through live
-/// GetOperator / GetParams (not by re-parsing ExportPipelineParams stage JSON).
+/// GetOperator / GetParams. Does not dump the full stage document into
+/// @c params_json; that field stays empty on the live path.
 /// Caller must hold the executor render lock.
 auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executor,
                                             alcedo::EditorRenderAdjustmentSnapshot* snapshot,

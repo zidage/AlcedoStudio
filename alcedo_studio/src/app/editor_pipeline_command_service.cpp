@@ -974,11 +974,6 @@ auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::str
   return SetError(error, JoinValidation(errors));
 }
 
-auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
-                                 const nlohmann::json& params, std::string* error) -> bool {
-  return ApplyEditorParameterPatch(live, target, params, error);
-}
-
 auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::string field_key,
                                          std::string* error)
     -> std::optional<EditorParameterTarget> {

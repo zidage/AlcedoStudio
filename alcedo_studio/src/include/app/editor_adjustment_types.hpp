@@ -111,8 +111,7 @@ struct EditorParameterTarget {
 struct EditorAdjustmentPatch {
   /// Stable field id, e.g. "exposure", "contrast", "lut".
   std::string field_key;
-  /// Live field operation. Required for queue and owner apply. Snapshot projection
-  /// may leave this empty and keep @p params_json until typed panel reads land.
+  /// Live field operation. Required for queue and owner apply.
   std::optional<EditorParameterWrite> write;
   /// True when the input sequence has settled (quality ladder); false while dragging.
   bool settled = false;
@@ -120,8 +119,8 @@ struct EditorAdjustmentPatch {
   bool enabled = true;
   /// Production write identity. Unspecified is filled at history; Apply still requires a complete target.
   EditorParameterTarget target{};
-  /// Snapshot / history-projection JSON only. Live queue entries must not use this
-  /// as the write payload.
+  /// CPU operator JSON for executor remirror, committed snapshots, and history restore.
+  /// Live queue entries must not use this as the write payload.
   std::string params_json;
 };
 
@@ -130,7 +129,7 @@ struct EditorRenderAdjustmentSnapshot {
   std::uint64_t snapshot_generation = 0;
   /// Compact digest for cheap equality (optional; may equal params hash).
   std::string   fingerprint;
-  /// Full pipeline or panel parameter set for this render (JSON text).
+  /// Unused on the live write path. Checkpoint helpers may still store a stage document here.
   std::string   params_json;
   /// Ordered patches applied since the previous committed snapshot (may be empty).
   std::vector<EditorAdjustmentPatch> patches;

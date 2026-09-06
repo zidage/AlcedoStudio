@@ -62,7 +62,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     throw std::runtime_error("ExecuteCudaDevelop: missing develop node");
   }
 
-  auto pending = TakePendingParameterPatch(develop->Params());
+  auto pending = TakePendingDirtyFields(develop->Params());
 
   if (workspace.Textures().ByteBudget() == 0) {
     workspace.Textures().SetByteBudget(DefaultProductTextureBudgetBytes());

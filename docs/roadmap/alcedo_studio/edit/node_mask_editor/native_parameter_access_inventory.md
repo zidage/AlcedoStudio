@@ -119,3 +119,32 @@ executable:
 - No QML layout or panel capability change is made.
 - No history, WAL, import/export, or project serialization format is removed.
 - No fallback backend, reduced decode quality, or alternate rendering path is introduced.
+
+## Destinations of the recorded interfaces
+
+P1 recorded the live JSON/DTO carriers. Each entry below is deleted, kept as a
+serialization boundary, or named with its current caller. This table does not
+rewrite the P1 characterization above.
+
+| Recorded interface | Destination | Current caller or reason |
+| --- | --- | --- |
+| `EditorAdjustmentPatch::write` | Keep — live queue and owner apply | `submitWrite` → `AdmitFieldChange` → `ApplyEditorParameterWrite` |
+| `EditorAdjustmentPatch::params_json` | Keep — serialization / remirror | CPU `GetParams` for remirror, committed snapshot fields, history restore. Live queue entries must carry `write` |
+| `EditorPendingInputQueue` | Keep — ordering and release | Typed field writes; `TakeReadyBatch` moves them |
+| `EditorRenderAdjustmentSnapshot::patches` | Keep — history field JSON | `MakeAdjustmentSnapshotFromLivePipeline` still stores per-field operator JSON for history. Panels do not parse this array |
+| `EditorRenderAdjustmentSnapshot::params_json` | Keep empty on the live path | `MakeAdjustmentSnapshotFromLivePipeline` clears it. `MakeAdjustmentSnapshotFromPipelineParams` may still dump a stage document for checkpoint helpers |
+| `ApplyEditorParameterPatch` / `ParseEditorParameterWrite` | Keep — JSON → typed parse | History, tests, and `submitPatch`. Live Model mutation is `ApplyEditorParameterWrite` |
+| `ApplyEditorParameterWrite` | Keep — live Model owner update | `CaptureAdjustmentBeforePreview` |
+| `ReadEditorParameterJson` | Keep — CPU remirror / persistence read | `RemirrorEditorParameterToExecutor`; not panel projection |
+| `PublishEditorParameterPatch` | Deleted | Callers use `ApplyEditorParameterPatch` |
+| `MakeAdjustmentSnapshotFromLivePipeline` | Keep — history snapshot builder | Per-field `GetParams()`; no `ExportPipelineParams()` dump into `params_json` |
+| `BuildSnapshotMap` | Deleted | Panels use `ProjectCurrentPanelFields` / `ReadEditorPanelField` → QML `loadFromSnapshot` |
+| `PipelineEditBatch`, WAL, checkpoint, import/export JSON | Keep — serialization | Project persistence and Mini-Git |
+| `CPUPipelineExecutor::SetOperator` / `GetParams` / `ApplyEditorAdjustmentSnapshot` | Keep — CPU executor JSON | Remirror and history restore when `live_parameters_applied` is false |
+| `IOperatorModel::MakeFullDto` / `TakeDirtyPatch` | Keep — Model API | Persistence, device recovery, and Model-level DTO tests. Live Grade/CameraColor/DRT packing and panel projection must not call `MakeFullDto` |
+| `ParameterArena::InitializeFromFullDto` / `ApplyPatch` / `CopyFields` | Deleted | `WritePackedSlot` / `BindOrWritePackedSlot` |
+| `UploadFullAndClearDirty` test helper | Deleted | Tests use `WritePackedOwnerBytes` / `UploadPackedAndClearDirty` |
+| `TypedOperatorParamPayload` wrap of CameraColor / DRT GPU structs | Deleted | Packed struct written directly into the arena |
+| `submitPatch` | Keep — QML collection boundary | RAW / ODT / lens / Geometry panels parse once, then `submitWrite` |
+| `DrtNodeModel::ToJson` → `ODT_Op` | Keep — GPU table prep | CUDA / OpenCL / Metal DRT passes. Not a live Model write |
+| Document Geometry `source_size` / lens maker-model extras | Keep — CPU extras, not Model-owned | Geometry apply still carries these CPU-side fields |

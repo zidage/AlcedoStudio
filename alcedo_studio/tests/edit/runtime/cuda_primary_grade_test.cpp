@@ -283,6 +283,23 @@ TEST_F(CudaPrimaryGradeFixture, CudaGradeParameterBindDoesNotCopyFullDto) {
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
+TEST_F(CudaPrimaryGradeFixture, CudaCameraColorPackedWriteDoesNotCopyFullDto) {
+  device_.BeginRender();
+  ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+  ExecuteCudaGeometryResample(device_, plan_);
+  OperatorModelFullDtoCopyCount::Reset();
+  ExecuteCudaCameraColor(device_, plan_, document_);
+  device_.EndRender();
+  device_.WaitIdle();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaDrtPackedWriteDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderThroughDrtPost();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceZeroOffsetPreservesAp1White) {
   auto& wb = ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance());
   wb.SetTemperatureOffset(0.0f);

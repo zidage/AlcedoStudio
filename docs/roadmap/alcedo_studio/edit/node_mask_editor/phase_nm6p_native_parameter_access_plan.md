@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.P1–NM6.P5 complete; NM6.P6 remains planned.
+Status: NM6.P1–NM6.P6 complete.
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
 Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
@@ -604,6 +604,98 @@ Suite totals: `GpuDagAdjustmentRuntime` 9/9; dirty-field subset 4/4; `GpuDagCuda
 结束此阶段。真实QML/session测试与像素/参数回归通过。明确统计中转类型、JSON调用、
 完整payload复制和无意义转发的去除情况，不以新增测试数量或总行数作为可维护性证明。
 
+维护说明：[Native parameter access](native_parameter_access.md)。去向表写在
+[inventory destinations](native_parameter_access_inventory.md#destinations-of-the-recorded-interfaces)。
+
+##### Phase NM6.P6 completion record (2026-09-06)
+
+**Status:** complete — deleted leftover JSON/DTO helpers; live packing writes packed GPU structs; live snapshot no longer dumps stage JSON.
+
+**Primary success call chain:**
+
+```text
+QML/model local value
+  -> submitWrite (submitPatch only at QML JSON collection boundary)
+  -> EnqueueAdjustmentInput / AdmitFieldChange (typed write required)
+  -> TakeReadyBatch (move fields)
+  -> HandlePendingSequence
+  -> CaptureAdjustmentBeforePreview
+  -> ApplyEditorParameterWrite
+  -> RemirrorEditorParameterToExecutor (ReadEditorParameterJson -> CPU SetOperator)
+  -> serial render with live_parameters_applied
+  -> CommitAdjustment (history before/after JSON)
+  -> ProjectCurrentPanelFields / ReadEditorPanelField -> QML loadFromSnapshot
+
+GPU CameraColor / DRT output
+  -> already-resolved GPU struct
+  -> ParameterArena::BindOrWritePackedSlot
+  -> UploadDirty
+  -> kernel dispatch (MakeFullDto count stays 0)
+```
+
+**Primary failure call chain:**
+
+```text
+missing typed write or invalid QML JSON
+  -> AdmitFieldChange / submitPatch reject on GUI thread
+  -> document and history head unchanged
+
+ApplyEditorParameterWrite fails
+  -> Capture restores before JSON
+  -> HandlePatch Rejected; no new render or history commit
+
+packed slot size mismatch or UploadDirty throws
+  -> ParameterArena throws / restores pending ranges
+  -> TakePendingDirtyFields destructor RestoreDirty when used
+```
+
+**Removed carriers (not test count / LOC):**
+
+- Forwarding alias `PublishEditorParameterPatch`
+- `ParameterArena::InitializeFromFullDto`, `ApplyPatch`, `CopyFields`
+- Live `ExportPipelineParams().dump()` into `EditorRenderAdjustmentSnapshot::params_json`
+- `OperatorParamDto` / `TypedOperatorParamPayload` wrap of `CameraColorGpuParams` and DRT GPU structs on CUDA/OpenCL/Metal
+- Workspace test helper `UploadFullAndClearDirty` (field-range DTO `ApplyPatch`)
+
+JSON that remains is listed in the inventory destination table (history/WAL/project, CPU remirror, `submitPatch` parse, DRT `ToJson` → `ODT_Op`).
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `InitialAdjustmentSnapshotContainsEverySupportedFieldBeforeAnyRender` (`params_json` empty; per-field JSON kept) | `EditorSessionHistoryPortTest` | PASS 77/77 |
+| `CameraColorPackedSlotWriteDoesNotCopyFullDto` | `GpuDagRawInputTest` (`GpuDagAdjustmentRuntime`) | PASS 10/10 |
+| `CudaCameraColorPackedWriteDoesNotCopyFullDto` / `CudaDrtPackedWriteDoesNotCopyFullDto` + Grade pixels | `GpuDagCudaPrimaryGradeTest` | PASS 38/38 |
+| `OpenClCameraColorPackedWriteDoesNotCopyFullDto` + Grade pixels | `GpuDagOpenClGradeTest` | PASS 61/61 |
+| `CudaDrtPackedWriteDoesNotCopyFullDto` | `GpuDagCudaDrtProductTest` | PASS 52/52 |
+| `OpenClDrtPackedWriteDoesNotCopyFullDto` | `GpuDagOpenClDrtProductTest` | PASS 16/16 |
+| `ParameterArenaWritePackedSlotUploadsBoundSlotOnce` + failure restore | `GpuDagCudaWorkspaceTest` | PASS 24/24 |
+| OpenCL packed-slot upload + failure restore | `GpuDagOpenClWorkspaceTest` | PASS (packed-slot tests); see residuals for unrelated header scan |
+| typed write / JSON parse boundary | `EditorPipelineCommandServiceTest` | PASS 19/19 |
+| queue typed writes | `EditorPendingInputTest` | PASS 13/13 |
+| typed panel projection | `EditorPanelProjectionTest` | PASS 5/5 |
+| session controller + QML snapshot restore | `EditorSessionControllerPhase5ATest` / `EditorAdjustmentSnapshotQmlTest` | PASS 49/49 and 2/2 |
+| Model DTO API still covered (`TakePendingParameterPatch`) | `GpuDagModelGraphTest` | PASS 66/66 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPipelineCommandServiceTest GpuDagRawInputTest GpuDagModelGraphTest GpuDagCudaWorkspaceTest GpuDagOpenClWorkspaceTest GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagOpenClDrtProductTest EditorSessionHistoryPortTest EditorPanelProjectionTest EditorSessionControllerPhase5ATest EditorAdjustmentSnapshotQmlTest EditorPendingInputTest
+
+build\debug\alcedo_studio\tests\app\EditorPipelineCommandServiceTest_runtime\EditorPipelineCommandServiceTest.exe
+build\debug\alcedo_studio\tests\edit\GpuDagRawInputTest_runtime\GpuDagRawInputTest.exe --gtest_filter=GpuDagAdjustmentRuntime.*
+build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+```
+
+Logs: `build/tmp/nm6p/p6_*.txt`.
+
+**Checklist / exit condition:** P6 正文无 checkbox。P1 旧入口均已删除、保留为序列化边界、或写出当前调用方。维护说明覆盖 scalar/complex 链、如何加算子/面板、序列化边界。生产链由 session/QML/history 与 CUDA/OpenCL 像素及 `MakeFullDto` 计数共同证明。Metal 源码已接入同一 packed write，本机 Windows 未执行 Metal 二进制。
+
+**LOC note (grill-code-review):** `editor_parameter_write.cpp` 257（仅 typed apply）；`editor_parameter_write_parse.cpp` 780（JSON 收集边界）；`parameter_arena.hpp` 205；`cuda_camera_color_pass.cu` 107；`cuda_drt_pass.cu` 215；`opencl_develop_pass.cpp` 616；`opencl_drt_pass.cpp` 256；`metal_develop_pass.mm` 520；`metal_drt_pass.mm` 273；`editor_history_shared_helpers.cpp` 513。均低于 1000 行。解析与 apply 按职责拆分，不是空转发。未新增全量 State/Context/Payload 镜像。
+
+**Residual gaps:** DRT GPU 表仍经 `ToJson` → `ODT_Op`（GPU 准备边界，不是 live Model 写入）。CameraColor 每帧重写 packed slot（`const PipelineDocument&`，无 dirty-take）。CPU remirror 仍 `ReadEditorParameterJson`。`submitPatch` 仍是 QML 收集边界。Geometry `source_size` / lens maker-model 仍是 CPU extras。无 `grade.primary` 时 `PrimaryGrade()` 仍回退到第一个 Color Grade。Metal packing 未在本机执行。`GpuDagOpenClWorkspace.RendererTemplateInstantiatesOpenClWithoutCudaOrMetalHeaders` 因 `renderer.hpp` 注释含 `Metal/` 失败，本阶段未改该头文件，与参数路径无关。NM6.5/6.6 未开始。
+
 ## 5. 人类可读与长期维护的退出条件
 
 - 开发者从滑块开始能沿直接调用读到一次Model更新；每次线程切换均有具体原因。
@@ -633,7 +725,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | NM6.P3 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → pending typed fields → move on consume → `ApplyEditorParameterWrite` → serial render | write-path 115/115、history 76/76、QML/session 143/145 then RapidMultiSlider PASS; see P3 completion record | live queue/`HandlePatch`/Capture 不再经 pending JSON；`submitPatch` 仅 GUI 收集边界一次解析；snapshot `params_json` 留待 P4；历史/WAL/项目 JSON 保留 |
 | NM6.P4 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner lock → typed adapter (`NodeId`+instance) → `EditorPanelProjection` → session stamp → controller discard/merge/replace → existing QML `loadFromSnapshot` | `EditorPanelProjectionTest` 5/5、`EditorSessionControllerPhase5ATest` 49/49、`EditorAdjustmentSnapshotQmlTest` 2/2、`EditorSessionHistoryPortTest` 77/77；Windows/MSVC target builds passed | GUI 面板加载不再经 `params_json` / `BuildSnapshotMap`；`ToJson`/`MakeFullDto` 不在投射路径；render snapshot JSON 与 history/WAL/project JSON 保留至 P6；NM6.6 所选节点尚未接入 |
 | NM6.P5 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner `Read` → `MakeGradeRuntimeParams` / `MakeGradeNeighborParams` → `BindOrRefreshGradeRuntimeSlot` → `ParameterArena::WritePackedSlot` → `UploadDirty`; LLF/Metal enable from packed host slot | `GpuDagAdjustmentRuntime` 9/9、dirty-field 4/4、`GpuDagCudaWorkspaceTest` 24/24、`GpuDagCudaPrimaryGradeTest` 36/36、`GpuDagOpenClGradeTest` 60/60；Windows/MSVC target builds passed | Grade 生产路径不再 `MakeFullDto` 或把 `GradeAdjustmentParams` 包成 OperatorParamDto；未改槽位不重新打包；Develop/DRT JSON-resolved GPU params 与 `InitializeFromFullDto` 留待 P6 |
-| NM6.P6 | planned | — | — | — |
+| NM6.P6 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot` | history 77/77、CUDA Grade 38/38、OpenCL Grade 61/61、CUDA DRT 52/52、OpenCL DRT 16/16、session 49/49、QML snapshot 2/2；见 P6 completion record | 删除 `PublishEditorParameterPatch`、`InitializeFromFullDto`/`ApplyPatch`/`CopyFields`、live `ExportPipelineParams` dump、CameraColor/DRT DTO wrap；JSON 仅保留序列化/CPU remirror/`submitPatch`/DRT `ODT_Op` 边界 |
 
 NM6.P整体完成后才能把NM6.5/6.6标记为可开始。保留NM6.1–NM6.4原完成记录；新的范围和
 证据写在这里。NM6.P 使用同一个 `feature/nm6-native-parameter-access` 分支作为整体

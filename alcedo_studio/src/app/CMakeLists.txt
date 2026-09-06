@@ -392,6 +392,7 @@ def_library(EditorAdjustmentPipeline
 def_library(EditorParameterWrite
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
+        "${ALCEDO_APP_ROOT}/editor_parameter_write_parse.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
     PUBLIC_DEPS EditGraph JSON
 )

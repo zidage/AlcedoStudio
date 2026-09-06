@@ -35,12 +35,6 @@ const std::array<std::string_view, 22> kEditorSnapshotFields = {
 
 namespace {
 
-auto IsFullPipelineParamsDocument(const nlohmann::json& params) -> bool {
-  if (!params.is_object()) return false;
-  return params.contains("Image Loading") || params.contains("Basic Adjustment") ||
-         params.contains("Color Adjustment") || params.contains("Output Transform");
-}
-
 auto StageNameForSnapshotField(const std::string& field_key) -> std::string {
   const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
   if (!spec.has_value()) return {};
@@ -95,12 +89,6 @@ auto ReadPipelineOperatorEntry(const nlohmann::json& pipeline_params, const std:
   return false;
 }
 
-auto SetSnapshotParamsJson(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                           const nlohmann::json& params) -> void {
-  if (snapshot == nullptr) return;
-  snapshot->params_json = params.is_null() ? std::string{} : params.dump();
-}
-
 }  // namespace
 
 void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
@@ -121,11 +109,6 @@ void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     *existing = std::move(patch);
   }
   ++snapshot->snapshot_generation;
-  if (!IsFullPipelineParamsDocument(
-          snapshot->params_json.empty() ? nlohmann::json{} : nlohmann::json::parse(
-              snapshot->params_json, nullptr, false))) {
-    SetSnapshotParamsJson(snapshot, params);
-  }
   snapshot->fingerprint.clear();
   for (const auto& current : snapshot->patches) {
     if (!snapshot->fingerprint.empty()) snapshot->fingerprint += "|";
@@ -222,9 +205,7 @@ auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executo
                               state.params.is_null() ? nlohmann::json::object() : state.params,
                               state.enabled);
     }
-    // Full pipeline export remains available for checkpoint serialization that
-    // still expects a stage document; panel load paths should use field GetParams.
-    snapshot->params_json = executor.ExportPipelineParams().dump();
+    snapshot->params_json.clear();
     return IsCompleteAdjustmentSnapshot(*snapshot, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();

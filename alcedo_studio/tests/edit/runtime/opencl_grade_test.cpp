@@ -712,6 +712,17 @@ TEST_F(OpenClGradeFixture, OpenClGradeParameterBindDoesNotCopyFullDto) {
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
+TEST_F(OpenClGradeFixture, OpenClCameraColorPackedWriteDoesNotCopyFullDto) {
+  device_->BeginRender();
+  ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+  ExecuteOpenClGeometryResample(*device_, plan_);
+  OperatorModelFullDtoCopyCount::Reset();
+  ExecuteOpenClCameraColor(*device_, plan_, document_);
+  device_->EndRender();
+  device_->WaitIdle();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(OpenClGradeFixture, OpenClExposureEditRunsOnlyPrimaryGradeAndDrt) {
   (void)device_->Execute(plan_, prepared_, document_);
   device_->WaitIdle();

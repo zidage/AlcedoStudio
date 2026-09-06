@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/camera_color_gpu_params.hpp"
 
 #include <cstring>
 #include <optional>
@@ -13,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -321,6 +323,26 @@ TEST(GpuDagAdjustmentRuntime, WritePackedSlotRejectsSizeMismatch) {
   arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
   const float scalar = 1.0f;
   EXPECT_THROW(arena.WritePackedSlot(key, scalar), std::runtime_error);
+}
+
+TEST(GpuDagAdjustmentRuntime, CameraColorPackedSlotWriteDoesNotCopyFullDto) {
+  HostParameterBackend backend;
+  ParameterArena<HostParameterBackend> arena(backend);
+  ParameterSlotKey key{NodeId{"develop"}, kDevelopCameraColorSlot};
+  CameraColorGpuParams params{};
+  params.camera_to_ap1[0] = 1.5f;
+  params.camera_to_ap1[4] = 0.8f;
+  params.camera_to_ap1[8] = 1.1f;
+  OperatorModelFullDtoCopyCount::Reset();
+  arena.BindOrWritePackedSlot(key, DirtyFieldMask{DevelopDirty::WhiteBalance}, params);
+  EXPECT_TRUE(arena.HasPendingUpload());
+  EXPECT_EQ(arena.Binding(key).size, sizeof(CameraColorGpuParams));
+  CameraColorGpuParams stored{};
+  std::memcpy(&stored, arena.HostSpan().data() + arena.Binding(key).offset, sizeof(stored));
+  EXPECT_FLOAT_EQ(stored.camera_to_ap1[0], 1.5f);
+  EXPECT_FLOAT_EQ(stored.camera_to_ap1[4], 0.8f);
+  EXPECT_FLOAT_EQ(stored.camera_to_ap1[8], 1.1f);
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
 }  // namespace alcedo

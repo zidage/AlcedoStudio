@@ -16,9 +16,10 @@ namespace alcedo {
 /**
  * @brief Counts @ref IOperatorModel::MakeFullDto copies on this thread.
  *
- * Grade GPU packing and panel projection must leave this at zero. Persistence,
- * history, and device-recovery paths that still need a full payload snapshot
- * increment it. Tests reset the counter around the call they are proving.
+ * Grade GPU packing, CameraColor/DRT packed-slot writes, and panel projection
+ * must leave this at zero. Persistence, history, and device-recovery paths that
+ * still need a full payload snapshot increment it. Tests reset the counter around
+ * the call they are proving.
  */
 struct OperatorModelFullDtoCopyCount {
   static void Reset() noexcept { count_ = 0; }
@@ -35,8 +36,8 @@ struct OperatorModelFullDtoCopyCount {
  *
  * Setters mark dirty field bits. @ref TakeDirtyPatch copies the current payload
  * and clears taken bits under a short lock. Failed uploads call @ref RestoreDirty.
- * GPU Grade packing uses @ref TakeDirtyFields so it can commit dirty bits without
- * copying the Model payload.
+ * GPU packing uses @ref TakeDirtyFields so it can commit dirty bits without
+ * copying the Model payload. ParameterArena stores packed GPU structs, not DTOs.
  *
  * Thread-safe: setters, take, restore, and JSON load serialize on an internal mutex
  * in OperatorModelBase.

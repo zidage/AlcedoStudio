@@ -571,6 +571,7 @@ TEST_F(EditorSessionHistoryPortTest,
     EXPECT_FALSE(patch.params_json.empty());
   }
   EXPECT_EQ(actual_fields, expected_fields);
+  EXPECT_TRUE(snapshot.params_json.empty());
 }
 
 TEST_F(EditorSessionHistoryPortTest,

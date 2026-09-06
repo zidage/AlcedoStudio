@@ -54,14 +54,6 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
 auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::string* error) -> bool;
 
 /**
- * @brief Apply a validated patch in place; equivalent to ApplyEditorParameterPatch.
- *
- * @pre Caller holds the shared executor render lock. No graph validation or copy occurs.
- */
-auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
-                                 const nlohmann::json& params, std::string* error) -> bool;
-
-/**
  * @brief Fill a current-panel target from @p field_key and the live document.
  *
  * Ordinary Grade fields target the Default Grade (`grade.primary`, else the first

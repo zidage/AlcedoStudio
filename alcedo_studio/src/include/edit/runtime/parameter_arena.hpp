@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "edit/operators/models/operator_param_dto.hpp"
+#include "edit/operators/models/dirty_field_mask.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 
@@ -118,21 +118,19 @@ class ParameterArena {
   }
 
   /**
-   * @brief Copy every bound field from a full DTO. Does not read dirty bits.
-   * Queues the whole slot for upload.
+   * @brief Bind the slot if missing, then write packed GPU bytes.
+   *
+   * This is the production arena write for already-resolved GPU parameter structs.
+   * It does not wrap a Model DTO.
    */
-  void InitializeFromFullDto(const ParameterSlotKey& key, const OperatorParamDto& dto) {
-    const auto& binding = Binding(key);
-    CopyFields(binding, dto.payload.get(), /*dirty_only=*/false, {});
-    pending_.push_back(ByteRange{binding.offset, binding.size});
-  }
-
-  /**
-   * @brief Copy dirty fields from a patch into the host mirror and queue ranges.
-   */
-  void ApplyPatch(const ParameterSlotKey& key, const OperatorParamPatchDto& patch) {
-    const auto& binding = Binding(key);
-    CopyFields(binding, patch.payload.get(), /*dirty_only=*/true, patch.dirty_fields);
+  template <class Packed>
+  void BindOrWritePackedSlot(const ParameterSlotKey& key, DirtyFieldMask dirty,
+                             const Packed& packed) {
+    if (!Contains(key)) {
+      const ParameterFieldBinding field{dirty, 0, 0, static_cast<std::uint32_t>(sizeof(Packed))};
+      BindSlot(key, static_cast<std::uint32_t>(sizeof(Packed)), std::span{&field, 1});
+    }
+    WritePackedSlot(key, packed);
   }
 
   /**
@@ -192,30 +190,6 @@ class ParameterArena {
   void ThrowIfBusy() const {
     if (backend_->HasInFlightSubmission()) {
       throw std::runtime_error("ParameterArena: cannot grow while a GPU submission is in flight");
-    }
-  }
-
-  void CopyFields(const ParameterBinding& binding, const IOperatorParamPayload* payload,
-                  bool dirty_only, DirtyFieldMask dirty) {
-    if (payload == nullptr) {
-      throw std::runtime_error("ParameterArena: missing payload");
-    }
-    const auto bytes = payload->Bytes();
-    for (const auto& field : binding.fields) {
-      if (dirty_only && !dirty.Contains(field.dirty_bit)) {
-        continue;
-      }
-      if (static_cast<std::size_t>(field.source_offset) + field.size > bytes.size()) {
-        throw std::runtime_error("ParameterArena: field exceeds payload");
-      }
-      if (static_cast<std::size_t>(field.destination_offset) + field.size > host_.size()) {
-        throw std::runtime_error("ParameterArena: field exceeds arena");
-      }
-      std::memcpy(host_.data() + field.destination_offset, bytes.data() + field.source_offset,
-                  field.size);
-      if (dirty_only) {
-        pending_.push_back(ByteRange{field.destination_offset, field.size});
-      }
     }
   }
 

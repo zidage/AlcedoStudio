@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <memory>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -109,7 +108,7 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
     if (!behavior.has_value() || !IsNeighborhoodBehavior(*behavior)) {
       throw std::runtime_error("ExecuteCudaDrt: DRT/Post adjustment is not a neighborhood operation");
     }
-    if (auto change = TakePendingParameterPatch(*model)) {
+    if (auto change = TakePendingDirtyFields(*model)) {
       post_pending.push_back(std::move(*change));
     }
     auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
@@ -176,14 +175,12 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
     cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: neighborhood kernel launch");
   }
 
-  auto&                       arena = workspace.Parameters();
-  const ParameterSlotKey      key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
-  const ParameterFieldBinding field{DirtyFieldMask{kDrtDirtyBits}, 0, 0,
-                                    sizeof(GPU_TO_OUTPUT_Params)};
-  auto                        pending          = plan.output_color_override.has_value()
-                                ? decltype(TakePendingParameterPatch(drt->Params())){}
-                                : TakePendingParameterPatch(drt->Params());
-  const bool                  needs_initialize = !arena.Contains(key);
+  auto&                  arena = workspace.Parameters();
+  const ParameterSlotKey key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
+  auto                   pending = plan.output_color_override.has_value()
+                                       ? decltype(TakePendingDirtyFields(drt->Params())){}
+                                       : TakePendingDirtyFields(drt->Params());
+  const bool             needs_initialize = !arena.Contains(key);
   if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
     auto drt_json = drt->Params().ToJson();
     if (plan.output_color_override.has_value()) {
@@ -191,16 +188,7 @@ auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, Pipelin
     }
     ResolveRuntime(device.DrtRuntime(), drt_json);
     const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
-    auto       payload = std::make_shared<TypedOperatorParamPayload<GPU_TO_OUTPUT_Params>>(
-        drt->Params().Type(), 1, runtime);
-    if (needs_initialize) {
-      arena.BindSlot(key, sizeof(GPU_TO_OUTPUT_Params), std::span{&field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{drt->Params().Type(), 1, payload});
-    } else {
-      arena.ApplyPatch(
-          key, OperatorParamPatchDto{drt->Id(), AdjustmentInstanceId{"drt.output"},
-                                     drt->Params().Type(), DirtyFieldMask{kDrtDirtyBits}, payload});
-    }
+    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
   }
   arena.UploadDirty(context);
   if (pending) pending->Commit();
