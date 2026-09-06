@@ -346,6 +346,16 @@ TEST_F(MetalGradeFixture, MetalSingleSliderEditUploadsOnlyItsParameterRange) {
   EXPECT_NE(device_.Workspace().Device().GradeCommandTopologyHash(), 0U);
 }
 
+TEST_F(MetalGradeFixture, MetalGradeParameterBindDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(MetalGradeFixture, MetalExposureEditRunsOnlyPrimaryGradeAndDrt) {
   (void)device_.Execute(plan_, prepared_, document_);
   device_.WaitIdle();

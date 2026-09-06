@@ -273,6 +273,16 @@ TEST_F(CudaPrimaryGradeFixture, CudaExposurePatchChangesOnlyExposureParameterRan
   EXPECT_FALSE(exposure.IsDirty());
 }
 
+TEST_F(CudaPrimaryGradeFixture, CudaGradeParameterBindDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)Render();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)Render();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceZeroOffsetPreservesAp1White) {
   auto& wb = ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance());
   wb.SetTemperatureOffset(0.0f);

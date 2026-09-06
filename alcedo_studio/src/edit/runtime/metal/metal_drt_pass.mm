@@ -15,9 +15,8 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
-#include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -166,8 +165,6 @@ auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
   const auto height = input->Texture().Height();
   auto&      context = device.CommandContext();
   auto&      arena   = workspace.Parameters();
-  const ParameterFieldBinding post_field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
-                                         kGradeRuntimeParamBytes};
   std::vector<PendingParameterPatch> post_pending;
   std::vector<std::uint32_t>         command_offsets;
   command_offsets.reserve(plan.drt.post_adjustments.size());
@@ -182,22 +179,10 @@ auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
           "ExecuteMetalDrt: DRT/Post adjustment is not a neighborhood operation");
     }
     const ParameterSlotKey key{drt->Id(), compiled.instance_id};
-    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
-    auto payload = std::make_shared<TypedOperatorParamPayload<GradeAdjustmentParams>>(
-        compiled.type, 1, runtime_params);
-    if (!arena.Contains(key)) {
-      arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&post_field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
-      if (auto first = TakePendingParameterPatch(*model)) {
-        post_pending.push_back(std::move(*first));
-      }
-    } else if (auto change = TakePendingParameterPatch(*model)) {
-      arena.ApplyPatch(key, OperatorParamPatchDto{drt->Id(), compiled.instance_id, compiled.type,
-                                                 DirtyFieldMask{kGradeRuntimeParamDirtyBit},
-                                                 payload});
+    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
       post_pending.push_back(std::move(*change));
     }
-    if (runtime_params.values[0] != 0.0f) {
+    if (PackedGradeControlValue(arena, key) != 0.0f) {
       command_offsets.push_back(arena.Binding(key).offset);
     }
   }

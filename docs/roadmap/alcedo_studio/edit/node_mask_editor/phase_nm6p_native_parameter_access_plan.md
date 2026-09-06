@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.P1–NM6.P4 complete; NM6.P5–NM6.P6 remain planned.
+Status: NM6.P1–NM6.P5 complete; NM6.P6 remains planned.
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
 Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
@@ -504,7 +504,7 @@ Suite totals: `EditorPanelProjectionTest` 5/5; `EditorSessionControllerPhase5ATe
 
 **LOC note (grill-code-review):** `editor_panel_projection.cpp` 556、`editor_panel_projection.hpp` 231；`editor_panel_presentation.cpp` 160；`editor_session_controller.cpp` 1391（去掉 JSON `BuildSnapshotMap`）；`editor_history_mutation.cpp` 1038；`editor_panel_projection_test.cpp` 383。既有大文件 `editor_session_service.cpp` 1800、`editor_session_controller_phase5a_test.cpp` 1566 未再并入新的全量参数镜像。控制器仍兼生命周期与面板投递；P4 只替换读取载体，不在本阶段拆控制器。
 
-**Residual gaps:** Geometry `source_size` / `aspect_ratio_preset` 仍在 CPU `CropRotateOp`，不在 `ImageGeometryModel`；镜头 maker/model 仍是图像本地 CPU extras，不在 `DevelopParamsModel`。P4 只投射 document 拥有的 crop/rotation/`lens_enabled`。`MakeAdjustmentSnapshotFromLivePipeline` 与 `EditorRenderAdjustmentSnapshot::params_json` 仍给渲染/持久化快照，删除留给 P6。所选节点路由由 NM6.6 把目标列表传入 `ProjectEditorPanelFields`。P5 运行时 FullDto、P6 旧 helper 删除仍 planned。
+**Residual gaps:** Geometry `source_size` / `aspect_ratio_preset` 仍在 CPU `CropRotateOp`，不在 `ImageGeometryModel`；镜头 maker/model 仍是图像本地 CPU extras，不在 `DevelopParamsModel`。P4 只投射 document 拥有的 crop/rotation/`lens_enabled`。`MakeAdjustmentSnapshotFromLivePipeline` 与 `EditorRenderAdjustmentSnapshot::params_json` 仍给渲染/持久化快照，删除留给 P6。所选节点路由由 NM6.6 把目标列表传入 `ProjectEditorPanelFields`。P6 旧 helper 删除仍 planned。
 
 ### NM6.P5 — 去掉运行时完整参数体中转
 
@@ -518,6 +518,79 @@ Suite totals: `EditorPanelProjectionTest` 5/5; `EditorSessionControllerPhase5ATe
 
 **验收：** 未改槽位不重新打包；必要GPU上传之外无完整Model复制；CPU准备数值与
 现有期望参数一致；CUDA/OpenCL/Metal调用同一类型化参数准备代码。
+
+##### Phase NM6.P5 completion record (2026-09-06)
+
+**Status:** complete — Grade GPU packing reads owner fields into the existing ParameterArena layout; unchanged slots are not repacked.
+
+**Primary success call chain:**
+
+```text
+stable Color Grade / DRT-Post Model (owner lock)
+  -> MakeGradeRuntimeParams / MakeGradeNeighborParams
+     (OperatorModelBase::Read of only GPU-needed fields)
+  -> BindOrRefreshGradeRuntimeSlot
+     (pack only when the slot is missing or the Model is dirty)
+  -> ParameterArena::WritePackedSlot
+  -> ParameterArena::UploadDirty
+  -> PendingParameterPatch::Commit
+  -> existing CUDA / OpenCL / Metal Grade dispatch
+
+LLF slider / Metal neighborhood enable
+  -> PackedGradeControlValue from the arena host mirror
+  -> no second Model FullDto copy
+```
+
+**Primary failure call chain:**
+
+```text
+Model type does not match AdjustmentBehavior, or DTO-only stand-in
+  -> MakeGradeRuntimeParams throws before any slot write
+  -> MakeFullDto is not called
+
+WritePackedSlot size mismatch
+  -> ParameterArena throws; host slot unchanged
+
+UploadDirty throws after a dirty pack
+  -> PendingParameterPatch destructor RestoreDirty
+  -> Model remains dirty for retry
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCopy` | `GpuDagRawInputTest` | PASS |
+| `NeighborhoodParamsReadOwnerFieldsWithoutFullDtoCopy` | `GpuDagRawInputTest` | PASS |
+| `GradePackingRejectsDtoOnlyModelWithoutReadingFullDto` | `GpuDagRawInputTest` | PASS |
+| `GradePackingRejectsMismatchedModelTypeWithoutFullDtoCopy` | `GpuDagRawInputTest` | PASS |
+| `GradeRuntimeSlotWritesPackedBytesOnlyWhenDirty` | `GpuDagRawInputTest` | PASS |
+| `WritePackedSlotRejectsSizeMismatch` | `GpuDagRawInputTest` | PASS |
+| `TakeDirtyFieldsClearsBitsWithoutCopyingFullDto` | `GpuDagModelGraphTest` | PASS |
+| `CudaGradeParameterBindDoesNotCopyFullDto` + exposure-only upload + neighbor/LLF pixels | `GpuDagCudaPrimaryGradeTest` | PASS 36/36 |
+| `OpenClGradeParameterBindDoesNotCopyFullDto` + OpenCL Grade/LLF/multi-Grade | `GpuDagOpenClGradeTest` | PASS 60/60 |
+| existing ParameterArena dirty-range / no-upload tests | `GpuDagCudaWorkspaceTest` | PASS 24/24 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest GpuDagModelGraphTest GpuDagCudaPrimaryGradeTest GpuDagCudaWorkspaceTest GpuDagOpenClGradeTest
+build\debug\alcedo_studio\tests\edit\GpuDagRawInputTest_runtime\GpuDagRawInputTest.exe --gtest_filter=GpuDagAdjustmentRuntime.*
+build\debug\alcedo_studio\tests\edit\GpuDagModelGraphTest_runtime\GpuDagModelGraphTest.exe --gtest_filter=GpuDagModelGraph.TakeDirtyFields*
+build\debug\alcedo_studio\tests\edit\GpuDagCudaWorkspaceTest_runtime\GpuDagCudaWorkspaceTest.exe --gtest_filter=CudaWorkspaceFixture.*
+build\debug\alcedo_studio\tests\edit\GpuDagCudaPrimaryGradeTest_runtime\GpuDagCudaPrimaryGradeTest.exe
+build\debug\alcedo_studio\tests\edit\GpuDagOpenClGradeTest_runtime\GpuDagOpenClGradeTest.exe
+```
+
+Logs: `build/tmp/nm6p/p5_adjustment_runtime.txt`, `p5_dirty_fields.txt`, `p5_cuda_workspace.txt`, `p5_cuda_grade.txt`, `p5_opencl_grade.txt`.
+
+Suite totals: `GpuDagAdjustmentRuntime` 9/9; dirty-field subset 4/4; `GpuDagCudaWorkspaceTest` 24/24; `GpuDagCudaPrimaryGradeTest` 36/36; `GpuDagOpenClGradeTest` 60/60.
+
+**Checklist / exit condition:** P5 正文无 checkbox。验收项均有具名测试：未改槽位不 `WritePackedSlot`；packing 路径 `MakeFullDto` 计数为 0；CPU packed values 与 owner getters 一致；CUDA 与 OpenCL 生产 Grade 入口调用同一 `BindOrRefreshGradeRuntimeSlot` / `MakeGradeNeighborParams`。Metal 源码已接入同一 helper，本机 Windows 未执行 Metal 二进制。
+
+**LOC note (grill-code-review):** `adjustment_runtime.cpp` 307；`grade_parameter_slot.hpp` 62；`parameter_arena.hpp` 207；`cuda_primary_grade_pass.cu` 537；`opencl_primary_grade_pass.cpp` 514；`metal_primary_grade_pass.mm` 453；`adjustment_runtime_test.cpp` 281。均低于 1000 行拆分阈值。未新增全量 State/Context/Payload 镜像。
+
+**Residual gaps:** Develop / DRT output 仍把已解析的 GPU 结构写入 `InitializeFromFullDto`（不是 `MakeFullDto` 读几个标量）；字段级 Model payload 上传仍给 workspace Sharpen 测试使用。删除这些剩余 helper 属于 P6。`EditorRenderAdjustmentSnapshot::params_json` 仍给 P6。Metal Grade packing 未在本机执行。无 `grade.primary` 节点时 `PrimaryGrade()` 仍回退到 backbone 上第一个 Color Grade；相关测试改为断言 `FindNode("grade.primary") == nullptr`，不在本阶段改回退规则。
 
 ### NM6.P6 — 删除被替代路径并验证整条生产链
 
@@ -559,7 +632,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | NM6.P2 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/session pending edit → `EditorHistoryMutation::CaptureAdjustmentBeforePreview` → `ApplyEditorParameterPatch` → field parser → concrete Model typed update → dirty patch/render/history；history replay 的 expected-side JSON boundary → typed apply | `EditorPipelineCommandServiceTest` 19/19、`EditorSessionHistoryPortTest` 75/75、`PipelineHistoryApplierTest` 12/12；Windows/MSVC target builds passed | 普通 Model 写入的完整 JSON merge/LoadJson 已替换为 typed owner operations；`ReadEditorParameterJson`、ToJson/LoadJson、history/project/WAL/import/export JSON boundary 保留；P3 queue、P4 projection、P5 runtime DTO、P6 cleanup remain planned |
 | NM6.P3 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → pending typed fields → move on consume → `ApplyEditorParameterWrite` → serial render | write-path 115/115、history 76/76、QML/session 143/145 then RapidMultiSlider PASS; see P3 completion record | live queue/`HandlePatch`/Capture 不再经 pending JSON；`submitPatch` 仅 GUI 收集边界一次解析；snapshot `params_json` 留待 P4；历史/WAL/项目 JSON 保留 |
 | NM6.P4 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner lock → typed adapter (`NodeId`+instance) → `EditorPanelProjection` → session stamp → controller discard/merge/replace → existing QML `loadFromSnapshot` | `EditorPanelProjectionTest` 5/5、`EditorSessionControllerPhase5ATest` 49/49、`EditorAdjustmentSnapshotQmlTest` 2/2、`EditorSessionHistoryPortTest` 77/77；Windows/MSVC target builds passed | GUI 面板加载不再经 `params_json` / `BuildSnapshotMap`；`ToJson`/`MakeFullDto` 不在投射路径；render snapshot JSON 与 history/WAL/project JSON 保留至 P6；NM6.6 所选节点尚未接入 |
-| NM6.P5 | planned | — | — | — |
+| NM6.P5 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner `Read` → `MakeGradeRuntimeParams` / `MakeGradeNeighborParams` → `BindOrRefreshGradeRuntimeSlot` → `ParameterArena::WritePackedSlot` → `UploadDirty`; LLF/Metal enable from packed host slot | `GpuDagAdjustmentRuntime` 9/9、dirty-field 4/4、`GpuDagCudaWorkspaceTest` 24/24、`GpuDagCudaPrimaryGradeTest` 36/36、`GpuDagOpenClGradeTest` 60/60；Windows/MSVC target builds passed | Grade 生产路径不再 `MakeFullDto` 或把 `GradeAdjustmentParams` 包成 OperatorParamDto；未改槽位不重新打包；Develop/DRT JSON-resolved GPU params 与 `InitializeFromFullDto` 留待 P6 |
 | NM6.P6 | planned | — | — | — |
 
 NM6.P整体完成后才能把NM6.5/6.6标记为可开始。保留NM6.1–NM6.4原完成记录；新的范围和

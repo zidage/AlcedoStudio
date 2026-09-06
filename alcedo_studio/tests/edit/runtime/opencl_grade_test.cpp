@@ -702,6 +702,16 @@ TEST_F(OpenClGradeFixture, OpenClSingleSliderEditUploadsOnlyItsParameterRange) {
   EXPECT_NE(device_->Workspace().Device().GradeCommandTopologyHash(), 0U);
 }
 
+TEST_F(OpenClGradeFixture, OpenClGradeParameterBindDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(OpenClGradeFixture, OpenClExposureEditRunsOnlyPrimaryGradeAndDrt) {
   (void)device_->Execute(plan_, prepared_, document_);
   device_->WaitIdle();

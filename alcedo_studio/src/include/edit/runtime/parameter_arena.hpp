@@ -93,6 +93,31 @@ class ParameterArena {
   }
 
   /**
+   * @brief Copy packed GPU parameter bytes into a bound slot and queue the slot for upload.
+   *
+   * @p bytes must match the bound slot size. This writes the host mirror used for H2D
+   * copies; it does not wrap a Model DTO. Not thread-safe.
+   * @throws std::runtime_error if the slot is missing or @p bytes does not match the slot.
+   */
+  void WritePackedBytes(const ParameterSlotKey& key, std::span<const std::byte> bytes) {
+    const auto& binding = Binding(key);
+    if (bytes.size() != binding.size) {
+      throw std::runtime_error("ParameterArena: packed slot size mismatch");
+    }
+    std::memcpy(host_.data() + binding.offset, bytes.data(), bytes.size());
+    pending_.push_back(ByteRange{binding.offset, binding.size});
+  }
+
+  /**
+   * @brief Copy a trivially-copyable GPU parameter struct into a bound slot.
+   */
+  template <class Packed>
+  void WritePackedSlot(const ParameterSlotKey& key, const Packed& packed) {
+    WritePackedBytes(key, std::span<const std::byte>(reinterpret_cast<const std::byte*>(&packed),
+                                                    sizeof(Packed)));
+  }
+
+  /**
    * @brief Copy every bound field from a full DTO. Does not read dirty bits.
    * Queues the whole slot for upload.
    */

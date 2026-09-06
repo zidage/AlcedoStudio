@@ -96,8 +96,11 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
 [[nodiscard]] auto IsNeighborhoodBehavior(AdjustmentBehavior behavior) -> bool;
 
 /**
- * @brief Pack a Model DTO into the shared Grade GPU parameter slot.
- * @throws std::runtime_error when the payload layout is not supported.
+ * @brief Pack owner Model fields into the shared Grade GPU parameter slot.
+ *
+ * Reads only the fields the GPU layout needs under the Model lock. Does not copy a
+ * full DTO. Throws when the Model type does not match @p behavior or the layout is
+ * unsupported.
  */
 [[nodiscard]] auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior behavior)
     -> GradeAdjustmentParams;
