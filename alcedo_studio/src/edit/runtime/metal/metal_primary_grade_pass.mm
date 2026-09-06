@@ -444,10 +444,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     if (op.kind == GradeOpKind::LlfBarrier) {
       const auto tone =
           ExecuteMetalLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                plan.geometry,
-                                HashLlfSourceKey(plan, prepared, document, compiled_grade->node_id),
-                                HashLlfReferenceKey(plan, prepared, document,
-                                                    compiled_grade->node_id));
+                                plan.geometry);
       result.local_tone_reference_resource_id       = tone.reference_resource_id;
       result.local_tone_rebuilt_reference           = tone.rebuilt_reference;
       result.local_tone_sampled_canonical_reference = tone.sampled_canonical_reference;
@@ -498,6 +495,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");
   }
+  device.Workspace().PrepareResultValidity(plan, document, prepared);
   MetalPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
     last = ExecuteMetalPrimaryGrade(device, plan, prepared, document, compiled_grade);

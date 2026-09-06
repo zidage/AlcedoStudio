@@ -23,6 +23,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
+#include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "opencl/opencl_api_counters.hpp"
@@ -484,7 +485,8 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
     ContentKey distance_key{};
     if (persistent_key != nullptr) {
       distance_key = HashSignedDistanceKey(*persistent_key, raster_descriptor.extent);
-      key_matches  = metadata.has_value() && metadata->content_key == distance_key &&
+      key_matches  = metadata.has_value() &&
+                    metadata->representation.identity == distance_key.hash &&
                     metadata->extent == ImageExtent{raster_descriptor.extent.width,
                                                     raster_descriptor.extent.height};
     }
@@ -508,9 +510,12 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
                         sampling.render_to_texture_uv, radius_texels, mask_model.invert,
                         mask_model.opacity);
     if (must_compute && persistent_key != nullptr) {
-      workspace.Values().StoreMetadata(
-          distance_id, distance_key,
-          ImageExtent{raster_descriptor.extent.width, raster_descriptor.extent.height});
+      ResultRepresentation distance_repr;
+      distance_repr.identity = distance_key.hash;
+      distance_repr.extent   = ImageExtent{raster_descriptor.extent.width,
+                                           raster_descriptor.extent.height};
+      distance_repr.format   = TextureFormat::R32f;
+      workspace.Values().StoreMetadata(distance_id, 1, distance_repr, distance_repr.extent);
     }
   };
 

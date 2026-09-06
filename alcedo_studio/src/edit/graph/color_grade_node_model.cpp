@@ -133,14 +133,30 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json)
     throw std::runtime_error("ColorGrade FromJson: empty or duplicate MaskId");
   }
   node->masks_ = std::move(masks);
+  for (const auto& mask : node->masks_) {
+    node->TouchMask(mask.id);
+  }
   return node;
 }
 
-void ColorGradeNodeModel::SetEnabled(bool enabled) { enabled_ = enabled; }
+void ColorGradeNodeModel::SetEnabled(bool enabled) {
+  if (enabled_ == enabled) {
+    return;
+  }
+  enabled_   = enabled;
+  mix_dirty_ = true;
+}
 
 void ColorGradeNodeModel::SetDisplayName(std::string name) { display_name_ = std::move(name); }
 
-void ColorGradeNodeModel::SetMix(float mix) { mix_ = std::clamp(mix, 0.0f, 1.0f); }
+void ColorGradeNodeModel::SetMix(float mix) {
+  const auto clamped = std::clamp(mix, 0.0f, 1.0f);
+  if (mix_ == clamped) {
+    return;
+  }
+  mix_       = clamped;
+  mix_dirty_ = true;
+}
 
 auto ColorGradeNodeModel::AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId& {
   return adjustments_.at(index).instance_id;
@@ -262,6 +278,15 @@ auto RequireMaskIterator(std::vector<MaskModel>& masks, const MaskId& mask_id)
 
 }  // namespace
 
+void ColorGradeNodeModel::TouchMask(const MaskId& mask_id) {
+  mask_content_revision_[mask_id] = next_mask_revision_++;
+}
+
+auto ColorGradeNodeModel::MaskContentRevision(const MaskId& mask_id) const -> std::uint64_t {
+  const auto it = mask_content_revision_.find(mask_id);
+  return it == mask_content_revision_.end() ? 0 : it->second;
+}
+
 void ColorGradeNodeModel::AddMask(MaskModel mask, std::size_t index) {
   ValidateMaskModel(mask);
   if (FindMask(mask.id) != nullptr) {
@@ -272,10 +297,12 @@ void ColorGradeNodeModel::AddMask(MaskModel mask, std::size_t index) {
     index = masks_.size();
   }
   masks_.insert(masks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(mask));
+  TouchMask(masks_[index].id);
 }
 
 void ColorGradeNodeModel::RemoveMask(const MaskId& mask_id) {
   const auto it = RequireMaskIterator(masks_, mask_id);
+  mask_content_revision_.erase(mask_id);
   masks_.erase(it);
 }
 
@@ -288,6 +315,7 @@ void ColorGradeNodeModel::ReplaceMaskSource(const MaskId& mask_id, MaskSource so
   candidate.source    = std::move(source);
   ValidateMaskModel(candidate);
   mask->source = std::move(candidate.source);
+  TouchMask(mask_id);
 }
 
 void ColorGradeNodeModel::SetMaskEnabled(const MaskId& mask_id, bool enabled) {
@@ -295,7 +323,11 @@ void ColorGradeNodeModel::SetMaskEnabled(const MaskId& mask_id, bool enabled) {
   if (mask == nullptr) {
     FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
   }
+  if (mask->enabled == enabled) {
+    return;
+  }
   mask->enabled = enabled;
+  TouchMask(mask_id);
 }
 
 void ColorGradeNodeModel::SetMaskOpacity(const MaskId& mask_id, float opacity) {
@@ -307,6 +339,7 @@ void ColorGradeNodeModel::SetMaskOpacity(const MaskId& mask_id, float opacity) {
   candidate.opacity   = opacity;
   ValidateMaskModel(candidate);
   mask->opacity = candidate.opacity;
+  TouchMask(mask_id);
 }
 
 void ColorGradeNodeModel::SetMaskInvert(const MaskId& mask_id, bool invert) {
@@ -314,7 +347,11 @@ void ColorGradeNodeModel::SetMaskInvert(const MaskId& mask_id, bool invert) {
   if (mask == nullptr) {
     FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
   }
+  if (mask->invert == invert) {
+    return;
+  }
   mask->invert = invert;
+  TouchMask(mask_id);
 }
 
 void ColorGradeNodeModel::MoveMaskForDisplay(const MaskId& mask_id, std::size_t index) {

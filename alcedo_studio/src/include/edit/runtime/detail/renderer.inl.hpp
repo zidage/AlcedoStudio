@@ -118,9 +118,6 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   GraphCompiler::BindFrameGeometry(plan, *document_, request.geometry);
   plan.output_color_override = request.output_color;
   detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
-  if (document_->TopologyDirty()) {
-    document_->ClearTopologyDirty();
-  }
   const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
   const auto  output_id = render_device->Execute(
       plan, prepared, *document_, mask_store_.get(), false,
@@ -153,16 +150,20 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
     }
     if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
-      if (use_session_cache) {
-        render_device->PublishResults();
-      } else {
-        release_one_shot_resources();
-      }
-      return host;
-    }
     if (use_session_cache) {
       render_device->PublishResults();
+      render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
+          render_device->Workspace().Images());
     } else {
+      release_one_shot_resources();
+    }
+    return host;
+  }
+  if (use_session_cache) {
+    render_device->PublishResults();
+    render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
+        render_device->Workspace().Images());
+  } else {
       release_one_shot_resources();
     }
   } catch (const std::exception& ex) {

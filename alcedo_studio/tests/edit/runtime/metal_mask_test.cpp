@@ -725,34 +725,35 @@ TEST_F(MetalMaskFixture, MaskFailurePublishesNoSourceUnionOrGradeWrites) {
   document_.MarkTopologyDirty();
   Compile();
   ExecutePlan();
-  const auto before = BuildFrameResultContentKeys(plan_, prepared_, document_);
+  auto& images       = device_.Workspace().Images();
+  auto& invalidation = device_.Workspace().ResultInvalidation();
   ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
-  const auto      source_a = plan_.FirstGrade()->mask_stack->sources[0].effective_output;
-  const auto      union_id = plan_.FirstGrade()->mask_output;
-  const auto      grade_id = plan_.FirstGrade()->scene_output;
+  const auto source_a    = plan_.FirstGrade()->mask_stack->sources[0].effective_output;
+  const auto union_id    = plan_.FirstGrade()->mask_output;
+  const auto grade_id    = plan_.FirstGrade()->scene_output;
+  const auto source_rev  = images.PublishedRevision(source_a);
+  const auto union_rev   = images.PublishedRevision(union_id);
+  const auto grade_rev   = images.PublishedRevision(grade_id);
+  const auto source_repr = images.PublishedRepresentation(source_a);
+  const auto union_repr  = images.PublishedRepresentation(union_id);
+  const auto grade_repr  = images.PublishedRepresentation(grade_id);
+  ASSERT_NE(source_rev, 0U);
 
   BrushMaskSource missing;
   missing.asset_key         = MaskAssetKey{"missing.asset"};
   missing.descriptor.extent = {1, 1};
   document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.a"}, missing);
-  const auto after = BuildFrameResultContentKeys(plan_, prepared_, document_);
-  EXPECT_NE(after.Value(source_a), before.Value(source_a));
   EXPECT_THROW((void)device_.Execute(plan_, prepared_, document_, store_.get()),
                std::runtime_error);
   device_.WaitIdle();
   const auto completed = device_.Workspace().Device().CompletedSubmission();
-  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
-      source_a, before.Value(source_a), before.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
-      union_id, before.mask, before.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(
-      grade_id, before.primary_grade, before.geometry_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
-      source_a, after.Value(source_a), after.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
-      union_id, after.mask, after.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_FALSE(device_.Workspace().Images().FindValidResult(
-      grade_id, after.primary_grade, after.geometry_extent, TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(source_a, source_rev, source_repr, completed));
+  EXPECT_TRUE(images.FindValidResult(union_id, union_rev, union_repr, completed));
+  EXPECT_TRUE(images.FindValidResult(grade_id, grade_rev, grade_repr, completed));
+  EXPECT_EQ(images.PublishedRevision(source_a), source_rev);
+  EXPECT_NE(invalidation.RequiredRevision(source_a), source_rev);
+  EXPECT_NE(invalidation.RequiredRevision(union_id), union_rev);
+  EXPECT_NE(invalidation.RequiredRevision(grade_id), grade_rev);
 }
 
 TEST_F(MetalMaskFixture, ActiveMaskTexturesReleaseAfterGpuCompletion) {

@@ -18,13 +18,14 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/mask_asset.hpp"
-#include "edit/runtime/content_key.hpp"
+#include "edit/runtime/result_representation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
+#include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/render_backend.hpp"
-#include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
@@ -607,12 +608,13 @@ TEST_F(OpenClWorkspaceFixture, OpenClFailedUploadRestoresDirtyFieldsAndPublishes
   }
   EXPECT_TRUE(model.IsDirty());
 
-  const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
-  const ContentKey   content{41};
+  const GraphValueId    id{NodeId{"develop"}, PortId{"sensor_linear"}};
+  constexpr RuntimeRevision content = 41;
   device.BeginRender();
   (void)device.Workspace().AcquireImageForWrite(id, {8, 8, TextureFormat::Rgba32f});
-  device.Workspace().Images().RecordUnpublished(id, content, {8, 8}, TextureFormat::Rgba32f,
-                                                device.CommandContext().SubmissionId());
+  device.Workspace().Images().RecordUnpublished(
+      id, content, MakeExtentRepresentation({8, 8}, TextureFormat::Rgba32f),
+      device.CommandContext().SubmissionId());
   device.Workspace().Device().FailNextUpload();
   std::vector<std::byte> pixels(8 * 8 * 16, std::byte{1});
   EXPECT_THROW(
@@ -622,7 +624,7 @@ TEST_F(OpenClWorkspaceFixture, OpenClFailedUploadRestoresDirtyFieldsAndPublishes
   device.CancelRender();
   device.WaitIdle();
   EXPECT_FALSE(device.Workspace().Images().FindValidResult(
-      id, content, {8, 8}, TextureFormat::Rgba32f,
+      id, content, MakeExtentRepresentation({8, 8}, TextureFormat::Rgba32f),
       device.Workspace().Device().CompletedSubmission()));
   EXPECT_EQ(device.Workspace().Images().PublishedCount(), 0U);
 }
@@ -719,31 +721,28 @@ TEST_F(OpenClWorkspaceFixture, SinkFailurePublishesNoNewResults) {
   OpenClRenderDevice device;
   auto&              workspace = device.Workspace();
   const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
-  const ContentKey   first{81};
-  const ContentKey   second{82};
+  constexpr RuntimeRevision first  = 81;
+  constexpr RuntimeRevision second = 82;
   constexpr std::uint32_t kWidth  = 8;
   constexpr std::uint32_t kHeight = 8;
+  const auto              repr = MakeExtentRepresentation({kWidth, kHeight}, TextureFormat::Rgba32f);
   device.BeginRender();
   (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
-  workspace.Images().RecordUnpublished(id, first, ImageExtent{kWidth, kHeight},
-                                       TextureFormat::Rgba32f, device.CommandContext().SubmissionId());
+  workspace.Images().RecordUnpublished(id, first, repr, device.CommandContext().SubmissionId());
   device.EndRender();
   device.PublishResults();
   device.WaitIdle();
-  ASSERT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight},
-                                                 TextureFormat::Rgba32f,
+  ASSERT_TRUE(workspace.Images().FindValidResult(id, first, repr,
                                                  workspace.Device().CompletedSubmission()));
 
   device.BeginRender();
   (void)workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
-  workspace.Images().RecordUnpublished(id, second, {kWidth, kHeight}, TextureFormat::Rgba32f,
-                                       device.CommandContext().SubmissionId());
+  workspace.Images().RecordUnpublished(id, second, repr, device.CommandContext().SubmissionId());
   device.CancelRender();
   device.WaitIdle();
-  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, {kWidth, kHeight}, TextureFormat::Rgba32f,
+  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, repr,
                                                  workspace.Device().CompletedSubmission()));
-  EXPECT_FALSE(workspace.Images().FindValidResult(id, second, {kWidth, kHeight},
-                                                  TextureFormat::Rgba32f,
+  EXPECT_FALSE(workspace.Images().FindValidResult(id, second, repr,
                                                   workspace.Device().CompletedSubmission()));
   EXPECT_EQ(workspace.Images().UnpublishedCount(), 0U);
 }

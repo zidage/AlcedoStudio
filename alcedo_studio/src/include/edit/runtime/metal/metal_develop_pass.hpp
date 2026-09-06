@@ -27,7 +27,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
 void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan& plan);
 
 void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& plan,
-                             const PipelineDocument& document);
+                             PipelineDocument& document);
 
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
 

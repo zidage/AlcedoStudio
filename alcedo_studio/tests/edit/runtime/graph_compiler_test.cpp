@@ -319,7 +319,7 @@ TEST(GpuDagGraphCompiler, GradeWithoutPrimaryIdRendersItsParameters) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
-  ASSERT_EQ(document.PrimaryGrade(), nullptr);
+  ASSERT_EQ(document.PrimaryGrade()->Id(), NodeId{"grade.b"});
   const auto* remaining =
       dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode("grade.b"));
   ASSERT_NE(remaining, nullptr);

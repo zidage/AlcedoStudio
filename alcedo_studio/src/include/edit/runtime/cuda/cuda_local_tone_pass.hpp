@@ -8,7 +8,6 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
-#include "edit/runtime/content_key.hpp"
 
 namespace alcedo {
 
@@ -27,7 +26,8 @@ struct CudaLocalToneResult {
  * viewport ROI. A full-EditSpace frame seeds or upgrades that reference. A viewport
  * ROI samples it through MakeLlfSamplingPlan instead of rebuilding the pyramids.
  *
- * Pyramid storage is owned by the render workspace. Both input and output must be
+ * Source versus result reuse is decided by @ref RuntimeInvalidationState. Pyramid
+ * scratch is owned by the render workspace. Both input and output must be
  * RGBA32F images of @p width by @p height. Slider values use the persisted [-100, 100]
  * UI scale. Throws on missing resources, invalid geometry, or CUDA failure.
  */
@@ -35,8 +35,7 @@ struct CudaLocalToneResult {
                                         const GraphValueId& output, const NodeId& grade_id,
                                         std::uint32_t width, std::uint32_t height,
                                         float shadows_slider, float highlights_slider,
-                                        const ResolvedRenderGeometry& geometry,
-                                        ContentKey                    reference_key)
+                                        const ResolvedRenderGeometry& geometry)
     -> CudaLocalToneResult;
 
 }  // namespace alcedo

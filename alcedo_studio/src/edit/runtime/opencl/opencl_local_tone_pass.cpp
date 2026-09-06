@@ -280,8 +280,7 @@ auto ResultId(const NodeId& grade_id) -> GraphValueId { return LevelId(grade_id,
 auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Texture2D& input,
                             OpenClBackend::Texture2D& output, const NodeId& grade_id,
                             float shadows_slider, float highlights_slider,
-                            const ResolvedRenderGeometry& geometry, ContentKey source_key,
-                            ContentKey result_key) -> OpenClLocalToneResult {
+                            const ResolvedRenderGeometry& geometry) -> OpenClLocalToneResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteOpenClLocalTone: BeginRender has not been called");
@@ -296,9 +295,6 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
       output.Format() != TextureFormat::Rgba32f || input.Format() != TextureFormat::Rgba32f) {
     throw std::runtime_error("ExecuteOpenClLocalTone: input and output must be matching RGBA32F");
   }
-  if (source_key.Empty() || result_key.Empty()) {
-    throw std::runtime_error("ExecuteOpenClLocalTone: content keys must be non-empty");
-  }
 
   const auto width     = input.Width();
   const auto height    = input.Height();
@@ -311,21 +307,27 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
   const bool        full_edit = CoversFullEditSpace(geometry);
   const int         current_long_edge =
       std::max(CheckedInt(width, "input width"), CheckedInt(height, "input height"));
-  auto&      images    = workspace.Images();
-  const auto source_id = SourceId(grade_id);
-  const auto result_id = ResultId(grade_id);
-  auto*      cached_source =
-      images.BindValidResult(source_id, source_key, canonical_extent, TextureFormat::R32f,
+  auto&      images       = workspace.Images();
+  auto&      invalidation = workspace.ResultInvalidation();
+  const auto source_id    = SourceId(grade_id);
+  const auto result_id    = ResultId(grade_id);
+  const auto source_needed = invalidation.MakeImageRepresentation(
+      source_id, canonical_extent, TextureFormat::R32f,
+      static_cast<std::uint32_t>(current_long_edge));
+  const auto result_needed = invalidation.MakeImageRepresentation(
+      result_id, canonical_extent, TextureFormat::R32f,
+      static_cast<std::uint32_t>(current_long_edge));
+  auto* cached_source =
+      images.BindValidResult(source_id, invalidation.RequiredRevision(source_id), source_needed,
                              workspace.Device().CompletedSubmission());
-  const auto source_long_edge = images.PublishedAuxiliary(source_id, source_key);
+  const auto source_long_edge = images.PublishedAuxiliary(source_id);
   const bool source_valid =
       cached_source != nullptr && source_long_edge > 0 &&
       source_long_edge <= static_cast<std::uint64_t>((std::numeric_limits<int>::max)());
   auto* cached_result =
-      source_valid
-          ? images.BindValidResult(result_id, result_key, canonical_extent, TextureFormat::R32f,
-                                   workspace.Device().CompletedSubmission())
-          : nullptr;
+      source_valid ? images.BindValidResult(result_id, invalidation.RequiredRevision(result_id),
+                                            result_needed, workspace.Device().CompletedSubmission())
+                   : nullptr;
   const bool result_valid = cached_result != nullptr;
   const bool sample_canonical =
       result_valid && !(full_edit && current_long_edge > static_cast<int>(source_long_edge));
@@ -524,13 +526,13 @@ auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Tex
     if (!reuse_source) {
       workspace.Device().CopyDeviceMemoryToImage(source[0].ptr, cached_source->Texture(),
                                                  device.CommandContext());
-      images.RecordUnpublished(source_id, source_key, extent, TextureFormat::R32f,
+      images.RecordUnpublished(source_id, invalidation.RequiredRevision(source_id), source_needed,
                                device.CommandContext().SubmissionId(),
                                static_cast<std::uint64_t>(current_long_edge));
     }
     workspace.Device().CopyDeviceMemoryToImage(result[0].ptr, cached_result->Texture(),
                                                device.CommandContext());
-    images.RecordUnpublished(result_id, result_key, extent, TextureFormat::R32f,
+    images.RecordUnpublished(result_id, invalidation.RequiredRevision(result_id), result_needed,
                              device.CommandContext().SubmissionId(),
                              static_cast<std::uint64_t>(current_long_edge));
     tone.reference_resource_id = cached_source->Texture().ResourceId();

@@ -28,7 +28,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
 void ExecuteOpenClGeometryResample(OpenClRenderDevice& device, const ExecutionPlan& plan);
 
 void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                              const PipelineDocument& document);
+                              PipelineDocument& document);
 
 /**
  * @brief Test hook: inject a model cache so Neural load failure can be asserted.

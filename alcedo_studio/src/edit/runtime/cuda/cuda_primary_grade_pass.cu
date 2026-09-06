@@ -537,10 +537,9 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
               static_cast<float4*>(dest.DevicePointer()), static_cast<int>(input_width),
               static_cast<int>(input_height), op.neighbor);
     } else if (op.kind == GradeOpKind::LlfBarrier) {
-      local_tone = ExecuteCudaLocalTone(
-          device, current_id, dest_id, grade->Id(), input_width, input_height, shadows_slider,
-          highlights_slider, plan.geometry,
-          HashLlfReferenceKey(plan, prepared, document, compiled_grade->node_id));
+      local_tone = ExecuteCudaLocalTone(device, current_id, dest_id, grade->Id(), input_width,
+                                        input_height, shadows_slider, highlights_slider,
+                                        plan.geometry);
     } else {
       auto& src  = Resolve(current_id);
       auto& dest = Resolve(dest_id);
@@ -581,6 +580,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
   }
+  device.Workspace().PrepareResultValidity(plan, document, prepared);
   CudaPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
     last = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade);

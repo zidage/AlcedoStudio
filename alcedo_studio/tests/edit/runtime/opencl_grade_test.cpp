@@ -999,18 +999,19 @@ TEST_F(OpenClGradeFixture, OpenClLlfUsesWorkspaceTransientArenaForEveryPyramid) 
             result.local_tone_transient_bytes);
   EXPECT_GE(device_->Workspace().TransientBuffers().capacity_bytes(), plan_.peak_transient_bytes);
 
-  const auto  source_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
-  const auto  result_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
-  const auto  source_key    = HashLlfSourceKey(plan_, prepared_, document_);
-  const auto  reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
-  const auto* source        = device_->Workspace().Images().Find(source_id);
-  const auto* adjusted      = device_->Workspace().Images().Find(result_id);
+  const auto  source_id = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto  result_id = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto* source    = device_->Workspace().Images().Find(source_id);
+  const auto* adjusted  = device_->Workspace().Images().Find(result_id);
   ASSERT_NE(source, nullptr);
   ASSERT_NE(adjusted, nullptr);
   EXPECT_EQ(source->Texture().Format(), TextureFormat::R32f);
   EXPECT_EQ(adjusted->Texture().Format(), TextureFormat::R32f);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
+  EXPECT_NE(device_->Workspace().Images().PublishedRevision(source_id), 0U);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(source_id),
+            device_->Workspace().ResultInvalidation().RequiredRevision(source_id));
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(result_id),
+            device_->Workspace().ResultInvalidation().RequiredRevision(result_id));
   EXPECT_EQ(device_->Workspace().Values().Find(source_id), nullptr);
   EXPECT_EQ(device_->Workspace().Values().Find(result_id), nullptr);
 }
@@ -1022,19 +1023,20 @@ TEST_F(OpenClGradeFixture, OpenClLlfFullFrameBuildsCanonicalReferenceOnce) {
   EXPECT_FALSE(first.local_tone_sampled_canonical_reference);
   ASSERT_NE(first.local_tone_reference_resource_id, 0U);
 
-  const auto source_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
-  const auto result_id     = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
-  const auto source_key    = HashLlfSourceKey(plan_, prepared_, document_);
-  const auto reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id, source_key), 16U);
+  const auto source_id = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto result_id = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  EXPECT_NE(device_->Workspace().Images().PublishedRevision(source_id), 0U);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(source_id),
+            device_->Workspace().ResultInvalidation().RequiredRevision(source_id));
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(result_id),
+            device_->Workspace().ResultInvalidation().RequiredRevision(result_id));
+  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id), 16U);
 
   const auto second = RenderGrade();
   EXPECT_FALSE(second.local_tone_rebuilt_reference);
   EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
   EXPECT_EQ(second.local_tone_reference_resource_id, first.local_tone_reference_resource_id);
-  EXPECT_LE(device_->Workspace().Images().PublishedLastWriter(source_id, source_key),
+  EXPECT_LE(device_->Workspace().Images().PublishedLastWriter(source_id),
             device_->Workspace().Device().CompletedSubmission());
 }
 
@@ -1043,20 +1045,20 @@ TEST_F(OpenClGradeFixture, OpenClLlfSliderEditReusesCanonicalReference) {
   const auto first               = RenderGrade();
   const auto source_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
   const auto result_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
-  const auto source_key          = HashLlfSourceKey(plan_, prepared_, document_);
-  const auto first_reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
+  const auto first_source_rev    = device_->Workspace().Images().PublishedRevision(source_id);
+  const auto first_result_rev    = device_->Workspace().Images().PublishedRevision(result_id);
   ASSERT_TRUE(first.local_tone_rebuilt_reference);
+  ASSERT_NE(first_source_rev, 0U);
 
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(70.0f);
-  const auto second               = RenderGrade();
-  const auto second_reference_key = HashLlfReferenceKey(plan_, prepared_, document_);
-  EXPECT_EQ(HashLlfSourceKey(plan_, prepared_, document_), source_key);
-  EXPECT_NE(second_reference_key, first_reference_key);
+  const auto second = RenderGrade();
   EXPECT_TRUE(second.local_tone_rebuilt_reference);
   EXPECT_FALSE(second.local_tone_sampled_canonical_reference);
   EXPECT_EQ(second.local_tone_reference_resource_id, first.local_tone_reference_resource_id);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), second_reference_key);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(source_id), first_source_rev);
+  EXPECT_NE(device_->Workspace().Images().PublishedRevision(result_id), first_result_rev);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(result_id),
+            device_->Workspace().ResultInvalidation().RequiredRevision(result_id));
 }
 
 TEST_F(OpenClGradeFixture, OpenClLlfSecondStableRenderCreatesNoBufferImageProgramOrKernel) {
@@ -1078,8 +1080,8 @@ TEST_F(OpenClGradeFixture, OpenClLlfFailedSubmissionDoesNotPublishReference) {
   ASSERT_TRUE(first.local_tone_rebuilt_reference);
   const auto source_id          = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
   const auto result_id          = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
-  const auto source_key         = HashLlfSourceKey(plan_, prepared_, document_);
-  const auto reference_key      = HashLlfReferenceKey(plan_, prepared_, document_);
+  const auto source_rev         = device_->Workspace().Images().PublishedRevision(source_id);
+  const auto result_rev         = device_->Workspace().Images().PublishedRevision(result_id);
   const auto source_resource_id = first.local_tone_reference_resource_id;
 
   auto       failed_plan        = plan_;
@@ -1092,9 +1094,9 @@ TEST_F(OpenClGradeFixture, OpenClLlfFailedSubmissionDoesNotPublishReference) {
                std::runtime_error);
   device_->CancelRender();
 
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(source_id), source_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedContentKey(result_id), reference_key);
-  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id, source_key), 16U);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(source_id), source_rev);
+  EXPECT_EQ(device_->Workspace().Images().PublishedRevision(result_id), result_rev);
+  EXPECT_EQ(device_->Workspace().Images().PublishedAuxiliary(source_id), 16U);
 
   const auto recovered = RenderGrade();
   EXPECT_FALSE(recovered.local_tone_rebuilt_reference);
@@ -1186,8 +1188,11 @@ TEST(GpuDagOpenClGrade, OpenClLlfRoiSamplesCanonicalReferenceWithSharedGeometryP
   EXPECT_TRUE(roi_result.local_tone_sampled_canonical_reference);
   EXPECT_EQ(roi_result.local_tone_reference_resource_id,
             full_result.local_tone_reference_resource_id);
-  EXPECT_EQ(device.Workspace().Images().PublishedContentKey(source_id), full_source_key);
-  EXPECT_EQ(device.Workspace().Images().PublishedContentKey(result_id), full_reference_key);
+  EXPECT_NE(device.Workspace().Images().PublishedRevision(source_id), 0U);
+  EXPECT_EQ(device.Workspace().Images().PublishedRevision(source_id),
+            device.Workspace().ResultInvalidation().RequiredRevision(source_id));
+  EXPECT_EQ(device.Workspace().Images().PublishedRevision(result_id),
+            device.Workspace().ResultInvalidation().RequiredRevision(result_id));
   EXPECT_EQ(roi_pixels.size(), static_cast<std::size_t>(32) * kHeight);
   for (const auto& pixel : roi_pixels) {
     EXPECT_TRUE(std::isfinite(pixel.r));

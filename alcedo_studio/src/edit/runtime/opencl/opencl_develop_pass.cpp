@@ -558,15 +558,16 @@ void ExecuteOpenClGeometryResample(OpenClRenderDevice& device, const ExecutionPl
 }
 
 void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                              const PipelineDocument& document) {
+                              PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteOpenClCameraColor: BeginRender has not been called");
   }
-  const auto* develop = document.Develop();
+  auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteOpenClCameraColor: missing develop node");
   }
+  auto pending = TakePendingParameterPatch(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
@@ -622,6 +623,9 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   cl_mem table_mem = tables.Native();
   CheckOpenCl(clSetKernelArg(kernel, 4, sizeof(cl_mem), &table_mem), "camera profile arg4");
   DispatchKernel(device, kernel, width, height);
+  if (pending.has_value()) {
+    pending->Commit();
+  }
 }
 
 }  // namespace alcedo
