@@ -110,6 +110,7 @@ TEST_F(OpenClMultiGradeFixture, GradeWithoutPrimaryIdRendersItsParameters) {
   multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.b"});
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
   ASSERT_EQ(document.Graph().FindNode("grade.primary"), nullptr);
+  ASSERT_EQ(document.PrimaryGrade()->Id(), NodeId{"grade.b"});
   multi_grade_test::GradeAdjustment<ExposureModel>(document, NodeId{"grade.b"}, type_ids::Exposure())
       .SetValue(1.0f);
   const auto plan = Compile(document);

@@ -16,6 +16,9 @@
 
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_cache_ids.hpp"
+#include "edit/runtime/runtime_invalidation.hpp"
+#include "edit/runtime/texture_format.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
 namespace alcedo {
@@ -320,8 +323,7 @@ void AppendMetalLocalToneWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Texture2D& input,
                            MetalBackend::Texture2D& output, const NodeId& grade_id,
                            float shadows_slider, float highlights_slider,
-                           const ResolvedRenderGeometry& geometry, ContentKey source_key,
-                           ContentKey result_key) -> MetalLocalToneResult {
+                           const ResolvedRenderGeometry& geometry) -> MetalLocalToneResult {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteMetalLocalTone: BeginRender has not been called");
@@ -348,14 +350,26 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
   const auto canonical_bytes   = static_cast<std::size_t>(canonical_dims.width) *
                                static_cast<std::size_t>(canonical_dims.height) * sizeof(float);
   const auto meta          = ReadMeta(workspace, grade_id);
-  auto*      cached_source = workspace.Values().Find(LevelId(grade_id, "source", 0));
-  auto*      cached_result = workspace.Values().Find(LevelId(grade_id, "result", 0));
-  const bool source_valid  = meta.canonical != 0 && meta.source_key == source_key.hash &&
+  auto&      invalidation  = workspace.ResultInvalidation();
+  const auto source_id     = LocalToneSourceId(grade_id);
+  const auto result_id     = LocalToneResultId(grade_id);
+  auto*      cached_source = workspace.Values().Find(source_id);
+  auto*      cached_result = workspace.Values().Find(result_id);
+  const ImageExtent canonical_extent{static_cast<std::uint32_t>(canonical_dims.width),
+                                     static_cast<std::uint32_t>(canonical_dims.height)};
+  const auto source_needed = invalidation.MakeImageRepresentation(
+      source_id, canonical_extent, TextureFormat::R32f,
+      static_cast<std::uint32_t>(current_long_edge));
+  const auto result_needed = invalidation.MakeImageRepresentation(
+      result_id, canonical_extent, TextureFormat::R32f,
+      static_cast<std::uint32_t>(current_long_edge));
+  const bool source_valid  = meta.canonical != 0 &&
+                            invalidation.IsSatisfied(source_id, source_needed) &&
                             meta.mask_width == canonical_dims.width &&
                             meta.mask_height == canonical_dims.height && cached_source != nullptr &&
                             cached_source->Bytes() >= canonical_bytes &&
                             cached_source->Native() != nullptr;
-  const bool result_valid = source_valid && meta.result_key == result_key.hash &&
+  const bool result_valid = source_valid && invalidation.IsSatisfied(result_id, result_needed) &&
                             cached_result != nullptr && cached_result->Bytes() >= canonical_bytes &&
                             cached_result->Native() != nullptr;
   const bool sample_canonical =
@@ -520,13 +534,17 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
     workspace.Device().CopyDeviceMemoryToBuffer(result[0].ptr, result_buffer, 0, bytes,
                                                 device.CommandContext());
     CanonicalLlfMeta published;
-    published.source_key       = source_key.hash;
-    published.result_key       = result_key.hash;
+    published.source_key       = invalidation.RequiredRevision(source_id);
+    published.result_key       = invalidation.RequiredRevision(result_id);
     published.mask_width       = layout.widths[0];
     published.mask_height      = layout.heights[0];
     published.source_long_edge = current_long_edge;
     published.canonical        = 1;
     WriteMeta(device, grade_id, published);
+    if (!reuse_source) {
+      invalidation.MarkCompleted(source_id, source_needed);
+    }
+    invalidation.MarkCompleted(result_id, result_needed);
     tone.reference_resource_id = source_buffer.ResourceId();
   } else if (workspace.Values().Find(MetaId(grade_id)) != nullptr) {
     WriteMeta(device, grade_id, CanonicalLlfMeta{});

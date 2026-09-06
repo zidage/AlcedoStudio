@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.4 complete; NM6.P and NM6.5–NM6.9 planned.
+Status: NM6.1–NM6.4 and NM6.P complete; NM6.5–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -402,7 +402,7 @@ Additional acceptance requirements:
 
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.4 are complete. NM6.P is a separate prerequisite before NM6.5–NM6.9. Each phase must leave a buildable product path and
+NM6.1–NM6.4 and NM6.P are complete. NM6.5–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -796,7 +796,8 @@ Suite totals: `GpuDagRawInputTest` 106/106 PASS; `EditorPipelineCommandServiceTe
 
 ### NM6.P — Native parameter access prerequisite
 
-**Status:** planned. Execute the [separate NM6.P plan](phase_nm6p_native_parameter_access_plan.md).
+**Status:** complete 2026-09-06. Execute and evidence are in the
+[separate NM6.P plan](phase_nm6p_native_parameter_access_plan.md).
 Its scope is direct Model read/update, minimal queued changes, typed panel projection, runtime
 parameter packing and deletion of old full-state JSON/DTO intermediary paths. Preserve NM6.2–4
 queue, pacing and invalidation behavior. This is an independent acceptance gate, not an extra list
@@ -997,7 +998,7 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.2 | complete 2026-09-05 | uncommitted on `feature/queued-typed-adjustment-input` @ `3a7a3825` | slider/model → `submitPatch` → `EnqueueAdjustmentInput` → `EditorPendingInputQueue::AdmitFieldChange`; live document/history unchanged | 90/90 focused PASS excluding pre-existing RapidImageSelection; see NM6.2 completion record | Consume, 16 ms pacing, GPU-safe completion are NM6.3 |
 | NM6.3 | complete 2026-09-05 | uncommitted on `feature/nm6-serial-adjustment-consumption` @ `8ed06f88` | enqueue → PostCompletion consume → HandlePendingSequence → history capture/commit → RouteInitialRender → Present-wait completion → next admission | 137/137 focused PASS; see NM6.3 completion record | Cache versions NM6.4; node targeting NM6.6 |
 | NM6.4 | complete 2026-09-05 | uncommitted on `feature/runtime-dependency-result-versions` | mutation → CollectAndPropagate → BindValidResult(required, representation) → skip/encode → RecordUnpublished → PublishResults / MarkCompleted | 180/180 focused PASS; see NM6.4 completion record | Shared Grade/LLF executors NM6.5; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
-| NM6.P | planned | — | — | [Separate execution plan](phase_nm6p_native_parameter_access_plan.md) | Native parameter read/write and production cutover |
+| NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot` | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
 | NM6.5 | planned | — | — | — | Shared three-backend execution after NM6.P |
 | NM6.6 | planned | — | — | — | Node context/target routing |
 | NM6.7 | planned | — | — | — | Approved header and panel UI |

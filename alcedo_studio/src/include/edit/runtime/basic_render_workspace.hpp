@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <span>
 #include <stdexcept>
 
 #include "edit/runtime/develop_transient.hpp"
@@ -14,6 +15,7 @@
 #include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_allocation_policy.hpp"
@@ -66,6 +68,26 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto ResultInvalidation() -> RuntimeInvalidationState& { return invalidation_; }
+  [[nodiscard]] auto ResultInvalidation() const -> const RuntimeInvalidationState& {
+    return invalidation_;
+  }
+
+  /**
+   * @brief Collect dependency revisions once for the current @ref BeginRender.
+   *
+   * PlanExecutor and standalone grade encodes share this so a frame cannot assign
+   * two change versions. Operator dirty bits are read, not consumed.
+   */
+  void PrepareResultValidity(const ExecutionPlan& plan, PipelineDocument& document,
+                             const PreparedRawInput& input,
+                             std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
+    if (validity_prepared_) {
+      return;
+    }
+    invalidation_.CollectAndPropagate(plan, document, input, active_raster_masks);
+    validity_prepared_ = true;
+  }
   [[nodiscard]] auto DevelopTransientHighWater() -> DevelopTransientHighWaterCache& {
     return develop_high_water_;
   }
@@ -177,7 +199,8 @@ class BasicRenderWorkspace {
     mask_textures_.BeginFrame();
     active_raster_textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
-    rendering_ = true;
+    rendering_           = true;
+    validity_prepared_   = false;
   }
 
   /**
@@ -216,6 +239,8 @@ class BasicRenderWorkspace {
     }
     images_.Clear();
     values_.Clear();
+    invalidation_.Clear();
+    validity_prepared_ = false;
     mask_textures_.Clear();
     active_raster_textures_.Clear();
     textures_.ReleaseUnleased();
@@ -250,9 +275,11 @@ class BasicRenderWorkspace {
   ActiveRasterTextureCache<Backend> active_raster_textures_;
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
+  RuntimeInvalidationState       invalidation_{};
   DevelopTransientHighWaterCache develop_high_water_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
   bool                           rendering_             = false;
+  bool                           validity_prepared_     = false;
 };
 
 }  // namespace alcedo

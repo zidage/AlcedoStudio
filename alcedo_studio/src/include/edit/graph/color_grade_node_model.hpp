@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -73,6 +75,22 @@ class ColorGradeNodeModel final : public INodeModel {
 
   void SetEnabled(bool enabled);
   void SetMix(float mix);
+
+  /**
+   * @brief True when enabled or mix changed since the last @ref ClearMixDirty.
+   *
+   * Display-name edits do not set this. Runtime invalidation reads it without
+   * copying parameter values.
+   */
+  [[nodiscard]] auto MixDirty() const -> bool { return mix_dirty_; }
+  void               ClearMixDirty() { mix_dirty_ = false; }
+
+  /**
+   * @brief Monotonic Mask content revision. Zero when @p mask_id is absent.
+   *
+   * Display-order moves do not change the revision. Not serialized.
+   */
+  [[nodiscard]] auto MaskContentRevision(const MaskId& mask_id) const -> std::uint64_t;
 
   [[nodiscard]] auto Enabled() const -> bool { return enabled_; }
   [[nodiscard]] auto Mix() const -> float { return mix_; }
@@ -148,12 +166,18 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto FindMask(const MaskId& mask_id) const -> const MaskModel*;
 
  private:
+  void TouchMask(const MaskId& mask_id);
+
+ private:
   NodeId id_;
   std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
   std::vector<MaskModel>            masks_;
+  std::map<MaskId, std::uint64_t>   mask_content_revision_;
+  std::uint64_t                     next_mask_revision_ = 1;
   bool  enabled_ = true;
   float mix_     = 1.0f;
+  bool  mix_dirty_ = false;
   std::array<PortDescriptor, 1> inputs_;
   std::array<PortDescriptor, 1> outputs_;
 };

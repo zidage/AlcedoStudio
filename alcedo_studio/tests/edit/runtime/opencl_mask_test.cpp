@@ -510,7 +510,7 @@ TEST_F(OpenClMaskFixture, OpenClFeatherRadiusEditReusesSignedDistanceResult) {
   EXPECT_NE(first.signed_distance_resource_id, 0U);
   EXPECT_EQ(first.signed_distance_resource_id, second.signed_distance_resource_id);
   EXPECT_EQ(second.transient_bytes, 0U);
-  EXPECT_EQ(first_metadata->content_key, second_metadata->content_key);
+  EXPECT_EQ(first_metadata->representation.identity, second_metadata->representation.identity);
 }
 
 TEST_F(OpenClMaskFixture, OpenClMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution) {

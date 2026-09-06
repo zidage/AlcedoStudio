@@ -472,15 +472,16 @@ void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan
 }
 
 void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& plan,
-                             const PipelineDocument& document) {
+                             PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteMetalCameraColor: BeginRender has not been called");
   }
-  const auto* develop = document.Develop();
+  auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteMetalCameraColor: missing develop node");
   }
+  auto pending = TakePendingParameterPatch(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
@@ -515,6 +516,9 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
       UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),
                       binding.offset, tables);
+  if (pending.has_value()) {
+    pending->Commit();
+  }
 }
 
 }  // namespace alcedo

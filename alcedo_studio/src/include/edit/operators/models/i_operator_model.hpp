@@ -50,6 +50,13 @@ class IOperatorModel {
   [[nodiscard]] virtual auto IsDefault() const -> bool      = 0;
   [[nodiscard]] virtual auto IsDirty() const -> bool        = 0;
 
+  /**
+   * @brief Current dirty field mask. Does not clear bits.
+   *
+   * Runtime invalidation reads this independently of @ref TakeDirtyPatch.
+   */
+  [[nodiscard]] virtual auto DirtyFields() const -> DirtyFieldMask = 0;
+
   /// Full payload snapshot. Ignores dirty bits.
   [[nodiscard]] virtual auto MakeFullDto() const -> OperatorParamDto = 0;
 

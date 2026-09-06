@@ -305,6 +305,55 @@ auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey {
   return hash.Key();
 }
 
+auto HashLinearizationParams(const RawLinearizationParams& linearization) -> ContentKey {
+  ContentHash hash;
+  MixLinearization(hash, linearization);
+  return hash.Key();
+}
+
+auto HashSensorSourceIdentity(const PreparedRawInput& input) -> ContentKey {
+  ContentHash hash;
+  MixPreparedSource(hash, input.source_key);
+  MixLinearization(hash, input.linearization);
+  hash.MixU32(static_cast<std::uint32_t>(input.input_kind));
+  hash.MixU32(kSensorDevelopImplementationVersion);
+  return hash.Key();
+}
+
+auto HashCanonicalReferenceIdentity(const ExecutionPlan& plan, const PreparedRawInput& input)
+    -> ContentKey {
+  ContentHash hash;
+  hash.MixKey(HashSensorSourceIdentity(input));
+  MixExtent(hash, plan.geometry.full_reference_extent);
+  MixExtent(hash, plan.geometry.edit_extent);
+  MixExtent(hash, plan.geometry.decoded_extent);
+  MixMatrix(hash, plan.geometry.decoded_to_reference);
+  MixMatrix(hash, plan.geometry.reference_to_edit);
+  MixExtent(hash, plan.source.host_extent);
+  MixExtent(hash, plan.source.develop_output_extent);
+  MixExtent(hash, plan.source.full_reference_extent);
+  hash.MixU32(static_cast<std::uint32_t>(plan.source.kind));
+  hash.MixU32(plan.source.downsample_passes);
+  MixRect(hash, plan.source.sensor_active_area);
+  hash.MixU32(kLlfReferenceImplementationVersion);
+  hash.MixU32(kGeometryImplementationVersion);
+  return hash.Key();
+}
+
+auto HashFrameImageIdentity(const ExecutionPlan& plan, const PreparedRawInput& input,
+                            RuntimeRevision document_epoch) -> ContentKey {
+  ContentHash hash;
+  hash.MixKey(HashSensorSourceIdentity(input));
+  hash.MixKey(HashResolvedRenderGeometry(plan.geometry));
+  hash.MixU64(document_epoch);
+  hash.MixU32(plan.static_key.backend_capability_version);
+  hash.MixU32(kCameraColorImplementationVersion);
+  hash.MixU32(kPrimaryGradeImplementationVersion);
+  hash.MixU32(kDrtImplementationVersion);
+  hash.MixU32(kMaskImplementationVersion);
+  return hash.Key();
+}
+
 auto HashLlfReferenceKey(const ExecutionPlan& plan, const PreparedRawInput& input,
                          const PipelineDocument& document, const NodeId& grade_id) -> ContentKey {
   ContentHash hash;

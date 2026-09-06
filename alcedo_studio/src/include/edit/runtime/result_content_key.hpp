@@ -13,6 +13,7 @@
 #include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/runtime_revision.hpp"
 
 namespace alcedo {
 
@@ -59,9 +60,34 @@ struct FrameResultContentKeys {
 [[nodiscard]] auto HashPreparedSourceKey(const PreparedSourceKey& key) -> ContentKey;
 
 /**
+ * @brief Hash RAW linearization fields used by SensorDevelop.
+ */
+[[nodiscard]] auto HashLinearizationParams(const RawLinearizationParams& linearization)
+    -> ContentKey;
+
+/**
  * @brief Hash the full ResolvedRenderGeometry, including crop, rotation, ROI, and sampling.
  */
 [[nodiscard]] auto HashResolvedRenderGeometry(const ResolvedRenderGeometry& geometry) -> ContentKey;
+
+/**
+ * @brief Canonical LLF/crop identity. Viewport ROI and render extent are omitted.
+ */
+[[nodiscard]] auto HashCanonicalReferenceIdentity(const ExecutionPlan& plan,
+                                                  const PreparedRawInput& input) -> ContentKey;
+
+/**
+ * @brief Viewport-inclusive frame identity for resampled image results.
+ */
+[[nodiscard]] auto HashFrameImageIdentity(const ExecutionPlan& plan, const PreparedRawInput& input,
+                                          RuntimeRevision document_epoch) -> ContentKey;
+
+/**
+ * @brief SensorDevelop identity: prepared source, linearization, and implementation version.
+ *
+ * Develop operator values are not mixed; those use dependency revisions.
+ */
+[[nodiscard]] auto HashSensorSourceIdentity(const PreparedRawInput& input) -> ContentKey;
 
 /**
  * @brief Identity of the canonical LLF reference for @p grade_id. Viewport ROI is omitted.

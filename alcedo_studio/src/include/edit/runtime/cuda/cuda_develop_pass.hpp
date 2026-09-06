@@ -39,6 +39,6 @@ void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& 
  * never substituted. Independently skippable from SensorDevelop and Geometry.
  */
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            const PipelineDocument& document);
+                            PipelineDocument& document);
 
 }  // namespace alcedo

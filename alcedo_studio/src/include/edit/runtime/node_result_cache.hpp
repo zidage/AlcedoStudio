@@ -13,7 +13,8 @@
 #include <utility>
 
 #include "edit/graph/graph_ids.hpp"
-#include "edit/runtime/content_key.hpp"
+#include "edit/runtime/result_representation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 
 namespace alcedo {
@@ -21,17 +22,18 @@ namespace alcedo {
 /**
  * @brief KV cache of non-image node buffers keyed by producer node and output port.
  *
- * GPU image results live in GraphImageCache with content keys. This cache holds
- * runtime buffers such as adjustment command lists. Not thread-safe.
+ * GPU image results live in GraphImageCache. This cache holds runtime buffers
+ * such as LLF planes. One current buffer per GraphValueId. Not thread-safe.
  */
 template <class Backend>
 class NodeResultCache {
  public:
   struct Metadata {
-    ContentKey    content_key{};
-    ImageExtent   extent{};
-    std::uint32_t source_long_edge = 0;
-    bool          canonical        = false;
+    RuntimeRevision      completed_revision = 0;
+    ResultRepresentation representation{};
+    ImageExtent          extent{};
+    std::uint32_t        source_long_edge = 0;
+    bool                 canonical        = false;
   };
 
   void Store(GraphValueId id, typename Backend::Buffer buffer) {
@@ -45,17 +47,19 @@ class NodeResultCache {
   }
 
   /**
-   * @brief Attach the content identity used to validate a cached node buffer.
+   * @brief Attach the validity metadata used to reuse a cached node buffer.
    *
    * @p source_long_edge and @p canonical describe an LLF reference plane. Other
-   * buffers leave them at the defaults.
+   * buffers leave them at the defaults. A failed write must not call this.
    */
-  void StoreMetadata(const GraphValueId& id, ContentKey content_key, ImageExtent extent,
+  void StoreMetadata(const GraphValueId& id, RuntimeRevision completed_revision,
+                     const ResultRepresentation& representation, ImageExtent extent,
                      std::uint32_t source_long_edge = 0, bool canonical = false) {
     if (!values_.contains(id)) {
       throw std::runtime_error("NodeResultCache::StoreMetadata: value buffer is missing");
     }
-    metadata_.insert_or_assign(id, Metadata{content_key, extent, source_long_edge, canonical});
+    metadata_.insert_or_assign(
+        id, Metadata{completed_revision, representation, extent, source_long_edge, canonical});
   }
 
   /** @brief Return cached identity metadata for a node buffer, when available. */

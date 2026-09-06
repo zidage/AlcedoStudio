@@ -305,8 +305,33 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
     if (dest == payload) {
       return DirtyFieldMask{};
     }
+    DirtyFieldMask changed;
+    if (payload.demosaic_method != dest.demosaic_method) {
+      changed |= DirtyFieldMask{DevelopDirty::Demosaic};
+    }
+    if (payload.highlights_reconstruct != dest.highlights_reconstruct) {
+      changed |= DirtyFieldMask{DevelopDirty::Highlights};
+    }
+    if (payload.lens_enabled != dest.lens_enabled ||
+        payload.apply_vignetting != dest.apply_vignetting ||
+        payload.apply_distortion != dest.apply_distortion ||
+        payload.apply_tca != dest.apply_tca || payload.apply_crop != dest.apply_crop ||
+        payload.auto_scale != dest.auto_scale || payload.use_user_scale != dest.use_user_scale ||
+        payload.user_scale != dest.user_scale ||
+        payload.projection_enabled != dest.projection_enabled ||
+        payload.target_projection != dest.target_projection ||
+        payload.lens_profile_db_path != dest.lens_profile_db_path) {
+      changed |= DirtyFieldMask{DevelopDirty::Lens};
+    }
+    if (payload.use_camera_wb != dest.use_camera_wb || payload.user_wb != dest.user_wb ||
+        payload.wb_mode != dest.wb_mode || payload.custom_cct != dest.custom_cct ||
+        payload.custom_tint != dest.custom_tint || payload.as_shot_cct != dest.as_shot_cct ||
+        payload.as_shot_tint != dest.as_shot_tint ||
+        payload.camera_profile != dest.camera_profile) {
+      changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
     dest = std::move(payload);
-    return DirtyFieldMask{DevelopDirty::All};
+    return changed.Any() ? changed : DirtyFieldMask{DevelopDirty::All};
   });
 }
 

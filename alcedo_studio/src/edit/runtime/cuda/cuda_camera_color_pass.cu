@@ -52,15 +52,16 @@ __global__ void CameraColorKernel(const float4* input, float4* output, std::uint
 }  // namespace
 
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            const PipelineDocument& document) {
+                            PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaCameraColor: BeginRender has not been called");
   }
-  const auto* develop = document.Develop();
+  auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
   }
+  auto pending = TakePendingParameterPatch(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
@@ -101,6 +102,9 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
       static_cast<const float*>(tables.DevicePointer()));
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaCameraColor: CUDA kernel launch failed");
+  }
+  if (pending.has_value()) {
+    pending->Commit();
   }
 }
 

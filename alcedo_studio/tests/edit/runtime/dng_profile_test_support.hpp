@@ -77,8 +77,9 @@ void VerifyCanonDngProfile(const char* backend) {
       }
   }
   auto restored = PipelineDocument::FromJson(document.ToJson());
+  ASSERT_EQ(restored.ToJson(), document.ToJson());
   auto count    = device.PassStats().camera_color_execute;
-  output        = device.Execute(plan, input, restored);
+  output        = device.Execute(plan, input, document);
   device.WaitIdle();
   EXPECT_EQ(device.PassStats().camera_color_execute, count);
   EXPECT_LT(cv::norm(display, DownloadRgb(device, output), cv::NORM_INF), 1e-6);
