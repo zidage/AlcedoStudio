@@ -27,7 +27,6 @@
 #include "edit/runtime/opencl/opencl_local_tone_pass.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
-#include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
@@ -516,10 +515,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
       auto&      dest = Resolve(dest_slot, dest_scratch);
       const auto local_tone =
           ExecuteOpenClLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                 plan.geometry,
-                                 HashLlfSourceKey(plan, prepared, document, compiled_grade->node_id),
-                                 HashLlfReferenceKey(plan, prepared, document,
-                                                     compiled_grade->node_id));
+                                 plan.geometry);
       result.local_tone_reference_resource_id       = local_tone.reference_resource_id;
       result.local_tone_rebuilt_reference           = local_tone.rebuilt_reference;
       result.local_tone_sampled_canonical_reference = local_tone.sampled_canonical_reference;
@@ -566,6 +562,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");
   }
+  device.Workspace().PrepareResultValidity(plan, document, prepared);
   OpenClPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
     last = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);

@@ -124,7 +124,7 @@ class Renderer {
    *        one-shot device, and backend session extras.
    *
    * The session device is kept when it already exists so the next editor Render
-   * does not rebuild CUDA/Metal/OpenCL streams. Thumbnail-only Bypass renders
+   * does not rebuild GPU streams. Thumbnail-only Bypass renders
    * never create that session device. Call when the last pipeline pin is
    * released. The next Render rebuilds caches from the still-owned document.
    */
@@ -248,7 +248,11 @@ void Renderer<Backend>::SetDocument(std::shared_ptr<PipelineDocument> document) 
   if (!document) {
     throw std::invalid_argument("Renderer: PipelineDocument is null");
   }
-  document_ = std::move(document);
+  const bool replaced = document_.get() != document.get();
+  document_           = std::move(document);
+  if (replaced && device_) {
+    device_->Workspace().ResultInvalidation().AdvanceDocumentEpoch();
+  }
 }
 
 template <class Backend>

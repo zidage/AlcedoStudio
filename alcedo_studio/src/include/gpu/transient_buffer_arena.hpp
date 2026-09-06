@@ -421,7 +421,7 @@ class TransientBufferArena {
     }
     // Larger than one slab: do not pre-split into max-slab chunks. A remainder
     // slab cannot satisfy a later near-max-slab Allocate, and appending that
-    // request then exceeds MaxTransientBytes (OpenCL 100MP Neural + HLR).
+    // request then exceeds MaxTransientBytes (100MP Neural + HLR).
     // Allocate() appends request-sized slabs instead.
   }
 

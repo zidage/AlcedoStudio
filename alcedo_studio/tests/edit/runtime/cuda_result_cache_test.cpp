@@ -413,14 +413,10 @@ TEST_F(CudaResultCacheProductFixture, ImageSwitchBackReusesMatchingPreparedSourc
   const auto stats = renderer_->Stats();
   EXPECT_EQ(stats.libraw_open_unpack_count, 0U);
   EXPECT_EQ(stats.prepared_source_hits, 1U);
-  EXPECT_EQ(stats.pass.source_h2d_count, 0U);
-  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
-  EXPECT_EQ(stats.pass.geometry_execute, 0U);
-  EXPECT_EQ(stats.pass.camera_color_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
-  EXPECT_EQ(stats.pass.drt_execute, 0U);
-  EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
-  EXPECT_EQ(stats.pass.drt_skip, 1U);
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 1U);
+  EXPECT_EQ(stats.pass.drt_execute, 1U);
+  EXPECT_EQ(stats.pass.sensor_develop_skip, 0U);
+  EXPECT_EQ(stats.pass.drt_skip, 0U);
 }
 
 TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditorSessionCaches) {
@@ -506,22 +502,21 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
   renderer_->Device().WaitIdle();
   const auto completed = renderer_->Device().Workspace().Device().CompletedSubmission();
   auto&      images    = renderer_->Device().Workspace().Images();
-  EXPECT_EQ(images.PublishedContentKey(plan.sensor_linear_output), keys.sensor_linear);
-  EXPECT_EQ(images.PublishedContentKey(plan.geometry_output), keys.geometry_scene_source);
-  EXPECT_EQ(images.PublishedContentKey(plan.develop_output), keys.develop_image);
+  auto&      invalidation = renderer_->Device().Workspace().ResultInvalidation();
   ASSERT_NE(plan.FirstGrade(), nullptr);
-  EXPECT_EQ(images.PublishedContentKey(plan.FirstGrade()->scene_output), keys.primary_grade);
-  EXPECT_EQ(images.PublishedContentKey(plan.display_output), keys.drt_display);
-  EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, keys.sensor_linear,
-                                     keys.sensor_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.geometry_output, keys.geometry_scene_source,
-                                     keys.geometry_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.develop_output, keys.develop_image, keys.geometry_extent,
-                                     TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.FirstGrade()->scene_output, keys.primary_grade,
-                                     keys.geometry_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.display_output, keys.drt_display, keys.geometry_extent,
-                                     TextureFormat::Rgba32f, completed));
+  const auto expect_current = [&](const GraphValueId& id, ImageExtent extent) {
+    EXPECT_NE(images.PublishedRevision(id), 0U);
+    EXPECT_EQ(images.PublishedRevision(id), invalidation.RequiredRevision(id));
+    EXPECT_TRUE(images.FindValidResult(id, invalidation.RequiredRevision(id),
+                                       invalidation.MakeImageRepresentation(id, extent,
+                                                                            TextureFormat::Rgba32f),
+                                       completed));
+  };
+  expect_current(plan.sensor_linear_output, keys.sensor_extent);
+  expect_current(plan.geometry_output, keys.geometry_extent);
+  expect_current(plan.develop_output, keys.geometry_extent);
+  expect_current(plan.FirstGrade()->scene_output, keys.geometry_extent);
+  expect_current(plan.display_output, keys.geometry_extent);
 }
 
 TEST_F(CudaResultCacheProductFixture, RepeatedOneShotRendersReuseDeviceAndReleaseWorkspace) {
@@ -663,7 +658,7 @@ TEST_F(CudaResultCacheProductFixture, RendererOneShotWorkspaceCannotPublishIntoS
   EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
 }
 
-TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedContentKeys) {
+TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedRevisions) {
   ASSERT_TRUE(OutputIsFinite(Render()));
   auto&      encoded       = image_->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
@@ -672,8 +667,12 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedCon
   const auto& prepared     = source_lease.Get();
   auto        first_plan   = renderer_->PlanCache().GetOrCompile(*document_, prepared.CompileSource());
   GraphCompiler::BindFrameGeometry(first_plan, *document_, {});
-  const auto first_keys = BuildFrameResultContentKeys(first_plan, prepared, *document_);
   const auto published_before = renderer_->SessionResources().published_result_count;
+  auto&      images           = renderer_->Device().Workspace().Images();
+  const auto published_sensor = images.PublishedRevision(first_plan.sensor_linear_output);
+  const auto published_display = images.PublishedRevision(first_plan.display_output);
+  const auto sensor_repr      = images.PublishedRepresentation(first_plan.sensor_linear_output);
+  const auto display_repr     = images.PublishedRepresentation(first_plan.display_output);
 
   auto develop                   = document_->Develop()->Params().Params();
   develop.highlights_reconstruct = !develop.highlights_reconstruct;
@@ -681,27 +680,16 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedCon
   renderer_->Device().Workspace().Device().FailNextUpload();
   EXPECT_THROW(Render(), std::runtime_error);
 
-  auto second_plan = GraphCompiler::CompileStatic(*document_, prepared.CompileSource(),
-                                                  kCudaDagBackendCapabilityVersion);
-  GraphCompiler::BindFrameGeometry(second_plan, *document_, {});
-  const auto second_keys = BuildFrameResultContentKeys(second_plan, prepared, *document_);
-  ASSERT_NE(second_keys.sensor_linear, first_keys.sensor_linear);
-
   renderer_->Device().WaitIdle();
-  auto&      images    = renderer_->Device().Workspace().Images();
   const auto completed = renderer_->Device().Workspace().Device().CompletedSubmission();
+  auto&      invalidation = renderer_->Device().Workspace().ResultInvalidation();
   EXPECT_EQ(renderer_->SessionResources().published_result_count, published_before);
-  EXPECT_TRUE(images.FindValidResult(first_plan.sensor_linear_output, first_keys.sensor_linear,
-                                     first_keys.sensor_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(first_plan.display_output, first_keys.drt_display,
-                                     first_keys.geometry_extent, TextureFormat::Rgba32f,
+  EXPECT_TRUE(images.FindValidResult(first_plan.sensor_linear_output, published_sensor, sensor_repr,
                                      completed));
-  EXPECT_FALSE(images.FindValidResult(second_plan.sensor_linear_output, second_keys.sensor_linear,
-                                      second_keys.sensor_extent, TextureFormat::Rgba32f,
-                                      completed));
-  EXPECT_FALSE(images.FindValidResult(second_plan.display_output, second_keys.drt_display,
-                                      second_keys.geometry_extent, TextureFormat::Rgba32f,
-                                      completed));
+  EXPECT_TRUE(images.FindValidResult(first_plan.display_output, published_display, display_repr,
+                                     completed));
+  EXPECT_NE(invalidation.RequiredRevision(first_plan.sensor_linear_output), published_sensor);
+  EXPECT_NE(invalidation.RequiredRevision(first_plan.display_output), published_display);
   EXPECT_EQ(images.UnpublishedCount(), 0U);
 }
 
@@ -726,48 +714,44 @@ class CudaResultCacheDeviceFixture : public ::testing::Test {
   CudaRenderDevice device_;
 };
 
-TEST_F(CudaResultCacheDeviceFixture, FailedSubmissionDoesNotPublishResultContentKey) {
-  auto       plan       = Compile();
-  const auto first_keys = BuildFrameResultContentKeys(plan, input_, document_);
+TEST_F(CudaResultCacheDeviceFixture, FailedSubmissionDoesNotPublishResultRevision) {
+  auto plan = Compile();
   ASSERT_EQ(device_.Execute(plan, input_, document_), plan.display_output);
+  auto& images            = device_.Workspace().Images();
+  const auto published_sensor  = images.PublishedRevision(plan.sensor_linear_output);
+  const auto published_display = images.PublishedRevision(plan.display_output);
+  const auto sensor_repr       = images.PublishedRepresentation(plan.sensor_linear_output);
+  const auto display_repr      = images.PublishedRepresentation(plan.display_output);
   auto develop                   = document_.Develop()->Params().Params();
   develop.highlights_reconstruct = !develop.highlights_reconstruct;
   document_.Develop()->Params().ReplaceParams(develop);
-  const auto second_keys = BuildFrameResultContentKeys(plan, input_, document_);
-  ASSERT_NE(second_keys.sensor_linear, first_keys.sensor_linear);
   device_.Workspace().Device().FailNextUpload();
   EXPECT_THROW((void)device_.Execute(plan, input_, document_), std::runtime_error);
   device_.WaitIdle();
-  auto&      images    = device_.Workspace().Images();
-  const auto completed = device_.Workspace().Device().CompletedSubmission();
-  EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, first_keys.sensor_linear,
-                                     first_keys.sensor_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_TRUE(images.FindValidResult(plan.display_output, first_keys.drt_display,
-                                     first_keys.geometry_extent, TextureFormat::Rgba32f,
+  const auto completed    = device_.Workspace().Device().CompletedSubmission();
+  auto&      invalidation = device_.Workspace().ResultInvalidation();
+  EXPECT_TRUE(images.FindValidResult(plan.sensor_linear_output, published_sensor, sensor_repr,
                                      completed));
-  EXPECT_FALSE(images.FindValidResult(plan.sensor_linear_output, second_keys.sensor_linear,
-                                      second_keys.sensor_extent, TextureFormat::Rgba32f,
-                                      completed));
-  EXPECT_FALSE(images.FindValidResult(plan.display_output, second_keys.drt_display,
-                                      second_keys.geometry_extent, TextureFormat::Rgba32f,
-                                      completed));
+  EXPECT_TRUE(images.FindValidResult(plan.display_output, published_display, display_repr,
+                                     completed));
+  EXPECT_NE(invalidation.RequiredRevision(plan.sensor_linear_output), published_sensor);
+  EXPECT_NE(invalidation.RequiredRevision(plan.display_output), published_display);
 }
 
 TEST_F(CudaResultCacheDeviceFixture,
        CancelledSubmissionKeepsPreviouslyCompletedCacheEntriesUsable) {
-  auto       plan = Compile();
-  const auto keys = BuildFrameResultContentKeys(plan, input_, document_);
+  auto plan = Compile();
   ASSERT_EQ(device_.Execute(plan, input_, document_), plan.display_output);
+  auto&      images   = device_.Workspace().Images();
+  const auto revision = images.PublishedRevision(plan.display_output);
+  const auto repr     = images.PublishedRepresentation(plan.display_output);
   device_.BeginRender();
   (void)device_.Workspace().AcquireImageForWrite(
-      plan.display_output,
-      {keys.geometry_extent.width, keys.geometry_extent.height, TextureFormat::Rgba32f});
+      plan.display_output, {repr.extent.width, repr.extent.height, TextureFormat::Rgba32f});
   device_.CancelRender();
   device_.WaitIdle();
   const auto completed = device_.Workspace().Device().CompletedSubmission();
-  EXPECT_TRUE(device_.Workspace().Images().FindValidResult(plan.display_output, keys.drt_display,
-                                                           keys.geometry_extent,
-                                                           TextureFormat::Rgba32f, completed));
+  EXPECT_TRUE(images.FindValidResult(plan.display_output, revision, repr, completed));
   ASSERT_EQ(device_.Execute(plan, input_, document_), plan.display_output);
   EXPECT_EQ(device_.PassStats().drt_skip, 1U);
 }

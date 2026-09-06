@@ -11,7 +11,6 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
-#include "edit/runtime/content_key.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
@@ -34,8 +33,7 @@ struct MetalLocalToneResult {
                                          const MetalBackend::Texture2D& input,
                                          MetalBackend::Texture2D& output, const NodeId& grade_id,
                                          float shadows_slider, float highlights_slider,
-                                         const ResolvedRenderGeometry& geometry,
-                                         ContentKey source_key, ContentKey result_key)
+                                         const ResolvedRenderGeometry& geometry)
     -> MetalLocalToneResult;
 
 void AppendMetalLocalToneWarmup(std::vector<MetalPipelineWarmup>& pipelines);

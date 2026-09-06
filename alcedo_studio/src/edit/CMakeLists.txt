@@ -84,6 +84,7 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/runtime_invalidation.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
 )
 if(NOT ALCEDO_METAL_ENABLED)

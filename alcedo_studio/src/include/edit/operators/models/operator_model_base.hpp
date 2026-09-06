@@ -32,6 +32,11 @@ class OperatorModelBase : public IOperatorModel {
     return dirty_.Any();
   }
 
+  [[nodiscard]] auto DirtyFields() const -> DirtyFieldMask override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dirty_;
+  }
+
   [[nodiscard]] auto MakeFullDto() const -> OperatorParamDto override {
     std::lock_guard<std::mutex> lock(mutex_);
     return MakeDtoLocked();

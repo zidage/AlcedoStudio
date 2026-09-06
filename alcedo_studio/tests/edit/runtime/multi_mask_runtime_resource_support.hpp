@@ -374,11 +374,19 @@ void ExpectMaskUploadFailureKeepsPriorPublishedResults(Device& device) {
   auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), {});
   ASSERT_EQ(device.Execute(plan, prepared, document, &store), plan.display_output);
   device.WaitIdle();
-  const auto before = BuildFrameResultContentKeys(plan, prepared, document);
+  auto& images       = device.Workspace().Images();
+  auto& invalidation = device.Workspace().ResultInvalidation();
   ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
-  const auto source_id = plan.FirstGrade()->mask_stack->sources[0].effective_output;
-  const auto union_id  = plan.FirstGrade()->mask_output;
-  const auto grade_id  = plan.FirstGrade()->scene_output;
+  const auto source_id   = plan.FirstGrade()->mask_stack->sources[0].effective_output;
+  const auto union_id    = plan.FirstGrade()->mask_output;
+  const auto grade_id    = plan.FirstGrade()->scene_output;
+  const auto source_rev  = images.PublishedRevision(source_id);
+  const auto union_rev   = images.PublishedRevision(union_id);
+  const auto grade_rev   = images.PublishedRevision(grade_id);
+  const auto source_repr = images.PublishedRepresentation(source_id);
+  const auto union_repr  = images.PublishedRepresentation(union_id);
+  const auto grade_repr  = images.PublishedRepresentation(grade_id);
+  ASSERT_NE(source_rev, 0U);
 
   auto second = MakeFilledRaster(kResourceWidth, kResourceHeight, 40);
   second.key  = store.Put(second.descriptor, second.pixels);
@@ -388,17 +396,12 @@ void ExpectMaskUploadFailureKeepsPriorPublishedResults(Device& device) {
   device.Workspace().Device().FailNextUpload();
   EXPECT_THROW((void)device.Execute(plan, prepared, document, &store), std::runtime_error);
   device.WaitIdle();
-  const auto after     = BuildFrameResultContentKeys(plan, prepared, document);
   const auto completed = device.Workspace().Device().CompletedSubmission();
-  EXPECT_NE(after.Value(source_id), before.Value(source_id));
-  EXPECT_TRUE(device.Workspace().Images().FindValidResult(
-      source_id, before.Value(source_id), before.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_TRUE(device.Workspace().Images().FindValidResult(
-      union_id, before.mask, before.geometry_extent, TextureFormat::R8, completed));
-  EXPECT_TRUE(device.Workspace().Images().FindValidResult(
-      grade_id, before.primary_grade, before.geometry_extent, TextureFormat::Rgba32f, completed));
-  EXPECT_FALSE(device.Workspace().Images().FindValidResult(
-      source_id, after.Value(source_id), after.geometry_extent, TextureFormat::R8, completed));
+  EXPECT_TRUE(images.FindValidResult(source_id, source_rev, source_repr, completed));
+  EXPECT_TRUE(images.FindValidResult(union_id, union_rev, union_repr, completed));
+  EXPECT_TRUE(images.FindValidResult(grade_id, grade_rev, grade_repr, completed));
+  EXPECT_EQ(images.PublishedRevision(source_id), source_rev);
+  EXPECT_NE(invalidation.RequiredRevision(source_id), source_rev);
 }
 
 }  // namespace alcedo::multi_mask_qualification

@@ -107,12 +107,40 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
 }
 
 void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
-  if (payload == PayloadCopy()) {
+  const auto current = PayloadCopy();
+  if (payload == current) {
     return;
   }
-  Mutate(DevelopDirty::All, [payload = std::move(payload)](DevelopPayload& dest) mutable {
-    dest = std::move(payload);
-  });
+  auto bits = static_cast<std::uint64_t>(DevelopDirty::None);
+  if (payload.demosaic_method != current.demosaic_method) {
+    bits |= static_cast<std::uint64_t>(DevelopDirty::Demosaic);
+  }
+  if (payload.highlights_reconstruct != current.highlights_reconstruct) {
+    bits |= static_cast<std::uint64_t>(DevelopDirty::Highlights);
+  }
+  if (payload.lens_enabled != current.lens_enabled ||
+      payload.apply_vignetting != current.apply_vignetting ||
+      payload.apply_distortion != current.apply_distortion ||
+      payload.apply_tca != current.apply_tca || payload.apply_crop != current.apply_crop ||
+      payload.auto_scale != current.auto_scale || payload.use_user_scale != current.use_user_scale ||
+      payload.user_scale != current.user_scale ||
+      payload.projection_enabled != current.projection_enabled ||
+      payload.target_projection != current.target_projection ||
+      payload.lens_profile_db_path != current.lens_profile_db_path) {
+    bits |= static_cast<std::uint64_t>(DevelopDirty::Lens);
+  }
+  if (payload.use_camera_wb != current.use_camera_wb || payload.user_wb != current.user_wb ||
+      payload.wb_mode != current.wb_mode || payload.custom_cct != current.custom_cct ||
+      payload.custom_tint != current.custom_tint || payload.as_shot_cct != current.as_shot_cct ||
+      payload.as_shot_tint != current.as_shot_tint ||
+      payload.camera_profile != current.camera_profile) {
+    bits |= static_cast<std::uint64_t>(DevelopDirty::WhiteBalance);
+  }
+  if (bits == 0) {
+    bits = static_cast<std::uint64_t>(DevelopDirty::All);
+  }
+  Mutate(static_cast<DevelopDirty>(bits),
+         [payload = std::move(payload)](DevelopPayload& dest) mutable { dest = std::move(payload); });
 }
 
 DevelopNodeModel::DevelopNodeModel(NodeId id) : id_(std::move(id)) {
