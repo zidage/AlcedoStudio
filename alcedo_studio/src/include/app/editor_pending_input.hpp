@@ -132,6 +132,21 @@ class EditorPendingInputQueue {
    */
   [[nodiscard]] auto Peek() const -> EditorPendingInputView;
 
+  /**
+   * @brief Take the next sequence the owner may apply.
+   *
+   * Sealed sequences are taken in admit order. When none are sealed, the open
+   * sequence's current field writes are taken and the sequence stays open so
+   * later pointer samples can merge. Empty open sequences are not taken.
+   * Cancel seals are taken even when fields were discarded at admit time.
+   *
+   * @return The batch, or nullopt when nothing is consumable.
+   */
+  auto TakeReadyBatch() -> std::optional<EditorPendingSequence>;
+
+  /// True when TakeReadyBatch would return a sequence.
+  [[nodiscard]] auto HasConsumableWork() const -> bool;
+
   /// True when no sealed or open sequences remain.
   [[nodiscard]] auto empty() const -> bool;
 
@@ -144,6 +159,7 @@ class EditorPendingInputQueue {
       -> EditorPendingSequence&;
   void SealOpenLocked(EditorPendingInputBoundaryKind kind);
   [[nodiscard]] auto PeekLocked() const -> EditorPendingInputView;
+  [[nodiscard]] auto HasConsumableWorkLocked() const -> bool;
 
   mutable std::mutex                                 mutex_;
   std::uint64_t                                      next_sequence_id_ = 1;

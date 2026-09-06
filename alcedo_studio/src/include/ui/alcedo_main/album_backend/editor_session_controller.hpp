@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 #include <QVariantMap>
 #include <QtGlobal>
 #include <memory>
@@ -308,6 +309,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                      const QString&                     selected_id = {});
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
+  void BindAdmissionDeadline();
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto       NormalizeToolPanelPage(const QString& page) -> QString;
 
@@ -351,6 +353,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection                        interaction_view_change_connection_;
   QMetaObject::Connection                        interaction_policy_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
+  QTimer*                                        admission_deadline_timer_ = nullptr;
 };
 
 }  // namespace alcedo::ui

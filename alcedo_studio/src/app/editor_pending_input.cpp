@@ -65,9 +65,37 @@ auto EditorPendingInputQueue::Peek() const -> EditorPendingInputView {
   return PeekLocked();
 }
 
+auto EditorPendingInputQueue::TakeReadyBatch() -> std::optional<EditorPendingSequence> {
+  std::scoped_lock lock(mutex_);
+  if (!sealed_.empty()) {
+    EditorPendingSequence batch = std::move(sealed_.front());
+    sealed_.erase(sealed_.begin());
+    return batch;
+  }
+  if (open_.has_value() && !open_->fields.empty()) {
+    EditorPendingSequence batch = *open_;
+    open_->fields.clear();
+    open_field_index_.clear();
+    return batch;
+  }
+  return std::nullopt;
+}
+
+auto EditorPendingInputQueue::HasConsumableWork() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return HasConsumableWorkLocked();
+}
+
 auto EditorPendingInputQueue::empty() const -> bool {
   std::scoped_lock lock(mutex_);
   return sealed_.empty() && !open_.has_value();
+}
+
+auto EditorPendingInputQueue::HasConsumableWorkLocked() const -> bool {
+  if (!sealed_.empty()) {
+    return true;
+  }
+  return open_.has_value() && !open_->fields.empty();
 }
 
 auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity        identity,

@@ -8,6 +8,7 @@
 
 #include "app/editor_pending_input.hpp"
 #include "app/editor_pipeline_command_service.hpp"
+#include "app/editor_session_edit_controller.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -329,6 +330,35 @@ TEST_F(SerialInputBoundaryTest, TypedModelsEnqueueThroughSameOwnerRuleWithoutLiv
     EXPECT_EQ(sequence.identity.element_id, identity_.element_id);
     EXPECT_EQ(sequence.identity.image_id, identity_.image_id);
   }
+}
+
+TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOnce) {
+  QueuedInputSubmitter submitter(&queue_, identity_);
+  auto                 model = std::make_unique<EditorAdjustmentValueModel>();
+  model->setSubmitter(&submitter);
+  model->setFieldKey("exposure");
+  model->setMinimum(-5.0);
+  model->setMaximum(5.0);
+  model->setDefaultValue(1.25);
+  model->setValue(0.0);
+  model->reset();
+
+  auto batch = queue_.TakeReadyBatch();
+  ASSERT_TRUE(batch.has_value());
+  EXPECT_EQ(batch->seal, alcedo::EditorPendingInputBoundaryKind::Release);
+
+  auto history_ptr = std::shared_ptr<alcedo::IEditorHistoryPort>(
+      static_cast<alcedo::IEditorHistoryPort*>(&history_), [](alcedo::IEditorHistoryPort*) {});
+  alcedo::EditorSessionEditController edit({history_ptr, nullptr});
+  const auto outcome = edit.HandlePendingSequence(*batch, handle_, identity_);
+  EXPECT_EQ(outcome.kind, alcedo::EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(outcome.reason, alcedo::EditorRenderReason::SettledAdjustment);
+  EXPECT_TRUE(outcome.render_command.live_parameters_applied);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 1.25f);
+
+  std::string error;
+  ASSERT_TRUE(history_.Undo(handle_, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), alcedo::kDefaultPipelineExposureEv);
 }
 
 TEST_F(SerialInputBoundaryTest, ImageExifDisplayFieldsAreOwnedByImageNotPipelineDocument) {

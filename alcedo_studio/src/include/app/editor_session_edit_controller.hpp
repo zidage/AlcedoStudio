@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
@@ -54,6 +55,19 @@ class EditorSessionEditController final {
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,
                    const EditorHistoryGuardHandle& guard,
                    const EditorSessionIdentity& identity) -> EditorEditOutcome;
+
+  /**
+   * @brief Apply one pending-input sequence under the history owner.
+   *
+   * Captures first-before values, applies every field once, commits Release and
+   * NodeSwitch sequences, restores Cancel without committing, and returns a
+   * single render command. Live parameters are applied during history capture;
+   * the render command sets @c live_parameters_applied so configure does not
+   * apply them again.
+   */
+  auto HandlePendingSequence(const EditorPendingSequence& sequence,
+                             const EditorHistoryGuardHandle& guard,
+                             const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
   /// Undo or redo the last history operation. History rebuilds the live pipeline;
   /// the render command carries no adjustment replay.

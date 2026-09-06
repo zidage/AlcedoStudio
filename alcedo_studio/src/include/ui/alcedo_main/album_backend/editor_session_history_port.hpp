@@ -58,6 +58,8 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
                                       const alcedo::EditorAdjustmentPatch& patch,
                                       std::string* error) -> bool override;
+  auto RestoreUnsettledPreview(const alcedo::EditorHistoryGuardHandle& guard, bool* live_changed,
+                               std::string* error) -> bool override;
   auto CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::EditorAdjustmentPatch& patch, std::string* error)
       -> bool override;

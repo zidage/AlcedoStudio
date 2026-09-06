@@ -487,6 +487,11 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
   if (!reducing_command_) {
+    if (auto deferred = DeferIfLiveOwnershipHeld(
+            [this, version_id] { return CheckoutVersion(version_id); },
+            "Checkout queued behind in-flight frame")) {
+      return *deferred;
+    }
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::CheckoutVersion;
     command.version_id = version_id;
@@ -494,6 +499,7 @@ auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
       return CheckoutVersion(queued.version_id);
     });
   }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto outcome = navigation_.RequestCheckoutVersion(version_id);
   return FinishVersionNavigation(outcome);
 }
@@ -1081,6 +1087,7 @@ auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
     return Reject(admitted.error.empty() ? "Queued adjustment input was rejected"
                                          : admitted.error);
   }
+  RequestPendingInputConsume();
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -1103,6 +1110,7 @@ auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundar
     return Reject(admitted.error.empty() ? "Queued adjustment boundary was rejected"
                                          : admitted.error);
   }
+  RequestPendingInputConsume();
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -1113,6 +1121,163 @@ auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundar
 
 auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {
   return pending_input_.Peek();
+}
+
+void EditorSessionService::SetAdmissionDeadlineHandler(
+    std::function<void(std::int64_t delay_ns)> handler) {
+  serial_admission_.SetDeadlineHandler(std::move(handler));
+}
+
+void EditorSessionService::SetMonotonicClock(std::shared_ptr<IEditorMonotonicClock> clock) {
+  serial_admission_.SetClock(std::move(clock));
+}
+
+void EditorSessionService::RequestPendingInputConsume() {
+  command_queue_.PostCompletion([this] {
+    const auto previous_reducing  = reducing_command_;
+    const auto previous_operation = current_operation_id_;
+    reducing_command_             = true;
+    BeginPublication();
+    TryConsumePendingInput();
+    EndPublication();
+    reducing_command_     = previous_reducing;
+    current_operation_id_ = previous_operation;
+  });
+}
+
+void EditorSessionService::TryConsumePendingInput() {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
+    return;
+  }
+  if (serial_admission_.HoldsOwnership()) {
+    return;
+  }
+  if (render_.render_diagnostics().has_inflight) {
+    serial_admission_.RequestInteractiveDeadlineIfNeeded();
+    return;
+  }
+  if (serial_admission_.HasDeferredOwnerWork()) {
+    auto work = serial_admission_.TakeDeferredOwnerWork();
+    if (work) {
+      work();
+    }
+    return;
+  }
+  if (!pending_input_.HasConsumableWork()) {
+    return;
+  }
+  const auto peek = pending_input_.Peek();
+  if (peek.sequences.empty()) {
+    return;
+  }
+  const bool interactive =
+      peek.sequences.front().seal == EditorPendingInputBoundaryKind::None;
+  if (!serial_admission_.TryBeginCycle(interactive)) {
+    return;
+  }
+  auto batch = pending_input_.TakeReadyBatch();
+  if (!batch.has_value()) {
+    serial_admission_.AbortCycle();
+    return;
+  }
+  const auto result = ConsumeTakenSequence(*batch);
+  if (result.kind == EditorSessionResultKind::Rejected ||
+      result.kind == EditorSessionResultKind::Failed) {
+    serial_admission_.AbortCycle();
+    (void)Emit(result);
+    RequestPendingInputConsume();
+  }
+}
+
+auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& sequence)
+    -> EditorSessionResult {
+  const auto guard = lifecycle_.history_guard();
+  const auto ident = lifecycle_.identity();
+  auto       outcome = edit_.HandlePendingSequence(sequence, guard, ident);
+  if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
+      outcome.kind == EditorEditOutcome::Kind::Failed) {
+    EditorSessionResult result;
+    result.kind     = outcome.kind == EditorEditOutcome::Kind::Failed
+                          ? EditorSessionResultKind::Failed
+                          : EditorSessionResultKind::Rejected;
+    result.state    = lifecycle_.state();
+    result.identity = ident;
+    result.message  = outcome.message;
+    return result;
+  }
+  const bool commit = sequence.seal == EditorPendingInputBoundaryKind::Release ||
+                      sequence.seal == EditorPendingInputBoundaryKind::NodeSwitch;
+  if (!outcome.schedule_render || outcome.kind != EditorEditOutcome::Kind::RenderRouted) {
+    serial_admission_.AbortCycle();
+    if (commit) {
+      BumpHistoryRevision();
+    }
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = ident;
+    result.message  = outcome.message;
+    return result;
+  }
+  const auto route_identity           = lifecycle_.identity();
+  const auto load_request             = lifecycle_.active_image_load_request();
+  outcome.render_command.operation_id = current_operation_id_;
+  const auto request_id =
+      render_.RouteInitialRender(outcome.render_command, route_identity, load_request);
+  if (request_id == 0) {
+    serial_admission_.AbortCycle();
+  } else {
+    serial_admission_.NoteScheduledRequest(request_id);
+  }
+  if (commit) {
+    BumpHistoryRevision();
+  }
+  EditorSessionResult result;
+  result.kind              = EditorSessionResultKind::RenderRouted;
+  result.state             = lifecycle_.state();
+  result.identity          = route_identity;
+  result.render_request_id = request_id;
+  result.message           = outcome.message;
+  return result;
+}
+
+void EditorSessionService::FinishSerialFrameIfNeeded(const EditorRenderResult& render_result) {
+  switch (render_result.kind) {
+    case EditorRenderResultKind::FrameReady:
+    case EditorRenderResultKind::Failed:
+    case EditorRenderResultKind::Cancelled:
+      break;
+    default:
+      return;
+  }
+  const bool published = render_result.kind == EditorRenderResultKind::FrameReady;
+  (void)serial_admission_.CompleteIfMatches(render_result.request_id, published);
+  if (serial_admission_.HoldsOwnership()) {
+    return;
+  }
+  if (serial_admission_.HasDeferredOwnerWork()) {
+    auto work = serial_admission_.TakeDeferredOwnerWork();
+    if (work) {
+      work();
+    }
+    return;
+  }
+  TryConsumePendingInput();
+}
+
+auto EditorSessionService::DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry,
+                                                    std::string message)
+    -> std::optional<EditorSessionResult> {
+  if (!serial_admission_.HoldsOwnership() || !retry) {
+    return std::nullopt;
+  }
+  serial_admission_.DeferOwnerWork([retry = std::move(retry)]() { (void)retry(); });
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = std::move(message);
+  return result;
 }
 
 auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
@@ -1194,6 +1359,10 @@ auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSess
 
 auto EditorSessionService::Undo() -> EditorSessionResult {
   if (!reducing_command_) {
+    if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Undo(); },
+                                                "Undo queued behind in-flight frame")) {
+      return *deferred;
+    }
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Undo;
     return SubmitCommand(std::move(command),
@@ -1211,6 +1380,7 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto undo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1228,6 +1398,10 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
 
 auto EditorSessionService::Redo() -> EditorSessionResult {
   if (!reducing_command_) {
+    if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Redo(); },
+                                                "Redo queued behind in-flight frame")) {
+      return *deferred;
+    }
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Redo;
     return SubmitCommand(std::move(command),
@@ -1245,6 +1419,7 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
+  serial_admission_.ResetPacingAfterNonInteractiveWork();
   const auto redo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1499,6 +1674,7 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     BeginPublication();
     render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(),
                                lifecycle_.active_image_load_request(), lifecycle_.state());
+    FinishSerialFrameIfNeeded(completion.render_result);
     EndPublication();
     reducing_command_     = previous_reducing;
     current_operation_id_ = previous_operation;

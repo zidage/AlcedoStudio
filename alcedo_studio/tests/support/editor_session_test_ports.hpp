@@ -71,6 +71,9 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   int  release_count  = 0;
   int  capture_count  = 0;
   int  commit_count   = 0;
+  int  restore_preview_count = 0;
+  bool restore_changes_live  = false;
+  bool fail_restore_preview  = false;
   int  undo_count     = 0;
   int  redo_count     = 0;
   int  checkpoint_capture_count = 0;
@@ -118,6 +121,15 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     ++capture_count;
     last_captured_patch = patch;
     return true;
+  }
+
+  auto RestoreUnsettledPreview(const EditorHistoryGuardHandle&, bool* live_changed, std::string*)
+      -> bool override {
+    ++restore_preview_count;
+    if (live_changed != nullptr) {
+      *live_changed = restore_changes_live;
+    }
+    return !fail_restore_preview;
   }
 
   auto CommitAdjustment(const EditorHistoryGuardHandle&, const EditorAdjustmentPatch& patch,

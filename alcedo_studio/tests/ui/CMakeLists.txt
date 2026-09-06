@@ -614,6 +614,7 @@ target_link_libraries(EditorSerialInputBoundaryTest
     EditHistory
     EditorAdjustmentPipeline
     EditorPipelineCommandService
+    EditorSessionEditController
     GTest::gtest
     Qt6::Core
     Qt6::Gui

@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QSettings>
 #include <QThread>
+#include <QTimer>
 #include <QtGlobal>
 #include <algorithm>
 #include <cmath>
@@ -72,6 +73,7 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
     ApplyActionAvailability();
   }
   InstallBackendNotifier();
+  BindAdmissionDeadline();
 }
 
 EditorSessionController::~EditorSessionController() {
@@ -79,7 +81,42 @@ EditorSessionController::~EditorSessionController() {
     session_backend_->SetChangeNotifier({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
+    session_backend_->SetAdmissionDeadlineHandler({});
   }
+}
+
+void EditorSessionController::BindAdmissionDeadline() {
+  if (!session_backend_) {
+    return;
+  }
+  if (admission_deadline_timer_ == nullptr) {
+    admission_deadline_timer_ = new QTimer(this);
+    admission_deadline_timer_->setSingleShot(true);
+    connect(admission_deadline_timer_, &QTimer::timeout, this, [this] {
+      if (session_backend_) {
+        session_backend_->TryConsumePendingInput();
+      }
+    });
+  }
+  QPointer<EditorSessionController> self(this);
+  session_backend_->SetAdmissionDeadlineHandler([self](std::int64_t delay_ns) {
+    if (!self || self->admission_deadline_timer_ == nullptr) {
+      return;
+    }
+    auto* timer = self->admission_deadline_timer_;
+    timer->stop();
+    if (delay_ns <= 0) {
+      QTimer::singleShot(0, self.data(), [self] {
+        if (self && self->session_backend_) {
+          self->session_backend_->TryConsumePendingInput();
+        }
+      });
+      return;
+    }
+    const int delay_ms =
+        static_cast<int>((delay_ns + 999999) / 1000000);
+    timer->start(std::max(1, delay_ms));
+  });
 }
 
 void EditorSessionController::InstallBackendNotifier() {
@@ -153,12 +190,14 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
     session_backend_->SetChangeNotifier({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
+    session_backend_->SetAdmissionDeadlineHandler({});
   }
   session_backend_ = session_backend;
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
                                                QLatin1String("geometry"));
     InstallBackendNotifier();
+    BindAdmissionDeadline();
     SyncIdentityFromBackend();
     ApplyActionAvailability();
   } else {

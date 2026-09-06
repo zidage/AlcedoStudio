@@ -397,19 +397,42 @@ constexpr const char* kCurrentPanelFields[] = {
     "clarity",    "sharpen",  "odt",  "film_grain", "halation",   "crop_rotate", "raw_decode",
     "lens_calib", "color_temp"};
 
-auto CpuParamsFromModelJson(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
-  if (field_key == "exposure" && params.contains("exposure_ev")) {
-    params["exposure"] = params.at("exposure_ev");
-    params.erase("exposure_ev");
+void RenameJsonKeyIfAbsent(nlohmann::json& params, const char* from, const char* to) {
+  if (params.contains(from) && !params.contains(to)) {
+    params[to] = params.at(from);
+    params.erase(from);
   }
-  if (field_key == "lut" && params.contains("cube_path") && !params.contains("ocio_lmt")) {
-    params["ocio_lmt"] = params.at("cube_path");
-    params.erase("cube_path");
+}
+
+auto CpuParamsFromModelJson(const std::string& field_key, nlohmann::json params) -> nlohmann::json {
+  if (field_key == "exposure") {
+    RenameJsonKeyIfAbsent(params, "exposure_ev", "exposure");
+    RenameJsonKeyIfAbsent(params, "value", "exposure");
+  }
+  if (field_key == "lut") {
+    RenameJsonKeyIfAbsent(params, "cube_path", "ocio_lmt");
   }
   return params;
 }
 
 }  // namespace
+
+auto EditorAdjustmentDocumentParamsFromWrite(const std::string& field_key, nlohmann::json params)
+    -> nlohmann::json {
+  if (field_key == "exposure") {
+    RenameJsonKeyIfAbsent(params, "exposure", "exposure_ev");
+    RenameJsonKeyIfAbsent(params, "value", "exposure_ev");
+  }
+  if (field_key == "lut") {
+    RenameJsonKeyIfAbsent(params, "ocio_lmt", "cube_path");
+  }
+  return params;
+}
+
+auto EditorAdjustmentExecutorParamsFromWrite(const std::string& field_key, nlohmann::json params)
+    -> nlohmann::json {
+  return CpuParamsFromModelJson(field_key, std::move(params));
+}
 
 auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& executor,
                                                           std::string*         error) -> bool {

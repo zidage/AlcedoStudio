@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_session_edit_controller.hpp"
+#include "app/editor_pending_input.hpp"
 
 #include <gtest/gtest.h>
 
@@ -178,6 +179,58 @@ TEST_F(EditorSessionEditControllerTest, MaskTargetIsRejected) {
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
   EXPECT_EQ(result.message, "Mask parameter targets are rejected until NM3");
   EXPECT_EQ(history_->capture_count, 0);
+}
+
+TEST_F(EditorSessionEditControllerTest, PendingSequenceAppliesEveryFieldOnceThenCommitsRelease) {
+  EditorPendingSequence sequence;
+  sequence.seal = EditorPendingInputBoundaryKind::Release;
+  EditorPendingFieldChange exposure;
+  exposure.target.field_key = "exposure";
+  exposure.params_json      = R"({"exposure_ev":0.8})";
+  EditorPendingFieldChange contrast;
+  contrast.target.field_key = "contrast";
+  contrast.params_json      = R"({"value":12})";
+  sequence.fields           = {exposure, contrast};
+
+  const auto result = edit_->HandlePendingSequence(sequence, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(result.reason, EditorRenderReason::SettledAdjustment);
+  EXPECT_EQ(history_->capture_count, 2);
+  EXPECT_EQ(history_->commit_count, 2);
+  EXPECT_TRUE(result.render_command.live_parameters_applied);
+  ASSERT_EQ(result.render_command.adjustment.patches.size(), 2u);
+}
+
+TEST_F(EditorSessionEditControllerTest, InteractiveSequenceCapturesWithoutCommit) {
+  EditorPendingSequence sequence;
+  sequence.seal = EditorPendingInputBoundaryKind::None;
+  EditorPendingFieldChange exposure;
+  exposure.target.field_key = "exposure";
+  exposure.params_json      = R"({"exposure_ev":0.4})";
+  sequence.fields           = {exposure};
+
+  const auto result = edit_->HandlePendingSequence(sequence, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(result.reason, EditorRenderReason::InteractiveAdjustment);
+  EXPECT_EQ(history_->capture_count, 1);
+  EXPECT_EQ(history_->commit_count, 0);
+  EXPECT_TRUE(result.render_command.live_parameters_applied);
+}
+
+TEST_F(EditorSessionEditControllerTest, CancelRestoreRoutesRenderOnlyWhenLiveContentChanged) {
+  history_->restore_changes_live = false;
+  EditorPendingSequence empty_cancel;
+  empty_cancel.seal = EditorPendingInputBoundaryKind::Cancel;
+  auto skipped      = edit_->HandlePendingSequence(empty_cancel, guard(), identity());
+  EXPECT_EQ(skipped.kind, EditorEditOutcome::Kind::Accepted);
+  EXPECT_FALSE(skipped.schedule_render);
+  EXPECT_EQ(history_->restore_preview_count, 1);
+
+  history_->restore_changes_live = true;
+  auto restored = edit_->HandlePendingSequence(empty_cancel, guard(), identity());
+  EXPECT_EQ(restored.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_TRUE(restored.render_command.live_parameters_applied);
+  EXPECT_EQ(history_->restore_preview_count, 2);
 }
 
 }  // namespace

@@ -361,6 +361,37 @@ gtest_discover_tests(EditorPendingInputSessionTest
     PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(EditorPendingInputSessionTest app ci_core)
 
+add_executable(EditorInteractivePacingTest
+    ${ALCEDO_TEST_ROOT}/app/editor_interactive_pacing_test.cpp)
+target_include_directories(EditorInteractivePacingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorInteractivePacingTest PRIVATE GTest::gtest_main)
+gtest_discover_tests(EditorInteractivePacingTest TEST_PREFIX "EditorInteractivePacingTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorInteractivePacingTest app ci_core)
+
+add_executable(EditorSerialFrameAdmissionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_serial_frame_admission_test.cpp)
+target_include_directories(EditorSerialFrameAdmissionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSerialFrameAdmissionTest
+    PRIVATE EditorSerialFrameAdmission GTest::gtest_main)
+gtest_discover_tests(EditorSerialFrameAdmissionTest
+    TEST_PREFIX "EditorSerialFrameAdmissionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorSerialFrameAdmissionTest app ci_core)
+
+add_executable(EditorSerialFrameConsumptionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_serial_frame_consumption_test.cpp)
+target_include_directories(EditorSerialFrameConsumptionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSerialFrameConsumptionTest
+    PRIVATE EditorSessionService EditorSessionCommandQueue xxHash JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSerialFrameConsumptionTest
+    TEST_PREFIX "EditorSerialFrameConsumptionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorSerialFrameConsumptionTest app ci_core)
+
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionServiceFacadeTest
