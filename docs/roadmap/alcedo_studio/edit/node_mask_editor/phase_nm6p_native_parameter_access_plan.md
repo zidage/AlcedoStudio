@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.P1–NM6.P3 complete; NM6.P4–NM6.P6 remain planned.
+Status: NM6.P1–NM6.P4 complete; NM6.P5–NM6.P6 remain planned.
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
 Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
@@ -435,6 +435,77 @@ Look 双滑块在 offscreen Loader 上 QTest 鼠标未产生 enqueue，测试回
 **验收：** 多种面板一次加载正确；无 ToJson/LoadJson/全DTO投射；QML加载不提交；
 跨线程旧投递被丢弃；面板类型扩展示例只增加具体适配/注册而无需改全局JSON解析器。
 
+##### Phase NM6.P4 completion record (2026-09-06)
+
+**Status:** complete — typed Model → existing panel projection; GUI no longer parses node/operator JSON for `loadFromSnapshot`.
+
+**Primary success call chain:**
+
+```text
+owner lock / live PipelineDocument
+  -> ReadEditorPanelField / ProjectCurrentPanelFields
+     (explicit NodeId + AdjustmentInstanceId; current-panel helper only)
+  -> HistoryWorkingState.panel_projection
+     (full project on refresh; UpsertEditorPanelField after live write)
+  -> EditorSessionService::panel_projection (stamp session_generation)
+  -> EditorSessionController discard-or-apply
+  -> PanelProjectionToVariantMap / ApplyPanelProjectionToSnapshotMap
+  -> existing QML loadFromSnapshot (load-only)
+```
+
+**Primary failure call chain:**
+
+```text
+incomplete target / missing node / missing instance / wrong owner
+  -> ReadEditorPanelField / ProjectEditorPanelFields return false
+  -> output projection left unchanged; no panel value written
+
+stale session_generation != EditorSessionController::SessionEpoch
+  -> OnBackendChanged drops the copy
+  -> cached adjustmentSnapshot unchanged
+
+QML loadFromSnapshot / setSelectedPath
+  -> load-only setters; submitCount stays 0
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ProjectsToneLookLutRawOdtAndGeometryFromExplicitInstances` | `EditorPanelProjectionTest` | PASS |
+| `ReadsNamedInstanceNotFirstOperatorOfType` | `EditorPanelProjectionTest` | PASS |
+| `MissingNodeOrInstanceFailsBeforeAnyPanelValue` | `EditorPanelProjectionTest` | PASS |
+| `PanelProjectionDoesNotCallModelJsonOrFullDto` | `EditorPanelProjectionTest` | PASS |
+| `AdditionalPanelAdapterDoesNotChangeParameterWriteParser` | `EditorPanelProjectionTest` | PASS |
+| `StaleSessionGenerationLeavesPanelSnapshotUnchanged` | `EditorSessionControllerPhase5ATest` | PASS |
+| `SameSessionProjectionMergesChangedFieldsOnly` | `EditorSessionControllerPhase5ATest` | PASS |
+| `NewSessionGenerationReplacesPanelSnapshot` | `EditorSessionControllerPhase5ATest` | PASS |
+| `SnapshotIncludesTypedPanelValues` | `EditorSessionControllerPhase5ATest` | PASS |
+| `QmlLoadFromTypedProjectionDoesNotSubmit` | `EditorAdjustmentSnapshotQmlTest` | PASS |
+| `LiveWriteProjectsTypedExposureWithoutReadingParamsJson` | `EditorSessionHistoryPortTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPanelProjectionTest EditorSessionControllerPhase5ATest EditorAdjustmentSnapshotQmlTest EditorSessionHistoryPortTest
+build\debug\alcedo_studio\tests\app\EditorPanelProjectionTest_runtime\EditorPanelProjectionTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionControllerPhase5ATest_runtime\EditorSessionControllerPhase5ATest.exe
+set QT_QPA_PLATFORM=offscreen
+build\debug\alcedo_studio\tests\ui\EditorAdjustmentSnapshotQmlTest_runtime\EditorAdjustmentSnapshotQmlTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+```
+
+Logs: `build/tmp/nm6p/p4_projection.txt`, `p4_controller.txt`, `p4_qml.txt`, `p4_history.txt`.
+
+Suite totals: `EditorPanelProjectionTest` 5/5; `EditorSessionControllerPhase5ATest` 49/49; `EditorAdjustmentSnapshotQmlTest` 2/2; `EditorSessionHistoryPortTest` 77/77.
+
+**Checklist / exit condition:** P4 正文无 checkbox。验收项均有具名测试：多面板一次 typed 读取；显式实例而非 first-by-type；缺 node/instance 不写任何面板值；投射路径 ToJson/MakeFullDto 为 0 且 `CanonicalPipelineDocumentJson` 仍可单独序列化；新适配只 `table.Add` 不改 `ParseEditorParameterWrite`；过期 `session_generation` 丢弃；同会话只合并变更字段；新会话替换；QML load-only 不 submit。生产 `OnBackendChanged` 不再 `QJsonDocument::fromJson` 解析 `params_json`。
+
+**LOC note (grill-code-review):** `editor_panel_projection.cpp` 556、`editor_panel_projection.hpp` 231；`editor_panel_presentation.cpp` 160；`editor_session_controller.cpp` 1391（去掉 JSON `BuildSnapshotMap`）；`editor_history_mutation.cpp` 1038；`editor_panel_projection_test.cpp` 383。既有大文件 `editor_session_service.cpp` 1800、`editor_session_controller_phase5a_test.cpp` 1566 未再并入新的全量参数镜像。控制器仍兼生命周期与面板投递；P4 只替换读取载体，不在本阶段拆控制器。
+
+**Residual gaps:** Geometry `source_size` / `aspect_ratio_preset` 仍在 CPU `CropRotateOp`，不在 `ImageGeometryModel`；镜头 maker/model 仍是图像本地 CPU extras，不在 `DevelopParamsModel`。P4 只投射 document 拥有的 crop/rotation/`lens_enabled`。`MakeAdjustmentSnapshotFromLivePipeline` 与 `EditorRenderAdjustmentSnapshot::params_json` 仍给渲染/持久化快照，删除留给 P6。所选节点路由由 NM6.6 把目标列表传入 `ProjectEditorPanelFields`。P5 运行时 FullDto、P6 旧 helper 删除仍 planned。
+
 ### NM6.P5 — 去掉运行时完整参数体中转
 
 **修改范围：** MakeGradeRuntimeParams、neighbor参数准备从安全 owner读取必要字段，
@@ -487,7 +558,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | NM6.P1 | complete 2026-09-05 | `feature/nm6-native-parameter-access`, base `main` @ `5c8acc56`; QML → session → pending input → owner consume → history/model → render；live state → snapshot → panel | inventory + `EditorPipelineCommandServiceTest` 的 2 个新增计数断言；7 个相关测试目标共 54/54 passed | P1 未删除生产路径；普通 JSON 应用/投射迁移到 P2/P4，队列载体迁移到 P3，运行时 DTO 清理迁移到 P5，最终删除迁移到 P6；项目/WAL/checkpoint/import/export JSON 保留 |
 | NM6.P2 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/session pending edit → `EditorHistoryMutation::CaptureAdjustmentBeforePreview` → `ApplyEditorParameterPatch` → field parser → concrete Model typed update → dirty patch/render/history；history replay 的 expected-side JSON boundary → typed apply | `EditorPipelineCommandServiceTest` 19/19、`EditorSessionHistoryPortTest` 75/75、`PipelineHistoryApplierTest` 12/12；Windows/MSVC target builds passed | 普通 Model 写入的完整 JSON merge/LoadJson 已替换为 typed owner operations；`ReadEditorParameterJson`、ToJson/LoadJson、history/project/WAL/import/export JSON boundary 保留；P3 queue、P4 projection、P5 runtime DTO、P6 cleanup remain planned |
 | NM6.P3 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → pending typed fields → move on consume → `ApplyEditorParameterWrite` → serial render | write-path 115/115、history 76/76、QML/session 143/145 then RapidMultiSlider PASS; see P3 completion record | live queue/`HandlePatch`/Capture 不再经 pending JSON；`submitPatch` 仅 GUI 收集边界一次解析；snapshot `params_json` 留待 P4；历史/WAL/项目 JSON 保留 |
-| NM6.P4 | planned | — | — | — |
+| NM6.P4 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner lock → typed adapter (`NodeId`+instance) → `EditorPanelProjection` → session stamp → controller discard/merge/replace → existing QML `loadFromSnapshot` | `EditorPanelProjectionTest` 5/5、`EditorSessionControllerPhase5ATest` 49/49、`EditorAdjustmentSnapshotQmlTest` 2/2、`EditorSessionHistoryPortTest` 77/77；Windows/MSVC target builds passed | GUI 面板加载不再经 `params_json` / `BuildSnapshotMap`；`ToJson`/`MakeFullDto` 不在投射路径；render snapshot JSON 与 history/WAL/project JSON 保留至 P6；NM6.6 所选节点尚未接入 |
 | NM6.P5 | planned | — | — | — |
 | NM6.P6 | planned | — | — | — |
 

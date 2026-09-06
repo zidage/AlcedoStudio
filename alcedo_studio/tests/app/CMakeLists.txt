@@ -56,6 +56,16 @@ gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
 
+add_executable(EditorPanelProjectionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_panel_projection_test.cpp)
+target_include_directories(EditorPanelProjectionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPanelProjectionTest
+    PRIVATE GTest::gtest_main EditorPanelProjection EditorParameterWrite EditGraph JSON)
+gtest_discover_tests(EditorPanelProjectionTest
+    TEST_PREFIX "EditorPanelProjectionTest.")
+alcedo_register_test_target(EditorPanelProjectionTest app)
+
 add_executable(PipelineHistoryApplierTest
     ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
 target_include_directories(PipelineHistoryApplierTest

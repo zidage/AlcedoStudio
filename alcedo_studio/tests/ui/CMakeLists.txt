@@ -203,6 +203,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   EditorNodeGraphProjection
   EditorAdjustmentPipeline
   EditorPipelineCommandService
+  EditorPanelProjection
   PipelineHistoryApplier
   EditGraph
   EditMaskStore

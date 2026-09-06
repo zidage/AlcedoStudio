@@ -131,6 +131,9 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool override;
+  auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::EditorPanelProjection* projection, std::string* error)
+      -> bool override;
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> override;
   auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,

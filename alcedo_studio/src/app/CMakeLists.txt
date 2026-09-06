@@ -403,6 +403,13 @@ def_library(EditorPipelineCommandService
     PUBLIC_DEPS EditGraph JSON EditorParameterWrite
 )
 
+def_library(EditorPanelProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_panel_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_panel_projection.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditGraph
+)
+
 def_library(EditorNodeGraphProjection
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_node_graph_projection.cpp"

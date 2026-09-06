@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <variant>
 
 #include "json.hpp"
 #include "app/adjustment_transfer_service.hpp"
@@ -269,6 +270,29 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   EXPECT_TRUE(guard_->working_head_commit_hash().has_value());
+}
+
+TEST_F(EditorSessionHistoryPortTest, LiveWriteProjectsTypedExposureWithoutReadingParamsJson) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.75})", false});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+
+  alcedo::EditorPanelProjection projection;
+  ASSERT_TRUE(history_.ReadPanelProjection(handle, &projection, &error)) << error;
+  const alcedo::EditorPanelFieldPresentation* exposure = nullptr;
+  for (const auto& field : projection.fields) {
+    if (field.field_key == "exposure") {
+      exposure = &field;
+      break;
+    }
+  }
+  ASSERT_NE(exposure, nullptr);
+  const auto* scalar = std::get_if<alcedo::EditorPanelScalarValue>(&exposure->value);
+  ASSERT_NE(scalar, nullptr);
+  EXPECT_FLOAT_EQ(scalar->value, 0.75f);
+  EXPECT_EQ(exposure->source.adjustment_instance_id.Value(), "grade.primary.exposure");
 }
 
 TEST_F(EditorSessionHistoryPortTest, BranchingVersionHistoryAllowsSwitchingWithoutMergeCommits) {

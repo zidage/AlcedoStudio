@@ -10,6 +10,8 @@
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
+#include "app/editor_panel_projection.hpp"
+
 namespace alcedo::ui {
 
 EditorHistoryProjection::EditorHistoryProjection(EditorHistoryState& state) : state_(state) {}
@@ -125,6 +127,22 @@ auto EditorHistoryProjection::ReadAdjustmentSnapshot(
     return false;
   }
   *snapshot = state->committed_snapshot;
+  return true;
+}
+
+auto EditorHistoryProjection::ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                                                  alcedo::EditorPanelProjection* projection,
+                                                  std::string* error) -> bool {
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    if (projection) *projection = {};
+    return true;
+  }
+  if (projection == nullptr) {
+    if (error) *error = "Panel projection output is null";
+    return false;
+  }
+  *projection = state->panel_projection;
   return true;
 }
 

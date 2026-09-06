@@ -15,6 +15,7 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
@@ -53,6 +54,9 @@ struct HistoryWorkingState {
   std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
+  /// Load-only panel values copied from live Models under the render lock.
+  /// Not a live Model pointer and not a writable parameter mirror.
+  alcedo::EditorPanelProjection panel_projection;
   bool recovered_head = false;
   /// Required for ReplaceMaskAsset undo/redo. Not owned.
   alcedo::MaskStore* mask_store = nullptr;

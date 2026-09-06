@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QVariantMap>
 #include <QtGlobal>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -343,10 +344,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // emits HistoryChanged only when the backend's history_revision advances, so
   // render/preview/task notifications no longer trigger a history projection.
   std::uint64_t                   last_history_revision_     = 0;
-  /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
-  /// by field_key with parsed JSON values suitable for QML model loading.
-  [[nodiscard]] static auto BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot)
-      -> QVariantMap;
+  /// Last panel projection session_generation applied to adjustment_snapshot_.
+  /// A matching generation merges changed fields; a new generation replaces.
+  std::uint64_t                   last_applied_panel_generation_ = 0;
 
   QString                                        active_adjustment_panel_ = QStringLiteral("tone");
   QString                                        editor_tool_panel_page_;

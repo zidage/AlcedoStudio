@@ -35,6 +35,9 @@ class EditorHistoryProjection {
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool;
 
+  auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::EditorPanelProjection* projection, std::string* error) -> bool;
+
  private:
   EditorHistoryState& state_;
 };

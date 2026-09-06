@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/pipeline_document_history.hpp"
@@ -48,8 +49,16 @@ auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* e
     if (!holds_render_lock) {
       render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
     }
-    return MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
-                                                  &state.committed_snapshot, error);
+    if (!MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
+                                                &state.committed_snapshot, error)) {
+      return false;
+    }
+    if (state.pipeline_guard->document_ == nullptr) {
+      state.panel_projection = {};
+      return true;
+    }
+    return alcedo::ProjectCurrentPanelFields(*state.pipeline_guard->document_, 0,
+                                             &state.panel_projection, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
@@ -80,6 +89,14 @@ void ProjectDocumentEdit(HistoryWorkingState&                          state,
   UpsertCommittedSnapshot(&state.committed_snapshot, edit.target.field_key,
                           HistoryParams(edit.target, params), true);
   state.committed_snapshot.params_json.clear();
+  if (state.pipeline_guard != nullptr && state.pipeline_guard->document_ != nullptr) {
+    alcedo::EditorPanelFieldPresentation field;
+    std::string                          ignore;
+    if (alcedo::ReadEditorPanelField(*state.pipeline_guard->document_, edit.target, &field,
+                                     &ignore)) {
+      alcedo::UpsertEditorPanelField(&state.panel_projection, std::move(field));
+    }
+  }
 }
 
 /// Restore local before-values in reverse order under the caller's render lock.
@@ -368,6 +385,14 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     (void)ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
                                     edit.before_model_json, error);
     return false;
+  }
+  {
+    alcedo::EditorPanelFieldPresentation field;
+    std::string                          ignore;
+    if (alcedo::ReadEditorPanelField(*state->pipeline_guard->document_, edit.target, &field,
+                                     &ignore)) {
+      alcedo::UpsertEditorPanelField(&state->panel_projection, std::move(field));
+    }
   }
   // Only the first successful patch locks a target. Rejected input does not capture state.
   if (sequence == state->pending_document_sequence.end()) {

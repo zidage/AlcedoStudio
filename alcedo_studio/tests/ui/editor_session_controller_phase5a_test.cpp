@@ -26,6 +26,7 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_pending_input.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "type/hash_type.hpp"
@@ -169,11 +170,20 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   // Phase 6C-7: snapshot publication for panel state loading.
   EditorRenderAdjustmentSnapshot current_snapshot_;
+  // Load-only typed panel values. JSON patches on adjustment_snapshot are not
+  // converted for QML.
+  alcedo::EditorPanelProjection current_panel_projection_{};
   auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
     return current_snapshot_;
   }
+  auto panel_projection() const -> alcedo::EditorPanelProjection override {
+    return current_panel_projection_;
+  }
   void SetAdjustmentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
     current_snapshot_ = std::move(snapshot);
+  }
+  void SetPanelProjection(alcedo::EditorPanelProjection projection) {
+    current_panel_projection_ = std::move(projection);
   }
 
   auto                                Redo() -> EditorSessionResult override { return Discard(); }
@@ -393,6 +403,34 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     ++current_snapshot_.snapshot_generation;
   }
 };
+
+auto ScalarPanelField(std::string key, float value) -> alcedo::EditorPanelFieldPresentation {
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = std::move(key);
+  field.value     = alcedo::EditorPanelScalarValue{field.field_key, value};
+  return field;
+}
+
+auto PanelProjection(std::uint64_t generation,
+                     std::vector<alcedo::EditorPanelFieldPresentation> fields)
+    -> alcedo::EditorPanelProjection {
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = generation;
+  projection.fields             = std::move(fields);
+  return projection;
+}
+
+auto OdtPanelProjection(std::uint64_t generation, std::string space, std::string eotf, float peak)
+    -> alcedo::EditorPanelProjection {
+  alcedo::EditorPanelOdtValue odt;
+  odt.encoding_space = std::move(space);
+  odt.encoding_eotf  = std::move(eotf);
+  odt.peak_luminance = peak;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "odt";
+  field.value     = std::move(odt);
+  return PanelProjection(generation, {std::move(field)});
+}
 
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   FakeSessionBackend      backend;
@@ -887,17 +925,11 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotStartsEmpty) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {
-      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.5})", true}),
-      alcedo::test::SnapshotPatch({"contrast", R"({"contrast":18.0})", true}),
-  };
-  snap.snapshot_generation = 1;
-  backend.SetAdjustmentSnapshot(snap);
-
+  backend.SetPanelProjection(
+      PanelProjection(0, {ScalarPanelField("exposure", 1.5f), ScalarPanelField("contrast", 18.0f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map = controller.adjustment_snapshot();
@@ -912,12 +944,7 @@ TEST(EditorSessionControllerPhase5ATest,
   editor_rhi::EditorViewportItem viewport;
   controller.bindPresentationViewport(&viewport);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {alcedo::test::SnapshotPatch({
-      "odt",
-      R"({"odt":{"encoding_space":"rec2020","encoding_eotf":"st2084","peak_luminance":1600.0}})",
-      true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(OdtPanelProjection(0, "rec2020", "st2084", 1600.0f));
   backend.NotifyWithoutStateChange();
 
   const auto config = viewport.displayConfig();
@@ -928,19 +955,15 @@ TEST(EditorSessionControllerPhase5ATest,
 }
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap1;
-  snap1.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.0})", true})};
-  backend.SetAdjustmentSnapshot(snap1);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 0.0f)}));
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
   EXPECT_TRUE(map1.contains(QStringLiteral("exposure")));
 
-  EditorRenderAdjustmentSnapshot snap2;
-  snap2.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.5})", true})};
-  backend.SetAdjustmentSnapshot(snap2);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 1.5f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map2 = controller.adjustment_snapshot();
@@ -955,9 +978,7 @@ TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.75})", true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 0.75f)}));
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
   EXPECT_GE(signal_count, 1);
@@ -982,9 +1003,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":10.0})", true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 10.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
 }
@@ -1167,9 +1186,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":10.0})", true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 10.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
 
@@ -1177,19 +1194,16 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
   backend.NotifyWithoutStateChange();
   EXPECT_EQ(signal_count, before);
 
-  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":42.0})", true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 42.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GT(signal_count, before);
 }
 
-TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesTypedPanelValues) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":-1.75})", true})};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", -1.75f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map = controller.adjustment_snapshot();
@@ -1197,6 +1211,63 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
   const auto entry = map[QStringLiteral("exposure")].toMap();
   ASSERT_TRUE(entry.contains(QStringLiteral("exposure")));
   EXPECT_DOUBLE_EQ(entry[QStringLiteral("exposure")].toDouble(), -1.75);
+}
+
+TEST(EditorSessionControllerPhase5ATest, StaleSessionGenerationLeavesPanelSnapshotUnchanged) {
+  FakeSessionBackend backend;
+  backend.image_load_request_ = ImageLoadRequestId{7};
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(PanelProjection(7, {ScalarPanelField("exposure", 1.25f)}));
+  backend.NotifyWithoutStateChange();
+  const auto live = controller.adjustment_snapshot();
+  ASSERT_TRUE(live.contains(QStringLiteral("exposure")));
+
+  int signal_count = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++signal_count; });
+  backend.SetPanelProjection(PanelProjection(6, {ScalarPanelField("exposure", 9.0f),
+                                                 ScalarPanelField("contrast", 40.0f)}));
+  backend.NotifyWithoutStateChange();
+  EXPECT_EQ(signal_count, 0);
+  EXPECT_EQ(controller.adjustment_snapshot(), live);
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, SameSessionProjectionMergesChangedFieldsOnly) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(
+      PanelProjection(0, {ScalarPanelField("exposure", 0.5f), ScalarPanelField("contrast", 12.0f)}));
+  backend.NotifyWithoutStateChange();
+  ASSERT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 1.5f)}));
+  backend.NotifyWithoutStateChange();
+  const auto map = controller.adjustment_snapshot();
+  EXPECT_DOUBLE_EQ(map.value(QStringLiteral("exposure")).toMap().value(QStringLiteral("exposure"))
+                       .toDouble(),
+                   1.5);
+  EXPECT_TRUE(map.contains(QStringLiteral("contrast")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, NewSessionGenerationReplacesPanelSnapshot) {
+  FakeSessionBackend backend;
+  backend.image_load_request_ = ImageLoadRequestId{1};
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(
+      PanelProjection(1, {ScalarPanelField("exposure", 0.5f), ScalarPanelField("contrast", 12.0f)}));
+  backend.NotifyWithoutStateChange();
+  ASSERT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+
+  backend.image_load_request_ = ImageLoadRequestId{2};
+  backend.SetPanelProjection(PanelProjection(2, {ScalarPanelField("exposure", 1.5f)}));
+  backend.NotifyWithoutStateChange();
+  const auto map = controller.adjustment_snapshot();
+  EXPECT_TRUE(map.contains(QStringLiteral("exposure")));
+  EXPECT_FALSE(map.contains(QStringLiteral("contrast")));
 }
 
 // ---------------------------------------------------------------------------
