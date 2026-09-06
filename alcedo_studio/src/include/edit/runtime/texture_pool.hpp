@@ -99,6 +99,9 @@ class TexturePool {
 
   /**
    * @brief Reuse a matching free texture or allocate one. Increments the lease count.
+   *
+   * May exceed ByteBudget when remaining textures are leased. LRU eviction only
+   * considers unleased, idle entries.
    */
   [[nodiscard]] auto Acquire(const TextureRequest& request) -> ResourceLease<Backend> {
     if (request.width == 0 || request.height == 0) {

@@ -851,6 +851,58 @@ Suite totals: focused P7 filter 17/17 PASS; `CudaResultCacheProductFixture` 30/3
 
 **Remaining gaps:** Metal GPU execution of the three QualityBase tests was not run (Windows host, Metal target not built). NM6.9 wider RAW pixel matrix is unchanged. Session scheduler still uses `kQualityBasePreviewMaxLongEdge` 4096 with `UseSessionCache`; QualityBase is not switched to `BypassSessionCache`. Texture-pool LRU remains only for unowned, unleased textures.
 
+##### Phase NM6.P7 completion record (2026-09-06, live-write LRU budget)
+
+**Status:** complete — macOS Metal CI `CiRawWorkflowTest` failed after the first P7 landing because `GraphImageCache::AcquireTextureForWrite` treated the Metal 256 MiB texture-pool LRU target as a hard cap on live in-flight writes. The runner still had ~4.7 GiB device memory free (`images=pub0/write1`, one ~22.6 MiB leased write). The next pipeline stage needed another live texture, peak usage crossed 256 MiB, and the cache threw `insufficient texture memory to allocate a live result`.
+
+**Primary success call chain:**
+
+```text
+CiRawWorkflowTest one-shot / product render
+  -> PlanExecutor::Execute
+  -> GraphImageCache::AcquireTextureForWrite
+  -> matching free reuse, then invalid unleased reclaim, then EvictUntil idle
+  -> TexturePool::Acquire (may exceed LRU byte budget while valid or in-use textures stay leased)
+  -> backend CreateTexture2D
+```
+
+**Primary failure call chain:**
+
+```text
+HostTextureBackend::CreateTexture2D injected failure
+  -> std::runtime_error ("HostTextureBackend: injected allocation failure")
+  -> published Develop handle and revision unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `HeldUnpublishedWriteAllowsNextStagePastLruBudget` | `GraphImageCacheRetentionTest` | PASS |
+| `LiveWriteExceedsLruBudgetWithoutEvictingValidDevelop` | `GraphImageCacheRetentionTest` | PASS |
+| `RequiredLiveResourcesReportAllocationFailureWithoutEvictingDevelop` | `GraphImageCacheRetentionTest` | PASS (injected `CreateTexture2D` failure; LRU budget left large enough that a software-budget throw cannot satisfy the assertion) |
+| `FreeMatchingAllocationPreservesAllValidPipelineResults` | `GraphImageCacheRetentionTest` | PASS |
+| `InvalidMixedSizeResultsReleaseOnlyRequiredUnleasedAllocations` | `GraphImageCacheRetentionTest` | PASS |
+| `QualityBaseWriteDoesNotReplaceValidInteractiveGeometry` | `GraphImageCacheRetentionTest` | PASS |
+| `DefaultPipelineRendersCiRawFixture` | `CiRawWorkflowTest` | PASS |
+| `SchedulerProducesThumbnailAndFastPreview` | `CiRawWorkflowTest` | PASS |
+
+Commands:
+
+```text
+cmake --preset macos_debug_tests
+cmake --build build/macos-debug-tests --parallel 8 --target GraphImageCacheRetentionTest --target CiRawWorkflowTest
+ctest --test-dir build/macos-debug-tests --output-on-failure --timeout 180 -R 'GraphImageCacheRetention|CiRawWorkflowTest.DefaultPipelineRendersCiRawFixture|CiRawWorkflowTest.SchedulerProducesThumbnailAndFastPreview'
+```
+
+Suite totals: 8/8 PASS. Logs: `build/tmp/ci-raw-budget-fix/`. Host retention tests now live in `GraphImageCacheRetentionTest` (`ci_core_flow` + `ci_core` aggregate) so macOS CI builds and runs them without CUDA.
+
+**Checklist / exit condition:** software LRU budget is no longer a false allocation failure; valid Develop stays leased; real allocation failure is injected at `CreateTexture2D`; the two previously failing Metal CI RAW workflow tests pass on this host.
+
+**LOC note (grill-code-review):** `graph_image_cache.hpp` 543; `texture_pool.hpp` 371; `graph_image_cache_retention_test.cpp` 299; `graph_image_cache_test.cpp` 249 (CUDA workspace tests only). No new snapshot/mirror of live document state.
+
+**Remaining gaps:** Metal QualityBase product tests from the first P7 record were not re-run here. CUDA `GpuDagCudaWorkspaceTest` no longer owns the host retention cases; they run on `GraphImageCacheRetentionTest` on every CI OS.
+
 ## 5. 人类可读与长期维护的退出条件
 
 - 开发者从滑块开始能沿直接调用读到一次Model更新；每次线程切换均有具体原因。
@@ -882,6 +934,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | NM6.P5 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner `Read` → `MakeGradeRuntimeParams` / `MakeGradeNeighborParams` → `BindOrRefreshGradeRuntimeSlot` → `ParameterArena::WritePackedSlot` → `UploadDirty`; LLF/Metal enable from packed host slot | `GpuDagAdjustmentRuntime` 9/9、dirty-field 4/4、`GpuDagCudaWorkspaceTest` 24/24、`GpuDagCudaPrimaryGradeTest` 36/36、`GpuDagOpenClGradeTest` 60/60；Windows/MSVC target builds passed | Grade 生产路径不再 `MakeFullDto` 或把 `GradeAdjustmentParams` 包成 OperatorParamDto；未改槽位不重新打包；Develop/DRT JSON-resolved GPU params 与 `InitializeFromFullDto` 留待 P6 |
 | NM6.P6 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot` | history 77/77、CUDA Grade 38/38、OpenCL Grade 61/61、CUDA DRT 52/52、OpenCL DRT 16/16、session 49/49、QML snapshot 2/2；见 P6 completion record | 删除 `PublishEditorParameterPatch`、`InitializeFromFullDto`/`ApplyPatch`/`CopyFields`、live `ExportPipelineParams` dump、CameraColor/DRT DTO wrap；JSON 仅保留序列化/CPU remirror/`submitPatch`/DRT `ODT_Op` 边界 |
 | NM6.P7 / NM6.4P | complete 2026-09-06 | `feature/nm6-native-parameter-access`; owner 依赖失效 → `ResultPersistenceScopeForRole` → GraphImageCache 保留/回收 → QualityBase Develop 后旁路 → present/release | P7 filter 17/17 PASS; CUDA product cache 30/30 PASS; Metal tests present, not executed | 删除 published-result LRU (`EvictCompletedUnleased`)；QualityBase 不查找/发布 Geometry 及下游；无 4K 保留槽位 |
+| NM6.P7 live-write LRU budget | complete 2026-09-06 | `AcquireTextureForWrite` → free/invalid reclaim → `TexturePool::Acquire` (live writes may exceed LRU) | `GraphImageCacheRetentionTest` 6/6 PASS; `CiRawWorkflowTest` DefaultPipeline + Scheduler 2/2 PASS on `macos-debug-tests` | 删除把 LRU 字节预算当硬上限的软件失败；真实失败改为注入 `CreateTexture2D` |
 
 NM6.P整体（含P7）完成后才能把NM6.5/6.6标记为可开始。保留NM6.1–NM6.4原完成记录；新的范围和
 证据写在这里。NM6.P 使用同一个 `feature/nm6-native-parameter-access` 分支作为整体

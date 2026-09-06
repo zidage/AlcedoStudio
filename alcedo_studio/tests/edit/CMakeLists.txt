@@ -304,6 +304,15 @@ gtest_discover_tests(GpuDagMaskStoreTest TEST_PREFIX "GpuDagMaskStoreTest."
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(GpuDagMaskStoreTest edit)
 
+# Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
+add_executable(GraphImageCacheRetentionTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)
+target_include_directories(GraphImageCacheRetentionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GraphImageCacheRetentionTest PRIVATE GTest::gtest_main EditRuntime)
+gtest_discover_tests(GraphImageCacheRetentionTest TEST_PREFIX "GraphImageCacheRetentionTest."
+  PROPERTIES LABELS "ci_core_flow;edit;runtime")
+alcedo_register_test_target(GraphImageCacheRetentionTest edit ci_core)
+
 # GPU DAG Phase G3: CUDA GeometryResamplePass.
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(PipelineDocumentRenderTest

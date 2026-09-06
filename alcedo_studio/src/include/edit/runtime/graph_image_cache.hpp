@@ -33,7 +33,8 @@ namespace alcedo {
  *
  * Published results whose required revision still matches are retained. Memory
  * pressure reclaims invalid unleased results and unowned free textures first.
- * It does not LRU-evict a valid current result.
+ * It does not LRU-evict a valid current result. The pool LRU byte budget is a
+ * target for unused textures, not a hard cap on live in-flight writes.
  *
  * @tparam Backend Texture factory used by TexturePool.
  */
@@ -90,8 +91,9 @@ class GraphImageCache {
    * Reuses an in-flight write slot of the same size. Reuses a matching free
    * allocation before reclaiming invalid published results. Does not steal a
    * valid published result of another id. Replacing a persisted id may reclaim
-   * that id after GPU readers finish. Throws when retained live results and
-   * in-use textures cannot satisfy @p request.
+   * that id after GPU readers finish. A live write may exceed the pool LRU
+   * byte budget while valid published results stay leased. Throws when the
+   * backend cannot create the texture.
    *
    * @pre @p pool and @p backend outlive this cache.
    */
@@ -128,11 +130,6 @@ class GraphImageCache {
     pool.EvictUntil(needed_bytes);
     if (auto* reused = TryReuseMatchingFree(pool, id, request)) {
       return *reused;
-    }
-    if (pool.ByteBudget() != 0 && pool.UsedBytes() + needed_bytes > pool.ByteBudget()) {
-      throw std::runtime_error(
-          "GraphImageCache::AcquireTextureForWrite: insufficient texture memory "
-          "to allocate a live result");
     }
 
     WriteSlot slot;
