@@ -15,6 +15,8 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
+#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"

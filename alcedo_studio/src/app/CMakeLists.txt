@@ -446,7 +446,7 @@ def_library(EditorPendingInput
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
-    PUBLIC_DEPS EditGraph
+    PUBLIC_DEPS EditGraph JSON
 )
 
 def_library(EditorSerialFrameAdmission
