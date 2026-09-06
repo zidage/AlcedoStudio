@@ -41,7 +41,19 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
 
   auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
   auto snapshotRevision() const -> quint64 { return revision_; }
-  auto submitPatch(QString, QString, bool) -> bool override {
+    auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+        -> bool override {
+      static_cast<void>(fieldKey);
+      static_cast<void>(write);
+      static_cast<void>(settled);
+      ++submit_count_;
+      return true;
+    }
+
+  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    static_cast<void>(fieldKey);
+    static_cast<void>(paramsJson);
+    static_cast<void>(settled);
     ++submit_count_;
     return true;
   }

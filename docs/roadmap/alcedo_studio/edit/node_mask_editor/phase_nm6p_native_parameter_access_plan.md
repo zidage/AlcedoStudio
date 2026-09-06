@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.P1–NM6.P2 complete; NM6.P3–NM6.P6 remain planned.
+Status: NM6.P1–NM6.P3 complete; NM6.P4–NM6.P6 remain planned.
 
 Parent: [NM6 execution plan](phase_nm6_node_aware_adjustments_plan.md).
 Dependency: NM6.4 → NM6.P → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
@@ -313,6 +313,114 @@ edit controller、具体 QML 编辑入口。复用调度器，不再增加 comma
 独立字段不丢失、release保留、live写入仍在帧间、一次输入序列提交一次。队列不复制
 整批再清空原值。超出本阶段的持久化接口保留不代表旧普通参数通道可以继续使用。
 
+#### NM6.P3 完成记录（2026-09-06）
+
+**状态：** complete。live 写入路径已切到 typed field write；面板 JSON 投射、运行时完整
+DTO 和旧 helper 删除仍由 P4–P6 负责。
+
+**交付内容：**
+
+- 队列项 `EditorPendingFieldChange` 只持有 `EditorParameterWrite`，不再持有 live
+  `params_json`。`AdmitFieldChange` 拒绝缺少 typed write 的输入。`TakeReadyBatch`
+  对未封口序列执行 `fields = std::move(open_->fields)`，并清空索引，序列保持打开。
+- `HandlePatch` / `PatchFromPendingField` / `CaptureAdjustmentBeforePreview` 复制 typed
+  write，不再把 pending field 先编成 JSON 再应用。Capture 调用
+  `ApplyEditorParameterWrite`；Commit 从 live Model 读取 after 值，不再用 settled JSON
+  二次回写。缺少 write 时 Capture/Commit 均失败且不发布历史。
+- 生产控件：`IEditorAdjustmentSubmitter::submitWrite` 是 GUI 入队入口。C++ 模型直接
+  构造 `EditorScalarWrite` / `EditorEnumWrite` / `EditorToggleWrite` / `EditorCurveWrite` /
+  `EditorLutWrite` / `SharpenUpdate` / `HlsUpdate` / `ColorWheelUpdate` /
+  `DevelopColorTemperatureUpdate`。QML 收集边界（RAW / ODT / lens / Geometry crop）仍可
+  `submitPatch`，但只在 GUI 线程解析一次后转入 `submitWrite`。队列与 owner 消费不再走
+  JSON 合并。Tone/Look 标量不再包一层 `paramsBuilder`。
+- `EditorRenderAdjustmentSnapshot::params_json` 仍作为 P4 投射载体保留；live 入队不得
+  依赖它。历史 / WAL / 项目 JSON 边界保留，不等于 live 通道可以继续用 JSON。
+
+**成功调用链：**
+
+```text
+QML/model local value
+  -> EditorSessionController::submitWrite
+     (submitPatch only at QML collection boundary: ParseEditorParameterWrite once)
+  -> EditorSessionService::EnqueueAdjustmentInput
+  -> EditorPendingInputQueue::AdmitFieldChange (typed write required)
+  -> EditorPendingInputQueue::TakeReadyBatch (move open fields)
+  -> EditorSessionEditController::HandlePendingSequence
+  -> PatchFromPendingField (copy write, not JSON)
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview
+  -> ApplyEditorParameterWrite
+  -> MirrorTargetToExecutor / Remirror
+  -> existing serial render (live_parameters_applied)
+```
+
+**失败调用链：**
+
+```text
+missing typed write or invalid QML JSON
+  -> AdmitFieldChange / submitPatch reject on GUI thread
+  -> document and history head unchanged
+
+ApplyEditorParameterWrite fails
+  -> Capture restores before JSON
+  -> HandlePatch Rejected; no new render or history commit
+
+executor remirror fails
+  -> document restored from before JSON
+  -> no published preview
+
+CommitAdjustment without write, or before JSON equals after JSON
+  -> no history publish (missing write fails; identical values skip a new commit)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| missing write rejected; consume moves fields; 9 independent typed writes (scalar/curve/LUT/RAW/ODT/lens/Geometry/enum/toggle) | `EditorPendingInputTest` (`RejectsMissingTypedFieldWrite`, `TakeReadyBatchTransfersOpenFieldWritesAndLeavesSequenceOpen`, `OpenSequenceHoldsIndependentTypedWritesUntilMovedOnConsume`) | PASS |
+| merge, release, cancel, node-switch, independent fields | `EditorPendingInputTest` + `EditorPendingInputSessionTest` | PASS |
+| scalar / enum / toggle native `submitWrite`; one settled on release | `EditorAdjustmentModelTest` | PASS |
+| curve / LUT / color temp / HLS / CDL native writes; one settled | `EditorToneCurveModelTest`, `EditorLookModelTest` | PASS |
+| Capture applies typed write with empty `params_json`; invalid write leaves live value and history head | `EditorSessionHistoryPortTest` (`CaptureAppliesTypedScalarWriteWhenParamsJsonIsEmpty`, `InvalidParameterLeavesLiveValueAndHistoryHeadUnchanged`, `SettledAdjustmentCreatesOneCommitAndUndoRedoMovesHead`) | PASS |
+| inter-frame consume; release commits once | `SerialFrameConsumptionTest` (`ReleaseBeforeFirstPreviewCommitsFinalValuesOnce`) | PASS |
+| RAW panel → `DevelopRawDecodeUpdate` | `EditorRawDecodePanelQmlTest.UserChangesSubmitCompleteRawOperatorParams` | PASS |
+| Geometry crop → `ImageGeometryUpdate`; lens → `DevelopLensCalibrationUpdate` | `EditorGeometryPanelQmlTest` (crop confirm + `LensSelectionKeepsLegacyDefaultsAndIsAvailableWhenDisabled`) | PASS |
+| ODT method → `DrtParameterUpdate` | `EditorDisplayTransformSnapshotQmlTest.MethodChangeEnqueuesDrtParameterUpdate` | PASS |
+| dual-slider typed submit + snapshot cascade stays pumpable | `EditorLookPanelInteractionTest.RapidMultiSliderHandoffKeepsEventLoopResponsiveUnderSnapshotCascade` | PASS after model-drag fallback (offscreen Loader mouse did not enqueue) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target <write-path binaries>
+ctest --test-dir build/debug --output-on-failure
+  -> write-path + history subset 115/115 (build/tmp/nm6p/p3_core_ctest2.txt)
+
+ctest --test-dir build/debug -R '^EditorSessionHistoryPortTest\.' --output-on-failure
+  -> 76/76 (build/tmp/nm6p/p3_history_ctest.txt)
+
+set QT_QPA_PLATFORM=offscreen
+ctest --test-dir build/debug --output-on-failure
+  -> QML/session sweep 143/145 (build/tmp/nm6p/p3_qml_ctest.txt);
+     RapidMultiSlider re-run PASS (build/tmp/nm6p/p3_look_retry2.txt)
+```
+
+**Checklist / exit condition:** P3 正文无 checkbox。验收项均有具名测试：八类真实入口走 typed
+write；独立字段保留；release 保留；帧间 live 写入；一次序列一次提交；队列 move 而非
+复制后清空。生产控件写入均入队 P2 Model 操作，不是闲置 typed API。
+
+**LOC note (grill-code-review):** `editor_parameter_write.cpp` 1003 行（历史/QML 收集边界
+解析器占大部分，接近拆分阈值）；`editor_pending_input.cpp` 225；
+`editor_session_edit_controller.cpp` 303；`editor_adjustment_models.cpp` 460。
+既有大文件：`editor_session_controller.cpp` 1403、`editor_history_mutation.cpp` 1013、
+`editor_pipeline_command_service.cpp` 1049。P3 未再新增全量 State/Context/Payload 镜像。
+解析器拆分留待 P6，不在本阶段把 JSON 边界解析器拆成空转发文件。
+
+**Residual gaps:** P4 面板 typed 投射、P5 运行时完整 DTO、P6 删除旧 helper。
+`EditorRenderAdjustmentSnapshot::params_json` 仍给面板加载用。
+`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`
+失败是图像切换/命令队列选择晋升，测试自身已标明未完成，不是 live 参数写入路径。
+Look 双滑块在 offscreen Loader 上 QTest 鼠标未产生 enqueue，测试回退到模型
+`beginDrag`/`updateDrag`/`finishDrag` 证明 typed `submitWrite`；不恢复 JSON live 通道。
+
 ### NM6.P4 — 直接投射 Model 到现有面板模型
 
 **修改范围：** 实现第3.2节所述具体适配读取，替换全节点/算子JSON和完整DTO中转。
@@ -378,7 +486,7 @@ JSON/DTO调用后必须分类实际边界，不能一概删除合法ToJson/LoadJ
 | --- | --- | --- | --- | --- |
 | NM6.P1 | complete 2026-09-05 | `feature/nm6-native-parameter-access`, base `main` @ `5c8acc56`; QML → session → pending input → owner consume → history/model → render；live state → snapshot → panel | inventory + `EditorPipelineCommandServiceTest` 的 2 个新增计数断言；7 个相关测试目标共 54/54 passed | P1 未删除生产路径；普通 JSON 应用/投射迁移到 P2/P4，队列载体迁移到 P3，运行时 DTO 清理迁移到 P5，最终删除迁移到 P6；项目/WAL/checkpoint/import/export JSON 保留 |
 | NM6.P2 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/session pending edit → `EditorHistoryMutation::CaptureAdjustmentBeforePreview` → `ApplyEditorParameterPatch` → field parser → concrete Model typed update → dirty patch/render/history；history replay 的 expected-side JSON boundary → typed apply | `EditorPipelineCommandServiceTest` 19/19、`EditorSessionHistoryPortTest` 75/75、`PipelineHistoryApplierTest` 12/12；Windows/MSVC target builds passed | 普通 Model 写入的完整 JSON merge/LoadJson 已替换为 typed owner operations；`ReadEditorParameterJson`、ToJson/LoadJson、history/project/WAL/import/export JSON boundary 保留；P3 queue、P4 projection、P5 runtime DTO、P6 cleanup remain planned |
-| NM6.P3 | planned | — | — | — |
+| NM6.P3 | complete 2026-09-06 | `feature/nm6-native-parameter-access`; QML/model `submitWrite` → pending typed fields → move on consume → `ApplyEditorParameterWrite` → serial render | write-path 115/115、history 76/76、QML/session 143/145 then RapidMultiSlider PASS; see P3 completion record | live queue/`HandlePatch`/Capture 不再经 pending JSON；`submitPatch` 仅 GUI 收集边界一次解析；snapshot `params_json` 留待 P4；历史/WAL/项目 JSON 保留 |
 | NM6.P4 | planned | — | — | — |
 | NM6.P5 | planned | — | — | — |
 | NM6.P6 | planned | — | — | — |

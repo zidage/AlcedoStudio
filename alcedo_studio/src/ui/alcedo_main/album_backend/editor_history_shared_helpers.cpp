@@ -107,8 +107,11 @@ void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                              const std::string& field_key, const nlohmann::json& params,
                              bool enabled) {
   if (snapshot == nullptr) return;
-  alcedo::EditorAdjustmentPatch patch{field_key, params.is_null() ? std::string{} : params.dump(),
-                                      true, enabled};
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key   = field_key;
+  patch.params_json = params.is_null() ? std::string{} : params.dump();
+  patch.settled     = true;
+  patch.enabled     = enabled;
   auto existing = std::find_if(
       snapshot->patches.begin(), snapshot->patches.end(),
       [&](const alcedo::EditorAdjustmentPatch& current) { return current.field_key == field_key; });

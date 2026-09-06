@@ -12,9 +12,10 @@
 #include <QTimer>
 #include <QtGlobal>
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
+#include <exception>
 
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
@@ -1173,22 +1174,15 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
   return false;
 }
 
-bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
+                                          bool settled) {
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!can_edit()) {
-    // Pointer release must still stop the vsync consume if edit was lost
-    // mid-drag (image switch / session teardown).
     if (settled && viewport) {
       viewport->endInteractivePresentLoop();
     }
     return false;
   }
-  // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
-  // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. Unsettled writes
-  // also arm a vsync-sampled consume so a Ready frame does not wait for the
-  // next pointer event or a missed requestUpdate. Enqueue does not apply live
-  // parameters; present wakeups stay presentation-only.
   if (viewport) {
     if (settled) {
       viewport->endInteractivePresentLoop();
@@ -1201,12 +1195,28 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
     return false;
   }
   alcedo::EditorAdjustmentPatch patch;
-  patch.field_key   = fieldKey.toStdString();
-  patch.params_json = paramsJson.toStdString();
-  patch.settled     = settled;
+  patch.field_key = fieldKey.toStdString();
+  patch.write     = std::move(write);
+  patch.settled   = settled;
   const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&
          result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  nlohmann::json parsed;
+  try {
+    parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                  : nlohmann::json::parse(paramsJson.toStdString());
+  } catch (const std::exception&) {
+    return false;
+  }
+  std::string error;
+  auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return submitWrite(std::move(fieldKey), std::move(*write), settled);
 }
 
 bool EditorSessionController::enqueueNodeSwitchBoundary() {

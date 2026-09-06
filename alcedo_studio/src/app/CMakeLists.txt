@@ -389,11 +389,18 @@ def_library(EditorAdjustmentPipeline
     PUBLIC_DEPS EditPipeline EditHistory JSON EditorPipelineCommandService
 )
 
+def_library(EditorParameterWrite
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
+    PUBLIC_DEPS EditGraph JSON
+)
+
 def_library(EditorPipelineCommandService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
-    PUBLIC_DEPS EditGraph JSON
+    PUBLIC_DEPS EditGraph JSON EditorParameterWrite
 )
 
 def_library(EditorNodeGraphProjection
@@ -429,7 +436,9 @@ def_library(EditorPendingInput
         "${ALCEDO_APP_ROOT}/editor_pending_input.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
+    PUBLIC_DEPS EditGraph
 )
 
 def_library(EditorSerialFrameAdmission

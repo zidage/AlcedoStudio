@@ -32,12 +32,6 @@ Item {
     readonly property int handleSize: 22
     readonly property int sliderRowHeight: 32
 
-    function numericParams(key, v) {
-        var o = {}
-        o[key] = v
-        return JSON.stringify(o)
-    }
-
     function wireEnabled() {
         const on = root.controlsEnabled
         colorTempModel.enabled = on
@@ -216,7 +210,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("saturation", v) }
     }
     EditorAdjustmentValueModel {
         id: vibranceModel
@@ -229,7 +222,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("vibrance", v) }
     }
     EditorHlsModel {
         id: hlsModel
@@ -252,7 +244,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("clarity", v) }
     }
     EditorAdjustmentValueModel {
         id: sharpenModel
@@ -265,9 +256,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) {
-            return JSON.stringify({ sharpen: { offset: v } })
-        }
     }
     EditorAdjustmentValueModel {
         id: filmGrainModel
@@ -280,9 +268,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) {
-            return JSON.stringify({ film_grain: { strength: v } })
-        }
     }
     EditorAdjustmentValueModel {
         id: halationModel
@@ -295,9 +280,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) {
-            return JSON.stringify({ halation: { strength: v } })
-        }
     }
 
     component SectionShell: CollapsibleSection {

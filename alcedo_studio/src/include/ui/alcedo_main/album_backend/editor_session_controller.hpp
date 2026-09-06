@@ -188,6 +188,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // the session accepted the write for later owner processing, not that live
   // parameters or history were updated.
   Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
+  auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
+                                 bool settled) -> bool override;
   /// Queue a node-switch seal so later writes start a new sequence. Old
   /// sequence ids keep their captured target. No live mutation.
   Q_INVOKABLE bool   enqueueNodeSwitchBoundary();

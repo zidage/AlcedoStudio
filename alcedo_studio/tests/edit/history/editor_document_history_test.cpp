@@ -214,6 +214,18 @@ TEST_F(EditorDocumentHistoryTest, JournalAppendFailureRestoresDocumentExposureEv
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
 }
 
+TEST_F(EditorDocumentHistoryTest, CaptureAppliesTypedScalarWriteWhenParamsJsonIsEmpty) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  auto patch = WithColorGradeTarget(test::ScalarPatch("exposure", 2.25f, true));
+  patch.params_json.clear();
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  ASSERT_TRUE(history_.CommitAdjustment(handle, patch, &error)) << error;
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+}
+
 TEST_F(EditorDocumentHistoryTest, DiscardUncommittedPreviewRestoresDocumentExposureEv) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
@@ -231,9 +243,7 @@ TEST_F(EditorDocumentHistoryTest, MaskTargetWriteIsRejected) {
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  alcedo::EditorAdjustmentPatch patch;
-  patch.field_key                     = "exposure";
-  patch.params_json                   = R"({"exposure_ev":3.0})";
+  alcedo::EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 3.0f);
   patch.target.owner_kind             = alcedo::EditorParameterOwnerKind::ColorGradeMask;
   patch.target.node_id                = alcedo::NodeId{"grade.primary"};
   patch.target.adjustment_instance_id = alcedo::AdjustmentInstanceId{"grade.primary.exposure"};
@@ -295,7 +305,7 @@ TEST_F(EditorDocumentHistoryTest,
   EXPECT_EQ(parameter->before_value.at("exposure_ev"), 0.0);
   EXPECT_EQ(parameter->after_value.at("exposure_ev"), 16.0);
   // A different raw request normalizes to the same value, so it cannot produce another commit.
-  valid.params_json = R"({"exposure_ev":20.0})";
+  valid.write = alcedo::EditorScalarWrite{20.0f};
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, valid, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, valid, &error)) << error;
   EXPECT_EQ(guard_->working_head_commit_hash(), head);
@@ -376,9 +386,7 @@ TEST_F(EditorDocumentHistoryTest, PostControlTargetsDrtAndRestoresOnUndo) {
   EXPECT_EQ(filled->adjustment_instance_id, alcedo::AdjustmentInstanceId{"drt.clarity"});
   EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 0.0f);
 
-  alcedo::EditorAdjustmentPatch unspecified;
-  unspecified.field_key   = "clarity";
-  unspecified.params_json = R"({"clarity":25.0})";
+  alcedo::EditorAdjustmentPatch unspecified = test::ScalarPatch("clarity", 25.0f);
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, unspecified, &error)) << error;
   EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 25.0f);
 

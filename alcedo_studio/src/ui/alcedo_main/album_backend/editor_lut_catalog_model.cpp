@@ -239,7 +239,9 @@ void EditorLutCatalogModel::applySelectionHighlight() {
   }
 }
 
-void EditorLutCatalogModel::submitSettled() { submitNow(buildParamsJson(), true); }
+void EditorLutCatalogModel::submitSettled() {
+  submitNow(alcedo::EditorLutWrite{selectedPathUtf8_}, true);
+}
 
 auto EditorLutCatalogModel::buildParamsJson() const -> QString {
   QJsonObject root;

@@ -76,12 +76,14 @@ class EditorAdjustmentModelBase : public QObject {
   /// otherwise return `defaultJson`.
   [[nodiscard]] auto resolveParams(const QJSValue& arg, const QString& defaultJson) const
       -> QString;
-  /// Enqueue one field write through the seam. Defensive: no-op (returns false)
+  /// Enqueue one typed field write through the seam. Defensive: no-op (returns false)
   /// when there is no submitter or the session cannot accept input
   /// (`canEdit()` false). `settled=false` continues the sequence;
   /// `settled=true` seals it with Release. True means accepted for processing,
   /// not live-applied or history-committed.
-  auto submitNow(const QString& paramsJson, bool settled) -> bool;
+  auto submitNow(alcedo::EditorParameterWrite write, bool settled) -> bool;
+  /// Parse QML-collected field JSON once, then enqueue the typed write.
+  auto submitJsonBoundary(const QString& paramsJson, bool settled) -> bool;
   [[nodiscard]] auto submitterHandle() const -> IEditorAdjustmentSubmitter* {
     return submitter_;
   }

@@ -33,11 +33,14 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <variant>
 #include <vector>
 
+#include "app/editor_parameter_write.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
@@ -50,19 +53,41 @@ namespace {
 class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
  public:
   struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
+    QString                      fieldKey;
+    QString                      params;
+    bool                         settled = false;
+    alcedo::EditorParameterWrite write   = alcedo::EditorScalarWrite{};
   };
   std::vector<Call> calls;
   bool              canEditState = true;
 
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
     if (!canEditState) {
       return false;
     }
-    calls.push_back({fieldKey, paramsJson, settled});
+    calls.push_back({std::move(fieldKey), QString(), settled, std::move(write)});
     return true;
+  }
+
+  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
+    }
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      return false;
+    }
+    const auto ok = submitWrite(std::move(fieldKey), std::move(*write), settled);
+    if (ok && !calls.empty()) {
+      calls.back().params = std::move(paramsJson);
+    }
+    return ok;
   }
   auto canEdit() const -> bool override { return canEditState; }
 
@@ -79,11 +104,9 @@ class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
       return c.settled && c.fieldKey == field;
     }));
   }
-  static auto numericValue(const QString& params) -> double {
-    return QJsonDocument::fromJson(params.toUtf8()).object().value("value").toDouble();
-  }
-  static auto boolValue(const QString& params) -> bool {
-    return QJsonDocument::fromJson(params.toUtf8()).object().value("value").toBool();
+  static auto boolValue(const Call& call) -> bool {
+    const auto* toggle = std::get_if<alcedo::EditorToggleWrite>(&call.write);
+    return toggle != nullptr && toggle->value;
   }
 };
 
@@ -416,14 +439,14 @@ TEST(EditorAdjustmentControlQmlTest, AdjustmentToggleClickSubmitsOneSettled) {
   ProcessEvents(50);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("lens_calib_enabled")), 1);
   EXPECT_TRUE(h.toggle.value());
-  EXPECT_TRUE(RecordingSubmitter::boolValue([&] {
+  EXPECT_TRUE([&] {
     for (auto it = h.submitter.calls.rbegin(); it != h.submitter.calls.rend(); ++it) {
       if (it->settled && it->fieldKey == QStringLiteral("lens_calib_enabled")) {
-        return it->params;
+        return RecordingSubmitter::boolValue(*it);
       }
     }
-    return QString{};
-  }()));
+    return false;
+  }());
 }
 
 // Combo activation commits one settled transaction with the selected index.

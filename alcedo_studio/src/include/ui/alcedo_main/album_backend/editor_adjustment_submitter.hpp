@@ -6,6 +6,8 @@
 
 #include <QString>
 
+#include "app/editor_parameter_write.hpp"
+
 namespace alcedo::ui {
 
 /// Narrow QML-facing seam used by typed adjustment models to enqueue one
@@ -20,13 +22,19 @@ class IEditorAdjustmentSubmitter {
  public:
   virtual ~IEditorAdjustmentSubmitter() = default;
 
-  /// Enqueue one adjustment field write. `settled=false` continues the current
+  /// Enqueue one typed field operation. `settled=false` continues the current
   /// input sequence; `settled=true` also seals it with Release. Returns false
   /// when the session cannot accept input (no image, or not Interactive).
+  virtual auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool = 0;
+
+  /// QML collection boundary: parse one field JSON object into a typed write
+  /// and enqueue it. C++ models that already own typed values call
+  /// @ref submitWrite instead.
   virtual auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool = 0;
 
   /// True when the session has an image and is in the Interactive state, i.e.
-  /// adjustment controls should be enabled and `submitPatch` will be accepted.
+  /// adjustment controls should be enabled and writes will be accepted.
   virtual auto canEdit() const -> bool = 0;
 };
 

@@ -99,6 +99,7 @@ class EditorColorTempModel : public EditorAdjustmentModelBase {
   void promoteToCustomForEditing();
   void submitInteractive();
   void submitSettled();
+  [[nodiscard]] auto currentColorTempWrite() const -> alcedo::DevelopColorTemperatureUpdate;
   [[nodiscard]] auto buildParamsJson() const -> QString;
   void setDragActive(bool active, DragTarget target);
 
@@ -110,7 +111,7 @@ class EditorColorTempModel : public EditorAdjustmentModelBase {
   bool       supported_   = true;
   bool       dragActive_  = false;
   DragTarget dragTarget_  = DragTarget::None;
-  /// True once updateCct*/updateTint* changed a value in the open gesture.
+  /// True once updateCct*/updateTint* changed a value in the open pointer drag.
   /// Empty click halves of a double-click must not settle on finish*.
   bool cctDragMoved_  = false;
   bool tintDragMoved_ = false;

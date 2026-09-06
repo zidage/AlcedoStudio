@@ -2,7 +2,6 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_parameter_write.hpp"
 
 #include <array>
@@ -15,12 +14,13 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "app/editor_adjustment_types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
-#include "edit/graph/graph_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -175,28 +175,24 @@ auto ReadOptionalString(const nlohmann::json& object, std::initializer_list<std:
                            });
 }
 
-template <typename Model>
-void ApplyScalarPatch(IOperatorModel& base, const nlohmann::json& params, std::string_view field,
-                      std::string_view canonical_key) {
-  auto* model = dynamic_cast<Model*>(&base);
-  if (model == nullptr) {
-    throw std::invalid_argument("Adjustment Model type does not match field " + std::string{field});
-  }
+auto ParseScalarWrite(const nlohmann::json& params, std::string_view field,
+                      std::string_view canonical_key) -> EditorScalarWrite {
   const auto& object = (params.contains(field) && params.at(std::string{field}).is_object())
                            ? UnwrapObject(params, {field}, field)
                            : RequireObject(params, field);
   RejectUnknownKeys(object, {canonical_key, field, "value"}, field);
   const auto value = ReadOptionalFloat(object, {canonical_key, field, "value"}, field);
-  if (value.has_value()) {
-    model->SetValue(*value);
+  if (!value.has_value()) {
+    throw std::invalid_argument(std::string{field} + " requires a numeric value");
   }
+  return EditorScalarWrite{*value};
 }
 
-auto ParseCurvePoints(const nlohmann::json& params) -> std::optional<std::vector<CurvePoint>> {
+auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
   const auto& object = UnwrapObject(params, {"curve"}, "curve");
   RejectUnknownKeys(object, {"points", "size"}, "curve");
   if (!object.contains("points")) {
-    return std::nullopt;
+    throw std::invalid_argument("curve.points is required");
   }
   const auto& points_json = object.at("points");
   if (!points_json.is_array() || points_json.size() < 2) {
@@ -220,10 +216,10 @@ auto ParseCurvePoints(const nlohmann::json& params) -> std::optional<std::vector
     points.push_back(CurvePoint{ReadFiniteFloat(point.at("x"), "curve point.x"),
                                 ReadFiniteFloat(point.at("y"), "curve point.y")});
   }
-  return points;
+  return EditorCurveWrite{std::move(points)};
 }
 
-auto ParseLmtPath(const nlohmann::json& params) -> std::optional<std::string> {
+auto ParseLutWrite(const nlohmann::json& params) -> EditorLutWrite {
   RequireObject(params, "lut");
   const auto& object = (params.contains("lut") && params.at("lut").is_object())
                            ? UnwrapObject(params, {"lut"}, "lut")
@@ -231,7 +227,8 @@ auto ParseLmtPath(const nlohmann::json& params) -> std::optional<std::string> {
                            ? UnwrapObject(params, {"ocio_lmt"}, "lut")
                            : params;
   RejectUnknownKeys(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut");
-  return ReadOptionalString(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut");
+  return EditorLutWrite{
+      ReadOptionalString(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut").value_or("")};
 }
 
 auto ParseHlsVec3(const nlohmann::json& value, std::string_view context) -> HlsVec3 {
@@ -348,8 +345,6 @@ auto ParseColorWheelUpdate(const nlohmann::json& params) -> ColorWheelUpdate {
 
 auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdate {
   const auto& object = UnwrapObject(params, {"raw", "raw_decode"}, "raw_decode");
-  // History reads the complete Develop Model JSON. Known non-RAW fields are accepted as
-  // owner-local persistence context and are intentionally not copied into this update.
   RejectUnknownKeys(object,
                     {"method",
                      "demosaic_method",
@@ -388,7 +383,6 @@ auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdat
 
 auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTemperatureUpdate {
   const auto& object = UnwrapObject(params, {"color_temp"}, "color_temp");
-  // History reads the complete Develop Model JSON. Only white-balance fields are applied.
   RejectUnknownKeys(object,
                     {"mode",
                      "wb_mode",
@@ -428,7 +422,6 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
 
 auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCalibrationUpdate {
   const auto& object = UnwrapObject(params, {"lens_calib"}, "lens_calib");
-  // Camera metadata and other Develop fields are persistence context, not lens update inputs.
   RejectUnknownKeys(object,
                     {"enabled",
                      "lens_enabled",
@@ -694,15 +687,82 @@ auto ParseDrtUpdate(const nlohmann::json& params) -> DrtParameterUpdate {
   return update;
 }
 
-auto JoinValidation(const std::vector<GraphValidationError>& errors) -> std::string {
-  std::string text;
-  for (const auto& item : errors) {
-    if (!text.empty()) {
-      text += "; ";
-    }
-    text += item.message;
+auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
+    -> EditorParameterWrite {
+  if (field == "exposure") {
+    return ParseScalarWrite(params, field, "exposure_ev");
   }
-  return text;
+  if (field == "contrast") {
+    return ParseScalarWrite(params, field, "contrast");
+  }
+  if (field == "white" || field == "whites") {
+    return ParseScalarWrite(params, field, "white");
+  }
+  if (field == "black" || field == "blacks") {
+    return ParseScalarWrite(params, field, "black");
+  }
+  if (field == "shadows") {
+    return ParseScalarWrite(params, field, "shadows");
+  }
+  if (field == "highlights") {
+    return ParseScalarWrite(params, field, "highlights");
+  }
+  if (field == "saturation") {
+    return ParseScalarWrite(params, field, "saturation");
+  }
+  if (field == "vibrance") {
+    return ParseScalarWrite(params, field, "vibrance");
+  }
+  if (field == "clarity") {
+    return ParseScalarWrite(params, field, "clarity");
+  }
+  if (field == "halation") {
+    return ParseScalarWrite(params, field, "strength");
+  }
+  if (field == "film_grain") {
+    return ParseScalarWrite(params, field, "strength");
+  }
+  if (field == "curve") {
+    return ParseCurveWrite(params);
+  }
+  if (field == "lut" || field == "ocio_lmt") {
+    return ParseLutWrite(params);
+  }
+  if (field == "hls" || field == "HLS") {
+    return ParseHlsUpdate(params);
+  }
+  if (field == "color_wheel") {
+    return ParseColorWheelUpdate(params);
+  }
+  if (field == "tint") {
+    return ParseCat02Update(params);
+  }
+  if (field == "sharpen") {
+    return ParseSharpenUpdate(params);
+  }
+  if (field == "raw_decode") {
+    return ParseRawDecodeUpdate(params);
+  }
+  if (field == "color_temp") {
+    return ParseColorTemperatureUpdate(params);
+  }
+  if (field == "lens_calib") {
+    return ParseLensCalibrationUpdate(params);
+  }
+  if (field == "odt") {
+    return ParseDrtUpdate(params);
+  }
+  if (field == "crop_rotate") {
+    return ParseGeometryUpdate(params);
+  }
+  RequireObject(params, field);
+  if (params.contains("index") && params.contains("value") && params.at("value").is_string()) {
+    return EditorEnumWrite{params.at("value").get<std::string>()};
+  }
+  if (params.contains("value") && params.at("value").is_boolean() && params.size() == 1) {
+    return EditorToggleWrite{params.at("value").get<bool>()};
+  }
+  throw std::invalid_argument("Unsupported editor parameter field: " + std::string{field});
 }
 
 auto ColorGradeOf(PipelineDocument& document, const NodeId& id, std::string* error)
@@ -715,47 +775,8 @@ auto ColorGradeOf(PipelineDocument& document, const NodeId& id, std::string* err
   return grade;
 }
 
-auto ColorGradeOf(const PipelineDocument& document, const NodeId& id, std::string* error)
-    -> const ColorGradeNodeModel* {
-  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(id));
-  if (grade == nullptr) {
-    SetError(error, "Color Grade node is missing: " + std::string(id.Value()));
-    return nullptr;
-  }
-  return grade;
-}
-
 auto IsDrtPostAdjustmentField(std::string_view field) -> bool {
   return field == "clarity" || field == "sharpen" || field == "halation" || field == "film_grain";
-}
-
-auto OperatorTypeForCurrentPanelField(std::string_view field) -> const OperatorTypeId* {
-  if (field == "exposure") return &type_ids::Exposure();
-  if (field == "contrast") return &type_ids::Contrast();
-  if (field == "white" || field == "whites") return &type_ids::White();
-  if (field == "black" || field == "blacks") return &type_ids::Black();
-  if (field == "shadows") return &type_ids::Shadows();
-  if (field == "highlights") return &type_ids::Highlights();
-  if (field == "curve") return &type_ids::Curve();
-  if (field == "saturation") return &type_ids::Saturation();
-  if (field == "vibrance") return &type_ids::Vibrance();
-  if (field == "tint") return &type_ids::Cat02WhiteBalance();
-  if (field == "hls" || field == "HLS") return &type_ids::Hls();
-  if (field == "color_wheel") return &type_ids::ColorWheel();
-  if (field == "lut" || field == "ocio_lmt") return &type_ids::Lmt();
-  if (field == "clarity") return &type_ids::Clarity();
-  if (field == "sharpen") return &type_ids::Sharpen();
-  if (field == "halation") return &type_ids::Halation();
-  if (field == "film_grain") return &type_ids::FilmGrain();
-  return nullptr;
-}
-
-auto CurrentPanelColorGrade(const PipelineDocument& document) -> const ColorGradeNodeModel* {
-  if (const auto* primary = document.PrimaryGrade(); primary != nullptr) {
-    return primary;
-  }
-  const auto grades = ColorGradesOnImageBackbone(document);
-  return grades.empty() ? nullptr : grades.front();
 }
 
 auto DrtPostModel(DrtNodeModel& drt, const AdjustmentInstanceId& id, std::string* error)
@@ -767,123 +788,125 @@ auto DrtPostModel(DrtNodeModel& drt, const AdjustmentInstanceId& id, std::string
   return model;
 }
 
-auto DrtPostModel(const DrtNodeModel& drt, const AdjustmentInstanceId& id, std::string* error)
-    -> const IOperatorModel* {
-  const auto* model = drt.FindAdjustment(id);
-  if (model == nullptr) {
-    SetError(error, "Adjustment instance is missing: " + std::string(id.Value()));
+template <typename Alternative>
+auto RequireWrite(const EditorParameterWrite& write, std::string_view field) -> const Alternative& {
+  const auto* value = std::get_if<Alternative>(&write);
+  if (value == nullptr) {
+    throw std::invalid_argument("Field " + std::string{field} +
+                                " received an incompatible write payload");
   }
-  return model;
+  return *value;
 }
 
-void ApplyColorGradeModelPatch(IOperatorModel& model, std::string_view field,
-                               const nlohmann::json& params) {
+template <typename Model>
+void ApplyScalarValue(IOperatorModel& base, std::string_view field, float value) {
+  auto* model = dynamic_cast<Model*>(&base);
+  if (model == nullptr) {
+    throw std::invalid_argument("Adjustment Model type does not match field " + std::string{field});
+  }
+  model->SetValue(value);
+}
+
+void ApplyColorGradeWrite(IOperatorModel& model, std::string_view field,
+                          const EditorParameterWrite& write) {
   if (field == "exposure") {
-    ApplyScalarPatch<ExposureModel>(model, params, field, "exposure_ev");
+    ApplyScalarValue<ExposureModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "contrast") {
-    ApplyScalarPatch<ContrastModel>(model, params, field, "contrast");
+    ApplyScalarValue<ContrastModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "white" || field == "whites") {
-    ApplyScalarPatch<WhiteModel>(model, params, field, "white");
+    ApplyScalarValue<WhiteModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "black" || field == "blacks") {
-    ApplyScalarPatch<BlackModel>(model, params, field, "black");
+    ApplyScalarValue<BlackModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "shadows") {
-    ApplyScalarPatch<ShadowsModel>(model, params, field, "shadows");
+    ApplyScalarValue<ShadowsModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "highlights") {
-    ApplyScalarPatch<HighlightsModel>(model, params, field, "highlights");
+    ApplyScalarValue<HighlightsModel>(model, field,
+                                      RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "saturation") {
-    ApplyScalarPatch<SaturationModel>(model, params, field, "saturation");
+    ApplyScalarValue<SaturationModel>(model, field,
+                                      RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "vibrance") {
-    ApplyScalarPatch<VibranceModel>(model, params, field, "vibrance");
+    ApplyScalarValue<VibranceModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "curve") {
-    const auto points = ParseCurvePoints(params);
-    if (!points.has_value()) {
-      return;
-    }
     auto* typed = dynamic_cast<CurveModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field curve");
     }
-    typed->SetPoints(*points);
+    typed->SetPoints(RequireWrite<EditorCurveWrite>(write, field).points);
     return;
   }
   if (field == "tint") {
-    auto  update = ParseCat02Update(params);
-    auto* typed  = dynamic_cast<Cat02WhiteBalanceModel*>(&model);
+    auto* typed = dynamic_cast<Cat02WhiteBalanceModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field tint");
     }
-    typed->ApplyUpdate(std::move(update));
+    typed->ApplyUpdate(RequireWrite<Cat02WhiteBalanceUpdate>(write, field));
     return;
   }
   if (field == "hls" || field == "HLS") {
-    auto  update = ParseHlsUpdate(params);
-    auto* typed  = dynamic_cast<HlsModel*>(&model);
+    auto* typed = dynamic_cast<HlsModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field HLS");
     }
-    typed->ApplyUpdate(std::move(update));
+    typed->ApplyUpdate(RequireWrite<HlsUpdate>(write, field));
     return;
   }
   if (field == "color_wheel") {
-    auto  update = ParseColorWheelUpdate(params);
-    auto* typed  = dynamic_cast<ColorWheelModel*>(&model);
+    auto* typed = dynamic_cast<ColorWheelModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field color_wheel");
     }
-    typed->ApplyUpdate(std::move(update));
+    typed->ApplyUpdate(RequireWrite<ColorWheelUpdate>(write, field));
     return;
   }
   if (field == "lut" || field == "ocio_lmt") {
-    const auto path  = ParseLmtPath(params);
-    auto*      typed = dynamic_cast<LmtModel*>(&model);
+    auto* typed = dynamic_cast<LmtModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field lut");
     }
-    if (path.has_value()) {
-      typed->SetCubePath(*path);
-    }
+    typed->SetCubePath(RequireWrite<EditorLutWrite>(write, field).cube_path);
     return;
   }
   throw std::invalid_argument("Unsupported Color Grade parameter field: " + std::string{field});
 }
 
-void ApplyDrtPostAdjustmentPatch(IOperatorModel& model, std::string_view field,
-                                 const nlohmann::json& params) {
+void ApplyDrtPostWrite(IOperatorModel& model, std::string_view field,
+                       const EditorParameterWrite& write) {
   if (field == "clarity") {
-    ApplyScalarPatch<ClarityModel>(model, params, field, "clarity");
+    ApplyScalarValue<ClarityModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "halation") {
-    ApplyScalarPatch<HalationModel>(model, params, field, "strength");
+    ApplyScalarValue<HalationModel>(model, field, RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "film_grain") {
-    ApplyScalarPatch<FilmGrainModel>(model, params, field, "strength");
+    ApplyScalarValue<FilmGrainModel>(model, field,
+                                     RequireWrite<EditorScalarWrite>(write, field).value);
     return;
   }
   if (field == "sharpen") {
-    auto  update = ParseSharpenUpdate(params);
-    auto* typed  = dynamic_cast<SharpenModel*>(&model);
+    auto* typed = dynamic_cast<SharpenModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field sharpen");
     }
-    typed->ApplyUpdate(std::move(update));
+    typed->ApplyUpdate(RequireWrite<SharpenUpdate>(write, field));
     return;
   }
   throw std::invalid_argument("Unsupported DRT/Post parameter field: " + std::string{field});
@@ -891,20 +914,23 @@ void ApplyDrtPostAdjustmentPatch(IOperatorModel& model, std::string_view field,
 
 }  // namespace
 
-auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameterTarget& target,
-                               const nlohmann::json& params, std::string* error) -> bool {
-  auto write = ParseEditorParameterWrite(target.field_key, params, error);
-  if (!write.has_value()) {
-    return false;
+auto ParseEditorParameterWrite(std::string_view field_key, const nlohmann::json& params,
+                               std::string* error) -> std::optional<EditorParameterWrite> {
+  const nlohmann::json& object = params.is_null() ? nlohmann::json::object() : params;
+  if (!object.is_object()) {
+    SetError(error, "Editor parameter params must be a JSON object");
+    return std::nullopt;
   }
-  return ApplyEditorParameterWrite(document, target, *write, error);
+  try {
+    return ParseWriteOrThrow(field_key, object);
+  } catch (const std::exception& ex) {
+    SetError(error, ex.what());
+    return std::nullopt;
+  }
 }
 
-auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParameterTarget& target,
-                             nlohmann::json* json, std::string* error) -> bool {
-  if (json == nullptr) {
-    return SetError(error, "Editor parameter JSON storage is required");
-  }
+auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameterTarget& target,
+                               const EditorParameterWrite& write, std::string* error) -> bool {
   const auto target_error = DescribeEditorParameterTargetError(target, target.field_key);
   if (!target_error.empty()) {
     return SetError(error, target_error);
@@ -912,43 +938,58 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
   try {
     switch (target.owner_kind) {
       case EditorParameterOwnerKind::ColorGrade: {
-        const auto* grade = ColorGradeOf(document, target.node_id, error);
+        auto* grade = ColorGradeOf(document, target.node_id, error);
         if (grade == nullptr) {
           return false;
         }
-        const auto* model = grade->FindAdjustment(target.adjustment_instance_id);
+        auto* model = grade->FindAdjustment(target.adjustment_instance_id);
         if (model == nullptr) {
           return SetError(error, "Adjustment instance is missing: " +
                                      std::string(target.adjustment_instance_id.Value()));
         }
-        *json = model->ToJson();
+        ApplyColorGradeWrite(*model, target.field_key, write);
         return true;
       }
-      case EditorParameterOwnerKind::Document:
-        *json = document.Geometry().ToJson();
+      case EditorParameterOwnerKind::Document: {
+        document.Geometry().ApplyUpdate(RequireWrite<ImageGeometryUpdate>(write, target.field_key));
         return true;
+      }
       case EditorParameterOwnerKind::Develop: {
-        const auto* develop = document.Develop();
+        auto* develop = document.Develop();
         if (develop == nullptr || develop->Id() != target.node_id) {
           return SetError(error, "Develop node is missing: " + std::string(target.node_id.Value()));
         }
-        *json = develop->Params().ToJson();
+        if (target.field_key == "raw_decode") {
+          develop->Params().ApplyRawDecodeUpdate(
+              RequireWrite<DevelopRawDecodeUpdate>(write, target.field_key));
+        } else if (target.field_key == "color_temp") {
+          develop->Params().ApplyColorTemperatureUpdate(
+              RequireWrite<DevelopColorTemperatureUpdate>(write, target.field_key));
+        } else if (target.field_key == "lens_calib") {
+          develop->Params().ApplyLensCalibrationUpdate(
+              RequireWrite<DevelopLensCalibrationUpdate>(write, target.field_key));
+        } else {
+          return SetError(error, "Unsupported Develop parameter field: " + target.field_key);
+        }
         return true;
       }
       case EditorParameterOwnerKind::DrtPost: {
-        const auto* drt = document.Drt();
+        auto* drt = document.Drt();
         if (drt == nullptr || drt->Id() != target.node_id) {
           return SetError(error, "DRT node is missing: " + std::string(target.node_id.Value()));
         }
         if (IsDrtPostAdjustmentField(target.field_key)) {
-          const auto* model = DrtPostModel(*drt, target.adjustment_instance_id, error);
+          auto* model = DrtPostModel(*drt, target.adjustment_instance_id, error);
           if (model == nullptr) {
             return false;
           }
-          *json = model->ToJson();
+          ApplyDrtPostWrite(*model, target.field_key, write);
           return true;
         }
-        *json = drt->Params().ToJson();
+        if (target.field_key != "odt") {
+          return SetError(error, "Unsupported DRT parameter field: " + target.field_key);
+        }
+        drt->Params().ApplyUpdate(RequireWrite<DrtParameterUpdate>(write, target.field_key));
         return true;
       }
       default:
@@ -957,93 +998,6 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
   }
-}
-
-auto CanonicalPipelineDocumentJson(const PipelineDocument& document) -> std::string {
-  return document.ToJson().dump();
-}
-
-auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::string* error)
-    -> bool {
-  auto       errors   = document.Graph().Validate();
-  const auto backbone = document.Graph().ValidateImageBackbone();
-  errors.insert(errors.end(), backbone.begin(), backbone.end());
-  if (errors.empty()) {
-    return true;
-  }
-  return SetError(error, JoinValidation(errors));
-}
-
-auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
-                                 const nlohmann::json& params, std::string* error) -> bool {
-  return ApplyEditorParameterPatch(live, target, params, error);
-}
-
-auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::string field_key,
-                                         std::string* error)
-    -> std::optional<EditorParameterTarget> {
-  EditorParameterTarget target;
-  target.field_key = std::move(field_key);
-  if (target.field_key == "crop_rotate") {
-    target.owner_kind = EditorParameterOwnerKind::Document;
-    return target;
-  }
-  if (target.field_key == "raw_decode" || target.field_key == "lens_calib" ||
-      target.field_key == "color_temp") {
-    const auto* develop = document.Develop();
-    if (develop == nullptr) {
-      SetError(error, "Develop node is missing");
-      return std::nullopt;
-    }
-    target.owner_kind = EditorParameterOwnerKind::Develop;
-    target.node_id    = develop->Id();
-    return target;
-  }
-  if (target.field_key == "odt") {
-    const auto* drt = document.Drt();
-    if (drt == nullptr) {
-      SetError(error, "DRT node is missing");
-      return std::nullopt;
-    }
-    target.owner_kind = EditorParameterOwnerKind::DrtPost;
-    target.node_id    = drt->Id();
-    return target;
-  }
-  const auto* type = OperatorTypeForCurrentPanelField(target.field_key);
-  if (type == nullptr) {
-    SetError(error, "Unknown editor adjustment field: " + target.field_key);
-    return std::nullopt;
-  }
-  if (IsDrtPostAdjustmentField(target.field_key)) {
-    const auto* drt = document.Drt();
-    if (drt == nullptr) {
-      SetError(error, "DRT node is missing");
-      return std::nullopt;
-    }
-    const auto* instance = drt->FindAdjustmentIdByType(*type);
-    if (instance == nullptr) {
-      SetError(error, "DRT/Post adjustment is missing: " + std::string{type->Text()});
-      return std::nullopt;
-    }
-    target.owner_kind             = EditorParameterOwnerKind::DrtPost;
-    target.node_id                = drt->Id();
-    target.adjustment_instance_id = *instance;
-    return target;
-  }
-  const auto* grade = CurrentPanelColorGrade(document);
-  if (grade == nullptr) {
-    SetError(error, "Color Grade node is missing");
-    return std::nullopt;
-  }
-  const auto* instance = grade->FindAdjustmentIdByType(*type);
-  if (instance == nullptr) {
-    SetError(error, "Color Grade adjustment is missing: " + std::string{type->Text()});
-    return std::nullopt;
-  }
-  target.owner_kind             = EditorParameterOwnerKind::ColorGrade;
-  target.node_id                = grade->Id();
-  target.adjustment_instance_id = *instance;
-  return target;
 }
 
 }  // namespace alcedo

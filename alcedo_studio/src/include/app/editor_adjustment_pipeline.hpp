@@ -141,6 +141,17 @@ auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
     -> bool;
 
 /**
+ * @brief Copy one Model field onto the matching CPU stage operator.
+ *
+ * Used after a typed live write so the executor tracks the document owner.
+ * Caller holds the executor render lock.
+ */
+auto RemirrorEditorParameterToExecutor(CPUPipelineExecutor& executor,
+                                       const PipelineDocument& document,
+                                       const EditorParameterTarget& target, std::string* error)
+    -> bool;
+
+/**
  * @brief Remirror CPU stages from one typed-batch commit's after (or before) values.
  *
  * Used by undo (before) and redo (after). Caller holds the render lock.

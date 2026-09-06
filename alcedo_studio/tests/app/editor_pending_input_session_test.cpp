@@ -7,6 +7,7 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -75,15 +76,12 @@ TEST_F(EditorPendingInputSessionTest, EnqueueDoesNotCaptureHistoryOrApplyLivePat
   const int captures_before = history_->capture_count;
   const int commits_before  = history_->commit_count;
 
-  EditorAdjustmentPatch preview;
-  preview.field_key   = "exposure";
-  preview.params_json = R"({"value":0.25})";
-  preview.settled     = false;
+  EditorAdjustmentPatch preview = test::ScalarPatch("exposure", 0.25f, false);
   const auto queued   = service_->EnqueueAdjustmentInput(preview);
   EXPECT_EQ(queued.kind, EditorSessionResultKind::Accepted);
 
   EditorAdjustmentPatch settled = preview;
-  settled.params_json           = R"({"value":0.40})";
+  settled.write                 = EditorScalarWrite{0.40f};
   settled.settled               = true;
   const auto released           = service_->EnqueueAdjustmentInput(settled);
   EXPECT_EQ(released.kind, EditorSessionResultKind::Accepted);
@@ -98,15 +96,13 @@ TEST_F(EditorPendingInputSessionTest, EnqueueDoesNotCaptureHistoryOrApplyLivePat
   EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::Release);
   const auto* exposure = FindPendingField(pending, "exposure");
   ASSERT_NE(exposure, nullptr);
-  EXPECT_EQ(exposure->params_json, R"({"value":0.40})");
+  EXPECT_EQ(PendingScalarValue(*exposure), 0.40f);
   EXPECT_EQ(exposure->identity.element_id, static_cast<sl_element_id_t>(10));
   EXPECT_EQ(exposure->identity.image_id, static_cast<image_id_t>(20));
 }
 
 TEST_F(EditorPendingInputSessionTest, EnqueueRejectedWhenSessionIsNotInteractive) {
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"value":0.25})";
+  EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.25f);
   const auto rejected = service_->EnqueueAdjustmentInput(patch);
   EXPECT_EQ(rejected.kind, EditorSessionResultKind::Rejected);
   EXPECT_TRUE(service_->PeekPendingInput().sequences.empty());
@@ -115,9 +111,7 @@ TEST_F(EditorPendingInputSessionTest, EnqueueRejectedWhenSessionIsNotInteractive
 TEST_F(EditorPendingInputSessionTest, NodeSwitchBoundaryKeepsOriginalSequenceTarget) {
   OpenInteractive();
   const int captures_before = history_->capture_count;
-  EditorAdjustmentPatch first;
-  first.field_key   = "exposure";
-  first.params_json = R"({"value":0.1})";
+  EditorAdjustmentPatch first = test::ScalarPatch("exposure", 0.1f);
   first.target.owner_kind             = EditorParameterOwnerKind::ColorGrade;
   first.target.node_id                = NodeId{"grade.a"};
   first.target.adjustment_instance_id = AdjustmentInstanceId{"tone"};
@@ -127,7 +121,7 @@ TEST_F(EditorPendingInputSessionTest, NodeSwitchBoundaryKeepsOriginalSequenceTar
             EditorSessionResultKind::Accepted);
 
   EditorAdjustmentPatch second = first;
-  second.params_json           = R"({"value":0.2})";
+  second.write                 = EditorScalarWrite{0.2f};
   second.target.node_id        = NodeId{"grade.b"};
   ASSERT_EQ(service_->EnqueueAdjustmentInput(second).kind, EditorSessionResultKind::Accepted);
 

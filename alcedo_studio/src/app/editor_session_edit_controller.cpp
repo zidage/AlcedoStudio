@@ -28,6 +28,11 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
     outcome.message = "Adjustment patch requires a field key";
     return outcome;
   }
+  if (!patch.write.has_value()) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "Typed field write is required";
+    return outcome;
+  }
   if (patch.target.owner_kind != EditorParameterOwnerKind::Unspecified) {
     const auto target_error =
         DescribeEditorParameterTargetError(patch.target, patch.field_key);
@@ -62,7 +67,6 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
 
   EditorRenderAdjustmentSnapshot render_delta;
   render_delta.fingerprint = patch.field_key;
-  render_delta.params_json = patch.params_json;
   render_delta.patches     = {patch};
 
   outcome.kind                      = EditorEditOutcome::Kind::RenderRouted;
@@ -79,10 +83,10 @@ namespace {
 [[nodiscard]] auto PatchFromPendingField(const EditorPendingFieldChange& field)
     -> EditorAdjustmentPatch {
   EditorAdjustmentPatch patch;
-  patch.field_key   = field.target.field_key;
-  patch.params_json = field.params_json;
-  patch.enabled     = field.enabled;
-  patch.target      = field.target;
+  patch.field_key = field.target.field_key;
+  patch.write     = field.write;
+  patch.enabled   = field.enabled;
+  patch.target    = field.target;
   return patch;
 }
 

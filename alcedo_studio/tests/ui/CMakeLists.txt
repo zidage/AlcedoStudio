@@ -579,7 +579,7 @@ add_executable(EditorAdjustmentModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorAdjustmentModelTest
   PRIVATE
     AlbumBackendLib
@@ -1305,7 +1305,7 @@ add_executable(EditorToneCurveModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorToneCurveModelTest
   PRIVATE
     AlbumBackendLib
@@ -1347,7 +1347,7 @@ add_executable(EditorLookModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorLookModelTest
   PRIVATE
     AlbumBackendLib

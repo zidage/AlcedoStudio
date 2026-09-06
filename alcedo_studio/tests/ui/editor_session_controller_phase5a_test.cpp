@@ -7,6 +7,7 @@
 /// and build-check that EditorSessionService does not link Qt Widgets.
 
 #include <gtest/gtest.h>
+#include "support/editor_parameter_write_test.hpp"
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -24,6 +25,7 @@
 
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "type/hash_type.hpp"
@@ -890,8 +892,8 @@ TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController)
 
   EditorRenderAdjustmentSnapshot snap;
   snap.patches = {
-      EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true},
-      EditorAdjustmentPatch{"contrast", R"({"contrast":18.0})", true},
+      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.5})", true}),
+      alcedo::test::SnapshotPatch({"contrast", R"({"contrast":18.0})", true}),
   };
   snap.snapshot_generation = 1;
   backend.SetAdjustmentSnapshot(snap);
@@ -911,10 +913,10 @@ TEST(EditorSessionControllerPhase5ATest,
   controller.bindPresentationViewport(&viewport);
 
   EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{
+  snap.patches = {alcedo::test::SnapshotPatch({
       "odt",
       R"({"odt":{"encoding_space":"rec2020","encoding_eotf":"st2084","peak_luminance":1600.0}})",
-      true}};
+      true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
 
@@ -930,14 +932,14 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
   EditorSessionController        controller(&backend);
 
   EditorRenderAdjustmentSnapshot snap1;
-  snap1.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true}};
+  snap1.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.0})", true})};
   backend.SetAdjustmentSnapshot(snap1);
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
   EXPECT_TRUE(map1.contains(QStringLiteral("exposure")));
 
   EditorRenderAdjustmentSnapshot snap2;
-  snap2.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true}};
+  snap2.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.5})", true})};
   backend.SetAdjustmentSnapshot(snap2);
   backend.NotifyWithoutStateChange();
 
@@ -954,7 +956,7 @@ TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
                    [&] { ++signal_count; });
 
   EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", true}};
+  snap.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.75})", true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
@@ -981,7 +983,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
                    [&] { ++signal_count; });
 
   EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
+  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":10.0})", true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
@@ -1024,8 +1026,8 @@ TEST(EditorSessionControllerPhase5ATest,
   const auto* vibrance   = FindPendingField(pending, "vibrance");
   ASSERT_NE(saturation, nullptr);
   ASSERT_NE(vibrance, nullptr);
-  EXPECT_EQ(saturation->params_json, "{\"saturation\":40}");
-  EXPECT_EQ(vibrance->params_json, "{\"vibrance\":24}");
+  EXPECT_EQ(PendingScalarValue(*saturation), 40.0f);
+  EXPECT_EQ(PendingScalarValue(*vibrance), 24.0f);
   EXPECT_EQ(snapshot_signals, 0)
       << "interactive submitPatch must not flood AdjustmentSnapshotChanged "
          "(each emit re-enters QML loadFromSnapshot during pointer moves)";
@@ -1061,7 +1063,7 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchDoesNotCommitOrPublis
   EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::Release);
   const auto* exposure = FindPendingField(pending, "exposure");
   ASSERT_NE(exposure, nullptr);
-  EXPECT_EQ(exposure->params_json, "{\"exposure\":0.8}");
+  EXPECT_EQ(PendingScalarValue(*exposure), 0.8f);
 }
 
 TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSettledStopsIt) {
@@ -1166,7 +1168,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
                    [&] { ++signal_count; });
 
   EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
+  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":10.0})", true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
@@ -1175,7 +1177,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
   backend.NotifyWithoutStateChange();
   EXPECT_EQ(signal_count, before);
 
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":42.0})", true}};
+  snap.patches = {alcedo::test::SnapshotPatch({"contrast", R"({"contrast":42.0})", true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
   EXPECT_GT(signal_count, before);
@@ -1186,7 +1188,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
   EditorSessionController        controller(&backend);
 
   EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":-1.75})", true}};
+  snap.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":-1.75})", true})};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
 
@@ -1306,9 +1308,9 @@ TEST(EditorSessionControllerPhase5ATest, NodeSwitchBoundaryStartsANewQueuedSeque
   ASSERT_EQ(pending.sequences.size(), 2u);
   EXPECT_EQ(pending.sequences[0].seal, EditorPendingInputBoundaryKind::NodeSwitch);
   ASSERT_EQ(pending.sequences[0].fields.size(), 1u);
-  EXPECT_NE(pending.sequences[0].fields.front().params_json.find("0.4"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences[0].fields.front()), 0.4f);
   ASSERT_FALSE(pending.sequences[1].fields.empty());
-  EXPECT_NE(pending.sequences[1].fields.front().params_json.find("0.9"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences[1].fields.front()), 0.9f);
 }
 
 TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefreshHistoryModels) {

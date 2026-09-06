@@ -42,6 +42,7 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 namespace alcedo {
 namespace {
@@ -586,10 +587,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   const auto captures_before = history_->capture_count;
   const auto scheduled_before = scheduler_->scheduled_.size();
 
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure":0.5})";
-  patch.settled     = false;
+  EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.5f, false);
   const auto result = service_->Patch(patch);
 
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
@@ -622,9 +620,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
     release_renderer.set_value();
   });
 
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure":0.25})";
+  EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.25f);
   const auto result = service_->Patch(patch);
   releaser.join();
   renderer.join();
