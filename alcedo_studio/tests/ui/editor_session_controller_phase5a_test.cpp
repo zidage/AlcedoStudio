@@ -217,10 +217,13 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   void NotifyWithoutStateChange() { NotifyChange(); }
 
-  // Phase 6D multi-slider: Patch/Commit update the live snapshot and NotifyChange
-  // the same way EditorSessionService::Emit does after HandlePatch.
-  int  patch_count  = 0;
-  int  commit_count = 0;
+  // Patch/Commit remain owner-consume APIs for tests that call them directly.
+  // GUI submitPatch uses EnqueueAdjustmentInput and must not copy live params
+  // into the panel snapshot.
+  int  patch_count   = 0;
+  int  commit_count  = 0;
+  int  enqueue_count = 0;
+  EditorPendingInputQueue pending_input_;
 
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++patch_count;
@@ -236,9 +239,8 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++commit_count;
     UpsertSnapshotPatch(std::move(patch));
-    // Phase 7A R2: a settled commit mutates history, so bump the revision the
-    // same way EditorSessionService::CommitAdjustment does. Interactive Patch
-    // below does not bump, so previews stay off the history projection path.
+    // A settled consume mutates history, so bump the revision the same way
+    // EditorSessionService::CommitAdjustment does. Enqueue below does not.
     ++history_revision_;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::RenderRouted;
@@ -246,6 +248,42 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override {
+    ++enqueue_count;
+    const auto admitted = pending_input_.AdmitFieldChange(identity_, patch);
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input queued";
+    return result;
+  }
+
+  auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
+      -> EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitBoundary(identity_, kind);
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input boundary queued";
+    return result;
+  }
+
+  [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override {
+    return pending_input_.Peek();
   }
 
   // Phase 7A R0: deterministic counters + async Version-operation modeling for
@@ -829,8 +867,8 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
       text.substr(start, next == std::string::npos ? std::string::npos : next - start);
   // Match real link dependency tokens, not comments that mention Widgets.
   // The facade may declare PRIVATE_DEPS on internal module libraries
-  // (EditorSaveCheckpointService, EditorSessionLifecycle, etc.) as part of
-  // Fix-1B; it must never link Qt Widgets or expose PUBLIC_DEPS.
+  // (EditorPendingInput, EditorSaveCheckpointService, EditorSessionLifecycle,
+  // etc.). It must never link Qt Widgets or expose PUBLIC_DEPS.
   EXPECT_EQ(block.find("PUBLIC_DEPS"), std::string::npos)
       << "EditorSessionService must not declare PUBLIC_DEPS";
   EXPECT_EQ(block.find("Qt6::Widgets"), std::string::npos)
@@ -976,18 +1014,27 @@ TEST(EditorSessionControllerPhase5ATest,
                                        QStringLiteral("{\"vibrance\":%1}").arg(i * 3), false));
   }
 
-  EXPECT_EQ(backend.patch_count, 16);
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.enqueue_count, 16);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::None);
+  const auto* saturation = FindPendingField(pending, "saturation");
+  const auto* vibrance   = FindPendingField(pending, "vibrance");
+  ASSERT_NE(saturation, nullptr);
+  ASSERT_NE(vibrance, nullptr);
+  EXPECT_EQ(saturation->params_json, "{\"saturation\":40}");
+  EXPECT_EQ(vibrance->params_json, "{\"vibrance\":24}");
   EXPECT_EQ(snapshot_signals, 0)
       << "interactive submitPatch must not flood AdjustmentSnapshotChanged "
          "(each emit re-enters QML loadFromSnapshot during pointer moves)";
-  EXPECT_GE(state_signals, 1) << "StateChanged must still fire for renderBusy bindings";
-  // Cache stays warm so a later external NotifyChange does not look brand-new
-  // unless params actually change again.
-  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
-  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
+  EXPECT_EQ(state_signals, 0) << "enqueue must not NotifyChange or apply live parameters";
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
 }
 
-TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapshotChanged) {
+TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchDoesNotCommitOrPublishAdjustmentSnapshot) {
   FakeSessionBackend backend;
   backend.state_               = EditorSessionState::Interactive;
   backend.image_load_request_  = ImageLoadRequestId{1};
@@ -999,15 +1046,22 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapsh
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++snapshot_signals; });
 
-  // Interactive first (no signal), then settled (must signal for panel sync).
   ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
                                      QStringLiteral("{\"exposure\":0.5}"), false));
   EXPECT_EQ(snapshot_signals, 0);
 
   ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
                                      QStringLiteral("{\"exposure\":0.8}"), true));
-  EXPECT_GE(snapshot_signals, 1) << "settled submitPatch must publish AdjustmentSnapshotChanged";
-  EXPECT_EQ(backend.commit_count, 1);
+  EXPECT_EQ(snapshot_signals, 0) << "settled enqueue is accepted, not history-committed";
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.enqueue_count, 2);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::Release);
+  const auto* exposure = FindPendingField(pending, "exposure");
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_EQ(exposure->params_json, "{\"exposure\":0.8}");
 }
 
 TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSettledStopsIt) {
@@ -1199,12 +1253,62 @@ TEST(EditorSessionControllerPhase5ATest, SettledCommitPublishesOneHistoryRevisio
   QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
   backend.history_snapshot_count_ = 0;
 
-  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
-                                     QStringLiteral(R"({"exposure":0.8})"), true));
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":0.8})";
+  patch.settled     = true;
+  const auto result = backend.CommitAdjustment(std::move(patch));
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  controller.OnBackendChanged();
 
   EXPECT_EQ(history_signals, 1) << "one settled commit publishes one history revision";
   EXPECT_EQ(model_refreshes, 1) << "one settled commit performs one projection";
   EXPECT_EQ(backend.history_snapshot_count_, 1) << "one settled commit reads one history snapshot";
+}
+
+TEST(EditorSessionControllerPhase5ATest, SubmitPatchSettledDoesNotPublishHistoryRevision) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+  EditorSessionController controller(&backend);
+  EditorHistoryModel      model;
+  model.setEditorSession(&controller);
+
+  int history_signals = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryChanged,
+                   [&] { ++history_signals; });
+  backend.history_snapshot_count_ = 0;
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"exposure":0.8})"), true));
+
+  EXPECT_EQ(history_signals, 0);
+  EXPECT_EQ(backend.history_snapshot_count_, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.history_revision(), 0u);
+}
+
+TEST(EditorSessionControllerPhase5ATest, NodeSwitchBoundaryStartsANewQueuedSequence) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+  EditorSessionController controller(&backend);
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"value":0.4})"), false));
+  ASSERT_TRUE(controller.enqueueNodeSwitchBoundary());
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"value":0.9})"), false));
+
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 2u);
+  EXPECT_EQ(pending.sequences[0].seal, EditorPendingInputBoundaryKind::NodeSwitch);
+  ASSERT_EQ(pending.sequences[0].fields.size(), 1u);
+  EXPECT_NE(pending.sequences[0].fields.front().params_json.find("0.4"), std::string::npos);
+  ASSERT_FALSE(pending.sequences[1].fields.empty());
+  EXPECT_NE(pending.sequences[1].fields.front().params_json.find("0.9"), std::string::npos);
 }
 
 TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefreshHistoryModels) {

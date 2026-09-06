@@ -14,6 +14,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
@@ -219,6 +220,44 @@ class IEditorSessionBackend {
     result.message = "Adjustment commit not supported by this backend";
     return result;
   }
+  /**
+   * @brief Admit one typed field write into the pending-input queue.
+   *
+   * Acceptance means queued for later owner processing. It does not apply the
+   * write to the live document, capture history before-values, or commit.
+   * The queued payload is the caller's field write, not a copy of live
+   * operator/node/document parameters.
+   * Accepted writes are not appended to the session result log; inspect the
+   * pending-input queue instead. Default backends reject so fakes must opt in.
+   */
+  virtual auto EnqueueAdjustmentInput(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.identity = identity();
+    result.message = "Queued adjustment input is not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Admit a Release, Cancel, or NodeSwitch seal on the open sequence.
+   *
+   * Does not apply or restore live parameters. Default backends reject.
+   */
+  virtual auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind /*kind*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Queued adjustment input is not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Inspect queued change descriptions. Empty when the backend has none.
+   *
+   * The view is the pending-input queue itself, not a live parameter-body copy.
+   */
+  [[nodiscard]] virtual auto PeekPendingInput() const -> EditorPendingInputView { return {}; }
   /// Rename a Color Grade as a metadata-only history change. Default backends reject.
   virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
       -> EditorSessionResult {
@@ -391,6 +430,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto               CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
+      -> EditorSessionResult override;
+  [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
@@ -498,6 +541,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorSessionRenderController           render_;
   EditorSessionEditController             edit_;
   EditorSessionNavigationController       navigation_;
+  EditorPendingInputQueue                 pending_input_;
   bool                                    reducing_command_     = false;
   std::uint64_t                           current_operation_id_ = 0;
   std::size_t                             publication_depth_    = 0;

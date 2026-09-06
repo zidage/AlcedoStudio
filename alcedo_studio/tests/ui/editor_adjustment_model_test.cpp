@@ -151,6 +151,21 @@ TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSett
   EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.3);
 }
 
+// Control value is written and submitPatch is called before updateDrag returns.
+// The submitter records the enqueue; live document mutation is a later owner
+// consume step and is not part of this model seam.
+TEST(EditorAdjustmentModelTest, PointerDragWritesControlValueAndEnqueuesPatchBeforeReturn) {
+  RecordingSubmitter sub;
+  auto               m = makeValueModel(sub);
+  m->beginDrag();
+  m->updateDrag(0.4);
+  ASSERT_EQ(sub.calls.size(), 1u);
+  EXPECT_FALSE(sub.calls.front().settled);
+  EXPECT_DOUBLE_EQ(m->value(), 0.4);
+  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.calls.front().params), m->value());
+  m->finishDrag();
+}
+
 // 2. A wheel/keyboard burst submits one interactive patch per value and one
 // settled patch after the debounce stabilizes.
 TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettledAfterDebounce) {

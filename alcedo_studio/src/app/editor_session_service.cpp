@@ -5,6 +5,7 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <mutex>
 #include <utility>
 
 #include "app/editor_action_policy.hpp"
@@ -1064,6 +1065,54 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   result.message  = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
+}
+
+auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued adjustment input requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued adjustment input requires an open image");
+  }
+  const auto identity = lifecycle_.identity();
+  const auto admitted = pending_input_.AdmitFieldChange(identity, patch);
+  if (!admitted.accepted) {
+    return Reject(admitted.error.empty() ? "Queued adjustment input was rejected"
+                                         : admitted.error);
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = identity;
+  result.message  = "Adjustment input queued";
+  return result;
+}
+
+auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued adjustment input requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued adjustment input requires an open image");
+  }
+  const auto identity = lifecycle_.identity();
+  const auto admitted = pending_input_.AdmitBoundary(identity, kind);
+  if (!admitted.accepted) {
+    return Reject(admitted.error.empty() ? "Queued adjustment boundary was rejected"
+                                         : admitted.error);
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = identity;
+  result.message  = "Adjustment input boundary queued";
+  return result;
+}
+
+auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {
+  return pending_input_.Peek();
 }
 
 auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)

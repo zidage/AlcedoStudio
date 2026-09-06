@@ -79,9 +79,8 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
 }
 
 /// Production-shaped session backend: real Mini-Git history + pipeline guard.
-/// Patch/Commit call history Capture/Commit (GUI-thread, same as service).
-/// After each patch, a render worker holds GetRenderLock and may BlockingQueued
-/// to the GUI — the cross-thread shape of Apply + present.
+/// submitPatch enqueues typed input without taking the render lock. Patch/Commit
+/// remain available for owner consume tests that call them directly.
 class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
  public:
   explicit ProductionSessionBackend(QObject* gui_anchor) : gui_anchor_(gui_anchor) {
@@ -172,6 +171,47 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   auto CommitAdjustment(alcedo::EditorAdjustmentPatch patch)
       -> alcedo::EditorSessionResult override {
     return ApplyPatch(std::move(patch), /*settled=*/true);
+  }
+
+  auto EnqueueAdjustmentInput(alcedo::EditorAdjustmentPatch patch)
+      -> alcedo::EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitFieldChange(identity_, patch);
+    alcedo::EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = alcedo::EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    if (patch.settled) {
+      ++commit_count_;
+    } else {
+      ++patch_count_;
+    }
+    result.kind    = alcedo::EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input queued";
+    return result;
+  }
+
+  auto EnqueuePendingInputBoundary(alcedo::EditorPendingInputBoundaryKind kind)
+      -> alcedo::EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitBoundary(identity_, kind);
+    alcedo::EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = alcedo::EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = alcedo::EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input boundary queued";
+    return result;
+  }
+
+  [[nodiscard]] auto PeekPendingInput() const -> alcedo::EditorPendingInputView override {
+    return pending_input_.Peek();
   }
 
   // --- stats for QML ---
@@ -350,6 +390,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   alcedo::EditorSessionIdentity              identity_{};
   alcedo::ImageLoadRequestId                 image_load_request_{};
   std::string                                last_error_;
+  alcedo::EditorPendingInputQueue            pending_input_;
 
   int                                        patch_count_        = 0;
   int                                        commit_count_       = 0;

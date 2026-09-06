@@ -1146,10 +1146,10 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   }
   // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
   // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. Unsettled patches
+  // can block waiting for a recyclable direct-present slot. Unsettled writes
   // also arm a vsync-sampled consume so a Ready frame does not wait for the
-  // next pointer event or a missed requestUpdate. The worker's NotifyFrameReady
-  // update remains the completion-side wakeup when the loop is not armed.
+  // next pointer event or a missed requestUpdate. Enqueue does not apply live
+  // parameters; present wakeups stay presentation-only.
   if (viewport) {
     if (settled) {
       viewport->endInteractivePresentLoop();
@@ -1158,23 +1158,26 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
     }
     viewport->prepareForAdjustmentFrame();
   }
-  alcedo::EditorAdjustmentPatch patch;
-  patch.field_key              = fieldKey.toStdString();
-  patch.params_json            = paramsJson.toStdString();
-  patch.settled                = settled;
-  // Typed models already own the live value during a pointer drag. Echoing the
-  // full adjustment snapshot into QML on every interactive patch forces
-  // loadFromSnapshot across Tone+Look while the mouse handler is still on the
-  // stack. Rapid handoff (finish slider A → drag slider B) multiplies that with
-  // history capture/commit under the pipeline render lock and freezes the GUI.
-  const bool previous_suppress = suppress_snapshot_publish_;
-  if (!settled) {
-    suppress_snapshot_publish_ = true;
+  if (session_backend_ == nullptr) {
+    return false;
   }
-  const auto result =
-      settled ? session_backend_->CommitAdjustment(patch) : session_backend_->Patch(patch);
-  suppress_snapshot_publish_ = previous_suppress;
-  return result.kind != alcedo::EditorSessionResultKind::Rejected;
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key   = fieldKey.toStdString();
+  patch.params_json = paramsJson.toStdString();
+  patch.settled     = settled;
+  const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+bool EditorSessionController::enqueueNodeSwitchBoundary() {
+  if (session_backend_ == nullptr || !can_edit()) {
+    return false;
+  }
+  const auto result = session_backend_->EnqueuePendingInputBoundary(
+      alcedo::EditorPendingInputBoundaryKind::NodeSwitch);
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {

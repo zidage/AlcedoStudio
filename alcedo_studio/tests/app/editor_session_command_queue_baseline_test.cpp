@@ -33,6 +33,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -52,9 +53,21 @@ auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPacka
   return package;
 }
 
-/// Recording scheduler: accepts every render request and returns a non-zero
-/// job id so the coordinator marks it in-flight. Completion is driven manually
-/// by the test through `EditorRenderCoordinator::Notify*`.
+class LockingEditorHistoryPort final : public ControllableEditorHistoryPort {
+ public:
+  std::promise<void> about_to_lock;
+
+  auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle& guard,
+                                      const EditorAdjustmentPatch& patch, std::string* error)
+      -> bool override {
+    about_to_lock.set_value();
+    std::unique_lock<std::mutex> held;
+    if (render_lock != nullptr) {
+      held = std::unique_lock<std::mutex>(*render_lock);
+    }
+    return FakeEditorHistoryPort::CaptureAdjustmentBeforePreview(guard, patch, error);
+  }
+};
 class RecordingScheduler final : public IEditorPipelineSchedulerPort {
  public:
   auto Schedule(const EditorRenderRequest& request,
@@ -79,8 +92,9 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
 
   /// Rebuild the full session runtime with fresh ports and recorder. Tests
   /// that compare two runs of the same scenario call this between runs.
-  void RebuildSession() {
-    history_          = std::make_shared<ControllableEditorHistoryPort>();
+  void RebuildSession(std::shared_ptr<ControllableEditorHistoryPort> history = nullptr) {
+    history_          = history ? std::move(history)
+                                : std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
     journal_          = std::make_shared<OrderRecordingJournalPort>();
@@ -564,6 +578,59 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   const auto late = service_->Open(50, 60);
   EXPECT_EQ(late.kind, EditorSessionResultKind::Rejected);
   EXPECT_EQ(service_->state(), EditorSessionState::ShuttingDown);
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       OwnerThreadPatchCapturesHistoryAndRoutesRenderBeforeReturn) {
+  openInteractive(10, 20);
+  const auto captures_before = history_->capture_count;
+  const auto scheduled_before = scheduler_->scheduled_.size();
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":0.5})";
+  patch.settled     = false;
+  const auto result = service_->Patch(patch);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->capture_count, captures_before + 1);
+  EXPECT_EQ(history_->last_captured_patch.field_key, "exposure");
+  EXPECT_GT(scheduler_->scheduled_.size(), scheduled_before);
+  EXPECT_TRUE(runtime_->coordinator->has_inflight());
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       PatchWaitsWhenHistoryCaptureHoldsRenderLock) {
+  auto locking = std::make_shared<LockingEditorHistoryPort>();
+  RebuildSession(locking);
+  openInteractive(10, 20);
+
+  std::mutex           render_lock;
+  locking->render_lock = &render_lock;
+  std::promise<void>   renderer_holds;
+  std::promise<void>   release_renderer;
+  std::thread          renderer([&] {
+    std::unique_lock<std::mutex> held(render_lock);
+    renderer_holds.set_value();
+    release_renderer.get_future().wait();
+  });
+  renderer_holds.get_future().wait();
+
+  std::thread releaser([&] {
+    locking->about_to_lock.get_future().wait();
+    EXPECT_EQ(locking->capture_count, 0);
+    release_renderer.set_value();
+  });
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":0.25})";
+  const auto result = service_->Patch(patch);
+  releaser.join();
+  renderer.join();
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(locking->capture_count, 1);
 }
 
 }  // namespace

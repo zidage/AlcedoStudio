@@ -4,6 +4,9 @@
 
 #include "app/editor_render_coordinator.hpp"
 
+#include "support/latch_blocked_pipeline_scheduler_port.hpp"
+#include "support/manual_monotonic_clock.hpp"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -817,6 +820,38 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndReadyF
     EXPECT_EQ(diag.pending_count, 0u);
     EXPECT_GE(diag.cancelled_count, 1u);
   }
+}
+
+TEST_F(EditorRenderCoordinatorTest,
+       BlockedRendererKeepsOneInflightUntilCompletionLatchReleases) {
+  auto latch = std::make_shared<test::LatchBlockedPipelineSchedulerPort>();
+  coordinator_->SetPipelineSchedulerPort(latch);
+  test::ManualMonotonicClock clock;
+
+  const auto first = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  EXPECT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  const auto second = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
+  EXPECT_EQ(second.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+  EXPECT_EQ(latch->rejected_while_running(), 0);
+
+  clock.advance_ns(16'000'000);
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  latch->Complete(true, "first");
+  EXPECT_EQ(latch->scheduled().size(), 2u);
+  EXPECT_TRUE(latch->running());
+  latch->Complete(true, "second");
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
 }
 
 }  // namespace
