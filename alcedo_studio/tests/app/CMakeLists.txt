@@ -66,6 +66,16 @@ gtest_discover_tests(EditorPanelProjectionTest
     TEST_PREFIX "EditorPanelProjectionTest.")
 alcedo_register_test_target(EditorPanelProjectionTest app)
 
+add_executable(EditorAdjustmentContextTest
+    ${ALCEDO_TEST_ROOT}/app/editor_adjustment_context_test.cpp)
+target_include_directories(EditorAdjustmentContextTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorAdjustmentContextTest
+    PRIVATE GTest::gtest_main EditorPanelProjection EditGraph Image)
+gtest_discover_tests(EditorAdjustmentContextTest
+    TEST_PREFIX "EditorAdjustmentContextTest.")
+alcedo_register_test_target(EditorAdjustmentContextTest app)
+
 add_executable(PipelineHistoryApplierTest
     ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
 target_include_directories(PipelineHistoryApplierTest

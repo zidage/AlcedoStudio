@@ -101,6 +101,10 @@ class EditorHistoryMutation {
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool;
 
+  /// Replace panel_projection from @p node_id without mutating parameters.
+  auto SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
+                              const alcedo::NodeId& node_id, std::string* error) -> bool;
+
  private:
   EditorHistoryState& state_;
 };

@@ -17,6 +17,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_node_graph_projection.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -35,6 +36,7 @@ struct NodeGraphTopologyChange;
 namespace alcedo::ui {
 class IAlbumCatalog;
 class InteractionPolicyController;
+class EditorNodeController;
 }  // namespace alcedo::ui
 
 namespace alcedo::ui {
@@ -194,6 +196,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Queue a node-switch seal so later writes start a new sequence. Old
   /// sequence ids keep their captured target. No live mutation.
   Q_INVOKABLE bool   enqueueNodeSwitchBoundary();
+  /// Bind the Nodes-page selection owner used to stamp submit targets.
+  void               BindNodeSelectionSource(EditorNodeController* nodes);
+  /// Reproject panels for the selected node without rendering or committing.
+  void ApplySelectedAdjustmentNode(const alcedo::NodeId& node_id, alcedo::EditorNodeKind kind);
+  [[nodiscard]] auto PeekPendingInput() const -> alcedo::EditorPendingInputView;
   [[nodiscard]] auto canEdit() const -> bool override { return can_edit(); }
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
@@ -312,13 +319,15 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                      const QString&                     selected_id = {});
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
-  void BindAdmissionDeadline();
+  void                     BindAdmissionDeadline();
+  void                     SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto       NormalizeToolPanelPage(const QString& page) -> QString;
 
   alcedo::IEditorSessionBackend*  session_backend_    = nullptr;
   InteractionPolicyController*    interaction_policy_ = nullptr;
   IAlbumCatalog*                  album_catalog_      = nullptr;
+  QPointer<EditorNodeController>  node_controller_;
   EditorActionAvailabilityModel   actions_;
   /// Focused correlator for history/Version operation events (R4). Owns
   /// operation ids, pending-async state, and the last published map.

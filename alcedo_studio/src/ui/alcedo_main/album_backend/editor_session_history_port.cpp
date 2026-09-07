@@ -254,6 +254,12 @@ auto EditorSessionHistoryPort::ReadPanelProjection(const alcedo::EditorHistoryGu
   return projection_->ReadPanelProjection(guard, projection, error);
 }
 
+auto EditorSessionHistoryPort::SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
+                                                      const alcedo::NodeId& node_id,
+                                                      std::string* error) -> bool {
+  return mutation_->SetPanelProjectionNode(guard, node_id, error);
+}
+
 auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,
                                                      std::string* error)
     -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> {

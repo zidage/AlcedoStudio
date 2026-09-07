@@ -240,6 +240,7 @@ class EditorNodeController : public QObject {
   void               ClearSnapshot();
   void               SetLastError(QString error);
   void               RestoreSelectionAfterSnapshot();
+  void               SyncSessionAdjustmentNode(bool seal_open_sequence);
   [[nodiscard]] auto ContainsNode(const NodeId& node_id) const -> bool;
   [[nodiscard]] auto DefaultSelectedNodeId() const -> NodeId;
   [[nodiscard]] auto IndexOf(const NodeId& node_id) const -> int;

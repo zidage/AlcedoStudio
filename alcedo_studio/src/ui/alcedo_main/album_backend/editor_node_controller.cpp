@@ -23,6 +23,15 @@
 namespace alcedo::ui {
 namespace {
 
+[[nodiscard]] auto HasQueuedFieldWrites(const alcedo::EditorPendingInputView& view) -> bool {
+  for (const auto& sequence : view.sequences) {
+    if (!sequence.fields.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnapshot& rhs) -> bool {
   if (lhs.nodes.size() != rhs.nodes.size() || lhs.edges.size() != rhs.edges.size()) {
     return false;
@@ -66,6 +75,9 @@ auto EditorNodeController::editor_session_object() const -> QObject* { return se
 auto EditorNodeController::session() const -> EditorSessionController* { return session_.data(); }
 
 void EditorNodeController::DisconnectSession() {
+  if (session_ != nullptr) {
+    session_->BindNodeSelectionSource(nullptr);
+  }
   if (state_connection_) {
     QObject::disconnect(state_connection_);
     state_connection_ = {};
@@ -89,6 +101,7 @@ void EditorNodeController::set_editor_session(QObject* session) {
   DisconnectSession();
   session_ = typed;
   if (session_ != nullptr) {
+    session_->BindNodeSelectionSource(this);
     state_connection_   = connect(session_.data(), &EditorSessionController::StateChanged, this,
                                   &EditorNodeController::OnSessionStateChanged);
     history_connection_ = connect(session_.data(), &EditorSessionController::HistoryChanged, this,
@@ -263,6 +276,21 @@ void EditorNodeController::RestoreSelectionAfterSnapshot() {
   selected_node_id_ = DefaultSelectedNodeId();
 }
 
+void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
+  if (session_ == nullptr) {
+    return;
+  }
+  if (seal_open_sequence && session_->can_edit() &&
+      HasQueuedFieldWrites(session_->PeekPendingInput())) {
+    (void)session_->enqueueNodeSwitchBoundary();
+  }
+  const auto* node = NodeFor(selected_node_id_);
+  if (node == nullptr) {
+    return;
+  }
+  session_->ApplySelectedAdjustmentNode(selected_node_id_, node->node_kind);
+}
+
 auto EditorNodeController::selected_node_id_string() const -> QString {
   return NodeIdToQString(selected_node_id_);
 }
@@ -358,6 +386,7 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   snapshot_version_id_         = version_id_;
   SyncLayoutKey();
   RestoreSelectionAfterSnapshot();
+  SyncSessionAdjustmentNode(false);
   SetLastError({});
   emit SnapshotChanged();
   emit SelectionChanged();
@@ -679,6 +708,7 @@ void EditorNodeController::selectNode(const QString& node_id) {
   SetLastError({});
   PersistSavedSelection();
   ApplyLiveSelectionToAdapter();
+  SyncSessionAdjustmentNode(true);
   emit SelectionChanged();
   emit ActionAvailabilityChanged();
 }

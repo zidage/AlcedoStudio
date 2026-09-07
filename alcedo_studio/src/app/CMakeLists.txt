@@ -408,7 +408,9 @@ def_library(EditorPanelProjection
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_panel_projection.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_panel_projection.hpp"
-    PUBLIC_DEPS EditorPipelineCommandService EditGraph
+        "${ALCEDO_APP_ROOT}/editor_adjustment_context.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_context.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditGraph Image
 )
 
 def_library(EditorNodeGraphProjection

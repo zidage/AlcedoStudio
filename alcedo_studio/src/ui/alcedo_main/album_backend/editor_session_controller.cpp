@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 
+#include "app/editor_adjustment_context.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
@@ -21,6 +22,7 @@
 #include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
@@ -1190,6 +1192,32 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
     }
     return false;
   }
+  if (session_backend_ == nullptr) {
+    return false;
+  }
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key = fieldKey.toStdString();
+  patch.write     = std::move(write);
+  patch.settled   = settled;
+  if (node_controller_ != nullptr) {
+    const auto* document = pipeline_document();
+    if (document == nullptr) {
+      if (settled && viewport) {
+        viewport->endInteractivePresentLoop();
+      }
+      return false;
+    }
+    std::string error;
+    auto        target = alcedo::CompleteSelectedNodeParameterTarget(
+        *document, node_controller_->selected_node_id(), patch.field_key, &error);
+    if (!target.has_value()) {
+      if (settled && viewport) {
+        viewport->endInteractivePresentLoop();
+      }
+      return false;
+    }
+    patch.target = std::move(*target);
+  }
   if (viewport) {
     if (settled) {
       viewport->endInteractivePresentLoop();
@@ -1198,13 +1226,6 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
     }
     viewport->prepareForAdjustmentFrame();
   }
-  if (session_backend_ == nullptr) {
-    return false;
-  }
-  alcedo::EditorAdjustmentPatch patch;
-  patch.field_key = fieldKey.toStdString();
-  patch.write     = std::move(write);
-  patch.settled   = settled;
   const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&
          result.kind != alcedo::EditorSessionResultKind::Failed;
@@ -1234,6 +1255,33 @@ bool EditorSessionController::enqueueNodeSwitchBoundary() {
       alcedo::EditorPendingInputBoundaryKind::NodeSwitch);
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&
          result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+void EditorSessionController::BindNodeSelectionSource(EditorNodeController* nodes) {
+  node_controller_ = nodes;
+}
+
+void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId& node_id,
+                                                          alcedo::EditorNodeKind kind) {
+  if (session_backend_ != nullptr) {
+    (void)session_backend_->SetAdjustmentProjectionNode(node_id);
+  }
+  const auto current = active_adjustment_panel_.toStdString();
+  if (!alcedo::AdjustmentPanelIsSupported(kind, current)) {
+    const auto fallback = alcedo::DefaultAdjustmentPanel(kind);
+    SetActiveAdjustmentPanel(
+        QString::fromLatin1(fallback.data(), static_cast<int>(fallback.size())), false);
+    return;
+  }
+  if (session_backend_ != nullptr) {
+    session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
+                                               QLatin1String("geometry"));
+  }
+}
+
+auto EditorSessionController::PeekPendingInput() const -> alcedo::EditorPendingInputView {
+  return session_backend_ ? session_backend_->PeekPendingInput()
+                          : alcedo::EditorPendingInputView{};
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {
@@ -1300,6 +1348,12 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("raw") || key == QLatin1String("rawdecode")) {
     return QStringLiteral("raw");
   }
+  if (key == QLatin1String("detail")) {
+    return QStringLiteral("detail");
+  }
+  if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
+    return QStringLiteral("masks");
+  }
   return QStringLiteral("tone");
 }
 
@@ -1334,6 +1388,10 @@ auto EditorSessionController::pipeline_document() const -> const alcedo::Pipelin
 }
 
 void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
+  SetActiveAdjustmentPanel(panel, true);
+}
+
+void EditorSessionController::SetActiveAdjustmentPanel(const QString& panel, bool request_view) {
   const QString normalized = NormalizeAdjustmentPanel(panel);
   if (active_adjustment_panel_ == normalized) {
     return;
@@ -1342,7 +1400,7 @@ void EditorSessionController::set_active_adjustment_panel(const QString& panel) 
   SaveDesktopUiPrefs();
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(normalized == QLatin1String("geometry"));
-    if (session_backend_->has_image() &&
+    if (request_view && session_backend_->has_image() &&
         session_backend_->state() == alcedo::EditorSessionState::Interactive) {
       session_backend_->RequestViewChange(alcedo::EditorRenderReason::CropRotate, std::nullopt);
     }

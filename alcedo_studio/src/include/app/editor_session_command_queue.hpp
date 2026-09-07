@@ -59,6 +59,7 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetPresentationTarget,
   SetPresentationSize,
   SetGeometryOverlay,
+  SetAdjustmentProjectionNode,
   RenameColorGrade,
   EditNodeGraph,
 };

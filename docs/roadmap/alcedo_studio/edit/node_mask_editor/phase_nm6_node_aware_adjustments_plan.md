@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.5B, NM6.4P, and NM6.P complete; NM6.6–NM6.9 planned.
+Status: NM6.1–NM6.6, NM6.4P, and NM6.P complete; NM6.7–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -413,7 +413,7 @@ Additional acceptance requirements:
 
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.5B, NM6.4P, and NM6.P are complete. NM6.6–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.6, NM6.4P, and NM6.P are complete. NM6.7–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -1125,6 +1125,76 @@ render or commit; queued old-target input cannot land on the new selection. EXIF
 Section 6.2 JSON/copy instrumentation passes. Geometry capability belongs only to Develop while
 its actual target remains document-owned. Preserve Patch/Commit as the update unit.
 
+##### Phase NM6.6 completion record (2026-09-07)
+
+**Status:** complete — selected-node panel capabilities, submit stamping, and load-only projection without render or history commit
+
+**Primary success call chain:**
+
+```text
+EditorNodeController.selectNode / PublishSnapshot
+  -> SyncSessionAdjustmentNode
+  -> EditorSessionController.ApplySelectedAdjustmentNode
+  -> EditorSessionService.SetAdjustmentProjectionNode
+  -> IEditorHistoryPort.SetPanelProjectionNode
+  -> ProjectSelectedNodePanelFields (typed adapters, no Model ToJson / MakeFullDto)
+
+submitWrite(field)
+  -> CompleteSelectedNodeParameterTarget(selected NodeId)
+  -> EnqueueAdjustmentInput with captured NodeId / AdjustmentInstanceId
+  -> NM6.2 queue / NM6.3 owner
+  -> CaptureAdjustmentBeforePreview uses stamped target
+  -> ApplyEditorParameterWrite / CommitAdjustment
+```
+
+**Primary failure call chain:**
+
+```text
+Geometry write while Color Grade selected
+  -> CompleteSelectedNodeParameterTarget rejects (field not owned by selected node)
+  -> submitWrite returns false; pending queue unchanged
+
+Missing node / missing instance / wrong owner
+  -> CompleteSelectedNodeParameterTarget / ProjectSelectedNodePanelFields fail
+  -> caller output left unchanged; no PrimaryGrade substitute
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Two Color Grades resolve independent exposure instances | `EditorAdjustmentContextTest` | PASS |
+| Missing node or instance leaves projection unchanged | `EditorAdjustmentContextTest` | PASS |
+| Wrong owner and Geometry-from-Grade fail; Geometry-from-Develop is document-owned | `EditorAdjustmentContextTest` | PASS |
+| Selected-node panel projection does not call Model ToJson / MakeFullDto | `EditorAdjustmentContextTest` | PASS |
+| Image EXIF copies owner fields; invalid values are nullopt | `EditorAdjustmentContextTest` | PASS |
+| Context copies caller EXIF for two node ids | `EditorAdjustmentContextTest` | PASS |
+| Capability registry matches node kind | `EditorAdjustmentContextTest` | PASS |
+| `submitWrite` stamps selected Color Grade instance | `EditorNodeSelectionLayoutTest` | PASS |
+| Geometry write rejected when Color Grade is selected | `EditorNodeSelectionLayoutTest` | PASS |
+| Empty selection does not queue NodeSwitch, render, or history revision | `EditorNodeSelectionLayoutTest` | PASS |
+| Node switch seals open sequence; later write targets the new Grade | `EditorNodeSelectionLayoutTest` | PASS |
+| Leaving Develop Geometry does not request a view change | `EditorNodeSelectionLayoutTest` | PASS |
+| Unspecified history write uses selected projection node, not PrimaryGrade | `EditorSessionHistoryPortTest` | PASS |
+| Empty NodeSwitch does not bump history revision | `EditorPendingInputSessionTest` | PASS |
+| Selected-node projection does not capture or commit | `EditorPendingInputSessionTest` | PASS |
+| Section 6.2 panel projection instrumentation | `EditorPanelProjectionTest` | PASS |
+| `NodeSwitchKeepsQueuedEditOnOriginalTarget` | `EditorPendingInputTest` | PASS |
+
+Commands:
+```
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorAdjustmentContextTest --target EditorPendingInputSessionTest --target EditorNodeSelectionLayoutTest --target EditorSessionHistoryPortTest
+ctest --test-dir build/debug --output-on-failure -R "EditorAdjustmentContextTest|EditorPendingInputSessionTest|EditorNodeSelectionLayoutTest|EditorSessionHistoryPortTest.UnspecifiedWriteUsesSelectedProjectionNodeNotPrimaryGrade"
+ctest --test-dir build/debug --output-on-failure -R "EditorPanelProjectionTest|EditorPendingInputTest.NodeSwitchKeepsQueuedEditOnOriginalTarget"
+```
+Suite totals: 58/58 focused PASS plus 6/6 related panel/queue PASS.
+
+**Checklist / exit condition:** acceptance criteria above are covered by executed tests. No checkbox list in this phase heading.
+
+**LOC note (grill-code-review):** new `EditorAdjustmentContext` is 142/302 header/cpp. `editor_session_service.cpp` 1832, `editor_session_controller.cpp` 1449, `editor_history_mutation.cpp` 1112, `editor_node_controller.cpp` 1101 remain above 1000 from prior phases; this slice added a small selected-node path instead of growing `editor_pipeline_command_service.cpp`. `editor_node_controller_test.cpp` is 895 lines and now mixes Nodes-page and selected-node submit cases.
+
+**Residual gaps:** NM6.7 QML header/capability-filtered navigation; NM6.8 lifecycle/history e2e; NM6.9 pixel/perf qualification. `CompleteCurrentPanelParameterTarget` still fills PrimaryGrade when no node controller is bound and `panel_projection_node_id` is empty. Production QML can still open Geometry on a Grade until NM6.7 hides that page; `submitWrite` rejects that write.
+
 ### NM6.7 — Build node-name/EXIF header and capability-filtered panels
 
 **Changes:** implement Section 6 header in the existing stack; bind navigation/body to the registry;
@@ -1274,7 +1344,7 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot`; P7 result retention / QualityBase bypass | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
 | NM6.5 | complete 2026-09-06 | uncommitted on `feature/shared-grade-local-tone-executors` | PlanExecutor → GradeExecutor → LocalToneExecutor → specialized GPU op → PersistCanonical source.0/result.0 → RecordUnpublished / PublishResults | 120/120 focused PASS; Metal GPU encode skipped on Windows; see NM6.5 completion record | Shared Point/Neighbor/DRT orchestration is NM6.5B; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
 | NM6.5B | complete 2026-09-07 | uncommitted on `feature/shared-grade-local-tone-executors` | compiled stages → GradeExecutor / NeighborExecutor / DrtPostExecutor → Ops::DispatchPointwise \| DispatchHorizontal \| DispatchVerticalApply \| DispatchDisplayTransform | 118/118 focused PASS plus 2 CUDA product DRT cases; Metal GPU encode skipped on Windows; see NM6.5B completion record | Node targeting NM6.6; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
-| NM6.6 | planned | — | — | — | Node context/target routing |
+| NM6.6 | complete 2026-09-07 | uncommitted on `feature/selected-node-adjustment-context` @ `9b881864` | selectNode → SetAdjustmentProjectionNode → ProjectSelectedNodePanelFields; submitWrite → CompleteSelectedNodeParameterTarget → queue → CaptureAdjustmentBeforePreview | 58/58 focused PASS plus 6/6 panel/queue PASS; see NM6.6 completion record | QML header/capability filter NM6.7; lifecycle e2e NM6.8; Section 8.2 RAW pixel matrix NM6.9 |
 | NM6.7 | planned | — | — | — | Approved header and panel UI |
 | NM6.8 | planned | — | — | — | Lifecycle/history integration |
 | NM6.9 | planned | — | — | — | Cross-platform qualification |

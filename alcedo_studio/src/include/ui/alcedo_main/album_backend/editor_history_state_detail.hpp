@@ -57,6 +57,8 @@ struct HistoryWorkingState {
   /// Load-only panel values copied from live Models under the render lock.
   /// Not a live Model pointer and not a writable parameter mirror.
   alcedo::EditorPanelProjection panel_projection;
+  /// Node last requested for panel projection. Empty means current-panel owners.
+  alcedo::NodeId panel_projection_node_id;
   bool recovered_head = false;
   /// Required for ReplaceMaskAsset undo/redo. Not owned.
   alcedo::MaskStore* mask_store = nullptr;

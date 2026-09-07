@@ -98,6 +98,8 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   NodeGraphTopologyChange        last_topology_change{};
   NodeId                         last_node_id;
   std::string                    last_grade_name;
+  int                            set_panel_projection_node_count = 0;
+  NodeId                         last_panel_projection_node;
   std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
 
@@ -174,6 +176,13 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   [[nodiscard]] auto LastPublishedRenderReason() const
       -> std::optional<EditorRenderReason> override {
     return last_render_reason;
+  }
+
+  auto SetPanelProjectionNode(const EditorHistoryGuardHandle&, const NodeId& node_id, std::string*)
+      -> bool override {
+    ++set_panel_projection_node_count;
+    last_panel_projection_node = node_id;
+    return true;
   }
 
   auto Undo(const EditorHistoryGuardHandle&, std::string* error) -> bool override {
