@@ -9,7 +9,8 @@ using namespace metal;
 struct GradeAdjustmentParams {
   uint  behavior;
   uint  count;
-  float values[30];
+  float values[48];
+  uint  reserved[2];
 };
 
 struct PrimaryGradeDispatchParams {
@@ -71,17 +72,33 @@ static inline float3 ApplyHls(float3 c, device const GradeAdjustmentParams& p) {
   if (hue < 0.0f) {
     hue += 360.0f;
   }
-  const int   bin        = int((hue + 22.5f) / 45.0f) & 7;
-  const float luma       = Luma(c);
-  const float saturation = 1.0f + p.values[16 + bin];
-  c.x                    = luma + (c.x - luma) * saturation;
-  c.y                    = luma + (c.y - luma) * saturation;
-  c.z                    = luma + (c.z - luma) * saturation;
-  const float lightness  = p.values[8 + bin];
-  c.x += lightness;
-  c.y += lightness;
-  c.z += lightness;
-  return c;
+  if (chroma <= 1.0e-6f) return c;
+  float sum_h = 0.0f, sum_l = 0.0f, sum_s = 0.0f, sum_weight = 0.0f;
+  for (int i = 0; i < 8; ++i) {
+    const float difference = abs(hue - p.values[i]);
+    const float distance   = min(difference, 360.0f - difference);
+    const float width      = max(p.values[32 + i], 1.0f);
+    const float weight     = exp2(-distance * distance / (width * width));
+    sum_h += p.values[8 + i * 3] * weight;
+    sum_l += p.values[8 + i * 3 + 1] * weight;
+    sum_s += p.values[8 + i * 3 + 2] * weight;
+    sum_weight += weight;
+  }
+  if (sum_weight <= 1.0e-6f) return c;
+  const float inv_weight = 1.0f / sum_weight;
+  const float adj_h = sum_h * inv_weight;
+  const float adj_l = sum_l * inv_weight;
+  const float adj_s = sum_s * inv_weight;
+  if (abs(adj_h) <= 1.0e-6f && abs(adj_l) <= 1.0e-6f && abs(adj_s) <= 1.0e-6f) return c;
+  const float angle = adj_h * 2.25f * 0.017453292519943295f;
+  const float scale = exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
+  const float luma  = Luma(c) + adj_l * 1.125f;
+  const float i     = 0.596f * c.x - 0.274f * c.y - 0.322f * c.z;
+  const float q     = 0.211f * c.x - 0.523f * c.y + 0.312f * c.z;
+  const float ri    = (i * cos(angle) - q * sin(angle)) * scale;
+  const float rq    = (i * sin(angle) + q * cos(angle)) * scale;
+  return float3(luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
+                luma - 1.106f * ri + 1.703f * rq);
 }
 
 static inline uint LutIndex(uint edge, uint x, uint y, uint z) { return (z * edge + y) * edge + x; }
@@ -160,16 +177,19 @@ static inline float3 ApplyAdjustment(float3 c, device const GradeAdjustmentParam
   } else if (behavior == 8u) {
     c = ApplyHls(c, p);
   } else if (behavior == 9u || behavior == 10u) {
-    const float l = Luma(c);
-    float scale   = behavior == 9u ? value : 1.0f + value * 0.01f;
+    float scale = behavior == 9u ? value : 1.0f + value * 0.01f;
     if (behavior == 10u) {
       const float maximum = max(c.x, max(c.y, c.z));
       const float minimum = min(c.x, min(c.y, c.z));
       scale               = 1.0f + (scale - 1.0f) * (1.0f - min(maximum - minimum, 1.0f));
     }
-    c.x = l + (c.x - l) * scale;
-    c.y = l + (c.y - l) * scale;
-    c.z = l + (c.z - l) * scale;
+    const float l = Luma(c);
+    if (scale > 1.5f) {
+      const float peak       = max(c.x, max(c.y, c.z));
+      const float peak_raise = (peak - l) * (scale - 1.0f);
+      if (peak_raise > 0.1f) scale = 1.0f + 0.1f / max(peak - l, 1.0e-6f);
+    }
+    c             = l + (c - l) * scale;
   } else if (behavior == 11u) {
     const float gamma_x = max(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = max(p.values[5] + p.values[7], 1.0e-4f);
@@ -180,9 +200,7 @@ static inline float3 ApplyAdjustment(float3 c, device const GradeAdjustmentParam
   } else if (behavior == 14u) {
     const float l     = Luma(c);
     const float scale = 1.0f + value * 0.0025f;
-    c.x               = l + (c.x - l) * scale;
-    c.y               = l + (c.y - l) * scale;
-    c.z               = l + (c.z - l) * scale;
+    c = l + (c - l) * scale;
   } else if (behavior == 15u) {
     c.x += max(Luma(c) - 0.6f, 0.0f) * value * 0.15f;
   } else if (behavior == 16u && value != 0.0f) {

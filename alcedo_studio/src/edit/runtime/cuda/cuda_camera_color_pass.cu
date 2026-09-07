@@ -11,6 +11,7 @@
 #include <string>
 
 #include "cuda_acescc.cuh"
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
@@ -45,9 +46,10 @@ __global__ void CameraColorKernel(const float4* input, float4* output, std::uint
   c.x           = m[0] * source.x + m[1] * source.y + m[2] * source.z;
   c.y           = m[3] * source.x + m[4] * source.y + m[5] * source.z;
   c.z           = m[6] * source.x + m[7] * source.y + m[8] * source.z;
-  const auto corrected = DngApplyColorProfile(DngMakeRgb(c.x, c.y, c.z), dng_profile);
-  output[index] = make_float4(cuda_acescc::Encode(corrected.r), cuda_acescc::Encode(corrected.g),
-                              cuda_acescc::Encode(corrected.b), source.w);
+  const auto corrected  = DngApplyColorProfile(DngMakeRgb(c.x, c.y, c.z), dng_profile);
+  const auto compressed = AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
+  output[index] = make_float4(cuda_acescc::Encode(compressed.r), cuda_acescc::Encode(compressed.g),
+                              cuda_acescc::Encode(compressed.b), source.w);
 }
 
 }  // namespace

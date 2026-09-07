@@ -307,6 +307,7 @@ if(ALCEDO_METAL_ENABLED)
         "Compiling Metal DAG camera color shader"
         "Linking Metal DAG camera color library"
         DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 
     alcedo_add_metal_library(
@@ -346,6 +347,9 @@ if(ALCEDO_METAL_ENABLED)
         DEPENDS
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
+            "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
+            "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 
     add_custom_target(GpuDagMetalShaders DEPENDS

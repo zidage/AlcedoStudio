@@ -79,9 +79,11 @@ Item {
         const val = entry[fieldKey] !== undefined ? entry[fieldKey] : entry.value
         if (val === undefined)
             return
-        const num = Number(val)
+        var num = Number(val)
         if (isNaN(num))
             return
+        if (fieldKey === "saturation")
+            num = (num - 1.0) * 100.0
         if (Math.abs(model.value - num) > (model.step * 0.1))
             model.value = num
     }
@@ -100,9 +102,11 @@ Item {
                   : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
         if (val === undefined)
             return
-        const num = Number(val)
+        var num = Number(val)
         if (isNaN(num))
             return
+        if (fieldKey === "film_grain" || fieldKey === "halation")
+            num *= 100.0
         if (Math.abs(model.value - num) > (model.step * 0.1))
             model.value = num
     }
@@ -250,7 +254,7 @@ Item {
         objectName: "lookSharpenModel"
         fieldKey: "sharpen"
         label: qsTr("Sharpen")
-        minimum: -100
+        minimum: 0
         maximum: 100
         defaultValue: 0
         step: 1

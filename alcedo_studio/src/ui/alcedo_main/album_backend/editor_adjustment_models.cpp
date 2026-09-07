@@ -28,6 +28,20 @@
 
 namespace alcedo::ui {
 
+namespace {
+
+auto UiValueToModelValue(const QString& field_key, double value) -> float {
+  if (field_key == QLatin1String("saturation")) {
+    return static_cast<float>(std::max(0.0, 1.0 + value / 100.0));
+  }
+  if (field_key == QLatin1String("film_grain") || field_key == QLatin1String("halation")) {
+    return static_cast<float>(std::clamp(value / 100.0, 0.0, 1.0));
+  }
+  return static_cast<float>(value);
+}
+
+}  // namespace
+
 // ── EditorAdjustmentModelBase ───────────────────────────────────────────────
 
 EditorAdjustmentModelBase::EditorAdjustmentModelBase(QObject* parent) : QObject(parent) {}
@@ -100,14 +114,16 @@ auto EditorAdjustmentModelBase::resolveParams(const QJSValue& arg, const QString
   return defaultJson;
 }
 
-auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bool settled) -> bool {
+auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bool settled)
+    -> bool {
   if (submitter_ == nullptr || !submitter_->canEdit()) {
     return false;
   }
   return submitter_->submitWrite(fieldKey_, std::move(write), settled);
 }
 
-auto EditorAdjustmentModelBase::submitJsonBoundary(const QString& paramsJson, bool settled) -> bool {
+auto EditorAdjustmentModelBase::submitJsonBoundary(const QString& paramsJson, bool settled)
+    -> bool {
   nlohmann::json parsed;
   try {
     parsed = paramsJson.isEmpty() ? nlohmann::json::object()
@@ -304,7 +320,7 @@ void EditorAdjustmentValueModel::submitInteractive(double v) {
     submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, false);
     return;
   }
-  submitNow(alcedo::EditorScalarWrite{static_cast<float>(v)}, false);
+  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, false);
 }
 
 void EditorAdjustmentValueModel::submitSettled(double v) {
@@ -316,7 +332,7 @@ void EditorAdjustmentValueModel::submitSettled(double v) {
     submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, true);
     return;
   }
-  submitNow(alcedo::EditorScalarWrite{static_cast<float>(v)}, true);
+  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, true);
 }
 
 void EditorAdjustmentValueModel::onDebounceTimeout() {

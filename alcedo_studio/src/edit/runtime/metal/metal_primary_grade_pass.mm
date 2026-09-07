@@ -18,6 +18,8 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/content_key.hpp"
+#include "edit/runtime/grade_executor.hpp"
+#include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_local_tone_pass.hpp"
@@ -39,23 +41,9 @@ struct PrimaryGradeDispatchParams {
   std::uint32_t pad[3]          = {};
 };
 
-enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
-
-struct GradeOp {
-  GradeOpKind                kind = GradeOpKind::Fused;
-  std::vector<std::uint32_t> offsets;
-  ParameterSlotKey           detail_key{};
-};
-
 auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<MetalBackend>& {
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
-}
-
-auto AcquireScratch(MetalRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
-    -> MetalBackend::Texture2D& {
-  return workspace.Device().AcquireRecordedWorkScratchTexture(width, height,
-                                                              TextureFormat::Rgba32f);
 }
 
 auto EnsureBuffer(MetalRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
@@ -89,7 +77,7 @@ void DispatchThreads(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineSt
   encoder->dispatchThreads(MTL::Size{width, height, 1}, MTL::Size{thread_width, thread_height, 1});
 }
 
-void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
+void EnqueueGradePointwise(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
                        MetalBackend::Texture2D& dst, const MetalBackend::Buffer& params,
                        const MetalBackend::Buffer& commands, std::uint32_t command_offset,
                        std::uint32_t command_count, const MetalLutBinding& lut, std::uint32_t width,
@@ -117,7 +105,7 @@ void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D&
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
-void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
+void EnqueueGradeMix(MetalRenderDevice& device, const MetalBackend::Texture2D& source,
                  const MetalBackend::Texture2D& adjusted, MetalBackend::Texture2D& dst, float mix,
                  const MetalBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
   auto  pipeline = mask == nullptr
@@ -140,7 +128,7 @@ void DispatchMix(MetalRenderDevice& device, const MetalBackend::Texture2D& sourc
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
-auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
+auto LoadMetalGradeLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (!packed.has_value()) {
     return device.Workspace().Device().DummyLut();
@@ -152,37 +140,140 @@ auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutB
                                                 device.CommandContext());
 }
 
-auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector<GradeOp> {
-  std::vector<GradeOp> compacted;
-  compacted.reserve(ops.size());
-  for (auto& op : ops) {
-    if (op.kind == GradeOpKind::LlfBarrier && !local_tone_active) {
-      continue;
-    }
-    if (op.kind == GradeOpKind::Fused && op.offsets.empty()) {
-      continue;
-    }
-    if (op.kind == GradeOpKind::Fused && !compacted.empty() &&
-        compacted.back().kind == GradeOpKind::Fused) {
-      compacted.back().offsets.insert(compacted.back().offsets.end(), op.offsets.begin(),
-                                      op.offsets.end());
-      continue;
-    }
-    compacted.push_back(std::move(op));
-  }
-  return compacted;
-}
 
-auto CountGpuWrites(const std::vector<GradeOp>& ops, bool skip_mix) -> std::size_t {
-  std::size_t count = skip_mix ? 0 : 1;
-  for (const auto& op : ops) {
-    if (op.kind == GradeOpKind::Fused || op.kind == GradeOpKind::Detail ||
-        op.kind == GradeOpKind::LlfBarrier) {
-      ++count;
-    }
+struct MetalGradeOps {
+  using Device            = MetalRenderDevice;
+  using Backend           = MetalBackend;
+  using Texture           = MetalBackend::Texture2D;
+  using Scratch           = Texture*;
+  using HorizontalScratch = ResourceLease<MetalBackend>;
+  using LutBinding        = MetalLutBinding;
+
+  static constexpr const char* kErrorPrefix = "ExecuteMetalPrimaryGrade";
+
+  static void AliasOutput(MetalRenderDevice& device, const GraphValueId& output,
+                          const GraphValueId& input) {
+    device.Workspace().AliasImageFrom(output, input);
   }
-  return count;
-}
+
+  static auto UploadFusedCommands(MetalRenderDevice& device, const NodeId& grade_id,
+                                  const std::vector<std::uint32_t>& fused_offsets)
+      -> std::uint32_t {
+    if (fused_offsets.empty()) {
+      return 0;
+    }
+    auto&              workspace = device.Workspace();
+    const GraphValueId command_id{grade_id, PortId{"runtime.order"}};
+    const auto         bytes = fused_offsets.size() * sizeof(fused_offsets[0]);
+    ContentHash        topology;
+    topology.MixText(grade_id.Value());
+    topology.MixU32(static_cast<std::uint32_t>(fused_offsets.size()));
+    for (const auto offset : fused_offsets) {
+      topology.MixU32(offset);
+    }
+    const auto  topology_hash = topology.Key().hash;
+    const auto* existing      = workspace.Values().Find(command_id);
+    const bool  needs_upload =
+        existing == nullptr || existing->Bytes() < bytes ||
+        workspace.Device().GradeCommandTopologyHash() != topology_hash;
+    auto& buffer =
+        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
+    if (needs_upload) {
+      workspace.Device().UploadBufferRange(
+          buffer, 0,
+          std::span<const std::byte>(reinterpret_cast<const std::byte*>(fused_offsets.data()),
+                                     bytes),
+          device.CommandContext());
+      workspace.Device().SetGradeCommandTopologyHash(topology_hash);
+      return static_cast<std::uint32_t>(bytes);
+    }
+    return 0;
+  }
+
+  static auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
+    return LoadMetalGradeLut(device, grade);
+  }
+
+  static auto LutResourceId(const MetalLutBinding& lut) -> std::uint64_t { return lut.resource_id; }
+
+  static auto AcquireScratch(MetalRenderDevice& device, std::uint32_t width, std::uint32_t height,
+                             const GraphValueId& id) -> Scratch {
+    return &AcquireRgba(device.Workspace(), id, width, height).Texture();
+  }
+
+  static auto ScratchTexture(Scratch scratch) -> Texture& { return *scratch; }
+
+  static auto AcquireOutput(MetalRenderDevice& device, const GraphValueId& output,
+                            std::uint32_t width, std::uint32_t height) -> Texture& {
+    return AcquireRgba(device.Workspace(), output, width, height).Texture();
+  }
+
+  static auto SceneTexture(MetalRenderDevice& device, const GraphValueId& id) -> Texture& {
+    auto* image = device.Workspace().Images().Find(id);
+    if (image == nullptr || image->Empty()) {
+      throw std::runtime_error("ExecuteMetalPrimaryGrade: stage image is missing");
+    }
+    return image->Texture();
+  }
+
+  static void DispatchPointwise(MetalRenderDevice& device, const Texture& src, Texture& dst,
+                                const MetalLutBinding& lut, const NodeId& grade_id,
+                                std::uint32_t command_start, std::uint32_t command_count,
+                                std::uint32_t width, std::uint32_t height) {
+    auto& workspace = device.Workspace();
+    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr) {
+      throw std::runtime_error("ExecuteMetalPrimaryGrade: missing fused command buffer");
+    }
+    EnqueueGradePointwise(device, src, dst, workspace.Parameters().DeviceBuffer(), *commands,
+                          command_start, command_count, lut, width, height);
+  }
+
+  static auto AcquireHorizontalScratch(MetalRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(MetalRenderDevice&, const Texture&, Texture&, const NeighborWork&,
+                                 std::uint32_t, std::uint32_t) {}
+
+  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src, const Texture&,
+                                    Texture& dst, const LutBinding& lut, const NeighborWork& work,
+                                    std::uint32_t width, std::uint32_t height) {
+    DispatchPointwise(device, src, dst, lut, work.owner, work.command_index, 1, width, height);
+  }
+
+  static void DispatchMix(MetalRenderDevice& device, const Texture& source, const Texture& adjusted,
+                          Texture& destination, float mix, const Texture* mask, std::uint32_t width,
+                          std::uint32_t height) {
+    EnqueueGradeMix(device, source, adjusted, destination, mix, mask, width, height);
+  }
+
+  static auto ExecuteLocalTone(MetalRenderDevice& device, const Texture& src, Texture& dst,
+                               const NodeId& grade_id, float shadows_slider,
+                               float highlights_slider, const ResolvedRenderGeometry& geometry)
+      -> MetalLocalToneResult {
+    return ExecuteMetalLocalTone(device, src, dst, grade_id, shadows_slider, highlights_slider,
+                                 geometry);
+  }
+
+  static auto MaskTexture(MetalRenderDevice& device, const GraphValueId& mask_output,
+                          std::uint32_t width, std::uint32_t height) -> const Texture* {
+    auto* mask = device.Workspace().Images().Find(mask_output);
+    if (mask == nullptr || mask->Texture().Native() == nullptr ||
+        mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
+        mask->Texture().Height() != height) {
+      throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled mask output is missing");
+    }
+    return &mask->Texture();
+  }
+
+  static void CheckAfterEncode(MetalRenderDevice&) {}
+};
 
 }  // namespace
 
@@ -205,272 +296,18 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
                               const PreparedRawInput& prepared, PipelineDocument& document,
                               const CompiledGradeNode& compiled_grade_node)
     -> MetalPrimaryGradeResult {
-  auto& workspace = device.Workspace();
-  if (!workspace.IsRendering()) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: BeginRender has not been called");
-  }
-  const auto* compiled_grade = &compiled_grade_node;
-  auto* grade =
-      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
-  if (grade == nullptr) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled Color Grade is missing");
-  }
-  auto* input = workspace.Images().Find(compiled_grade->scene_input);
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
-  }
-  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
-  if (early_mix == 0.0f) {
-    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
-    MetalPrimaryGradeResult skipped;
-    skipped.output = compiled_grade->scene_output;
-    return skipped;
-  }
-
-  auto&       arena      = workspace.Parameters();
-  std::size_t slot_count = 0;
-  for (const auto& compiled_node : plan.grade_nodes) {
-    slot_count += compiled_node.adjustments.size();
-  }
-  arena.Reserve(slot_count *
-                (kGradeRuntimeParamBytes + ParameterArena<MetalBackend>::kSlotAlignment));
-  std::vector<PendingParameterPatch> pending;
-  std::vector<GradeOp>               ops;
-  ops.reserve(compiled_grade->adjustments.size());
-  float                       shadows_slider    = 0.0f;
-  float                       highlights_slider = 0.0f;
-
-  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
-    auto* model = node.FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteMetalPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteMetalPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    if (IsLocalToneBehavior(*behavior) &&
-        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      throw std::runtime_error(
-          "ExecuteMetalPrimaryGrade: Shadows/Highlights were not compiled for LLF");
-    }
-    const ParameterSlotKey key{node.Id(), compiled.instance_id};
-    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
-      pending.push_back(std::move(*change));
-    }
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    BindAdjustmentSlot(*grade, compiled);
-  }
-
-  auto FlushFused = [&]() -> GradeOp* {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
-    }
-    return &ops.back();
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    auto* model = grade->FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteMetalPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteMetalPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      const float slider = PackedGradeControlValue(arena, key);
-      if (*behavior == AdjustmentBehavior::Shadows) {
-        shadows_slider = slider;
-      } else if (*behavior == AdjustmentBehavior::Highlights) {
-        highlights_slider = slider;
-      }
-      if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
-        ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});
-      }
-      continue;
-    }
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
-        IsNeighborhoodBehavior(*behavior)) {
-      if (PackedGradeControlValue(arena, key) != 0.0f) {
-        ops.push_back(GradeOp{GradeOpKind::Detail, {arena.Binding(key).offset}, key});
-      }
-      continue;
-    }
-    FlushFused()->offsets.push_back(arena.Binding(key).offset);
-  }
-
-  const bool local_tone_active = local_tone_mapping::ShouldRun(shadows_slider * 1.5f / 80.0f,
-                                                               -highlights_slider * 1.5f / 100.0f);
-  ops                          = CompactOps(std::move(ops), local_tone_active);
-
-  auto& context                = device.CommandContext();
-  arena.UploadDirty(context);
-  for (auto& patch : pending) {
-    patch.Commit();
-  }
-
-  std::vector<std::uint32_t> command_offsets;
-  command_offsets.reserve(compiled_grade->adjustments.size());
-  std::vector<std::uint32_t> fused_starts;
-  fused_starts.reserve(ops.size());
-  ContentHash topology;
-  topology.MixText(grade->Id().Value());
-  for (const auto& op : ops) {
-    topology.MixU32(static_cast<std::uint32_t>(op.kind));
-    topology.MixU32(static_cast<std::uint32_t>(op.offsets.size()));
-    fused_starts.push_back(static_cast<std::uint32_t>(command_offsets.size()));
-    for (const auto offset : op.offsets) {
-      topology.MixU32(offset);
-      command_offsets.push_back(offset);
-    }
-  }
-  const auto              topology_hash = topology.Key().hash;
-
+  const auto executed = GradeExecutor<MetalGradeOps>::Execute(device, plan, prepared, document,
+                                                             compiled_grade_node);
   MetalPrimaryGradeResult result;
-  result.output = compiled_grade->scene_output;
-  const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
-  if (!command_offsets.empty()) {
-    const auto bytes = command_offsets.size() * sizeof(command_offsets[0]);
-    const auto* existing_command_buffer = workspace.Values().Find(command_id);
-    const bool command_buffer_needs_upload =
-        existing_command_buffer == nullptr || existing_command_buffer->Bytes() < bytes;
-    auto& command_buffer =
-        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
-    if (command_buffer_needs_upload ||
-        workspace.Device().GradeCommandTopologyHash() != topology_hash) {
-      workspace.Device().UploadBufferRange(
-          command_buffer, 0,
-          std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
-                                     bytes),
-          context);
-      workspace.Device().SetGradeCommandTopologyHash(topology_hash);
-      result.command_upload_bytes = static_cast<std::uint32_t>(bytes);
-    }
-  }
-
-  const auto lut         = LoadLut(device, *grade);
-  result.lut_resource_id = lut.resource_id;
-
-  input                  = workspace.Images().Find(compiled_grade->scene_input);
-  if (input == nullptr) {
-    throw std::runtime_error(
-        "ExecuteMetalPrimaryGrade: Color Grade scene input lost during parameter bind");
-  }
-  const auto  width       = input->Texture().Width();
-  const auto  height      = input->Texture().Height();
-  const float mix         = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool  skip_mix    = mix == 1.0f && !compiled_grade->mask_stack.has_value();
-  const auto  write_count = CountGpuWrites(ops, skip_mix);
-
-  std::vector<MetalBackend::Texture2D*> scratches;
-  scratches.reserve(write_count + 1);
-  auto remaining = write_count;
-  enum class ImageSlot : std::uint8_t { Input, Scratch, Output };
-  ImageSlot   current_slot    = ImageSlot::Input;
-  std::size_t current_scratch = 0;
-  ImageSlot   dest_slot       = ImageSlot::Scratch;
-  std::size_t dest_scratch    = 0;
-
-  auto        Resolve = [&](ImageSlot slot, std::size_t scratch_index) -> MetalBackend::Texture2D& {
-    if (slot == ImageSlot::Input) {
-      auto* source = workspace.Images().Find(compiled_grade->scene_input);
-      if (source == nullptr) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing Color Grade scene input");
-      }
-      return source->Texture();
-    }
-    if (slot == ImageSlot::Output) {
-      auto* dest = workspace.Images().Find(compiled_grade->scene_output);
-      if (dest == nullptr) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing grade output");
-      }
-      return dest->Texture();
-    }
-    if (scratch_index >= scratches.size()) {
-      throw std::runtime_error("ExecuteMetalPrimaryGrade: scratch index is invalid");
-    }
-    return *scratches[scratch_index];
-  };
-
-  auto AllocateDest = [&]() {
-    if (remaining == 0) {
-      throw std::runtime_error("ExecuteMetalPrimaryGrade: destination count underflow");
-    }
-    --remaining;
-    if (remaining == 0) {
-      dest_slot = ImageSlot::Output;
-      (void)AcquireRgba(workspace, compiled_grade->scene_output, width, height);
-      return;
-    }
-    dest_slot    = ImageSlot::Scratch;
-    dest_scratch = scratches.size();
-    scratches.push_back(&AcquireScratch(workspace, width, height));
-  };
-
-  if (write_count == 0) {
-    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
-    return result;
-  }
-
-  auto* commands_buffer = command_offsets.empty() ? nullptr : workspace.Values().Find(command_id);
-  for (std::size_t index = 0; index < ops.size(); ++index) {
-    const auto& op = ops[index];
-    AllocateDest();
-    auto& src  = Resolve(current_slot, current_scratch);
-    auto& dest = Resolve(dest_slot, dest_scratch);
-    if (op.kind == GradeOpKind::LlfBarrier) {
-      const auto tone =
-          ExecuteMetalLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                plan.geometry);
-      result.local_tone_reference_resource_id       = tone.reference_resource_id;
-      result.local_tone_rebuilt_reference           = tone.rebuilt_reference;
-      result.local_tone_sampled_canonical_reference = tone.sampled_canonical_reference;
-      result.local_tone_transient_bytes             = tone.transient_bytes;
-    } else if (op.kind == GradeOpKind::Fused) {
-      if (commands_buffer == nullptr) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing fused command buffer");
-      }
-      DispatchPointwise(device, src, dest, arena.DeviceBuffer(), *commands_buffer,
-                        fused_starts[index], static_cast<std::uint32_t>(op.offsets.size()), lut,
-                        width, height);
-      ++result.pointwise_dispatch_count;
-    } else {
-      if (commands_buffer == nullptr) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: missing detail command buffer");
-      }
-      DispatchPointwise(device, src, dest, arena.DeviceBuffer(), *commands_buffer,
-                        fused_starts[index], 1, lut, width, height);
-      ++result.detail_pass_count;
-    }
-    current_slot    = dest_slot;
-    current_scratch = dest_scratch;
-  }
-
-  if (!skip_mix) {
-    AllocateDest();
-    auto&                          source       = Resolve(ImageSlot::Input, 0);
-    auto&                          adjusted     = Resolve(current_slot, current_scratch);
-    auto&                          dest         = Resolve(dest_slot, dest_scratch);
-    const MetalBackend::Texture2D* mask_texture = nullptr;
-    if (compiled_grade->mask_stack) {
-      auto* mask = workspace.Images().Find(compiled_grade->mask_output);
-      if (mask == nullptr || mask->Texture().Native() == nullptr ||
-          mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
-          mask->Texture().Height() != height) {
-        throw std::runtime_error("ExecuteMetalPrimaryGrade: compiled mask output is missing");
-      }
-      mask_texture = &mask->Texture();
-    }
-    DispatchMix(device, source, adjusted, dest, mix, mask_texture, width, height);
-  }
+  result.output                                 = executed.output;
+  result.pointwise_dispatch_count               = executed.pointwise_dispatch_count;
+  result.detail_pass_count                      = executed.detail_pass_count;
+  result.command_upload_bytes                   = executed.command_upload_bytes;
+  result.lut_resource_id                        = executed.lut_resource_id;
+  result.local_tone_reference_resource_id       = executed.local_tone_reference_resource_id;
+  result.local_tone_rebuilt_reference           = executed.local_tone_rebuilt_reference;
+  result.local_tone_sampled_canonical_reference = executed.local_tone_sampled_canonical_reference;
+  result.local_tone_transient_bytes             = executed.local_tone_transient_bytes;
   return result;
 }
 

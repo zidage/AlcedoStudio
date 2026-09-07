@@ -39,28 +39,6 @@ static inline float GradeNeighborSmoothstep(float edge0, float edge1, float valu
   return t * t * (3.0f - 2.0f * t);
 }
 
-static inline float GradeAcesccEncode(float value) {
-  const float k_a         = 9.72f;
-  const float k_b         = 17.52f;
-  const float offset      = 0.0000152587890625f;
-  const float transition  = 0.000030517578125f;
-  const float floor_value = (-16.0f + k_a) / k_b;
-  if (value < 0.0f) return floor_value + value;
-  if (value < transition) return (log2(offset + value * 0.5f) + k_a) / k_b;
-  return (log2(value) + k_a) / k_b;
-}
-
-static inline float GradeAcesccDecode(float value) {
-  const float k_a         = 9.72f;
-  const float k_b         = 17.52f;
-  const float offset      = 0.0000152587890625f;
-  const float floor_value = (-16.0f + k_a) / k_b;
-  const float threshold   = (-15.0f + k_a) / k_b;
-  if (value < floor_value) return value - floor_value;
-  if (value <= threshold) return (exp2(value * k_b - k_a) - offset) * 2.0f;
-  return exp2(value * k_b - k_a);
-}
-
 static inline float4 GradeGaussianHorizontal(read_only image2d_t src, int2 coord,
                                              const GradeNeighborParams* params) {
   float4 blur = GradeNeighborRead(src, coord) * params->weights[0];
@@ -98,21 +76,16 @@ static inline float GradeHalationNormalization(int radius, float sigma) {
   return 1.0f / fmax(sum, 1.0e-6f);
 }
 
-static inline float4 GradeHalationDecode(float4 value) {
-  return (float4)(GradeAcesccDecode(value.x), GradeAcesccDecode(value.y),
-                  GradeAcesccDecode(value.z), value.w);
-}
-
 static inline float4 GradeHalationHorizontal(read_only image2d_t src, int2 coord,
                                              const GradeNeighborParams* params) {
   const int    radius = GradeHalationRadius(params->sigma_x);
   const float  norm   = GradeHalationNormalization(radius, params->sigma_x);
-  const float4 center = GradeHalationDecode(GradeNeighborRead(src, coord));
+  const float4 center = GradeNeighborRead(src, coord);
   float4       blur   = (float4)(center.x * norm, center.y * norm, center.z * norm, center.w);
   for (int tap = 1; tap <= radius; ++tap) {
     const float  weight = GradeHalationWeight(tap, params->sigma_x) * norm;
-    const float4 left   = GradeHalationDecode(GradeNeighborRead(src, coord - (int2)(tap, 0)));
-    const float4 right  = GradeHalationDecode(GradeNeighborRead(src, coord + (int2)(tap, 0)));
+    const float4 left   = GradeNeighborRead(src, coord - (int2)(tap, 0));
+    const float4 right  = GradeNeighborRead(src, coord + (int2)(tap, 0));
     blur.xyz += (left.xyz + right.xyz) * weight;
   }
   return blur;
@@ -318,14 +291,11 @@ __kernel void primary_grade_neighbor_apply_v_rgba32f(read_only image2d_t  origin
     write_imagef(dst, gid, (float4)(fma(diff.xyz, (float3)(strength), source.xyz), source.w));
   } else if (params.behavior == GRADE_BEHAVIOR_HALATION) {
     const float4 blur   = GradeHalationVertical(vertical_tile, center, tile_width, &params);
-    const float4 linear = GradeHalationDecode(source);
-    const float3 spill  = fmax(blur.xyz - linear.xyz, (float3)(0.0f));
+    const float3 spill  = fmax(blur.xyz - source.xyz, (float3)(0.0f));
     const float3 result =
-        linear.xyz + spill * params.amount *
+        source.xyz + spill * params.amount *
                          (float3)(params.redshift[0], params.redshift[1], params.redshift[2]);
-    write_imagef(dst, gid,
-                 (float4)(GradeAcesccEncode(result.x), GradeAcesccEncode(result.y),
-                          GradeAcesccEncode(result.z), source.w));
+    write_imagef(dst, gid, (float4)(result, source.w));
   } else {
     write_imagef(dst, gid,
                  GradeFilmApply(source,

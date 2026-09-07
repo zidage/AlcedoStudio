@@ -26,6 +26,7 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #include "edit/scope/detail/scope_opencl_shared.hpp"
@@ -84,6 +85,38 @@ auto AllFinite(const std::vector<Rgba>& pixels) -> bool {
     return std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b) &&
            std::isfinite(pixel.a);
   });
+}
+
+auto MaxRgb(const std::vector<Rgba>& pixels) -> float {
+  float max_value = 0.0f;
+  for (const auto& pixel : pixels) {
+    max_value = std::max(max_value, std::max(pixel.r, std::max(pixel.g, pixel.b)));
+  }
+  return max_value;
+}
+
+auto IsolatedBrightCount(const std::vector<Rgba>& pixels, std::uint32_t width, std::uint32_t height,
+                         float bright_floor, float neighbor_ceiling) -> std::size_t {
+  if (pixels.size() != static_cast<std::size_t>(width) * height) return pixels.size();
+  std::size_t isolated = 0;
+  auto        at       = [&](std::uint32_t x, std::uint32_t y) -> const Rgba& {
+    return pixels[static_cast<std::size_t>(y) * width + x];
+  };
+  auto peak = [&](const Rgba& pixel) {
+    return std::max(pixel.r, std::max(pixel.g, pixel.b));
+  };
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      if (!(peak(at(x, y)) > bright_floor)) continue;
+      float neighbor_max = 0.0f;
+      if (x > 0) neighbor_max = std::max(neighbor_max, peak(at(x - 1, y)));
+      if (x + 1 < width) neighbor_max = std::max(neighbor_max, peak(at(x + 1, y)));
+      if (y > 0) neighbor_max = std::max(neighbor_max, peak(at(x, y - 1)));
+      if (y + 1 < height) neighbor_max = std::max(neighbor_max, peak(at(x, y + 1)));
+      if (neighbor_max < neighbor_ceiling) ++isolated;
+    }
+  }
+  return isolated;
 }
 
 auto MaxAbsError(const std::vector<Rgba>& lhs, const std::vector<Rgba>& rhs) -> float {
@@ -201,11 +234,120 @@ class OpenClDrtFixture : public ::testing::Test {
 
   auto             Render() -> GraphValueId { return device_->Execute(plan_, input_, document_); }
 
+  auto RenderDarkChromaticNoise(DrtMethod method, float saturation, float sharpen_amount)
+      -> std::vector<Rgba> {
+    constexpr std::uint32_t width  = 64;
+    constexpr std::uint32_t height = 48;
+    document_                      = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
+    auto drt_params   = document_.Drt()->Params().Params();
+    drt_params.method = method;
+    document_.Drt()->Params().ReplaceParams(drt_params);
+    auto* saturation_model = dynamic_cast<SaturationModel*>(
+        document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+    if (saturation_model == nullptr) {
+      ADD_FAILURE() << "Default pipeline is missing saturation";
+      return {};
+    }
+    saturation_model->SetValue(saturation);
+    if (sharpen_amount > 0.0f) {
+      auto* sharpen_model =
+          dynamic_cast<SharpenModel*>(document_.Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+      if (sharpen_model == nullptr) {
+        ADD_FAILURE() << "Default pipeline is missing sharpen";
+        return {};
+      }
+      sharpen_model->SetAmount(sharpen_amount);
+      sharpen_model->SetRadius(3.0f);
+      sharpen_model->SetThreshold(0.0f);
+    }
+    input_ = RawInputLoader::FromDirectRgb(
+        gpu_dag_test::MakeDarkChromaticNoisePlane(width, height, 0.0015f),
+        gpu_dag_test::FullSensor(width, height));
+    plan_ = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+    return Download(*device_, Render());
+  }
+
+  void RenderCrushedExposureAndExpectDark(DrtMethod method, float exposure_ev, HostImagePlane plane,
+                                          std::uint32_t width, std::uint32_t height,
+                                          float max_rgb_ceiling) {
+    document_ = CreateDefaultPipelineDocument();
+    gpu_dag_test::EnsureTestCameraProfile(document_);
+    auto drt_params   = document_.Drt()->Params().Params();
+    drt_params.method = method;
+    document_.Drt()->Params().ReplaceParams(drt_params);
+    auto* exposure = dynamic_cast<ExposureModel*>(
+        document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+    ASSERT_NE(exposure, nullptr);
+    exposure->SetValue(exposure_ev);
+    input_  = RawInputLoader::FromDirectRgb(std::move(plane),
+                                            gpu_dag_test::FullSensor(width, height));
+    plan_   = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+    const auto pixels = Download(*device_, Render());
+    ASSERT_EQ(pixels.size(), static_cast<std::size_t>(width) * height);
+    ASSERT_TRUE(AllFinite(pixels));
+    EXPECT_EQ(IsolatedBrightCount(pixels, width, height, 0.98f, 0.25f), 0U)
+        << "max_display=" << MaxRgb(pixels);
+    EXPECT_LT(MaxRgb(pixels), max_rgb_ceiling);
+  }
+
   PipelineDocument document_;
   PreparedRawInput input_;
   ExecutionPlan    plan_;
   std::unique_ptr<OpenClRenderDevice> device_;
 };
+
+TEST_F(OpenClDrtFixture, BothDrtMethodsKeepHighSaturationDarkNoiseBelowWhite) {
+  for (const auto method : {DrtMethod::Aces20, DrtMethod::OpenDrt}) {
+    SCOPED_TRACE(method == DrtMethod::Aces20 ? "ACES 2.0" : "OpenDRT");
+    const auto pixels = RenderDarkChromaticNoise(method, 2.0f, 0.0f);
+    ASSERT_TRUE(AllFinite(pixels));
+    float maximum = 0.0f;
+    for (const auto& pixel : pixels) maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
+    EXPECT_LT(maximum, 0.45f);
+  }
+}
+
+TEST_F(OpenClDrtFixture, BothDrtMethodsApplySharpenAfterDisplayTransformWithoutWhitePixels) {
+  for (const auto method : {DrtMethod::Aces20, DrtMethod::OpenDrt}) {
+    SCOPED_TRACE(method == DrtMethod::Aces20 ? "ACES 2.0" : "OpenDRT");
+    const auto pixels = RenderDarkChromaticNoise(method, 1.0f, 100.0f);
+    ASSERT_TRUE(AllFinite(pixels));
+    float maximum = 0.0f;
+    for (const auto& pixel : pixels) maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
+    EXPECT_LT(maximum, 0.98f);
+  }
+}
+
+TEST_F(OpenClDrtFixture, Aces20CrushedExposureHueWheelHasNoIsolatedWhitePixels) {
+  constexpr std::uint32_t kHues = 72;
+  RenderCrushedExposureAndExpectDark(DrtMethod::Aces20, -8.0f,
+                                     gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 0.18f), kHues,
+                                     1, 0.55f);
+}
+
+TEST_F(OpenClDrtFixture, OpenDrtCrushedExposureHueWheelHasNoIsolatedWhitePixels) {
+  constexpr std::uint32_t kHues = 72;
+  RenderCrushedExposureAndExpectDark(DrtMethod::OpenDrt, -8.0f,
+                                     gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 0.18f), kHues,
+                                     1, 0.55f);
+}
+
+TEST_F(OpenClDrtFixture, Aces20CrushedExposureChromaticSceneHasNoIsolatedWhitePixels) {
+  constexpr std::uint32_t kWidth  = 48;
+  constexpr std::uint32_t kHeight = 32;
+  RenderCrushedExposureAndExpectDark(
+      DrtMethod::Aces20, -10.0f, gpu_dag_test::MakeDarkChromaticNoisePlane(kWidth, kHeight, 0.18f),
+      kWidth, kHeight, 0.45f);
+}
+
+TEST_F(OpenClDrtFixture, OpenDrtCrushedExposureChromaticSceneHasNoIsolatedWhitePixels) {
+  constexpr std::uint32_t kWidth  = 48;
+  constexpr std::uint32_t kHeight = 32;
+  RenderCrushedExposureAndExpectDark(
+      DrtMethod::OpenDrt, -10.0f, gpu_dag_test::MakeDarkChromaticNoisePlane(kWidth, kHeight, 0.18f),
+      kWidth, kHeight, 0.45f);
+}
 
 TEST_F(OpenClDrtFixture, OpenClDrtAcesMatchesCudaReferenceWithinTolerance) {
 #ifndef HAVE_CUDA
@@ -256,6 +398,32 @@ TEST_F(OpenClDrtFixture, OpenClDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
   ASSERT_TRUE(AllFinite(cuda_pixels));
   EXPECT_LT(MaxAbsError(opencl_pixels, cuda_pixels), 5.0e-3f);
 #endif
+}
+
+TEST_F(OpenClDrtFixture, Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels) {
+  constexpr std::uint32_t kHues = 360;
+  auto aces   = document_.Drt()->Params().Params();
+  aces.method = DrtMethod::Aces20;
+  document_.Drt()->Params().ReplaceParams(aces);
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 4.0f),
+                                         gpu_dag_test::FullSensor(kHues, 1));
+  plan_  = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+  const auto pixels = Download(*device_, Render());
+  ASSERT_EQ(pixels.size(), static_cast<std::size_t>(kHues));
+  ASSERT_TRUE(AllFinite(pixels));
+
+  auto luma = [](const Rgba& p) { return 0.2126f * p.r + 0.7152f * p.g + 0.0722f * p.b; };
+  std::size_t isolated_black = 0;
+  for (std::uint32_t i = 0; i < kHues; ++i) {
+    const float prev = luma(pixels[(i + kHues - 1) % kHues]);
+    const float curr = luma(pixels[i]);
+    const float next = luma(pixels[(i + 1) % kHues]);
+    const float neighbor_floor = std::min(prev, next);
+    if (neighbor_floor > 0.08f && curr < 0.25f * neighbor_floor) {
+      ++isolated_black;
+    }
+  }
+  EXPECT_EQ(isolated_black, 0U);
 }
 
 TEST_F(OpenClDrtFixture, OpenClDrtPackedWriteDoesNotCopyFullDto) {

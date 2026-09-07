@@ -25,16 +25,16 @@
 namespace alcedo {
 namespace {
 
-constexpr std::size_t   kMaxCurvePoints             = 8;
-constexpr float         kHalationSigma              = 7.0f;
-constexpr float         kHalationStrengthScale      = 2.0f;
-constexpr float         kHalationRedshift[3]        = {1.0f, 0.05f, 0.02f};
-constexpr float         kClarityNeighborhoodSigma   = 15.0f;
-constexpr float         kFilmGrainDyeCloudSigma     = 0.8f;
-constexpr std::uint32_t kSharpenMaxRadius           = 15U;
-constexpr std::uint32_t kClarityMaxRadius           = 60U;
-constexpr std::uint32_t kFilmGrainMaxRadius         = 3U;
-constexpr std::uint64_t kFilmGrainSeed              = 0x6a09e667f3bcc909ULL;
+constexpr std::size_t   kMaxCurvePoints           = 8;
+constexpr float         kHalationSigma            = 7.0f;
+constexpr float         kHalationStrengthScale    = 2.0f;
+constexpr float         kHalationRedshift[3]      = {1.0f, 0.05f, 0.02f};
+constexpr float         kClarityNeighborhoodSigma = 15.0f;
+constexpr float         kFilmGrainDyeCloudSigma   = 0.8f;
+constexpr std::uint32_t kSharpenMaxRadius         = 15U;
+constexpr std::uint32_t kClarityMaxRadius         = 60U;
+constexpr std::uint32_t kFilmGrainMaxRadius       = 3U;
+constexpr std::uint64_t kFilmGrainSeed            = 0x6a09e667f3bcc909ULL;
 
 void BuildGaussianWeights(float sigma, std::uint32_t max_radius, GradeNeighborParams& result) {
   if (!(sigma > 0.0f)) {
@@ -221,26 +221,31 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
       return RequireModel<HlsModel>(model).Read([behavior](const HlsPayload& payload) {
         GradeAdjustmentParams packed;
         packed.behavior = static_cast<std::uint32_t>(behavior);
+        packed.count    = kHlsHueBinCount;
         for (int i = 0; i < kHlsHueBinCount; ++i) {
-          packed.values[i]      = payload.hls_adj_table[static_cast<std::size_t>(i)].h;
-          packed.values[8 + i]  = payload.hls_adj_table[static_cast<std::size_t>(i)].l;
-          packed.values[16 + i] = payload.hls_adj_table[static_cast<std::size_t>(i)].s;
+          const auto index             = static_cast<std::size_t>(i);
+          packed.values[i]             = payload.hue_bins[index];
+          packed.values[8 + i * 3]     = payload.hls_adj_table[index].h;
+          packed.values[8 + i * 3 + 1] = payload.hls_adj_table[index].l;
+          packed.values[8 + i * 3 + 2] = payload.hls_adj_table[index].s;
+          packed.values[32 + i]        = payload.h_range_table[index];
         }
         return packed;
       });
     case AdjustmentBehavior::ColorWheel:
-      return RequireModel<ColorWheelModel>(model).Read([behavior](const ColorWheelPayload& payload) {
-        GradeAdjustmentParams packed;
-        packed.behavior                     = static_cast<std::uint32_t>(behavior);
-        const ColorWheelControl controls[3] = {payload.lift, payload.gamma, payload.gain};
-        for (int i = 0; i < 3; ++i) {
-          packed.values[i * 4]     = controls[i].color_offset.x;
-          packed.values[i * 4 + 1] = controls[i].color_offset.y;
-          packed.values[i * 4 + 2] = controls[i].color_offset.z;
-          packed.values[i * 4 + 3] = controls[i].luminance_offset;
-        }
-        return packed;
-      });
+      return RequireModel<ColorWheelModel>(model).Read(
+          [behavior](const ColorWheelPayload& payload) {
+            GradeAdjustmentParams packed;
+            packed.behavior                     = static_cast<std::uint32_t>(behavior);
+            const ColorWheelControl controls[3] = {payload.lift, payload.gamma, payload.gain};
+            for (int i = 0; i < 3; ++i) {
+              packed.values[i * 4]     = controls[i].color_offset.x;
+              packed.values[i * 4 + 1] = controls[i].color_offset.y;
+              packed.values[i * 4 + 2] = controls[i].color_offset.z;
+              packed.values[i * 4 + 3] = controls[i].luminance_offset;
+            }
+            return packed;
+          });
     case AdjustmentBehavior::Sharpen:
       return RequireModel<SharpenModel>(model).Read([behavior](const SharpenPayload& payload) {
         GradeAdjustmentParams packed;
@@ -273,7 +278,7 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   }
 
   GradeNeighborParams result;
-  result.behavior          = static_cast<std::uint32_t>(behavior);
+  result.behavior = static_cast<std::uint32_t>(behavior);
   CopyRenderMapping(geometry, result);
   const float render_scale = NeighborhoodRenderScale(geometry);
 
@@ -331,6 +336,15 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   result.seed_hi = static_cast<std::uint32_t>((kFilmGrainSeed >> 32U) & 0xffffffffULL);
   BuildGaussianWeights(result.sigma_x, kFilmGrainMaxRadius, result);
   return result;
+}
+
+auto NeighborhoodVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
+  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
+  if (behavior == AdjustmentBehavior::Halation) {
+    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
+                      kGradeNeighborMaxTapCount - 1U);
+  }
+  return params.radius;
 }
 
 }  // namespace alcedo

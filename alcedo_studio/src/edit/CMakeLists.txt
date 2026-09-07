@@ -80,6 +80,8 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/adjustment_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_lut.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/grade_schedule.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/drt_post_schedule.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp

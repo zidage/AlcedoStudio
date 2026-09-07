@@ -16,6 +16,7 @@ constant int kMetalEotfBt1886        = 4;
 constant int kMetalEotfGamma22       = 5;
 constant int kMetalEotfGamma18       = 6;
 constant int kMetalOdtTableSize      = 360;
+constant int kMetalOdtTotalTableSize = 362;
 constant int kMetalOdtBaseIndex      = 1;
 constant float kMetalHueLimit        = 360.0f;
 
@@ -54,6 +55,9 @@ constant float kSmoothCusps         = 0.12f;
 constant float kCuspMidBlend        = 1.3f;
 constant float kFocusGainBlend      = 0.3f;
 constant float kCompressionThreshold = 0.75f;
+constant float kHuntNJ = 0.012f;
+constant float kChromaJFloor = 0.25f;
+constant float kRgbMappingFailureRatio = 8.0f;
 
 constant float kAp1ToAp0[9] = {
     0.695452213f, 0.0447945632f, -0.00552588236f,
@@ -214,6 +218,14 @@ static inline float acescc_decode(float acescc) {
 static inline float gamma22_encode(float linear) { return pow(fmax(linear, 0.0f), 1.0f / 2.2f); }
 
 static inline float Tonescale_fwd(float x, const constant MetalTSParams& params) {
+  if (!isfinite(x)) {
+    if (x > 0.0f) {
+      const float f_inf = params.m_2_;
+      const float h_inf = fmax(0.0f, f_inf * f_inf / (f_inf + params.t_1_));
+      return h_inf * params.n_r_;
+    }
+    return 0.0f;
+  }
   const float denom = x + params.s_2_;
   const float ratio = (denom > 1e-7f) ? (fmax(0.0f, x) / denom) : 0.0f;
   const float f     = params.m_2_ * pow(ratio, params.g_);
@@ -388,7 +400,13 @@ static inline float safe_log10_ratio(float num, float den, float eps = 1e-7f) {
   return log10(fmax(num, eps) / fmax(den, eps));
 }
 
-static inline float safe_pow_pos(float base, float expv) { return pow(fmax(base, 0.0f), expv); }
+static inline float safe_pow_pos(float base, float expv) {
+  const float b = fmax(base, 0.0f);
+  if (b == 0.0f) {
+    return (expv > 0.0f) ? 0.0f : 1.0f;
+  }
+  return pow(b, expv);
+}
 
 struct HueDependentGamutParams {
   float2 JMcusp;
@@ -432,7 +450,7 @@ static inline float reach_M_from_table(float h, const constant MetalODTParams& p
 }
 
 static inline float pacrc_fwd_base(float rc) {
-  const float fl_y = pow(rc, 0.42f);
+  const float fl_y = safe_pow_pos(rc, 0.42f);
   return fl_y / (kCamNlOffset + fl_y);
 }
 
@@ -441,17 +459,24 @@ static inline float pacrc_fwd(float v) {
 }
 
 static inline float pacrc_inv_base(float ra) {
+  if (!isfinite_f(ra) || ra <= 0.0f) {
+    return 0.0f;
+  }
   const float ra_lim = fmin(ra, 0.99f);
   const float fl_y   = (kCamNlOffset * ra_lim) / (1.0f - ra_lim);
-  return pow(fl_y, 1.0f / 0.42f);
+  return safe_pow_pos(fl_y, 1.0f / 0.42f);
 }
 
 static inline float pacrc_inv(float v) {
   return copysign(pacrc_inv_base(fabs(v)), v);
 }
 
-static inline float Achromatic_n_to_J(float a, float cz) { return kJScale * pow(a, cz); }
-static inline float J_to_Achromatic_n(float j, float inv_cz) { return pow(j * (1.0f / kJScale), inv_cz); }
+static inline float Achromatic_n_to_J(float a, float cz) {
+  return kJScale * safe_pow_pos(fmax(a, 0.0f), cz);
+}
+static inline float J_to_Achromatic_n(float j, float inv_cz) {
+  return safe_pow_pos(fmax(j, 0.0f) * (1.0f / kJScale), inv_cz);
+}
 
 static inline float3 RGB_to_Aab(float3 rgb, const constant MetalJMhParams& p) {
   const float3 rgb_m = mult_f3_f33(rgb, p.MATRIX_RGB_to_CAM16_c_);
@@ -488,6 +513,9 @@ static inline float3 JMh_to_RGB(float3 jmh, const constant MetalJMhParams& p) {
 }
 
 static inline float A_to_Y(float a, const constant MetalJMhParams& p) {
+  if (!isfinite_f(a) || a <= 0.0f) {
+    return 0.0f;
+  }
   return pacrc_inv_base(p.A_w_J_ * a) / p.F_L_n_;
 }
 
@@ -499,6 +527,12 @@ static inline float Y_to_J(float y, const constant MetalJMhParams& p) {
   const float ra = pacrc_fwd_base(fabs(y) * p.F_L_n_);
   const float j  = Achromatic_n_to_J(ra * p.inv_A_w_J_, p.cz_);
   return copysign(j, y);
+}
+
+static inline float hunt_colorfulness_factor(float nJ) {
+  const float nj = fmax(nJ, 0.0f);
+  const float t2 = kHuntNJ * kHuntNJ;
+  return (nj * nj) / (nj * nj + t2);
 }
 
 static inline float chroma_compress_norm(float h, float chroma_compress_scale) {
@@ -553,12 +587,15 @@ static inline float3 chroma_compress_fwd(float3 jmh, float tonemapped_j, const c
     const float toe_snj_sat      = snj * p.sat;
     const float toe_sqrt_nj_thr  = sqrt(nj * nj + p.sat_thr);
     const float toe_nj_compr     = nj * p.compr;
-    const float ratio            = (fabs(jmh.x) < 1e-6f) ? 1.0f : (jts / fabs(jmh.x));
-    m_compr                      = jmh.y * safe_pow_pos(ratio, p.model_gamma_inv);
+    const float nJ_in   = clamp_f(fmax(jmh.x, 0.0f) / limit_j, 0.0f, 1.0f);
+    const float j_denom = fmax(fabs(jmh.x), kChromaJFloor);
+    const float ratio   = jts / j_denom;
+    m_compr             = jmh.y * hunt_colorfulness_factor(nJ_in) * safe_pow_pos(ratio, p.model_gamma_inv);
     m_compr                      = m_compr / mnorm;
     m_compr                      = limit - toe(limit - m_compr, toe_limit, toe_snj_sat, toe_sqrt_nj_thr, false);
     m_compr                      = toe(m_compr, limit, toe_nj_compr, snj, false);
     m_compr                      = m_compr * mnorm;
+    m_compr                      = m_compr * hunt_colorfulness_factor(nj);
   }
   (void)invert;
   return float3(tonemapped_j, m_compr, jmh.z);
@@ -594,7 +631,7 @@ static inline float2 cusp_from_table(float h, const constant MetalODTParams& p) 
   const float lo_h = p.table_gamut_cusps_[lo_idx][2];
   const float hi_h = p.table_gamut_cusps_[hi_idx][2];
   const float denom = hi_h - lo_h;
-  const float t     = (denom != 0.0f) ? (hw - lo_h) / denom : 0.0f;
+  const float t     = clamp_f((fabs(denom) > 1e-6f) ? (hw - lo_h) / denom : 0.0f, 0.0f, 1.0f);
   return float2(lerp_f(p.table_gamut_cusps_[lo_idx][0], p.table_gamut_cusps_[hi_idx][0], t),
                 lerp_f(p.table_gamut_cusps_[lo_idx][1], p.table_gamut_cusps_[hi_idx][1], t));
 }
@@ -605,15 +642,19 @@ static inline float compute_focus_J(float cusp_j, float mid_j, float limit_j_max
 
 static inline int look_hue_interval(float h, const constant MetalODTParams& p) {
   const float hw = wrap_to_360(h);
-  int i          = kMetalOdtBaseIndex + hue_position_in_uniform_table(hw, kMetalOdtTableSize);
+  int i          = kMetalOdtBaseIndex + hue_position_in_uniform_table(hw, kMetalOdtTotalTableSize);
   int i_lo       = i + p.hue_linearity_search_range[0];
   int i_hi       = i + p.hue_linearity_search_range[1];
   i_lo           = i_lo < kMetalOdtBaseIndex ? kMetalOdtBaseIndex : i_lo;
   i_hi           = i_hi > (kMetalOdtBaseIndex + kMetalOdtTableSize)
                        ? (kMetalOdtBaseIndex + kMetalOdtTableSize)
                        : i_hi;
+  if (i_lo > i_hi) {
+    i_lo = kMetalOdtBaseIndex;
+    i_hi = kMetalOdtBaseIndex + kMetalOdtTableSize;
+  }
   i              = (i_lo + i_hi) >> 1;
-  for (int k = 0; k < 6 && (i_lo + 1 < i_hi); ++k) {
+  for (int k = 0; k < 16 && (i_lo + 1 < i_hi); ++k) {
     const float v = p.table_hues_[i];
     if (hw > v) {
       i_lo = i;
@@ -625,14 +666,21 @@ static inline int look_hue_interval(float h, const constant MetalODTParams& p) {
   return (i_hi < 1) ? 1 : i_hi;
 }
 
+static inline float interpolation_weight(float h, float h_lo, float h_hi) {
+  const float denom = h_hi - h_lo;
+  if (fabs(denom) < 1e-6f) return 0.0f;
+  return clamp_f((h - h_lo) / denom, 0.0f, 1.0f);
+}
+
 static inline HueDependentGamutParams init_HueDependentGamutParams(float h, const constant MetalODTParams& p) {
   HueDependentGamutParams hdp;
   hdp.gamma_bottom_inv = p.lower_hull_gamma_inv;
   const int i_hi       = look_hue_interval(h, p);
   const float hw       = wrap_to_360(h);
-  const float t        = hw - p.table_hues_[i_hi - 1];
+  const float t        = interpolation_weight(hw, p.table_hues_[i_hi - 1], p.table_hues_[i_hi]);
   hdp.JMcusp           = cusp_from_table(h, p);
-  hdp.gamma_top_inv    = lerp_f(p.table_upper_hull_gamma_[i_hi - 1], p.table_upper_hull_gamma_[i_hi], t);
+  hdp.gamma_top_inv    = clamp_f(
+      lerp_f(p.table_upper_hull_gamma_[i_hi - 1], p.table_upper_hull_gamma_[i_hi], t), 0.05f, 8.0f);
   hdp.focus_J          = compute_focus_J(hdp.JMcusp.x, p.mid_J, p.limit_J_max);
   hdp.analytical_threshold = lerp_f(hdp.JMcusp.x, p.limit_J_max, kFocusGainBlend);
   return hdp;
@@ -738,11 +786,16 @@ static inline float3 compress_gamut(float3 jmh, float jx, const constant MetalOD
   const float reach_boundary_m = estimate_line_and_boundary_intersection_M(
       j_intersect_source, gamut_slope, p.model_gamma_inv, p.limit_J_max, reach_max_m, p.limit_J_max);
   const float remapped_m       = remap_M(jmh.y, gamut_boundary_m, reach_boundary_m, invert);
-  return float3(j_intersect_source + remapped_m * gamut_slope, remapped_m, jmh.z);
+  const float j_out            = j_intersect_source + remapped_m * gamut_slope;
+  if (!isfinite_f(j_out) || !isfinite_f(remapped_m) || j_out < 0.0f ||
+      j_out > p.limit_J_max * 1.05f) {
+    return float3(clamp_f(fmax(jx, 0.0f), 0.0f, p.limit_J_max), 0.0f, jmh.z);
+  }
+  return float3(clamp_f(j_out, 0.0f, p.limit_J_max), fmax(remapped_m, 0.0f), jmh.z);
 }
 
 static inline float3 gamut_compress_fwd(float3 jmh, const constant MetalODTParams& p) {
-  if (jmh.x <= 0.0f) {
+  if (jmh.x <= 1.0e-3f) {
     return float3(0.0f, 0.0f, jmh.z);
   }
   if (jmh.y <= 0.0f || jmh.x > p.limit_J_max) {
@@ -757,6 +810,9 @@ static inline float3 limit_rgb_preserve_chroma(float3 rgb, float lower, float up
   }
   rgb = max(rgb, float3(lower));
   const float m = fmax(rgb.x, fmax(rgb.y, rgb.z));
+  if (m > upper * kRgbMappingFailureRatio) {
+    return float3(0.0f);
+  }
   if (m > upper && m > 0.0f) {
     rgb *= upper / m;
   }

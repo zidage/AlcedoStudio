@@ -57,7 +57,11 @@ GPU_FUNC float safe_log10_ratio(float num, float den, float eps = 1e-7f) {
 
 GPU_FUNC float safe_pow_pos(float base, float exp) {
   // pow for non-negative base; clamps base to >=0 to avoid NaNs for fractional exp.
-  return powf(fmaxf(base, 0.0f), exp);
+  const float b = fmaxf(base, 0.0f);
+  if (b == 0.0f) {
+    return (exp > 0.0f) ? 0.0f : 1.0f;
+  }
+  return powf(b, exp);
 }
 
 struct HueDependentGamutParams {
@@ -124,7 +128,7 @@ GPU_FUNC float reach_M_from_table(float h, GPU_ODTParams& p) {
 }
 
 GPU_FUNC float _pacrc_fwd(float Rc) {
-  const float F_L_Y = powf(Rc, 0.42f);
+  const float F_L_Y = safe_pow_pos(Rc, 0.42f);
   return (F_L_Y) / (cam_nl_offset + F_L_Y);
 }
 
@@ -135,9 +139,12 @@ GPU_FUNC float pacrc_fwd(float v) {
 }
 
 GPU_FUNC float _pacrc_inv(float Ra) {
+  if (!isfinite_f(Ra) || Ra <= 0.0f) {
+    return 0.0f;
+  }
   const float Ra_lim = fminf(Ra, 0.99f);
   const float F_L_Y  = (cam_nl_offset * Ra_lim) / (1.f - Ra_lim);
-  return powf(F_L_Y, (1.f / 0.42f));
+  return safe_pow_pos(F_L_Y, (1.f / 0.42f));
 }
 
 GPU_FUNC float pacrc_inv(float v) {
@@ -146,9 +153,13 @@ GPU_FUNC float pacrc_inv(float v) {
   return copysignf(Rc, v);
 }
 
-GPU_FUNC float Achromatic_n_to_J(float A, float cz) { return J_scale * powf(A, cz); }
+GPU_FUNC float Achromatic_n_to_J(float A, float cz) {
+  return J_scale * safe_pow_pos(fmaxf(A, 0.0f), cz);
+}
 
-GPU_FUNC float J_to_Achromatic_n(float J, float inv_cz) { return powf(J * (1. / J_scale), inv_cz); }
+GPU_FUNC float J_to_Achromatic_n(float J, float inv_cz) {
+  return safe_pow_pos(fmaxf(J, 0.0f) * (1.f / J_scale), inv_cz);
+}
 
 GPU_FUNC float3 RGB_to_Aab(const float3& RGB, GPU_JMhParams& p) {
   float3 RGB_m = mult_f3_f33(RGB, p.MATRIX_RGB_to_CAM16_c_);
@@ -205,6 +216,9 @@ GPU_FUNC float3 JMh_to_RGB(const float3& JMh, GPU_JMhParams& p) {
 }
 
 GPU_FUNC float _A_to_Y(float A, GPU_JMhParams& p) {
+  if (!isfinite_f(A) || A <= 0.0f) {
+    return 0.0f;
+  }
   float Ra = p.A_w_J_ * A;
   float Y  = _pacrc_inv(Ra) / p.F_L_n_;
 
@@ -222,6 +236,17 @@ GPU_FUNC float Y_to_J(float Y, GPU_JMhParams& p) {
   float J     = Achromatic_n_to_J(Ra * p.inv_A_w_J_, p.cz_);
 
   return copysignf(J, Y);
+}
+
+// Hunt (1952) / CAM16: colorfulness falls with luminance. Academy CTL instead
+// keeps M/J through the tonescale (constant chromaticity). That ratio is
+// singular as J → 0, which is exactly the crushed-exposure / noisy-shadow
+// path, and it contradicts Hunt. Fade M with a squared toe so midtones
+// (nJ ≫ hunt_nJ) stay on the CTL path.
+GPU_FUNC float hunt_colorfulness_factor(float nJ) {
+  const float nj = fmaxf(nJ, 0.0f);
+  const float t2 = hunt_nJ * hunt_nJ;
+  return (nj * nj) / (nj * nj + t2);
 }
 
 GPU_FUNC float chroma_compress_norm(float h, float chroma_compress_scale) {
@@ -301,13 +326,16 @@ GPU_FUNC float3 chroma_compress_fwd(const float3& JMh, float tonemapped_J, GPU_O
     float toe_sqrt_nJ_sat_thr = sqrtf(nJ * nJ + p.sat_thr);
     float toe_nJ_compr        = nJ * p.compr;
 
-    // Rescaling of M with the tonescaled J to get the M to the same range as
-    // J after the tonescale.  The rescaling uses the Hellwig2022 model gamma to
-    // keep the M/J ratio correct (keeping the chromaticities constant).
-    // Avoid division by ~0 in near-black. If J is tiny, keep ratio ~1 to prevent blow-ups.
-    const float absJ          = fabsf(J);
-    const float ratio         = (absJ < 1e-6f) ? 1.0f : (Jts / absJ);
-    M_compr                   = M * safe_pow_pos(ratio, p.model_gamma_inv);
+    // Official CTL rescales M by (J_ts / J)^inv_gamma so chromaticity is
+    // constant through the tonescale. CAM16 JMh is undefined / extremely
+    // steep for mixed-sign cone responses after crushing exposure, so |M/J|
+    // of near-black noise is unphysical. Hunt-fade input M, never divide by
+    // a J in that singular region, then Hunt-fade again after the toes so
+    // shadow expansion cannot resurrect noise chroma.
+    const float nJ_in   = clamp_f(fmaxf(J, 0.0f) / limitJ, 0.0f, 1.0f);
+    const float j_denom = fmaxf(fabsf(J), chroma_j_floor);
+    const float ratio   = Jts / j_denom;
+    M_compr             = M * hunt_colorfulness_factor(nJ_in) * safe_pow_pos(ratio, p.model_gamma_inv);
 
     // Normalize M with the rendering space cusp M
     M_compr                   = M_compr / Mnorm;
@@ -327,6 +355,7 @@ GPU_FUNC float3 chroma_compress_fwd(const float3& JMh, float tonemapped_J, GPU_O
 
     // Denormalize M
     M_compr = M_compr * Mnorm;
+    M_compr = M_compr * hunt_colorfulness_factor(nJ);
   }
 
   return make_float3(tonemapped_J, M_compr, h);
@@ -350,27 +379,38 @@ GPU_FUNC float3 tonemap_and_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
 GPU_FUNC int look_hue_interval(float h, const GPU_Table1D<float>& hue_table,
                                int* hue_linearity_search_range) {
   const float hw = wrap_to_360(h);
-  int         i  = baseIndex + hue_position_in_uniform_table(hw, tableSize);  //  tableSize=360
-  int         i_lo = i + hue_linearity_search_range[0];
-  int         i_hi = i + hue_linearity_search_range[1];
+  // Academy CTL seeds this search with totalTableSize so the window matches
+  // determine_hue_linearity_search_range (also keyed on totalTableSize).
+  int i    = baseIndex + hue_position_in_uniform_table(hw, totalTableSize);
+  int i_lo = i + hue_linearity_search_range[0];
+  int i_hi = i + hue_linearity_search_range[1];
 
   // clamp to valid padded range [baseIndex, baseIndex + tableSize]
-  i_lo             = i_lo < baseIndex ? baseIndex : i_lo;
-  i_hi             = i_hi > (baseIndex + tableSize) ? (baseIndex + tableSize) : i_hi;
+  i_lo = i_lo < baseIndex ? baseIndex : i_lo;
+  i_hi = i_hi > (baseIndex + tableSize) ? (baseIndex + tableSize) : i_hi;
+  if (i_lo > i_hi) {
+    i_lo = baseIndex;
+    i_hi = baseIndex + tableSize;
+  }
+  i = (i_lo + i_hi) >> 1;
 
 #pragma unroll
-  for (int k = 0; k < 6 && (i_lo + 1 < i_hi); ++k) {  // log2(range) <= 6
+  for (int k = 0; k < 16 && (i_lo + 1 < i_hi); ++k) {
     const float v  = tex1Dfetch<float>(hue_table.texture_object_, i);
     const int   gt = hw > v;  // 0/1
     i_lo           = gt ? i : i_lo;
     i_hi           = gt ? i_hi : i;
-    i              = (i_lo + i_hi) >> 1;  // midpoint
+    i              = (i_lo + i_hi) >> 1;
   }
 
   return (i_hi < 1) ? 1 : i_hi;
 }
 
-GPU_FUNC float  interpolation_weight(float h, float h_lo, float h_hi) { return h - h_lo; }
+GPU_FUNC float interpolation_weight(float h, float h_lo, float h_hi) {
+  const float denom = h_hi - h_lo;
+  if (fabsf(denom) < 1e-6f) return 0.0f;
+  return clamp_f((h - h_lo) / denom, 0.0f, 1.0f);
+}
 
 GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
   const float hw     = wrap_to_360(h);
@@ -391,7 +431,7 @@ GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
   const float4 lo    = tex1Dfetch<float4>(table.texture_object_, high_i - 1);
   const float4 hi    = tex1Dfetch<float4>(table.texture_object_, high_i);
   const float  denom = hi.z - lo.z;
-  const float  t     = (denom != 0.0f) ? (hw - lo.z) / denom : 0.0f;
+  const float  t     = clamp_f((fabsf(denom) > 1e-6f) ? (hw - lo.z) / denom : 0.0f, 0.0f, 1.0f);
 
   return make_float2(lerp_f(lo.x, hi.x, t), lerp_f(lo.y, hi.y, t));
 }
@@ -413,8 +453,9 @@ GPU_FUNC HueDependentGamutParams init_HueDependentGamutParams(float h, GPU_ODTPa
   const float t  = interpolation_weight(hw, table_get(p.table_hues_, i_hi - 1), table_get(p.table_hues_, i_hi));
 
   hdp.JMcusp               = cusp_from_table(h, p.table_gamut_cusps_);
-  hdp.gamma_top_inv        = lerp_f(table_get(p.table_upper_hull_gamma_, i_hi - 1),
-                                    table_get(p.table_upper_hull_gamma_, i_hi), t);
+  hdp.gamma_top_inv        = clamp_f(lerp_f(table_get(p.table_upper_hull_gamma_, i_hi - 1),
+                                           table_get(p.table_upper_hull_gamma_, i_hi), t),
+                                    0.05f, 8.0f);
   hdp.focus_J              = compute_focus_J(hdp.JMcusp.x, p.mid_J, p.limit_J_max);
   hdp.analytical_threshold = lerp_f(hdp.JMcusp.x, p.limit_J_max, focus_gain_blend);
 
@@ -572,7 +613,12 @@ GPU_FUNC float3 compress_gamut(const float3& JMh, float Jx, GPU_ODTParams& p,
                                                 p.limit_J_max, reach_max_M, p.limit_J_max);
 
   const float remapped_M = remap_M(M, gamut_boundary_M, reach_boundary_M, invert);
-  return make_float3(J_intersect_source + remapped_M * gamut_slope, remapped_M, h);
+  const float J_out      = J_intersect_source + remapped_M * gamut_slope;
+  if (!isfinite_f(J_out) || !isfinite_f(remapped_M) || J_out < 0.0f ||
+      J_out > p.limit_J_max * 1.05f) {
+    return make_float3(clamp_f(fmaxf(Jx, 0.0f), 0.0f, p.limit_J_max), 0.f, h);
+  }
+  return make_float3(clamp_f(J_out, 0.0f, p.limit_J_max), fmaxf(remapped_M, 0.0f), h);
 }
 
 GPU_FUNC float3 gamut_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
@@ -580,7 +626,7 @@ GPU_FUNC float3 gamut_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
   const float M = JMh.y;
   const float h = JMh.z;
 
-  if (J <= 0.f) {
+  if (J <= 1.0e-3f) {
     return make_float3(0.f, 0.f, h);
   }
 
@@ -603,8 +649,13 @@ GPU_FUNC float3 limit_rgb_preserve_chroma(float3 rgb, float lower, float upper) 
   rgb.y = fmaxf(rgb.y, lower);
   rgb.z = fmaxf(rgb.z, lower);
 
-  // Upper limit: preserve ratios by scaling uniformly
+  // Upper limit: preserve ratios by scaling uniformly, unless the value is far
+  // past the tonescale peak. That case is a JMh mapping failure; scaling it
+  // onto the peak is what turns crushed-exposure NaNs into isolated white dots.
   const float m = fmaxf(rgb.x, fmaxf(rgb.y, rgb.z));
+  if (m > upper * rgb_mapping_failure_ratio) {
+    return make_float3(0.f, 0.f, 0.f);
+  }
   if (m > upper && m > 0.f) {
     const float s = upper / m;
     rgb.x *= s;

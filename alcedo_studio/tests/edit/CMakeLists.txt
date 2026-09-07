@@ -113,7 +113,9 @@ gtest_discover_tests(ToneMappingFacadeTest TEST_PREFIX "ToneMappingFacadeTest.")
 alcedo_register_test_target(ToneMappingFacadeTest edit)
 
 # ODT (Output Device Transform) operator test.
-add_executable(ODTOpTest ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp)
+add_executable(ODTOpTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/aces_odt_numeric_stability_test.cpp)
 target_include_directories(ODTOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators)
 gtest_discover_tests(ODTOpTest TEST_PREFIX "ODTOpTest.")
@@ -344,6 +346,9 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/adjustment_runtime_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/grade_schedule_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/drt_post_executor_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <limits>
 
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/dng_profile_gpu_math.h"
 #include "image/dng_color_profile_import.hpp"
@@ -144,6 +145,27 @@ TEST(DngColorProfile, MissingProfileLeavesNonDngPixelsExactlyUnchanged) {
   EXPECT_FLOAT_EQ(actual.r, -.25f);
   EXPECT_FLOAT_EQ(actual.g, .5f);
   EXPECT_FLOAT_EQ(actual.b, 4);
+}
+
+TEST(DngColorProfile, ReferenceGamutCompressionPreservesNeutralAndInGamutAp1Exactly) {
+  for (const auto input : {AcesRgcMakeRgb(0.18f, 0.18f, 0.18f),
+                           AcesRgcMakeRgb(1.0f, 0.25f, 0.15f)}) {
+    const auto output = AcesReferenceGamutCompress(input.r, input.g, input.b);
+    EXPECT_FLOAT_EQ(output.r, input.r);
+    EXPECT_FLOAT_EQ(output.g, input.g);
+    EXPECT_FLOAT_EQ(output.b, input.b);
+  }
+}
+
+TEST(DngColorProfile, ReferenceGamutCompressionReducesExtremeAp1DistanceBeforeLogEncoding) {
+  const auto input  = AcesRgcMakeRgb(1.0f, -1.0f, 0.0f);
+  const auto output = AcesReferenceGamutCompress(input.r, input.g, input.b);
+  EXPECT_FLOAT_EQ(output.r, input.r);
+  EXPECT_GT(output.g, input.g);
+  EXPECT_GT(output.b, input.b);
+  EXPECT_TRUE(std::isfinite(output.r));
+  EXPECT_TRUE(std::isfinite(output.g));
+  EXPECT_TRUE(std::isfinite(output.b));
 }
 
 TEST(DngColorProfile, LegacyProjectMetadataReloadsCompleteProfileWithoutMutatingSharedImage) {

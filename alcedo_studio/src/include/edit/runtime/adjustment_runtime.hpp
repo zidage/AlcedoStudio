@@ -38,8 +38,11 @@ enum class AdjustmentBehavior : std::uint32_t {
 struct alignas(16) GradeAdjustmentParams {
   std::uint32_t behavior = 0;
   std::uint32_t count    = 0;
-  float         values[30]{};
+  float         values[48]{};
+  std::uint32_t reserved[2]{};
 };
+
+static_assert(sizeof(GradeAdjustmentParams) == 208);
 
 struct GradeAdjustmentCommand {
   std::uint32_t parameter_offset = 0;
@@ -118,5 +121,12 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
 [[nodiscard]] auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,
                                            const ResolvedRenderGeometry& geometry)
     -> GradeNeighborParams;
+
+/**
+ * @brief Vertical shared-memory radius for a separable neighborhood pass.
+ *
+ * Halation uses a 3-sigma window of @p params.sigma_y. Other operators use @p params.radius.
+ */
+[[nodiscard]] auto NeighborhoodVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t;
 
 }  // namespace alcedo

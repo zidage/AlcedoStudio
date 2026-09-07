@@ -349,7 +349,7 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
   CompiledDrtNode compiled;
   compiled.node_id        = drt.Id();
   compiled.scene_input    = scene_input;
-  compiled.scene_output   = GraphValueId{drt.Id(), PortId{"runtime.scene_post"}};
+  compiled.scene_output   = GraphValueId{drt.Id(), PortId{"runtime.display_base"}};
   compiled.display_output = GraphValueId{drt.Id(), PortId{"display"}};
 
   std::vector<OperatorTypeId>         drt_types;
@@ -357,7 +357,9 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
   drt_types.reserve(drt.AdjustmentCount());
   parameters.reserve(drt.AdjustmentCount());
   compiled.post_adjustments.reserve(drt.AdjustmentCount());
-  GraphValueId step_input = scene_input;
+  compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform, {},
+                                           OperatorTypeId{}, scene_input, compiled.scene_output});
+  GraphValueId step_input = compiled.scene_output;
   for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
     const auto& type = drt.AdjustmentAt(index).Type();
     drt_types.push_back(type);
@@ -374,17 +376,13 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
     step_input = step_output;
   }
   RequireCompleteDrtPostTypes(drt_types, "GraphCompiler DRT");
-  compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform, {},
-                                           OperatorTypeId{}, compiled.scene_output,
-                                           compiled.display_output});
-  if (!compiled.steps.empty() && compiled.steps.size() >= 2) {
-    compiled.steps[compiled.steps.size() - 2].output = compiled.scene_output;
-    compiled.steps.back().input                      = compiled.scene_output;
+  if (compiled.steps.size() >= 2) {
+    compiled.steps.back().output = compiled.display_output;
   }
 
   PushPass(plan, GpuPassKind::Drt, drt.Id(),
            {{PortId{"image"}, compiled.scene_input, CompiledValueKind::SceneImage}},
-           {{compiled.scene_output, CompiledValueKind::SceneImage},
+           {{compiled.scene_output, CompiledValueKind::DisplayImage},
             {compiled.display_output, CompiledValueKind::DisplayImage}},
            {}, std::move(parameters));
   return compiled;

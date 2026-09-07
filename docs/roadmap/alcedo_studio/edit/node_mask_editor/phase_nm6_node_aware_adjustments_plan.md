@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.4, NM6.4P, and NM6.P complete; NM6.5–NM6.9 planned.
+Status: NM6.1–NM6.5B, NM6.4P, and NM6.P complete; NM6.6–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -413,7 +413,7 @@ Additional acceptance requirements:
 
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.4, NM6.4P, and NM6.P are complete. NM6.5–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.5B, NM6.4P, and NM6.P are complete. NM6.6–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -858,9 +858,248 @@ rebuild tests on all three backends; failed LLF work does not publish reusable m
 released at safe completion. Pixel output meets declared tolerances against independent expected
 behavior and fresh execution. Backend-native submission APIs may differ, decisions may not.
 
+##### Phase NM6.5 completion record (2026-09-06)
+
+**Status:** complete — CUDA, OpenCL, and Metal Color Grade / LLF passes share `GradeExecutor` and
+`LocalToneExecutor` host decisions. Independent per-backend fusion, ping-pong, mix, and pyramid
+loops were removed. Parameter transport and UI projection were not changed.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor<Backend>
+  -> GradeExecutor<Backend>::Execute
+  -> BindAndScheduleGrade / MakeGradeSchedule / GradeWriteSlots
+  -> Ops::DispatchPointwise | DispatchNeighbor | ExecuteLocalTone | DispatchMix
+  -> LocalToneExecutor<Backend>::Execute
+  -> DecideLocalTone / MakeLocalToneDecisionTrace
+  -> Ops::PersistCanonicalSource|Result (source.0 / result.0 only)
+  -> CheckAfterEncode
+  -> PlanExecutor RecordUnpublished / PublishResults
+```
+
+**Primary failure call chain:**
+
+```text
+LocalToneExecutor remap / extract / empty geometry throw
+  -> return before Ops::PersistCanonicalSource|Result
+  -> no RecordUnpublished for canonical planes
+  -> CancelRender / DiscardUnpublished
+  -> prior published source/result revisions unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Equivalent Grade inputs share one decision trace | `GpuDagRawInputTest` `GradeSchedule.EquivalentInputsProduceIdenticalDecisionTraces` | PASS |
+| Fusion, mix skip, LLF barrier, neighborhood split | `GpuDagRawInputTest` `GradeSchedule.*` (7 tests) | PASS |
+| Source-only vs result rebuild / sample / QualityBase bypass | `GpuDagRawInputTest` `LocalTonePlan.*` (7 tests) | PASS |
+| Failed remap does not persist canonical planes | `GpuDagRawInputTest` `LocalToneExecutor.RemapFailureDoesNotPersistCanonicalPlanes` | PASS |
+| Slider edit binds canonical source and persists result only | `GpuDagRawInputTest` `LocalToneExecutor.SliderEditBindsCanonicalSourceAndPersistsResultOnly` | PASS |
+| CUDA source-only vs result rebuild; failed encode keeps prior revisions | `GpuDagCudaPrimaryGradeTest` `CudaLlfSliderEditReusesCanonicalSourceAndRebuildsResult`, `CudaLlfFailedSubmissionDoesNotPublishCanonicalPlanes` | PASS |
+| CUDA persist only `local_tone.source.0` / `local_tone.result.0` | `GpuDagCudaPrimaryGradeTest` `CudaLocalToneUsesWorkspaceInsteadOfPrivateAllocation` | PASS |
+| CUDA neighbor / identity Grade workspace reuse after Develop scratch | `GpuDagCudaPrimaryGradeTest` `CudaNeighborStagesReuseWorkspaceTexturesAfterFirstRender`, `CudaColorGradeSecondRenderCreatesNoGpuAllocation` | PASS |
+| CUDA pixels vs independent expected / fresh execution | `GpuDagCudaPrimaryGradeTest` neighbor, LLF, pointwise, LUT tests in the same binary | PASS |
+| OpenCL source-only vs result rebuild; failed encode keeps prior revisions | `GpuDagOpenClGradeTest` `OpenClLlfSliderEditReusesCanonicalReference`, `OpenClLlfFailedSubmissionDoesNotPublishReference` | PASS |
+| OpenCL persist only canonical source/result images | `GpuDagOpenClGradeTest` `OpenClLlfPersistsOnlyCanonicalSourceAndResultPlanes` | PASS |
+| OpenCL workspace reuse after Develop scratch | `GpuDagOpenClGradeTest` `OpenClLlfSecondStableRenderCreatesNoBufferImageProgramOrKernel`, `OpenClStableGradeCreatesNoDummyLutOrStageParameterBuffer`, `OpenClDetailPassesAcquireAllResourcesFromWorkspace` | PASS |
+| OpenCL pixels vs independent expected / fresh execution | `GpuDagOpenClGradeTest` including `OpenClLlfMatchesCudaReferenceWithinTolerance` | PASS |
+| Product Shadows path uses shared LLF workspace | `GpuDagCudaDrtProductTest` `LegacyShadowControlExecutesLocalLaplacianWorkspacePath` | PASS |
+| Metal Grade/LLF GPU encode | `GpuDagMetalGradeTest` / `GpuDagMetalLlfTest` | skipped — no Metal on this Windows host |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest --target GpuDagOpenClGradeTest --target GpuDagRawInputTest --target GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R "GradeSchedule|LocalTonePlan|LocalToneExecutor|GpuDagCudaPrimaryGrade|GpuDagOpenClGrade|LegacyShadowControlExecutesLocalLaplacian" --timeout 90
+```
+
+Suite totals: **120/120 PASS** (17 GPU-free + 40 CUDA primary Grade + 62 OpenCL Grade + 1 CUDA product LLF path). Metal encode was not run.
+
+**Checklist / exit condition:** shared decision traces, CUDA/OpenCL source-vs-result rebuild, failed-LLF non-publication, canonical persist limited to source.0/result.0, and pixel tolerances have executed tests. Metal host wiring is in-tree; Metal GPU execution remains an environmental skip.
+
+**LOC note (grill-code-review):** new shared hosts `grade_executor.hpp` 185, `grade_schedule.hpp` 158, `grade_schedule.cpp` 117, `local_tone_executor.hpp` 166, `local_tone_plan.hpp` 179; GPU-free tests 170+263. CUDA/OpenCL/Metal grade+LLF passes 279–478 after removing independent decision loops. No file crossed 1000 lines.
+
+**Residual gaps:** Metal canonical persist still copies linear `Values()` buffers and `MarkCompleted` because Metal graph images are textures, not linear R32f buffers; CUDA/OpenCL persist R32f graph images via `RecordUnpublished`. Direct RGB Develop ExactRelease still allocates/frees upload (and CUDA linearize) slabs at last GPU use; Grade workspace-reuse tests reset device counters after Develop so they measure Grade/DRT/LLF pool reuse, not that Develop scratch. Shared Point/Neighbor/DRT host launch order is NM6.5B. Node targeting is NM6.6. Section 8.2 three-Grade real-RAW cached-versus-fresh pixel matrix remains NM6.9.
+
+### NM6.5B — Share Point, Neighbor, and DRT/Post kernel orchestration
+
+**Prerequisite:** NM6.5 complete. Do not redesign node structure, adjustment ownership, or
+Grade internal order. Do not add a dynamic fusion framework. Color Grade stays
+Point → Local Laplacian → Point (or Point → Local Laplacian). Sharpen, Grain, Clarity, and
+Halation stay on the DRT/Post node.
+
+Grade already has a fixed internal stage order, so the compiler can publish that order.
+Runtime does not rediscover fusion boundaries. Execution has three layers:
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| Compiler | Fixed node and stage order, Point adjustment ranges, stage inputs/outputs, parameter dependencies | GPU kernel platform launch details |
+| Shared execution template | Execute the compiled stages; which kernels to start, their order, intermediate resources, and reuse | CUDA launch syntax, OpenCL argument binding, Metal encoder API |
+| Backend operation | Resource binding and kernel start for one GPU step | Whole-algorithm steps, loops, and skip policy |
+
+`LocalToneExecutor<Ops>` already follows this split. Point, Neighbor, and DRT/Post must
+align with it. Host-side launch decisions and multi-kernel sequencing move up; block/grid,
+threadgroup size, argument binding, and native error checks stay in the backend. A platform-specific
+implementation of one step stays inside that operation.
+
+Point is one fused kernel start: the shared Grade executor calls `Ops::DispatchPointwise`
+directly. Do not add a PointExecutor with no extra duties. Neighbor has horizontal scratch
+and two starts. LLF has level loops. Both have shared host sequencing to extract.
+
+**Changes:**
+
+1. Executors consume compiler-fixed stages. `CompiledGradeStage` already names the algorithm
+   class and adjustment range; that list is the execution order. `MakeGradeSchedule` must not
+   reclassify or splice stages from a flat adjustment walk. Runtime keeps parameter binding,
+   whether Local Laplacian actually runs, and node bypass. Those checks do not change the
+   compiled order. When Local Laplacian does not run, the compiler's Point ranges are selected
+   and concatenated into one launch.
+2. Lift Grade Neighbor multi-start sequencing into the shared layer. `GradeExecutor` currently
+   calls a coarse `Ops::DispatchNeighbor` whose backends still own horizontal work, vertical
+   work, scratch, and start order. Shared code acquires horizontal scratch, calls
+   `DispatchHorizontal` then `DispatchVerticalApply`, and ends the scratch lifetime. Backends
+   only start each kernel. Metal may keep its current neighborhood kernel inside
+   `DispatchVerticalApply` and treat horizontal start as a no-op; that choice stays at the
+   operation boundary and must not reintroduce a host loop.
+3. Lift the three DRT/Post backend execution loops into `DrtPostExecutor<Ops>`. CUDA, OpenCL,
+   and Metal currently iterate enabled Post adjustments, choose ping/pong, acquire horizontal
+   scratch, and start two Neighbor kernels, then start the display transform. That host
+   sequence is platform-independent. The display transform runs at the compiled last step.
+4. Shared code owns resource use order and when a result may be published. Native allocation,
+   GPU completion tracking, and actual release stay in the backend.
+
+**Primary call chain:** compiled node plan → shared node executor → Point start /
+shared LLF sequencing / shared Post sequencing → backend GPU operation (CUDA / OpenCL / Metal).
+
+**Files/APIs:** `execution_plan` compiled Grade/DRT stages; `grade_schedule` / `grade_executor`;
+new shared Neighbor and DRT/Post executors; CUDA, OpenCL, and Metal Grade and DRT passes.
+Do not change shader mathematics or backend selection. Parameter transport remains NM6.P.
+
+**Acceptance:** reading only the shared executors answers which compute steps a frame starts,
+in what order, and why a step is skipped or rebuilt. Reading a backend answers only how that
+step starts on that platform. The three backends no longer each maintain the same operator
+loop, ping/pong choice, or multi-kernel order. GPU-free traces cover compiler-stage Grade
+order, Local Laplacian skip concatenating Point ranges, Neighbor scratch then horizontal then
+vertical then release, and DRT skip/copy/ping-pong/display order. Existing CUDA/OpenCL pixel
+and workspace-reuse cases still pass. Metal host wiring stays in tree; Metal GPU execution
+remains an environmental skip on Windows.
+
+##### Phase NM6.5B completion record (2026-09-07)
+
+**Status:** complete — compiler-fixed Grade stages, `NeighborExecutor`, and `DrtPostExecutor` own host launch order. CUDA, OpenCL, and Metal Grade/DRT passes only bind resources and start one kernel. No PointExecutor. Sharpen/Grain/Clarity/Halation stay on DRT/Post.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor
+  -> GradeExecutor::Execute
+  -> BindAndScheduleGrade / MakeGradeSchedule(compiled stages)
+  -> CompactGradeOps (inactive LLF drop, adjacent Point concat)
+  -> Ops::DispatchPointwise | NeighborExecutor | LocalToneExecutor | DispatchMix
+  -> NeighborExecutor: AcquireHorizontalScratch -> SceneTexture lookup
+       -> DispatchHorizontal -> DispatchVerticalApply -> scratch dtor
+  -> DrtPostExecutor::Execute
+  -> MakeDrtPostSchedule / DrtNeighborhoodDestinations
+  -> ApplyNeighborhoods (copy or ping/pong + NeighborExecutor)
+  -> DispatchDisplay -> Ops::DispatchDisplayTransform
+  -> CheckAfterEncode
+```
+
+**Primary failure call chain:**
+
+```text
+NeighborExecutor DispatchHorizontal throw
+  -> HorizontalScratch destructor
+  -> DispatchVerticalApply not started
+  -> CheckAfterEncode / CancelRender
+  -> unpublished writes discarded
+
+DrtPostExecutor missing BeginRender, DRT node, or scene input
+  -> throw before neighborhood or display start
+  -> pending Model dirty bits restore unless Commit ran
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Compiler Point stages fuse; inactive LLF concatenates Point ranges | `GpuDagRawInputTest` `GradeSchedule.*` (7 tests) | PASS |
+| Disabled neighborhood does not break Point concat | `GpuDagRawInputTest` `GradeSchedule.DisabledCompilerNeighborhoodDoesNotBreakPointwiseConcatenation` | PASS |
+| Equivalent compiled stages share one decision trace | `GpuDagRawInputTest` `GradeSchedule.EquivalentCompilerStagesProduceIdenticalDecisionTraces` | PASS |
+| Default pipeline Grade stages are Point / LLF / Point | `GpuDagRawInputTest` `GpuDagGraphCompiler.DefaultPipelineCompilesShadowsAndHighlightsToLocalLaplacianOnly` | PASS |
+| DRT skip copies scene; enabled list keeps compiler order and ping/pong dests | `GpuDagRawInputTest` `DrtPostSchedule.*` (2 tests) | PASS |
+| Neighbor acquire → horizontal → vertical → release | `GpuDagRawInputTest` `NeighborExecutor.AcquiresScratchThenStartsHorizontalThenVerticalThenReleases` | PASS |
+| Horizontal failure releases scratch without vertical start | `GpuDagRawInputTest` `NeighborExecutor.HorizontalFailureReleasesScratchWithoutVerticalStart` | PASS |
+| Empty DRT neighborhoods copy; two enabled use shared H/V; display after writes | `GpuDagRawInputTest` `DrtPostExecutor.*` (3 tests) | PASS |
+| CUDA neighbor pixels, workspace reuse, LLF, pointwise, LUT | `GpuDagCudaPrimaryGradeTest` | PASS |
+| OpenCL neighbor pixels, workspace reuse, LLF, pointwise, LUT | `GpuDagOpenClGradeTest` | PASS |
+| Product Shadows path still uses shared LLF workspace | `GpuDagCudaDrtProductTest` `LegacyShadowControlExecutesLocalLaplacianWorkspacePath` | PASS |
+| Product DRT/Post order and second-render reuse | `GpuDagCudaDrtProductTest` `DrtPostPreservesUnmaskedReferenceOrder`, `CudaDefaultPipelineSecondRenderCreatesNoGpuAllocation` | PASS |
+| Metal Grade/DRT GPU encode | `GpuDagMetalGradeTest` | skipped — no Metal on this Windows host |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest --target GpuDagCudaPrimaryGradeTest --target GpuDagOpenClGradeTest --target GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R "GradeSchedule|DrtPostSchedule|NeighborExecutor|DrtPostExecutor|GpuDagGraphCompiler.DefaultPipelineCompilesShadows|GpuDagCudaPrimaryGrade|GpuDagOpenClGrade|LegacyShadowControlExecutesLocalLaplacian" --timeout 90
+```
+
+Suite totals: **118/118 PASS** on the focused filter (15 GPU-free + 40 CUDA primary Grade + 62 OpenCL Grade + 1 CUDA product LLF path). Two extra CUDA product DRT cases also PASS. Metal encode was not run.
+
+**Checklist / exit condition:** compiler-stage Grade selection, LLF-skip Point concat, Neighbor scratch/H/V/release, DRT skip/copy/ping-pong/display order, and existing CUDA/OpenCL pixel plus workspace-reuse cases have executed tests. Metal host wiring is in-tree; Metal GPU execution remains an environmental skip.
+
+**LOC note (grill-code-review):** shared hosts `neighbor_executor.hpp` 51, `drt_post_schedule.hpp`/`.cpp` 50+41, `drt_post_executor.hpp` 170, `grade_schedule.hpp`/`.cpp` 176+134, `grade_executor.hpp` 207; GPU-free tests 151+259. CUDA/OpenCL/Metal Grade+DRT wrappers 149–408. CUDA neighbor launches live in `cuda_neighbor_grade.cu` with the kernels (same translation unit). No file crossed 1000 lines.
+
+**Residual gaps:** Metal GPU execution remains an environmental skip on Windows. Display-referred DRT/Post neighborhood is now a real separable H/V pair in the DRT metallib (`drt_neighbor_blur_horizontal` / `drt_neighbor_apply_vertical`) matching CUDA/OpenCL Sharpen, Clarity, Halation, and Film Grain; Metal pixel tests exist and skip on this host. `TexturePool` growth still invalidates held `Texture&`; NeighborExecutor looks up source/destination after scratch acquire so that path is safe. DRT display packing still uses `ToJson` (NM6.P residual). Node targeting is NM6.6. Section 8.2 three-Grade real-RAW cached-versus-fresh pixel matrix remains NM6.9.
+
+##### Phase NM6.5B follow-up (2026-09-07) — Metal display-referred neighborhood kernels
+
+**Status:** complete on host wiring and shader math — Metal DRT/Post starts the same separable neighborhood algorithm as CUDA/OpenCL after the display transform. Metal GPU encode still skips on this Windows host.
+
+**Primary success call chain:**
+
+```text
+ExecuteMetalDrt
+  -> DrtPostExecutor::DispatchDisplay -> drt_display
+  -> ApplyNeighborhoods / NeighborExecutor
+  -> DispatchHorizontal -> drt_neighbor_blur_horizontal
+  -> DispatchVerticalApply -> drt_neighbor_apply_vertical
+  -> display-referred Sharpen / Clarity / Halation / Film Grain
+```
+
+**Primary failure call chain:**
+
+```text
+missing DRT metallib or compute encoder
+  -> throw before neighborhood start
+  -> pending Model dirty bits restore unless Commit ran
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| CUDA Sharpen / Clarity / Halation / Film Grain / reuse | `GpuDagCudaPrimaryGradeTest` | PASS |
+| OpenCL Sharpen / Clarity / Halation / Film Grain / reuse | `GpuDagOpenClGradeTest` | PASS |
+| DRT/Post after display, mix does not suppress Clarity | `GpuDagCudaDrtProductTest` `DrtPostRunsAfterDisplayTransformAndIgnoresGradeMix` | PASS |
+| Metal Sharpen / Clarity / Halation / Film Grain / preview radius | `GpuDagMetalGradeTest` | not executed — no Metal on this Windows host |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest --target GpuDagOpenClGradeTest --target GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R "CudaSharpen|CudaClarity|CudaHalation|CudaFilmGrain|CudaNeighbor|OpenClSharpen|OpenClClarity|OpenClHalation|OpenClFilmGrain|OpenClDetailPasses|DrtPostRunsAfterDisplay" --timeout 90
+```
+
+Suite totals: **13/13 PASS** on the focused CUDA/OpenCL neighborhood filter. Metal encode was not run.
+
+**Residual gaps:** Metal encode on macOS; NM6.6 node targeting; Section 8.2 RAW pixel matrix NM6.9.
+
 ### NM6.6 — Resolve context and exact node-owned edits
 
-**Prerequisite:** NM6.P and NM6.5 complete. This phase connects selection and capabilities to the
+**Prerequisite:** NM6.P, NM6.5, and NM6.5B complete. This phase connects selection and capabilities to the
 already implemented typed readers/writers. It does not own the cross-layer parameter refactor.
 
 **Changes:** implement read-only EditorAdjustmentContext, selected-target resolution and one panel
@@ -1009,7 +1248,7 @@ planning document was created.
 
 ## 9. Delivery order and risk controls
 
-NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.P1–P6 → NM6.4P (NM6.P7) → NM6.5 → NM6.6 → NM6.7 → NM6.8 → NM6.9.
+NM6.1 → NM6.2 → NM6.3 → NM6.4 → NM6.P1–P6 → NM6.4P (NM6.P7) → NM6.5 → NM6.5B → NM6.6 → NM6.7 → NM6.8 → NM6.9.
 Split reviewable PRs by these engineering boundaries. NM6.1 red-test evidence and its immediate
 fix can share a PR. Do not expose node-aware controls until their exact-target serial write path works.
 
@@ -1033,7 +1272,8 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.4 | complete 2026-09-05 | uncommitted on `feature/runtime-dependency-result-versions` | mutation → CollectAndPropagate → BindValidResult(required, representation) → skip/encode → RecordUnpublished → PublishResults / MarkCompleted | 180/180 focused PASS; see NM6.4 completion record | Shared Grade/LLF executors NM6.5; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
 | NM6.4P | complete 2026-09-06 | implementation owned by NM6.P7 on `feature/nm6-native-parameter-access` | dependency validity → result retention; QualityBase Develop → downstream cache bypass | P7 filter 17/17 PASS; CUDA product cache 30/30 PASS | No valid-result LRU; no retained 4K slots |
 | NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot`; P7 result retention / QualityBase bypass | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
-| NM6.5 | planned | — | — | — | Shared three-backend execution after NM6.P |
+| NM6.5 | complete 2026-09-06 | uncommitted on `feature/shared-grade-local-tone-executors` | PlanExecutor → GradeExecutor → LocalToneExecutor → specialized GPU op → PersistCanonical source.0/result.0 → RecordUnpublished / PublishResults | 120/120 focused PASS; Metal GPU encode skipped on Windows; see NM6.5 completion record | Shared Point/Neighbor/DRT orchestration is NM6.5B; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
+| NM6.5B | complete 2026-09-07 | uncommitted on `feature/shared-grade-local-tone-executors` | compiled stages → GradeExecutor / NeighborExecutor / DrtPostExecutor → Ops::DispatchPointwise \| DispatchHorizontal \| DispatchVerticalApply \| DispatchDisplayTransform | 118/118 focused PASS plus 2 CUDA product DRT cases; Metal GPU encode skipped on Windows; see NM6.5B completion record | Node targeting NM6.6; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
 | NM6.6 | planned | — | — | — | Node context/target routing |
 | NM6.7 | planned | — | — | — | Approved header and panel UI |
 | NM6.8 | planned | — | — | — | Lifecycle/history integration |

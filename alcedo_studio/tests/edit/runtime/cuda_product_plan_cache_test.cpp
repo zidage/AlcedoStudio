@@ -21,6 +21,7 @@
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/local_tone_cache_ids.hpp"
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
@@ -209,10 +210,10 @@ TEST(GpuDagCudaDrtProduct, LegacyShadowControlExecutesLocalLaplacianWorkspacePat
 
   CudaProductRenderer renderer(document, MakeUnpacker());
   ASSERT_NE(RenderHost(renderer, MakeEncodedImage(42), DecodeRes::FULL, RenderRequest{}), nullptr);
-  const auto* reference = renderer.Device().Workspace().Values().Find(
-      document->PrimaryGrade()->Id(), PortId{"local_tone.source.0"});
+  const auto* reference = renderer.Device().Workspace().Images().Find(
+      LocalToneSourceId(document->PrimaryGrade()->Id()));
   ASSERT_NE(reference, nullptr);
-  EXPECT_GT(reference->Bytes(), sizeof(float));
+  EXPECT_GT(reference->Texture().Bytes(), sizeof(float));
 }
 
 }  // namespace

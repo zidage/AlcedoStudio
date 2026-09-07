@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
 #include "../../../../include/edit/runtime/dng_profile_gpu_math.h"
 
 struct CameraColorGpuParams {
@@ -45,8 +46,9 @@ kernel void camera_color_acescc(texture2d<float, access::read>  src [[texture(0)
   const float z =
       camera.camera_to_ap1[6] * source.x + camera.camera_to_ap1[7] * source.y +
       camera.camera_to_ap1[8] * source.z;
-  const auto corrected = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
-  dst.write(float4(AcesccEncode(corrected.r), AcesccEncode(corrected.g), AcesccEncode(corrected.b),
-                   source.w),
+  const auto corrected  = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
+  const auto compressed = AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
+  dst.write(float4(AcesccEncode(compressed.r), AcesccEncode(compressed.g),
+                   AcesccEncode(compressed.b), source.w),
             gid);
 }

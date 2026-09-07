@@ -10,7 +10,6 @@
 #include <cstdint>
 
 #include "cuda/prng.hpp"
-#include "cuda_acescc.cuh"
 #include "edit/operators/GPU_kernels/detail.cuh"
 #include "edit/operators/GPU_kernels/film_grain.cuh"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -44,23 +43,18 @@ __device__ __forceinline__ auto HalationNormalization(int radius, float sigma) -
   return 1.0f / fmaxf(sum, 1.0e-6f);
 }
 
-__device__ __forceinline__ auto DecodeAcescc(float4 pixel) -> float4 {
-  return make_float4(cuda_acescc::Decode(pixel.x), cuda_acescc::Decode(pixel.y),
-                     cuda_acescc::Decode(pixel.z), pixel.w);
-}
-
 __device__ __forceinline__ auto HalationBlurHorizontal(const float4* src, int x, int y, int width,
                                                        int                        height,
                                                        const GradeNeighborParams& params)
     -> float4 {
   const int   radius = HalationRadius(params.sigma_x);
   const float norm   = HalationNormalization(radius, params.sigma_x);
-  const auto  center = DecodeAcescc(ReadClamped(src, x, y, width, height));
+  const auto  center = ReadClamped(src, x, y, width, height);
   float4      blur   = make_float4(center.x * norm, center.y * norm, center.z * norm, center.w);
   for (int tap = 1; tap <= radius; ++tap) {
     const float weight = HalationWeight(tap, params.sigma_x) * norm;
-    const auto  left   = DecodeAcescc(ReadClamped(src, x - tap, y, width, height));
-    const auto  right  = DecodeAcescc(ReadClamped(src, x + tap, y, width, height));
+    const auto  left   = ReadClamped(src, x - tap, y, width, height);
+    const auto  right  = ReadClamped(src, x + tap, y, width, height);
     blur.x += (left.x + right.x) * weight;
     blur.y += (left.y + right.y) * weight;
     blur.z += (left.z + right.z) * weight;
@@ -239,14 +233,12 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
       blur.y += (top.y + bottom.y) * weight;
       blur.z += (top.z + bottom.z) * weight;
     }
-    const auto  linear  = DecodeAcescc(source);
-    const float spill_r = fmaxf(blur.x - linear.x, 0.0f);
-    const float spill_g = fmaxf(blur.y - linear.y, 0.0f);
-    const float spill_b = fmaxf(blur.z - linear.z, 0.0f);
-    dst[index]          = make_float4(
-        cuda_acescc::Encode(linear.x + spill_r * params.amount * params.redshift[0]),
-        cuda_acescc::Encode(linear.y + spill_g * params.amount * params.redshift[1]),
-        cuda_acescc::Encode(linear.z + spill_b * params.amount * params.redshift[2]), source.w);
+    const float spill_r = fmaxf(blur.x - source.x, 0.0f);
+    const float spill_g = fmaxf(blur.y - source.y, 0.0f);
+    const float spill_b = fmaxf(blur.z - source.z, 0.0f);
+    dst[index] = make_float4(source.x + spill_r * params.amount * params.redshift[0],
+                             source.y + spill_g * params.amount * params.redshift[1],
+                             source.z + spill_b * params.amount * params.redshift[2], source.w);
     return;
   }
 
