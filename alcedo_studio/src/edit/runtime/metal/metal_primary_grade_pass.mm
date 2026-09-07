@@ -19,6 +19,7 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/grade_executor.hpp"
+#include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_local_tone_pass.hpp"
@@ -141,10 +142,12 @@ auto LoadMetalGradeLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) ->
 
 
 struct MetalGradeOps {
-  using Device  = MetalRenderDevice;
-  using Backend = MetalBackend;
-  using Texture = MetalBackend::Texture2D;
-  using Scratch = Texture*;
+  using Device            = MetalRenderDevice;
+  using Backend           = MetalBackend;
+  using Texture           = MetalBackend::Texture2D;
+  using Scratch           = Texture*;
+  using HorizontalScratch = ResourceLease<MetalBackend>;
+  using LutBinding        = MetalLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalPrimaryGrade";
 
@@ -226,11 +229,22 @@ struct MetalGradeOps {
                           command_start, command_count, lut, width, height);
   }
 
-  static void DispatchNeighbor(MetalRenderDevice& device, const Texture& src, Texture& dst,
-                               const GradeScheduledOp&, const MetalLutBinding& lut,
-                               const NodeId& grade_id, std::uint32_t command_start,
-                               std::uint32_t width, std::uint32_t height) {
-    DispatchPointwise(device, src, dst, lut, grade_id, command_start, 1, width, height);
+  static auto AcquireHorizontalScratch(MetalRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(MetalRenderDevice&, const Texture&, Texture&, const NeighborWork&,
+                                 std::uint32_t, std::uint32_t) {}
+
+  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src, const Texture&,
+                                    Texture& dst, const LutBinding& lut, const NeighborWork& work,
+                                    std::uint32_t width, std::uint32_t height) {
+    DispatchPointwise(device, src, dst, lut, work.owner, work.command_index, 1, width, height);
   }
 
   static void DispatchMix(MetalRenderDevice& device, const Texture& source, const Texture& adjusted,

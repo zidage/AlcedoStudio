@@ -25,6 +25,7 @@
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/grade_executor.hpp"
+#include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -268,10 +269,12 @@ __global__ void FinalMixKernel(const float4* source, const float4* adjusted, flo
 
 
 struct CudaGradeOps {
-  using Device  = CudaRenderDevice;
-  using Backend = CudaBackend;
-  using Texture = CudaBackend::Texture2D;
-  using Scratch = ResourceLease<CudaBackend>*;
+  using Device             = CudaRenderDevice;
+  using Backend            = CudaBackend;
+  using Texture            = CudaBackend::Texture2D;
+  using Scratch            = ResourceLease<CudaBackend>*;
+  using HorizontalScratch  = ResourceLease<CudaBackend>;
+  using LutBinding         = CudaLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaPrimaryGrade";
 
@@ -347,27 +350,31 @@ struct CudaGradeOps {
         static_cast<const float4*>(lut.device_pointer), lut.edge_size);
   }
 
-  static void DispatchNeighbor(CudaRenderDevice& device, const Texture& src, Texture& dst,
-                               const GradeScheduledOp& op, const CudaLutBinding&, const NodeId&,
-                               std::uint32_t, std::uint32_t width, std::uint32_t height) {
-    auto blur_horizontal = AcquireCudaScratch(device.Workspace(), width, height);
-    const dim3 neighbor_block{16, 16};
-    const dim3 neighbor_grid{(width + neighbor_block.x - 1) / neighbor_block.x,
-                             (height + neighbor_block.y - 1) / neighbor_block.y};
-    cuda_neighbor_grade::BlurHorizontal<<<neighbor_grid, neighbor_block, 0,
-                                          device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(src.DevicePointer()),
-        static_cast<float4*>(blur_horizontal.Texture().DevicePointer()), static_cast<int>(width),
-        static_cast<int>(height), op.neighbor);
-    const auto vertical_radius = NeighborhoodVerticalRadius(op.neighbor);
-    const auto shared_bytes    = static_cast<std::size_t>(neighbor_block.x) *
-                              (neighbor_block.y + 2U * vertical_radius) * sizeof(float4);
-    cuda_neighbor_grade::ApplyVertical<<<neighbor_grid, neighbor_block, shared_bytes,
-                                         device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(src.DevicePointer()),
-        static_cast<const float4*>(blur_horizontal.Texture().DevicePointer()),
-        static_cast<float4*>(dst.DevicePointer()), static_cast<int>(width),
-        static_cast<int>(height), op.neighbor);
+  static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return AcquireCudaScratch(device.Workspace(), width, height);
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(CudaRenderDevice& device, const Texture& src, Texture& blur,
+                                 const NeighborWork& work, std::uint32_t width,
+                                 std::uint32_t height) {
+    cuda_neighbor_grade::LaunchBlurHorizontal(
+        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
+        static_cast<float4*>(blur.DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), work.params);
+  }
+
+  static void DispatchVerticalApply(CudaRenderDevice& device, const Texture& src, const Texture& blur,
+                                    Texture& dst, const LutBinding&, const NeighborWork& work,
+                                    std::uint32_t width, std::uint32_t height) {
+    cuda_neighbor_grade::LaunchApplyVertical(
+        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
+        static_cast<const float4*>(blur.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
+        static_cast<int>(width), static_cast<int>(height), work.params);
   }
 
   static void DispatchMix(CudaRenderDevice& device, const Texture& source, const Texture& adjusted,

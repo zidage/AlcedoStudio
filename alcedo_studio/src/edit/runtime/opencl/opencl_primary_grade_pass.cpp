@@ -22,10 +22,12 @@
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/grade_executor.hpp"
+#include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_local_tone_pass.hpp"
+#include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -127,44 +129,6 @@ void EnqueueGradePointwise(OpenClRenderDevice& device, const OpenClBackend::Text
   DispatchKernel(device, kernel, width, height);
 }
 
-void EnqueueGradeNeighbor(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
-                      OpenClBackend::Texture2D& blur_horizontal, OpenClBackend::Texture2D& dst,
-                      const GradeNeighborParams& params, std::uint32_t width,
-                      std::uint32_t height) {
-  auto blur_kernel =
-      OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kPrimaryGradeProgramName,
-                                              OpenCL::GpuDag::kPrimaryGradeNeighborBlurKernelName);
-  auto apply_kernel =
-      OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kPrimaryGradeProgramName,
-                                              OpenCL::GpuDag::kPrimaryGradeNeighborApplyKernelName);
-
-  const auto src_mem  = src.Native();
-  const auto blur_mem = blur_horizontal.Native();
-  const auto dst_mem  = dst.Native();
-  CheckOpenCl(clSetKernelArg(blur_kernel, 0, sizeof(cl_mem), &src_mem),
-              "OpenCL Primary Grade neighbor source argument");
-  CheckOpenCl(clSetKernelArg(blur_kernel, 1, sizeof(cl_mem), &blur_mem),
-              "OpenCL Primary Grade neighbor blur argument");
-  CheckOpenCl(clSetKernelArg(blur_kernel, 2, sizeof(params), &params),
-              "OpenCL Primary Grade neighbor parameters");
-  constexpr std::size_t kLocalEdge = 8;
-  DispatchKernel(device, blur_kernel, width, height, kLocalEdge);
-
-  CheckOpenCl(clSetKernelArg(apply_kernel, 0, sizeof(cl_mem), &src_mem),
-              "OpenCL Primary Grade neighbor apply source argument");
-  CheckOpenCl(clSetKernelArg(apply_kernel, 1, sizeof(cl_mem), &blur_mem),
-              "OpenCL Primary Grade neighbor apply blur argument");
-  CheckOpenCl(clSetKernelArg(apply_kernel, 2, sizeof(cl_mem), &dst_mem),
-              "OpenCL Primary Grade neighbor apply destination argument");
-  CheckOpenCl(clSetKernelArg(apply_kernel, 3, sizeof(params), &params),
-              "OpenCL Primary Grade neighbor apply parameters");
-  const auto radius      = NeighborhoodVerticalRadius(params);
-  const auto local_bytes = kLocalEdge * (kLocalEdge + 2U * radius) * 4U * sizeof(float);
-  CheckOpenCl(clSetKernelArg(apply_kernel, 4, local_bytes, nullptr),
-              "OpenCL Primary Grade neighbor local tile argument");
-  DispatchKernel(device, apply_kernel, width, height, kLocalEdge);
-}
-
 void EnqueueGradeMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
                  const OpenClBackend::Texture2D& adjusted, OpenClBackend::Texture2D& dst, float mix,
                  const OpenClBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
@@ -208,10 +172,12 @@ auto LoadOpenClGradeLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) 
 
 
 struct OpenClGradeOps {
-  using Device  = OpenClRenderDevice;
-  using Backend = OpenClBackend;
-  using Texture = OpenClBackend::Texture2D;
-  using Scratch = ResourceLease<OpenClBackend>*;
+  using Device            = OpenClRenderDevice;
+  using Backend           = OpenClBackend;
+  using Texture           = OpenClBackend::Texture2D;
+  using Scratch           = ResourceLease<OpenClBackend>*;
+  using HorizontalScratch = ResourceLease<OpenClBackend>;
+  using LutBinding        = OpenClLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClPrimaryGrade";
 
@@ -295,11 +261,26 @@ struct OpenClGradeOps {
                           command_start, command_count, lut, width, height);
   }
 
-  static void DispatchNeighbor(OpenClRenderDevice& device, const Texture& src, Texture& dst,
-                               const GradeScheduledOp& op, const OpenClLutBinding&, const NodeId&,
-                               std::uint32_t, std::uint32_t width, std::uint32_t height) {
-    auto blur_horizontal = AcquireOpenClScratch(device.Workspace(), width, height);
-    EnqueueGradeNeighbor(device, src, blur_horizontal.Texture(), dst, op.neighbor, width, height);
+  static auto AcquireHorizontalScratch(OpenClRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return AcquireOpenClScratch(device.Workspace(), width, height);
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(OpenClRenderDevice& device, const Texture& src, Texture& blur,
+                                 const NeighborWork& work, std::uint32_t width,
+                                 std::uint32_t height) {
+    EnqueueOpenClNeighborHorizontal(device, src, blur, work.params, width, height);
+  }
+
+  static void DispatchVerticalApply(OpenClRenderDevice& device, const Texture& src,
+                                    const Texture& blur, Texture& dst, const LutBinding&,
+                                    const NeighborWork& work, std::uint32_t width,
+                                    std::uint32_t height) {
+    EnqueueOpenClNeighborVertical(device, src, blur, dst, work.params, width, height);
   }
 
   static void DispatchMix(OpenClRenderDevice& device, const Texture& source, const Texture& adjusted,

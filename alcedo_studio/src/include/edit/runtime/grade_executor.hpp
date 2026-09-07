@@ -17,6 +17,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/grade_schedule.hpp"
+#include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 
 namespace alcedo {
@@ -42,10 +43,11 @@ struct GradeExecutionResult {
 };
 
 /**
- * @brief Common Color Grade fusion, ping-pong, mix, and LLF barrier order.
+ * @brief Common Color Grade Point, Neighborhood, mix, and Local Laplacian order.
  *
  * @tparam Ops Backend operations: allocation, fused-command upload, dispatch, and
- *         native error reporting. Shared code owns stage order and destination choice.
+ *         native error reporting. Shared code owns compiler-stage order, ping-pong,
+ *         Neighbor scratch lifetime, and destination choice.
  *
  * @pre Ops::Device exposes Workspace() with IsRendering, Parameters, and Images.
  *      Ops static methods are documented at each call site below.
@@ -154,17 +156,36 @@ class GradeExecutor {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": invalid grade image slot");
     };
 
+    auto SlotId = [&](GradeImageSlot slot) -> GraphValueId {
+      switch (slot) {
+        case GradeImageSlot::Input:
+          return compiled_grade.scene_input;
+        case GradeImageSlot::Output:
+          return compiled_grade.scene_output;
+        case GradeImageSlot::Ping:
+          return ping_id;
+        case GradeImageSlot::Pong:
+          return pong_id;
+      }
+      throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": invalid grade image slot");
+    };
+
     GradeImageSlot current = GradeImageSlot::Input;
     for (std::size_t index = 0; index < schedule.ops.size(); ++index) {
       const auto& op   = schedule.ops[index];
       const auto  dest = slots[index];
-      auto&       src  = Resolve(current);
-      auto&       dst  = Resolve(dest);
-      if (op.kind == GradeOpKind::Detail) {
-        Ops::DispatchNeighbor(device, src, dst, op, lut, grade->Id(), fused_starts[index], width,
-                              height);
+      if (op.kind == CompiledGradeStageKind::Neighborhood) {
+        NeighborWork work;
+        work.params        = op.neighbor;
+        work.owner         = grade->Id();
+        work.fused_offset  = op.fused_offsets.empty() ? 0 : op.fused_offsets.front();
+        work.command_index = fused_starts[index];
+        NeighborExecutor<Ops>::Execute(device, SlotId(current), SlotId(dest), lut, work, width,
+                                       height);
         ++result.detail_pass_count;
-      } else if (op.kind == GradeOpKind::LlfBarrier) {
+      } else if (op.kind == CompiledGradeStageKind::LocalLaplacian) {
+        auto&      src  = Resolve(current);
+        auto&      dst  = Resolve(dest);
         const auto tone =
             Ops::ExecuteLocalTone(device, src, dst, grade->Id(), schedule.shadows_slider,
                                   schedule.highlights_slider, plan.geometry);
@@ -174,6 +195,8 @@ class GradeExecutor {
         result.local_tone_transient_bytes             = tone.transient_bytes;
         ++result.local_tone_pass_count;
       } else {
+        auto& src = Resolve(current);
+        auto& dst = Resolve(dest);
         Ops::DispatchPointwise(device, src, dst, lut, grade->Id(), fused_starts[index],
                                static_cast<std::uint32_t>(op.fused_offsets.size()), width, height);
         ++result.pointwise_dispatch_count;

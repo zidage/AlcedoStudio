@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -14,10 +15,12 @@
 #include <alcedo/metal/Metal.hpp>
 
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/drt_post_executor.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -38,11 +41,6 @@ struct PrimaryGradeDispatchParams {
   std::uint32_t width           = 0;
   std::uint32_t pad[3]          = {};
 };
-
-auto AcquireRgba(MetalRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
-                 std::uint32_t height) -> ResourceLease<MetalBackend>& {
-  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
-}
 
 auto EnsureBuffer(MetalRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
     -> MetalBackend::Buffer& {
@@ -132,6 +130,119 @@ void DispatchDrt(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
+struct MetalDrtOps {
+  using Device            = MetalRenderDevice;
+  using Texture           = MetalBackend::Texture2D;
+  using HorizontalScratch = ResourceLease<MetalBackend>;
+  using LutBinding        = MetalLutBinding;
+
+  static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
+
+  static auto RefreshNeighborhoodAdjustment(MetalRenderDevice& device, IOperatorModel& model,
+                                            const ParameterSlotKey& key, AdjustmentBehavior behavior)
+      -> std::optional<PendingParameterPatch> {
+    return BindOrRefreshGradeRuntimeSlot(device.Workspace().Parameters(), key, model, behavior);
+  }
+
+  static void PrepareNeighborCommands(MetalRenderDevice& device, const NodeId& owner,
+                                      std::span<const std::uint32_t> command_offsets) {
+    if (command_offsets.empty()) {
+      return;
+    }
+    auto&              workspace = device.Workspace();
+    const GraphValueId command_id{owner, PortId{"runtime.order"}};
+    const auto         bytes = command_offsets.size() * sizeof(command_offsets[0]);
+    auto&              command_buffer =
+        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
+    workspace.Device().UploadBufferRange(
+        command_buffer, 0,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
+                                   bytes),
+        device.CommandContext());
+  }
+
+  static auto NeighborLut(MetalRenderDevice& device) -> LutBinding {
+    return device.Workspace().Device().DummyLut();
+  }
+
+  static auto AcquireHorizontalScratch(MetalRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(MetalRenderDevice&, const Texture&, Texture&, const NeighborWork&,
+                                 std::uint32_t, std::uint32_t) {}
+
+  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src, const Texture&,
+                                    Texture& dst, const LutBinding& lut, const NeighborWork& work,
+                                    std::uint32_t width, std::uint32_t height) {
+    auto& workspace = device.Workspace();
+    auto* commands  = workspace.Values().Find(GraphValueId{work.owner, PortId{"runtime.order"}});
+    if (commands == nullptr) {
+      throw std::runtime_error("ExecuteMetalDrt: missing fused command buffer");
+    }
+    DispatchPointwise(device, src, dst, workspace.Parameters().DeviceBuffer(), *commands,
+                      work.command_index, lut, width, height);
+  }
+
+  static auto AcquireOutput(MetalRenderDevice& device, const GraphValueId& id, std::uint32_t width,
+                            std::uint32_t height) -> Texture& {
+    return device.Workspace()
+        .AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f})
+        .Texture();
+  }
+
+  static auto SceneTexture(MetalRenderDevice& device, const GraphValueId& id) -> Texture& {
+    auto* image = device.Workspace().Images().Find(id);
+    if (image == nullptr || image->Empty()) {
+      throw std::runtime_error("ExecuteMetalDrt: scene image is missing");
+    }
+    return image->Texture();
+  }
+
+  static void CopyTexture(MetalRenderDevice& device, const GraphValueId& src,
+                          const GraphValueId& dst) {
+    device.Workspace().Device().CopyTexture2D(SceneTexture(device, src), SceneTexture(device, dst),
+                                              device.CommandContext());
+  }
+
+  static void BindDisplayParams(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+    auto&                  arena = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
+    auto                   display_pending = plan.output_color_override.has_value()
+                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
+                                                 : TakePendingDirtyFields(drt.Params());
+    const bool             needs_initialize = !arena.Contains(key);
+    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
+      auto drt_json = drt.Params().ToJson();
+      if (plan.output_color_override.has_value()) {
+        OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
+      }
+      const auto runtime = ResolveMetalDrtGpuParams(drt_json);
+      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+    }
+    if (display_pending) {
+      pending.push_back(std::move(*display_pending));
+    }
+  }
+
+  static void DispatchDisplayTransform(MetalRenderDevice& device, const Texture& scene,
+                                       Texture& display, const NodeId& drt_id, std::uint32_t,
+                                       std::uint32_t) {
+    auto&                  arena   = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
+    const auto             binding = arena.Binding(key);
+    DispatchDrt(device, scene, display, arena.DeviceBuffer(), binding.offset);
+  }
+
+  static void CheckAfterEncode(MetalRenderDevice&) {}
+};
+
 }  // namespace
 
 void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
@@ -150,126 +261,8 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 
 auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
                      PipelineDocument& document) -> MetalDrtResult {
-  auto& workspace = device.Workspace();
-  if (!workspace.IsRendering()) {
-    throw std::runtime_error("ExecuteMetalDrt: BeginRender has not been called");
-  }
-  auto* drt = document.Drt();
-  if (drt == nullptr) {
-    throw std::runtime_error("ExecuteMetalDrt: missing DRT endpoint");
-  }
-  auto* input = workspace.Images().Find(plan.SceneInputForDrt());
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteMetalDrt: missing DRT scene input");
-  }
-
-  const auto width  = input->Texture().Width();
-  const auto height = input->Texture().Height();
-  auto&      context = device.CommandContext();
-  auto&      arena   = workspace.Parameters();
-  std::vector<PendingParameterPatch> post_pending;
-  std::vector<std::uint32_t>         command_offsets;
-  command_offsets.reserve(plan.drt.post_adjustments.size());
-  for (const auto& compiled : plan.drt.post_adjustments) {
-    auto* model = drt->FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error("ExecuteMetalDrt: compiled DRT/Post adjustment no longer matches");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value() || !IsNeighborhoodBehavior(*behavior)) {
-      throw std::runtime_error(
-          "ExecuteMetalDrt: DRT/Post adjustment is not a neighborhood operation");
-    }
-    const ParameterSlotKey key{drt->Id(), compiled.instance_id};
-    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
-      post_pending.push_back(std::move(*change));
-    }
-    if (PackedGradeControlValue(arena, key) != 0.0f) {
-      command_offsets.push_back(arena.Binding(key).offset);
-    }
-  }
-  arena.UploadDirty(context);
-  for (auto& patch : post_pending) {
-    patch.Commit();
-  }
-
-  auto Resolve = [&](const GraphValueId& id) -> MetalBackend::Texture2D& {
-    auto* image = workspace.Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteMetalDrt: scene image is missing");
-    }
-    return image->Texture();
-  };
-
-  GraphValueId scene_id = plan.SceneInputForDrt();
-  if (command_offsets.empty()) {
-    AcquireRgba(workspace, plan.drt.scene_output, width, height);
-    input = workspace.Images().Find(plan.SceneInputForDrt());
-    if (input == nullptr) {
-      throw std::runtime_error("ExecuteMetalDrt: DRT scene input lost during scene copy");
-    }
-    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt.scene_output), context);
-    scene_id = plan.drt.scene_output;
-  } else {
-    const GraphValueId command_id{drt->Id(), PortId{"runtime.order"}};
-    const auto         bytes = command_offsets.size() * sizeof(command_offsets[0]);
-    auto&              command_buffer =
-        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
-    workspace.Device().UploadBufferRange(
-        command_buffer, 0,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
-                                   bytes),
-        context);
-    const auto         lut     = workspace.Device().DummyLut();
-    const GraphValueId ping_id{drt->Id(), PortId{"runtime.ping"}};
-    const GraphValueId pong_id{drt->Id(), PortId{"runtime.pong"}};
-    std::size_t        remaining = command_offsets.size();
-    for (std::size_t index = 0; index < command_offsets.size(); ++index) {
-      if (remaining == 0) {
-        throw std::runtime_error("ExecuteMetalDrt: neighborhood destination underflow");
-      }
-      --remaining;
-      GraphValueId dest_id = plan.drt.scene_output;
-      if (remaining != 0) {
-        dest_id = scene_id == ping_id ? pong_id : ping_id;
-      }
-      AcquireRgba(workspace, dest_id, width, height);
-      auto& src  = Resolve(scene_id);
-      auto& dest = Resolve(dest_id);
-      DispatchPointwise(device, src, dest, arena.DeviceBuffer(), command_buffer,
-                        static_cast<std::uint32_t>(index), lut, width, height);
-      scene_id = dest_id;
-    }
-  }
-
-  const ParameterSlotKey key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
-  auto                   pending = plan.output_color_override.has_value()
-                                       ? decltype(TakePendingDirtyFields(drt->Params())){}
-                                       : TakePendingDirtyFields(drt->Params());
-  const bool             needs_initialize = !arena.Contains(key);
-  if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
-    auto drt_json = drt->Params().ToJson();
-    if (plan.output_color_override.has_value()) {
-      OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
-    }
-    const auto runtime = ResolveMetalDrtGpuParams(drt_json);
-    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
-  }
-  arena.UploadDirty(context);
-  if (pending) {
-    pending->Commit();
-  }
-
-  AcquireRgba(workspace, plan.display_output, width, height);
-  auto* scene  = workspace.Images().Find(scene_id);
-  auto* output = workspace.Images().Find(plan.display_output);
-  if (scene == nullptr || output == nullptr) {
-    throw std::runtime_error("ExecuteMetalDrt: image cache changed during allocation");
-  }
-  const auto binding = arena.Binding(key);
-  DispatchDrt(device, scene->Texture(), output->Texture(), arena.DeviceBuffer(), binding.offset);
-  return {plan.display_output, plan.drt.scene_output,
-          static_cast<std::uint32_t>(command_offsets.size())};
+  const auto executed = DrtPostExecutor<MetalDrtOps>::Execute(device, plan, document);
+  return {executed.output, executed.scene_post, executed.post_neighborhood_count};
 }
 
 }  // namespace alcedo

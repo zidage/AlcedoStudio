@@ -10,9 +10,10 @@
 
 namespace alcedo::cuda_neighbor_grade {
 
-__global__ void BlurHorizontal(const float4* src, float4* dst, int width, int height,
-                               GradeNeighborParams params);
-__global__ void ApplyVertical(const float4* original, const float4* blur_horizontal, float4* dst,
-                              int width, int height, GradeNeighborParams params);
+void LaunchBlurHorizontal(cudaStream_t stream, const float4* src, float4* dst, int width,
+                          int height, const GradeNeighborParams& params);
+void LaunchApplyVertical(cudaStream_t stream, const float4* original,
+                         const float4* blur_horizontal, float4* dst, int width, int height,
+                         const GradeNeighborParams& params);
 
 }  // namespace alcedo::cuda_neighbor_grade

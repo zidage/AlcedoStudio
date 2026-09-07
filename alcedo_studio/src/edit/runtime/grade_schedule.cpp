@@ -4,6 +4,8 @@
 
 #include "edit/runtime/grade_schedule.hpp"
 
+#include <stdexcept>
+
 namespace alcedo {
 
 auto CompactGradeOps(std::vector<GradeScheduledOp> ops, bool local_tone_active)
@@ -11,14 +13,14 @@ auto CompactGradeOps(std::vector<GradeScheduledOp> ops, bool local_tone_active)
   std::vector<GradeScheduledOp> compacted;
   compacted.reserve(ops.size());
   for (auto& op : ops) {
-    if (op.kind == GradeOpKind::LlfBarrier && !local_tone_active) {
+    if (op.kind == CompiledGradeStageKind::LocalLaplacian && !local_tone_active) {
       continue;
     }
-    if (op.kind == GradeOpKind::Fused && op.fused_offsets.empty()) {
+    if (op.kind == CompiledGradeStageKind::Pointwise && op.fused_offsets.empty()) {
       continue;
     }
-    if (op.kind == GradeOpKind::Fused && !compacted.empty() &&
-        compacted.back().kind == GradeOpKind::Fused) {
+    if (op.kind == CompiledGradeStageKind::Pointwise && !compacted.empty() &&
+        compacted.back().kind == CompiledGradeStageKind::Pointwise) {
       compacted.back().fused_offsets.insert(compacted.back().fused_offsets.end(),
                                             op.fused_offsets.begin(), op.fused_offsets.end());
       continue;
@@ -32,8 +34,9 @@ auto CountGradeGpuWrites(const std::vector<GradeScheduledOp>& ops, bool skip_fin
     -> std::size_t {
   std::size_t count = skip_final_mix ? 0 : 1;
   for (const auto& op : ops) {
-    if (op.kind == GradeOpKind::Fused || op.kind == GradeOpKind::Detail ||
-        op.kind == GradeOpKind::LlfBarrier) {
+    if (op.kind == CompiledGradeStageKind::Pointwise ||
+        op.kind == CompiledGradeStageKind::Neighborhood ||
+        op.kind == CompiledGradeStageKind::LocalLaplacian) {
       ++count;
     }
   }
@@ -53,7 +56,8 @@ auto GradeWriteSlots(std::size_t write_count) -> std::vector<GradeImageSlot> {
   return slots;
 }
 
-auto MakeGradeSchedule(std::span<const GradeScheduleInput> inputs, float mix, bool has_mask)
+auto MakeGradeSchedule(std::span<const CompiledGradeStage> stages,
+                       std::span<const GradeScheduleInput> bound, float mix, bool has_mask)
     -> GradeSchedule {
   GradeSchedule schedule;
   if (mix == 0.0f) {
@@ -62,38 +66,51 @@ auto MakeGradeSchedule(std::span<const GradeScheduleInput> inputs, float mix, bo
   }
 
   std::vector<GradeScheduledOp> ops;
-  ops.reserve(inputs.size());
-  auto FlushFused = [&]() -> GradeScheduledOp& {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeScheduledOp{GradeOpKind::Fused, {}, {}});
+  ops.reserve(stages.size());
+  for (const auto& stage : stages) {
+    const auto begin = static_cast<std::size_t>(stage.begin);
+    const auto end   = begin + stage.count;
+    if (end > bound.size()) {
+      throw std::runtime_error("MakeGradeSchedule: compiled grade stage is out of range");
     }
-    return ops.back();
-  };
-
-  for (const auto& input : inputs) {
-    if (input.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      if (input.behavior == AdjustmentBehavior::Shadows) {
-        schedule.shadows_slider = input.llf_control;
-      } else if (input.behavior == AdjustmentBehavior::Highlights) {
-        schedule.highlights_slider = input.llf_control;
+    switch (stage.kind) {
+      case CompiledGradeStageKind::Pointwise: {
+        GradeScheduledOp op;
+        op.kind = CompiledGradeStageKind::Pointwise;
+        op.fused_offsets.reserve(stage.count);
+        for (std::size_t index = begin; index < end; ++index) {
+          op.fused_offsets.push_back(bound[index].fused_offset);
+        }
+        ops.push_back(std::move(op));
+        break;
       }
-      if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
-        ops.push_back(GradeScheduledOp{GradeOpKind::LlfBarrier, {}, {}});
+      case CompiledGradeStageKind::LocalLaplacian: {
+        for (std::size_t index = begin; index < end; ++index) {
+          if (bound[index].behavior == AdjustmentBehavior::Shadows) {
+            schedule.shadows_slider = bound[index].llf_control;
+          } else if (bound[index].behavior == AdjustmentBehavior::Highlights) {
+            schedule.highlights_slider = bound[index].llf_control;
+          }
+        }
+        if (ops.empty() || ops.back().kind != CompiledGradeStageKind::LocalLaplacian) {
+          ops.push_back(GradeScheduledOp{CompiledGradeStageKind::LocalLaplacian, {}, {}});
+        }
+        break;
       }
-      continue;
+      case CompiledGradeStageKind::Neighborhood: {
+        for (std::size_t index = begin; index < end; ++index) {
+          if (bound[index].neighbor.enabled == 0U) {
+            continue;
+          }
+          GradeScheduledOp detail;
+          detail.kind          = CompiledGradeStageKind::Neighborhood;
+          detail.fused_offsets = {bound[index].fused_offset};
+          detail.neighbor      = bound[index].neighbor;
+          ops.push_back(std::move(detail));
+        }
+        break;
+      }
     }
-    if (input.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
-        IsNeighborhoodBehavior(input.behavior)) {
-      if (input.neighbor.enabled != 0U) {
-        GradeScheduledOp detail;
-        detail.kind           = GradeOpKind::Detail;
-        detail.fused_offsets  = {input.fused_offset};
-        detail.neighbor       = input.neighbor;
-        ops.push_back(std::move(detail));
-      }
-      continue;
-    }
-    FlushFused().fused_offsets.push_back(input.fused_offset);
   }
 
   schedule.local_tone_active = local_tone_mapping::ShouldRun(

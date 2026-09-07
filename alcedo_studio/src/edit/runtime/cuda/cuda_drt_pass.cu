@@ -4,9 +4,9 @@
 
 #include <cuda_runtime.h>
 
-#include <algorithm>
-#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -15,15 +15,19 @@
 #include "cuda_acescc.cuh"
 #include "cuda_drt_runtime_state.cuh"
 #include "cuda_neighbor_grade.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/GPU_kernels/color_mgmt/disp_enc_funcs.cuh"
 #include "edit/operators/GPU_kernels/color_mgmt/odt_funcs.cuh"
 #include "edit/operators/GPU_kernels/color_mgmt/open_drt_funcs.cuh"
 #include "edit/operators/cst/odt_op.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/drt_post_executor.hpp"
+#include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -31,25 +35,6 @@ namespace alcedo {
 namespace {
 
 constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All);
-
-auto EnsureDisplayImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
-                        std::uint32_t height) -> ResourceLease<CudaBackend>& {
-  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
-}
-
-auto AcquireScratch(CudaRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
-    -> ResourceLease<CudaBackend> {
-  return workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
-}
-
-auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
-  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
-  if (behavior == AdjustmentBehavior::Halation) {
-    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
-                      kGradeNeighborMaxTapCount - 1U);
-  }
-  return params.radius;
-}
 
 void ResolveRuntime(CudaDrtRuntimeState& state, const nlohmann::json& drt_json) {
   ODT_Op descriptor(nlohmann::json{{"odt", drt_json}});
@@ -77,139 +62,123 @@ __global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pix
   output[index]        = make_float4(encoded.x, encoded.y, encoded.z, source.w);
 }
 
-}  // namespace
+struct CudaDrtOps {
+  using Device            = CudaRenderDevice;
+  using Texture           = CudaBackend::Texture2D;
+  using HorizontalScratch = ResourceLease<CudaBackend>;
+  using LutBinding        = CudaLutBinding;
 
-auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document)
-    -> CudaDrtResult {
-  auto& workspace = device.Workspace();
-  if (!workspace.IsRendering()) {
-    throw std::runtime_error("ExecuteCudaDrt: BeginRender has not been called");
-  }
-  auto* drt = document.Drt();
-  if (drt == nullptr) throw std::runtime_error("ExecuteCudaDrt: missing DRT endpoint");
-  auto* input = workspace.Images().Find(plan.SceneInputForDrt());
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteCudaDrt: missing DRT scene input");
-  }
+  static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
 
-  const auto input_width  = input->Texture().Width();
-  const auto input_height = input->Texture().Height();
-  auto&      context      = device.CommandContext();
-
-  std::vector<PendingParameterPatch> post_pending;
-  std::vector<GradeNeighborParams>   enabled;
-  enabled.reserve(plan.drt.post_adjustments.size());
-  for (const auto& compiled : plan.drt.post_adjustments) {
-    auto* model = drt->FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error("ExecuteCudaDrt: compiled DRT/Post adjustment no longer matches");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value() || !IsNeighborhoodBehavior(*behavior)) {
-      throw std::runtime_error("ExecuteCudaDrt: DRT/Post adjustment is not a neighborhood operation");
-    }
-    if (auto change = TakePendingDirtyFields(*model)) {
-      post_pending.push_back(std::move(*change));
-    }
-    auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
-    if (neighbor.enabled != 0U) {
-      enabled.push_back(neighbor);
-    }
-  }
-  for (auto& patch : post_pending) {
-    patch.Commit();
+  static auto RefreshNeighborhoodAdjustment(CudaRenderDevice&, IOperatorModel& model,
+                                            const ParameterSlotKey&, AdjustmentBehavior)
+      -> std::optional<PendingParameterPatch> {
+    return TakePendingDirtyFields(model);
   }
 
-  auto Resolve = [&](const GraphValueId& id) -> CudaBackend::Texture2D& {
-    auto* image = workspace.Images().Find(id);
+  static void PrepareNeighborCommands(CudaRenderDevice&, const NodeId&,
+                                      std::span<const std::uint32_t>) {}
+
+  static auto NeighborLut(CudaRenderDevice& device) -> LutBinding {
+    return device.Workspace().Device().DummyLut();
+  }
+
+  static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+  }
+
+  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
+    return scratch.Texture();
+  }
+
+  static void DispatchHorizontal(CudaRenderDevice& device, const Texture& src, Texture& blur,
+                                 const NeighborWork& work, std::uint32_t width,
+                                 std::uint32_t height) {
+    cuda_neighbor_grade::LaunchBlurHorizontal(
+        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
+        static_cast<float4*>(blur.DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), work.params);
+  }
+
+  static void DispatchVerticalApply(CudaRenderDevice& device, const Texture& src, const Texture& blur,
+                                    Texture& dst, const LutBinding&, const NeighborWork& work,
+                                    std::uint32_t width, std::uint32_t height) {
+    cuda_neighbor_grade::LaunchApplyVertical(
+        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
+        static_cast<const float4*>(blur.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
+        static_cast<int>(width), static_cast<int>(height), work.params);
+  }
+
+  static auto AcquireOutput(CudaRenderDevice& device, const GraphValueId& id, std::uint32_t width,
+                            std::uint32_t height) -> Texture& {
+    return device.Workspace()
+        .AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f})
+        .Texture();
+  }
+
+  static auto SceneTexture(CudaRenderDevice& device, const GraphValueId& id) -> Texture& {
+    auto* image = device.Workspace().Images().Find(id);
     if (image == nullptr || image->Empty()) {
       throw std::runtime_error("ExecuteCudaDrt: scene image is missing");
     }
     return image->Texture();
-  };
+  }
 
-  GraphValueId scene_id = plan.SceneInputForDrt();
-  if (enabled.empty()) {
-    EnsureDisplayImage(workspace, plan.drt.scene_output, input_width, input_height);
-    input = workspace.Images().Find(plan.SceneInputForDrt());
-    if (input == nullptr) {
-      throw std::runtime_error("ExecuteCudaDrt: DRT scene input lost during scene copy");
-    }
-    workspace.Device().CopyTexture2D(input->Texture(), Resolve(plan.drt.scene_output), context);
-    scene_id = plan.drt.scene_output;
-  } else {
-    const GraphValueId ping_id{drt->Id(), PortId{"runtime.ping"}};
-    const GraphValueId pong_id{drt->Id(), PortId{"runtime.pong"}};
-    std::size_t        remaining = enabled.size();
-    const dim3         neighbor_block{16, 16};
-    const dim3         neighbor_grid{(input_width + neighbor_block.x - 1) / neighbor_block.x,
-                                     (input_height + neighbor_block.y - 1) / neighbor_block.y};
-    for (const auto& neighbor : enabled) {
-      if (remaining == 0) {
-        throw std::runtime_error("ExecuteCudaDrt: neighborhood destination underflow");
+  static void CopyTexture(CudaRenderDevice& device, const GraphValueId& src,
+                          const GraphValueId& dst) {
+    device.Workspace().Device().CopyTexture2D(SceneTexture(device, src), SceneTexture(device, dst),
+                                              device.CommandContext());
+  }
+
+  static void BindDisplayParams(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+    auto&                  arena = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
+    auto                   display_pending = plan.output_color_override.has_value()
+                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
+                                                 : TakePendingDirtyFields(drt.Params());
+    const bool             needs_initialize = !arena.Contains(key);
+    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
+      auto drt_json = drt.Params().ToJson();
+      if (plan.output_color_override.has_value()) {
+        OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
       }
-      --remaining;
-      GraphValueId dest_id = plan.drt.scene_output;
-      if (remaining != 0) {
-        dest_id = scene_id == ping_id ? pong_id : ping_id;
-      }
-      EnsureDisplayImage(workspace, dest_id, input_width, input_height);
-      auto  blur_horizontal = AcquireScratch(workspace, input_width, input_height);
-      auto& src             = Resolve(scene_id);
-      auto& dest            = Resolve(dest_id);
-      cuda_neighbor_grade::BlurHorizontal<<<neighbor_grid, neighbor_block, 0, context.Stream()>>>(
-          static_cast<const float4*>(src.DevicePointer()),
-          static_cast<float4*>(blur_horizontal.Texture().DevicePointer()),
-          static_cast<int>(input_width), static_cast<int>(input_height), neighbor);
-      const auto vertical_radius = NeighborVerticalRadius(neighbor);
-      const auto shared_bytes    = static_cast<std::size_t>(neighbor_block.x) *
-                                (neighbor_block.y + 2U * vertical_radius) * sizeof(float4);
-      cuda_neighbor_grade::
-          ApplyVertical<<<neighbor_grid, neighbor_block, shared_bytes, context.Stream()>>>(
-              static_cast<const float4*>(src.DevicePointer()),
-              static_cast<const float4*>(blur_horizontal.Texture().DevicePointer()),
-              static_cast<float4*>(dest.DevicePointer()), static_cast<int>(input_width),
-              static_cast<int>(input_height), neighbor);
-      scene_id = dest_id;
+      ResolveRuntime(device.DrtRuntime(), drt_json);
+      const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
+      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
     }
-    cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: neighborhood kernel launch");
+    if (display_pending) {
+      pending.push_back(std::move(*display_pending));
+    }
   }
 
-  auto&                  arena = workspace.Parameters();
-  const ParameterSlotKey key{drt->Id(), AdjustmentInstanceId{"drt.output"}};
-  auto                   pending = plan.output_color_override.has_value()
-                                       ? decltype(TakePendingDirtyFields(drt->Params())){}
-                                       : TakePendingDirtyFields(drt->Params());
-  const bool             needs_initialize = !arena.Contains(key);
-  if (needs_initialize || pending.has_value() || plan.output_color_override.has_value()) {
-    auto drt_json = drt->Params().ToJson();
-    if (plan.output_color_override.has_value()) {
-      OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
-    }
-    ResolveRuntime(device.DrtRuntime(), drt_json);
-    const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
-    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+  static void DispatchDisplayTransform(CudaRenderDevice& device, const Texture& scene,
+                                       Texture& display, const NodeId& drt_id, std::uint32_t width,
+                                       std::uint32_t height) {
+    auto&                  arena   = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
+    const auto&            binding = arena.Binding(key);
+    const auto*            params  = reinterpret_cast<const GPU_TO_OUTPUT_Params*>(
+        static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
+    const std::uint32_t     pixels = width * height;
+    constexpr std::uint32_t block  = 256;
+    DrtKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(scene.DevicePointer()),
+        static_cast<float4*>(display.DevicePointer()), pixels, params);
   }
-  arena.UploadDirty(context);
-  if (pending) pending->Commit();
 
-  EnsureDisplayImage(workspace, plan.display_output, input_width, input_height);
-  auto* scene  = workspace.Images().Find(scene_id);
-  auto* output = workspace.Images().Find(plan.display_output);
-  if (scene == nullptr || output == nullptr) {
-    throw std::runtime_error("ExecuteCudaDrt: image cache changed during allocation");
+  static void CheckAfterEncode(CudaRenderDevice&) {
+    cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: kernel launch");
   }
-  const auto& binding = arena.Binding(key);
-  const auto* params  = reinterpret_cast<const GPU_TO_OUTPUT_Params*>(
-      static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
-  const std::uint32_t     pixels = input_width * input_height;
-  constexpr std::uint32_t block  = 256;
-  DrtKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
-      static_cast<const float4*>(scene->Texture().DevicePointer()),
-      static_cast<float4*>(output->Texture().DevicePointer()), pixels, params);
-  cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: kernel launch");
-  return {plan.display_output, plan.drt.scene_output,
-          static_cast<std::uint32_t>(enabled.size())};
+};
+
+}  // namespace
+
+auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document)
+    -> CudaDrtResult {
+  const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document);
+  return {executed.output, executed.scene_post, executed.post_neighborhood_count};
 }
 
 }  // namespace alcedo

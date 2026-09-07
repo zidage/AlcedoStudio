@@ -22,17 +22,14 @@
 
 namespace alcedo {
 
-/** @brief One compiled Color Grade GPU stage after fusion and LLF gating. */
-enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
-
 /**
- * @brief One fused pointwise group, neighborhood barrier, or LLF barrier.
+ * @brief One compiler stage after runtime Local Laplacian gating and disabled-neighborhood skip.
  *
- * @ref fused_offsets are ParameterArena byte offsets. Detail ops also carry the
- * packed neighborhood parameters used by separable GPU kernels.
+ * @ref fused_offsets are ParameterArena byte offsets. Neighborhood ops also carry the packed
+ * parameters used by separable GPU kernels.
  */
 struct GradeScheduledOp {
-  GradeOpKind                kind = GradeOpKind::Fused;
+  CompiledGradeStageKind     kind = CompiledGradeStageKind::Pointwise;
   std::vector<std::uint32_t> fused_offsets;
   GradeNeighborParams        neighbor{};
 };
@@ -41,18 +38,18 @@ struct GradeScheduledOp {
 enum class GradeImageSlot : std::uint8_t { Input, Ping, Pong, Output };
 
 /**
- * @brief Backend-neutral Grade stage list, mix policy, and LLF slider values.
+ * @brief Backend-neutral Grade stage list, mix policy, and Local Laplacian slider values.
  *
  * Owner: GradeExecutor for one compiled Color Grade encode. Not persisted.
  */
 struct GradeSchedule {
   std::vector<GradeScheduledOp> ops;
-  float                         shadows_slider     = 0.0f;
-  float                         highlights_slider  = 0.0f;
-  bool                          local_tone_active  = false;
-  bool                          alias_to_input     = false;
-  bool                          skip_final_mix     = false;
-  std::size_t                   gpu_write_count    = 0;
+  float                         shadows_slider    = 0.0f;
+  float                         highlights_slider = 0.0f;
+  bool                          local_tone_active = false;
+  bool                          alias_to_input    = false;
+  bool                          skip_final_mix    = false;
+  std::size_t                   gpu_write_count   = 0;
 };
 
 /**
@@ -62,12 +59,12 @@ struct GradeSchedule {
  * may differ; these fields may not.
  */
 struct GradeDecisionTrace {
-  bool                     alias_to_input    = false;
-  bool                     skip_final_mix    = false;
-  bool                     local_tone_active = false;
-  std::vector<GradeOpKind> op_kinds;
-  std::size_t              fused_command_count = 0;
-  std::size_t              gpu_write_count     = 0;
+  bool                               alias_to_input    = false;
+  bool                               skip_final_mix    = false;
+  bool                               local_tone_active = false;
+  std::vector<CompiledGradeStageKind> op_kinds;
+  std::size_t                        fused_command_count = 0;
+  std::size_t                        gpu_write_count     = 0;
 };
 
 /** @brief One compiled adjustment after its GPU slot has been bound. */
@@ -80,9 +77,9 @@ struct GradeScheduleInput {
 };
 
 /**
- * @brief Drop inactive LLF barriers, empty fused groups, and adjacent fused groups.
+ * @brief Drop inactive Local Laplacian stages, empty Point groups, and adjacent Point groups.
  *
- * @param local_tone_active When false, LLF barriers are removed before fusion.
+ * @param local_tone_active When false, Local Laplacian stages are removed before Point concatenation.
  */
 [[nodiscard]] auto CompactGradeOps(std::vector<GradeScheduledOp> ops, bool local_tone_active)
     -> std::vector<GradeScheduledOp>;
@@ -90,7 +87,7 @@ struct GradeScheduleInput {
 /**
  * @brief GPU writes for compacted ops plus the optional final mix.
  *
- * Each fused, detail, and LLF op writes once. Mix adds one write unless skipped.
+ * Each Point, Neighborhood, and Local Laplacian op writes once. Mix adds one write unless skipped.
  */
 [[nodiscard]] auto CountGradeGpuWrites(const std::vector<GradeScheduledOp>& ops, bool skip_final_mix)
     -> std::size_t;
@@ -103,19 +100,22 @@ struct GradeScheduleInput {
 [[nodiscard]] auto GradeWriteSlots(std::size_t write_count) -> std::vector<GradeImageSlot>;
 
 /**
- * @brief Build a Grade schedule from already-bound compiled adjustments.
+ * @brief Select launches from compiler-fixed stages and already-bound adjustments.
  *
+ * @param stages Compiler order. Runtime does not reclassify adjustments into stages.
+ * @param bound Bound slots indexed like the compiled adjustment list.
  * @param mix Enabled mix in [0, 1]. Mix 0 aliases the input without GPU work.
  * @param has_mask When true, mix cannot be skipped even at mix 1.
  */
-[[nodiscard]] auto MakeGradeSchedule(std::span<const GradeScheduleInput> inputs, float mix,
+[[nodiscard]] auto MakeGradeSchedule(std::span<const CompiledGradeStage> stages,
+                                     std::span<const GradeScheduleInput> bound, float mix,
                                      bool has_mask) -> GradeSchedule;
 
 /** @brief Record the comparable host decisions from @p schedule. */
 [[nodiscard]] auto MakeGradeDecisionTrace(const GradeSchedule& schedule) -> GradeDecisionTrace;
 
 /**
- * @brief Bind dirty Grade slots, then build the shared host schedule.
+ * @brief Bind dirty Grade slots, then select launches from compiled stages.
  *
  * @tparam Backend ParameterArena backend.
  * @param error_prefix Thrown message prefix when compiled adjustments do not match the graph.
@@ -123,17 +123,17 @@ struct GradeScheduleInput {
  */
 template <class Backend>
 [[nodiscard]] auto BindAndScheduleGrade(ParameterArena<Backend>& arena, ColorGradeNodeModel& grade,
-                                        const CompiledGradeNode&       compiled_grade,
-                                        const ResolvedRenderGeometry&  geometry,
+                                        const CompiledGradeNode&           compiled_grade,
+                                        const ResolvedRenderGeometry&      geometry,
                                         std::vector<PendingParameterPatch>& pending,
-                                        std::string_view               error_prefix)
+                                        std::string_view                   error_prefix)
     -> GradeSchedule {
   auto Fail = [error_prefix](std::string_view detail) {
     throw std::runtime_error(std::string{error_prefix} + std::string{detail});
   };
 
-  std::vector<GradeScheduleInput> inputs;
-  inputs.reserve(compiled_grade.adjustments.size());
+  std::vector<GradeScheduleInput> bound;
+  bound.reserve(compiled_grade.adjustments.size());
   for (const auto& compiled : compiled_grade.adjustments) {
     auto* model = grade.FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
@@ -168,11 +168,29 @@ template <class Backend>
     } else if (compiled.algorithm != CompiledAdjustmentAlgorithm::Pointwise) {
       Fail(": unsupported grade algorithm");
     }
-    inputs.push_back(std::move(input));
+    bound.push_back(std::move(input));
+  }
+
+  for (const auto& stage : compiled_grade.stages) {
+    const auto end = static_cast<std::size_t>(stage.begin) + stage.count;
+    if (end > bound.size()) {
+      Fail(": compiled grade stage is out of range");
+    }
+    for (std::uint32_t index = stage.begin; index < stage.begin + stage.count; ++index) {
+      const auto expected = bound[index].algorithm;
+      if ((stage.kind == CompiledGradeStageKind::Pointwise &&
+           expected != CompiledAdjustmentAlgorithm::Pointwise) ||
+          (stage.kind == CompiledGradeStageKind::LocalLaplacian &&
+           expected != CompiledAdjustmentAlgorithm::LocalLaplacian) ||
+          (stage.kind == CompiledGradeStageKind::Neighborhood &&
+           expected != CompiledAdjustmentAlgorithm::Neighborhood)) {
+        Fail(": compiled grade stage does not match adjustment algorithm");
+      }
+    }
   }
 
   const float mix = grade.Enabled() ? grade.Mix() : 0.0f;
-  return MakeGradeSchedule(inputs, mix, compiled_grade.mask_stack.has_value());
+  return MakeGradeSchedule(compiled_grade.stages, bound, mix, compiled_grade.mask_stack.has_value());
 }
 
 }  // namespace alcedo

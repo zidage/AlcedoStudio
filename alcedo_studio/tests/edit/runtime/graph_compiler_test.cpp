@@ -134,6 +134,9 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   EXPECT_TRUE(saw_lmt);
   ASSERT_EQ(grade_plan->stages.size(), 3U);
   EXPECT_EQ(grade_plan->stages.front().kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(grade_plan->stages[0].begin + grade_plan->stages[0].count, grade_plan->stages[1].begin);
+  EXPECT_EQ(grade_plan->stages[1].begin + grade_plan->stages[1].count, grade_plan->stages[2].begin);
+  EXPECT_EQ(grade_plan->stages[2].kind, CompiledGradeStageKind::Pointwise);
   bool saw_llf_stage = false;
   for (const auto& stage : grade_plan->stages) {
     EXPECT_NE(stage.kind, CompiledGradeStageKind::Neighborhood);
