@@ -406,9 +406,6 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     throw std::runtime_error("ExecuteOpenClDevelop: missing develop node");
   }
   auto pending = TakePendingDirtyFields(develop->Params());
-  if (workspace.Textures().ByteBudget() == 0) {
-    workspace.Textures().SetByteBudget(OpenClBackend::DefaultTextureBudgetBytes());
-  }
   const auto         flags       = develop->Params().Params();
   const bool         hlr         = flags.highlights_reconstruct;
   const auto         out_w       = plan.source.develop_output_extent.width;

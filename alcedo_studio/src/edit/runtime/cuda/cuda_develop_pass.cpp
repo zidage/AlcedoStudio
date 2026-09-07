@@ -64,10 +64,6 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
 
   auto pending = TakePendingDirtyFields(develop->Params());
 
-  if (workspace.Textures().ByteBudget() == 0) {
-    workspace.Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
-  }
-
   auto&              ctx           = device.CommandContext();
   auto               stream        = WrapStream(ctx.Stream());
   const auto         flags         = develop->Params().Params();

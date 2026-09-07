@@ -92,8 +92,6 @@ class OpenClBackend {
   static constexpr std::uint32_t kCapabilityVersion = kOpenClDagBackendCapabilityVersion;
   static constexpr const char*   kName              = "OpenCL";
 
-  static auto DefaultTextureBudgetBytes() -> std::size_t;
-
   class Buffer {
    public:
     Buffer() = default;

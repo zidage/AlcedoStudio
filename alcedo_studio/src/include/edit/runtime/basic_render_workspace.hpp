@@ -142,16 +142,10 @@ class BasicRenderWorkspace {
                                transients_.capacity_bytes());
   }
 
-  /**
-   * @brief Allocate an unpublished write texture for @p id. See GraphImageCache.
-   *
-   * Retention uses this workspace's invalidation state and result persistence.
-   */
+  /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
   auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
       -> ResourceLease<Backend>& {
-    auto&      lease = images_.AcquireTextureForWrite(textures_, backend_, id, request,
-                                                      invalidation_, persistence_scope_,
-                                                      persist_sensor_);
+    auto&      lease = images_.AcquireTextureForWrite(textures_, id, request);
     const auto bytes = static_cast<std::size_t>(request.width) * request.height *
                        TextureFormatBytesPerPixel(request.format);
     if (ShouldTraceGpuPoolAlloc(bytes)) {
@@ -171,10 +165,10 @@ class BasicRenderWorkspace {
             ? device_memory.total_bytes - device_memory.free_bytes
             : 0;
     std::fprintf(stderr,
-                 "[GPU_POOL] %s textures=%.1f/%.1f MiB n=%zu  transient=%.1f/%.1f MiB  "
+                 "[GPU_POOL] %s textures=%.1f MiB n=%zu  transient=%.1f/%.1f MiB  "
                  "images=pub%zu/write%zu  values=%.1f n=%zu  masks=%.1f n=%zu",
                  reason == nullptr ? "" : reason, GpuPoolMiB(textures_.UsedBytes()),
-                 GpuPoolMiB(textures_.ByteBudget()), textures_.EntryCount(),
+                 textures_.EntryCount(),
                  GpuPoolMiB(transients_.used_bytes()), GpuPoolMiB(transients_.capacity_bytes()),
                  images_.PublishedCount(), images_.UnpublishedCount(),
                  GpuPoolMiB(values_.UsedBytes()), values_.Size(),

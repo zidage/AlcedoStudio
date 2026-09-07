@@ -15,7 +15,6 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/result_representation.hpp"
-#include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
@@ -31,10 +30,8 @@ namespace alcedo {
  * ResourceId is allocation reuse, not a content hit. Not thread-safe. One
  * in-flight submission.
  *
- * Published results whose required revision still matches are retained. Memory
- * pressure reclaims invalid unleased results and unowned free textures first.
- * It does not LRU-evict a valid current result. The pool LRU byte budget is a
- * target for unused textures, not a hard cap on live in-flight writes.
+ * Published results whose required revision still matches are retained. Idle
+ * pool textures are dropped by TexturePool::ReleaseUnleased on session reset.
  *
  * @tparam Backend Texture factory used by TexturePool.
  */
@@ -88,20 +85,14 @@ class GraphImageCache {
   /**
    * @brief Allocate or reuse a texture for an unpublished write of @p id.
    *
-   * Reuses an in-flight write slot of the same size. Reuses a matching free
-   * allocation before reclaiming invalid published results. Does not steal a
-   * valid published result of another id. Replacing a persisted id may reclaim
-   * that id after GPU readers finish. A live write may exceed the pool LRU
-   * byte budget while valid published results stay leased. Throws when the
-   * backend cannot create the texture.
+   * Reuses an in-flight write slot of the same size, otherwise a matching free
+   * pool entry, otherwise a new allocation. Does not steal a published result.
+   * Throws when the backend cannot create the texture.
    *
-   * @pre @p pool and @p backend outlive this cache.
+   * @pre @p pool outlives this cache.
    */
-  auto AcquireTextureForWrite(TexturePool<Backend>& pool, Backend& backend, const GraphValueId& id,
-                              const TextureRequest& request,
-                              const RuntimeInvalidationState& invalidation,
-                              ResultPersistenceScope persistence, const GraphValueId& sensor_linear)
-      -> ResourceLease<Backend>& {
+  auto AcquireTextureForWrite(TexturePool<Backend>& pool, const GraphValueId& id,
+                              const TextureRequest& request) -> ResourceLease<Backend>& {
     if (request.width == 0 || request.height == 0) {
       throw std::runtime_error("GraphImageCache::AcquireTextureForWrite: invalid size");
     }
@@ -117,19 +108,6 @@ class GraphImageCache {
         }
       }
       write_slots_.erase(id);
-    }
-
-    const auto needed_bytes = TextureBytes(request);
-    if (auto* reused = TryReuseMatchingFree(pool, id, request)) {
-      return *reused;
-    }
-    ReclaimInvalidResults(pool, backend, request, id, invalidation, persistence, sensor_linear);
-    if (auto* reused = TryReuseMatchingFree(pool, id, request)) {
-      return *reused;
-    }
-    pool.EvictUntil(needed_bytes);
-    if (auto* reused = TryReuseMatchingFree(pool, id, request)) {
-      return *reused;
     }
 
     WriteSlot slot;
@@ -403,11 +381,6 @@ class GraphImageCache {
     return entry.last_writer != 0 && entry.last_writer > completed_submission;
   }
 
-  static auto TextureBytes(const TextureRequest& request) -> std::size_t {
-    return static_cast<std::size_t>(request.width) * request.height *
-           TextureFormatBytesPerPixel(request.format);
-  }
-
   auto FindWrite(const GraphValueId& id) -> WriteSlot* {
     const auto it = write_slots_.find(id);
     return it == write_slots_.end() ? nullptr : &it->second;
@@ -428,116 +401,15 @@ class GraphImageCache {
     return it == published_.end() ? nullptr : &it->second;
   }
 
-  auto TryReuseMatchingFree(TexturePool<Backend>& pool, const GraphValueId& id,
-                            const TextureRequest& request) -> ResourceLease<Backend>* {
-    if (!pool.HasReusable(request)) {
-      return nullptr;
-    }
-    WriteSlot slot;
-    slot.texture               = pool.Acquire(request);
-    slot.representation.extent = ImageExtent{request.width, request.height};
-    slot.representation.format = request.format;
-    auto [it, inserted]        = write_slots_.emplace(id, std::move(slot));
-    (void)inserted;
-    return &it->second.texture;
-  }
-
-  [[nodiscard]] auto HandleOwnerCount(std::uint64_t handle) const -> std::uint32_t {
-    std::uint32_t count = 0;
-    for (const auto& [id, entry] : published_) {
-      (void)id;
-      if (!entry.texture.Empty() && entry.texture.Handle() == handle) {
-        ++count;
-      }
-    }
-    for (const auto& [id, slot] : write_slots_) {
-      (void)id;
-      if (!slot.texture.Empty() && slot.texture.Handle() == handle) {
-        ++count;
-      }
-    }
-    return count;
-  }
-
-  [[nodiscard]] auto MayReclaim(const GraphValueId& id, const PublishedResult& entry,
-                                const GraphValueId& allocating_id, Backend& backend,
-                                const TexturePool<Backend>& pool,
-                                const RuntimeInvalidationState& invalidation,
-                                ResultPersistenceScope persistence,
-                                const GraphValueId& sensor_linear) const -> bool {
-    if (entry.texture.Empty()) {
-      return false;
-    }
-    if (backend.IsResourceBusy(entry.last_writer)) {
-      return false;
-    }
-    const auto handle = entry.texture.Handle();
-    if (pool.LeaseCount(handle) > HandleOwnerCount(handle)) {
-      return false;
-    }
-    const auto required = invalidation.RequiredRevision(id);
-    if (entry.revision == 0 || required != entry.revision) {
-      return true;
-    }
-    return allocating_id == id && PersistsGraphValue(persistence, id, sensor_linear);
-  }
-
-  void ReclaimInvalidResults(TexturePool<Backend>& pool, Backend& backend,
-                             const TextureRequest& request, const GraphValueId& allocating_id,
-                             const RuntimeInvalidationState& invalidation,
-                             ResultPersistenceScope persistence,
-                             const GraphValueId& sensor_linear) {
-    if (pool.ByteBudget() == 0) {
-      return;
-    }
-    const auto needed_bytes = TextureBytes(request);
-    auto reclaim_matching   = [&](bool matching_size_only) -> bool {
-      GraphValueId victim_id;
-      bool         found = false;
-      for (auto& [id, entry] : published_) {
-        if (!MayReclaim(id, entry, allocating_id, backend, pool, invalidation, persistence,
-                        sensor_linear)) {
-          continue;
-        }
-        const bool matches = entry.representation.extent.width == request.width &&
-                             entry.representation.extent.height == request.height &&
-                             entry.representation.format == request.format;
-        if (matching_size_only && !matches) {
-          continue;
-        }
-        victim_id = id;
-        found     = true;
-        break;
-      }
-      if (!found) {
-        return false;
-      }
-      published_.erase(victim_id);
-      ++invalid_reclaims_;
-      return true;
-    };
-
-    while (!pool.HasReusable(request) && pool.UsedBytes() + needed_bytes > pool.ByteBudget()) {
-      if (reclaim_matching(true)) {
-        continue;
-      }
-      if (!reclaim_matching(false)) {
-        break;
-      }
-      pool.EvictUntil(needed_bytes);
-    }
-  }
-
   std::map<GraphValueId, WriteSlot>       write_slots_;
   std::map<GraphValueId, PublishedResult> published_;
-  std::uint64_t                           lookups_                = 0;
-  std::uint64_t                           content_hits_           = 0;
-  std::uint64_t                           missing_misses_         = 0;
-  std::uint64_t                           revision_misses_        = 0;
-  std::uint64_t                           representation_misses_  = 0;
-  std::uint64_t                           writer_busy_misses_     = 0;
-  std::uint64_t                           persistent_publishes_   = 0;
-  std::uint64_t                           invalid_reclaims_       = 0;
+  std::uint64_t                           lookups_               = 0;
+  std::uint64_t                           content_hits_          = 0;
+  std::uint64_t                           missing_misses_        = 0;
+  std::uint64_t                           revision_misses_       = 0;
+  std::uint64_t                           representation_misses_ = 0;
+  std::uint64_t                           writer_busy_misses_    = 0;
+  std::uint64_t                           persistent_publishes_  = 0;
 };
 
 }  // namespace alcedo

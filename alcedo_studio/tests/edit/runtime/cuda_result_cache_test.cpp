@@ -418,10 +418,6 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_TRUE(resources.session_value_ids.empty());
 }
 
-TEST_F(CudaResultCacheProductFixture, TexturePoolBudgetNoLongerHardCodedTo64MiBOnProductPath) {
-  EXPECT_GT(renderer_->Device().Workspace().Textures().ByteBudget(), 64ull << 20);
-}
-
 TEST_F(CudaResultCacheProductFixture,
        ViewportChangeAfterSessionReleaseStillReusesSensorLinearOnTheLivePipeline) {
   ASSERT_TRUE(OutputIsFinite(Render()));
@@ -750,14 +746,12 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedRev
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       DownstreamEditsPreserveValidDevelopAndInteractiveResizeNearBudget) {
+       DownstreamEditsPreserveValidDevelopAndInteractiveResize) {
   ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
   auto& images = renderer_->Device().Workspace().Images();
   const auto sensor_handle = images.Find(SensorId())->Handle();
   const auto sensor_rev    = images.PublishedRevision(SensorId());
   const auto geometry_rev  = images.PublishedRevision(GeometryId());
-  const auto used          = renderer_->Device().Workspace().Textures().UsedBytes();
-  renderer_->Device().Workspace().Textures().SetByteBudget(used + 32U * 32U * 16U);
   renderer_->ResetStats();
   auto* exposure = Exposure();
   ASSERT_NE(exposure, nullptr);

@@ -123,9 +123,7 @@ struct HostRetentionHarness {
 
   void Publish(const GraphValueId& id, const TextureRequest& request) {
     const auto required = invalidation.RequiredRevision(id);
-    auto&      lease    = cache.AcquireTextureForWrite(
-        pool, backend, id, request, invalidation, ResultPersistenceScope::AllCurrentResults,
-        Sensor());
+    auto&      lease    = cache.AcquireTextureForWrite(pool, id, request);
     (void)lease;
     cache.RecordUnpublished(
         id, required, MakeExtentRepresentation({request.width, request.height}, request.format), 1);
@@ -136,8 +134,6 @@ struct HostRetentionHarness {
 TEST(GraphImageCacheRetention, FreeMatchingAllocationPreservesAllValidPipelineResults) {
   HostRetentionHarness     harness;
   constexpr TextureRequest kRgba{8, 8, TextureFormat::Rgba32f};
-  const auto               bytes = static_cast<std::size_t>(8) * 8 * 16;
-  harness.pool.SetByteBudget(bytes * 3);
   harness.Publish(harness.Sensor(), kRgba);
   harness.Publish(harness.Geometry(), kRgba);
   harness.Publish(harness.Grade(), kRgba);
@@ -151,9 +147,7 @@ TEST(GraphImageCacheRetention, FreeMatchingAllocationPreservesAllValidPipelineRe
   const auto         entries_before = harness.pool.EntryCount();
 
   const GraphValueId display        = harness.plan.display_output;
-  (void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, display, kRgba, harness.invalidation,
-      ResultPersistenceScope::AllCurrentResults, harness.Sensor());
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, display, kRgba);
   EXPECT_EQ(harness.cache.PublishedCount(), 3U);
   EXPECT_EQ(harness.cache.Find(harness.Sensor())->Handle(), develop_handle);
   EXPECT_EQ(harness.cache.PublishedRevision(harness.Sensor()), develop_rev);
@@ -162,13 +156,10 @@ TEST(GraphImageCacheRetention, FreeMatchingAllocationPreservesAllValidPipelineRe
       harness.Sensor(), develop_rev, MakeExtentRepresentation({8, 8}, TextureFormat::Rgba32f), 1));
 }
 
-TEST(GraphImageCacheRetention, InvalidMixedSizeResultsReleaseOnlyRequiredUnleasedAllocations) {
+TEST(GraphImageCacheRetention, InvalidDownstreamDoesNotDropValidDevelopOrSharedGeometry) {
   HostRetentionHarness harness;
   const TextureRequest large{16, 16, TextureFormat::Rgba32f};
   const TextureRequest small{8, 8, TextureFormat::Rgba32f};
-  const auto           large_bytes = static_cast<std::size_t>(16) * 16 * 16;
-  const auto           small_bytes = static_cast<std::size_t>(8) * 8 * 16;
-  harness.pool.SetByteBudget(large_bytes + small_bytes * 2);
   harness.Publish(harness.Sensor(), large);
   harness.Publish(harness.Geometry(), small);
   harness.Publish(harness.Grade(), small);
@@ -196,67 +187,51 @@ TEST(GraphImageCacheRetention, InvalidMixedSizeResultsReleaseOnlyRequiredUnlease
       harness.Grade(), harness.cache.PublishedRevision(harness.Grade())));
 
   const GraphValueId display = harness.plan.display_output;
-  (void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, display, small, harness.invalidation,
-      ResultPersistenceScope::AllCurrentResults, harness.Sensor());
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, display, small);
   ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
   EXPECT_EQ(harness.cache.Find(harness.Sensor())->Handle(), develop_handle);
   ASSERT_NE(harness.cache.Find(harness.Geometry()), nullptr);
   EXPECT_EQ(harness.cache.Find(harness.Geometry())->Handle(), geometry_handle);
-  EXPECT_EQ(harness.cache.Find(harness.Grade()), nullptr);
+  ASSERT_NE(harness.cache.Find(harness.Grade()), nullptr);
 }
 
-TEST(GraphImageCacheRetention, HeldUnpublishedWriteAllowsNextStagePastLruBudget) {
+TEST(GraphImageCacheRetention, HeldUnpublishedWriteAllowsNextStage) {
   HostRetentionHarness harness;
   const TextureRequest stage{16, 16, TextureFormat::Rgba32f};
-  const auto           bytes = static_cast<std::size_t>(16) * 16 * 16;
-  harness.pool.SetByteBudget(bytes);
-  (void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, harness.Sensor(), stage, harness.invalidation,
-      ResultPersistenceScope::AllCurrentResults, harness.Sensor());
-  ASSERT_EQ(harness.pool.UsedBytes(), bytes);
-  ASSERT_GT(harness.pool.UsedBytes() + bytes, harness.pool.ByteBudget());
-  ASSERT_NO_THROW((void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, harness.Geometry(), stage, harness.invalidation,
-      ResultPersistenceScope::AllCurrentResults, harness.Sensor()));
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Sensor(), stage);
+  ASSERT_NO_THROW(
+      (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Geometry(), stage));
   ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
   ASSERT_NE(harness.cache.Find(harness.Geometry()), nullptr);
   EXPECT_EQ(harness.cache.Find(harness.Sensor())->Texture().Width(), 16U);
   EXPECT_EQ(harness.cache.Find(harness.Geometry())->Texture().Width(), 16U);
-  EXPECT_GT(harness.pool.UsedBytes(), harness.pool.ByteBudget());
   EXPECT_EQ(harness.cache.PublishedCount(), 0U);
 }
 
-TEST(GraphImageCacheRetention, LiveWriteExceedsLruBudgetWithoutEvictingValidDevelop) {
+TEST(GraphImageCacheRetention, LiveWriteDoesNotEvictValidDevelop) {
   HostRetentionHarness harness;
   const TextureRequest develop_req{16, 16, TextureFormat::Rgba32f};
   const TextureRequest other_req{8, 8, TextureFormat::Rgba32f};
-  harness.pool.SetByteBudget(static_cast<std::size_t>(16) * 16 * 16);
   harness.Publish(harness.Sensor(), develop_req);
   const auto develop_handle = harness.cache.Find(harness.Sensor())->Handle();
   const auto develop_rev    = harness.cache.PublishedRevision(harness.Sensor());
-  ASSERT_NO_THROW((void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, harness.Grade(), other_req, harness.invalidation,
-      ResultPersistenceScope::AllCurrentResults, harness.Sensor()));
+  ASSERT_NO_THROW(
+      (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Grade(), other_req));
   EXPECT_EQ(harness.cache.PublishedCount(), 1U);
   EXPECT_EQ(harness.cache.Find(harness.Sensor())->Handle(), develop_handle);
   EXPECT_EQ(harness.cache.PublishedRevision(harness.Sensor()), develop_rev);
-  EXPECT_GT(harness.pool.UsedBytes(), harness.pool.ByteBudget());
 }
 
 TEST(GraphImageCacheRetention, RequiredLiveResourcesReportAllocationFailureWithoutEvictingDevelop) {
   HostRetentionHarness harness;
   const TextureRequest develop_req{16, 16, TextureFormat::Rgba32f};
   const TextureRequest other_req{8, 8, TextureFormat::Rgba32f};
-  harness.pool.SetByteBudget(static_cast<std::size_t>(16) * 16 * 16 * 8);
   harness.Publish(harness.Sensor(), develop_req);
   const auto develop_handle        = harness.cache.Find(harness.Sensor())->Handle();
   const auto develop_rev           = harness.cache.PublishedRevision(harness.Sensor());
   harness.backend.fail_next_create = true;
   try {
-    (void)harness.cache.AcquireTextureForWrite(
-        harness.pool, harness.backend, harness.Grade(), other_req, harness.invalidation,
-        ResultPersistenceScope::AllCurrentResults, harness.Sensor());
+    (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Grade(), other_req);
     FAIL() << "expected injected allocation failure";
   } catch (const std::runtime_error& error) {
     EXPECT_STREQ(error.what(), "HostTextureBackend: injected allocation failure");
@@ -270,14 +245,11 @@ TEST(GraphImageCacheRetention, QualityBaseWriteDoesNotReplaceValidInteractiveGeo
   HostRetentionHarness harness;
   const TextureRequest interactive{8, 8, TextureFormat::Rgba32f};
   const TextureRequest quality{16, 16, TextureFormat::Rgba32f};
-  harness.pool.SetByteBudget(static_cast<std::size_t>(16) * 16 * 16 * 4);
   harness.Publish(harness.Sensor(), interactive);
   harness.Publish(harness.Geometry(), interactive);
   const auto geometry_handle = harness.cache.Find(harness.Geometry())->Handle();
   const auto geometry_rev    = harness.cache.PublishedRevision(harness.Geometry());
-  (void)harness.cache.AcquireTextureForWrite(
-      harness.pool, harness.backend, harness.Geometry(), quality, harness.invalidation,
-      ResultPersistenceScope::SensorDevelopOnly, harness.Sensor());
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Geometry(), quality);
   EXPECT_EQ(harness.cache.PublishedRevision(harness.Geometry()), geometry_rev);
   harness.cache.RecordUnpublished(harness.Geometry(),
                                   harness.invalidation.RequiredRevision(harness.Geometry()),

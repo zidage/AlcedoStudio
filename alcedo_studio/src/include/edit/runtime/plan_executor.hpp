@@ -70,9 +70,6 @@ class PlanExecutor {
                     }) {
         workspace.Device().WarmUpPlan(plan);
       }
-      if (workspace.Textures().ByteBudget() == 0) {
-        workspace.Textures().SetByteBudget(Backend::DefaultTextureBudgetBytes());
-      }
       device.BeginRender();
       workspace.SetResultPersistence(persistence, plan.sensor_linear_output);
       workspace.AlignParameterLayout(plan.static_key.topology_hash);

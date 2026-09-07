@@ -217,7 +217,7 @@ void MetalBackend::FailNextUpload() { fail_next_upload_ = true; }
 auto MetalBackend::NativeDevice() const -> void* { return nullptr; }
 auto MetalBackend::NativeQueue() const -> void* { return nullptr; }
 auto MetalBackend::WorkingSetBudgetBytes() const -> std::size_t {
-  return DefaultTextureBudgetBytes();
+  return 256ull << 20;
 }
 auto MetalBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot { return {}; }
 auto MetalBackend::PipelineCreateCount() const -> std::uint64_t { return 0; }

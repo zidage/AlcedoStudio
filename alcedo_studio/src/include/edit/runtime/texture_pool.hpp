@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -21,7 +20,7 @@ template <class Backend>
 class TexturePool;
 
 /**
- * @brief RAII pin on a TexturePool entry. Prevents LRU eviction while held.
+ * @brief RAII pin on a TexturePool entry. The entry stays alive until released.
  *
  * The pool and its backend must outlive this object. Move-only.
  */
@@ -72,8 +71,9 @@ struct TextureRequest {
 };
 
 /**
- * @brief Byte-budget LRU of GPU textures. Evicts only unleased, non-busy entries.
+ * @brief Reusable GPU textures. Matching free entries are recycled; otherwise allocate.
  *
+ * Idle unleased textures are destroyed by @ref ReleaseUnleased after GPU last-use.
  * Not thread-safe. @p Backend must provide Texture2D, CreateTexture2D, and
  * IsResourceBusy(submitted_on_submission_id).
  */
@@ -85,8 +85,6 @@ class TexturePool {
   TexturePool(const TexturePool&)            = delete;
   auto operator=(const TexturePool&) -> TexturePool& = delete;
 
-  void SetByteBudget(std::size_t bytes) { budget_bytes_ = bytes; }
-  [[nodiscard]] auto ByteBudget() const -> std::size_t { return budget_bytes_; }
   [[nodiscard]] auto UsedBytes() const -> std::size_t { return used_bytes_; }
 
   void BeginFrame() {
@@ -99,19 +97,15 @@ class TexturePool {
 
   /**
    * @brief Reuse a matching free texture or allocate one. Increments the lease count.
-   *
-   * May exceed ByteBudget when remaining textures are leased. LRU eviction only
-   * considers unleased, idle entries.
    */
   [[nodiscard]] auto Acquire(const TextureRequest& request) -> ResourceLease<Backend> {
     if (request.width == 0 || request.height == 0) {
       throw std::runtime_error("TexturePool::Acquire: invalid size");
     }
-    const auto bytes = TextureBytes(request);
     if (auto* reusable = FindReusable(request)) {
       return TakeLease(*reusable);
     }
-    EvictUntil(bytes);
+    const auto bytes = TextureBytes(request);
     auto texture = backend_->CreateTexture2D(request.width, request.height, request.format);
     Entry entry;
     entry.texture         = std::move(texture);
@@ -152,16 +146,9 @@ class TexturePool {
 
   /**
    * @brief True when an unleased, matching texture can be reused without allocating.
-   *
-   * Result owners must call this before reclaiming published GPU results.
    */
   [[nodiscard]] auto HasReusable(const TextureRequest& request) const -> bool {
     return FindReusable(request) != nullptr;
-  }
-
-  [[nodiscard]] auto LeaseCount(std::uint64_t handle) const -> std::uint32_t {
-    const auto* entry = Find(handle);
-    return entry == nullptr ? 0 : entry->lease_count;
   }
 
   [[nodiscard]] auto EntryCount() const -> std::size_t {
@@ -219,9 +206,8 @@ class TexturePool {
 
   /** @brief Print texture pool totals. Per-texture lines require ALCEDO_GPU_POOL_TRACE. */
   void DumpToStderr(const char* reason) const {
-    std::fprintf(stderr, "[GPU_POOL] textures %s entries=%zu used=%.1f budget=%.1f MiB\n",
-                 reason == nullptr ? "" : reason, EntryCount(), GpuPoolMiB(used_bytes_),
-                 GpuPoolMiB(budget_bytes_));
+    std::fprintf(stderr, "[GPU_POOL] textures %s entries=%zu used=%.1f MiB\n",
+                 reason == nullptr ? "" : reason, EntryCount(), GpuPoolMiB(used_bytes_));
     if (!GpuPoolTraceVerbose()) {
       return;
     }
@@ -231,44 +217,12 @@ class TexturePool {
       }
       std::fprintf(stderr,
                    "[GPU_POOL]   tex handle=%llu %ux%u %s %.1f MiB leases=%u busy_sub=%llu "
-                   "lru=%llu frame=%d\n",
+                   "frame=%d\n",
                    static_cast<unsigned long long>(entry.handle), entry.request.width,
                    entry.request.height, TextureFormatName(entry.request.format),
                    GpuPoolMiB(entry.bytes), entry.lease_count,
                    static_cast<unsigned long long>(entry.submitted_on),
-                   static_cast<unsigned long long>(entry.lru_tick),
                    entry.used_this_frame ? 1 : 0);
-    }
-  }
-
-  /**
-   * @brief Drop unleased, idle textures until used + needed fits the budget, if possible.
-   */
-  void EvictUntil(std::size_t needed_bytes) {
-    if (budget_bytes_ == 0) {
-      return;
-    }
-    while (used_bytes_ + needed_bytes > budget_bytes_) {
-      Entry* victim = nullptr;
-      std::uint64_t oldest = (std::numeric_limits<std::uint64_t>::max)();
-      for (auto& entry : entries_) {
-        if (!entry.alive || entry.lease_count > 0) {
-          continue;
-        }
-        if (backend_->IsResourceBusy(entry.submitted_on)) {
-          continue;
-        }
-        if (entry.lru_tick < oldest) {
-          oldest = entry.lru_tick;
-          victim = &entry;
-        }
-      }
-      if (victim == nullptr) {
-        break;
-      }
-      used_bytes_ -= victim->bytes;
-      victim->texture = {};
-      victim->alive   = false;
     }
   }
 
@@ -282,7 +236,6 @@ class TexturePool {
     std::uint64_t               handle          = 0;
     std::uint32_t               lease_count     = 0;
     std::uint64_t               submitted_on    = 0;
-    std::uint64_t               lru_tick        = 0;
     bool                        used_this_frame = false;
     bool                        alive           = false;
   };
@@ -331,16 +284,13 @@ class TexturePool {
   auto TakeLease(Entry& entry) -> ResourceLease<Backend> {
     ++entry.lease_count;
     entry.used_this_frame = true;
-    entry.lru_tick        = ++lru_clock_;
     return ResourceLease<Backend>{this, entry.handle};
   }
 
-  Backend*             backend_      = nullptr;
-  std::vector<Entry>   entries_;
-  std::size_t          budget_bytes_ = 0;
-  std::size_t          used_bytes_   = 0;
-  std::uint64_t        next_handle_  = 1;
-  std::uint64_t        lru_clock_    = 0;
+  Backend*           backend_      = nullptr;
+  std::vector<Entry> entries_;
+  std::size_t        used_bytes_   = 0;
+  std::uint64_t      next_handle_  = 1;
 };
 
 template <class Backend>

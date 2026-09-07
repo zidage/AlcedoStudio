@@ -397,7 +397,6 @@ TEST_F(OpenClWorkspaceFixture, OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutI
 TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
   OpenClRenderDevice device;
   auto&              textures = device.Workspace().Textures();
-  textures.SetByteBudget(64 * 64 * 16);
 
   device.BeginRender();
   auto first = textures.Acquire({32, 16, TextureFormat::Rgba32f});
@@ -435,11 +434,10 @@ TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
   EXPECT_FLOAT_EQ(r32_back[63], 2.5f);
 }
 
-TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotEvictBusySubmissionImages) {
+TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotReleaseBusySubmissionImages) {
   OpenClRenderDevice      device;
   auto&                   textures = device.Workspace().Textures();
   constexpr std::uint32_t kSize    = 64;
-  textures.SetByteBudget(static_cast<std::size_t>(kSize) * kSize);
 
   device.BeginRender();
   auto       lease_a  = textures.Acquire({kSize, kSize, TextureFormat::R8});
@@ -450,11 +448,11 @@ TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotEvictBusySubmissionImages
 
   lease_a.Release();
   lease_b.Release();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_TRUE(textures.Contains(handle_a));
 
   device.BeginRender();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_FALSE(textures.Contains(handle_a));
   device.EndRender();
   device.WaitIdle();
@@ -548,7 +546,6 @@ TEST_F(OpenClWorkspaceFixture, OpenClSecondEmptyRenderCreatesNoBufferImageProgra
 
   workspace.Parameters().Reserve(256);
   workspace.TransientBuffers().Reserve(1 << 20);
-  workspace.Textures().SetByteBudget(64 * 64);
   workspace.MaskTextures().SetByteBudget(64 * 64);
 
   device.BeginRender();

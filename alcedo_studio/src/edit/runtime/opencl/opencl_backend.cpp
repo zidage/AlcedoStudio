@@ -941,21 +941,6 @@ void OpenClBackend::ResetCounters() {
 
 void OpenClBackend::FailNextUpload() { fail_next_upload_ = true; }
 
-auto OpenClBackend::DefaultTextureBudgetBytes() -> std::size_t {
-  auto& context = OpenClContext::Instance();
-  if (!context.IsInitialized()) {
-    return kTextureBudgetFloorBytes;
-  }
-  const auto& cap       = context.Capabilities();
-  const auto  quarter   = static_cast<std::size_t>(cap.global_memory_bytes / 4);
-  auto        budget    = quarter > kTextureBudgetFloorBytes ? quarter : kTextureBudgetFloorBytes;
-  const auto  max_alloc = static_cast<std::size_t>(cap.max_single_allocation_bytes);
-  if (max_alloc > 0 && max_alloc < budget) {
-    budget = max_alloc;
-  }
-  return budget;
-}
-
 auto OpenClBackend::MaxSlabBytes() const -> std::size_t {
   if (max_slab_bytes_override_ > 0) {
     return max_slab_bytes_override_;
@@ -977,7 +962,7 @@ auto OpenClBackend::MaxTransientBytes() const -> std::size_t {
 void OpenClBackend::SetMaxSlabBytes(std::size_t bytes) { max_slab_bytes_override_ = bytes; }
 
 auto OpenClBackend::WorkingSetBudgetBytes() const -> std::size_t {
-  return DefaultTextureBudgetBytes();
+  return MaxTransientBytes();
 }
 
 auto OpenClBackend::QueryDeviceMemory() const -> GpuDeviceMemorySnapshot {

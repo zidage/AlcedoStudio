@@ -111,7 +111,6 @@ TEST_F(CudaGeometryFixture, CropRotateViewportAndScaleExecuteAsOneCudaResample) 
   const auto host_src = MakeSrcImage(64, 48);
   CudaRenderDevice device;
   auto&            textures = device.Workspace().Textures();
-  textures.SetByteBudget(64ull * 48ull * 16ull * 4ull);
 
   device.BeginRender();
   auto src = textures.Acquire({64, 48, TextureFormat::Rgba32f});

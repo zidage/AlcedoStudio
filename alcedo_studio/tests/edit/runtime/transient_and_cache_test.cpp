@@ -68,7 +68,6 @@ TEST_F(CudaWorkspaceFixture, SecondRenderUsesNoCudaAllocationAfterPeakReserve) {
   auto&            workspace = device.Workspace();
   workspace.Parameters().Reserve(256);
   workspace.TransientBuffers().Reserve(1 << 20);
-  workspace.Textures().SetByteBudget(64 * 64);
 
   device.BeginRender();
   {
@@ -107,7 +106,6 @@ TEST(GpuDagGpuPoolTrace, LargeAllocThresholdIsSixteenMebibytes) {
 TEST_F(CudaWorkspaceFixture, DumpGpuPoolsPrintsResidentTexturesAndTransientsWithoutThrowing) {
   CudaRenderDevice device;
   auto&            workspace = device.Workspace();
-  workspace.Textures().SetByteBudget(64 * 64 * 16);
   device.BeginRender();
   const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
   (void)workspace.AcquireImageForWrite(id, {8, 8, TextureFormat::Rgba32f});

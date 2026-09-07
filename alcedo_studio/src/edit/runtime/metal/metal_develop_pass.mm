@@ -359,9 +359,6 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     throw std::runtime_error("ExecuteMetalDevelop: missing develop node");
   }
   auto pending = TakePendingDirtyFields(develop->Params());
-  if (workspace.Textures().ByteBudget() == 0) {
-    workspace.Textures().SetByteBudget(MetalBackend::DefaultTextureBudgetBytes());
-  }
 
   const auto         flags         = develop->Params().Params();
   const bool         hlr           = flags.highlights_reconstruct;
