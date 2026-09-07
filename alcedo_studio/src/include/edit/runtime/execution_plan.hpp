@@ -263,8 +263,8 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
  *
  * Color Grades are @ref grade_nodes in backbone edge order. DRT/Post is @ref drt.
  * @ref peak_transient_bytes is a compiler exclusive-stage upper bound for tests.
- * SensorDevelop allocation uses a conservative initial slab plus observed high-water,
- * not this field as a Reserve argument.
+ * SensorDevelop does not pre-reserve from this field or from prior slab capacity.
+ * Finished full-frame planes are released after GPU last-use.
  */
 struct ExecutionPlan {
   StaticPlanKey                           static_key{};

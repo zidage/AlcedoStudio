@@ -25,7 +25,7 @@ namespace alcedo::CUDA {
 // Not thread-safe; use one instance for each concurrent CUDA decode.
 //
 // Product SensorDevelop binds these buffers from the exclusive-stage transient arena
-// (`BindExternal`) so tile scratch is discarded with the rest of develop scratch.
+// (`BindExternal`) so tile scratch is discarded after the last tile's GPU last-use.
 // `EnsureCapacity` without a bind still owns grow-only allocations for RAW-processor
 // and tests. `allocation_generation()` increments whenever owned capacity grows or
 // when BindExternal installs a new borrowed working set.
@@ -50,6 +50,14 @@ class NeuralDemosaicWorkspace {
    */
   void BindExternal(float* input, std::size_t input_numel, void* activation,
                     std::size_t activation_bytes, void* rgb, int rgb_height, int rgb_width);
+
+  /**
+   * @brief Drop borrowed tile wraps. Does not cudaFree; the caller owns those slabs.
+   *
+   * GPU last-use of the bound pointers must already be complete. Owned
+   * EnsureCapacity allocations are left unchanged.
+   */
+  void ReleaseBorrowed() noexcept;
 
   // Grow-only reservation for a single forward of the given CFA spatial size.
   // Increments `allocation_generation()` when any owned capacity actually grows.

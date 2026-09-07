@@ -24,6 +24,7 @@
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/texture_pool.hpp"
 
@@ -261,6 +262,56 @@ TEST(GraphImageCacheRetention, QualityBaseWriteDoesNotReplaceValidInteractiveGeo
   ASSERT_NE(harness.cache.Find(harness.Geometry()), nullptr);
   EXPECT_EQ(harness.cache.Find(harness.Geometry())->Handle(), geometry_handle);
   EXPECT_EQ(harness.cache.Find(harness.Geometry())->Texture().Width(), 8U);
+}
+
+TEST(GraphImageCacheRetention, DropStalePublishedKeepsCurrentDevelopAndFreesIdleTextures) {
+  HostRetentionHarness harness;
+  const TextureRequest rgba{8, 8, TextureFormat::Rgba32f};
+  harness.Publish(harness.Sensor(), rgba);
+  harness.Publish(harness.Geometry(), rgba);
+  harness.Publish(harness.Grade(), rgba);
+  const auto develop_handle = harness.cache.Find(harness.Sensor())->Handle();
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.5f);
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision) {
+    return harness.invalidation.HasCurrentRevision(id, revision);
+  });
+  harness.pool.ReleaseUnleased();
+
+  ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Sensor())->Handle(), develop_handle);
+  EXPECT_NE(harness.cache.Find(harness.Geometry()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Grade()), nullptr);
+  EXPECT_FALSE(harness.pool.HasReusable(rgba));
+}
+
+TEST(GraphImageCacheRetention, ExtraLeaseKeepsDisplayedTextureAfterStalePublishDrop) {
+  HostRetentionHarness harness;
+  const TextureRequest rgba{8, 8, TextureFormat::Rgba32f};
+  harness.Publish(harness.Sensor(), rgba);
+  const auto handle        = harness.cache.Find(harness.Sensor())->Handle();
+  auto       display_lease = harness.pool.DuplicateLease(handle);
+
+  auto payload            = harness.document.Develop()->Params().Params();
+  payload.demosaic_method = payload.demosaic_method == "legacy" ? "neural_engine" : "legacy";
+  harness.document.Develop()->Params().ReplaceParams(std::move(payload));
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision) {
+    return harness.invalidation.HasCurrentRevision(id, revision);
+  });
+  harness.pool.ReleaseUnleased();
+  EXPECT_TRUE(harness.pool.Contains(handle));
+  EXPECT_EQ(harness.cache.Find(harness.Sensor()), nullptr);
+
+  display_lease.Release();
+  harness.pool.ReleaseUnleased();
+  EXPECT_FALSE(harness.pool.Contains(handle));
 }
 
 }  // namespace

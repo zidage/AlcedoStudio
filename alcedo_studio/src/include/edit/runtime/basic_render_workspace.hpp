@@ -10,16 +10,15 @@
 #include <span>
 #include <stdexcept>
 
-#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
-#include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 
 namespace alcedo {
@@ -107,39 +106,19 @@ class BasicRenderWorkspace {
     invalidation_.CollectAndPropagate(plan, document, input, active_raster_masks);
     validity_prepared_ = true;
   }
-  [[nodiscard]] auto DevelopTransientHighWater() -> DevelopTransientHighWaterCache& {
-    return develop_high_water_;
-  }
-  [[nodiscard]] auto DevelopTransientHighWater() const -> const DevelopTransientHighWaterCache& {
-    return develop_high_water_;
-  }
-
   /**
-   * @brief Reserve a conservative exclusive-stage slab from last observed capacity.
+   * @brief Drop stale published GPU images, then destroy unleased idle textures.
    *
-   * First use of a layout uses @ref ConservativeDevelopInitialBytes. Does not use
-   * compiled peak_transient_bytes. @p demosaic_method is part of the high-water
-   * key so Neural Engine and Legacy (RCD) do not share a working-set size.
+   * Call after GPU last-use of the previous submission, before a Develop rewrite
+   * allocates new scratch. Results whose required revision still matches stay so
+   * ordinary downstream edits can skip Develop. Extra TexturePool leases, such as
+   * a still-displayed frame, keep those textures alive.
    */
-  void PrepareDevelopTransients(const DevelopCompileSource& source,
-                                 std::uint32_t backend_capability_version,
-                                 RawDemosaicMethod demosaic_method) {
-    if (transients_.allocation_policy() == TransientAllocationPolicy::ExactRelease) {
-      return;
-    }
-    const auto bytes =
-        develop_high_water_.SuggestInitial(source, backend_capability_version, demosaic_method);
-    if (bytes == 0) {
-      return;
-    }
-    transients_.Reserve(bytes);
-  }
-
-  void RecordDevelopTransients(const DevelopCompileSource& source,
-                                std::uint32_t backend_capability_version,
-                                RawDemosaicMethod demosaic_method) {
-    develop_high_water_.Record(source, backend_capability_version, demosaic_method,
-                               transients_.capacity_bytes());
+  void ReleaseStalePublishedImagesAndIdleTextures() {
+    images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision) {
+      return invalidation_.HasCurrentRevision(id, revision);
+    });
+    textures_.ReleaseUnleased();
   }
 
   /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
@@ -306,7 +285,6 @@ class BasicRenderWorkspace {
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   RuntimeInvalidationState       invalidation_{};
-  DevelopTransientHighWaterCache develop_high_water_{};
   GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
   ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;

@@ -12,10 +12,11 @@ namespace alcedo {
  * Selected per render from the task request (session cache vs bypass). Not a
  * pipeline mode flag and not stored on the live document.
  *
- * SessionPacked keeps the editor bump allocator: minimum slabs, quantum growth,
- * and idle capacity for the next interactive frame.
+ * SessionPacked keeps the editor bump allocator: minimum slabs and quantum
+ * growth for stages that pack many small allocations, such as masks.
  * ExactRelease allocates only the requested aligned bytes and drops unused slabs
- * after the caller has satisfied the GPU last-use dependency.
+ * after the caller has satisfied the GPU last-use dependency. SensorDevelop uses
+ * ExactRelease so finished full-frame planes can be freed independently.
  */
 enum class TransientAllocationPolicy {
   SessionPacked,

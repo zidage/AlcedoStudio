@@ -30,8 +30,9 @@ namespace alcedo {
  * ResourceId is allocation reuse, not a content hit. Not thread-safe. One
  * in-flight submission.
  *
- * Published results whose required revision still matches are retained. Idle
- * pool textures are dropped by TexturePool::ReleaseUnleased on session reset.
+ * Published results whose required revision still matches are retained. Stale
+ * published results are dropped before a Develop rewrite; idle pool textures
+ * are destroyed by TexturePool::ReleaseUnleased after GPU last-use.
  *
  * @tparam Backend Texture factory used by TexturePool.
  */
@@ -310,6 +311,31 @@ class GraphImageCache {
   void Clear() {
     write_slots_.clear();
     published_.clear();
+  }
+
+  /**
+   * @brief Drop a published result. Extra TexturePool leases keep the texture.
+   *
+   * Unpublished writes are unchanged. No-op when @p id is not published.
+   */
+  void DropPublished(const GraphValueId& id) { published_.erase(id); }
+
+  /**
+   * @brief Drop published results for which @p is_current is false.
+   *
+   * @p is_current receives (id, published revision). Extra leases on those
+   * textures, including a still-displayed frame, keep the device memory.
+   * GPU last-use of dropped results must already be complete.
+   */
+  template <class IsCurrent>
+  void DropStalePublished(IsCurrent&& is_current) {
+    for (auto it = published_.begin(); it != published_.end();) {
+      if (is_current(it->first, it->second.revision)) {
+        ++it;
+        continue;
+      }
+      it = published_.erase(it);
+    }
   }
 
   [[nodiscard]] auto CurrentValueIds() const -> std::vector<GraphValueId> {

@@ -100,13 +100,8 @@ class PlanExecutor {
         const bool highlights_reconstruct =
             develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
+        workspace.ReleaseStalePublishedImagesAndIdleTextures();
         try {
-        if constexpr (UsesDevelopTransientArena()) {
-          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
-            workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion,
-                                               develop_method);
-          }
-        }
           if (plan.Contains(GpuPassKind::UploadRgb)) {
             PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
                                                                  mask_store);
@@ -127,14 +122,8 @@ class PlanExecutor {
         ++stats.source_h2d_count;
         Record(device, invalidation, plan.sensor_linear_output, sensor_extent);
         ++stats.sensor_develop_execute;
-        if constexpr (UsesDevelopTransientArena()) {
-          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
-            workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion,
-                                              develop_method);
-          }
-        }
-        // Develop intermediates are not a cache. Finish the recorded work so backend-owned
-        // scratch can be destroyed before Geometry allocates display textures.
+        // Develop intermediates are not a cache. Finish remaining recorded work so
+        // backend-owned scratch can be destroyed before Geometry allocates display textures.
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
       }
       if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
@@ -282,13 +271,6 @@ class PlanExecutor {
 
  private:
   static constexpr TextureFormat kResultFormat = TextureFormat::Rgba32f;
-
-  static constexpr auto UsesDevelopTransientArena() -> bool {
-    if constexpr (requires { Backend::kUsesDevelopTransientArena; }) {
-      return Backend::kUsesDevelopTransientArena;
-    }
-    return true;
-  }
 
   template <class Workspace>
   static auto BindOrMiss(Workspace& images_owner, RuntimeInvalidationState& invalidation,

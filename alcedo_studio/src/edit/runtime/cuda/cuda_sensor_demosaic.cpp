@@ -24,6 +24,7 @@
 #include "decoders/processor/operators/gpu/cuda_xtrans_interpolate.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "gpu/transient_last_use.hpp"
 
 namespace alcedo {
 namespace {
@@ -69,19 +70,21 @@ void ThrowIfPackedExtentMismatch(const cv::cuda::GpuMat& packed, const cv::cuda:
   }
 }
 
-void PackRgbWithOptionalHighlight(CudaRenderWorkspace& workspace, cv::cuda::GpuMat rgb,
-                                  cv::cuda::GpuMat packed, const float* cam_mul, int orientation_flip,
-                                  bool hlr, cv::cuda::Stream& stream) {
+void PackRgbWithOptionalHighlight(CudaRenderDevice& device, cv::cuda::GpuMat rgb,
+                                  cv::cuda::GpuMat packed, const float* cam_mul,
+                                  int orientation_flip, bool hlr, cv::cuda::Stream& stream) {
   if (!hlr) {
     CUDA::ApplyInverseCamMulAndPackRGBAOriented(rgb, packed, cam_mul, orientation_flip, &stream);
     return;
   }
-  const int cw = rgb.cols;
-  const int ch = rgb.rows;
-  int*   anyclipped = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
-  float* sums       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-  float* cnts       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-  void*  hlr_rgb    = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch * sizeof(float) * 3);
+  auto&     workspace   = device.Workspace();
+  const int cw          = rgb.cols;
+  const int ch          = rgb.rows;
+  int*   anyclipped     = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
+  float* sums           = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+  float* cnts           = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+  void*  hlr_rgb        = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch *
+                                                            sizeof(float) * 3);
   CUDA::HighlightWorkspace highlight;
   highlight.BindExternal(anyclipped, sums, cnts, hlr_rgb, cw, ch);
   CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(cam_mul);
@@ -90,13 +93,15 @@ void PackRgbWithOptionalHighlight(CudaRenderWorkspace& workspace, cv::cuda::GpuM
   CUDA::FinalizeHighlightCorrection(accumulation, correction);
   CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(rgb, packed, correction, cam_mul,
                                                     orientation_flip, &highlight, &stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {anyclipped, sums, cnts, hlr_rgb});
 }
 
-void DemosaicBayerRcd(CudaRenderWorkspace& workspace, const PreparedRawInput& input,
+void DemosaicBayerRcd(CudaRenderDevice& device, const PreparedRawInput& input,
                       cv::cuda::GpuMat linear, cv::cuda::GpuMat packed, bool hlr,
                       cv::cuda::Stream& stream) {
-  const int w = linear.cols;
-  const int h = linear.rows;
+  auto&     workspace = device.Workspace();
+  const int w         = linear.cols;
+  const int h         = linear.rows;
   void* r_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
   void* g_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
   void* b_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
@@ -106,6 +111,7 @@ void DemosaicBayerRcd(CudaRenderWorkspace& workspace, const PreparedRawInput& in
   CUDA::RcdWorkspace rcd;
   rcd.BindExternal(r_ptr, g_ptr, b_ptr, vh_ptr, pq_ptr, cv::Size(w, h));
   CUDA::Bayer2x2ToPlanarRGB_RCD(linear, input.cfa_pattern.bayer_pattern, &rcd, &stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {linear.data, vh_ptr, pq_ptr});
 
   auto r = CropIfNeeded(rcd.r, input.demosaic_output_crop);
   auto g = CropIfNeeded(rcd.g, input.demosaic_output_crop);
@@ -120,17 +126,22 @@ void DemosaicBayerRcd(CudaRenderWorkspace& workspace, const PreparedRawInput& in
     int*   anyclipped = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
     float* sums       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
     float* cnts       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-    void*  hlr_rgb    = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch * sizeof(float) * 3);
+    void*  hlr_rgb    = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch *
+                                                          sizeof(float) * 3);
     CUDA::HighlightWorkspace highlight;
     highlight.BindExternal(anyclipped, sums, cnts, hlr_rgb, cw, ch);
-    CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(input.linearization.cam_mul);
+    CUDA::HighlightCorrection correction =
+        CUDA::BuildHighlightCorrection(input.linearization.cam_mul);
     CUDA::HighlightAccumulation accumulation;
-    CUDA::AccumulateHighlightStats(r, g, b, correction, cv::Rect{}, highlight, accumulation, &stream);
+    CUDA::AccumulateHighlightStats(r, g, b, correction, cv::Rect{}, highlight, accumulation,
+                                   &stream);
     CUDA::FinalizeHighlightCorrection(accumulation, correction);
     CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(r, g, b, packed, correction,
                                                       input.linearization.cam_mul,
                                                       input.sensor.orientation_flip, &highlight,
                                                       &stream);
+    ReleaseTransientSlabsAfterGpuLastUse(device, {r_ptr, g_ptr, b_ptr, anyclipped, sums, cnts,
+                                                 hlr_rgb});
     return;
   }
 
@@ -140,24 +151,28 @@ void DemosaicBayerRcd(CudaRenderWorkspace& workspace, const PreparedRawInput& in
   CUDA::MergeRGB(r, g, b, merged, &stream);
   CUDA::ApplyInverseCamMulAndPackRGBAOriented(merged, packed, input.linearization.cam_mul,
                                               input.sensor.orientation_flip, &stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {r_ptr, g_ptr, b_ptr, merge_ptr});
 }
 
-void DemosaicXTransInterpolator(CudaRenderWorkspace& workspace, const PreparedRawInput& input,
+void DemosaicXTransInterpolator(CudaRenderDevice& device, const PreparedRawInput& input,
                                 cv::cuda::GpuMat linear, cv::cuda::GpuMat packed, bool hlr,
                                 cv::cuda::Stream& stream) {
-  const int w = linear.cols;
-  const int h = linear.rows;
+  auto&     workspace = device.Workspace();
+  const int w         = linear.cols;
+  const int h         = linear.rows;
   void* green_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
   void* rgb_ptr =
       AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float) * 3);
-  auto green  = WrapF32C1(green_ptr, w, h);
-  auto rgb    = WrapF32C3(rgb_ptr, w, h);
+  auto      green  = WrapF32C1(green_ptr, w, h);
+  auto      rgb    = WrapF32C3(rgb_ptr, w, h);
   const int passes = input.downsample_passes == 0 ? 3 : 1;
   CUDA::XTransToRGB_Ref(linear, green, rgb, input.cfa_pattern.xtrans_pattern, passes, &stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {linear.data, green_ptr});
   auto cropped = CropIfNeeded(rgb, input.demosaic_output_crop);
   ThrowIfPackedExtentMismatch(packed, cropped, input.sensor.orientation_flip, "X-Trans");
-  PackRgbWithOptionalHighlight(workspace, cropped, packed, input.linearization.cam_mul,
+  PackRgbWithOptionalHighlight(device, cropped, packed, input.linearization.cam_mul,
                                input.sensor.orientation_flip, hlr, stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {rgb_ptr});
 }
 
 void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& input,
@@ -185,6 +200,7 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
   if (!prep.succeeded) {
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine preprocess failed: " + prep.error);
   }
+  ReleaseTransientSlabsAfterGpuLastUse(device, {linear.data});
 
   const auto policy =
       is_bayer ? detail::MakeBayerStudentTilePolicy() : detail::MakeXTransStudentTilePolicy();
@@ -193,11 +209,11 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
                      sizeof(float) * 3);
   cv::cuda::GpuMat output_rgb = WrapF32C3(rgb_ptr, neural_cfa.cols, neural_cfa.rows);
 
-  auto&                         neural_workspace = device.NeuralDemosaicWorkspace();
-  CUDA::NeuralDemosaicOptions   neural_options;
+  auto&                       neural_workspace = device.NeuralDemosaicWorkspace();
+  CUDA::NeuralDemosaicOptions neural_options;
   neural_options.workspace = &neural_workspace;
   if (g_neural_model_cache_for_test != nullptr) {
-    neural_options.model_cache = g_neural_model_cache_for_test;
+    neural_options.model_cache            = g_neural_model_cache_for_test;
     neural_options.load_options.model_dir = "alcedo-missing-demosaicnet-models";
   }
 
@@ -205,15 +221,15 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
   auto&      cache   = neural_options.model_cache != nullptr ? *neural_options.model_cache
                                                              : DemosaicNetModelCache::Instance();
   DemosaicNetLoadOptions load_options = neural_options.load_options;
-  load_options.stream = cv::cuda::StreamAccessor::getStream(stream);
+  load_options.stream                 = cv::cuda::StreamAccessor::getStream(stream);
   if (!cache.EnsureLoaded(variant, load_options)) {
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine unavailable: " + cache.LastError());
   }
 
-  const int tile_h      = policy.input_tile.height;
-  const int tile_w      = policy.input_tile.width;
-  const int tile_out_h  = policy.output_tile.height;
-  const int tile_out_w  = policy.output_tile.width;
+  const int         tile_h     = policy.input_tile.height;
+  const int         tile_w     = policy.input_tile.width;
+  const int         tile_out_h = policy.output_tile.height;
+  const int         tile_out_w = policy.output_tile.width;
   const std::size_t input_numel =
       static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
       static_cast<std::size_t>(tile_w);
@@ -241,11 +257,19 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
     }
     tile_rgb(job.model_output_roi).copyTo(output_rgb(job.destination_roi), stream);
   }
+  device.Workspace().Device().SynchronizeRecordedWork(device.CommandContext());
+  neural_workspace.ReleaseBorrowed();
+  auto& arena = device.Workspace().TransientBuffers();
+  arena.ReleaseSlabContaining(aligned_ptr);
+  arena.ReleaseSlabContaining(input_ptr);
+  arena.ReleaseSlabContaining(act_ptr);
+  arena.ReleaseSlabContaining(tile_rgb_ptr);
 
   auto cropped = CropIfNeeded(output_rgb, input.demosaic_output_crop);
   ThrowIfPackedExtentMismatch(packed, cropped, input.sensor.orientation_flip, "Neural Engine");
-  PackRgbWithOptionalHighlight(device.Workspace(), cropped, packed, input.linearization.cam_mul,
+  PackRgbWithOptionalHighlight(device, cropped, packed, input.linearization.cam_mul,
                                input.sensor.orientation_flip, hlr, stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {rgb_ptr});
 }
 
 }  // namespace
@@ -260,16 +284,18 @@ void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& inp
   auto&     workspace = device.Workspace();
   const int width     = uploaded_rgba.cols;
   const int height    = uploaded_rgba.rows;
-  auto      rgb       = WrapF32C3(
-      AllocateTransient(workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3),
-      width, height);
+  void*     rgb_ptr   = AllocateTransient(
+      workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3);
+  auto rgb = WrapF32C3(rgb_ptr, width, height);
   CUDA::LinearizeRgb(uploaded_rgba, rgb,
                      input.rgb_linearization.value_or(RawRgbLinearizationParams{}), &stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {uploaded_rgba.data});
   const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-  PackRgbWithOptionalHighlight(workspace, CropIfNeeded(rgb, input.demosaic_output_crop), packed,
+  PackRgbWithOptionalHighlight(device, CropIfNeeded(rgb, input.demosaic_output_crop), packed,
                                input.rgb_linearization ? input.linearization.cam_mul : identity,
                                input.sensor.orientation_flip,
                                hlr && input.rgb_linearization.has_value(), stream);
+  ReleaseTransientSlabsAfterGpuLastUse(device, {rgb_ptr});
 }
 
 void ExecuteCudaSensorDemosaicAndPack(CudaRenderDevice& device, const PreparedRawInput& input,
@@ -283,10 +309,10 @@ void ExecuteCudaSensorDemosaicAndPack(CudaRenderDevice& device, const PreparedRa
     return;
   }
   if (input.cfa_pattern.kind == RawCfaKind::XTrans6x6) {
-    DemosaicXTransInterpolator(device.Workspace(), input, linear, packed, hlr, stream);
+    DemosaicXTransInterpolator(device, input, linear, packed, hlr, stream);
     return;
   }
-  DemosaicBayerRcd(device.Workspace(), input, linear, packed, hlr, stream);
+  DemosaicBayerRcd(device, input, linear, packed, hlr, stream);
 }
 
 }  // namespace alcedo

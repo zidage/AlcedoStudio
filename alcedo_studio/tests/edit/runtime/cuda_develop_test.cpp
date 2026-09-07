@@ -24,7 +24,6 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
-#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -213,14 +212,17 @@ TEST_F(CudaDevelopFixture, CudaDevelopUsesWorkspaceForAllTemporaryBuffers) {
 
   CudaRenderDevice device;
   device.BeginRender();
+  device.Workspace().Device().ResetCounters();
   ExecuteCudaDevelop(device, plan, prepared, document);
-  EXPECT_GT(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+  EXPECT_GT(device.Workspace().Device().MallocCount(), 0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   device.EndRender();
   device.WaitIdle();
   EXPECT_NE(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
 }
 
-TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {
+TEST_F(CudaDevelopFixture, CudaDevelopReleasesScratchInsteadOfKeepingItForTheNextDevelop) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -231,17 +233,20 @@ TEST_F(CudaDevelopFixture, CudaDevelopSecondRenderCreatesNoGpuAllocation) {
   CudaRenderDevice device;
   device.BeginRender();
   ExecuteCudaDevelop(device, plan, prepared, document);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   device.EndRender();
   device.WaitIdle();
   device.Workspace().Device().ResetCounters();
 
   device.BeginRender();
   ExecuteCudaDevelop(device, plan, prepared, document);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   device.EndRender();
   device.WaitIdle();
 
-  EXPECT_EQ(device.Workspace().Device().MallocCount(), 0U);
-  EXPECT_EQ(device.Workspace().Device().FreeCount(), 0U);
+  EXPECT_GT(device.Workspace().Device().MallocCount(), 0U);
+  EXPECT_GT(device.Workspace().Device().FreeCount(), 0U);
+  EXPECT_EQ(device.Workspace().Device().MallocCount(), device.Workspace().Device().FreeCount());
 }
 
 TEST_F(CudaDevelopFixture, DirectRgbInputBypassesLibRawAndEntersDevelopEndpoint) {
@@ -465,7 +470,26 @@ TEST_F(CudaDevelopFixture, PlanExecuteFreesDevelopScratchAfterSensorDevelop) {
   EXPECT_NE(device.Workspace().Images().Find(plan.sensor_linear_output), nullptr);
 }
 
-TEST_F(CudaDevelopFixture, PlanExecuteCachesObservedDevelopTransientCapacityForTheNextLayout) {
+TEST_F(CudaDevelopFixture, CudaDevelopFreesFullFrameScratchAfterGpuLastUse) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "legacy", false);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  CudaRenderDevice device;
+  device.BeginRender();
+  ExecuteCudaDevelop(device, plan, prepared, document);
+  EXPECT_EQ(device.Workspace().TransientBuffers().used_bytes(), 0U);
+  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+  device.EndRender();
+  device.WaitIdle();
+}
+
+TEST_F(CudaDevelopFixture, SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -478,18 +502,13 @@ TEST_F(CudaDevelopFixture, PlanExecuteCachesObservedDevelopTransientCapacityForT
   CudaRenderDevice device;
   (void)device.Execute(plan, prepared, document);
   device.WaitIdle();
-  const auto observed = device.Workspace().DevelopTransientHighWater().ObservedCapacity(
-      plan.source, CudaBackend::kCapabilityVersion, RawDemosaicMethod::Legacy);
-  EXPECT_GT(observed, ConservativeDevelopInitialBytes(plan.source));
-  EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
+  const auto used_after_first = device.Workspace().Textures().UsedBytes();
+  ASSERT_GT(used_after_first, 0U);
 
-  device.WaitIdle();
-  device.Workspace().ReleaseSessionResources();
-  EXPECT_EQ(device.Workspace().DevelopTransientHighWater().SuggestInitial(
-                plan.source, CudaBackend::kCapabilityVersion, RawDemosaicMethod::Legacy),
-            ApplyDevelopTransientSafetyMargin(observed));
+  SetDevelopMethod(document, "legacy", true);
   (void)device.Execute(plan, prepared, document);
   device.WaitIdle();
+  EXPECT_EQ(device.Workspace().Textures().UsedBytes(), used_after_first);
   EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
 }
 

@@ -250,44 +250,43 @@ TEST(DevelopTransientFailure, DescribesResolvedDemosaicMethodNotEmptyPayloadStri
   EXPECT_NE(message.find("hlr=1"), std::string::npos);
 }
 
-TEST(DevelopTransientHighWater, NeuralAndLegacyLayoutsKeepSeparateObservedCapacity) {
+TEST(DevelopTransientSizing, NeuralConservativeBytesIncludeTileScratchAndExceedLegacy) {
   DevelopCompileSource source;
   source.kind        = DevelopInputKind::BayerCfa;
   source.host_extent = Extent2D{64, 64};
-  DevelopTransientHighWaterCache cache;
-  cache.Record(source, 1, RawDemosaicMethod::Legacy, 400000);
-  cache.Record(source, 1, RawDemosaicMethod::NeuralEngine, 120000);
-  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
-            ApplyDevelopTransientSafetyMargin(400000));
-  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
-            ApplyDevelopTransientSafetyMargin(120000));
-  EXPECT_EQ(cache.ObservedCapacity(source, 1, RawDemosaicMethod::Legacy), 400000U);
-  EXPECT_EQ(cache.ObservedCapacity(source, 1, RawDemosaicMethod::NeuralEngine), 120000U);
-}
-
-TEST(DevelopTransientHighWater, NeuralConservativeReserveIncludesTileScratch) {
-  DevelopCompileSource source;
-  source.kind        = DevelopInputKind::BayerCfa;
-  source.host_extent = Extent2D{64, 64};
-  DevelopTransientHighWaterCache cache;
-  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
-            ConservativeDevelopInitialBytes(source, RawDemosaicMethod::NeuralEngine));
-  EXPECT_GT(cache.SuggestInitial(source, 1, RawDemosaicMethod::NeuralEngine),
-            cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy));
-}
-
-TEST(DevelopTransientHighWater, SuggestsConservativeBytesThenObservedCapacityWithMargin) {
-  DevelopCompileSource source;
-  source.kind             = DevelopInputKind::BayerCfa;
-  source.host_extent      = Extent2D{64, 64};
-  DevelopTransientHighWaterCache cache;
-  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
+  EXPECT_EQ(ConservativeDevelopInitialBytes(source, RawDemosaicMethod::NeuralEngine),
+            64U * 64U * kConservativeNeuralDevelopBytesPerPixel +
+                kConservativeNeuralTileScratchBytes);
+  EXPECT_GT(ConservativeDevelopInitialBytes(source, RawDemosaicMethod::NeuralEngine),
+            ConservativeDevelopInitialBytes(source, RawDemosaicMethod::Legacy));
+  EXPECT_EQ(ConservativeDevelopInitialBytes(source, RawDemosaicMethod::Legacy),
             64U * 64U * kConservativeDevelopBytesPerPixel);
-  cache.Record(source, 1, RawDemosaicMethod::Legacy, 200000);
-  EXPECT_EQ(cache.SuggestInitial(source, 1, RawDemosaicMethod::Legacy),
-            ApplyDevelopTransientSafetyMargin(200000));
   EXPECT_EQ(ConservativeDevelopInitialBytes(DevelopCompileSource{.kind = DevelopInputKind::DirectRgb}),
             0U);
+}
+
+TEST(TransientBufferArena, ExactReleaseCanFreeAFinishedSlabWhileLaterSlabsStay) {
+  RecordingBackend backend;
+  TransientBufferArena<RecordingBackend> arena(backend);
+  arena.SetAllocationPolicy(TransientAllocationPolicy::ExactRelease);
+  void* first  = arena.Allocate(64, 256);
+  void* second = arena.Allocate(64, 256);
+  void* third  = arena.Allocate(64, 256);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(third, nullptr);
+  static_cast<std::byte*>(first)[0]  = std::byte{0x11};
+  static_cast<std::byte*>(third)[0]  = std::byte{0x33};
+  EXPECT_EQ(arena.slab_count(), 3U);
+  backend.events.clear();
+  arena.ReleaseSlabContaining(second);
+  EXPECT_EQ(backend.events.back(), "free");
+  EXPECT_EQ(arena.slab_count(), 2U);
+  EXPECT_EQ(static_cast<std::byte*>(first)[0], std::byte{0x11});
+  EXPECT_EQ(static_cast<std::byte*>(third)[0], std::byte{0x33});
+  arena.ReleaseSlabContaining(first);
+  arena.ReleaseSlabContaining(third);
+  EXPECT_EQ(arena.slab_count(), 0U);
 }
 
 }  // namespace

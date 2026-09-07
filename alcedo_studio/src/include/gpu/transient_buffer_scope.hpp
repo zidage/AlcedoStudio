@@ -64,4 +64,53 @@ class TransientBufferScope {
   typename TransientBufferArena<Backend>::Mark mark_;
 };
 
+/**
+ * @brief Restore the previous TransientAllocationPolicy when destroyed.
+ *
+ * Develop uses ExactRelease so finished full-frame planes can be freed
+ * independently. Mask and other later stages may still use SessionPacked.
+ */
+template <class Backend>
+class TransientAllocationPolicyScope {
+ public:
+  TransientAllocationPolicyScope(TransientBufferArena<Backend>& arena,
+                                 TransientAllocationPolicy policy)
+      : arena_(&arena), previous_(arena.allocation_policy()) {
+    arena.SetAllocationPolicy(policy);
+  }
+
+  TransientAllocationPolicyScope(const TransientAllocationPolicyScope&) = delete;
+  auto operator=(const TransientAllocationPolicyScope&)
+      -> TransientAllocationPolicyScope& = delete;
+
+  TransientAllocationPolicyScope(TransientAllocationPolicyScope&& other) noexcept
+      : arena_(other.arena_), previous_(other.previous_) {
+    other.arena_ = nullptr;
+  }
+
+  auto operator=(TransientAllocationPolicyScope&& other) noexcept
+      -> TransientAllocationPolicyScope& {
+    if (this != &other) {
+      Restore();
+      arena_         = other.arena_;
+      previous_      = other.previous_;
+      other.arena_   = nullptr;
+    }
+    return *this;
+  }
+
+  ~TransientAllocationPolicyScope() { Restore(); }
+
+ private:
+  void Restore() noexcept {
+    if (arena_ != nullptr) {
+      arena_->SetAllocationPolicy(previous_);
+      arena_ = nullptr;
+    }
+  }
+
+  TransientBufferArena<Backend>* arena_    = nullptr;
+  TransientAllocationPolicy      previous_ = TransientAllocationPolicy::SessionPacked;
+};
+
 }  // namespace alcedo
