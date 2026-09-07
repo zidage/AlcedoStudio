@@ -84,6 +84,9 @@ static inline float4 opencl_lmt_op(float4 px, __global const OpenClFusedParams* 
 #define ALCEDO_OPENCL_CUSP_MID_BLEND 1.3f
 #define ALCEDO_OPENCL_FOCUS_GAIN_BLEND 0.3f
 #define ALCEDO_OPENCL_COMPRESSION_THRESHOLD 0.75f
+#define ALCEDO_OPENCL_HUNT_NJ 0.012f
+#define ALCEDO_OPENCL_CHROMA_J_FLOOR 0.25f
+#define ALCEDO_OPENCL_RGB_MAPPING_FAILURE_RATIO 8.0f
 #define ALCEDO_OPENCL_PI 3.1415926535897932f
 #define ALCEDO_OPENCL_OPEN_DRT_SQRT3 1.7320508075688772f
 
@@ -246,24 +249,27 @@ static inline float opencl_tonescale_fwd(float x, __global const OpenClTSParams*
 
 static inline float opencl_pacrc_fwd(float v) {
   const float abs_v = fabs(v);
-  const float F_L_Y = pow(abs_v, 0.42f);
+  const float F_L_Y = opencl_safe_pow_pos(abs_v, 0.42f);
   const float Rc = F_L_Y / (ALCEDO_OPENCL_CAM_NL_OFFSET + F_L_Y);
   return copysign(Rc, v);
 }
 
 static inline float opencl_pacrc_inv(float v) {
   const float abs_v = fabs(v);
+  if (!isfinite(abs_v) || abs_v <= 0.0f) {
+    return 0.0f;
+  }
   const float Ra_lim = fmin(abs_v, 0.99f);
   const float F_L_Y = (ALCEDO_OPENCL_CAM_NL_OFFSET * Ra_lim) / (1.0f - Ra_lim);
-  return copysign(pow(F_L_Y, 1.0f / 0.42f), v);
+  return copysign(opencl_safe_pow_pos(F_L_Y, 1.0f / 0.42f), v);
 }
 
 static inline float opencl_achromatic_n_to_J(float A, float cz) {
-  return ALCEDO_OPENCL_J_SCALE * pow(A, cz);
+  return ALCEDO_OPENCL_J_SCALE * opencl_safe_pow_pos(fmax(A, 0.0f), cz);
 }
 
 static inline float opencl_J_to_achromatic_n(float J, float inv_cz) {
-  return pow(J * (1.0f / ALCEDO_OPENCL_J_SCALE), inv_cz);
+  return opencl_safe_pow_pos(fmax(J, 0.0f) * (1.0f / ALCEDO_OPENCL_J_SCALE), inv_cz);
 }
 
 static inline float3 opencl_rgb_to_aab(float3 RGB, __global OpenClJMhParams* p) {
@@ -303,6 +309,9 @@ static inline float3 opencl_jmh_to_rgb(float3 JMh, __global OpenClJMhParams* p) 
 }
 
 static inline float opencl_A_to_Y(float A, __global OpenClJMhParams* p) {
+  if (!isfinite(A) || A <= 0.0f) {
+    return 0.0f;
+  }
   float Ra = p->A_w_J_ * A;
   return opencl_pacrc_inv(Ra) / p->F_L_n_;
 }
@@ -325,6 +334,12 @@ static inline float opencl_reach_M_from_table(float h, __global const OpenClODTP
   const int i_lo = base + ALCEDO_OPENCL_ODT_BASE_INDEX;
   const int i_hi = i_lo + 1;
   return p->table_reach_M_[i_lo] + (p->table_reach_M_[i_hi] - p->table_reach_M_[i_lo]) * t;
+}
+
+static inline float opencl_hunt_colorfulness_factor(float nJ) {
+  const float nj = fmax(nJ, 0.0f);
+  const float t2 = ALCEDO_OPENCL_HUNT_NJ * ALCEDO_OPENCL_HUNT_NJ;
+  return (nj * nj) / (nj * nj + t2);
 }
 
 static inline float opencl_chroma_compress_norm(float h, float chroma_compress_scale) {
@@ -367,13 +382,17 @@ static inline float3 opencl_chroma_compress_fwd(float3 JMh, float tonemapped_J,
     }
     float limit = opencl_safe_pow_pos(nJ, p->model_gamma_inv) * opencl_reach_M_from_table(h, p) / Mnorm;
     limit = fmax(limit, 0.0f);
-    const float ratio = (fabs(J) < 1e-6f) ? 1.0f : (Jts / fabs(J));
-    M_compr = M * opencl_safe_pow_pos(ratio, p->model_gamma_inv);
+    const float nJ_in = opencl_clamp_f(fmax(J, 0.0f) / limitJ, 0.0f, 1.0f);
+    const float j_denom = fmax(fabs(J), ALCEDO_OPENCL_CHROMA_J_FLOOR);
+    const float ratio = Jts / j_denom;
+    M_compr = M * opencl_hunt_colorfulness_factor(nJ_in) *
+              opencl_safe_pow_pos(ratio, p->model_gamma_inv);
     M_compr = M_compr / Mnorm;
     M_compr = limit - opencl_toe(limit - M_compr, limit - 0.001f,
                                  snJ * p->sat, sqrt(nJ * nJ + p->sat_thr));
     M_compr = opencl_toe(M_compr, limit, nJ * p->compr, snJ);
     M_compr *= Mnorm;
+    M_compr *= opencl_hunt_colorfulness_factor(nJ);
   }
   return (float3)(tonemapped_J, M_compr, h);
 }
@@ -565,14 +584,15 @@ static inline float3 opencl_compress_gamut(float3 JMh, float Jx, __global const 
       p->limit_J_max);
   const float remapped_M = opencl_remap_M(JMh.y, gamut_boundary_M, reach_boundary_M);
   const float J_out = J_intersect_source + remapped_M * gamut_slope;
-  if (!isfinite(J_out) || !isfinite(remapped_M)) {
-    return (float3)(fmax(Jx, 0.0f), 0.0f, JMh.z);
+  if (!isfinite(J_out) || !isfinite(remapped_M) || J_out < 0.0f ||
+      J_out > p->limit_J_max * 1.05f) {
+    return (float3)(opencl_clamp_f(fmax(Jx, 0.0f), 0.0f, p->limit_J_max), 0.0f, JMh.z);
   }
-  return (float3)(J_out, remapped_M, JMh.z);
+  return (float3)(opencl_clamp_f(J_out, 0.0f, p->limit_J_max), fmax(remapped_M, 0.0f), JMh.z);
 }
 
 static inline float3 opencl_gamut_compress_fwd(float3 JMh, __global const OpenClODTParams* p) {
-  if (JMh.x <= 0.0f) return (float3)(0.0f, 0.0f, JMh.z);
+  if (JMh.x <= 1.0e-3f) return (float3)(0.0f, 0.0f, JMh.z);
   if (JMh.y <= 0.0f || JMh.x > p->limit_J_max) return (float3)(JMh.x, 0.0f, JMh.z);
   OpenClHueDependentGamutParams hdp = opencl_init_hue_dependent_gamut_params(JMh.z, p);
   return opencl_compress_gamut(JMh, JMh.x, p, hdp);
@@ -590,6 +610,7 @@ static inline float3 opencl_limit_rgb_preserve_chroma(float3 rgb, float lower, f
   if (!isfinite(rgb.x) || !isfinite(rgb.y) || !isfinite(rgb.z)) return (float3)(0.0f);
   rgb = fmax(rgb, (float3)(lower));
   const float m = fmax(rgb.x, fmax(rgb.y, rgb.z));
+  if (m > upper * ALCEDO_OPENCL_RGB_MAPPING_FAILURE_RATIO) return (float3)(0.0f);
   if (m > upper && m > 0.0f) rgb *= upper / m;
   return rgb;
 }

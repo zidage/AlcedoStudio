@@ -14,8 +14,8 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
-#include <QQuickStyle>
 #include <QQuickItem>
+#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QVariantMap>
 #include <filesystem>
@@ -24,10 +24,10 @@
 #include <string>
 #include <utility>
 
+#include "app/editor_panel_projection.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
-#include "app/editor_panel_projection.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
@@ -35,7 +35,8 @@ namespace {
 
 class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
-  Q_PROPERTY(QVariantMap adjustmentSnapshot READ adjustmentSnapshot NOTIFY AdjustmentSnapshotChanged)
+  Q_PROPERTY(
+      QVariantMap adjustmentSnapshot READ adjustmentSnapshot NOTIFY AdjustmentSnapshotChanged)
   Q_PROPERTY(quint64 snapshotRevision READ snapshotRevision NOTIFY AdjustmentSnapshotChanged)
 
  public:
@@ -44,14 +45,14 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
 
   auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
   auto snapshotRevision() const -> quint64 { return revision_; }
-    auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
-        -> bool override {
-      static_cast<void>(fieldKey);
-      static_cast<void>(write);
-      static_cast<void>(settled);
-      ++submit_count_;
-      return true;
-    }
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
+    static_cast<void>(fieldKey);
+    static_cast<void>(write);
+    static_cast<void>(settled);
+    ++submit_count_;
+    return true;
+  }
 
   auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
     static_cast<void>(fieldKey);
@@ -108,7 +109,8 @@ class AdjustmentSnapshotQmlHarness {
     initial_properties.insert(QStringLiteral("editorSession"),
                               QVariant::fromValue(static_cast<QObject*>(session)));
     initial_properties.insert(QStringLiteral("controlsEnabled"), true);
-    root_.reset(qobject_cast<QQuickItem*>(component.createWithInitialProperties(initial_properties)));
+    root_.reset(
+        qobject_cast<QQuickItem*>(component.createWithInitialProperties(initial_properties)));
     if (!root_) {
       errors_ = component.errors();
       return;
@@ -138,11 +140,9 @@ class AdjustmentSnapshotQmlHarness {
 
 TEST(EditorAdjustmentSnapshotQmlTest, ExistingSnapshotIsAppliedOnFirstEditorBinding) {
   QVariantMap snapshot;
-  snapshot.insert(QStringLiteral("exposure"),
-                  QVariantMap{{QStringLiteral("exposure"), -2.25}});
-  snapshot.insert(QStringLiteral("contrast"),
-                  QVariantMap{{QStringLiteral("contrast"), 27.0}});
-  SnapshotSession session(std::move(snapshot), 0);
+  snapshot.insert(QStringLiteral("exposure"), QVariantMap{{QStringLiteral("exposure"), -2.25}});
+  snapshot.insert(QStringLiteral("contrast"), QVariantMap{{QStringLiteral("contrast"), 27.0}});
+  SnapshotSession              session(std::move(snapshot), 0);
   AdjustmentSnapshotQmlHarness harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -164,7 +164,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   exposure.value     = alcedo::EditorPanelScalarValue{"exposure", -1.5f};
   alcedo::EditorPanelFieldPresentation saturation;
   saturation.field_key = "saturation";
-  saturation.value     = alcedo::EditorPanelScalarValue{"saturation", 40.0f};
+  saturation.value     = alcedo::EditorPanelScalarValue{"saturation", 1.4f};
   alcedo::EditorPanelFieldPresentation lut;
   lut.field_key = "lut";
   lut.value     = alcedo::EditorPanelLutValue{"D:/luts/look.cube"};
@@ -172,7 +172,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   projection.fields.push_back(std::move(saturation));
   projection.fields.push_back(std::move(lut));
 
-  SnapshotSession session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
+  SnapshotSession              session(alcedo::ui::PanelProjectionToVariantMap(projection), 1);
   AdjustmentSnapshotQmlHarness harness(&session);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
@@ -184,7 +184,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   ASSERT_NE(look_saturation, nullptr);
   ASSERT_NE(lut_model, nullptr);
   EXPECT_DOUBLE_EQ(tone_exposure->property("value").toDouble(), -1.5);
-  EXPECT_DOUBLE_EQ(look_saturation->property("value").toDouble(), 40.0);
+  EXPECT_NEAR(look_saturation->property("value").toDouble(), 40.0, 1.0e-5);
   EXPECT_EQ(lut_model->property("selectedPath").toString(), QStringLiteral("D:/luts/look.cube"));
   EXPECT_EQ(session.submitCount(), 0);
 }

@@ -311,10 +311,10 @@ TEST(GpuDagGraphCompiler, ZeroGradesFeedDevelopIntoDrtPost) {
   EXPECT_EQ(plan.SceneInputForDrt(), plan.develop_output);
   EXPECT_EQ(plan.drt.scene_input, plan.develop_output);
   ASSERT_FALSE(plan.drt.steps.empty());
-  EXPECT_EQ(plan.drt.steps.front().kind, CompiledDrtStepKind::Neighborhood);
+  EXPECT_EQ(plan.drt.steps.front().kind, CompiledDrtStepKind::DisplayTransform);
   EXPECT_EQ(plan.drt.steps.front().input, plan.develop_output);
-  EXPECT_EQ(plan.drt.steps.back().kind, CompiledDrtStepKind::DisplayTransform);
-  EXPECT_EQ(plan.drt.steps.back().input, plan.drt.scene_output);
+  EXPECT_EQ(plan.drt.steps.front().output, plan.drt.scene_output);
+  EXPECT_EQ(plan.drt.steps.back().kind, CompiledDrtStepKind::Neighborhood);
   EXPECT_EQ(plan.drt.steps.back().output, plan.display_output);
 }
 

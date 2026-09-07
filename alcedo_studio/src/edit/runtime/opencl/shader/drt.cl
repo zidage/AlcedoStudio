@@ -16,8 +16,10 @@ __kernel void drt_display_rgba32f(__read_only image2d_t src, __write_only image2
   const __global OpenClToOutputParams* params =
       (__global const OpenClToOutputParams*)(params_bytes + params_offset_bytes);
   const float4 source = read_imagef(src, kNearestClamp, gid);
-  const float3 scene  = (float3)(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
-                                opencl_acescc_decode(source.z));
+  const AcesRgcRgb compressed =
+      AcesReferenceGamutCompress(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
+                                 opencl_acescc_decode(source.z));
+  const float3 scene = (float3)(compressed.r, compressed.g, compressed.b);
   float3 display_linear;
   if (params->method_ == 0) {
     display_linear = opencl_aces_output_transform_fwd(scene, &params->aces_params_);

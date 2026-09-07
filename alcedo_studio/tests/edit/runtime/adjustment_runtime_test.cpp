@@ -3,15 +3,14 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/adjustment_runtime.hpp"
-#include "edit/runtime/camera_color_gpu_params.hpp"
+
+#include <gtest/gtest.h>
 
 #include <cstring>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/graph/develop_node_model.hpp"
@@ -25,6 +24,7 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/byte_range.hpp"
+#include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -47,14 +47,12 @@ TEST(GpuDagAdjustmentRuntime, SharpenAndClarityRadiiScaleWithPreviewResolution) 
   ClarityModel clarity;
   clarity.SetValue(80.0f);
 
-  const auto full = MakeGeometry(256);
-  const auto full_sharpen =
-      MakeGradeNeighborParams(sharpen, AdjustmentBehavior::Sharpen, full);
-  const auto full_clarity =
-      MakeGradeNeighborParams(clarity, AdjustmentBehavior::Clarity, full);
+  const auto full         = MakeGeometry(256);
+  const auto full_sharpen = MakeGradeNeighborParams(sharpen, AdjustmentBehavior::Sharpen, full);
+  const auto full_clarity = MakeGradeNeighborParams(clarity, AdjustmentBehavior::Clarity, full);
 
   ResolutionRequest half;
-  half.render_scale = 0.5f;
+  half.render_scale        = 0.5f;
   const auto half_geometry = MakeGeometry(256, half);
   const auto half_sharpen =
       MakeGradeNeighborParams(sharpen, AdjustmentBehavior::Sharpen, half_geometry);
@@ -78,14 +76,12 @@ TEST(GpuDagAdjustmentRuntime, HalationAndFilmGrainNeighborhoodsScaleWithMaxEdge)
   FilmGrainModel grain;
   grain.SetValue(0.75f);
 
-  const auto full = MakeGeometry(256);
-  const auto full_halation =
-      MakeGradeNeighborParams(halation, AdjustmentBehavior::Halation, full);
-  const auto full_grain =
-      MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, full);
+  const auto full          = MakeGeometry(256);
+  const auto full_halation = MakeGradeNeighborParams(halation, AdjustmentBehavior::Halation, full);
+  const auto full_grain    = MakeGradeNeighborParams(grain, AdjustmentBehavior::FilmGrain, full);
 
   ResolutionRequest preview;
-  preview.max_edge = 64;
+  preview.max_edge            = 64;
   const auto preview_geometry = MakeGeometry(256, preview);
   const auto preview_halation =
       MakeGradeNeighborParams(halation, AdjustmentBehavior::Halation, preview_geometry);
@@ -107,7 +103,8 @@ TEST(GpuDagAdjustmentRuntime, NativeViewportRoiKeepsFullReferenceNeighborhoodSiz
   sharpen.SetAmount(50.0f);
   sharpen.SetRadius(6.0f);
 
-  const auto full = MakeGradeNeighborParams(sharpen, AdjustmentBehavior::Sharpen, MakeGeometry(256));
+  const auto full =
+      MakeGradeNeighborParams(sharpen, AdjustmentBehavior::Sharpen, MakeGeometry(256));
 
   ViewRequest view;
   view.visible_rect_in_edit_space = {0.25f, 0.25f, 0.5f, 0.5f};
@@ -123,11 +120,11 @@ class DtoOnlyExposureModel : public IOperatorModel {
  public:
   mutable int dto_reads = 0;
 
-  auto Type() const -> OperatorTypeId override { return value_.Type(); }
-  auto IsDefault() const -> bool override { return value_.IsDefault(); }
-  auto IsDirty() const -> bool override { return value_.IsDirty(); }
-  auto DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
-  auto MakeFullDto() const -> OperatorParamDto override {
+  auto        Type() const -> OperatorTypeId override { return value_.Type(); }
+  auto        IsDefault() const -> bool override { return value_.IsDefault(); }
+  auto        IsDirty() const -> bool override { return value_.IsDirty(); }
+  auto        DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
+  auto        MakeFullDto() const -> OperatorParamDto override {
     ++dto_reads;
     return value_.MakeFullDto();
   }
@@ -152,17 +149,17 @@ struct HostParameterBackend {
                          CommandContext&) {
     last_uploads.push_back(ByteRange{offset, static_cast<std::uint32_t>(data.size())});
   }
-  void DownloadBufferRange(const Buffer&, std::uint32_t, std::span<std::byte>,
-                           CommandContext&) const {}
-  [[nodiscard]] auto HasInFlightSubmission() const -> bool { return false; }
-  void               NoteHostToDeviceBegin() { last_uploads.clear(); }
+  void                   DownloadBufferRange(const Buffer&, std::uint32_t, std::span<std::byte>,
+                                             CommandContext&) const {}
+  [[nodiscard]] auto     HasInFlightSubmission() const -> bool { return false; }
+  void                   NoteHostToDeviceBegin() { last_uploads.clear(); }
 
   std::vector<ByteRange> last_uploads;
 };
 
 auto SlotParams(const ParameterArena<HostParameterBackend>& arena, const ParameterSlotKey& key)
     -> GradeAdjustmentParams {
-  const auto& binding = arena.Binding(key);
+  const auto&           binding = arena.Binding(key);
   GradeAdjustmentParams packed{};
   std::memcpy(&packed, arena.HostSpan().data() + binding.offset, sizeof(packed));
   return packed;
@@ -173,8 +170,7 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
 
   ExposureModel exposure;
   exposure.SetValue(1.25f);
-  const auto packed_exposure =
-      MakeGradeRuntimeParams(exposure, AdjustmentBehavior::Exposure);
+  const auto packed_exposure = MakeGradeRuntimeParams(exposure, AdjustmentBehavior::Exposure);
   EXPECT_EQ(packed_exposure.behavior, static_cast<std::uint32_t>(AdjustmentBehavior::Exposure));
   EXPECT_FLOAT_EQ(packed_exposure.values[0], 1.25f);
 
@@ -204,18 +200,23 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
   hls_update.hls_adj_table = table;
   hls.ApplyUpdate(hls_update);
   const auto packed_hls = MakeGradeRuntimeParams(hls, AdjustmentBehavior::Hls);
-  EXPECT_FLOAT_EQ(packed_hls.values[0], 0.1f);
-  EXPECT_FLOAT_EQ(packed_hls.values[8], 0.2f);
-  EXPECT_FLOAT_EQ(packed_hls.values[16], 0.3f);
-  EXPECT_FLOAT_EQ(packed_hls.values[7], -0.2f);
-  EXPECT_FLOAT_EQ(packed_hls.values[15], 0.4f);
-  EXPECT_FLOAT_EQ(packed_hls.values[23], -0.1f);
+  EXPECT_EQ(packed_hls.count, 8U);
+  EXPECT_FLOAT_EQ(packed_hls.values[0], 0.0f);
+  EXPECT_FLOAT_EQ(packed_hls.values[7], 315.0f);
+  EXPECT_FLOAT_EQ(packed_hls.values[8], 0.1f);
+  EXPECT_FLOAT_EQ(packed_hls.values[9], 0.2f);
+  EXPECT_FLOAT_EQ(packed_hls.values[10], 0.3f);
+  EXPECT_FLOAT_EQ(packed_hls.values[29], -0.2f);
+  EXPECT_FLOAT_EQ(packed_hls.values[30], 0.4f);
+  EXPECT_FLOAT_EQ(packed_hls.values[31], -0.1f);
+  EXPECT_FLOAT_EQ(packed_hls.values[32], 45.0f);
+  EXPECT_FLOAT_EQ(packed_hls.values[39], 45.0f);
 
-  ColorWheelModel        wheel;
-  ColorWheelUpdate       wheel_update;
+  ColorWheelModel         wheel;
+  ColorWheelUpdate        wheel_update;
   ColorWheelControlUpdate lift_update;
-  lift_update.color_offset      = Vec3f{0.1f, 0.2f, 0.3f};
-  lift_update.luminance_offset  = 0.05f;
+  lift_update.color_offset     = Vec3f{0.1f, 0.2f, 0.3f};
+  lift_update.luminance_offset = 0.05f;
   ColorWheelControlUpdate gain_update;
   gain_update.color_offset     = Vec3f{1.1f, 0.9f, 0.8f};
   gain_update.luminance_offset = -0.2f;
@@ -281,7 +282,7 @@ TEST(GpuDagAdjustmentRuntime, GradePackingRejectsMismatchedModelTypeWithoutFullD
 }
 
 TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotWritesPackedBytesOnlyWhenDirty) {
-  HostParameterBackend backend;
+  HostParameterBackend                 backend;
   ParameterArena<HostParameterBackend> arena(backend);
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel    model;
@@ -316,9 +317,9 @@ TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotWritesPackedBytesOnlyWhenDirty) {
 }
 
 TEST(GpuDagAdjustmentRuntime, WritePackedSlotRejectsSizeMismatch) {
-  HostParameterBackend backend;
+  HostParameterBackend                 backend;
   ParameterArena<HostParameterBackend> arena(backend);
-  ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ParameterSlotKey            key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
                                     kGradeRuntimeParamBytes};
   arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
@@ -327,10 +328,10 @@ TEST(GpuDagAdjustmentRuntime, WritePackedSlotRejectsSizeMismatch) {
 }
 
 TEST(GpuDagAdjustmentRuntime, CameraColorPackedSlotWriteDoesNotCopyFullDto) {
-  HostParameterBackend backend;
+  HostParameterBackend                 backend;
   ParameterArena<HostParameterBackend> arena(backend);
-  ParameterSlotKey key{NodeId{"develop"}, kDevelopCameraColorSlot};
-  CameraColorGpuParams params{};
+  ParameterSlotKey                     key{NodeId{"develop"}, kDevelopCameraColorSlot};
+  CameraColorGpuParams                 params{};
   params.camera_to_ap1[0] = 1.5f;
   params.camera_to_ap1[4] = 0.8f;
   params.camera_to_ap1[8] = 1.1f;

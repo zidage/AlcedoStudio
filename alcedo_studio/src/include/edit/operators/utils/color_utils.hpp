@@ -572,7 +572,9 @@ inline float Y_to_Hellwig_J(float Y, float _surround = 0.59f, float _L_A = 100.f
   return signum(Y) * 100.f * powf(((400.f * F_L_Y) / (27.13f + F_L_Y)) / A_w, _surround * z);
 }
 
-inline float Achromatic_n_to_J(float A, float cz) { return J_scale * powf(A, cz); }
+inline float Achromatic_n_to_J(float A, float cz) {
+  return J_scale * powf(fmaxf(A, 0.f), cz);
+}
 
 inline float Y_to_J(float Y, JMhParams& p) {
   float abs_Y = fabsf(Y);
@@ -590,7 +592,9 @@ inline float wrap_to_360(float hue) {
   return y;
 }
 
-inline float J_to_Achromatic_n(float J, float inv_cz) { return powf(J * (1.f / J_scale), inv_cz); }
+inline float J_to_Achromatic_n(float J, float inv_cz) {
+  return powf(fmaxf(J, 0.f) * (1.f / J_scale), inv_cz);
+}
 
 inline cv::Matx13f JMh_to_Aab(cv::Matx13f& JMh, JMhParams& params) {
   float       J      = JMh(0);

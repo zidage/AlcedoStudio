@@ -17,7 +17,7 @@ namespace alcedo {
 /**
  * @brief Selected DRT/Post neighborhood launches after disabled adjustments are skipped.
  *
- * Owner: DrtPostExecutor for one compiled DRT encode. Display transform always follows.
+ * Owner: DrtPostExecutor for one compiled DRT encode. Display transform always runs first.
  * Not persisted.
  */
 struct DrtPostSchedule {
@@ -39,8 +39,8 @@ struct DrtPostDecisionTrace {
 /**
  * @brief Keep enabled neighborhood params in compiler order.
  *
- * Disabled adjustments are skipped. An empty enabled list copies the scene input onto
- * `scene_post` before the display transform.
+ * Disabled adjustments are skipped. An empty enabled list copies the display-transform result to
+ * the final display output.
  */
 [[nodiscard]] auto MakeDrtPostSchedule(std::span<const GradeNeighborParams> compiled_order)
     -> DrtPostSchedule;
@@ -49,7 +49,7 @@ struct DrtPostDecisionTrace {
 [[nodiscard]] auto MakeDrtPostDecisionTrace(const DrtPostSchedule& schedule) -> DrtPostDecisionTrace;
 
 /**
- * @brief Ping/pong then `scene_output` destinations for enabled neighborhood writes.
+ * @brief Ping/pong then final-display destinations for enabled neighborhood writes.
  *
  * The first intermediate write is ping. The last write is always @p scene_output.
  */

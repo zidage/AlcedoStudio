@@ -14,8 +14,7 @@ namespace alcedo {
 /**
  * @brief One separable neighborhood launch: packed kernel parameters plus command identity.
  *
- * CUDA and OpenCL start kernels from @ref params. Metal neighborhood may ignore @ref params
- * and start its existing kernel from @ref owner / @ref command_index.
+ * CUDA, OpenCL, and Metal start kernels from @ref params.
  */
 struct NeighborWork {
   GradeNeighborParams params{};

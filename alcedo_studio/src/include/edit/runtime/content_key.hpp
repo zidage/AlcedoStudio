@@ -18,14 +18,17 @@ inline constexpr std::uint64_t kContentHashPrime                   = 10995116282
 inline constexpr std::uint32_t kSensorDevelopImplementationVersion = 2;
 /// Bumped when GeometryResample sampling rules change.
 inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
-/// Bumped when CameraColorPass math changes. Version 4 applies embedded DNG color profiles.
-inline constexpr std::uint32_t kCameraColorImplementationVersion   = 4;
-/// Bumped when Primary Grade pixel rules change. Version 4 samples the LMT cube in fused pointwise.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 4;
+/// Bumped when CameraColorPass math changes. Version 5 applies the ACES 1.3 Reference Gamut
+/// Compression to the profiled linear AP1 value before ACEScc encoding.
+inline constexpr std::uint32_t kCameraColorImplementationVersion   = 5;
+/// Bumped when Primary Grade pixel rules change. Version 5 restores full HLS profile packing,
+/// evaluates hue/lightness/saturation adjustments, and limits pathological ACEScc peak growth from
+/// saturation increases.
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 5;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
 inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 1;
 /// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.
-inline constexpr std::uint32_t kDrtImplementationVersion           = 3;
+inline constexpr std::uint32_t kDrtImplementationVersion           = 4;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 

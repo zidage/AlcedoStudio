@@ -1052,7 +1052,50 @@ Suite totals: **118/118 PASS** on the focused filter (15 GPU-free + 40 CUDA prim
 
 **LOC note (grill-code-review):** shared hosts `neighbor_executor.hpp` 51, `drt_post_schedule.hpp`/`.cpp` 50+41, `drt_post_executor.hpp` 170, `grade_schedule.hpp`/`.cpp` 176+134, `grade_executor.hpp` 207; GPU-free tests 151+259. CUDA/OpenCL/Metal Grade+DRT wrappers 149–408. CUDA neighbor launches live in `cuda_neighbor_grade.cu` with the kernels (same translation unit). No file crossed 1000 lines.
 
-**Residual gaps:** Metal GPU execution remains an environmental skip on Windows. Metal neighborhood still starts its existing pointwise kernel from `DispatchVerticalApply` with a no-op horizontal start. `TexturePool` growth still invalidates held `Texture&`; NeighborExecutor looks up source/destination after scratch acquire so that path is safe. DRT display packing still uses `ToJson` (NM6.P residual). Node targeting is NM6.6. Section 8.2 three-Grade real-RAW cached-versus-fresh pixel matrix remains NM6.9.
+**Residual gaps:** Metal GPU execution remains an environmental skip on Windows. Display-referred DRT/Post neighborhood is now a real separable H/V pair in the DRT metallib (`drt_neighbor_blur_horizontal` / `drt_neighbor_apply_vertical`) matching CUDA/OpenCL Sharpen, Clarity, Halation, and Film Grain; Metal pixel tests exist and skip on this host. `TexturePool` growth still invalidates held `Texture&`; NeighborExecutor looks up source/destination after scratch acquire so that path is safe. DRT display packing still uses `ToJson` (NM6.P residual). Node targeting is NM6.6. Section 8.2 three-Grade real-RAW cached-versus-fresh pixel matrix remains NM6.9.
+
+##### Phase NM6.5B follow-up (2026-09-07) — Metal display-referred neighborhood kernels
+
+**Status:** complete on host wiring and shader math — Metal DRT/Post starts the same separable neighborhood algorithm as CUDA/OpenCL after the display transform. Metal GPU encode still skips on this Windows host.
+
+**Primary success call chain:**
+
+```text
+ExecuteMetalDrt
+  -> DrtPostExecutor::DispatchDisplay -> drt_display
+  -> ApplyNeighborhoods / NeighborExecutor
+  -> DispatchHorizontal -> drt_neighbor_blur_horizontal
+  -> DispatchVerticalApply -> drt_neighbor_apply_vertical
+  -> display-referred Sharpen / Clarity / Halation / Film Grain
+```
+
+**Primary failure call chain:**
+
+```text
+missing DRT metallib or compute encoder
+  -> throw before neighborhood start
+  -> pending Model dirty bits restore unless Commit ran
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| CUDA Sharpen / Clarity / Halation / Film Grain / reuse | `GpuDagCudaPrimaryGradeTest` | PASS |
+| OpenCL Sharpen / Clarity / Halation / Film Grain / reuse | `GpuDagOpenClGradeTest` | PASS |
+| DRT/Post after display, mix does not suppress Clarity | `GpuDagCudaDrtProductTest` `DrtPostRunsAfterDisplayTransformAndIgnoresGradeMix` | PASS |
+| Metal Sharpen / Clarity / Halation / Film Grain / preview radius | `GpuDagMetalGradeTest` | not executed — no Metal on this Windows host |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaPrimaryGradeTest --target GpuDagOpenClGradeTest --target GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R "CudaSharpen|CudaClarity|CudaHalation|CudaFilmGrain|CudaNeighbor|OpenClSharpen|OpenClClarity|OpenClHalation|OpenClFilmGrain|OpenClDetailPasses|DrtPostRunsAfterDisplay" --timeout 90
+```
+
+Suite totals: **13/13 PASS** on the focused CUDA/OpenCL neighborhood filter. Metal encode was not run.
+
+**Residual gaps:** Metal encode on macOS; NM6.6 node targeting; Section 8.2 RAW pixel matrix NM6.9.
 
 ### NM6.6 — Resolve context and exact node-owned edits
 

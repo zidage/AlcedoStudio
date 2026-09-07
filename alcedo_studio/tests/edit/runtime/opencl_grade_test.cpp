@@ -23,6 +23,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -90,6 +91,36 @@ auto Download(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector
 
 auto Luma(const Rgba& c) -> float { return 0.272229f * c.r + 0.674082f * c.g + 0.053689f * c.b; }
 
+auto CpuAcesccEncode(float value) -> float {
+  constexpr float kA          = 9.72f;
+  constexpr float kB          = 17.52f;
+  constexpr float kOffset     = 0.0000152587890625f;
+  constexpr float kTransition = 0.000030517578125f;
+  constexpr float kFloor      = (-16.0f + kA) / kB;
+  if (value < 0.0f) {
+    return kFloor + value;
+  }
+  if (value < kTransition) {
+    return (std::log2(kOffset + value * 0.5f) + kA) / kB;
+  }
+  return (std::log2(value) + kA) / kB;
+}
+
+auto CpuAcesccDecode(float value) -> float {
+  constexpr float kA         = 9.72f;
+  constexpr float kB         = 17.52f;
+  constexpr float kOffset    = 0.0000152587890625f;
+  constexpr float kFloor     = (-16.0f + kA) / kB;
+  constexpr float kThreshold = (-15.0f + kA) / kB;
+  if (value < kFloor) {
+    return value - kFloor;
+  }
+  if (value <= kThreshold) {
+    return (std::exp2(value * kB - kA) - kOffset) * 2.0f;
+  }
+  return std::exp2(value * kB - kA);
+}
+
 auto ExtrapolateCurve(float value, const GradeAdjustmentParams& p, std::uint32_t a, std::uint32_t b)
     -> float {
   const float x0 = p.values[a * 2];
@@ -136,17 +167,33 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   if (hue < 0.0f) {
     hue += 360.0f;
   }
-  const int   bin        = static_cast<int>((hue + 22.5f) / 45.0f) & 7;
-  const float luma       = Luma(c);
-  const float saturation = 1.0f + p.values[16 + bin];
-  c.r                    = luma + (c.r - luma) * saturation;
-  c.g                    = luma + (c.g - luma) * saturation;
-  c.b                    = luma + (c.b - luma) * saturation;
-  const float lightness  = p.values[8 + bin];
-  c.r += lightness;
-  c.g += lightness;
-  c.b += lightness;
-  return c;
+  if (chroma <= 1.0e-6f) return c;
+  float sum_h = 0.0f, sum_l = 0.0f, sum_s = 0.0f, sum_weight = 0.0f;
+  for (int i = 0; i < 8; ++i) {
+    const float difference = std::fabs(hue - p.values[i]);
+    const float distance   = std::min(difference, 360.0f - difference);
+    const float width      = std::max(p.values[32 + i], 1.0f);
+    const float weight     = std::exp2(-distance * distance / (width * width));
+    sum_h += p.values[8 + i * 3] * weight;
+    sum_l += p.values[8 + i * 3 + 1] * weight;
+    sum_s += p.values[8 + i * 3 + 2] * weight;
+    sum_weight += weight;
+  }
+  if (sum_weight <= 1.0e-6f) return c;
+  const float adj_h = sum_h / sum_weight;
+  const float adj_l = sum_l / sum_weight;
+  const float adj_s = sum_s / sum_weight;
+  if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
+    return c;
+  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
+  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
+  const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
+  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
+  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
+  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
+          luma - 1.106f * ri + 1.703f * rq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
@@ -186,16 +233,21 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     c = ApplyHls(c, p);
   } else if (behavior == AdjustmentBehavior::Saturation ||
              behavior == AdjustmentBehavior::Vibrance) {
-    const float l     = Luma(c);
-    float       scale = behavior == AdjustmentBehavior::Saturation ? value : 1.0f + value * 0.01f;
+    float scale = behavior == AdjustmentBehavior::Saturation ? value : 1.0f + value * 0.01f;
     if (behavior == AdjustmentBehavior::Vibrance) {
       const float maximum = std::max(c.r, std::max(c.g, c.b));
       const float minimum = std::min(c.r, std::min(c.g, c.b));
       scale               = 1.0f + (scale - 1.0f) * (1.0f - std::min(maximum - minimum, 1.0f));
     }
-    c.r = l + (c.r - l) * scale;
-    c.g = l + (c.g - l) * scale;
-    c.b = l + (c.b - l) * scale;
+    const float l = Luma(c);
+    if (scale > 1.5f) {
+      const float peak       = std::max(c.r, std::max(c.g, c.b));
+      const float peak_raise = (peak - l) * (scale - 1.0f);
+      if (peak_raise > 0.1f) scale = 1.0f + 0.1f / std::max(peak - l, 1.0e-6f);
+    }
+    c.r           = l + (c.r - l) * scale;
+    c.g           = l + (c.g - l) * scale;
+    c.b           = l + (c.b - l) * scale;
   } else if (behavior == AdjustmentBehavior::ColorWheel) {
     const float gamma_x = std::max(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = std::max(p.values[5] + p.values[7], 1.0e-4f);
@@ -208,36 +260,6 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
           p.values[10];
   }
   return c;
-}
-
-auto CpuAcesccEncode(float value) -> float {
-  constexpr float kA          = 9.72f;
-  constexpr float kB          = 17.52f;
-  constexpr float kOffset     = 0.0000152587890625f;
-  constexpr float kTransition = 0.000030517578125f;
-  constexpr float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (std::log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (std::log2(value) + kA) / kB;
-}
-
-auto CpuAcesccDecode(float value) -> float {
-  constexpr float kA         = 9.72f;
-  constexpr float kB         = 17.52f;
-  constexpr float kOffset    = 0.0000152587890625f;
-  constexpr float kFloor     = (-16.0f + kA) / kB;
-  constexpr float kThreshold = (-15.0f + kA) / kB;
-  if (value < kFloor) {
-    return value - kFloor;
-  }
-  if (value <= kThreshold) {
-    return (std::exp2(value * kB - kA) - kOffset) * 2.0f;
-  }
-  return std::exp2(value * kB - kA);
 }
 
 auto CpuLogIntensity(const Rgba& pixel) -> float {
@@ -634,7 +656,8 @@ class OpenClGradeFixture : public ::testing::Test {
     device_->WaitIdle();
     last_develop_pixels_ = Download(*device_, plan_.develop_output);
     last_grade_pixels_   = Download(*device_, grade.output);
-    last_output_pixels_  = Download(*device_, result.scene_post);
+    last_display_base_pixels_ = Download(*device_, plan_.drt.scene_output);
+    last_output_pixels_  = Download(*device_, result.display_post);
     device_->PublishResults();
     return result;
   }
@@ -664,6 +687,7 @@ class OpenClGradeFixture : public ::testing::Test {
   std::unique_ptr<OpenClRenderDevice> device_;
   std::vector<Rgba>                   last_develop_pixels_;
   std::vector<Rgba>                   last_grade_pixels_;
+  std::vector<Rgba>                   last_display_base_pixels_;
   std::vector<Rgba>                   last_output_pixels_;
 };
 
@@ -684,6 +708,31 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
   const auto& output = last_output_pixels_;
   ASSERT_FALSE(output.empty());
   EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
+}
+
+TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  auto&      hls      = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table    = hls.AdjustmentTable();
+  table[0].h          = 0.1f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  (void)RenderGrade();
+  const auto& adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), adjusted.size());
+  bool changed = false;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    if (std::fabs(identity[i].r - adjusted[i].r) > 1.0e-5f ||
+        std::fabs(identity[i].g - adjusted[i].g) > 1.0e-5f ||
+        std::fabs(identity[i].b - adjusted[i].b) > 1.0e-5f) {
+      changed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(changed);
 }
 
 TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsUseOneDispatchPerLlfSegment) {
@@ -820,7 +869,7 @@ TEST_F(OpenClGradeFixture, OpenClSharpenUsesSurroundingPixelsForUnsharpMask) {
   sharpen.SetThreshold(0.0f);
 
   const auto  result         = RenderThroughDrtPost();
-  const auto& input          = last_grade_pixels_;
+  const auto& input          = last_display_base_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
@@ -836,7 +885,7 @@ TEST_F(OpenClGradeFixture, OpenClSharpenDarkRingFollowsPreviewResolution) {
   // Radius 4 is 12 taps at 1:1 and 6 taps at render_scale 0.5. Offset 10 sits between those
   // radii, so an unscaled kernel would still darken the half-res probe.
   constexpr std::uint32_t width   = 128;
-  constexpr std::uint32_t height = 128;
+  constexpr std::uint32_t height  = 128;
   auto&                   sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
   sharpen.SetRadius(4.0f);
   sharpen.SetThreshold(0.0f);
@@ -848,8 +897,7 @@ TEST_F(OpenClGradeFixture, OpenClSharpenDarkRingFollowsPreviewResolution) {
   sharpen.SetAmount(100.0f);
   (void)RenderThroughDrtPost();
   const auto full_sharpened = last_output_pixels_;
-  const auto full_near =
-      static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
+  const auto full_near      = static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
   ASSERT_EQ(full_identity.size(), full_sharpened.size());
   EXPECT_GT(full_identity[full_near].r - full_sharpened[full_near].r, 1.0e-4f);
 
@@ -870,21 +918,21 @@ TEST_F(OpenClGradeFixture, OpenClSharpenDarkRingFollowsPreviewResolution) {
   EXPECT_NEAR(half_sharpened[half_far].r, half_identity[half_far].r, 2.0e-3f);
 }
 
-TEST_F(OpenClGradeFixture, OpenClClarityUsesLargeRadiusLocalContrast) {
+TEST_F(OpenClGradeFixture, OpenClClarityDarkensDisplaySurroundingsAcrossLargeRadius) {
   constexpr std::uint32_t width  = 96;
   constexpr std::uint32_t height = 96;
   UseNeighborhoodPlane(width, height, 0.22f, 0.48f);
   ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(80.0f);
 
   const auto  result         = RenderThroughDrtPost();
-  const auto& input          = last_grade_pixels_;
+  const auto& input          = last_display_base_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
   const auto  far_index      = static_cast<std::size_t>(height / 2) * width + 1;
   ASSERT_EQ(input.size(), output.size());
   EXPECT_EQ(result.post_neighborhood_count, 1U);
-  EXPECT_GT(output[center].r, input[center].r);
+  EXPECT_GE(output[center].r, input[center].r);
   EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
   EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
 }
@@ -896,7 +944,7 @@ TEST_F(OpenClGradeFixture, OpenClHalationSpreadsRedLightIntoDarkNeighbors) {
   ModelByType<HalationModel>(type_ids::Halation()).SetValue(1.0f);
 
   const auto  result         = RenderThroughDrtPost();
-  const auto& input          = last_grade_pixels_;
+  const auto& input          = last_display_base_pixels_;
   const auto& output         = last_output_pixels_;
   const auto  center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto  neighbor_index = center - 1;
@@ -919,7 +967,7 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVari
   grain.SetValue(0.25f);
   (void)RenderThroughDrtPost();
   const auto low   = last_output_pixels_;
-  const auto input = last_grade_pixels_;
+  const auto input = last_display_base_pixels_;
   grain.SetValue(0.75f);
   (void)RenderThroughDrtPost();
   const auto high = last_output_pixels_;
@@ -982,12 +1030,10 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance
 }
 
 TEST_F(OpenClGradeFixture, OpenClUnknownAdjustmentIsRejectedAtInsert) {
-  EXPECT_THROW(
-      document_.InsertAdjustment(document_.PrimaryGrade()->Id(),
-                                 document_.PrimaryGrade()->AdjustmentCount(),
-                                 AdjustmentInstanceId{"grade.primary.tint"},
-                                 std::make_unique<TintModel>()),
-      std::runtime_error);
+  EXPECT_THROW(document_.InsertAdjustment(
+                   document_.PrimaryGrade()->Id(), document_.PrimaryGrade()->AdjustmentCount(),
+                   AdjustmentInstanceId{"grade.primary.tint"}, std::make_unique<TintModel>()),
+               std::runtime_error);
 }
 
 TEST_F(OpenClGradeFixture, OpenClStableGradeCreatesNoDummyLutOrStageParameterBuffer) {
@@ -1076,11 +1122,11 @@ TEST_F(OpenClGradeFixture, OpenClLlfFullFrameBuildsCanonicalReferenceOnce) {
 
 TEST_F(OpenClGradeFixture, OpenClLlfSliderEditReusesCanonicalReference) {
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
-  const auto first               = RenderGrade();
-  const auto source_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
-  const auto result_id           = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
-  const auto first_source_rev    = device_->Workspace().Images().PublishedRevision(source_id);
-  const auto first_result_rev    = device_->Workspace().Images().PublishedRevision(result_id);
+  const auto first            = RenderGrade();
+  const auto source_id        = LocalToneValueId(document_.PrimaryGrade()->Id(), "source");
+  const auto result_id        = LocalToneValueId(document_.PrimaryGrade()->Id(), "result");
+  const auto first_source_rev = device_->Workspace().Images().PublishedRevision(source_id);
+  const auto first_result_rev = device_->Workspace().Images().PublishedRevision(result_id);
   ASSERT_TRUE(first.local_tone_rebuilt_reference);
   ASSERT_NE(first_source_rev, 0U);
 
@@ -1101,9 +1147,9 @@ TEST_F(OpenClGradeFixture, OpenClLlfPersistsOnlyCanonicalSourceAndResultPlanes) 
   const auto grade_id = document_.PrimaryGrade()->Id();
   EXPECT_NE(device_->Workspace().Images().Find(LocalToneValueId(grade_id, "source")), nullptr);
   EXPECT_NE(device_->Workspace().Images().Find(LocalToneValueId(grade_id, "result")), nullptr);
-  EXPECT_EQ(device_->Workspace().Images().Find(
-                GraphValueId{grade_id, PortId{"local_tone.source.1"}}),
-            nullptr);
+  EXPECT_EQ(
+      device_->Workspace().Images().Find(GraphValueId{grade_id, PortId{"local_tone.source.1"}}),
+      nullptr);
   EXPECT_EQ(device_->Workspace().Values().Find(grade_id, PortId{"local_tone.source.1"}), nullptr);
   EXPECT_EQ(device_->Workspace().Values().Find(grade_id, PortId{"local_tone.remap_a.0"}), nullptr);
 }

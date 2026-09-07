@@ -28,13 +28,13 @@ namespace alcedo {
  */
 struct DrtPostExecutionResult {
   GraphValueId          output{NodeId{"drt"}, PortId{"display"}};
-  GraphValueId          scene_post{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  GraphValueId          display_post{NodeId{"drt"}, PortId{"display"}};
   std::uint32_t         post_neighborhood_count = 0;
   DrtPostDecisionTrace  trace;
 };
 
 /**
- * @brief Common DRT/Post neighborhood order, ping/pong, scratch, and display transform.
+ * @brief Common display transform followed by DRT/Post neighborhood processing.
  *
  * @tparam Ops Backend neighborhood starts, display bind/start, copies, and native errors.
  *         Shared code owns skip, copy, destinations, scratch lifetime, and display position.
@@ -46,9 +46,9 @@ class DrtPostExecutor {
   using LutBinding = typename Ops::LutBinding;
 
   /**
-   * @brief Apply enabled neighborhood writes, then the compiled display transform.
+   * @brief Apply the display transform, then enabled display-referred neighborhood writes.
    *
-   * An empty enabled list copies the compiled scene input onto `scene_post`. Parameter
+   * An empty enabled list copies the display base to the final output. Parameter
    * slots are uploaded before any GPU start. A failed dispatch throws after
    * Ops::CheckAfterEncode; pending Model dirty bits restore unless committed.
    */
@@ -117,14 +117,15 @@ class DrtPostExecutor {
     const auto schedule = MakeDrtPostSchedule(compiled_order);
     DrtPostExecutionResult result;
     result.output                   = plan.display_output;
-    result.scene_post               = plan.drt.scene_output;
+    result.display_post             = plan.display_output;
     result.post_neighborhood_count  = static_cast<std::uint32_t>(schedule.enabled.size());
     result.trace                    = MakeDrtPostDecisionTrace(schedule);
 
-    const auto lut      = Ops::NeighborLut(device);
-    const auto scene_id = ApplyNeighborhoods(device, schedule, works, plan.SceneInputForDrt(),
-                                             plan.drt.scene_output, drt->Id(), lut, width, height);
-    DispatchDisplay(device, scene_id, plan.display_output, drt->Id(), width, height);
+    DispatchDisplay(device, plan.SceneInputForDrt(), plan.drt.scene_output, drt->Id(), width,
+                    height);
+    const auto lut = Ops::NeighborLut(device);
+    (void)ApplyNeighborhoods(device, schedule, works, plan.drt.scene_output, plan.display_output,
+                             drt->Id(), lut, width, height);
     Ops::CheckAfterEncode(device);
     return result;
   }
@@ -132,7 +133,7 @@ class DrtPostExecutor {
   /**
    * @brief Copy or ping/pong neighborhood writes onto @p scene_output.
    *
-   * @return Graph value that holds the ACEScc scene after neighborhood work.
+   * @return Graph value that holds the display-referred image after neighborhood work.
    */
   static auto ApplyNeighborhoods(Device& device, const DrtPostSchedule& schedule,
                                  const std::vector<NeighborWork>& works,
@@ -168,8 +169,7 @@ class DrtPostExecutor {
   /**
    * @brief Acquire the compiled display image and start the display transform.
    *
-   * Runs after neighborhood writes. @p scene_id is the ACEScc image returned by
-   * @ref ApplyNeighborhoods.
+   * Runs before neighborhood writes and converts ACEScc scene values to display-referred values.
    */
   static void DispatchDisplay(Device& device, const GraphValueId& scene_id,
                               const GraphValueId& display_output, const NodeId& drt_id,

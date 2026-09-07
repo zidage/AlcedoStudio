@@ -24,6 +24,7 @@
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
@@ -48,8 +49,10 @@ __global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pix
   if (index >= pixel_count) return;
   auto         runtime = *params;
   const float4 source  = input[index];
-  const float3 scene   = make_float3(cuda_acescc::Decode(source.x), cuda_acescc::Decode(source.y),
-                                     cuda_acescc::Decode(source.z));
+  const AcesRgcRgb compressed =
+      AcesReferenceGamutCompress(cuda_acescc::Decode(source.x), cuda_acescc::Decode(source.y),
+                                 cuda_acescc::Decode(source.z));
+  const float3 scene = make_float3(compressed.r, compressed.g, compressed.b);
   float3       display_linear;
   if (runtime.method_ == GPU_ODTMethod::ACES_2_0) {
     auto aces      = runtime.aces_params_;
@@ -178,7 +181,7 @@ struct CudaDrtOps {
 auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document)
     -> CudaDrtResult {
   const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document);
-  return {executed.output, executed.scene_post, executed.post_neighborhood_count};
+  return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 
 }  // namespace alcedo

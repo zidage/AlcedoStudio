@@ -18,15 +18,15 @@ namespace alcedo {
 
 struct OpenClDrtResult {
   GraphValueId  output{NodeId{"drt"}, PortId{"display"}};
-  GraphValueId  scene_post{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  GraphValueId  display_post{NodeId{"drt"}, PortId{"display"}};
   std::uint32_t post_neighborhood_count = 0;
 };
 
 /**
- * @brief Run DRT/Post neighborhood ops in ACEScc, then ACES 2.0 or OpenDRT.
+ * @brief Run ACES 2.0 or OpenDRT, then display-referred DRT/Post operations.
  *
- * Consumes the compiled DRT scene-input ACEScc image and writes a workspace RGBA32F display
- * image. Grade mix and masks do not suppress the endpoint operations.
+ * Consumes the compiled DRT scene-input ACEScc image, transforms it to display-referred values,
+ * then applies neighborhood operations to the workspace RGBA32F display image.
  */
 [[nodiscard]] auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                     PipelineDocument& document) -> OpenClDrtResult;

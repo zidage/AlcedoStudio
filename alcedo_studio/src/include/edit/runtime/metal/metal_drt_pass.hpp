@@ -17,16 +17,15 @@ namespace alcedo {
 
 struct MetalDrtResult {
   GraphValueId  output{NodeId{"drt"}, PortId{"display"}};
-  GraphValueId  scene_post{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  GraphValueId  display_post{NodeId{"drt"}, PortId{"display"}};
   std::uint32_t post_neighborhood_count = 0;
 };
 
 /**
- * @brief Run DRT/Post neighborhood ops in ACEScc, then ACES 2.0 or OpenDRT.
+ * @brief Run ACES 2.0 or OpenDRT, then display-referred DRT/Post operations.
  *
- * Input is the compiled DRT scene-input AP1/ACEScc image. Neighborhood ops write
- * @ref ExecutionPlan::drt.scene_output. The display kernel then decodes ACEScc
- * to AP1 scene-linear. Grade mix and masks do not suppress these operations.
+ * Input is the compiled DRT scene-input ACEScc image. The display transform runs first, and
+ * neighborhood operations consume its display-referred result.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
                                    PipelineDocument& document) -> MetalDrtResult;

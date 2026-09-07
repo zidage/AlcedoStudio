@@ -132,10 +132,12 @@ __kernel void camera_color_acescc(__read_only image2d_t src, __write_only image2
   const float x = m[0] * source.x + m[1] * source.y + m[2] * source.z;
   const float y = m[3] * source.x + m[4] * source.y + m[5] * source.z;
   const float z = m[6] * source.x + m[7] * source.y + m[8] * source.z;
-  const DngRgb        corrected = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
+  const DngRgb     corrected  = DngApplyColorProfile(DngMakeRgb(x, y, z), dng_profile);
+  const AcesRgcRgb compressed =
+      AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
   write_imagef(dst, gid,
-               (float4)(AcesccEncode(corrected.r), AcesccEncode(corrected.g),
-                        AcesccEncode(corrected.b), source.w));
+               (float4)(AcesccEncode(compressed.r), AcesccEncode(compressed.g),
+                        AcesccEncode(compressed.b), source.w));
 }
 
 typedef struct {

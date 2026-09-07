@@ -64,7 +64,7 @@ static inline float reach_M_from_table(float h, const constant MetalODTParams& p
 }
 
 static inline float pacrc_fwd_base(float rc) {
-  const float fl_y = pow(rc, 0.42f);
+  const float fl_y = safe_pow_pos(rc, 0.42f);
   return fl_y / (kCamNlOffset + fl_y);
 }
 
@@ -73,17 +73,24 @@ static inline float pacrc_fwd(float v) {
 }
 
 static inline float pacrc_inv_base(float ra) {
+  if (!isfinite_f(ra) || ra <= 0.0f) {
+    return 0.0f;
+  }
   const float ra_lim = fmin(ra, 0.99f);
   const float fl_y   = (kCamNlOffset * ra_lim) / (1.0f - ra_lim);
-  return pow(fl_y, 1.0f / 0.42f);
+  return safe_pow_pos(fl_y, 1.0f / 0.42f);
 }
 
 static inline float pacrc_inv(float v) {
   return copysign(pacrc_inv_base(fabs(v)), v);
 }
 
-static inline float Achromatic_n_to_J(float a, float cz) { return kJScale * pow(a, cz); }
-static inline float J_to_Achromatic_n(float j, float inv_cz) { return pow(j * (1.0f / kJScale), inv_cz); }
+static inline float Achromatic_n_to_J(float a, float cz) {
+  return kJScale * safe_pow_pos(fmax(a, 0.0f), cz);
+}
+static inline float J_to_Achromatic_n(float j, float inv_cz) {
+  return safe_pow_pos(fmax(j, 0.0f) * (1.0f / kJScale), inv_cz);
+}
 
 static inline float3 RGB_to_Aab(float3 rgb, const constant MetalJMhParams& p) {
   const float3 rgb_m = mult_f3_f33(rgb, p.MATRIX_RGB_to_CAM16_c_);
@@ -120,6 +127,9 @@ static inline float3 JMh_to_RGB(float3 jmh, const constant MetalJMhParams& p) {
 }
 
 static inline float A_to_Y(float a, const constant MetalJMhParams& p) {
+  if (!isfinite_f(a) || a <= 0.0f) {
+    return 0.0f;
+  }
   return pacrc_inv_base(p.A_w_J_ * a) / p.F_L_n_;
 }
 
@@ -131,6 +141,12 @@ static inline float Y_to_J(float y, const constant MetalJMhParams& p) {
   const float ra = pacrc_fwd_base(fabs(y) * p.F_L_n_);
   const float j  = Achromatic_n_to_J(ra * p.inv_A_w_J_, p.cz_);
   return copysign(j, y);
+}
+
+static inline float hunt_colorfulness_factor(float nJ) {
+  const float nj = fmax(nJ, 0.0f);
+  const float t2 = kHuntNJ * kHuntNJ;
+  return (nj * nj) / (nj * nj + t2);
 }
 
 static inline float chroma_compress_norm(float h, float chroma_compress_scale) {
@@ -185,12 +201,15 @@ static inline float3 chroma_compress_fwd(float3 jmh, float tonemapped_j, const c
     const float toe_snj_sat      = snj * p.sat;
     const float toe_sqrt_nj_thr  = sqrt(nj * nj + p.sat_thr);
     const float toe_nj_compr     = nj * p.compr;
-    const float ratio            = (fabs(jmh.x) < 1e-6f) ? 1.0f : (jts / fabs(jmh.x));
-    m_compr                      = jmh.y * safe_pow_pos(ratio, p.model_gamma_inv);
+    const float nJ_in   = clamp_f(fmax(jmh.x, 0.0f) / limit_j, 0.0f, 1.0f);
+    const float j_denom = fmax(fabs(jmh.x), kChromaJFloor);
+    const float ratio   = jts / j_denom;
+    m_compr             = jmh.y * hunt_colorfulness_factor(nJ_in) * safe_pow_pos(ratio, p.model_gamma_inv);
     m_compr                      = m_compr / mnorm;
     m_compr                      = limit - toe(limit - m_compr, toe_limit, toe_snj_sat, toe_sqrt_nj_thr, false);
     m_compr                      = toe(m_compr, limit, toe_nj_compr, snj, false);
     m_compr                      = m_compr * mnorm;
+    m_compr                      = m_compr * hunt_colorfulness_factor(nj);
   }
   (void)invert;
   return float3(tonemapped_j, m_compr, jmh.z);
@@ -382,14 +401,15 @@ static inline float3 compress_gamut(float3 jmh, float jx, const constant MetalOD
       j_intersect_source, gamut_slope, p.model_gamma_inv, p.limit_J_max, reach_max_m, p.limit_J_max);
   const float remapped_m       = remap_M(jmh.y, gamut_boundary_m, reach_boundary_m, invert);
   const float j_out            = j_intersect_source + remapped_m * gamut_slope;
-  if (!isfinite_f(j_out) || !isfinite_f(remapped_m)) {
-    return float3(fmax(jx, 0.0f), 0.0f, jmh.z);
+  if (!isfinite_f(j_out) || !isfinite_f(remapped_m) || j_out < 0.0f ||
+      j_out > p.limit_J_max * 1.05f) {
+    return float3(clamp_f(fmax(jx, 0.0f), 0.0f, p.limit_J_max), 0.0f, jmh.z);
   }
-  return float3(j_out, remapped_m, jmh.z);
+  return float3(clamp_f(j_out, 0.0f, p.limit_J_max), fmax(remapped_m, 0.0f), jmh.z);
 }
 
 static inline float3 gamut_compress_fwd(float3 jmh, const constant MetalODTParams& p) {
-  if (jmh.x <= 0.0f) {
+  if (jmh.x <= 1.0e-3f) {
     return float3(0.0f, 0.0f, jmh.z);
   }
   if (jmh.y <= 0.0f || jmh.x > p.limit_J_max) {
@@ -404,6 +424,9 @@ static inline float3 limit_rgb_preserve_chroma(float3 rgb, float lower, float up
   }
   rgb = max(rgb, float3(lower));
   const float m = fmax(rgb.x, fmax(rgb.y, rgb.z));
+  if (m > upper * kRgbMappingFailureRatio) {
+    return float3(0.0f);
+  }
   if (m > upper && m > 0.0f) {
     rgb *= upper / m;
   }

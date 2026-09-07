@@ -168,7 +168,7 @@ struct OpenClDrtOps {
 auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
                       PipelineDocument& document) -> OpenClDrtResult {
   const auto executed = DrtPostExecutor<OpenClDrtOps>::Execute(device, plan, document);
-  return {executed.output, executed.scene_post, executed.post_neighborhood_count};
+  return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 
 }  // namespace alcedo

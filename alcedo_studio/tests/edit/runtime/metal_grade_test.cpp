@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -69,12 +71,10 @@ auto Download(MetalRenderDevice& device, const GraphValueId& id) -> std::vector<
   return pixels;
 }
 
-auto Luma(const Rgba& c) -> float {
-  return 0.272229f * c.r + 0.674082f * c.g + 0.053689f * c.b;
-}
+auto Luma(const Rgba& c) -> float { return 0.272229f * c.r + 0.674082f * c.g + 0.053689f * c.b; }
 
-auto ExtrapolateCurve(float value, const GradeAdjustmentParams& p, std::uint32_t a,
-                      std::uint32_t b) -> float {
+auto ExtrapolateCurve(float value, const GradeAdjustmentParams& p, std::uint32_t a, std::uint32_t b)
+    -> float {
   const float x0 = p.values[a * 2];
   const float y0 = p.values[a * 2 + 1];
   const float x1 = p.values[b * 2];
@@ -119,17 +119,33 @@ auto ApplyHls(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   if (hue < 0.0f) {
     hue += 360.0f;
   }
-  const int   bin        = static_cast<int>((hue + 22.5f) / 45.0f) & 7;
-  const float luma       = Luma(c);
-  const float saturation = 1.0f + p.values[16 + bin];
-  c.r                    = luma + (c.r - luma) * saturation;
-  c.g                    = luma + (c.g - luma) * saturation;
-  c.b                    = luma + (c.b - luma) * saturation;
-  const float lightness  = p.values[8 + bin];
-  c.r += lightness;
-  c.g += lightness;
-  c.b += lightness;
-  return c;
+  if (chroma <= 1.0e-6f) return c;
+  float sum_h = 0.0f, sum_l = 0.0f, sum_s = 0.0f, sum_weight = 0.0f;
+  for (int i = 0; i < 8; ++i) {
+    const float difference = std::fabs(hue - p.values[i]);
+    const float distance   = std::min(difference, 360.0f - difference);
+    const float width      = std::max(p.values[32 + i], 1.0f);
+    const float weight     = std::exp2(-distance * distance / (width * width));
+    sum_h += p.values[8 + i * 3] * weight;
+    sum_l += p.values[8 + i * 3 + 1] * weight;
+    sum_s += p.values[8 + i * 3 + 2] * weight;
+    sum_weight += weight;
+  }
+  if (sum_weight <= 1.0e-6f) return c;
+  const float adj_h = sum_h / sum_weight;
+  const float adj_l = sum_l / sum_weight;
+  const float adj_s = sum_s / sum_weight;
+  if (std::fabs(adj_h) <= 1.0e-6f && std::fabs(adj_l) <= 1.0e-6f && std::fabs(adj_s) <= 1.0e-6f)
+    return c;
+  const float     angle = adj_h * 2.25f * 0.017453292519943295f;
+  const float     scale = std::exp2(adj_s * 2.25f * (adj_s >= 0.0f ? 4.5f : 3.25f));
+  const float     luma  = Luma(c) + adj_l * 1.125f;
+  const float     i     = 0.596f * c.r - 0.274f * c.g - 0.322f * c.b;
+  const float     q     = 0.211f * c.r - 0.523f * c.g + 0.312f * c.b;
+  const float     ri    = (i * std::cos(angle) - q * std::sin(angle)) * scale;
+  const float     rq    = (i * std::sin(angle) + q * std::cos(angle)) * scale;
+  return {luma + 0.956f * ri + 0.621f * rq, luma - 0.272f * ri - 0.647f * rq,
+          luma - 1.106f * ri + 1.703f * rq, c.a};
 }
 
 auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pixel_index) -> Rgba {
@@ -178,16 +194,16 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     c = ApplyHls(c, p);
   } else if (behavior == AdjustmentBehavior::Saturation ||
              behavior == AdjustmentBehavior::Vibrance) {
-    const float l = Luma(c);
-    float scale   = behavior == AdjustmentBehavior::Saturation ? value : 1.0f + value * 0.01f;
+    float scale = behavior == AdjustmentBehavior::Saturation ? value : 1.0f + value * 0.01f;
     if (behavior == AdjustmentBehavior::Vibrance) {
       const float maximum = std::max(c.r, std::max(c.g, c.b));
       const float minimum = std::min(c.r, std::min(c.g, c.b));
       scale               = 1.0f + (scale - 1.0f) * (1.0f - std::min(maximum - minimum, 1.0f));
     }
-    c.r = l + (c.r - l) * scale;
-    c.g = l + (c.g - l) * scale;
-    c.b = l + (c.b - l) * scale;
+    const float l = Luma(c);
+    c.r           = l + (c.r - l) * scale;
+    c.g           = l + (c.g - l) * scale;
+    c.b           = l + (c.b - l) * scale;
   } else if (behavior == AdjustmentBehavior::ColorWheel) {
     const float gamma_x = std::max(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = std::max(p.values[5] + p.values[7], 1.0e-4f);
@@ -245,6 +261,29 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
   saturation->SetValue(1.0f);
 }
 
+auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
+                           float center) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  [](std::byte* p) { delete[] p; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const float value = x == width / 2 && y == height / 2 ? center : surroundings;
+      const auto  index = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = value;
+      pixels[index + 1] = value;
+      pixels[index + 2] = value;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
 class MetalGradeFixture : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -294,10 +333,18 @@ class MetalGradeFixture : public ::testing::Test {
     return *model;
   }
 
-  PreparedRawInput    prepared_;
-  PipelineDocument    document_;
-  ExecutionPlan       plan_;
-  MetalRenderDevice   device_;
+  void UseNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surroundings,
+                            float center, const RenderRequest& request = {}) {
+    prepared_ =
+        RawInputLoader::FromDirectRgb(MakeNeighborhoodPlane(width, height, surroundings, center),
+                                      gpu_dag_test::FullSensor(width, height));
+    plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), request);
+  }
+
+  PreparedRawInput  prepared_;
+  PipelineDocument  document_;
+  ExecutionPlan     plan_;
+  MetalRenderDevice device_;
 };
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradePreservesCompiledAdjustmentOrder) {
@@ -317,6 +364,31 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradePreservesCompiledAdjustmentOrder) {
   const auto output = Download(device_, result.output);
   ASSERT_FALSE(output.empty());
   EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
+}
+
+TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {
+  const auto identity_result = RenderGrade();
+  const auto identity        = Download(device_, identity_result.output);
+  auto&      hls             = ModelByType<HlsModel>(type_ids::Hls());
+  auto       table           = hls.AdjustmentTable();
+  table[0].h                 = 0.1f;
+  HlsUpdate update;
+  update.hls_adj_table = table;
+  hls.ApplyUpdate(update);
+
+  const auto adjusted_result = RenderGrade();
+  const auto adjusted        = Download(device_, adjusted_result.output);
+  ASSERT_EQ(identity.size(), adjusted.size());
+  bool changed = false;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    if (std::fabs(identity[i].r - adjusted[i].r) > 1.0e-5f ||
+        std::fabs(identity[i].g - adjusted[i].g) > 1.0e-5f ||
+        std::fabs(identity[i].b - adjusted[i].b) > 1.0e-5f) {
+      changed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(changed);
 }
 
 TEST_F(MetalGradeFixture, MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment) {
@@ -395,7 +467,8 @@ TEST_F(MetalGradeFixture, MetalExposureEditRunsOnlyPrimaryGradeAndDrt) {
 TEST_F(MetalGradeFixture, MetalLutTextureIsReusedByContentKey) {
   const auto cube_path = std::filesystem::absolute("build/tmp/gpu_dag_metal_m3/identity.cube");
   WriteIdentityCube(cube_path);
-  auto* lmt = dynamic_cast<LmtModel*>(document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  auto* lmt =
+      dynamic_cast<LmtModel*>(document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
   ASSERT_NE(lmt, nullptr);
   lmt->SetCubePath(cube_path.string());
   const auto first = RenderGrade();
@@ -422,7 +495,8 @@ TEST_F(MetalGradeFixture, MetalLutRemapChangesGradePixels) {
   EXPECT_NEAR(output.front().r, 1.0f, 1.0e-4f);
   EXPECT_NEAR(output.front().g, 0.0f, 1.0e-4f);
   EXPECT_NEAR(output.front().b, 0.0f, 1.0e-4f);
-  EXPECT_GT(std::abs(output.front().r - input.front().r) + std::abs(output.front().g - input.front().g) +
+  EXPECT_GT(std::abs(output.front().r - input.front().r) +
+                std::abs(output.front().g - input.front().g) +
                 std::abs(output.front().b - input.front().b),
             1.0e-3f);
 }
@@ -443,6 +517,125 @@ TEST_F(MetalGradeFixture, MetalDrtPostNeighborhoodPassesReuseWorkspaceImages) {
   EXPECT_EQ(device_.Workspace().Device().HeapCreateCount(), 0U);
 }
 
+TEST_F(MetalGradeFixture, MetalSharpenUsesSurroundingPixelsForUnsharpMask) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
+  auto& sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
+  sharpen.SetAmount(100.0f);
+  sharpen.SetRadius(3.0f);
+  sharpen.SetThreshold(0.0f);
+
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(device_, result.display_post);
+  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
+  const auto neighbor_index = center - 1;
+  const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
+  EXPECT_GT(output[center].r, input[center].r);
+  EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(MetalGradeFixture, MetalSharpenDarkRingFollowsPreviewResolution) {
+  constexpr std::uint32_t width  = 128;
+  constexpr std::uint32_t height = 128;
+  auto&                   sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
+  sharpen.SetRadius(4.0f);
+  sharpen.SetThreshold(0.0f);
+
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f);
+  sharpen.SetAmount(0.0f);
+  const auto full_identity = Download(device_, RenderThroughDrtPost().display_post);
+  sharpen.SetAmount(100.0f);
+  const auto full_sharpened = Download(device_, RenderThroughDrtPost().display_post);
+  const auto full_near      = static_cast<std::size_t>(height / 2) * width + width / 2 + 1U;
+  ASSERT_EQ(full_identity.size(), full_sharpened.size());
+  EXPECT_GT(full_identity[full_near].r - full_sharpened[full_near].r, 1.0e-4f);
+
+  RenderRequest half_request;
+  half_request.resolution.render_scale = 0.5f;
+  UseNeighborhoodPlane(width, height, 0.18f, 0.55f, half_request);
+  sharpen.SetAmount(0.0f);
+  const auto half_identity = Download(device_, RenderThroughDrtPost().display_post);
+  sharpen.SetAmount(100.0f);
+  const auto half_result    = RenderThroughDrtPost();
+  const auto half_sharpened = Download(device_, half_result.display_post);
+  ASSERT_EQ(half_identity.size(), static_cast<std::size_t>(64) * 64);
+  const auto half_near = static_cast<std::size_t>(32) * 64U + 32U + 1U;
+  const auto half_far  = static_cast<std::size_t>(32) * 64U + 32U + 10U;
+  EXPECT_EQ(half_result.post_neighborhood_count, 1U);
+  EXPECT_GT(half_identity[half_near].r - half_sharpened[half_near].r, 1.0e-5f);
+  EXPECT_NEAR(half_sharpened[half_far].r, half_identity[half_far].r, 2.0e-3f);
+}
+
+TEST_F(MetalGradeFixture, MetalClarityDarkensDisplaySurroundingsAcrossLargeRadius) {
+  constexpr std::uint32_t width  = 96;
+  constexpr std::uint32_t height = 96;
+  UseNeighborhoodPlane(width, height, 0.22f, 0.48f);
+  ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(80.0f);
+
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(device_, result.display_post);
+  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
+  const auto neighbor_index = center - 1;
+  const auto far_index      = static_cast<std::size_t>(height / 2) * width + 1;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
+  EXPECT_GE(output[center].r, input[center].r);
+  EXPECT_LT(output[neighbor_index].r, input[neighbor_index].r);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(MetalGradeFixture, MetalHalationSpreadsRedLightIntoDarkNeighbors) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.02f, 1.0f);
+  ModelByType<HalationModel>(type_ids::Halation()).SetValue(1.0f);
+
+  const auto result         = RenderThroughDrtPost();
+  const auto output         = Download(device_, result.display_post);
+  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto neighbor_index = static_cast<std::size_t>(height / 2) * width + width / 2 - 1;
+  const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
+  ASSERT_EQ(input.size(), output.size());
+  EXPECT_EQ(result.post_neighborhood_count, 1U);
+  const float red_spill   = output[neighbor_index].r - input[neighbor_index].r;
+  const float green_spill = output[neighbor_index].g - input[neighbor_index].g;
+  EXPECT_GT(red_spill, 1.0e-4f);
+  EXPECT_GT(red_spill, green_spill * 5.0f);
+  EXPECT_NEAR(output[far_index].r, input[far_index].r, 1.0e-6f);
+}
+
+TEST_F(MetalGradeFixture, MetalFilmGrainStrengthScalesDeterministicDensityVariation) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  UseNeighborhoodPlane(width, height, 0.35f, 0.35f);
+  auto& grain = ModelByType<FilmGrainModel>(type_ids::FilmGrain());
+
+  grain.SetValue(0.25f);
+  const auto low   = Download(device_, RenderThroughDrtPost().display_post);
+  const auto input = Download(device_, plan_.drt.scene_output);
+  grain.SetValue(0.75f);
+  const auto high       = Download(device_, RenderThroughDrtPost().display_post);
+  const auto high_again = Download(device_, RenderThroughDrtPost().display_post);
+  ASSERT_EQ(input.size(), high.size());
+
+  double low_energy  = 0.0;
+  double high_energy = 0.0;
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    low_energy += std::pow(static_cast<double>(low[index].r - input[index].r), 2.0);
+    high_energy += std::pow(static_cast<double>(high[index].r - input[index].r), 2.0);
+    EXPECT_FLOAT_EQ(high[index].r, high_again[index].r);
+    EXPECT_FLOAT_EQ(high[index].g, high_again[index].g);
+    EXPECT_FLOAT_EQ(high[index].b, high_again[index].b);
+  }
+  EXPECT_GT(high_energy, low_energy * 6.0);
+}
+
 TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) {
   ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperatureOffset(120.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
@@ -456,7 +649,7 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   ASSERT_FALSE(input.empty());
 
   std::vector<GradeAdjustmentParams> params;
-  auto* grade = document_.PrimaryGrade();
+  auto*                              grade = document_.PrimaryGrade();
   ASSERT_NE(plan_.FirstGrade(), nullptr);
   for (const auto& compiled : plan_.FirstGrade()->adjustments) {
     auto* model = grade->FindAdjustment(compiled.instance_id);
@@ -486,10 +679,9 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
 }
 
 TEST_F(MetalGradeFixture, MetalUnknownAdjustmentIsRejectedAtInsert) {
-  EXPECT_THROW(document_.InsertAdjustment(document_.PrimaryGrade()->Id(),
-                                          document_.PrimaryGrade()->AdjustmentCount(),
-                                          AdjustmentInstanceId{"grade.primary.tint"},
-                                          std::make_unique<TintModel>()),
+  EXPECT_THROW(document_.InsertAdjustment(
+                   document_.PrimaryGrade()->Id(), document_.PrimaryGrade()->AdjustmentCount(),
+                   AdjustmentInstanceId{"grade.primary.tint"}, std::make_unique<TintModel>()),
                std::runtime_error);
 }
 

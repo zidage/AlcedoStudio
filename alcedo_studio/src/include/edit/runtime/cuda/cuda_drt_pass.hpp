@@ -15,17 +15,17 @@ namespace alcedo {
 
 struct CudaDrtResult {
   GraphValueId  output{NodeId{"drt"}, PortId{"display"}};
-  GraphValueId  scene_post{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  GraphValueId  display_post{NodeId{"drt"}, PortId{"display"}};
   std::uint32_t post_neighborhood_count = 0;
 };
 
 /**
- * @brief Run DRT/Post neighborhood ops in ACEScc, then the selected display transform.
+ * @brief Run the selected display transform, then display-referred DRT/Post operations.
  *
- * Neighborhood ops consume the compiled DRT scene-input AP1/ACEScc image and write
- * @ref ExecutionPlan::drt.scene_output. The display kernel then decodes ACEScc to
- * AP1 scene-linear before ACES 2.0 or OpenDRT. Grade mix and masks do not suppress
- * these endpoint operations. A failed parameter upload retains Model dirty bits.
+ * The display kernel decodes the compiled ACEScc input before ACES 2.0 or OpenDRT. Neighborhood
+ * operations consume that display-referred result and write the final display output. Grade mix
+ * and masks do not suppress these endpoint operations. A failed parameter upload retains Model
+ * dirty bits.
  */
 [[nodiscard]] auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan,
                                   PipelineDocument& document) -> CudaDrtResult;

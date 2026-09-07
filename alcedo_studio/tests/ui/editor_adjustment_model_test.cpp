@@ -10,21 +10,19 @@
 // or GPU is involved. QSignalSpy drives the debounce timer deterministically
 // through the event loop (interval 0 fires on the next loop iteration).
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include <gtest/gtest.h>
 
 #include <QSignalSpy>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
-
-#include <gtest/gtest.h>
-
 #include <memory>
 #include <variant>
 #include <vector>
 
 #include "support/recording_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -79,7 +77,7 @@ auto makeToggleModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorAdjustmen
 // settled patch on release.
 TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSettledOnRelease) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.1);
   m->updateDrag(0.2);
@@ -113,7 +111,7 @@ TEST(EditorAdjustmentModelTest, PointerDragWritesControlValueAndEnqueuesPatchBef
 // settled patch after the debounce stabilizes.
 TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettledAfterDebounce) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.1);
   m->editValue(0.2);
@@ -134,7 +132,7 @@ TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettle
 // once: one interactive, one settled.
 TEST(EditorAdjustmentModelTest, KeyboardEnterCommitImmediatelySubmitsOneSettled) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.5);
   EXPECT_EQ(sub.interactiveCount(), 1);
@@ -149,7 +147,7 @@ TEST(EditorAdjustmentModelTest, KeyboardEnterCommitImmediatelySubmitsOneSettled)
 // 4. Reset restores the default and commits exactly one settled transaction.
 TEST(EditorAdjustmentModelTest, ResetSubmitsOneSettledWithDefaultValue) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setValue(0.7);  // programmatic load: no submit
   ASSERT_EQ(sub.calls.size(), 0u);
   m->reset();
@@ -163,7 +161,7 @@ TEST(EditorAdjustmentModelTest, ResetSubmitsOneSettledWithDefaultValue) {
 // 5. An out-of-range value is clamped to [minimum, maximum] before any submit.
 TEST(EditorAdjustmentModelTest, OutOfRangeValueIsClampedBeforeSubmit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(100.0);  // above maximum 5.0
   EXPECT_DOUBLE_EQ(m->value(), 5.0);
@@ -178,7 +176,7 @@ TEST(EditorAdjustmentModelTest, OutOfRangeValueIsClampedBeforeSubmit) {
 // subsequent valid edit clears the invalid state and submits.
 TEST(EditorAdjustmentModelTest, InvalidValueSetsValidFalseAndDoesNotSubmit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   ASSERT_TRUE(m->valid());
   m->setInvalid(QStringLiteral("not a number"));
   EXPECT_FALSE(m->valid());
@@ -194,7 +192,7 @@ TEST(EditorAdjustmentModelTest, InvalidValueSetsValidFalseAndDoesNotSubmit) {
 // index and value.
 TEST(EditorAdjustmentModelTest, EnumChangeSubmitsExactlyOneSettledTransaction) {
   RecordingSubmitter sub;
-  auto m = makeEnumModel(sub);
+  auto               m = makeEnumModel(sub);
   m->selectIndex(1);
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.interactiveCount(), 0);
@@ -207,7 +205,7 @@ TEST(EditorAdjustmentModelTest, EnumChangeSubmitsExactlyOneSettledTransaction) {
 // 8. A toggle change commits exactly one settled transaction with the new bool.
 TEST(EditorAdjustmentModelTest, ToggleChangeSubmitsExactlyOneSettledTransaction) {
   RecordingSubmitter sub;
-  auto m = makeToggleModel(sub);
+  auto               m = makeToggleModel(sub);
   m->commitValue(true);
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.interactiveCount(), 0);
@@ -222,7 +220,7 @@ TEST(EditorAdjustmentModelTest, ToggleChangeSubmitsExactlyOneSettledTransaction)
 TEST(EditorAdjustmentModelTest, NoSubmitWhenSubmitterCanEditFalse) {
   RecordingSubmitter sub;
   sub.canEditState = false;
-  auto m = makeValueModel(sub);
+  auto m           = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.5);
   m->finishDrag();
@@ -235,7 +233,7 @@ TEST(EditorAdjustmentModelTest, NoSubmitWhenSubmitterCanEditFalse) {
 // before the debounce fires.
 TEST(EditorAdjustmentModelTest, LatestValueWinsWhenMultipleUpdatesBeforeSettled) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.4);
   m->editValue(0.8);
@@ -251,7 +249,7 @@ TEST(EditorAdjustmentModelTest, LatestValueWinsWhenMultipleUpdatesBeforeSettled)
 // release is dropped silently (documented limitation); the drag still ends.
 TEST(EditorAdjustmentModelTest, FinishDragAfterSessionLostDropsSettledSilently) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.5);
   EXPECT_EQ(sub.interactiveCount(), 1);
@@ -265,13 +263,56 @@ TEST(EditorAdjustmentModelTest, FinishDragAfterSessionLostDropsSettledSilently) 
 // editValue, false again after the settled commit lands.
 TEST(EditorAdjustmentModelTest, HasPendingSettledTrueAfterValueFalseAfterCommit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   EXPECT_FALSE(m->hasPendingSettled());
   m->editValue(0.3);
   EXPECT_TRUE(m->hasPendingSettled());
   m->commitImmediately();
   EXPECT_FALSE(m->hasPendingSettled());
+}
+
+TEST(EditorAdjustmentModelTest, LookPercentSlidersSubmitModelUnits) {
+  struct Case {
+    const char* field;
+    double      ui_value;
+    float       model_value;
+  };
+  const Case cases[] = {{"saturation", 40.0, 1.4f},
+                        {"saturation", -100.0, 0.0f},
+                        {"film_grain", 35.0, 0.35f},
+                        {"halation", 80.0, 0.8f}};
+
+  for (const auto& test_case : cases) {
+    RecordingSubmitter         sub;
+    EditorAdjustmentValueModel model;
+    model.setSubmitter(&sub);
+    model.setFieldKey(QString::fromLatin1(test_case.field));
+    model.setMinimum(test_case.ui_value < 0.0 ? -100.0 : 0.0);
+    model.setMaximum(100.0);
+    model.editValue(test_case.ui_value);
+    ASSERT_EQ(sub.interactiveCount(), 1) << test_case.field;
+    EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(sub.calls.back().write), test_case.model_value)
+        << test_case.field;
+    model.commitImmediately();
+  }
+}
+
+TEST(EditorAdjustmentModelTest, SharpenSliderKeepsPercentAmountForNeighborPacking) {
+  RecordingSubmitter         sub;
+  EditorAdjustmentValueModel model;
+  model.setSubmitter(&sub);
+  model.setFieldKey(QStringLiteral("sharpen"));
+  model.setMinimum(0.0);
+  model.setMaximum(100.0);
+  model.editValue(65.0);
+
+  ASSERT_EQ(sub.interactiveCount(), 1);
+  const auto* update = std::get_if<alcedo::SharpenUpdate>(&sub.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->amount.has_value());
+  EXPECT_FLOAT_EQ(*update->amount, 65.0f);
+  model.commitImmediately();
 }
 
 }  // namespace

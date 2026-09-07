@@ -283,9 +283,9 @@ TEST_F(MetalDrtFixture, MetalDrtAcesMatchesCudaReferenceWithinTolerance) {
   EXPECT_TRUE(AllFinite(high_pixels));
 }
 
-// NM2.1/NM2.5: mix 1, no mask, non-default DRT/Post then DRT display. Metal neighborhood
-// operators are not the CUDA-captured golden; this asserts endpoint order on Metal:
-// non-default DRT/Post changes display, and Grade mix 0 does not suppress DRT Clarity.
+// Mix 1, no mask, non-default DRT/Post after the display transform. Asserts endpoint
+// order on Metal: non-default DRT/Post changes display, and Grade mix 0 does not
+// suppress DRT Clarity. Pixel formulas for the four operators are in GpuDagMetalGradeTest.
 void ApplyUnmaskedReferencePostAndDrt(PipelineDocument& document) {
   auto* grade = document.PrimaryGrade();
   auto* drt   = document.Drt();
@@ -312,7 +312,7 @@ void ApplyUnmaskedReferencePostAndDrt(PipelineDocument& document) {
   drt->Params().ReplaceParams(params);
 }
 
-TEST_F(MetalDrtFixture, DrtPostPreservesUnmaskedReferenceOrder) {
+TEST_F(MetalDrtFixture, DrtPostRunsAfterDisplayTransformAndChangesDisplayPixels) {
   MetalRenderDevice baseline_device;
   auto              baseline_document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(baseline_document);

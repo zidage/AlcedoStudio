@@ -179,7 +179,7 @@ struct CompiledDrtStep {
 struct CompiledDrtNode {
   NodeId                          node_id{NodeId{"drt"}};
   GraphValueId                    scene_input{NodeId{"develop"}, PortId{"image"}};
-  GraphValueId                    scene_output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  GraphValueId                    scene_output{NodeId{"drt"}, PortId{"runtime.display_base"}};
   GraphValueId                    display_output{NodeId{"drt"}, PortId{"display"}};
   std::vector<CompiledAdjustment> post_adjustments;
   std::vector<CompiledDrtStep>    steps;

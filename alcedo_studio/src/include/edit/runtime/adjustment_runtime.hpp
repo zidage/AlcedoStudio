@@ -38,8 +38,11 @@ enum class AdjustmentBehavior : std::uint32_t {
 struct alignas(16) GradeAdjustmentParams {
   std::uint32_t behavior = 0;
   std::uint32_t count    = 0;
-  float         values[30]{};
+  float         values[48]{};
+  std::uint32_t reserved[2]{};
 };
+
+static_assert(sizeof(GradeAdjustmentParams) == 208);
 
 struct GradeAdjustmentCommand {
   std::uint32_t parameter_offset = 0;

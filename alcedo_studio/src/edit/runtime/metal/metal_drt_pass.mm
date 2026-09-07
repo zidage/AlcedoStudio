@@ -17,7 +17,6 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
@@ -33,35 +32,13 @@ namespace {
 
 constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All);
 
-struct PrimaryGradeDispatchParams {
-  std::uint32_t command_count   = 0;
-  std::uint32_t command_offset  = 0;
-  std::uint32_t lut_edge        = 0;
-  float         local_reference = 0.0f;
-  std::uint32_t width           = 0;
-  std::uint32_t pad[3]          = {};
-};
-
-auto EnsureBuffer(MetalRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
-    -> MetalBackend::Buffer& {
-  auto* existing = workspace.Values().Find(id);
-  if (existing != nullptr && existing->Bytes() >= bytes) {
-    return *existing;
-  }
-  workspace.Values().Store(id, workspace.Device().CreateBuffer(bytes));
-  auto* stored = workspace.Values().Find(id);
-  if (stored == nullptr) {
-    throw std::runtime_error("ExecuteMetalDrt: command buffer store failed");
-  }
-  return *stored;
-}
-
-auto GradePipeline() -> NS::SharedPtr<MTL::ComputePipelineState> {
-#ifndef ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH
-  throw std::runtime_error("Metal primary grade metallib path is not configured.");
+auto NeighborPipeline(const char* function, const char* label)
+    -> NS::SharedPtr<MTL::ComputePipelineState> {
+#ifndef ALCEDO_METAL_DRT_METALLIB_PATH
+  throw std::runtime_error("Metal DRT metallib path is not configured.");
 #else
-  return metal::ComputePipelineCache::Instance().GetPipelineState(
-      ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH, "primary_grade_pointwise", "Metal DRT Post");
+  return metal::ComputePipelineCache::Instance().GetPipelineState(ALCEDO_METAL_DRT_METALLIB_PATH,
+                                                                  function, label);
 #endif
 }
 
@@ -73,29 +50,40 @@ void DispatchThreads(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineSt
   encoder->dispatchThreads(MTL::Size{width, height, 1}, MTL::Size{thread_width, thread_height, 1});
 }
 
-void DispatchPointwise(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
-                       MetalBackend::Texture2D& dst, const MetalBackend::Buffer& params,
-                       const MetalBackend::Buffer& commands, std::uint32_t command_offset,
-                       const MetalLutBinding& lut, std::uint32_t width, std::uint32_t height) {
-  auto  pipeline = GradePipeline();
+/** @brief Start the display-referred horizontal neighborhood kernel. */
+void DispatchNeighborHorizontal(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
+                                MetalBackend::Texture2D& dst, const GradeNeighborParams& params,
+                                std::uint32_t width, std::uint32_t height) {
+  auto pipeline = NeighborPipeline("drt_neighbor_blur_horizontal", "Metal DRT Post Horizontal");
   auto* encoder  = static_cast<MTL::ComputeCommandEncoder*>(
       device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
   if (encoder == nullptr) {
     throw std::runtime_error("ExecuteMetalDrt: compute encoder is missing");
   }
-  PrimaryGradeDispatchParams dispatch;
-  dispatch.command_count   = 1;
-  dispatch.command_offset  = command_offset;
-  dispatch.lut_edge        = lut.edge_size;
-  dispatch.local_reference = local_tone_mapping::kAcesccMiddleGray;
-  dispatch.width           = width;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(src.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(dst.Native()), 1);
-  encoder->setBuffer(static_cast<MTL::Buffer*>(params.Native()), 0, 0);
-  encoder->setBuffer(static_cast<MTL::Buffer*>(commands.Native()), 0, 1);
-  encoder->setBytes(&dispatch, sizeof(dispatch), 2);
-  encoder->setBuffer(static_cast<MTL::Buffer*>(lut.native), 0, 3);
+  encoder->setBytes(&params, sizeof(params), 0);
+  DispatchThreads(encoder, pipeline.get(), width, height);
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
+}
+
+/** @brief Start the display-referred vertical apply kernel. */
+void DispatchNeighborVertical(MetalRenderDevice& device, const MetalBackend::Texture2D& src,
+                              const MetalBackend::Texture2D& horizontal,
+                              MetalBackend::Texture2D& dst, const GradeNeighborParams& params,
+                              std::uint32_t width, std::uint32_t height) {
+  auto pipeline = NeighborPipeline("drt_neighbor_apply_vertical", "Metal DRT Post Vertical");
+  auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
+      device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
+  if (encoder == nullptr) {
+    throw std::runtime_error("ExecuteMetalDrt: compute encoder is missing");
+  }
+  encoder->setComputePipelineState(pipeline.get());
+  encoder->setTexture(static_cast<MTL::Texture*>(src.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(horizontal.Native()), 1);
+  encoder->setTexture(static_cast<MTL::Texture*>(dst.Native()), 2);
+  encoder->setBytes(&params, sizeof(params), 0);
   DispatchThreads(encoder, pipeline.get(), width, height);
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
@@ -144,22 +132,8 @@ struct MetalDrtOps {
     return BindOrRefreshGradeRuntimeSlot(device.Workspace().Parameters(), key, model, behavior);
   }
 
-  static void PrepareNeighborCommands(MetalRenderDevice& device, const NodeId& owner,
-                                      std::span<const std::uint32_t> command_offsets) {
-    if (command_offsets.empty()) {
-      return;
-    }
-    auto&              workspace = device.Workspace();
-    const GraphValueId command_id{owner, PortId{"runtime.order"}};
-    const auto         bytes = command_offsets.size() * sizeof(command_offsets[0]);
-    auto&              command_buffer =
-        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
-    workspace.Device().UploadBufferRange(
-        command_buffer, 0,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
-                                   bytes),
-        device.CommandContext());
-  }
+  static void PrepareNeighborCommands(MetalRenderDevice&, const NodeId&,
+                                      std::span<const std::uint32_t>) {}
 
   static auto NeighborLut(MetalRenderDevice& device) -> LutBinding {
     return device.Workspace().Device().DummyLut();
@@ -174,19 +148,18 @@ struct MetalDrtOps {
     return scratch.Texture();
   }
 
-  static void DispatchHorizontal(MetalRenderDevice&, const Texture&, Texture&, const NeighborWork&,
-                                 std::uint32_t, std::uint32_t) {}
+  static void DispatchHorizontal(MetalRenderDevice& device, const Texture& src, Texture& dst,
+                                 const NeighborWork& work, std::uint32_t width,
+                                 std::uint32_t height) {
+    DispatchNeighborHorizontal(device, src, dst, work.params, width, height);
+  }
 
-  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src, const Texture&,
+  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src,
+                                    const Texture& horizontal,
                                     Texture& dst, const LutBinding& lut, const NeighborWork& work,
                                     std::uint32_t width, std::uint32_t height) {
-    auto& workspace = device.Workspace();
-    auto* commands  = workspace.Values().Find(GraphValueId{work.owner, PortId{"runtime.order"}});
-    if (commands == nullptr) {
-      throw std::runtime_error("ExecuteMetalDrt: missing fused command buffer");
-    }
-    DispatchPointwise(device, src, dst, workspace.Parameters().DeviceBuffer(), *commands,
-                      work.command_index, lut, width, height);
+    (void)lut;
+    DispatchNeighborVertical(device, src, horizontal, dst, work.params, width, height);
   }
 
   static auto AcquireOutput(MetalRenderDevice& device, const GraphValueId& id, std::uint32_t width,
@@ -249,12 +222,13 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 #ifdef ALCEDO_METAL_DRT_METALLIB_PATH
   pipelines.push_back(
       MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH, "drt_display", "Metal DRT"});
-#endif
-#ifdef ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH
-  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH,
-                                          "primary_grade_pointwise", "Metal DRT Post"});
-#endif
-#if !defined(ALCEDO_METAL_DRT_METALLIB_PATH) && !defined(ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH)
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH,
+                                          "drt_neighbor_blur_horizontal",
+                                          "Metal DRT Post Horizontal"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH,
+                                          "drt_neighbor_apply_vertical",
+                                          "Metal DRT Post Vertical"});
+#else
   (void)pipelines;
 #endif
 }
@@ -262,7 +236,7 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
                      PipelineDocument& document) -> MetalDrtResult {
   const auto executed = DrtPostExecutor<MetalDrtOps>::Execute(device, plan, document);
-  return {executed.output, executed.scene_post, executed.post_neighborhood_count};
+  return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 
 }  // namespace alcedo

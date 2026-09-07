@@ -38,7 +38,7 @@ TEST(DrtPostSchedule, DisabledNeighborhoodsCopySceneThenDisplay) {
   EXPECT_EQ(trace.enabled_neighborhood_count, 0U);
   EXPECT_TRUE(trace.display_transform_scheduled);
   EXPECT_TRUE(DrtNeighborhoodDestinations(NodeId{"drt"},
-                                          GraphValueId{NodeId{"drt"}, PortId{"runtime.scene_post"}},
+                                          GraphValueId{NodeId{"drt"}, PortId{"display"}},
                                           0)
                   .empty());
 }
@@ -55,12 +55,12 @@ TEST(DrtPostSchedule, EnabledNeighborhoodsKeepCompilerOrderAndPingPongDestinatio
             AdjustmentBehavior::Sharpen);
   EXPECT_EQ(static_cast<AdjustmentBehavior>(schedule.enabled[1].behavior),
             AdjustmentBehavior::Clarity);
-  const GraphValueId scene_output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
-  const auto dests = DrtNeighborhoodDestinations(NodeId{"drt"}, scene_output, 3);
+  const GraphValueId display_output{NodeId{"drt"}, PortId{"display"}};
+  const auto dests = DrtNeighborhoodDestinations(NodeId{"drt"}, display_output, 3);
   ASSERT_EQ(dests.size(), 3U);
   EXPECT_EQ(dests[0], (GraphValueId{NodeId{"drt"}, PortId{"runtime.ping"}}));
   EXPECT_EQ(dests[1], (GraphValueId{NodeId{"drt"}, PortId{"runtime.pong"}}));
-  EXPECT_EQ(dests[2], scene_output);
+  EXPECT_EQ(dests[2], display_output);
 }
 
 struct FakeNeighborTexture {};
@@ -236,7 +236,7 @@ TEST(DrtPostExecutor, EmptyNeighborhoodCopiesSceneWithoutKernelStarts) {
   DrtPostSchedule schedule;
   schedule.copy_scene_to_post = true;
   const GraphValueId input{NodeId{"grade"}, PortId{"image"}};
-  const GraphValueId output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  const GraphValueId output{NodeId{"drt"}, PortId{"display"}};
   const auto scene =
       DrtPostExecutor<FakeDrtOps>::ApplyNeighborhoods(device, schedule, {}, input, output,
                                                       NodeId{"drt"}, 0, 8, 8);
@@ -255,7 +255,7 @@ TEST(DrtPostExecutor, TwoEnabledNeighborhoodsUseSharedHorizontalThenVerticalOrde
   works[0].params = schedule.enabled[0];
   works[1].params = schedule.enabled[1];
   const GraphValueId input{NodeId{"grade"}, PortId{"image"}};
-  const GraphValueId output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  const GraphValueId output{NodeId{"drt"}, PortId{"display"}};
   const auto scene = DrtPostExecutor<FakeDrtOps>::ApplyNeighborhoods(
       device, schedule, works, input, output, NodeId{"drt"}, 0, 8, 8);
   EXPECT_EQ(scene, output);
@@ -265,7 +265,7 @@ TEST(DrtPostExecutor, TwoEnabledNeighborhoodsUseSharedHorizontalThenVerticalOrde
   EXPECT_EQ(FakeDrtOps::log, expected);
 }
 
-TEST(DrtPostExecutor, DisplayTransformStartsAfterNeighborhoodWrites) {
+TEST(DrtPostExecutor, DisplayTransformStartsBeforeNeighborhoodWrites) {
   FakeDrtOps::log.clear();
   FakeDrtDevice device;
   DrtPostSchedule schedule;
@@ -273,19 +273,19 @@ TEST(DrtPostExecutor, DisplayTransformStartsAfterNeighborhoodWrites) {
   std::vector<NeighborWork> works(1);
   works[0].params = schedule.enabled[0];
   const GraphValueId input{NodeId{"grade"}, PortId{"image"}};
-  const GraphValueId output{NodeId{"drt"}, PortId{"runtime.scene_post"}};
+  const GraphValueId output{NodeId{"drt"}, PortId{"runtime.display_base"}};
   const GraphValueId display{NodeId{"drt"}, PortId{"display"}};
-  const auto scene = DrtPostExecutor<FakeDrtOps>::ApplyNeighborhoods(
-      device, schedule, works, input, output, NodeId{"drt"}, 0, 8, 8);
-  DrtPostExecutor<FakeDrtOps>::DispatchDisplay(device, scene, display, NodeId{"drt"}, 8, 8);
+  DrtPostExecutor<FakeDrtOps>::DispatchDisplay(device, input, output, NodeId{"drt"}, 8, 8);
+  (void)DrtPostExecutor<FakeDrtOps>::ApplyNeighborhoods(
+      device, schedule, works, output, display, NodeId{"drt"}, 0, 8, 8);
   ASSERT_EQ(FakeDrtOps::log.size(), 7U);
   EXPECT_EQ(FakeDrtOps::log[0], "acquire-output");
-  EXPECT_EQ(FakeDrtOps::log[1], "acquire-h-scratch");
-  EXPECT_EQ(FakeDrtOps::log[2], "horizontal");
-  EXPECT_EQ(FakeDrtOps::log[3], "vertical");
-  EXPECT_EQ(FakeDrtOps::log[4], "release-h-scratch");
-  EXPECT_EQ(FakeDrtOps::log[5], "acquire-output");
-  EXPECT_EQ(FakeDrtOps::log[6], "display");
+  EXPECT_EQ(FakeDrtOps::log[1], "display");
+  EXPECT_EQ(FakeDrtOps::log[2], "acquire-output");
+  EXPECT_EQ(FakeDrtOps::log[3], "acquire-h-scratch");
+  EXPECT_EQ(FakeDrtOps::log[4], "horizontal");
+  EXPECT_EQ(FakeDrtOps::log[5], "vertical");
+  EXPECT_EQ(FakeDrtOps::log[6], "release-h-scratch");
 }
 
 }  // namespace

@@ -186,6 +186,9 @@ constant float kSmoothCusps         = 0.12f;
 constant float kCuspMidBlend        = 1.3f;
 constant float kFocusGainBlend      = 0.3f;
 constant float kCompressionThreshold = 0.75f;
+constant float kHuntNJ = 0.012f;
+constant float kChromaJFloor = 0.25f;
+constant float kRgbMappingFailureRatio = 8.0f;
 
 constant float kAp1ToAp0[9] = {
     0.695452213f, 0.0447945632f, -0.00552588236f,
@@ -405,6 +408,7 @@ static inline float3 DisplayEncoding(float3 rgb, constant float* mat_limit_to_di
 
 #include "drt_aces.metal"
 #include "drt_opendrt.metal"
+#include "../../../../include/edit/runtime/aces_reference_gamut_compression.h"
 
 kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
                         texture2d<float, access::write> output [[texture(1)]],
@@ -414,8 +418,10 @@ kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
     return;
   }
   const float4 source = input.read(gid);
-  const float3 scene =
-      float3(acescc_decode(source.x), acescc_decode(source.y), acescc_decode(source.z));
+  const AcesRgcRgb compressed =
+      AcesReferenceGamutCompress(acescc_decode(source.x), acescc_decode(source.y),
+                                 acescc_decode(source.z));
+  const float3 scene = float3(compressed.r, compressed.g, compressed.b);
   float3 display_linear;
   if (params.method_ == kMetalOdtMethodAces20) {
     display_linear = OutputTransform_fwd(scene, params.aces_params_);
@@ -426,3 +432,5 @@ kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
                                          params.display_linear_scale_);
   output.write(float4(encoded, source.w), gid);
 }
+
+#include "drt_neighbor.metal"
