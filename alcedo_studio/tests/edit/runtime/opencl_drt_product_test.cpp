@@ -258,6 +258,32 @@ TEST_F(OpenClDrtFixture, OpenClDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
 #endif
 }
 
+TEST_F(OpenClDrtFixture, Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels) {
+  constexpr std::uint32_t kHues = 360;
+  auto aces   = document_.Drt()->Params().Params();
+  aces.method = DrtMethod::Aces20;
+  document_.Drt()->Params().ReplaceParams(aces);
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 4.0f),
+                                         gpu_dag_test::FullSensor(kHues, 1));
+  plan_  = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+  const auto pixels = Download(*device_, Render());
+  ASSERT_EQ(pixels.size(), static_cast<std::size_t>(kHues));
+  ASSERT_TRUE(AllFinite(pixels));
+
+  auto luma = [](const Rgba& p) { return 0.2126f * p.r + 0.7152f * p.g + 0.0722f * p.b; };
+  std::size_t isolated_black = 0;
+  for (std::uint32_t i = 0; i < kHues; ++i) {
+    const float prev = luma(pixels[(i + kHues - 1) % kHues]);
+    const float curr = luma(pixels[i]);
+    const float next = luma(pixels[(i + 1) % kHues]);
+    const float neighbor_floor = std::min(prev, next);
+    if (neighbor_floor > 0.08f && curr < 0.25f * neighbor_floor) {
+      ++isolated_black;
+    }
+  }
+  EXPECT_EQ(isolated_black, 0U);
+}
+
 TEST_F(OpenClDrtFixture, OpenClDrtPackedWriteDoesNotCopyFullDto) {
   OperatorModelFullDtoCopyCount::Reset();
   (void)Render();

@@ -57,7 +57,11 @@ GPU_FUNC float safe_log10_ratio(float num, float den, float eps = 1e-7f) {
 
 GPU_FUNC float safe_pow_pos(float base, float exp) {
   // pow for non-negative base; clamps base to >=0 to avoid NaNs for fractional exp.
-  return powf(fmaxf(base, 0.0f), exp);
+  const float b = fmaxf(base, 0.0f);
+  if (b == 0.0f) {
+    return (exp > 0.0f) ? 0.0f : 1.0f;
+  }
+  return powf(b, exp);
 }
 
 struct HueDependentGamutParams {
@@ -350,27 +354,38 @@ GPU_FUNC float3 tonemap_and_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
 GPU_FUNC int look_hue_interval(float h, const GPU_Table1D<float>& hue_table,
                                int* hue_linearity_search_range) {
   const float hw = wrap_to_360(h);
-  int         i  = baseIndex + hue_position_in_uniform_table(hw, tableSize);  //  tableSize=360
-  int         i_lo = i + hue_linearity_search_range[0];
-  int         i_hi = i + hue_linearity_search_range[1];
+  // Academy CTL seeds this search with totalTableSize so the window matches
+  // determine_hue_linearity_search_range (also keyed on totalTableSize).
+  int i    = baseIndex + hue_position_in_uniform_table(hw, totalTableSize);
+  int i_lo = i + hue_linearity_search_range[0];
+  int i_hi = i + hue_linearity_search_range[1];
 
   // clamp to valid padded range [baseIndex, baseIndex + tableSize]
-  i_lo             = i_lo < baseIndex ? baseIndex : i_lo;
-  i_hi             = i_hi > (baseIndex + tableSize) ? (baseIndex + tableSize) : i_hi;
+  i_lo = i_lo < baseIndex ? baseIndex : i_lo;
+  i_hi = i_hi > (baseIndex + tableSize) ? (baseIndex + tableSize) : i_hi;
+  if (i_lo > i_hi) {
+    i_lo = baseIndex;
+    i_hi = baseIndex + tableSize;
+  }
+  i = (i_lo + i_hi) >> 1;
 
 #pragma unroll
-  for (int k = 0; k < 6 && (i_lo + 1 < i_hi); ++k) {  // log2(range) <= 6
+  for (int k = 0; k < 16 && (i_lo + 1 < i_hi); ++k) {
     const float v  = tex1Dfetch<float>(hue_table.texture_object_, i);
     const int   gt = hw > v;  // 0/1
     i_lo           = gt ? i : i_lo;
     i_hi           = gt ? i_hi : i;
-    i              = (i_lo + i_hi) >> 1;  // midpoint
+    i              = (i_lo + i_hi) >> 1;
   }
 
   return (i_hi < 1) ? 1 : i_hi;
 }
 
-GPU_FUNC float  interpolation_weight(float h, float h_lo, float h_hi) { return h - h_lo; }
+GPU_FUNC float interpolation_weight(float h, float h_lo, float h_hi) {
+  const float denom = h_hi - h_lo;
+  if (fabsf(denom) < 1e-6f) return 0.0f;
+  return clamp_f((h - h_lo) / denom, 0.0f, 1.0f);
+}
 
 GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
   const float hw     = wrap_to_360(h);
@@ -391,7 +406,7 @@ GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
   const float4 lo    = tex1Dfetch<float4>(table.texture_object_, high_i - 1);
   const float4 hi    = tex1Dfetch<float4>(table.texture_object_, high_i);
   const float  denom = hi.z - lo.z;
-  const float  t     = (denom != 0.0f) ? (hw - lo.z) / denom : 0.0f;
+  const float  t     = clamp_f((fabsf(denom) > 1e-6f) ? (hw - lo.z) / denom : 0.0f, 0.0f, 1.0f);
 
   return make_float2(lerp_f(lo.x, hi.x, t), lerp_f(lo.y, hi.y, t));
 }
@@ -413,8 +428,9 @@ GPU_FUNC HueDependentGamutParams init_HueDependentGamutParams(float h, GPU_ODTPa
   const float t  = interpolation_weight(hw, table_get(p.table_hues_, i_hi - 1), table_get(p.table_hues_, i_hi));
 
   hdp.JMcusp               = cusp_from_table(h, p.table_gamut_cusps_);
-  hdp.gamma_top_inv        = lerp_f(table_get(p.table_upper_hull_gamma_, i_hi - 1),
-                                    table_get(p.table_upper_hull_gamma_, i_hi), t);
+  hdp.gamma_top_inv        = clamp_f(lerp_f(table_get(p.table_upper_hull_gamma_, i_hi - 1),
+                                           table_get(p.table_upper_hull_gamma_, i_hi), t),
+                                    0.05f, 8.0f);
   hdp.focus_J              = compute_focus_J(hdp.JMcusp.x, p.mid_J, p.limit_J_max);
   hdp.analytical_threshold = lerp_f(hdp.JMcusp.x, p.limit_J_max, focus_gain_blend);
 
@@ -572,7 +588,11 @@ GPU_FUNC float3 compress_gamut(const float3& JMh, float Jx, GPU_ODTParams& p,
                                                 p.limit_J_max, reach_max_M, p.limit_J_max);
 
   const float remapped_M = remap_M(M, gamut_boundary_M, reach_boundary_M, invert);
-  return make_float3(J_intersect_source + remapped_M * gamut_slope, remapped_M, h);
+  const float J_out      = J_intersect_source + remapped_M * gamut_slope;
+  if (!isfinite_f(J_out) || !isfinite_f(remapped_M)) {
+    return make_float3(fmaxf(Jx, 0.0f), 0.0f, h);
+  }
+  return make_float3(J_out, remapped_M, h);
 }
 
 GPU_FUNC float3 gamut_compress_fwd(const float3& JMh, GPU_ODTParams& p) {

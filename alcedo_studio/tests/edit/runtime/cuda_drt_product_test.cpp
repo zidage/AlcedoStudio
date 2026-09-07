@@ -349,6 +349,60 @@ void ApplyUnmaskedReferencePostAndDrt(PipelineDocument& document) {
   drt->Params().ReplaceParams(params);
 }
 
+TEST_F(CudaDrtProductFixture, Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels) {
+  constexpr std::uint32_t kHues = 360;
+  auto document = CreateDefaultPipelineDocument();
+  auto params   = document.Drt()->Params().Params();
+  params.method = DrtMethod::Aces20;
+  document.Drt()->Params().ReplaceParams(params);
+  input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 4.0f),
+                                         gpu_dag_test::FullSensor(kHues, 1));
+  const auto pixels = Render(document);
+  ASSERT_EQ(pixels.size(), static_cast<std::size_t>(kHues));
+  ASSERT_TRUE(AllFiniteDisplayValues(pixels));
+
+  auto luma = [](const Rgba& p) { return 0.2126f * p.r + 0.7152f * p.g + 0.0722f * p.b; };
+  std::size_t isolated_black = 0;
+  for (std::uint32_t i = 0; i < kHues; ++i) {
+    const float prev = luma(pixels[(i + kHues - 1) % kHues]);
+    const float curr = luma(pixels[i]);
+    const float next = luma(pixels[(i + 1) % kHues]);
+    const float neighbor_floor = std::min(prev, next);
+    if (neighbor_floor > 0.08f && curr < 0.25f * neighbor_floor) {
+      ++isolated_black;
+    }
+  }
+  EXPECT_EQ(isolated_black, 0U);
+}
+
+TEST_F(CudaDrtProductFixture, Aces20ExtremeChromaticHdrStaysFiniteAndNotBlack) {
+  auto document = CreateDefaultPipelineDocument();
+  auto params   = document.Drt()->Params().Params();
+  params.method = DrtMethod::Aces20;
+  document.Drt()->Params().ReplaceParams(params);
+  auto plane = gpu_dag_test::MakeF32RgbaPlane(8, 1);
+  auto* px   = const_cast<float*>(reinterpret_cast<const float*>(plane.bytes.get()));
+  const float samples[][3] = {
+      {1.0e5f, 1.0e5f, 1.0e5f}, {1.0e5f, 0.0f, 0.0f}, {0.0f, 1.0e5f, 0.0f},
+      {0.0f, 0.0f, 1.0e5f},     {1.0e5f, 1.0e-4f, 0.0f}, {1.0e-4f, 1.0e5f, 1.0e-4f},
+      {4.0f, 0.0f, 4.0f},       {0.18f, 0.18f, 0.18f},
+  };
+  for (int i = 0; i < 8; ++i) {
+    px[i * 4 + 0] = samples[i][0];
+    px[i * 4 + 1] = samples[i][1];
+    px[i * 4 + 2] = samples[i][2];
+    px[i * 4 + 3] = 1.0f;
+  }
+  input_ = RawInputLoader::FromDirectRgb(plane, gpu_dag_test::FullSensor(8, 1));
+  const auto pixels = Render(document);
+  ASSERT_EQ(pixels.size(), 8U);
+  ASSERT_TRUE(AllFiniteDisplayValues(pixels));
+  EXPECT_GT(MaxRgb(pixels), 0.05f);
+  for (const auto& pixel : pixels) {
+    EXPECT_GE(std::min(pixel.r, std::min(pixel.g, pixel.b)), 0.0f);
+  }
+}
+
 TEST_F(CudaDrtProductFixture, DrtPostPreservesUnmaskedReferenceOrder) {
   auto document = CreateDefaultPipelineDocument();
   ApplyUnmaskedReferencePostAndDrt(document);

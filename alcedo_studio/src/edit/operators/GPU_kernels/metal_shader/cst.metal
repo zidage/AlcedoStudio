@@ -16,6 +16,7 @@ constant int kMetalEotfBt1886        = 4;
 constant int kMetalEotfGamma22       = 5;
 constant int kMetalEotfGamma18       = 6;
 constant int kMetalOdtTableSize      = 360;
+constant int kMetalOdtTotalTableSize = 362;
 constant int kMetalOdtBaseIndex      = 1;
 constant float kMetalHueLimit        = 360.0f;
 
@@ -214,6 +215,14 @@ static inline float acescc_decode(float acescc) {
 static inline float gamma22_encode(float linear) { return pow(fmax(linear, 0.0f), 1.0f / 2.2f); }
 
 static inline float Tonescale_fwd(float x, const constant MetalTSParams& params) {
+  if (!isfinite(x)) {
+    if (x > 0.0f) {
+      const float f_inf = params.m_2_;
+      const float h_inf = fmax(0.0f, f_inf * f_inf / (f_inf + params.t_1_));
+      return h_inf * params.n_r_;
+    }
+    return 0.0f;
+  }
   const float denom = x + params.s_2_;
   const float ratio = (denom > 1e-7f) ? (fmax(0.0f, x) / denom) : 0.0f;
   const float f     = params.m_2_ * pow(ratio, params.g_);
@@ -388,7 +397,13 @@ static inline float safe_log10_ratio(float num, float den, float eps = 1e-7f) {
   return log10(fmax(num, eps) / fmax(den, eps));
 }
 
-static inline float safe_pow_pos(float base, float expv) { return pow(fmax(base, 0.0f), expv); }
+static inline float safe_pow_pos(float base, float expv) {
+  const float b = fmax(base, 0.0f);
+  if (b == 0.0f) {
+    return (expv > 0.0f) ? 0.0f : 1.0f;
+  }
+  return pow(b, expv);
+}
 
 struct HueDependentGamutParams {
   float2 JMcusp;
@@ -594,7 +609,7 @@ static inline float2 cusp_from_table(float h, const constant MetalODTParams& p) 
   const float lo_h = p.table_gamut_cusps_[lo_idx][2];
   const float hi_h = p.table_gamut_cusps_[hi_idx][2];
   const float denom = hi_h - lo_h;
-  const float t     = (denom != 0.0f) ? (hw - lo_h) / denom : 0.0f;
+  const float t     = clamp_f((fabs(denom) > 1e-6f) ? (hw - lo_h) / denom : 0.0f, 0.0f, 1.0f);
   return float2(lerp_f(p.table_gamut_cusps_[lo_idx][0], p.table_gamut_cusps_[hi_idx][0], t),
                 lerp_f(p.table_gamut_cusps_[lo_idx][1], p.table_gamut_cusps_[hi_idx][1], t));
 }
@@ -605,15 +620,19 @@ static inline float compute_focus_J(float cusp_j, float mid_j, float limit_j_max
 
 static inline int look_hue_interval(float h, const constant MetalODTParams& p) {
   const float hw = wrap_to_360(h);
-  int i          = kMetalOdtBaseIndex + hue_position_in_uniform_table(hw, kMetalOdtTableSize);
+  int i          = kMetalOdtBaseIndex + hue_position_in_uniform_table(hw, kMetalOdtTotalTableSize);
   int i_lo       = i + p.hue_linearity_search_range[0];
   int i_hi       = i + p.hue_linearity_search_range[1];
   i_lo           = i_lo < kMetalOdtBaseIndex ? kMetalOdtBaseIndex : i_lo;
   i_hi           = i_hi > (kMetalOdtBaseIndex + kMetalOdtTableSize)
                        ? (kMetalOdtBaseIndex + kMetalOdtTableSize)
                        : i_hi;
+  if (i_lo > i_hi) {
+    i_lo = kMetalOdtBaseIndex;
+    i_hi = kMetalOdtBaseIndex + kMetalOdtTableSize;
+  }
   i              = (i_lo + i_hi) >> 1;
-  for (int k = 0; k < 6 && (i_lo + 1 < i_hi); ++k) {
+  for (int k = 0; k < 16 && (i_lo + 1 < i_hi); ++k) {
     const float v = p.table_hues_[i];
     if (hw > v) {
       i_lo = i;
@@ -625,14 +644,21 @@ static inline int look_hue_interval(float h, const constant MetalODTParams& p) {
   return (i_hi < 1) ? 1 : i_hi;
 }
 
+static inline float interpolation_weight(float h, float h_lo, float h_hi) {
+  const float denom = h_hi - h_lo;
+  if (fabs(denom) < 1e-6f) return 0.0f;
+  return clamp_f((h - h_lo) / denom, 0.0f, 1.0f);
+}
+
 static inline HueDependentGamutParams init_HueDependentGamutParams(float h, const constant MetalODTParams& p) {
   HueDependentGamutParams hdp;
   hdp.gamma_bottom_inv = p.lower_hull_gamma_inv;
   const int i_hi       = look_hue_interval(h, p);
   const float hw       = wrap_to_360(h);
-  const float t        = hw - p.table_hues_[i_hi - 1];
+  const float t        = interpolation_weight(hw, p.table_hues_[i_hi - 1], p.table_hues_[i_hi]);
   hdp.JMcusp           = cusp_from_table(h, p);
-  hdp.gamma_top_inv    = lerp_f(p.table_upper_hull_gamma_[i_hi - 1], p.table_upper_hull_gamma_[i_hi], t);
+  hdp.gamma_top_inv    = clamp_f(
+      lerp_f(p.table_upper_hull_gamma_[i_hi - 1], p.table_upper_hull_gamma_[i_hi], t), 0.05f, 8.0f);
   hdp.focus_J          = compute_focus_J(hdp.JMcusp.x, p.mid_J, p.limit_J_max);
   hdp.analytical_threshold = lerp_f(hdp.JMcusp.x, p.limit_J_max, kFocusGainBlend);
   return hdp;
@@ -738,7 +764,11 @@ static inline float3 compress_gamut(float3 jmh, float jx, const constant MetalOD
   const float reach_boundary_m = estimate_line_and_boundary_intersection_M(
       j_intersect_source, gamut_slope, p.model_gamma_inv, p.limit_J_max, reach_max_m, p.limit_J_max);
   const float remapped_m       = remap_M(jmh.y, gamut_boundary_m, reach_boundary_m, invert);
-  return float3(j_intersect_source + remapped_m * gamut_slope, remapped_m, jmh.z);
+  const float j_out            = j_intersect_source + remapped_m * gamut_slope;
+  if (!isfinite_f(j_out) || !isfinite_f(remapped_m)) {
+    return float3(fmax(jx, 0.0f), 0.0f, jmh.z);
+  }
+  return float3(j_out, remapped_m, jmh.z);
 }
 
 static inline float3 gamut_compress_fwd(float3 jmh, const constant MetalODTParams& p) {

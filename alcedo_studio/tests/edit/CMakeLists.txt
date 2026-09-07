@@ -113,7 +113,9 @@ gtest_discover_tests(ToneMappingFacadeTest TEST_PREFIX "ToneMappingFacadeTest.")
 alcedo_register_test_target(ToneMappingFacadeTest edit)
 
 # ODT (Output Device Transform) operator test.
-add_executable(ODTOpTest ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp)
+add_executable(ODTOpTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/aces_odt_numeric_stability_test.cpp)
 target_include_directories(ODTOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators)
 gtest_discover_tests(ODTOpTest TEST_PREFIX "ODTOpTest.")

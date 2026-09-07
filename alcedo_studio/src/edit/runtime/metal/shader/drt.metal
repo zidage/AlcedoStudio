@@ -160,6 +160,7 @@ constant int kMetalEotfBt1886        = 4;
 constant int kMetalEotfGamma22       = 5;
 constant int kMetalEotfGamma18       = 6;
 constant int kMetalOdtTableSize      = 360;
+constant int kMetalOdtTotalTableSize = 362;
 constant int kMetalOdtBaseIndex      = 1;
 constant float kMetalHueLimit        = 360.0f;
 
@@ -318,6 +319,14 @@ static inline float acescc_decode(float acescc) {
 }
 
 static inline float Tonescale_fwd(float x, const constant MetalTSParams& params) {
+  if (!isfinite(x)) {
+    if (x > 0.0f) {
+      const float f_inf = params.m_2_;
+      const float h_inf = fmax(0.0f, f_inf * f_inf / (f_inf + params.t_1_));
+      return h_inf * params.n_r_;
+    }
+    return 0.0f;
+  }
   const float denom = x + params.s_2_;
   const float ratio = (denom > 1e-7f) ? (fmax(0.0f, x) / denom) : 0.0f;
   const float f     = params.m_2_ * pow(ratio, params.g_);

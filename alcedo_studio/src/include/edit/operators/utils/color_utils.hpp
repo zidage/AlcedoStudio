@@ -1016,6 +1016,9 @@ inline float get_focus_gain(float J, float analytical_threshold, float limit_J_M
   if (J > analytical_threshold) {
     float gain_adjustment =
         log10f((limit_J_Max - analytical_threshold) / fmaxf(0.0001f, limit_J_Max - J));
+    if (!std::isfinite(gain_adjustment)) {
+      gain_adjustment = 0.f;
+    }
     gain_adjustment = gain_adjustment * gain_adjustment + 1.f;
     gain            = gain * gain_adjustment;
   }
@@ -1023,22 +1026,25 @@ inline float get_focus_gain(float J, float analytical_threshold, float limit_J_M
 }
 
 inline float solve_J_intersect(float J, float M, float focus_J, float max_J, float slope_gain) {
-  const float M_scaled = M / slope_gain;
-  const float a        = M_scaled / focus_J;
+  const float sg       = fmaxf(fabsf(slope_gain), 1e-6f);
+  const float fj       = fmaxf(fabsf(focus_J), 1e-6f);
+  const float M_scaled = M / sg;
+  const float a        = M_scaled / fj;
 
   if (J < focus_J) {
     const float b    = 1.f - M_scaled;
     const float c    = -J;
     const float det  = b * b - 4.f * a * c;
-    const float root = sqrtf(det);
-    return -2.f * c / (b + root);
-  } else {
-    const float b    = -(1.f + M_scaled + max_J * a);
-    const float c    = max_J * M_scaled + J;
-    const float det  = b * b - 4.f * a * c;
-    const float root = sqrtf(det);
-    return -2.f * c / (b - root);
+    const float root = (det > 0.f) ? sqrtf(det) : 0.f;
+    const float den  = copysignf(fmaxf(fabsf(b + root), 1e-6f), b + root);
+    return -2.f * c / den;
   }
+  const float b    = -(1.f + M_scaled + max_J * a);
+  const float c    = max_J * M_scaled + J;
+  const float det  = b * b - 4.f * a * c;
+  const float root = (det > 0.f) ? sqrtf(det) : 0.f;
+  const float den  = copysignf(fmaxf(fabsf(b - root), 1e-6f), b - root);
+  return -2.f * c / den;
 }
 
 inline float compute_compression_vector_slope(float intersect_J, float focus_J, float limit_J_max,
@@ -1086,19 +1092,23 @@ inline float estimate_line_and_boundary_intersection_M(float J_axis_intersect, f
 
   // We calculate a shifted intersection from the original intersection using
   // the inverse of the exponential and the provided reference
-  const float normalized_J         = J_axis_intersect / J_intersection_reference;
-  const float shifted_intersection = J_intersection_reference * powf(normalized_J, inv_gamma);
+  const float refJ                 = fmaxf(J_intersection_reference, 1e-6f);
+  const float normalized_J         = fmaxf(J_axis_intersect / refJ, 0.0f);
+  const float shifted_intersection =
+      (normalized_J == 0.0f) ? 0.0f : refJ * powf(normalized_J, inv_gamma);
 
   // Now we find the M intersection of two lines
   // line from origin to J,M Max       l1(x) = J/M * x
   // line from J Intersect' with slope l2(x) = slope * x + Intersect'
 
   // return shifted_intersection / ((J_max / M_max) - slope);
-  return shifted_intersection * M_max / (J_max - slope * M_max);
+  const float denom = copysignf(fmaxf(fabsf(J_max - slope * M_max), 1e-6f), (J_max - slope * M_max));
+  return shifted_intersection * M_max / denom;
 }
 
 inline float smin_scaled(float a, float b, float scale_ref) {
   const float s_scaled = smooth_cusps * scale_ref;
+  if (s_scaled <= 1e-6f) return fminf(a, b);
   const float h        = fmaxf(s_scaled - fabsf(a - b), 0.f) / s_scaled;
   return fminf(a, b) - h * h * h * s_scaled * (1.f / 6.f);
 }
@@ -1208,6 +1218,9 @@ inline std::array<float, TOTAL_TABLE_SIZE> MakeUpperHullGammaTable(
       }
     }
     upper_hull_gammas[i] = 1.f / high;
+    if (!std::isfinite(upper_hull_gammas[i]) || upper_hull_gammas[i] <= 0.f) {
+      upper_hull_gammas[i] = 1.f / fmaxf(high, gamma_search_step);
+    }
   }
 
   // Copy last populated entry to first empty spot

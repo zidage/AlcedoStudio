@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -86,6 +88,27 @@ inline auto MakeF32RgbaPlane(std::uint32_t width, std::uint32_t height) -> HostI
       px[i + 2] = 0.25f;
       px[i + 3] = 1.0f;
     }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+inline auto MakeSaturatedHueWheelPlane(std::uint32_t hues, float amplitude) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = Extent2D{hues, 1};
+  plane.stride_bytes = hues * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  const std::size_t bytes = plane.ByteCount();
+  auto storage = std::shared_ptr<std::byte>(new std::byte[bytes], [](std::byte* p) { delete[] p; });
+  auto* px     = reinterpret_cast<float*>(storage.get());
+  constexpr float kTwoPi = 6.28318530718f;
+  const float     step   = kTwoPi / static_cast<float>(hues);
+  for (std::uint32_t i = 0; i < hues; ++i) {
+    const float h = static_cast<float>(i) * step;
+    px[i * 4 + 0] = amplitude * std::max(0.0f, std::cos(h));
+    px[i * 4 + 1] = amplitude * std::max(0.0f, std::cos(h - kTwoPi / 3.0f));
+    px[i * 4 + 2] = amplitude * std::max(0.0f, std::cos(h + kTwoPi / 3.0f));
+    px[i * 4 + 3] = 1.0f;
   }
   plane.bytes = std::const_pointer_cast<const std::byte>(storage);
   return plane;
