@@ -20,6 +20,8 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/content_key.hpp"
+#include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/grade_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
@@ -45,20 +47,12 @@ struct PrimaryGradeDispatchParams {
 
 static_assert(sizeof(PrimaryGradeDispatchParams) == 32);
 
-enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
-
-struct GradeOp {
-  GradeOpKind                kind = GradeOpKind::Fused;
-  std::vector<std::uint32_t> offsets;
-  GradeNeighborParams        neighbor{};
-};
-
 auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<OpenClBackend>& {
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
 }
 
-auto AcquireScratch(OpenClRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
+auto AcquireOpenClScratch(OpenClRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
     -> ResourceLease<OpenClBackend> {
   return workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
 }
@@ -91,15 +85,6 @@ void DispatchKernel(OpenClRenderDevice& device, cl_kernel kernel, std::uint32_t 
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
-auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
-  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
-  if (behavior == AdjustmentBehavior::Halation) {
-    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
-                      kGradeNeighborMaxTapCount - 1U);
-  }
-  return params.radius;
-}
-
 void SetImageKernelArgs(cl_kernel kernel, cl_mem src, cl_mem dst) {
   CheckOpenCl(clSetKernelArg(kernel, 0, sizeof(cl_mem), &src),
               "OpenCL Primary Grade source argument");
@@ -107,7 +92,7 @@ void SetImageKernelArgs(cl_kernel kernel, cl_mem src, cl_mem dst) {
               "OpenCL Primary Grade destination argument");
 }
 
-void DispatchPointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
+void EnqueueGradePointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
                        OpenClBackend::Texture2D& dst, const OpenClBackend::Buffer& params,
                        const OpenClBackend::Buffer& commands, std::uint32_t command_offset,
                        std::uint32_t command_count, const OpenClLutBinding& lut,
@@ -142,7 +127,7 @@ void DispatchPointwise(OpenClRenderDevice& device, const OpenClBackend::Texture2
   DispatchKernel(device, kernel, width, height);
 }
 
-void DispatchNeighbor(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
+void EnqueueGradeNeighbor(OpenClRenderDevice& device, const OpenClBackend::Texture2D& src,
                       OpenClBackend::Texture2D& blur_horizontal, OpenClBackend::Texture2D& dst,
                       const GradeNeighborParams& params, std::uint32_t width,
                       std::uint32_t height) {
@@ -173,14 +158,14 @@ void DispatchNeighbor(OpenClRenderDevice& device, const OpenClBackend::Texture2D
               "OpenCL Primary Grade neighbor apply destination argument");
   CheckOpenCl(clSetKernelArg(apply_kernel, 3, sizeof(params), &params),
               "OpenCL Primary Grade neighbor apply parameters");
-  const auto radius      = NeighborVerticalRadius(params);
+  const auto radius      = NeighborhoodVerticalRadius(params);
   const auto local_bytes = kLocalEdge * (kLocalEdge + 2U * radius) * 4U * sizeof(float);
   CheckOpenCl(clSetKernelArg(apply_kernel, 4, local_bytes, nullptr),
               "OpenCL Primary Grade neighbor local tile argument");
   DispatchKernel(device, apply_kernel, width, height, kLocalEdge);
 }
 
-void DispatchMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
+void EnqueueGradeMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
                  const OpenClBackend::Texture2D& adjusted, OpenClBackend::Texture2D& dst, float mix,
                  const OpenClBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
   const auto kernel_name = mask == nullptr ? OpenCL::GpuDag::kPrimaryGradeMixKernelName
@@ -209,7 +194,7 @@ void DispatchMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& sou
   DispatchKernel(device, kernel, width, height);
 }
 
-auto LoadLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
+auto LoadOpenClGradeLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (!packed.has_value()) {
     return device.Workspace().Device().DummyLut();
@@ -221,37 +206,129 @@ auto LoadLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLu
                                                 device.CommandContext());
 }
 
-auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector<GradeOp> {
-  std::vector<GradeOp> compacted;
-  compacted.reserve(ops.size());
-  for (auto& op : ops) {
-    if (op.kind == GradeOpKind::LlfBarrier && !local_tone_active) {
-      continue;
-    }
-    if (op.kind == GradeOpKind::Fused && op.offsets.empty()) {
-      continue;
-    }
-    if (op.kind == GradeOpKind::Fused && !compacted.empty() &&
-        compacted.back().kind == GradeOpKind::Fused) {
-      compacted.back().offsets.insert(compacted.back().offsets.end(), op.offsets.begin(),
-                                      op.offsets.end());
-      continue;
-    }
-    compacted.push_back(std::move(op));
-  }
-  return compacted;
-}
 
-auto CountGpuWrites(const std::vector<GradeOp>& ops, bool skip_mix) -> std::size_t {
-  std::size_t count = skip_mix ? 0 : 1;
-  for (const auto& op : ops) {
-    if (op.kind == GradeOpKind::Fused || op.kind == GradeOpKind::Detail ||
-        op.kind == GradeOpKind::LlfBarrier) {
-      ++count;
-    }
+struct OpenClGradeOps {
+  using Device  = OpenClRenderDevice;
+  using Backend = OpenClBackend;
+  using Texture = OpenClBackend::Texture2D;
+  using Scratch = ResourceLease<OpenClBackend>*;
+
+  static constexpr const char* kErrorPrefix = "ExecuteOpenClPrimaryGrade";
+
+  static void AliasOutput(OpenClRenderDevice& device, const GraphValueId& output,
+                          const GraphValueId& input) {
+    device.Workspace().AliasImageFrom(output, input);
   }
-  return count;
-}
+
+  static auto UploadFusedCommands(OpenClRenderDevice& device, const NodeId& grade_id,
+                                  const std::vector<std::uint32_t>& fused_offsets)
+      -> std::uint32_t {
+    if (fused_offsets.empty()) {
+      return 0;
+    }
+    auto&              workspace = device.Workspace();
+    const GraphValueId command_id{grade_id, PortId{"runtime.order"}};
+    const auto         bytes = fused_offsets.size() * sizeof(fused_offsets[0]);
+    ContentHash        topology;
+    topology.MixText(grade_id.Value());
+    topology.MixU32(static_cast<std::uint32_t>(fused_offsets.size()));
+    for (const auto offset : fused_offsets) {
+      topology.MixU32(offset);
+    }
+    const auto topology_hash = topology.Key().hash;
+    const auto* existing     = workspace.Values().Find(command_id);
+    const bool needs_upload =
+        existing == nullptr || existing->Bytes() < bytes ||
+        workspace.Device().GradeCommandTopologyHash() != topology_hash;
+    auto& buffer =
+        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
+    if (needs_upload) {
+      workspace.Device().UploadBufferRange(
+          buffer, 0,
+          std::span<const std::byte>(reinterpret_cast<const std::byte*>(fused_offsets.data()),
+                                     bytes),
+          device.CommandContext());
+      workspace.Device().SetGradeCommandTopologyHash(topology_hash);
+      return static_cast<std::uint32_t>(bytes);
+    }
+    return 0;
+  }
+
+  static auto LoadLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
+    return LoadOpenClGradeLut(device, grade);
+  }
+
+  static auto LutResourceId(const OpenClLutBinding& lut) -> std::uint64_t {
+    return lut.resource_id;
+  }
+
+  static auto AcquireScratch(OpenClRenderDevice& device, std::uint32_t width, std::uint32_t height,
+                             const GraphValueId& id) -> Scratch {
+    return &AcquireRgba(device.Workspace(), id, width, height);
+  }
+
+  static auto ScratchTexture(Scratch scratch) -> Texture& { return scratch->Texture(); }
+
+  static auto AcquireOutput(OpenClRenderDevice& device, const GraphValueId& output,
+                            std::uint32_t width, std::uint32_t height) -> Texture& {
+    return AcquireRgba(device.Workspace(), output, width, height).Texture();
+  }
+
+  static auto SceneTexture(OpenClRenderDevice& device, const GraphValueId& id) -> Texture& {
+    auto* image = device.Workspace().Images().Find(id);
+    if (image == nullptr || image->Empty()) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: stage image is missing");
+    }
+    return image->Texture();
+  }
+
+  static void DispatchPointwise(OpenClRenderDevice& device, const Texture& src, Texture& dst,
+                                const OpenClLutBinding& lut, const NodeId& grade_id,
+                                std::uint32_t command_start, std::uint32_t command_count,
+                                std::uint32_t width, std::uint32_t height) {
+    auto& workspace = device.Workspace();
+    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
+    }
+    EnqueueGradePointwise(device, src, dst, workspace.Parameters().DeviceBuffer(), *commands,
+                          command_start, command_count, lut, width, height);
+  }
+
+  static void DispatchNeighbor(OpenClRenderDevice& device, const Texture& src, Texture& dst,
+                               const GradeScheduledOp& op, const OpenClLutBinding&, const NodeId&,
+                               std::uint32_t, std::uint32_t width, std::uint32_t height) {
+    auto blur_horizontal = AcquireOpenClScratch(device.Workspace(), width, height);
+    EnqueueGradeNeighbor(device, src, blur_horizontal.Texture(), dst, op.neighbor, width, height);
+  }
+
+  static void DispatchMix(OpenClRenderDevice& device, const Texture& source, const Texture& adjusted,
+                          Texture& destination, float mix, const Texture* mask, std::uint32_t width,
+                          std::uint32_t height) {
+    EnqueueGradeMix(device, source, adjusted, destination, mix, mask, width, height);
+  }
+
+  static auto ExecuteLocalTone(OpenClRenderDevice& device, const Texture& src, Texture& dst,
+                               const NodeId& grade_id, float shadows_slider,
+                               float highlights_slider, const ResolvedRenderGeometry& geometry)
+      -> OpenClLocalToneResult {
+    return ExecuteOpenClLocalTone(device, src, dst, grade_id, shadows_slider, highlights_slider,
+                                  geometry);
+  }
+
+  static auto MaskTexture(OpenClRenderDevice& device, const GraphValueId& mask_output,
+                          std::uint32_t width, std::uint32_t height) -> const Texture* {
+    auto* mask = device.Workspace().Images().Find(mask_output);
+    if (mask == nullptr || mask->Texture().Native() == nullptr ||
+        mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
+        mask->Texture().Height() != height) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled mask output is missing");
+    }
+    return &mask->Texture();
+  }
+
+  static void CheckAfterEncode(OpenClRenderDevice&) {}
+};
 
 }  // namespace
 
@@ -259,285 +336,19 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
                                const PreparedRawInput& prepared, PipelineDocument& document,
                                const CompiledGradeNode& compiled_grade_node)
     -> OpenClPrimaryGradeResult {
-  auto& workspace = device.Workspace();
-  if (!workspace.IsRendering()) {
-    throw std::runtime_error("ExecuteOpenClPrimaryGrade: BeginRender has not been called");
-  }
-  const auto* compiled_grade = &compiled_grade_node;
-  auto* grade =
-      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
-  if (grade == nullptr) {
-    throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled Color Grade is missing");
-  }
-  auto* input = workspace.Images().Find(compiled_grade->scene_input);
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing Color Grade scene input");
-  }
-  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
-  if (early_mix == 0.0f) {
-    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
-    OpenClPrimaryGradeResult skipped;
-    skipped.output = compiled_grade->scene_output;
-    return skipped;
-  }
-
-  auto&       arena      = workspace.Parameters();
-  std::size_t slot_count = 0;
-  for (const auto& compiled_node : plan.grade_nodes) {
-    slot_count += compiled_node.adjustments.size();
-  }
-  arena.Reserve(slot_count *
-                (kGradeRuntimeParamBytes + ParameterArena<OpenClBackend>::kSlotAlignment));
-  std::vector<PendingParameterPatch> pending;
-  std::vector<GradeOp>               ops;
-  ops.reserve(compiled_grade->adjustments.size());
-  float                       shadows_slider    = 0.0f;
-  float                       highlights_slider = 0.0f;
-
-  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
-    auto* model = node.FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteOpenClPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    if (IsLocalToneBehavior(*behavior) &&
-        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      throw std::runtime_error(
-          "ExecuteOpenClPrimaryGrade: Shadows/Highlights were not compiled for LLF");
-    }
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian &&
-        !IsLocalToneBehavior(*behavior)) {
-      throw std::runtime_error(
-          "ExecuteOpenClPrimaryGrade: non-local adjustment was compiled for LLF");
-    }
-    const ParameterSlotKey key{node.Id(), compiled.instance_id};
-    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
-      pending.push_back(std::move(*change));
-    }
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    BindAdjustmentSlot(*grade, compiled);
-  }
-
-  auto FlushFused = [&]() -> GradeOp* {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
-    }
-    return &ops.back();
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    auto* model = grade->FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteOpenClPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      const float slider = PackedGradeControlValue(arena, key);
-      if (*behavior == AdjustmentBehavior::Shadows) {
-        shadows_slider = slider;
-      } else if (*behavior == AdjustmentBehavior::Highlights) {
-        highlights_slider = slider;
-      }
-      if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
-        ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});
-      }
-      continue;
-    }
-
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
-        IsNeighborhoodBehavior(*behavior)) {
-      auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
-      if (neighbor.enabled != 0U) {
-        ops.push_back(GradeOp{GradeOpKind::Detail, {}, neighbor});
-      }
-      continue;
-    }
-    if (compiled.algorithm != CompiledAdjustmentAlgorithm::Pointwise) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: unsupported grade algorithm");
-    }
-    FlushFused()->offsets.push_back(arena.Binding(key).offset);
-  }
-
-  const bool local_tone_active = local_tone_mapping::ShouldRun(
-      shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
-      -highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f);
-  ops           = CompactOps(std::move(ops), local_tone_active);
-  auto& context = device.CommandContext();
-  arena.UploadDirty(context);
-  for (auto& patch : pending) {
-    patch.Commit();
-  }
-
-  std::vector<std::uint32_t> command_offsets;
-  command_offsets.reserve(compiled_grade->adjustments.size());
-  std::vector<std::uint32_t> command_starts;
-  command_starts.reserve(ops.size());
-  ContentHash topology;
-  topology.MixText(grade->Id().Value());
-  for (const auto& op : ops) {
-    topology.MixU32(static_cast<std::uint32_t>(op.kind));
-    topology.MixU32(static_cast<std::uint32_t>(op.offsets.size()));
-    command_starts.push_back(static_cast<std::uint32_t>(command_offsets.size()));
-    for (const auto offset : op.offsets) {
-      topology.MixU32(offset);
-      command_offsets.push_back(offset);
-    }
-  }
-  const auto               topology_hash = topology.Key().hash;
-
+  const auto executed = GradeExecutor<OpenClGradeOps>::Execute(device, plan, prepared, document,
+                                                              compiled_grade_node);
   OpenClPrimaryGradeResult result;
-  result.output = compiled_grade->scene_output;
-  const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
-  if (!command_offsets.empty()) {
-    const auto  bytes                   = command_offsets.size() * sizeof(command_offsets[0]);
-    const auto* existing_command_buffer = workspace.Values().Find(command_id);
-    const bool  command_buffer_needs_upload =
-        existing_command_buffer == nullptr || existing_command_buffer->Bytes() < bytes;
-    auto& command_buffer =
-        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
-    if (command_buffer_needs_upload ||
-        workspace.Device().GradeCommandTopologyHash() != topology_hash) {
-      workspace.Device().UploadBufferRange(
-          command_buffer, 0,
-          std::span<const std::byte>(reinterpret_cast<const std::byte*>(command_offsets.data()),
-                                     bytes),
-          context);
-      workspace.Device().SetGradeCommandTopologyHash(topology_hash);
-      result.command_upload_bytes = static_cast<std::uint32_t>(bytes);
-    }
-  }
-
-  const auto lut         = LoadLut(device, *grade);
-  result.lut_resource_id = lut.resource_id;
-
-  input                  = workspace.Images().Find(compiled_grade->scene_input);
-  if (input == nullptr) {
-    throw std::runtime_error(
-        "ExecuteOpenClPrimaryGrade: Color Grade scene input lost during parameter bind");
-  }
-  const auto  width       = input->Texture().Width();
-  const auto  height      = input->Texture().Height();
-  const float mix         = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool  skip_mix    = mix == 1.0f && !compiled_grade->mask_stack.has_value();
-  const auto  write_count = CountGpuWrites(ops, skip_mix);
-
-  std::vector<ResourceLease<OpenClBackend>> scratches;
-  scratches.reserve(write_count + 1);
-  auto remaining = write_count;
-  enum class ImageSlot : std::uint8_t { Input, Scratch, Output };
-  ImageSlot   current_slot    = ImageSlot::Input;
-  std::size_t current_scratch = 0;
-  ImageSlot   dest_slot       = ImageSlot::Scratch;
-  std::size_t dest_scratch    = 0;
-
-  auto Resolve = [&](ImageSlot slot, std::size_t scratch_index) -> OpenClBackend::Texture2D& {
-    if (slot == ImageSlot::Input) {
-      auto* source = workspace.Images().Find(compiled_grade->scene_input);
-      if (source == nullptr) {
-        throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing Color Grade scene input");
-      }
-      return source->Texture();
-    }
-    if (slot == ImageSlot::Output) {
-      auto* dest = workspace.Images().Find(compiled_grade->scene_output);
-      if (dest == nullptr) {
-        throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing grade output");
-      }
-      return dest->Texture();
-    }
-    if (scratch_index >= scratches.size()) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: scratch index is invalid");
-    }
-    return scratches[scratch_index].Texture();
-  };
-
-  auto AllocateDest = [&]() {
-    if (remaining == 0) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: destination count underflow");
-    }
-    --remaining;
-    if (remaining == 0) {
-      dest_slot = ImageSlot::Output;
-      (void)AcquireRgba(workspace, compiled_grade->scene_output, width, height);
-      return;
-    }
-    dest_slot    = ImageSlot::Scratch;
-    dest_scratch = scratches.size();
-    scratches.push_back(AcquireScratch(workspace, width, height));
-  };
-
-  if (write_count == 0) {
-    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
-    return result;
-  }
-
-  auto* commands_buffer = command_offsets.empty() ? nullptr : workspace.Values().Find(command_id);
-  for (std::size_t index = 0; index < ops.size(); ++index) {
-    const auto& op = ops[index];
-    AllocateDest();
-    if (op.kind == GradeOpKind::Detail) {
-      auto  blur_horizontal = AcquireScratch(workspace, width, height);
-      auto& src             = Resolve(current_slot, current_scratch);
-      auto& dest            = Resolve(dest_slot, dest_scratch);
-      DispatchNeighbor(device, src, blur_horizontal.Texture(), dest, op.neighbor, width, height);
-      ++result.detail_pass_count;
-    } else if (op.kind == GradeOpKind::LlfBarrier) {
-      auto&      src  = Resolve(current_slot, current_scratch);
-      auto&      dest = Resolve(dest_slot, dest_scratch);
-      const auto local_tone =
-          ExecuteOpenClLocalTone(device, src, dest, grade->Id(), shadows_slider, highlights_slider,
-                                 plan.geometry);
-      result.local_tone_reference_resource_id       = local_tone.reference_resource_id;
-      result.local_tone_rebuilt_reference           = local_tone.rebuilt_reference;
-      result.local_tone_sampled_canonical_reference = local_tone.sampled_canonical_reference;
-      result.local_tone_transient_bytes             = local_tone.transient_bytes;
-      ++result.local_tone_pass_count;
-    } else {
-      if (commands_buffer == nullptr) {
-        throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
-      }
-      auto& src  = Resolve(current_slot, current_scratch);
-      auto& dest = Resolve(dest_slot, dest_scratch);
-      DispatchPointwise(device, src, dest, arena.DeviceBuffer(), *commands_buffer,
-                        command_starts[index], static_cast<std::uint32_t>(op.offsets.size()), lut,
-                        width, height);
-      ++result.pointwise_dispatch_count;
-    }
-    current_slot    = dest_slot;
-    current_scratch = dest_scratch;
-  }
-
-  if (!skip_mix) {
-    AllocateDest();
-    auto&                           source       = Resolve(ImageSlot::Input, 0);
-    auto&                           adjusted     = Resolve(current_slot, current_scratch);
-    auto&                           dest         = Resolve(dest_slot, dest_scratch);
-    const OpenClBackend::Texture2D* mask_texture = nullptr;
-    if (compiled_grade->mask_stack.has_value()) {
-      auto* mask = workspace.Images().Find(compiled_grade->mask_output);
-      if (mask == nullptr || mask->Texture().Native() == nullptr ||
-          mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
-          mask->Texture().Height() != height) {
-        throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled mask output is missing");
-      }
-      mask_texture = &mask->Texture();
-    }
-    DispatchMix(device, source, adjusted, dest, mix, mask_texture, width, height);
-  }
+  result.output                                 = executed.output;
+  result.pointwise_dispatch_count               = executed.pointwise_dispatch_count;
+  result.detail_pass_count                      = executed.detail_pass_count;
+  result.local_tone_pass_count                  = executed.local_tone_pass_count;
+  result.local_tone_transient_bytes             = executed.local_tone_transient_bytes;
+  result.command_upload_bytes                   = executed.command_upload_bytes;
+  result.lut_resource_id                        = executed.lut_resource_id;
+  result.local_tone_reference_resource_id       = executed.local_tone_reference_resource_id;
+  result.local_tone_rebuilt_reference           = executed.local_tone_rebuilt_reference;
+  result.local_tone_sampled_canonical_reference = executed.local_tone_sampled_canonical_reference;
   return result;
 }
 

@@ -24,6 +24,7 @@
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/grade_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -36,19 +37,6 @@ namespace {
 using CudaAdjustmentParams  = GradeAdjustmentParams;
 using CudaAdjustmentCommand = GradeAdjustmentCommand;
 
-enum class GradeOpKind : std::uint8_t { Fused, Detail, LlfBarrier };
-
-struct GradeOp {
-  GradeOpKind                kind = GradeOpKind::Fused;
-  std::vector<std::uint32_t> offsets;
-  GradeNeighborParams        neighbor{};
-};
-
-auto EnsureImage(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
-                 std::uint32_t height) -> ResourceLease<CudaBackend>& {
-  return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
-}
-
 auto EnsureBuffer(CudaRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
     -> CudaBackend::Buffer& {
   auto* existing = workspace.Values().Find(id);
@@ -57,29 +45,12 @@ auto EnsureBuffer(CudaRenderWorkspace& workspace, const GraphValueId& id, std::s
   return *workspace.Values().Find(id);
 }
 
-auto AcquireScratch(CudaRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
+auto AcquireCudaScratch(CudaRenderWorkspace& workspace, std::uint32_t width, std::uint32_t height)
     -> ResourceLease<CudaBackend> {
   return workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
 }
 
-auto CompactOps(std::vector<GradeOp> ops, bool local_tone_active) -> std::vector<GradeOp> {
-  std::vector<GradeOp> compacted;
-  compacted.reserve(ops.size());
-  for (auto& op : ops) {
-    if (op.kind == GradeOpKind::LlfBarrier && !local_tone_active) continue;
-    if (op.kind == GradeOpKind::Fused && op.offsets.empty()) continue;
-    if (op.kind == GradeOpKind::Fused && !compacted.empty() &&
-        compacted.back().kind == GradeOpKind::Fused) {
-      compacted.back().offsets.insert(compacted.back().offsets.end(), op.offsets.begin(),
-                                      op.offsets.end());
-      continue;
-    }
-    compacted.push_back(std::move(op));
-  }
-  return compacted;
-}
-
-auto LoadLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
+auto LoadCudaGradeLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (!packed.has_value()) {
     return device.Workspace().Device().DummyLut();
@@ -89,15 +60,6 @@ auto LoadLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBin
   hash.MixU32(packed->edge);
   return device.Workspace().Device().AcquireLut(hash.Key(), packed->rgba, packed->edge,
                                                 device.CommandContext());
-}
-
-auto NeighborVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
-  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
-  if (behavior == AdjustmentBehavior::Halation) {
-    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
-                      kGradeNeighborMaxTapCount - 1U);
-  }
-  return params.radius;
 }
 
 __device__ auto Luma(const float3& c) -> float {
@@ -304,263 +266,163 @@ __global__ void FinalMixKernel(const float4* source, const float4* adjusted, flo
       make_float4(s.x + (a.x - s.x) * mix, s.y + (a.y - s.y) * mix, s.z + (a.z - s.z) * mix, s.w);
 }
 
+
+struct CudaGradeOps {
+  using Device  = CudaRenderDevice;
+  using Backend = CudaBackend;
+  using Texture = CudaBackend::Texture2D;
+  using Scratch = ResourceLease<CudaBackend>*;
+
+  static constexpr const char* kErrorPrefix = "ExecuteCudaPrimaryGrade";
+
+  static void AliasOutput(CudaRenderDevice& device, const GraphValueId& output,
+                          const GraphValueId& input) {
+    device.Workspace().AliasImageFrom(output, input);
+  }
+
+  static auto UploadFusedCommands(CudaRenderDevice& device, const NodeId& grade_id,
+                                  const std::vector<std::uint32_t>& fused_offsets)
+      -> std::uint32_t {
+    if (fused_offsets.empty()) {
+      return 0;
+    }
+    auto&              workspace  = device.Workspace();
+    const GraphValueId command_id{grade_id, PortId{"runtime.order"}};
+    const auto         bytes = fused_offsets.size() * sizeof(fused_offsets[0]);
+    auto&              buffer =
+        EnsureBuffer(workspace, command_id, std::max<std::size_t>(bytes, sizeof(std::uint32_t)));
+    workspace.Device().UploadBufferRange(
+        buffer, 0,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(fused_offsets.data()), bytes),
+        device.CommandContext());
+    return static_cast<std::uint32_t>(bytes);
+  }
+
+  static auto LoadLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
+    return LoadCudaGradeLut(device, grade);
+  }
+
+  static auto LutResourceId(const CudaLutBinding& lut) -> std::uint64_t { return lut.resource_id; }
+
+  static auto AcquireScratch(CudaRenderDevice& device, std::uint32_t width, std::uint32_t height,
+                             const GraphValueId& id) -> Scratch {
+    return &device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
+  }
+
+  static auto ScratchTexture(Scratch scratch) -> Texture& { return scratch->Texture(); }
+
+  static auto AcquireOutput(CudaRenderDevice& device, const GraphValueId& output,
+                            std::uint32_t width, std::uint32_t height) -> Texture& {
+    return device.Workspace()
+        .AcquireImageForWrite(output, {width, height, TextureFormat::Rgba32f})
+        .Texture();
+  }
+
+  static auto SceneTexture(CudaRenderDevice& device, const GraphValueId& id) -> Texture& {
+    auto* image = device.Workspace().Images().Find(id);
+    if (image == nullptr || image->Empty()) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: stage image is missing");
+    }
+    return image->Texture();
+  }
+
+  static void DispatchPointwise(CudaRenderDevice& device, const Texture& src, Texture& dst,
+                                const CudaLutBinding& lut, const NodeId& grade_id,
+                                std::uint32_t command_start, std::uint32_t command_count,
+                                std::uint32_t width, std::uint32_t height) {
+    auto& workspace = device.Workspace();
+    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr || command_count == 0) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: missing fused command buffer");
+    }
+    const auto pixels  = width * height;
+    const auto* device_commands =
+        static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer());
+    const auto* parameter_base =
+        static_cast<const unsigned char*>(workspace.Parameters().DeviceBuffer().DevicePointer());
+    constexpr std::uint32_t block = 256;
+    PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(src.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
+        pixels, parameter_base, device_commands + command_start, command_count,
+        static_cast<const float4*>(lut.device_pointer), lut.edge_size);
+  }
+
+  static void DispatchNeighbor(CudaRenderDevice& device, const Texture& src, Texture& dst,
+                               const GradeScheduledOp& op, const CudaLutBinding&, const NodeId&,
+                               std::uint32_t, std::uint32_t width, std::uint32_t height) {
+    auto blur_horizontal = AcquireCudaScratch(device.Workspace(), width, height);
+    const dim3 neighbor_block{16, 16};
+    const dim3 neighbor_grid{(width + neighbor_block.x - 1) / neighbor_block.x,
+                             (height + neighbor_block.y - 1) / neighbor_block.y};
+    cuda_neighbor_grade::BlurHorizontal<<<neighbor_grid, neighbor_block, 0,
+                                          device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(src.DevicePointer()),
+        static_cast<float4*>(blur_horizontal.Texture().DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), op.neighbor);
+    const auto vertical_radius = NeighborhoodVerticalRadius(op.neighbor);
+    const auto shared_bytes    = static_cast<std::size_t>(neighbor_block.x) *
+                              (neighbor_block.y + 2U * vertical_radius) * sizeof(float4);
+    cuda_neighbor_grade::ApplyVertical<<<neighbor_grid, neighbor_block, shared_bytes,
+                                         device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(src.DevicePointer()),
+        static_cast<const float4*>(blur_horizontal.Texture().DevicePointer()),
+        static_cast<float4*>(dst.DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), op.neighbor);
+  }
+
+  static void DispatchMix(CudaRenderDevice& device, const Texture& source, const Texture& adjusted,
+                          Texture& destination, float mix, const Texture* mask, std::uint32_t width,
+                          std::uint32_t height) {
+    const auto pixels = width * height;
+    constexpr std::uint32_t block = 256;
+    const auto* mask_pointer =
+        mask == nullptr ? nullptr : static_cast<const std::uint8_t*>(mask->DevicePointer());
+    FinalMixKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(source.DevicePointer()),
+        static_cast<const float4*>(adjusted.DevicePointer()),
+        static_cast<float4*>(destination.DevicePointer()), pixels, mix, mask_pointer);
+  }
+
+  static auto ExecuteLocalTone(CudaRenderDevice& device, const Texture& src, Texture& dst,
+                               const NodeId& grade_id, float shadows_slider,
+                               float highlights_slider, const ResolvedRenderGeometry& geometry)
+      -> CudaLocalToneResult {
+    return ExecuteCudaLocalTone(device, src, dst, grade_id, shadows_slider, highlights_slider,
+                                geometry);
+  }
+
+  static auto MaskTexture(CudaRenderDevice& device, const GraphValueId& mask_output,
+                          std::uint32_t width, std::uint32_t height) -> const Texture* {
+    auto* mask = device.Workspace().Images().Find(mask_output);
+    if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
+        mask->Texture().Width() != width || mask->Texture().Height() != height) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
+    }
+    return &mask->Texture();
+  }
+
+  static void CheckAfterEncode(CudaRenderDevice&) {
+    if (::cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
+    }
+  }
+};
+
 }  // namespace
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                              const PreparedRawInput& prepared, PipelineDocument& document,
                              const CompiledGradeNode& compiled_grade_node)
     -> CudaPrimaryGradeResult {
-  auto& workspace = device.Workspace();
-  if (!workspace.IsRendering()) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: BeginRender has not been called");
-  }
-  const auto* compiled_grade = &compiled_grade_node;
-  auto* grade =
-      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade->node_id));
-  if (grade == nullptr) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled Color Grade is missing");
-  }
-  auto* input = workspace.Images().Find(compiled_grade->scene_input);
-  if (input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: missing Color Grade scene input");
-  }
-  const float early_mix = grade->Enabled() ? grade->Mix() : 0.0f;
-  if (early_mix == 0.0f) {
-    workspace.AliasImageFrom(compiled_grade->scene_output, compiled_grade->scene_input);
-    return {compiled_grade->scene_output, 0, 0, false, false};
-  }
-
-  auto&       arena      = workspace.Parameters();
-  std::size_t slot_count = 0;
-  for (const auto& compiled_node : plan.grade_nodes) {
-    slot_count += compiled_node.adjustments.size();
-  }
-  arena.Reserve(slot_count *
-                (sizeof(CudaAdjustmentParams) + ParameterArena<CudaBackend>::kSlotAlignment));
-  std::vector<PendingParameterPatch> pending;
-  std::vector<GradeOp>               ops;
-  ops.reserve(compiled_grade->adjustments.size());
-  float                       shadows_slider    = 0.0f;
-  float                       highlights_slider = 0.0f;
-
-  auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
-    auto* model = node.FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteCudaPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveCudaAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    if (IsCudaLocalToneBehavior(*behavior) &&
-        compiled.algorithm != CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      throw std::runtime_error(
-          "ExecuteCudaPrimaryGrade: Shadows/Highlights were not compiled for LLF");
-    }
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian &&
-        !IsCudaLocalToneBehavior(*behavior)) {
-      throw std::runtime_error(
-          "ExecuteCudaPrimaryGrade: non-local adjustment was compiled for LLF");
-    }
-    const ParameterSlotKey key{node.Id(), compiled.instance_id};
-    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
-      pending.push_back(std::move(*change));
-    }
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    BindAdjustmentSlot(*grade, compiled);
-  }
-
-  auto FlushFused = [&]() -> GradeOp* {
-    if (ops.empty() || ops.back().kind != GradeOpKind::Fused) {
-      ops.push_back(GradeOp{GradeOpKind::Fused, {}, {}});
-    }
-    return &ops.back();
-  };
-
-  for (const auto& compiled : compiled_grade->adjustments) {
-    auto* model = grade->FindAdjustment(compiled.instance_id);
-    if (model == nullptr || model->Type() != compiled.type) {
-      throw std::runtime_error(
-          "ExecuteCudaPrimaryGrade: compiled adjustment no longer matches graph");
-    }
-    const auto behavior = TryResolveCudaAdjustmentBehavior(compiled.type);
-    if (!behavior.has_value()) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: unregistered adjustment type '" +
-                               std::string{compiled.type.Text()} + "'");
-    }
-    const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
-      const float slider = PackedGradeControlValue(arena, key);
-      if (*behavior == CudaAdjustmentBehavior::Shadows) {
-        shadows_slider = slider;
-      } else {
-        highlights_slider = slider;
-      }
-      if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
-        ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});
-      }
-      continue;
-    }
-
-    if (compiled.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
-        IsNeighborhoodBehavior(*behavior)) {
-      auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
-      if (neighbor.enabled != 0U) {
-        ops.push_back(GradeOp{GradeOpKind::Detail, {}, neighbor});
-      }
-      continue;
-    }
-    if (compiled.algorithm != CompiledAdjustmentAlgorithm::Pointwise) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: unsupported grade algorithm");
-    }
-    FlushFused()->offsets.push_back(arena.Binding(key).offset);
-  }
-
-  const bool local_tone_active = local_tone_mapping::ShouldRun(
-      shadows_slider * local_tone_mapping::kHighlightStrengthScale / 80.0f,
-      -highlights_slider * local_tone_mapping::kHighlightStrengthScale / 100.0f);
-  ops           = CompactOps(std::move(ops), local_tone_active);
-
-  auto& context = device.CommandContext();
-  arena.UploadDirty(context);
-  for (auto& patch : pending) patch.Commit();
-
-  std::vector<CudaAdjustmentCommand> commands;
-  commands.reserve(compiled_grade->adjustments.size());
-  std::vector<std::uint32_t> command_starts;
-  command_starts.reserve(ops.size());
-  for (const auto& op : ops) {
-    command_starts.push_back(static_cast<std::uint32_t>(commands.size()));
-    for (const auto offset : op.offsets) commands.push_back({offset});
-  }
-  const GraphValueId command_id{grade->Id(), PortId{"runtime.order"}};
-  auto&              command_buffer = EnsureBuffer(
-      workspace, command_id, std::max<std::size_t>(commands.size() * sizeof(commands[0]), 1));
-  if (!commands.empty()) {
-    workspace.Device().UploadBufferRange(
-        command_buffer, 0,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(commands.data()),
-                                   commands.size() * sizeof(commands[0])),
-        context);
-  }
-
-  const GraphValueId  output_id    = compiled_grade->scene_output;
-  const auto          input_width  = input->Texture().Width();
-  const auto          input_height = input->Texture().Height();
-  const std::uint8_t* mask_pointer = nullptr;
-  if (compiled_grade->mask_stack) {
-    auto* mask = workspace.Images().Find(compiled_grade->mask_output);
-    if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
-        mask->Texture().Width() != input_width || mask->Texture().Height() != input_height) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
-    }
-    mask_pointer = static_cast<const std::uint8_t*>(mask->Texture().DevicePointer());
-  }
-  const std::uint32_t     pixels = input_width * input_height;
-  constexpr std::uint32_t block  = 256;
-  const auto*             device_commands =
-      static_cast<const CudaAdjustmentCommand*>(command_buffer.DevicePointer());
-  const auto* parameter_base =
-      static_cast<const unsigned char*>(arena.DeviceBuffer().DevicePointer());
-  const auto lut = LoadLut(device, *grade);
-
-  CudaLocalToneResult local_tone;
-
-  if (ops.empty()) {
-    workspace.AliasImageFrom(output_id, compiled_grade->scene_input);
-    return {output_id, lut.resource_id, 0, false, false};
-  }
-
-  const float        grade_mix        = grade->Enabled() ? grade->Mix() : 0.0f;
-  const bool         skip_mix         = grade_mix == 1.0f && !compiled_grade->mask_stack.has_value();
-  std::size_t        remaining_writes = ops.size() + (skip_mix ? 0U : 1U);
-  const GraphValueId ping_id{grade->Id(), PortId{"runtime.ping"}};
-  const GraphValueId pong_id{grade->Id(), PortId{"runtime.pong"}};
-  GraphValueId       current_id = compiled_grade->scene_input;
-
-  auto               Resolve    = [&](const GraphValueId& id) -> CudaBackend::Texture2D& {
-    auto* image = workspace.Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: stage image is missing");
-    }
-    return image->Texture();
-  };
-  auto AllocateDest = [&]() -> GraphValueId {
-    if (remaining_writes == 0) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: destination count underflow");
-    }
-    --remaining_writes;
-    GraphValueId destination = output_id;
-    if (remaining_writes != 0) {
-      destination = current_id == ping_id ? pong_id : ping_id;
-    }
-    (void)EnsureImage(workspace, destination, input_width, input_height);
-    return destination;
-  };
-
-  const dim3 neighbor_block{16, 16};
-  const dim3 neighbor_grid{(input_width + neighbor_block.x - 1) / neighbor_block.x,
-                           (input_height + neighbor_block.y - 1) / neighbor_block.y};
-  for (std::size_t index = 0; index < ops.size(); ++index) {
-    const auto& op      = ops[index];
-    const auto  dest_id = AllocateDest();
-    if (op.kind == GradeOpKind::Detail) {
-      auto  blur_horizontal = AcquireScratch(workspace, input_width, input_height);
-      auto& src             = Resolve(current_id);
-      auto& dest            = Resolve(dest_id);
-      cuda_neighbor_grade::BlurHorizontal<<<neighbor_grid, neighbor_block, 0, context.Stream()>>>(
-          static_cast<const float4*>(src.DevicePointer()),
-          static_cast<float4*>(blur_horizontal.Texture().DevicePointer()),
-          static_cast<int>(input_width), static_cast<int>(input_height), op.neighbor);
-      const auto vertical_radius = NeighborVerticalRadius(op.neighbor);
-      const auto shared_bytes    = static_cast<std::size_t>(neighbor_block.x) *
-                                (neighbor_block.y + 2U * vertical_radius) * sizeof(float4);
-      cuda_neighbor_grade::
-          ApplyVertical<<<neighbor_grid, neighbor_block, shared_bytes, context.Stream()>>>(
-              static_cast<const float4*>(src.DevicePointer()),
-              static_cast<const float4*>(blur_horizontal.Texture().DevicePointer()),
-              static_cast<float4*>(dest.DevicePointer()), static_cast<int>(input_width),
-              static_cast<int>(input_height), op.neighbor);
-    } else if (op.kind == GradeOpKind::LlfBarrier) {
-      local_tone = ExecuteCudaLocalTone(device, current_id, dest_id, grade->Id(), input_width,
-                                        input_height, shadows_slider, highlights_slider,
-                                        plan.geometry);
-    } else {
-      auto& src  = Resolve(current_id);
-      auto& dest = Resolve(dest_id);
-      PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
-          static_cast<const float4*>(src.DevicePointer()),
-          static_cast<float4*>(dest.DevicePointer()), pixels, parameter_base,
-          device_commands + command_starts[index], static_cast<std::uint32_t>(op.offsets.size()),
-          static_cast<const float4*>(lut.device_pointer), lut.edge_size);
-    }
-    current_id = dest_id;
-  }
-
-  if (!skip_mix) {
-    const auto dest_id     = AllocateDest();
-    auto&      source      = Resolve(compiled_grade->scene_input);
-    auto&      adjusted    = Resolve(current_id);
-    auto&      destination = Resolve(dest_id);
-    FinalMixKernel<<<(pixels + block - 1) / block, block, 0, context.Stream()>>>(
-        static_cast<const float4*>(source.DevicePointer()),
-        static_cast<const float4*>(adjusted.DevicePointer()),
-        static_cast<float4*>(destination.DevicePointer()), pixels, grade_mix, mask_pointer);
-    current_id = dest_id;
-  }
-
-  if (current_id != output_id || remaining_writes != 0) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: grade output scheduling failed");
-  }
-  if (::cudaGetLastError() != cudaSuccess) {
-    throw std::runtime_error("ExecuteCudaPrimaryGrade: CUDA kernel launch failed");
-  }
-  return {output_id, lut.resource_id, local_tone.reference_resource_id,
-          local_tone.rebuilt_reference, local_tone.sampled_canonical_reference};
+  const auto executed =
+      GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document, compiled_grade_node);
+  CudaPrimaryGradeResult result;
+  result.output                                = executed.output;
+  result.lut_resource_id                       = executed.lut_resource_id;
+  result.local_tone_reference_resource_id      = executed.local_tone_reference_resource_id;
+  result.local_tone_rebuilt_reference          = executed.local_tone_rebuilt_reference;
+  result.local_tone_sampled_canonical_reference = executed.local_tone_sampled_canonical_reference;
+  return result;
 }
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,

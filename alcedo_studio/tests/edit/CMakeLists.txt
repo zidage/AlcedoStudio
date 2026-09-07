@@ -344,6 +344,8 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/adjustment_runtime_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/grade_schedule_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp

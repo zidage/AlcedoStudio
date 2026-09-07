@@ -119,4 +119,11 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
                                            const ResolvedRenderGeometry& geometry)
     -> GradeNeighborParams;
 
+/**
+ * @brief Vertical shared-memory radius for a separable neighborhood pass.
+ *
+ * Halation uses a 3-sigma window of @p params.sigma_y. Other operators use @p params.radius.
+ */
+[[nodiscard]] auto NeighborhoodVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t;
+
 }  // namespace alcedo

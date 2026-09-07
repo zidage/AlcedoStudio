@@ -596,9 +596,19 @@ class OpenClGradeFixture : public ::testing::Test {
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
-  auto RenderGrade() -> OpenClPrimaryGradeResult {
+  /**
+   * @brief Encode Develop through Color Grade and publish recorded image results.
+   *
+   * Direct RGB Develop allocates ExactRelease upload slabs and frees them at last
+   * GPU use. Pass @p reset_counters_after_develop for Grade workspace-reuse checks
+   * so those allocations are not counted as Grade or DRT pool growth.
+   */
+  auto RenderGrade(bool reset_counters_after_develop = false) -> OpenClPrimaryGradeResult {
     device_->BeginRender();
     ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+    if (reset_counters_after_develop) {
+      device_->Workspace().Device().ResetCounters();
+    }
     ExecuteOpenClGeometryResample(*device_, plan_);
     ExecuteOpenClCameraColor(*device_, plan_, document_);
     auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
@@ -610,9 +620,12 @@ class OpenClGradeFixture : public ::testing::Test {
     return result;
   }
 
-  auto RenderThroughDrtPost() -> OpenClDrtResult {
+  auto RenderThroughDrtPost(bool reset_counters_after_develop = false) -> OpenClDrtResult {
     device_->BeginRender();
     ExecuteOpenClDevelop(*device_, plan_, prepared_, document_);
+    if (reset_counters_after_develop) {
+      device_->Workspace().Device().ResetCounters();
+    }
     ExecuteOpenClGeometryResample(*device_, plan_);
     ExecuteOpenClCameraColor(*device_, plan_, document_);
     auto grade  = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
@@ -690,7 +703,7 @@ TEST_F(OpenClGradeFixture, OpenClSingleSliderEditUploadsOnlyItsParameterRange) {
                                       AdjustmentInstanceId{"grade.primary.exposure"}};
   const auto             exposure_binding = device_->Workspace().Parameters().Binding(exposure_key);
   device_->Workspace().Device().ResetCounters();
-  (void)RenderGrade();
+  (void)RenderGrade(true);
   const auto& ranges = device_->Workspace().Device().LastHostToDeviceRanges();
   EXPECT_TRUE(std::ranges::any_of(ranges, [&](const ByteRange& range) {
     return range.offset == exposure_binding.offset && range.size == exposure_binding.size;
@@ -773,7 +786,7 @@ TEST_F(OpenClGradeFixture, OpenClLutResourceIsReusedByContentKey) {
   EXPECT_NE(first.lut_resource_id, 0U);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.25f);
   device_->Workspace().Device().ResetCounters();
-  const auto second = RenderGrade();
+  const auto second = RenderGrade(true);
   EXPECT_EQ(second.lut_resource_id, first.lut_resource_id);
   EXPECT_EQ(device_->Workspace().Device().LutUploadBytes(), 0U);
   EXPECT_EQ(device_->Workspace().Device().LastLutResourceId(), first.lut_resource_id);
@@ -789,7 +802,7 @@ TEST_F(OpenClGradeFixture, OpenClDetailPassesAcquireAllResourcesFromWorkspace) {
   EXPECT_EQ(first.post_neighborhood_count, 4U);
   EXPECT_GT(device_->Workspace().Textures().EntryCount(), 0U);
   device_->Workspace().Device().ResetCounters();
-  const auto second = RenderThroughDrtPost();
+  const auto second = RenderThroughDrtPost(true);
   EXPECT_EQ(second.post_neighborhood_count, 4U);
   EXPECT_EQ(device_->Workspace().Device().TextureCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);
@@ -983,7 +996,7 @@ TEST_F(OpenClGradeFixture, OpenClStableGradeCreatesNoDummyLutOrStageParameterBuf
   EXPECT_NE(first.lut_resource_id, 0U);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.25f);
   device_->Workspace().Device().ResetCounters();
-  const auto second = RenderGrade();
+  const auto second = RenderGrade(true);
   EXPECT_EQ(second.command_upload_bytes, 0U);
   EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_->Workspace().Device().KernelCreateCount(), 0U);
@@ -1082,11 +1095,24 @@ TEST_F(OpenClGradeFixture, OpenClLlfSliderEditReusesCanonicalReference) {
             device_->Workspace().ResultInvalidation().RequiredRevision(result_id));
 }
 
+TEST_F(OpenClGradeFixture, OpenClLlfPersistsOnlyCanonicalSourceAndResultPlanes) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(55.0f);
+  (void)RenderGrade();
+  const auto grade_id = document_.PrimaryGrade()->Id();
+  EXPECT_NE(device_->Workspace().Images().Find(LocalToneValueId(grade_id, "source")), nullptr);
+  EXPECT_NE(device_->Workspace().Images().Find(LocalToneValueId(grade_id, "result")), nullptr);
+  EXPECT_EQ(device_->Workspace().Images().Find(
+                GraphValueId{grade_id, PortId{"local_tone.source.1"}}),
+            nullptr);
+  EXPECT_EQ(device_->Workspace().Values().Find(grade_id, PortId{"local_tone.source.1"}), nullptr);
+  EXPECT_EQ(device_->Workspace().Values().Find(grade_id, PortId{"local_tone.remap_a.0"}), nullptr);
+}
+
 TEST_F(OpenClGradeFixture, OpenClLlfSecondStableRenderCreatesNoBufferImageProgramOrKernel) {
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
   (void)RenderGrade();
   device_->Workspace().Device().ResetCounters();
-  const auto second = RenderGrade();
+  const auto second = RenderGrade(true);
   EXPECT_FALSE(second.local_tone_rebuilt_reference);
   EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
   EXPECT_EQ(device_->Workspace().Device().BufferCreateCount(), 0U);

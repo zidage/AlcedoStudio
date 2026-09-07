@@ -15,11 +15,12 @@
 #include <vector>
 
 #include "cuda_acescc.cuh"
-#include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
+#include "edit/runtime/local_tone_executor.hpp"
+#include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 
@@ -27,39 +28,6 @@ namespace alcedo {
 namespace {
 
 using local_tone_mapping::LlfSample;
-
-constexpr int   kMaxLevels = local_tone_mapping::kMaxLevels;
-constexpr float kRadius    = 18.0f;
-
-struct PyramidLayout {
-  int                         count = 0;
-  std::array<int, kMaxLevels> widths{};
-  std::array<int, kMaxLevels> heights{};
-};
-
-auto MakeLayout(int width, int height) -> PyramidLayout {
-  PyramidLayout layout;
-  layout.count      = local_tone_mapping::ComputeLevelCount(width, height, kRadius);
-  layout.widths[0]  = width;
-  layout.heights[0] = height;
-  for (int level = 1; level < layout.count; ++level) {
-    layout.widths[level]  = std::max(1, (layout.widths[level - 1] + 1) / 2);
-    layout.heights[level] = std::max(1, (layout.heights[level - 1] + 1) / 2);
-  }
-  return layout;
-}
-
-auto EnsureBuffer(CudaRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
-    -> CudaBackend::Buffer& {
-  auto* buffer = workspace.Values().Find(id);
-  if (buffer != nullptr && buffer->Bytes() >= bytes) return *buffer;
-  workspace.Values().Store(id, workspace.Device().CreateBuffer(bytes));
-  return *workspace.Values().Find(id);
-}
-
-auto LevelId(const NodeId& grade_id, const char* family, int level) -> GraphValueId {
-  return {grade_id, PortId{std::string{"local_tone."} + family + "." + std::to_string(level)}};
-}
 
 __device__ auto Ap1Intensity(const float4& pixel) -> float {
   return 0.272229f * pixel.x + 0.674082f * pixel.y + 0.053689f * pixel.z;
@@ -283,236 +251,260 @@ void CheckLaunch(const char* operation) {
   }
 }
 
-auto LocalUvPlan(std::uint32_t width, std::uint32_t height) -> Matrix3x3 {
-  Matrix3x3 matrix;
-  matrix.m[0] = 1.0f / static_cast<float>(width);
-  matrix.m[4] = 1.0f / static_cast<float>(height);
-  return matrix;
-}
+struct CudaTonePlane {
+  float*      ptr   = nullptr;
+  std::size_t bytes = 0;
+};
 
-}  // namespace
-
-auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id,
-                          const GraphValueId& output_id, const NodeId& grade_id,
-                          std::uint32_t width, std::uint32_t height, float shadows_slider,
-                          float highlights_slider, const ResolvedRenderGeometry& geometry)
-    -> CudaLocalToneResult {
-  auto& workspace = device.Workspace();
-  auto* input     = workspace.Images().Find(input_id);
-  if (!workspace.IsRendering() || input == nullptr || input->Empty()) {
-    throw std::runtime_error("ExecuteCudaLocalTone: missing active input");
-  }
-  if (geometry.full_reference_extent.Empty() || geometry.render_extent.Empty()) {
-    throw std::runtime_error("ExecuteCudaLocalTone: geometry extents must be positive");
-  }
-  auto& output = workspace.AcquireImageForWrite(output_id, {width, height, TextureFormat::Rgba32f});
-  input        = workspace.Images().Find(input_id);
-
-  const auto canonical_dims = local_tone_mapping::ComputeMaskDimensions(
+auto CanonicalNeeded(RuntimeInvalidationState& invalidation, const GraphValueId& id,
+                     const ResolvedRenderGeometry& geometry, int current_long_edge)
+    -> ResultRepresentation {
+  const auto canonical = local_tone_mapping::ComputeMaskDimensions(
       static_cast<int>(geometry.full_reference_extent.width),
       static_cast<int>(geometry.full_reference_extent.height),
       local_tone_mapping::kReferenceMaskMaxLongEdge);
-  const bool full_edit = CoversFullEditSpace(geometry);
-  const int  current_long_edge =
-      std::max(static_cast<int>(width), static_cast<int>(height));
-  const auto source_id       = LocalToneSourceId(grade_id);
-  const auto result_id       = LocalToneResultId(grade_id);
-  const bool persist_llf     = workspace.PersistsResult(source_id);
-  const auto canonical_bytes = static_cast<std::size_t>(canonical_dims.width) *
-                               static_cast<std::size_t>(canonical_dims.height) * sizeof(float);
-  auto* cached_source = persist_llf ? workspace.Values().Find(source_id) : nullptr;
-  auto* cached_result = persist_llf ? workspace.Values().Find(result_id) : nullptr;
-  if (!persist_llf) {
-    device.PassStats().result_policy_bypass += 2;
+  const ImageExtent extent{static_cast<std::uint32_t>(canonical.width),
+                           static_cast<std::uint32_t>(canonical.height)};
+  return invalidation.MakeImageRepresentation(id, extent, TextureFormat::R32f,
+                                              static_cast<std::uint32_t>(current_long_edge));
+}
+
+auto BindCanonicalImage(CudaRenderDevice& device, const GraphValueId& id,
+                        const ResultRepresentation& needed) -> ResourceLease<CudaBackend>* {
+  return device.Workspace().Images().BindValidResult(
+      id, device.Workspace().ResultInvalidation().RequiredRevision(id), needed,
+      device.Workspace().Device().CompletedSubmission());
+}
+
+void CopyPlaneToTexture(CudaRenderDevice& device, const CudaTonePlane& plane,
+                        CudaBackend::Texture2D& texture) {
+  if (plane.ptr == nullptr || texture.DevicePointer() == nullptr || plane.bytes == 0) {
+    throw std::runtime_error("ExecuteCudaLocalTone: cannot copy empty LLF plane");
   }
-  auto& invalidation  = workspace.ResultInvalidation();
-  const ImageExtent canonical_extent{static_cast<std::uint32_t>(canonical_dims.width),
-                                     static_cast<std::uint32_t>(canonical_dims.height)};
-  const auto source_needed = invalidation.MakeImageRepresentation(
-      source_id, canonical_extent, TextureFormat::R32f,
-      static_cast<std::uint32_t>(current_long_edge));
-  const auto result_needed = invalidation.MakeImageRepresentation(
-      result_id, canonical_extent, TextureFormat::R32f,
-      static_cast<std::uint32_t>(current_long_edge));
-  const auto cached_meta = workspace.Values().GetMetadata(source_id);
-  const bool buffers_ok =
-      cached_source != nullptr && cached_source->Bytes() >= canonical_bytes &&
-      cached_result != nullptr && cached_result->Bytes() >= canonical_bytes;
-  const bool source_valid =
-      buffers_ok && cached_meta.has_value() && cached_meta->canonical &&
-      invalidation.IsSatisfied(source_id, source_needed) &&
-      cached_meta->extent.width == canonical_extent.width &&
-      cached_meta->extent.height == canonical_extent.height;
-  const bool result_valid = source_valid && invalidation.IsSatisfied(result_id, result_needed);
-  const bool sample_canonical =
-      result_valid &&
-      !(full_edit && current_long_edge > static_cast<int>(cached_meta->source_long_edge));
+  if (::cudaMemcpyAsync(texture.DevicePointer(), plane.ptr, plane.bytes, cudaMemcpyDeviceToDevice,
+                        device.CommandContext().Stream()) != cudaSuccess) {
+    throw std::runtime_error("ExecuteCudaLocalTone: canonical plane copy failed");
+  }
+}
 
-  const dim3          block{16, 16, 1};
-  auto                stream = device.CommandContext().Stream();
-  CudaLocalToneResult tone;
+struct CudaLocalToneOps {
+  using Device       = CudaRenderDevice;
+  using Texture      = CudaBackend::Texture2D;
+  using ScratchPlane = CudaTonePlane;
 
-  if (sample_canonical) {
-    const auto sampling = MakeLlfSamplingPlan(
-        geometry, Extent2D{cached_meta->extent.width, cached_meta->extent.height});
+  static constexpr const char* kErrorPrefix = "ExecuteCudaLocalTone";
+
+  static auto TextureWidth(const Texture& texture) -> std::uint32_t { return texture.Width(); }
+  static auto TextureHeight(const Texture& texture) -> std::uint32_t { return texture.Height(); }
+  static auto TransientBytes(CudaRenderDevice& device) -> std::size_t {
+    return device.Workspace().TransientBuffers().used_bytes();
+  }
+
+  static auto LookupCanonical(CudaRenderDevice& device, const GraphValueId& source_id,
+                              const GraphValueId& result_id, int current_long_edge,
+                              const ResolvedRenderGeometry& geometry) -> LocalToneCanonicalLookup {
+    auto& invalidation = device.Workspace().ResultInvalidation();
+    const auto source_needed =
+        CanonicalNeeded(invalidation, source_id, geometry, current_long_edge);
+    const auto result_needed =
+        CanonicalNeeded(invalidation, result_id, geometry, current_long_edge);
+    auto* source = BindCanonicalImage(device, source_id, source_needed);
+    LocalToneCanonicalLookup lookup;
+    if (source == nullptr) {
+      return lookup;
+    }
+    const auto long_edge = device.Workspace().Images().PublishedAuxiliary(source_id);
+    lookup.source_valid     = long_edge > 0;
+    lookup.source_long_edge = static_cast<int>(long_edge);
+    lookup.extent           = source_needed.extent;
+    lookup.result_valid     = lookup.source_valid &&
+                          BindCanonicalImage(device, result_id, result_needed) != nullptr;
+    return lookup;
+  }
+
+  static void ApplyCanonicalSample(CudaRenderDevice& device, const Texture& input, Texture& output,
+                                   const GraphValueId& source_id, const GraphValueId& result_id,
+                                   const LocalToneDecision& decision, std::uint32_t width,
+                                   std::uint32_t height) {
+    auto& invalidation = device.Workspace().ResultInvalidation();
+    const auto needed = invalidation.MakeImageRepresentation(
+        source_id, decision.mask_extent, TextureFormat::R32f,
+        static_cast<std::uint32_t>(decision.current_long_edge));
+    const auto result_needed = invalidation.MakeImageRepresentation(
+        result_id, decision.mask_extent, TextureFormat::R32f,
+        static_cast<std::uint32_t>(decision.current_long_edge));
+    auto* source = BindCanonicalImage(device, source_id, needed);
+    auto* result = BindCanonicalImage(device, result_id, result_needed);
+    if (source == nullptr || result == nullptr) {
+      throw std::runtime_error("ExecuteCudaLocalTone: canonical sample lost published planes");
+    }
+    const dim3 block{16, 16, 1};
     ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
-                  stream>>>(
-        static_cast<const float4*>(input->Texture().DevicePointer()),
-        static_cast<const float*>(cached_source->DevicePointer()),
-        static_cast<const float*>(cached_result->DevicePointer()),
-        static_cast<float4*>(output.Texture().DevicePointer()), static_cast<int>(width),
-        static_cast<int>(height), static_cast<int>(cached_meta->extent.width),
-        static_cast<int>(cached_meta->extent.height), sampling.render_to_texture_uv);
+                  device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(input.DevicePointer()),
+        static_cast<const float*>(source->Texture().DevicePointer()),
+        static_cast<const float*>(result->Texture().DevicePointer()),
+        static_cast<float4*>(output.DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), static_cast<int>(decision.mask_extent.width),
+        static_cast<int>(decision.mask_extent.height), decision.apply_uv);
     CheckLaunch("canonical sample");
-    tone.reference_resource_id       = cached_source->ResourceId();
-    tone.sampled_canonical_reference = true;
-    return tone;
   }
 
-  const bool write_canonical_reference = full_edit;
-  const bool reuse_source =
-      source_valid &&
-      !(full_edit && current_long_edge > static_cast<int>(cached_meta->source_long_edge));
-  const auto mask_dims =
-      write_canonical_reference || reuse_source
-          ? canonical_dims
-          : local_tone_mapping::ComputeMaskDimensions(
-                static_cast<int>(width), static_cast<int>(height),
-                local_tone_mapping::kReferenceMaskMaxLongEdge);
-  const auto                     layout = MakeLayout(mask_dims.width, mask_dims.height);
-  std::array<float*, kMaxLevels> source{};
-  std::array<float*, kMaxLevels> remap_a{};
-  std::array<float*, kMaxLevels> remap_b{};
-  std::array<float*, kMaxLevels> result{};
-  std::uint64_t                  reference_id = 0;
-  for (int level = 0; level < layout.count; ++level) {
-    const auto bytes =
-        static_cast<std::size_t>(layout.widths[level]) * layout.heights[level] * sizeof(float);
-    if (persist_llf) {
-      auto& source_buffer = EnsureBuffer(workspace, LevelId(grade_id, "source", level), bytes);
-      auto& a_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_a", level), bytes);
-      auto& b_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_b", level), bytes);
-      auto& result_buffer = EnsureBuffer(workspace, LevelId(grade_id, "result", level), bytes);
-      source[level]       = static_cast<float*>(source_buffer.DevicePointer());
-      remap_a[level]      = static_cast<float*>(a_buffer.DevicePointer());
-      remap_b[level]      = static_cast<float*>(b_buffer.DevicePointer());
-      result[level]       = static_cast<float*>(result_buffer.DevicePointer());
-      if (level == 0) reference_id = source_buffer.ResourceId();
-    } else {
-      source[level]  = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
-      remap_a[level] = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
-      remap_b[level] = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
-      result[level]  = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
+  static auto CanonicalResourceId(CudaRenderDevice& device, const GraphValueId& source_id)
+      -> std::uint64_t {
+    auto* image = device.Workspace().Images().Find(source_id);
+    return image == nullptr ? 0 : image->Texture().ResourceId();
+  }
+
+  static auto BindCanonicalSourcePlane(CudaRenderDevice& device, const GraphValueId& source_id,
+                                       std::size_t bytes) -> CudaTonePlane {
+    auto* image = device.Workspace().Images().Find(source_id);
+    if (image == nullptr || image->Texture().DevicePointer() == nullptr) {
+      throw std::runtime_error("ExecuteCudaLocalTone: canonical source disappeared");
+    }
+    (void)bytes;
+    return CudaTonePlane{static_cast<float*>(image->Texture().DevicePointer()),
+                         image->Texture().Bytes()};
+  }
+
+  static auto AllocateScratchPlane(CudaRenderDevice& device, std::size_t bytes) -> CudaTonePlane {
+    void* ptr = device.Workspace().TransientBuffers().Allocate(bytes);
+    if (ptr == nullptr) {
+      throw std::runtime_error("ExecuteCudaLocalTone: transient allocation failed");
+    }
+    return CudaTonePlane{static_cast<float*>(ptr), bytes};
+  }
+
+  static void ExtractReference(CudaRenderDevice& device, const Texture& input, CudaTonePlane dest,
+                               std::uint32_t width, std::uint32_t height,
+                               const LocalToneDecision& decision,
+                               const ResolvedRenderGeometry& geometry) {
+    const dim3 block{16, 16, 1};
+    ExtractReferenceKernel<<<Grid(decision.widths[0], decision.heights[0], block), block, 0,
+                             device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(input.DevicePointer()), dest.ptr, static_cast<int>(width),
+        static_cast<int>(height), decision.widths[0], decision.heights[0],
+        geometry.reference_to_render, static_cast<float>(geometry.full_reference_extent.width),
+        static_cast<float>(geometry.full_reference_extent.height));
+    CheckLaunch("extract reference");
+  }
+
+  static void Extract(CudaRenderDevice& device, const Texture& input, CudaTonePlane dest,
+                      std::uint32_t width, std::uint32_t height, const LocalToneDecision& decision) {
+    const dim3 block{16, 16, 1};
+    ExtractKernel<<<Grid(decision.widths[0], decision.heights[0], block), block, 0,
+                    device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(input.DevicePointer()), dest.ptr, static_cast<int>(width),
+        static_cast<int>(height), decision.widths[0], decision.heights[0]);
+    CheckLaunch("extract");
+  }
+
+  static void PyramidDown(CudaRenderDevice& device, CudaTonePlane src, CudaTonePlane dst,
+                          const LocalToneDecision& decision, int level) {
+    const dim3 block{16, 16, 1};
+    DownKernel<<<Grid(decision.widths[level], decision.heights[level], block), block, 0,
+                 device.CommandContext().Stream()>>>(
+        src.ptr, dst.ptr, decision.widths[level - 1], decision.heights[level - 1],
+        decision.widths[level], decision.heights[level]);
+    CheckLaunch("pyramid down");
+  }
+
+  static void FillZero(CudaRenderDevice& device, CudaTonePlane plane) {
+    if (::cudaMemsetAsync(plane.ptr, 0, plane.bytes, device.CommandContext().Stream()) !=
+        cudaSuccess) {
+      throw std::runtime_error("ExecuteCudaLocalTone: result clear failed");
     }
   }
 
-  if (!reuse_source) {
-    if (write_canonical_reference) {
-      ExtractReferenceKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0,
-                               stream>>>(
-          static_cast<const float4*>(input->Texture().DevicePointer()), source[0],
-          static_cast<int>(width), static_cast<int>(height), layout.widths[0], layout.heights[0],
-          geometry.reference_to_render, static_cast<float>(geometry.full_reference_extent.width),
-          static_cast<float>(geometry.full_reference_extent.height));
-    } else {
-      ExtractKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0, stream>>>(
-          static_cast<const float4*>(input->Texture().DevicePointer()), source[0],
-          static_cast<int>(width), static_cast<int>(height), layout.widths[0], layout.heights[0]);
-    }
-  }
-  for (int level = 1; level < layout.count; ++level) {
-    DownKernel<<<Grid(layout.widths[level], layout.heights[level], block), block, 0, stream>>>(
-        source[level - 1], source[level], layout.widths[level - 1], layout.heights[level - 1],
-        layout.widths[level], layout.heights[level]);
+  static void Remap(CudaRenderDevice& device, CudaTonePlane src, CudaTonePlane dst,
+                    const LocalToneDecision& decision, const local_tone_mapping::LlfSample& sample,
+                    float sigma) {
+    const dim3 block{16, 16, 1};
+    RemapKernel<<<Grid(decision.widths[0], decision.heights[0], block), block, 0,
+                  device.CommandContext().Stream()>>>(
+        src.ptr, dst.ptr, decision.widths[0], decision.heights[0], sample, sigma);
+    CheckLaunch("remap");
   }
 
-  const float shadow_amount    = std::clamp(shadows_slider * 1.5f / 80.0f, -1.5f, 1.5f);
-  const float highlight_amount = std::clamp(-highlights_slider * 1.5f / 100.0f, -1.5f, 1.5f);
-  const float sigma            = local_tone_mapping::SigmaR(shadow_amount, highlight_amount);
-  const auto  samples          = local_tone_mapping::BuildSamples(shadow_amount, highlight_amount);
-  for (int level = 0; level < layout.count; ++level) {
-    ::cudaMemsetAsync(
-        result[level], 0,
-        static_cast<std::size_t>(layout.widths[level]) * layout.heights[level] * sizeof(float),
-        stream);
-  }
-  const auto build_remap = [&](const LlfSample& sample, std::array<float*, kMaxLevels>& levels) {
-    RemapKernel<<<Grid(layout.widths[0], layout.heights[0], block), block, 0, stream>>>(
-        source[0], levels[0], layout.widths[0], layout.heights[0], sample, sigma);
-    for (int level = 1; level < layout.count; ++level) {
-      DownKernel<<<Grid(layout.widths[level], layout.heights[level], block), block, 0, stream>>>(
-          levels[level - 1], levels[level], layout.widths[level - 1], layout.heights[level - 1],
-          layout.widths[level], layout.heights[level]);
-    }
-  };
-  build_remap(samples[0], remap_a);
-  build_remap(samples[1], remap_b);
-  for (std::size_t pair = 0; pair + 1 < samples.size(); ++pair) {
-    for (int level = 0; level < layout.count; ++level) {
-      const bool top = level + 1 == layout.count;
-      SelectKernel<<<Grid(layout.widths[level], layout.heights[level], block), block, 0, stream>>>(
-          source[level], remap_a[level], top ? nullptr : remap_a[level + 1], remap_b[level],
-          top ? nullptr : remap_b[level + 1], result[level], layout.widths[level],
-          layout.heights[level], top ? 1 : layout.widths[level + 1],
-          top ? 1 : layout.heights[level + 1], samples[pair].gamma, samples[pair + 1].gamma,
-          pair == 0, pair + 2 == samples.size(), top);
-    }
-    if (pair + 2 < samples.size()) {
-      std::swap(remap_a, remap_b);
-      build_remap(samples[pair + 2], remap_b);
-    }
-  }
-  for (int level = layout.count - 2; level >= 0; --level) {
-    CollapseKernel<<<Grid(layout.widths[level], layout.heights[level], block), block, 0, stream>>>(
-        result[level], result[level + 1], remap_a[level], layout.widths[level],
-        layout.heights[level], layout.widths[level + 1], layout.heights[level + 1]);
-    std::swap(result[level], remap_a[level]);
-  }
-  auto* named_result = persist_llf ? workspace.Values().Find(LevelId(grade_id, "result", 0))
-                                   : nullptr;
-  if (persist_llf && named_result == nullptr) {
-    throw std::runtime_error("ExecuteCudaLocalTone: missing result.0 after pyramid collapse");
-  }
-  if (persist_llf && result[0] != named_result->DevicePointer()) {
-    if (::cudaMemcpyAsync(named_result->DevicePointer(), result[0],
-                          static_cast<std::size_t>(layout.widths[0]) * layout.heights[0] *
-                              sizeof(float),
-                          cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
-      throw std::runtime_error("ExecuteCudaLocalTone: cannot store collapsed reference");
-    }
-    result[0] = static_cast<float*>(named_result->DevicePointer());
+  static void Select(CudaRenderDevice& device, CudaTonePlane source, CudaTonePlane lo,
+                     CudaTonePlane lo_coarse, CudaTonePlane hi, CudaTonePlane hi_coarse,
+                     CudaTonePlane output, const LocalToneDecision& decision, int level,
+                     const local_tone_mapping::LlfSample& lo_sample,
+                     const local_tone_mapping::LlfSample& hi_sample, bool first, bool last,
+                     bool top) {
+    const dim3 block{16, 16, 1};
+    SelectKernel<<<Grid(decision.widths[level], decision.heights[level], block), block, 0,
+                   device.CommandContext().Stream()>>>(
+        source.ptr, lo.ptr, top ? nullptr : lo_coarse.ptr, hi.ptr, top ? nullptr : hi_coarse.ptr,
+        output.ptr, decision.widths[level], decision.heights[level],
+        top ? 1 : decision.widths[level + 1], top ? 1 : decision.heights[level + 1],
+        lo_sample.gamma, hi_sample.gamma, first, last, top);
+    CheckLaunch("select");
   }
 
-  const Matrix3x3 apply_uv =
-      write_canonical_reference || reuse_source
-          ? MakeLlfSamplingPlan(geometry, Extent2D{static_cast<std::uint32_t>(layout.widths[0]),
-                                                   static_cast<std::uint32_t>(layout.heights[0])})
-                .render_to_texture_uv
-          : LocalUvPlan(width, height);
-  ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0, stream>>>(
-      static_cast<const float4*>(input->Texture().DevicePointer()), source[0], result[0],
-      static_cast<float4*>(output.Texture().DevicePointer()), static_cast<int>(width),
-      static_cast<int>(height), layout.widths[0], layout.heights[0], apply_uv);
-  CheckLaunch("kernel launch");
-
-  if (persist_llf && (write_canonical_reference || reuse_source)) {
-    const ImageExtent extent{static_cast<std::uint32_t>(layout.widths[0]),
-                             static_cast<std::uint32_t>(layout.heights[0])};
-    if (!reuse_source) {
-      workspace.Values().StoreMetadata(source_id, invalidation.RequiredRevision(source_id),
-                                       source_needed, extent,
-                                       static_cast<std::uint32_t>(current_long_edge), true);
-      invalidation.MarkCompleted(source_id, source_needed);
-    }
-    workspace.Values().StoreMetadata(result_id, invalidation.RequiredRevision(result_id),
-                                     result_needed, extent,
-                                     static_cast<std::uint32_t>(current_long_edge), true);
-    invalidation.MarkCompleted(result_id, result_needed);
-  } else if (persist_llf && workspace.Values().Find(source_id) != nullptr) {
-    workspace.Values().StoreMetadata(source_id, 0, {}, {}, 0, false);
+  static void Collapse(CudaRenderDevice& device, CudaTonePlane lap, CudaTonePlane coarse,
+                       CudaTonePlane output, const LocalToneDecision& decision, int level) {
+    const dim3 block{16, 16, 1};
+    CollapseKernel<<<Grid(decision.widths[level], decision.heights[level], block), block, 0,
+                     device.CommandContext().Stream()>>>(
+        lap.ptr, coarse.ptr, output.ptr, decision.widths[level], decision.heights[level],
+        decision.widths[level + 1], decision.heights[level + 1]);
+    CheckLaunch("collapse");
   }
-  tone.reference_resource_id = reference_id;
-  tone.rebuilt_reference     = true;
+
+  static void ApplyAdjusted(CudaRenderDevice& device, const Texture& input, Texture& output,
+                            CudaTonePlane reference, CudaTonePlane adjusted, std::uint32_t width,
+                            std::uint32_t height, const LocalToneDecision& decision) {
+    const dim3 block{16, 16, 1};
+    ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
+                  device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(input.DevicePointer()), reference.ptr, adjusted.ptr,
+        static_cast<float4*>(output.DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), decision.widths[0], decision.heights[0], decision.apply_uv);
+    CheckLaunch("apply");
+  }
+
+  static void PersistCanonical(CudaRenderDevice& device, CudaTonePlane plane, const GraphValueId& id,
+                               const LocalToneDecision& decision, int current_long_edge) {
+    auto& workspace    = device.Workspace();
+    auto& invalidation = workspace.ResultInvalidation();
+    const ImageExtent extent{decision.mask_extent.width, decision.mask_extent.height};
+    auto& image =
+        workspace.AcquireImageForWrite(id, {extent.width, extent.height, TextureFormat::R32f});
+    CopyPlaneToTexture(device, plane, image.Texture());
+    const auto needed = invalidation.MakeImageRepresentation(
+        id, extent, TextureFormat::R32f, static_cast<std::uint32_t>(current_long_edge));
+    workspace.Images().RecordUnpublished(id, invalidation.RequiredRevision(id), needed,
+                                         device.CommandContext().SubmissionId(),
+                                         static_cast<std::uint64_t>(current_long_edge));
+  }
+
+  static void PersistCanonicalSource(CudaRenderDevice& device, CudaTonePlane plane,
+                                     const GraphValueId& source_id, const LocalToneDecision& decision,
+                                     int current_long_edge) {
+    PersistCanonical(device, plane, source_id, decision, current_long_edge);
+  }
+
+  static void PersistCanonicalResult(CudaRenderDevice& device, CudaTonePlane plane,
+                                     const GraphValueId& result_id, const LocalToneDecision& decision,
+                                     int current_long_edge) {
+    PersistCanonical(device, plane, result_id, decision, current_long_edge);
+  }
+};
+
+}  // namespace
+
+auto ExecuteCudaLocalTone(CudaRenderDevice& device, const CudaBackend::Texture2D& input,
+                          CudaBackend::Texture2D& output, const NodeId& grade_id,
+                          float shadows_slider, float highlights_slider,
+                          const ResolvedRenderGeometry& geometry) -> CudaLocalToneResult {
+  const auto executed = LocalToneExecutor<CudaLocalToneOps>::Execute(
+      device, input, output, grade_id, shadows_slider, highlights_slider, geometry);
+  CudaLocalToneResult tone;
+  tone.reference_resource_id       = executed.reference_resource_id;
+  tone.rebuilt_reference           = executed.rebuilt_reference;
+  tone.sampled_canonical_reference = executed.sampled_canonical_reference;
+  tone.transient_bytes             = executed.transient_bytes;
   return tone;
 }
 

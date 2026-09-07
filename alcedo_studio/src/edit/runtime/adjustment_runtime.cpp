@@ -333,4 +333,13 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   return result;
 }
 
+auto NeighborhoodVerticalRadius(const GradeNeighborParams& params) -> std::uint32_t {
+  const auto behavior = static_cast<AdjustmentBehavior>(params.behavior);
+  if (behavior == AdjustmentBehavior::Halation) {
+    return std::clamp(static_cast<std::uint32_t>(std::ceil(params.sigma_y * 3.0f)), 1U,
+                      kGradeNeighborMaxTapCount - 1U);
+  }
+  return params.radius;
+}
+
 }  // namespace alcedo

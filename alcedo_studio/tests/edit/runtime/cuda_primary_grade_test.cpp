@@ -31,6 +31,7 @@
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/local_tone_cache_ids.hpp"
 
 namespace alcedo {
 namespace {
@@ -160,33 +161,12 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
-  auto Render() -> CudaPrimaryGradeResult {
-    device_.BeginRender();
-    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
-    ExecuteCudaGeometryResample(device_, plan_);
-    ExecuteCudaCameraColor(device_, plan_, document_);
-    auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
-    device_.EndRender();
-    device_.WaitIdle();
-    return result;
-  }
-
-  auto RenderThroughDrtPost() -> CudaDrtResult {
-    device_.BeginRender();
-    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
-    ExecuteCudaGeometryResample(device_, plan_);
-    ExecuteCudaCameraColor(device_, plan_, document_);
-    (void)ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
-    auto result = ExecuteCudaDrt(device_, plan_, document_);
-    device_.EndRender();
-    device_.WaitIdle();
-    return result;
-  }
-
-  auto Download(const GraphValueId& id) -> std::vector<Rgba> {
+  auto DownloadLive(const GraphValueId& id) -> std::vector<Rgba> {
     auto* lease = device_.Workspace().Images().Find(id);
     EXPECT_NE(lease, nullptr);
-    if (lease == nullptr) return {};
+    if (lease == nullptr) {
+      return {};
+    }
     const auto&       texture = lease->Texture();
     std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
     device_.Workspace().Device().DownloadTexture2D(
@@ -195,6 +175,76 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
                              pixels.size() * sizeof(Rgba)),
         device_.CommandContext());
     return pixels;
+  }
+
+  /**
+   * @brief Encode Develop through Color Grade and publish recorded image results.
+   *
+   * Direct RGB Develop allocates ExactRelease upload/linearize slabs and frees them
+   * at last GPU use. Pass @p reset_counters_after_develop for Grade workspace-reuse
+   * checks so those allocations are not counted as Grade or DRT pool growth.
+   */
+  auto Render(bool reset_counters_after_develop = false) -> CudaPrimaryGradeResult {
+    device_.BeginRender();
+    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    if (reset_counters_after_develop) {
+      device_.Workspace().Device().ResetCounters();
+    }
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
+    auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
+    device_.EndRender();
+    device_.WaitIdle();
+    last_output_id_      = result.output;
+    last_output_pixels_  = DownloadLive(result.output);
+    last_develop_pixels_ = DownloadLive(plan_.develop_output);
+    if (plan_.FirstGrade() != nullptr) {
+      last_grade_id_     = plan_.FirstGrade()->scene_output;
+      last_grade_pixels_ = last_grade_id_ == last_output_id_
+                               ? last_output_pixels_
+                               : DownloadLive(last_grade_id_);
+    }
+    device_.PublishResults();
+    return result;
+  }
+
+  auto RenderThroughDrtPost(bool reset_counters_after_develop = false) -> CudaDrtResult {
+    device_.BeginRender();
+    ExecuteCudaDevelop(device_, plan_, prepared_, document_);
+    if (reset_counters_after_develop) {
+      device_.Workspace().Device().ResetCounters();
+    }
+    ExecuteCudaGeometryResample(device_, plan_);
+    ExecuteCudaCameraColor(device_, plan_, document_);
+    auto grade = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
+    last_grade_id_     = grade.output;
+    last_grade_pixels_ = DownloadLive(grade.output);
+    auto result        = ExecuteCudaDrt(device_, plan_, document_);
+    device_.EndRender();
+    device_.WaitIdle();
+    last_output_id_         = result.output;
+    last_output_pixels_     = DownloadLive(result.output);
+    last_scene_post_id_     = result.scene_post;
+    last_scene_post_pixels_ = DownloadLive(result.scene_post);
+    last_develop_pixels_    = DownloadLive(plan_.develop_output);
+    device_.PublishResults();
+    return result;
+  }
+
+  auto Download(const GraphValueId& id) -> std::vector<Rgba> {
+    if (id == last_output_id_ && !last_output_pixels_.empty()) {
+      return last_output_pixels_;
+    }
+    if (id == last_scene_post_id_ && !last_scene_post_pixels_.empty()) {
+      return last_scene_post_pixels_;
+    }
+    if (id == last_grade_id_ && !last_grade_pixels_.empty()) {
+      return last_grade_pixels_;
+    }
+    if (id == plan_.develop_output && !last_develop_pixels_.empty()) {
+      return last_develop_pixels_;
+    }
+    return DownloadLive(id);
   }
 
   template <class Model>
@@ -220,6 +270,13 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
   PipelineDocument document_;
   ExecutionPlan    plan_;
   CudaRenderDevice device_;
+  GraphValueId      last_output_id_{NodeId{""}, PortId{"image"}};
+  GraphValueId      last_grade_id_{NodeId{""}, PortId{"image"}};
+  GraphValueId      last_scene_post_id_{NodeId{""}, PortId{"image"}};
+  std::vector<Rgba> last_output_pixels_;
+  std::vector<Rgba> last_grade_pixels_;
+  std::vector<Rgba> last_scene_post_pixels_;
+  std::vector<Rgba> last_develop_pixels_;
 };
 
 TEST_F(CudaPrimaryGradeFixture, CudaPrimaryGradeDefaultParametersPreserveDevelopOutput) {
@@ -467,7 +524,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaNeighborStagesReuseWorkspaceTexturesAfterFir
   (void)RenderThroughDrtPost();
 
   device_.Workspace().Device().ResetCounters();
-  (void)RenderThroughDrtPost();
+  (void)RenderThroughDrtPost(true);
   EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
 }
@@ -487,20 +544,76 @@ TEST_F(CudaPrimaryGradeFixture, CudaLocalTonePyramidBuffersReuseAcrossViewportCh
   EXPECT_TRUE(second.local_tone_sampled_canonical_reference);
 }
 
+TEST_F(CudaPrimaryGradeFixture, CudaLlfSliderEditReusesCanonicalSourceAndRebuildsResult) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
+  const auto first            = Render();
+  const auto source_id        = LocalToneSourceId(document_.PrimaryGrade()->Id());
+  const auto result_id        = LocalToneResultId(document_.PrimaryGrade()->Id());
+  const auto first_source_rev = device_.Workspace().Images().PublishedRevision(source_id);
+  const auto first_result_rev = device_.Workspace().Images().PublishedRevision(result_id);
+  ASSERT_TRUE(first.local_tone_rebuilt_reference);
+  ASSERT_NE(first_source_rev, 0U);
+
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(70.0f);
+  const auto second = Render();
+  EXPECT_TRUE(second.local_tone_rebuilt_reference);
+  EXPECT_FALSE(second.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(second.local_tone_reference_resource_id, first.local_tone_reference_resource_id);
+  EXPECT_EQ(device_.Workspace().Images().PublishedRevision(source_id), first_source_rev);
+  EXPECT_NE(device_.Workspace().Images().PublishedRevision(result_id), first_result_rev);
+  EXPECT_EQ(device_.Workspace().Images().PublishedRevision(result_id),
+            device_.Workspace().ResultInvalidation().RequiredRevision(result_id));
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaLlfFailedSubmissionDoesNotPublishCanonicalPlanes) {
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(65.0f);
+  const auto first = Render();
+  ASSERT_TRUE(first.local_tone_rebuilt_reference);
+  const auto source_id          = LocalToneSourceId(document_.PrimaryGrade()->Id());
+  const auto result_id          = LocalToneResultId(document_.PrimaryGrade()->Id());
+  const auto source_rev         = device_.Workspace().Images().PublishedRevision(source_id);
+  const auto result_rev         = device_.Workspace().Images().PublishedRevision(result_id);
+  const auto source_resource_id = first.local_tone_reference_resource_id;
+
+  auto failed_plan = plan_;
+  failed_plan.geometry.full_reference_extent = {};
+  device_.BeginRender();
+  ExecuteCudaDevelop(device_, failed_plan, prepared_, document_);
+  ExecuteCudaGeometryResample(device_, failed_plan);
+  ExecuteCudaCameraColor(device_, failed_plan, document_);
+  EXPECT_THROW((void)ExecuteCudaPrimaryGrade(device_, failed_plan, prepared_, document_),
+               std::runtime_error);
+  device_.CancelRender();
+
+  EXPECT_EQ(device_.Workspace().Images().PublishedRevision(source_id), source_rev);
+  EXPECT_EQ(device_.Workspace().Images().PublishedRevision(result_id), result_rev);
+
+  const auto recovered = Render();
+  EXPECT_FALSE(recovered.local_tone_rebuilt_reference);
+  EXPECT_TRUE(recovered.local_tone_sampled_canonical_reference);
+  EXPECT_EQ(recovered.local_tone_reference_resource_id, source_resource_id);
+}
+
 TEST_F(CudaPrimaryGradeFixture, CudaLocalToneUsesWorkspaceInsteadOfPrivateAllocation) {
   ModelByType<HighlightsModel>(type_ids::Highlights()).SetValue(-30.0f);
   const auto result = Render();
   EXPECT_NE(result.local_tone_reference_resource_id, 0U);
-  const auto* source        = device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
-                                                                PortId{"local_tone.source.0"});
-  const auto* result_buffer = device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
-                                                                PortId{"local_tone.result.0"});
+  const auto* source = device_.Workspace().Images().Find(
+      LocalToneSourceId(document_.PrimaryGrade()->Id()));
+  const auto* result_image = device_.Workspace().Images().Find(
+      LocalToneResultId(document_.PrimaryGrade()->Id()));
   ASSERT_NE(source, nullptr);
-  ASSERT_NE(result_buffer, nullptr);
-  EXPECT_GT(source->Bytes(), sizeof(float));
-  EXPECT_EQ(source->Bytes(), result_buffer->Bytes());
+  ASSERT_NE(result_image, nullptr);
+  EXPECT_GT(source->Texture().Bytes(), sizeof(float));
+  EXPECT_EQ(source->Texture().Bytes(), result_image->Texture().Bytes());
+  EXPECT_EQ(device_.Workspace().Values().Find(document_.PrimaryGrade()->Id(),
+                                              PortId{"local_tone.source.1"}),
+            nullptr);
+  EXPECT_EQ(device_.Workspace().Images().Find(
+                GraphValueId{document_.PrimaryGrade()->Id(), PortId{"local_tone.source.1"}}),
+            nullptr);
   device_.Workspace().Device().ResetCounters();
-  (void)Render();
+  (void)Render(true);
   EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
 }
@@ -508,7 +621,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaLocalToneUsesWorkspaceInsteadOfPrivateAlloca
 TEST_F(CudaPrimaryGradeFixture, CudaColorGradeSecondRenderCreatesNoGpuAllocation) {
   Render();
   device_.Workspace().Device().ResetCounters();
-  Render();
+  Render(true);
   EXPECT_EQ(device_.Workspace().Device().MallocCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().FreeCount(), 0U);
 }
@@ -593,12 +706,14 @@ auto MakeSplitPlane(std::uint32_t width, std::uint32_t height, float left, float
 
 auto DownloadLocalTonePlane(CudaRenderDevice& device, const NodeId& grade_id)
     -> std::vector<float> {
-  auto* buffer = device.Workspace().Values().Find(grade_id, PortId{"local_tone.source.0"});
-  EXPECT_NE(buffer, nullptr);
-  if (buffer == nullptr) return {};
-  std::vector<float> plane(buffer->Bytes() / sizeof(float));
-  device.Workspace().Device().DownloadBufferRange(
-      *buffer, 0, std::span<std::byte>(reinterpret_cast<std::byte*>(plane.data()), buffer->Bytes()),
+  auto* lease = device.Workspace().Images().Find(LocalToneSourceId(grade_id));
+  EXPECT_NE(lease, nullptr);
+  if (lease == nullptr) return {};
+  const auto&        texture = lease->Texture();
+  std::vector<float> plane(texture.Bytes() / sizeof(float));
+  device.Workspace().Device().DownloadTexture2D(
+      texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(plane.data()), texture.Bytes()),
       device.CommandContext());
   return plane;
 }
@@ -652,6 +767,7 @@ TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuil
   const auto full_mask   = DownloadLocalTonePlane(device, document.PrimaryGrade()->Id());
   ASSERT_FALSE(full_pixels.empty());
   ASSERT_FALSE(full_mask.empty());
+  device.PublishResults();
 
   RenderRequest roi_request;
   roi_request.view.visible_rect_in_edit_space = {0.5f, 0.0f, 0.5f, 1.0f};
