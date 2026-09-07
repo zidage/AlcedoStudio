@@ -16,21 +16,27 @@ namespace alcedo {
 /**
  * @brief Validate and apply one parameter patch to the existing live Model.
  *
- * Supplied keys, types, finite numbers and array dimensions are checked before setters.
- * Model setters normalize values and update dirty bits; topology and other Models stay intact.
- * A throwing setter restores only the affected Model's previous parameters.
+ * The JSON input is the application/history boundary only. Supplied keys, types, finite numbers,
+ * and array dimensions are checked before a typed Model update is built; the update then reaches
+ * the owning Model through its focused operation without a full Model JSON read/merge/reload.
+ * Model operations normalize values and update dirty bits; topology and other Models stay intact.
+ * Compound input is parsed completely before any owner field is changed.
  * @pre Caller holds the shared executor render lock; target is complete and is not Mask.
  * @param document Live document to mutate in place.
  * @param target Explicit node/adjustment identity; no missing identity is inferred.
- * @param params Partial Model JSON object.
- * @param error Optional failure detail, including restoration errors.
+ * @param params Field-specific JSON boundary object. Persistence/history JSON is accepted at this
+ *        boundary and converted to a typed operation before mutation.
+ * @param error Optional failure detail.
  * @return false for an invalid target or parameter; no history or persistence is performed.
  */
 auto ApplyEditorParameterPatch(PipelineDocument& document, const EditorParameterTarget& target,
                                const nlohmann::json& params, std::string* error) -> bool;
 
 /**
- * @brief Read the current model JSON for @p target.
+ * @brief Read the current model JSON for @p target at the persistence/history boundary.
+ *
+ * ApplyEditorParameterPatch does not use this function to update a live Model. It remains the
+ * JSON boundary required by history, project transfer, and persistence callers.
  *
  * @return false when the node or instance is missing.
  */
@@ -46,14 +52,6 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
  * @brief True when graph Validate and ValidateImageBackbone are both empty.
  */
 auto PipelineDocumentPassesValidation(const PipelineDocument& document, std::string* error) -> bool;
-
-/**
- * @brief Apply a validated patch in place; equivalent to ApplyEditorParameterPatch.
- *
- * @pre Caller holds the shared executor render lock. No graph validation or copy occurs.
- */
-auto PublishEditorParameterPatch(PipelineDocument& live, const EditorParameterTarget& target,
-                                 const nlohmann::json& params, std::string* error) -> bool;
 
 /**
  * @brief Fill a current-panel target from @p field_key and the live document.

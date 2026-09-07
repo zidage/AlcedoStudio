@@ -18,18 +18,45 @@ auto SharpenModel::IsDefault() const -> bool {
 
 void SharpenModel::SetAmount(float amount) {
   const float clamped = std::clamp(amount, 0.0f, 100.0f);
-  Mutate(SharpenDirty::Amount, [clamped](SharpenPayload& payload) { payload.amount = clamped; });
+  ApplyUpdate(SharpenUpdate{clamped, std::nullopt, std::nullopt});
 }
 
 void SharpenModel::SetRadius(float radius) {
   const float clamped = std::clamp(radius, 0.1f, 64.0f);
-  Mutate(SharpenDirty::Radius, [clamped](SharpenPayload& payload) { payload.radius = clamped; });
+  ApplyUpdate(SharpenUpdate{std::nullopt, clamped, std::nullopt});
 }
 
 void SharpenModel::SetThreshold(float threshold) {
   const float clamped = std::clamp(threshold, 0.0f, 1.0f);
-  Mutate(SharpenDirty::Threshold,
-         [clamped](SharpenPayload& payload) { payload.threshold = clamped; });
+  ApplyUpdate(SharpenUpdate{std::nullopt, std::nullopt, clamped});
+}
+
+void SharpenModel::ApplyUpdate(SharpenUpdate update) {
+  if (update.amount.has_value()) {
+    update.amount = std::clamp(*update.amount, 0.0f, 100.0f);
+  }
+  if (update.radius.has_value()) {
+    update.radius = std::clamp(*update.radius, 0.1f, 64.0f);
+  }
+  if (update.threshold.has_value()) {
+    update.threshold = std::clamp(*update.threshold, 0.0f, 1.0f);
+  }
+  MutateWithDirtyFields([update = std::move(update)](SharpenPayload& payload) {
+    DirtyFieldMask changed;
+    if (update.amount.has_value() && payload.amount != *update.amount) {
+      payload.amount = *update.amount;
+      changed |= DirtyFieldMask{SharpenDirty::Amount};
+    }
+    if (update.radius.has_value() && payload.radius != *update.radius) {
+      payload.radius = *update.radius;
+      changed |= DirtyFieldMask{SharpenDirty::Radius};
+    }
+    if (update.threshold.has_value() && payload.threshold != *update.threshold) {
+      payload.threshold = *update.threshold;
+      changed |= DirtyFieldMask{SharpenDirty::Threshold};
+    }
+    return changed;
+  });
 }
 
 auto SharpenModel::Amount() const -> float {

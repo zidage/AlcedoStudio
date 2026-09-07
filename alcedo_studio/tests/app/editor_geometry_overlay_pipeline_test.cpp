@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <gtest/gtest.h>
+#include "support/editor_parameter_write_test.hpp"
 
 #include <memory>
 #include <string>
@@ -73,10 +74,10 @@ TEST_F(EditorGeometryOverlayPipelineTest,
   executor.SetRenderRes(false, 256);
 
   EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {EditorAdjustmentPatch{
+  snapshot.patches = {alcedo::test::SnapshotPatch({
       "crop_rotate",
       R"({"crop_rotate":{"enabled":true,"angle_degrees":12.5,"enable_crop":true,"crop_rect":{"x":0.15,"y":0.2,"w":0.55,"h":0.5},"expand_to_fit":false,"aspect_ratio_preset":"free","aspect_ratio":{"width":1.0,"height":1.0}}})",
-      false}};
+      false})};
 
   std::string error;
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
@@ -140,10 +141,10 @@ TEST_F(EditorGeometryOverlayPipelineTest,
   executor.SetRenderRes(false, 128);
 
   EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {EditorAdjustmentPatch{
+  snapshot.patches = {alcedo::test::SnapshotPatch({
       "crop_rotate",
       R"({"crop_rotate":{"enabled":true,"angle_degrees":35.0,"enable_crop":true,"crop_rect":{"x":0.1,"y":0.1,"w":0.8,"h":0.8}}})",
-      false}};
+      false})};
   std::string error;
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
   DisableEditorGeometryOperatorForOverlay(executor);

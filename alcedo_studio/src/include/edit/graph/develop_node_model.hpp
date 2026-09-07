@@ -7,9 +7,10 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
-#include <string_view>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "edit/graph/i_node_model.hpp"
@@ -61,27 +62,27 @@ inline auto operator!=(const DevelopCameraProfile& a, const DevelopCameraProfile
 }
 
 struct DevelopPayload {
-  std::string demosaic_method          = "default";
-  bool        highlights_reconstruct   = true;
-  bool        use_camera_wb            = true;
-  float       user_wb                  = 7600.0f;
-  std::string wb_mode                  = "as_shot";
-  float       custom_cct               = 6500.0f;
-  float       custom_tint              = 0.0f;
-  float       as_shot_cct              = 6500.0f;
-  float       as_shot_tint             = 0.0f;
+  std::string          demosaic_method        = "default";
+  bool                 highlights_reconstruct = true;
+  bool                 use_camera_wb          = true;
+  float                user_wb                = 7600.0f;
+  std::string          wb_mode                = "as_shot";
+  float                custom_cct             = 6500.0f;
+  float                custom_tint            = 0.0f;
+  float                as_shot_cct            = 6500.0f;
+  float                as_shot_tint           = 0.0f;
   DevelopCameraProfile camera_profile{};
-  bool        lens_enabled             = false;
-  bool        apply_vignetting         = true;
-  bool        apply_distortion         = true;
-  bool        apply_tca                = true;
-  bool        apply_crop               = true;
-  bool        auto_scale               = true;
-  bool        use_user_scale           = false;
-  float       user_scale               = 1.0f;
-  bool        projection_enabled       = false;
-  std::string target_projection        = "unknown";
-  std::string lens_profile_db_path     = "src/config/lens_calib";
+  bool                 lens_enabled         = false;
+  bool                 apply_vignetting     = true;
+  bool                 apply_distortion     = true;
+  bool                 apply_tca            = true;
+  bool                 apply_crop           = true;
+  bool                 auto_scale           = true;
+  bool                 use_user_scale       = false;
+  float                user_scale           = 1.0f;
+  bool                 projection_enabled   = false;
+  std::string          target_projection    = "unknown";
+  std::string          lens_profile_db_path = "src/config/lens_calib";
 };
 
 inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool {
@@ -104,12 +105,50 @@ inline auto operator!=(const DevelopPayload& a, const DevelopPayload& b) -> bool
 }
 
 enum class DevelopDirty : std::uint32_t {
-  None        = 0,
-  Demosaic    = 1U << 0,
-  Highlights  = 1U << 1,
+  None         = 0,
+  Demosaic     = 1U << 0,
+  Highlights   = 1U << 1,
   WhiteBalance = 1U << 2,
-  Lens        = 1U << 3,
-  All         = Demosaic | Highlights | WhiteBalance | Lens,
+  Lens         = 1U << 3,
+  All          = Demosaic | Highlights | WhiteBalance | Lens,
+};
+
+/**
+ * @brief Focused RAW decode update. Omitted fields retain their values.
+ */
+struct DevelopRawDecodeUpdate {
+  std::optional<std::string> demosaic_method;
+  std::optional<bool>        highlights_reconstruct;
+  std::optional<bool>        use_camera_wb;
+  std::optional<float>       user_wb;
+};
+
+/**
+ * @brief Focused color-temperature update. Omitted fields retain their values.
+ */
+struct DevelopColorTemperatureUpdate {
+  std::optional<std::string> wb_mode;
+  std::optional<float>       custom_cct;
+  std::optional<float>       custom_tint;
+  std::optional<float>       as_shot_cct;
+  std::optional<float>       as_shot_tint;
+};
+
+/**
+ * @brief Focused lens and projection update. Omitted fields retain their values.
+ */
+struct DevelopLensCalibrationUpdate {
+  std::optional<bool>        lens_enabled;
+  std::optional<bool>        apply_vignetting;
+  std::optional<bool>        apply_distortion;
+  std::optional<bool>        apply_tca;
+  std::optional<bool>        apply_crop;
+  std::optional<bool>        auto_scale;
+  std::optional<bool>        use_user_scale;
+  std::optional<float>       user_scale;
+  std::optional<bool>        projection_enabled;
+  std::optional<std::string> target_projection;
+  std::optional<std::string> lens_profile_db_path;
 };
 
 /**
@@ -118,9 +157,49 @@ enum class DevelopDirty : std::uint32_t {
 class DevelopParamsModel final
     : public OperatorModelBase<DevelopParamsModel, DevelopPayload, DevelopDirty> {
  public:
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::DevelopNode(); }
+  static auto        TypeId() -> const OperatorTypeId& { return type_ids::DevelopNode(); }
 
   [[nodiscard]] auto IsDefault() const -> bool override;
+
+  /**
+   * @brief Read individual Develop fields through the owning Model lock.
+   */
+  [[nodiscard]] auto DemosaicMethod() const -> std::string;
+  [[nodiscard]] auto HighlightsReconstruct() const -> bool;
+  [[nodiscard]] auto UseCameraWhiteBalance() const -> bool;
+  [[nodiscard]] auto UserWhiteBalance() const -> float;
+  [[nodiscard]] auto WhiteBalanceMode() const -> std::string;
+  [[nodiscard]] auto CustomCct() const -> float;
+  [[nodiscard]] auto CustomTint() const -> float;
+  [[nodiscard]] auto AsShotCct() const -> float;
+  [[nodiscard]] auto AsShotTint() const -> float;
+  [[nodiscard]] auto LensEnabled() const -> bool;
+  [[nodiscard]] auto ApplyVignetting() const -> bool;
+  [[nodiscard]] auto ApplyDistortion() const -> bool;
+  [[nodiscard]] auto ApplyTca() const -> bool;
+  [[nodiscard]] auto ApplyCrop() const -> bool;
+  [[nodiscard]] auto AutoScale() const -> bool;
+  [[nodiscard]] auto UseUserScale() const -> bool;
+  [[nodiscard]] auto UserScale() const -> float;
+  [[nodiscard]] auto ProjectionEnabled() const -> bool;
+  [[nodiscard]] auto TargetProjection() const -> std::string;
+  [[nodiscard]] auto LensProfileDbPath() const -> std::string;
+
+  /**
+   * @brief Apply RAW decode fields atomically and mark only changed field groups dirty.
+   */
+  void               ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update);
+
+  /**
+   * @brief Apply color-temperature fields atomically and mark only changed fields dirty.
+   */
+  void               ApplyColorTemperatureUpdate(DevelopColorTemperatureUpdate update);
+
+  /**
+   * @brief Apply lens/projection fields atomically and avoid dirtying equal values.
+   */
+  void               ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate update);
+
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   void               LoadJson(const nlohmann::json& json) override;
 
@@ -136,7 +215,9 @@ class DevelopNodeModel final : public INodeModel {
   explicit DevelopNodeModel(NodeId id);
 
   [[nodiscard]] auto Id() const -> const NodeId& override { return id_; }
-  [[nodiscard]] auto Type() const -> const OperatorTypeId& override { return type_ids::DevelopNode(); }
+  [[nodiscard]] auto Type() const -> const OperatorTypeId& override {
+    return type_ids::DevelopNode();
+  }
   [[nodiscard]] auto DisplayName() const -> std::string_view override { return "Develop"; }
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
@@ -145,11 +226,11 @@ class DevelopNodeModel final : public INodeModel {
   [[nodiscard]] auto Params() -> DevelopParamsModel& { return params_; }
   [[nodiscard]] auto Params() const -> const DevelopParamsModel& { return params_; }
 
-  static auto FromJson(const nlohmann::json& json) -> std::unique_ptr<DevelopNodeModel>;
+  static auto        FromJson(const nlohmann::json& json) -> std::unique_ptr<DevelopNodeModel>;
 
  private:
-  NodeId             id_;
-  DevelopParamsModel params_;
+  NodeId                        id_;
+  DevelopParamsModel            params_;
   std::array<PortDescriptor, 1> outputs_;
 };
 

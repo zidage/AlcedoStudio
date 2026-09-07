@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_render_coordinator.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 #include "support/latch_blocked_pipeline_scheduler_port.hpp"
 #include "support/manual_monotonic_clock.hpp"
@@ -496,7 +497,7 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
       MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
   intent.adjustment.fingerprint = "tone:v1";
   intent.adjustment.params_json = R"({"exposure":0.5})";
-  intent.adjustment.patches.push_back(EditorAdjustmentPatch{"exposure", R"({"v":0.5})", false});
+  intent.adjustment.patches.push_back(alcedo::test::SnapshotPatch({"exposure", R"({"v":0.5})", false}));
 
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
@@ -508,7 +509,8 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
 
   ASSERT_FALSE(scheduler_->scheduled_.empty());
   const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
-  EXPECT_EQ(scheduled_intent.adjustment, accepted.intent.adjustment);
+  EXPECT_TRUE(alcedo::test::SameSnapshotProjection(scheduled_intent.adjustment,
+                                                  accepted.intent.adjustment));
   EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
 }
 

@@ -40,7 +40,7 @@ if(WIN32)
 endif()
 
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
-target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest
     PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool)
 gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
@@ -55,6 +55,16 @@ target_link_libraries(EditorPipelineCommandServiceTest
 gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
+
+add_executable(EditorPanelProjectionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_panel_projection_test.cpp)
+target_include_directories(EditorPanelProjectionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPanelProjectionTest
+    PRIVATE GTest::gtest_main EditorPanelProjection EditorParameterWrite EditGraph JSON)
+gtest_discover_tests(EditorPanelProjectionTest
+    TEST_PREFIX "EditorPanelProjectionTest.")
+alcedo_register_test_target(EditorPanelProjectionTest app)
 
 add_executable(PipelineHistoryApplierTest
     ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
@@ -125,7 +135,7 @@ alcedo_register_test_target(MaskAssetReachabilityTest app)
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
 add_executable(EditorGeometryOverlayPipelineTest
     ${ALCEDO_TEST_ROOT}/app/editor_geometry_overlay_pipeline_test.cpp)
-target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorGeometryOverlayPipelineTest
     PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool
             ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -317,7 +327,7 @@ alcedo_register_test_target(EditorSessionNavigationControllerTest app ci_core)
 # EditorSessionRenderController owns render/first-frame
 # state. Focused unit tests with a real coordinator and bootstrap scheduler.
 add_executable(EditorSessionRenderControllerTest ${ALCEDO_TEST_ROOT}/app/editor_session_render_controller_test.cpp)
-target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionRenderControllerTest
     EditorSessionRenderController EditorSessionLifecycle EditorSessionService
     EditorSessionCommandQueue GTest::gtest_main)
@@ -456,7 +466,8 @@ add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorSessionControllerPhase5ATest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionControllerPhase5ATest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_compile_definitions(EditorSessionControllerPhase5ATest PRIVATE
   ALCEDO_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(EditorSessionControllerPhase5ATest

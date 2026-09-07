@@ -65,7 +65,6 @@ class MetalBackend {
   static constexpr const char*   kName              = "Metal";
   /** @brief Metal Develop allocates command-buffer-owned scratch instead of arena slabs. */
   static constexpr bool          kUsesDevelopTransientArena = false;
-  static auto                    DefaultTextureBudgetBytes() -> std::size_t { return 256ull << 20; }
 
   class Buffer {
    public:

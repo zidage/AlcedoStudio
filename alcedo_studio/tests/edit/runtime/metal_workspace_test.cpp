@@ -21,30 +21,30 @@ namespace {
 using metal_workspace_test::BindSharpen;
 using metal_workspace_test::ExposureFieldBindings;
 using metal_workspace_test::MetalWorkspaceFixture;
-using metal_workspace_test::UploadFullAndClearDirty;
+using metal_workspace_test::UploadPackedAndClearDirty;
+using metal_workspace_test::WritePackedOwnerBytes;
 
-TEST_F(MetalWorkspaceFixture, MetalParameterArenaUploadsOnlyDirtyRanges) {
+TEST_F(MetalWorkspaceFixture, MetalParameterArenaWritePackedSlotUploadsBoundSlotOnce) {
   MetalRenderDevice device;
   ParameterSlotKey  key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel      model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetAmount(12.0f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
-  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, 4U);
-  EXPECT_EQ(backend.HostToDeviceBytes(), 4U);
-  EXPECT_LT(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
+  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
+  EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
 
   backend.ResetCounters();
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
@@ -75,7 +75,6 @@ TEST_F(MetalWorkspaceFixture, MetalTransientArenaRewindsWithoutReallocatingItsSl
 TEST_F(MetalWorkspaceFixture, MetalTexturePoolReusesMatchingPrivateTextures) {
   MetalRenderDevice device;
   auto&             textures = device.Workspace().Textures();
-  textures.SetByteBudget(64 * 64 * 16);
 
   device.BeginRender();
   auto first = textures.Acquire({32, 16, TextureFormat::Rgba32f});
@@ -139,11 +138,10 @@ TEST_F(MetalWorkspaceFixture, SequentialTextureUploadsKeepDistinctTexels) {
   EXPECT_EQ(back_second.back(), std::byte{128});
 }
 
-TEST_F(MetalWorkspaceFixture, MetalTexturePoolDoesNotEvictBusySubmissionResources) {
+TEST_F(MetalWorkspaceFixture, MetalTexturePoolDoesNotReleaseBusySubmissionResources) {
   MetalRenderDevice       device;
   auto&                   textures = device.Workspace().Textures();
   constexpr std::uint32_t kSize    = 64;
-  textures.SetByteBudget(static_cast<std::size_t>(kSize) * kSize);
 
   device.BeginRender();
   auto       lease_a  = textures.Acquire({kSize, kSize, TextureFormat::R8});
@@ -154,11 +152,11 @@ TEST_F(MetalWorkspaceFixture, MetalTexturePoolDoesNotEvictBusySubmissionResource
 
   lease_a.Release();
   lease_b.Release();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_TRUE(textures.Contains(handle_a));
 
   device.BeginRender();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_FALSE(textures.Contains(handle_a));
   device.EndRender();
   device.WaitIdle();
@@ -207,7 +205,6 @@ TEST_F(MetalWorkspaceFixture, MetalSecondEmptyRenderCreatesNoBufferTextureHeapOr
 
   workspace.Parameters().Reserve(256);
   workspace.TransientBuffers().Reserve(1 << 20);
-  workspace.Textures().SetByteBudget(64 * 64);
   workspace.MaskTextures().SetByteBudget(64 * 64);
 
   device.BeginRender();
@@ -246,14 +243,14 @@ TEST_F(MetalWorkspaceFixture, MetalFailedUploadRestoresDirtyFieldsAndPublishesNo
   ExposureModel     model;
   const auto        fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
   {
-    auto pending = TakePendingParameterPatch(model);
+    auto pending = TakePendingDirtyFields(model);
     ASSERT_TRUE(pending.has_value());
     device.Workspace().Device().FailNextUpload();
-    device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+    WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
     EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                  std::runtime_error);
   }
@@ -294,13 +291,13 @@ TEST_F(MetalWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
   ExposureModel     model;
   const auto        fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
   device.Workspace().Device().FailNextUpload();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
   EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                std::runtime_error);

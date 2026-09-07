@@ -505,6 +505,27 @@ auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const Commi
   }
 }
 
+auto RemirrorEditorParameterToExecutor(CPUPipelineExecutor& executor,
+                                       const PipelineDocument& document,
+                                       const EditorParameterTarget& target, std::string* error)
+    -> bool {
+  nlohmann::json json;
+  if (!ReadEditorParameterJson(document, target, &json, error)) {
+    return false;
+  }
+  const auto spec = FieldSpec(target.field_key);
+  if (!spec.has_value()) {
+    if (error) {
+      *error = "Unknown editor adjustment field: " + target.field_key;
+    }
+    return false;
+  }
+  EditorAdjustmentOperatorState state;
+  state.params  = EditorAdjustmentExecutorParamsFromWrite(target.field_key, std::move(json));
+  state.enabled = true;
+  return ApplyEditorAdjustmentOperatorState(executor, *spec, state, error);
+}
+
 auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
                                       const PipelineDocument& document, std::string* error)
     -> bool {

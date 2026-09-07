@@ -48,7 +48,8 @@ using opencl_workspace_test::BindSharpen;
 using opencl_workspace_test::ExposureFieldBindings;
 using opencl_workspace_test::HasOpenClDevice;
 using opencl_workspace_test::OpenClWorkspaceFixture;
-using opencl_workspace_test::UploadFullAndClearDirty;
+using opencl_workspace_test::UploadPackedAndClearDirty;
+using opencl_workspace_test::WritePackedOwnerBytes;
 
 auto FileContainsForbiddenToken(const std::filesystem::path& path,
                                 std::initializer_list<const char*> tokens) -> std::string {
@@ -180,28 +181,27 @@ TEST_F(OpenClWorkspaceFixture, OpenClBackendUsesThePreparedProcessContextAndProd
   EXPECT_GT(first.Workspace().Device().WorkingSetBudgetBytes(), 0U);
 }
 
-TEST_F(OpenClWorkspaceFixture, OpenClParameterArenaUploadsOnlyDirtyRanges) {
+TEST_F(OpenClWorkspaceFixture, OpenClParameterArenaWritePackedSlotUploadsBoundSlotOnce) {
   OpenClRenderDevice device;
   ParameterSlotKey   key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel       model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetAmount(12.0f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
-  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, 4U);
-  EXPECT_EQ(backend.HostToDeviceBytes(), 4U);
-  EXPECT_LT(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
+  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
+  EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
 
   backend.ResetCounters();
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
@@ -397,7 +397,6 @@ TEST_F(OpenClWorkspaceFixture, OpenClCreateBufferRejectsSizeAboveMaxSlabWithoutI
 TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
   OpenClRenderDevice device;
   auto&              textures = device.Workspace().Textures();
-  textures.SetByteBudget(64 * 64 * 16);
 
   device.BeginRender();
   auto first = textures.Acquire({32, 16, TextureFormat::Rgba32f});
@@ -435,11 +434,10 @@ TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolReusesMatchingImages) {
   EXPECT_FLOAT_EQ(r32_back[63], 2.5f);
 }
 
-TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotEvictBusySubmissionImages) {
+TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotReleaseBusySubmissionImages) {
   OpenClRenderDevice      device;
   auto&                   textures = device.Workspace().Textures();
   constexpr std::uint32_t kSize    = 64;
-  textures.SetByteBudget(static_cast<std::size_t>(kSize) * kSize);
 
   device.BeginRender();
   auto       lease_a  = textures.Acquire({kSize, kSize, TextureFormat::R8});
@@ -450,11 +448,11 @@ TEST_F(OpenClWorkspaceFixture, OpenClTexturePoolDoesNotEvictBusySubmissionImages
 
   lease_a.Release();
   lease_b.Release();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_TRUE(textures.Contains(handle_a));
 
   device.BeginRender();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_FALSE(textures.Contains(handle_a));
   device.EndRender();
   device.WaitIdle();
@@ -548,7 +546,6 @@ TEST_F(OpenClWorkspaceFixture, OpenClSecondEmptyRenderCreatesNoBufferImageProgra
 
   workspace.Parameters().Reserve(256);
   workspace.TransientBuffers().Reserve(1 << 20);
-  workspace.Textures().SetByteBudget(64 * 64);
   workspace.MaskTextures().SetByteBudget(64 * 64);
 
   device.BeginRender();
@@ -595,14 +592,14 @@ TEST_F(OpenClWorkspaceFixture, OpenClFailedUploadRestoresDirtyFieldsAndPublishes
   ExposureModel      model;
   const auto         fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
   {
-    auto pending = TakePendingParameterPatch(model);
+    auto pending = TakePendingDirtyFields(model);
     ASSERT_TRUE(pending.has_value());
     device.Workspace().Device().FailNextUpload();
-    device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+    WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
     EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                  std::runtime_error);
   }
@@ -690,13 +687,13 @@ TEST_F(OpenClWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) 
   ExposureModel      model;
   const auto         fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
   device.Workspace().Device().FailNextUpload();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
   EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                std::runtime_error);

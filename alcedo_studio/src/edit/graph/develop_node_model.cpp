@@ -15,8 +15,195 @@ auto DevelopParamsModel::IsDefault() const -> bool {
          !payload.lens_enabled;
 }
 
+auto DevelopParamsModel::DemosaicMethod() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.demosaic_method; });
+}
+
+auto DevelopParamsModel::HighlightsReconstruct() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.highlights_reconstruct; });
+}
+
+auto DevelopParamsModel::UseCameraWhiteBalance() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.use_camera_wb; });
+}
+
+auto DevelopParamsModel::UserWhiteBalance() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.user_wb; });
+}
+
+auto DevelopParamsModel::WhiteBalanceMode() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.wb_mode; });
+}
+
+auto DevelopParamsModel::CustomCct() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.custom_cct; });
+}
+
+auto DevelopParamsModel::CustomTint() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.custom_tint; });
+}
+
+auto DevelopParamsModel::AsShotCct() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.as_shot_cct; });
+}
+
+auto DevelopParamsModel::AsShotTint() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.as_shot_tint; });
+}
+
+auto DevelopParamsModel::LensEnabled() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.lens_enabled; });
+}
+
+auto DevelopParamsModel::ApplyVignetting() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.apply_vignetting; });
+}
+
+auto DevelopParamsModel::ApplyDistortion() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.apply_distortion; });
+}
+
+auto DevelopParamsModel::ApplyTca() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.apply_tca; });
+}
+
+auto DevelopParamsModel::ApplyCrop() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.apply_crop; });
+}
+
+auto DevelopParamsModel::AutoScale() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.auto_scale; });
+}
+
+auto DevelopParamsModel::UseUserScale() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.use_user_scale; });
+}
+
+auto DevelopParamsModel::UserScale() const -> float {
+  return Read([](const DevelopPayload& payload) { return payload.user_scale; });
+}
+
+auto DevelopParamsModel::ProjectionEnabled() const -> bool {
+  return Read([](const DevelopPayload& payload) { return payload.projection_enabled; });
+}
+
+auto DevelopParamsModel::TargetProjection() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.target_projection; });
+}
+
+auto DevelopParamsModel::LensProfileDbPath() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.lens_profile_db_path; });
+}
+
+void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
+  MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    DirtyFieldMask changed;
+    if (update.demosaic_method.has_value() && payload.demosaic_method != *update.demosaic_method) {
+      payload.demosaic_method = std::move(*update.demosaic_method);
+      changed |= DirtyFieldMask{DevelopDirty::Demosaic};
+    }
+    if (update.highlights_reconstruct.has_value() &&
+        payload.highlights_reconstruct != *update.highlights_reconstruct) {
+      payload.highlights_reconstruct = *update.highlights_reconstruct;
+      changed |= DirtyFieldMask{DevelopDirty::Highlights};
+    }
+    if (update.use_camera_wb.has_value() && payload.use_camera_wb != *update.use_camera_wb) {
+      payload.use_camera_wb = *update.use_camera_wb;
+      changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    if (update.user_wb.has_value() && payload.user_wb != *update.user_wb) {
+      payload.user_wb = *update.user_wb;
+      changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    return changed;
+  });
+}
+
+void DevelopParamsModel::ApplyColorTemperatureUpdate(DevelopColorTemperatureUpdate update) {
+  MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    bool changed = false;
+    if (update.wb_mode.has_value() && payload.wb_mode != *update.wb_mode) {
+      payload.wb_mode = std::move(*update.wb_mode);
+      changed         = true;
+    }
+    if (update.custom_cct.has_value() && payload.custom_cct != *update.custom_cct) {
+      payload.custom_cct = *update.custom_cct;
+      changed            = true;
+    }
+    if (update.custom_tint.has_value() && payload.custom_tint != *update.custom_tint) {
+      payload.custom_tint = *update.custom_tint;
+      changed             = true;
+    }
+    if (update.as_shot_cct.has_value() && payload.as_shot_cct != *update.as_shot_cct) {
+      payload.as_shot_cct = *update.as_shot_cct;
+      changed             = true;
+    }
+    if (update.as_shot_tint.has_value() && payload.as_shot_tint != *update.as_shot_tint) {
+      payload.as_shot_tint = *update.as_shot_tint;
+      changed              = true;
+    }
+    return changed ? DirtyFieldMask{DevelopDirty::WhiteBalance} : DirtyFieldMask{};
+  });
+}
+
+void DevelopParamsModel::ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate update) {
+  MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
+    bool changed = false;
+    if (update.lens_enabled.has_value() && payload.lens_enabled != *update.lens_enabled) {
+      payload.lens_enabled = *update.lens_enabled;
+      changed              = true;
+    }
+    if (update.apply_vignetting.has_value() &&
+        payload.apply_vignetting != *update.apply_vignetting) {
+      payload.apply_vignetting = *update.apply_vignetting;
+      changed                  = true;
+    }
+    if (update.apply_distortion.has_value() &&
+        payload.apply_distortion != *update.apply_distortion) {
+      payload.apply_distortion = *update.apply_distortion;
+      changed                  = true;
+    }
+    if (update.apply_tca.has_value() && payload.apply_tca != *update.apply_tca) {
+      payload.apply_tca = *update.apply_tca;
+      changed           = true;
+    }
+    if (update.apply_crop.has_value() && payload.apply_crop != *update.apply_crop) {
+      payload.apply_crop = *update.apply_crop;
+      changed            = true;
+    }
+    if (update.auto_scale.has_value() && payload.auto_scale != *update.auto_scale) {
+      payload.auto_scale = *update.auto_scale;
+      changed            = true;
+    }
+    if (update.use_user_scale.has_value() && payload.use_user_scale != *update.use_user_scale) {
+      payload.use_user_scale = *update.use_user_scale;
+      changed                = true;
+    }
+    if (update.user_scale.has_value() && payload.user_scale != *update.user_scale) {
+      payload.user_scale = *update.user_scale;
+      changed            = true;
+    }
+    if (update.projection_enabled.has_value() &&
+        payload.projection_enabled != *update.projection_enabled) {
+      payload.projection_enabled = *update.projection_enabled;
+      changed                    = true;
+    }
+    if (update.target_projection.has_value() &&
+        payload.target_projection != *update.target_projection) {
+      payload.target_projection = std::move(*update.target_projection);
+      changed                   = true;
+    }
+    if (update.lens_profile_db_path.has_value() &&
+        payload.lens_profile_db_path != *update.lens_profile_db_path) {
+      payload.lens_profile_db_path = std::move(*update.lens_profile_db_path);
+      changed                      = true;
+    }
+    return changed ? DirtyFieldMask{DevelopDirty::Lens} : DirtyFieldMask{};
+  });
+}
+
 auto DevelopParamsModel::ToJson() const -> nlohmann::json {
-  const auto payload = PayloadCopy();
+  const auto  payload = PayloadCopy();
   const auto& profile = payload.camera_profile;
   return {{"demosaic_method", payload.demosaic_method},
           {"highlights_reconstruct", payload.highlights_reconstruct},
@@ -56,15 +243,17 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
 
 void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
   Mutate(DevelopDirty::All, [&json](DevelopPayload& payload) {
-    payload.demosaic_method        = json_util::ReadString(json, "demosaic_method", payload.demosaic_method);
-    payload.highlights_reconstruct = json_util::ReadBool(json, "highlights_reconstruct", payload.highlights_reconstruct);
-    payload.use_camera_wb          = json_util::ReadBool(json, "use_camera_wb", payload.use_camera_wb);
-    payload.user_wb                = json_util::ReadFloat(json, "user_wb", payload.user_wb);
-    payload.wb_mode                = json_util::ReadString(json, "wb_mode", payload.wb_mode);
-    payload.custom_cct             = json_util::ReadFloat(json, "custom_cct", payload.custom_cct);
-    payload.custom_tint            = json_util::ReadFloat(json, "custom_tint", payload.custom_tint);
-    payload.as_shot_cct            = json_util::ReadFloat(json, "as_shot_cct", payload.as_shot_cct);
-    payload.as_shot_tint           = json_util::ReadFloat(json, "as_shot_tint", payload.as_shot_tint);
+    payload.demosaic_method =
+        json_util::ReadString(json, "demosaic_method", payload.demosaic_method);
+    payload.highlights_reconstruct =
+        json_util::ReadBool(json, "highlights_reconstruct", payload.highlights_reconstruct);
+    payload.use_camera_wb = json_util::ReadBool(json, "use_camera_wb", payload.use_camera_wb);
+    payload.user_wb       = json_util::ReadFloat(json, "user_wb", payload.user_wb);
+    payload.wb_mode       = json_util::ReadString(json, "wb_mode", payload.wb_mode);
+    payload.custom_cct    = json_util::ReadFloat(json, "custom_cct", payload.custom_cct);
+    payload.custom_tint   = json_util::ReadFloat(json, "custom_tint", payload.custom_tint);
+    payload.as_shot_cct   = json_util::ReadFloat(json, "as_shot_cct", payload.as_shot_cct);
+    payload.as_shot_tint  = json_util::ReadFloat(json, "as_shot_tint", payload.as_shot_tint);
     if (json.contains("camera_profile") && json["camera_profile"].is_object()) {
       const auto& profile_json = json["camera_profile"];
       auto&       profile      = payload.camera_profile;
@@ -74,15 +263,16 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
           json_util::ReadBool(profile_json, "color_matrices_valid", profile.color_matrices_valid);
       json_util::ReadNumberArray(profile_json, "color_matrix_1", profile.color_matrix_1.data(), 9);
       json_util::ReadNumberArray(profile_json, "color_matrix_2", profile.color_matrix_2.data(), 9);
-      profile.forward_matrices_valid = json_util::ReadBool(
-          profile_json, "forward_matrices_valid", profile.forward_matrices_valid);
+      profile.forward_matrices_valid = json_util::ReadBool(profile_json, "forward_matrices_valid",
+                                                           profile.forward_matrices_valid);
       json_util::ReadNumberArray(profile_json, "forward_matrix_1", profile.forward_matrix_1.data(),
                                  9);
       json_util::ReadNumberArray(profile_json, "forward_matrix_2", profile.forward_matrix_2.data(),
                                  9);
       profile.as_shot_neutral_valid =
           json_util::ReadBool(profile_json, "as_shot_neutral_valid", profile.as_shot_neutral_valid);
-      json_util::ReadNumberArray(profile_json, "as_shot_neutral", profile.as_shot_neutral.data(), 3);
+      json_util::ReadNumberArray(profile_json, "as_shot_neutral", profile.as_shot_neutral.data(),
+                                 3);
       profile.calibration_illuminants_valid = json_util::ReadBool(
           profile_json, "calibration_illuminants_valid", profile.calibration_illuminants_valid);
       profile.color_matrix_1_cct =
@@ -91,56 +281,58 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
           json_util::ReadDouble(profile_json, "color_matrix_2_cct", profile.color_matrix_2_cct);
       json_util::ReadNumberArray(profile_json, "cam_mul", profile.cam_mul.data(), 3);
     }
-    payload.lens_enabled           = json_util::ReadBool(json, "lens_enabled", payload.lens_enabled);
-    payload.apply_vignetting       = json_util::ReadBool(json, "apply_vignetting", payload.apply_vignetting);
-    payload.apply_distortion       = json_util::ReadBool(json, "apply_distortion", payload.apply_distortion);
-    payload.apply_tca              = json_util::ReadBool(json, "apply_tca", payload.apply_tca);
-    payload.apply_crop             = json_util::ReadBool(json, "apply_crop", payload.apply_crop);
-    payload.auto_scale             = json_util::ReadBool(json, "auto_scale", payload.auto_scale);
-    payload.use_user_scale         = json_util::ReadBool(json, "use_user_scale", payload.use_user_scale);
-    payload.user_scale             = json_util::ReadFloat(json, "user_scale", payload.user_scale);
-    payload.projection_enabled     = json_util::ReadBool(json, "projection_enabled", payload.projection_enabled);
-    payload.target_projection = json_util::ReadString(json, "target_projection", payload.target_projection);
+    payload.lens_enabled = json_util::ReadBool(json, "lens_enabled", payload.lens_enabled);
+    payload.apply_vignetting =
+        json_util::ReadBool(json, "apply_vignetting", payload.apply_vignetting);
+    payload.apply_distortion =
+        json_util::ReadBool(json, "apply_distortion", payload.apply_distortion);
+    payload.apply_tca      = json_util::ReadBool(json, "apply_tca", payload.apply_tca);
+    payload.apply_crop     = json_util::ReadBool(json, "apply_crop", payload.apply_crop);
+    payload.auto_scale     = json_util::ReadBool(json, "auto_scale", payload.auto_scale);
+    payload.use_user_scale = json_util::ReadBool(json, "use_user_scale", payload.use_user_scale);
+    payload.user_scale     = json_util::ReadFloat(json, "user_scale", payload.user_scale);
+    payload.projection_enabled =
+        json_util::ReadBool(json, "projection_enabled", payload.projection_enabled);
+    payload.target_projection =
+        json_util::ReadString(json, "target_projection", payload.target_projection);
     payload.lens_profile_db_path =
         json_util::ReadString(json, "lens_profile_db_path", payload.lens_profile_db_path);
   });
 }
 
 void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
-  const auto current = PayloadCopy();
-  if (payload == current) {
-    return;
-  }
-  auto bits = static_cast<std::uint64_t>(DevelopDirty::None);
-  if (payload.demosaic_method != current.demosaic_method) {
-    bits |= static_cast<std::uint64_t>(DevelopDirty::Demosaic);
-  }
-  if (payload.highlights_reconstruct != current.highlights_reconstruct) {
-    bits |= static_cast<std::uint64_t>(DevelopDirty::Highlights);
-  }
-  if (payload.lens_enabled != current.lens_enabled ||
-      payload.apply_vignetting != current.apply_vignetting ||
-      payload.apply_distortion != current.apply_distortion ||
-      payload.apply_tca != current.apply_tca || payload.apply_crop != current.apply_crop ||
-      payload.auto_scale != current.auto_scale || payload.use_user_scale != current.use_user_scale ||
-      payload.user_scale != current.user_scale ||
-      payload.projection_enabled != current.projection_enabled ||
-      payload.target_projection != current.target_projection ||
-      payload.lens_profile_db_path != current.lens_profile_db_path) {
-    bits |= static_cast<std::uint64_t>(DevelopDirty::Lens);
-  }
-  if (payload.use_camera_wb != current.use_camera_wb || payload.user_wb != current.user_wb ||
-      payload.wb_mode != current.wb_mode || payload.custom_cct != current.custom_cct ||
-      payload.custom_tint != current.custom_tint || payload.as_shot_cct != current.as_shot_cct ||
-      payload.as_shot_tint != current.as_shot_tint ||
-      payload.camera_profile != current.camera_profile) {
-    bits |= static_cast<std::uint64_t>(DevelopDirty::WhiteBalance);
-  }
-  if (bits == 0) {
-    bits = static_cast<std::uint64_t>(DevelopDirty::All);
-  }
-  Mutate(static_cast<DevelopDirty>(bits),
-         [payload = std::move(payload)](DevelopPayload& dest) mutable { dest = std::move(payload); });
+  MutateWithDirtyFields([payload = std::move(payload)](DevelopPayload& dest) mutable {
+    if (dest == payload) {
+      return DirtyFieldMask{};
+    }
+    DirtyFieldMask changed;
+    if (payload.demosaic_method != dest.demosaic_method) {
+      changed |= DirtyFieldMask{DevelopDirty::Demosaic};
+    }
+    if (payload.highlights_reconstruct != dest.highlights_reconstruct) {
+      changed |= DirtyFieldMask{DevelopDirty::Highlights};
+    }
+    if (payload.lens_enabled != dest.lens_enabled ||
+        payload.apply_vignetting != dest.apply_vignetting ||
+        payload.apply_distortion != dest.apply_distortion ||
+        payload.apply_tca != dest.apply_tca || payload.apply_crop != dest.apply_crop ||
+        payload.auto_scale != dest.auto_scale || payload.use_user_scale != dest.use_user_scale ||
+        payload.user_scale != dest.user_scale ||
+        payload.projection_enabled != dest.projection_enabled ||
+        payload.target_projection != dest.target_projection ||
+        payload.lens_profile_db_path != dest.lens_profile_db_path) {
+      changed |= DirtyFieldMask{DevelopDirty::Lens};
+    }
+    if (payload.use_camera_wb != dest.use_camera_wb || payload.user_wb != dest.user_wb ||
+        payload.wb_mode != dest.wb_mode || payload.custom_cct != dest.custom_cct ||
+        payload.custom_tint != dest.custom_tint || payload.as_shot_cct != dest.as_shot_cct ||
+        payload.as_shot_tint != dest.as_shot_tint ||
+        payload.camera_profile != dest.camera_profile) {
+      changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    dest = std::move(payload);
+    return changed.Any() ? changed : DirtyFieldMask{DevelopDirty::All};
+  });
 }
 
 DevelopNodeModel::DevelopNodeModel(NodeId id) : id_(std::move(id)) {

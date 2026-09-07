@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -26,8 +27,8 @@ TEST_F(EditorAdjustmentPipelineTest, AppliesTonePatchesToMatchingOperators) {
 
   EditorRenderAdjustmentSnapshot snapshot;
   snapshot.patches = {
-      EditorAdjustmentPatch{"exposure", R"({"exposure":-0.75})", false},
-      EditorAdjustmentPatch{"contrast", R"({"contrast":18.0})", false},
+      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":-0.75})", false}),
+      alcedo::test::SnapshotPatch({"contrast", R"({"contrast":18.0})", false}),
   };
 
   std::string error;
@@ -50,9 +51,9 @@ TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) 
   executor.ResetToCleanBaselineAdjustments();
 
   EditorRenderAdjustmentSnapshot first;
-  first.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.25})", false}};
+  first.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.25})", false})};
   EditorRenderAdjustmentSnapshot latest;
-  latest.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":1.25})", false}};
+  latest.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.25})", false})};
 
   std::string error;
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, first, &error)) << error;
@@ -67,11 +68,11 @@ TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) 
 
 TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawPatch) {
   EditorRenderAdjustmentSnapshot tone_only;
-  tone_only.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.5})", false}};
+  tone_only.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.5})", false})};
   EXPECT_FALSE(SnapshotTouchesImageLoading(tone_only));
 
   EditorRenderAdjustmentSnapshot raw_patch;
-  raw_patch.patches = {EditorAdjustmentPatch{"raw_decode", R"({"raw":{"method":"default"}})", true}};
+  raw_patch.patches = {alcedo::test::SnapshotPatch({"raw_decode", R"({"raw":{"method":"default"}})", true})};
   EXPECT_TRUE(SnapshotTouchesImageLoading(raw_patch));
 }
 
@@ -90,8 +91,8 @@ TEST_F(EditorAdjustmentPipelineTest,
 
   EditorRenderAdjustmentSnapshot first;
   first.patches = {
-      EditorAdjustmentPatch{"lens_calib", lens_params.dump(), false},
-      EditorAdjustmentPatch{"exposure", R"({"exposure":0.25})", false},
+      alcedo::test::SnapshotPatch({"lens_calib", lens_params.dump(), false}),
+      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.25})", false}),
   };
 
   std::string error;
@@ -105,8 +106,8 @@ TEST_F(EditorAdjustmentPipelineTest,
 
   EditorRenderAdjustmentSnapshot second;
   second.patches = {
-      EditorAdjustmentPatch{"lens_calib", lens_params.dump(), false},
-      EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", false},
+      alcedo::test::SnapshotPatch({"lens_calib", lens_params.dump(), false}),
+      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.75})", false}),
   };
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, second, &error)) << error;
 
@@ -119,7 +120,7 @@ TEST_F(EditorAdjustmentPipelineTest,
   changed_lens_params["lens_calib"]["lens_model"] = "Another Test Lens";
   EditorRenderAdjustmentSnapshot changed;
   changed.patches = {
-      EditorAdjustmentPatch{"lens_calib", changed_lens_params.dump(), false},
+      alcedo::test::SnapshotPatch({"lens_calib", changed_lens_params.dump(), false}),
   };
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, changed, &error)) << error;
   EXPECT_FALSE(loading.CacheValid());
@@ -134,7 +135,7 @@ TEST_F(EditorAdjustmentPipelineTest, RejectsUnknownFieldWithoutMutatingKnownOper
                           ->ExportOperatorParams();
 
   EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {EditorAdjustmentPatch{"not_a_field", R"({"value":1})", false}};
+  snapshot.patches = {alcedo::test::SnapshotPatch({"not_a_field", R"({"value":1})", false})};
 
   std::string error;
   EXPECT_FALSE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error));
@@ -151,10 +152,10 @@ TEST_F(EditorAdjustmentPipelineTest, GeometryOverlayPreviewKeepsCropParametersBu
   executor.ResetToCleanBaselineAdjustments();
 
   EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {EditorAdjustmentPatch{
+  snapshot.patches = {alcedo::test::SnapshotPatch({
       "crop_rotate",
       R"({"crop_rotate":{"enabled":true,"angle_degrees":35.0,"enable_crop":true,"crop_rect":{"x":0.1,"y":0.1,"w":0.7,"h":0.7}}})",
-      false}};
+      false})};
 
   std::string error;
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
@@ -187,9 +188,9 @@ TEST_F(EditorAdjustmentPipelineTest, WritePayloadMapsOntoDocumentAndExecutorKeys
   CPUPipelineExecutor executor;
   executor.ResetToCleanBaselineAdjustments();
   EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {EditorAdjustmentPatch{
+  snapshot.patches = {alcedo::test::SnapshotPatch({
       "exposure", EditorAdjustmentExecutorParamsFromWrite("exposure", {{"value", 2.0}}).dump(),
-      false}};
+      false})};
   std::string error;
   ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
   const auto exposure =

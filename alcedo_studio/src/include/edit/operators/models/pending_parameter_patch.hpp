@@ -22,6 +22,16 @@ class PendingParameterPatch {
   PendingParameterPatch(IOperatorModel& model, OperatorParamPatchDto patch)
       : model_(&model), patch_(std::move(patch)) {}
 
+  /**
+   * @brief Guard dirty bits taken without a payload copy.
+   *
+   * Grade GPU packing uses this so a failed upload can restore dirty bits without
+   * holding a full Model DTO.
+   */
+  PendingParameterPatch(IOperatorModel& model, DirtyFieldMask fields) : model_(&model) {
+    patch_.dirty_fields = fields;
+  }
+
   PendingParameterPatch(const PendingParameterPatch&)            = delete;
   auto operator=(const PendingParameterPatch&) -> PendingParameterPatch& = delete;
 
@@ -74,6 +84,19 @@ class PendingParameterPatch {
     return std::nullopt;
   }
   return PendingParameterPatch{model, std::move(*patch)};
+}
+
+/**
+ * @brief Take dirty bits without copying the Model payload.
+ * @return nullopt when the Model has no dirty fields.
+ */
+[[nodiscard]] inline auto TakePendingDirtyFields(IOperatorModel& model)
+    -> std::optional<PendingParameterPatch> {
+  auto fields = model.TakeDirtyFields();
+  if (!fields.has_value()) {
+    return std::nullopt;
+  }
+  return PendingParameterPatch{model, *fields};
 }
 
 }  // namespace alcedo

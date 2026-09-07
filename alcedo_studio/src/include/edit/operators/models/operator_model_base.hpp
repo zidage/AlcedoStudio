@@ -38,6 +38,7 @@ class OperatorModelBase : public IOperatorModel {
   }
 
   [[nodiscard]] auto MakeFullDto() const -> OperatorParamDto override {
+    OperatorModelFullDtoCopyCount::Note();
     std::lock_guard<std::mutex> lock(mutex_);
     return MakeDtoLocked();
   }
@@ -54,6 +55,29 @@ class OperatorModelBase : public IOperatorModel {
                                                                               kDataVersion, payload_);
     dirty_             = DirtyFieldMask{};
     return patch;
+  }
+
+  auto TakeDirtyFields() -> std::optional<DirtyFieldMask> override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!dirty_.Any()) {
+      return std::nullopt;
+    }
+    const auto fields = dirty_;
+    dirty_            = DirtyFieldMask{};
+    return fields;
+  }
+
+  /**
+   * @brief Read live owner fields under the Model lock.
+   *
+   * The callback receives the payload stored by this Model. It must not retain
+   * references or pointers to that payload after returning. This does not allocate
+   * a DTO or copy the whole payload unless the callback does.
+   */
+  template <class Fn>
+  auto Read(Fn&& fn) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return fn(payload_);
   }
 
   void RestoreDirty(DirtyFieldMask fields) override {
@@ -76,10 +100,16 @@ class OperatorModelBase : public IOperatorModel {
     dirty_ |= DirtyFieldMask{bit};
   }
 
+  /**
+   * @brief Apply one focused update while computing the changed dirty fields under the same lock.
+   *
+   * The callback must update only the supplied owner fields and return the dirty bits for fields
+   * that changed. Returning an empty mask makes an equivalent normalized update a no-op.
+   */
   template <class Fn>
-  auto Read(Fn&& fn) const {
+  void MutateWithDirtyFields(Fn&& fn) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return fn(payload_);
+    dirty_ |= fn(payload_);
   }
 
   [[nodiscard]] auto PayloadCopy() const -> Payload {

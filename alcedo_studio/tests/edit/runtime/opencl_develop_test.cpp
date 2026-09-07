@@ -317,7 +317,6 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopLinearizeMatchesCudaReferenceWithinTol
   const auto cpu = CpuLinearize(prepared);
 
   OpenClRenderDevice device;
-  device.Workspace().Textures().SetByteBudget(32ull * 24ull * 16ull);
   auto& transients = device.Workspace().TransientBuffers();
   transients.Reserve(32ull * 24ull * 16ull);
   device.BeginRender();
@@ -614,7 +613,6 @@ TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewpor
 
   const auto host_src = MakeSrcImage(64, 48);
   OpenClRenderDevice device;
-  device.Workspace().Textures().SetByteBudget(64ull * 48ull * 16ull * 8ull);
   device.BeginRender();
   ExecuteOpenClDevelop(device, plan, prepared, document);
   auto* sensor = device.Workspace().Images().Find(plan.sensor_linear_output);

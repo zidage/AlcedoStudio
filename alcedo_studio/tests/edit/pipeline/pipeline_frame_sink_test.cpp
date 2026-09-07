@@ -19,6 +19,7 @@
 #include "edit/operators/raw/raw_decode_op.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -583,6 +584,24 @@ TEST_F(PipelineFrameSinkTest, ThumbnailAnalysisAndExportApplyRequestsOmitActiveR
   EXPECT_TRUE(export_request.active_raster_masks.empty());
   EXPECT_FALSE(export_request.allow_active_raster_preview);
   EXPECT_EQ(export_request.cache_policy, RenderCachePolicy::BypassSessionCache);
+}
+
+TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelopPersistence) {
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+
+  PipelineTask quality;
+  quality.pipeline_executor_                 = exec;
+  quality.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
+  const auto request                         = quality.MakeApplyRequest();
+  EXPECT_EQ(request.submission.metadata.frame_role, FrameRole::QualityBase);
+  EXPECT_EQ(request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_EQ(request.geometry.resolution.max_edge, 4096U);
+  EXPECT_EQ(ResultPersistenceScopeForRole(request.submission.metadata.frame_role),
+            ResultPersistenceScope::SensorDevelopOnly);
+
+  exec->SetEnableCache(false);
+  quality.SetExecutorRenderParams();
+  EXPECT_TRUE(exec->CaptureOneShotRenderParams().enable_cache_);
 }
 
 TEST_F(PipelineFrameSinkTest, ThumbnailAndExportTasksDisableSessionCache) {

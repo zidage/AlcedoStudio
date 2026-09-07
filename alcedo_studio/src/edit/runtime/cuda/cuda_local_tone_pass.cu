@@ -317,10 +317,14 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
       std::max(static_cast<int>(width), static_cast<int>(height));
   const auto source_id       = LocalToneSourceId(grade_id);
   const auto result_id       = LocalToneResultId(grade_id);
+  const bool persist_llf     = workspace.PersistsResult(source_id);
   const auto canonical_bytes = static_cast<std::size_t>(canonical_dims.width) *
                                static_cast<std::size_t>(canonical_dims.height) * sizeof(float);
-  auto* cached_source = workspace.Values().Find(source_id);
-  auto* cached_result = workspace.Values().Find(result_id);
+  auto* cached_source = persist_llf ? workspace.Values().Find(source_id) : nullptr;
+  auto* cached_result = persist_llf ? workspace.Values().Find(result_id) : nullptr;
+  if (!persist_llf) {
+    device.PassStats().result_policy_bypass += 2;
+  }
   auto& invalidation  = workspace.ResultInvalidation();
   const ImageExtent canonical_extent{static_cast<std::uint32_t>(canonical_dims.width),
                                      static_cast<std::uint32_t>(canonical_dims.height)};
@@ -384,15 +388,22 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
   for (int level = 0; level < layout.count; ++level) {
     const auto bytes =
         static_cast<std::size_t>(layout.widths[level]) * layout.heights[level] * sizeof(float);
-    auto& source_buffer = EnsureBuffer(workspace, LevelId(grade_id, "source", level), bytes);
-    auto& a_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_a", level), bytes);
-    auto& b_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_b", level), bytes);
-    auto& result_buffer = EnsureBuffer(workspace, LevelId(grade_id, "result", level), bytes);
-    source[level]       = static_cast<float*>(source_buffer.DevicePointer());
-    remap_a[level]      = static_cast<float*>(a_buffer.DevicePointer());
-    remap_b[level]      = static_cast<float*>(b_buffer.DevicePointer());
-    result[level]       = static_cast<float*>(result_buffer.DevicePointer());
-    if (level == 0) reference_id = source_buffer.ResourceId();
+    if (persist_llf) {
+      auto& source_buffer = EnsureBuffer(workspace, LevelId(grade_id, "source", level), bytes);
+      auto& a_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_a", level), bytes);
+      auto& b_buffer      = EnsureBuffer(workspace, LevelId(grade_id, "remap_b", level), bytes);
+      auto& result_buffer = EnsureBuffer(workspace, LevelId(grade_id, "result", level), bytes);
+      source[level]       = static_cast<float*>(source_buffer.DevicePointer());
+      remap_a[level]      = static_cast<float*>(a_buffer.DevicePointer());
+      remap_b[level]      = static_cast<float*>(b_buffer.DevicePointer());
+      result[level]       = static_cast<float*>(result_buffer.DevicePointer());
+      if (level == 0) reference_id = source_buffer.ResourceId();
+    } else {
+      source[level]  = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
+      remap_a[level] = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
+      remap_b[level] = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
+      result[level]  = static_cast<float*>(workspace.TransientBuffers().Allocate(bytes));
+    }
   }
 
   if (!reuse_source) {
@@ -457,11 +468,12 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
         layout.heights[level], layout.widths[level + 1], layout.heights[level + 1]);
     std::swap(result[level], remap_a[level]);
   }
-  auto* named_result = workspace.Values().Find(LevelId(grade_id, "result", 0));
-  if (named_result == nullptr) {
+  auto* named_result = persist_llf ? workspace.Values().Find(LevelId(grade_id, "result", 0))
+                                   : nullptr;
+  if (persist_llf && named_result == nullptr) {
     throw std::runtime_error("ExecuteCudaLocalTone: missing result.0 after pyramid collapse");
   }
-  if (result[0] != named_result->DevicePointer()) {
+  if (persist_llf && result[0] != named_result->DevicePointer()) {
     if (::cudaMemcpyAsync(named_result->DevicePointer(), result[0],
                           static_cast<std::size_t>(layout.widths[0]) * layout.heights[0] *
                               sizeof(float),
@@ -483,7 +495,7 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
       static_cast<int>(height), layout.widths[0], layout.heights[0], apply_uv);
   CheckLaunch("kernel launch");
 
-  if (write_canonical_reference || reuse_source) {
+  if (persist_llf && (write_canonical_reference || reuse_source)) {
     const ImageExtent extent{static_cast<std::uint32_t>(layout.widths[0]),
                              static_cast<std::uint32_t>(layout.heights[0])};
     if (!reuse_source) {
@@ -496,7 +508,7 @@ auto ExecuteCudaLocalTone(CudaRenderDevice& device, const GraphValueId& input_id
                                      result_needed, extent,
                                      static_cast<std::uint32_t>(current_long_edge), true);
     invalidation.MarkCompleted(result_id, result_needed);
-  } else if (workspace.Values().Find(source_id) != nullptr) {
+  } else if (persist_llf && workspace.Values().Find(source_id) != nullptr) {
     workspace.Values().StoreMetadata(source_id, 0, {}, {}, 0, false);
   }
   tone.reference_resource_id = reference_id;

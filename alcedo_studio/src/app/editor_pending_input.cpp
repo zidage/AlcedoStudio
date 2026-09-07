@@ -4,6 +4,8 @@
 
 #include "app/editor_pending_input.hpp"
 
+#include <utility>
+
 namespace alcedo {
 namespace {
 
@@ -46,11 +48,11 @@ namespace {
 
 }  // namespace
 
-auto EditorPendingInputQueue::AdmitFieldChange(EditorSessionIdentity          identity,
-                                               const EditorAdjustmentPatch&   patch)
+auto EditorPendingInputQueue::AdmitFieldChange(EditorSessionIdentity identity,
+                                               EditorAdjustmentPatch patch)
     -> EditorPendingInputAdmitResult {
   std::scoped_lock lock(mutex_);
-  return AdmitFieldChangeLocked(identity, patch);
+  return AdmitFieldChangeLocked(identity, std::move(patch));
 }
 
 auto EditorPendingInputQueue::AdmitBoundary(EditorSessionIdentity          identity,
@@ -73,8 +75,12 @@ auto EditorPendingInputQueue::TakeReadyBatch() -> std::optional<EditorPendingSeq
     return batch;
   }
   if (open_.has_value() && !open_->fields.empty()) {
-    EditorPendingSequence batch = *open_;
-    open_->fields.clear();
+    EditorPendingSequence batch;
+    batch.sequence_id     = open_->sequence_id;
+    batch.identity        = open_->identity;
+    batch.captured_target = open_->captured_target;
+    batch.seal            = open_->seal;
+    batch.fields          = std::move(open_->fields);
     open_field_index_.clear();
     return batch;
   }
@@ -98,11 +104,14 @@ auto EditorPendingInputQueue::HasConsumableWorkLocked() const -> bool {
   return open_.has_value() && !open_->fields.empty();
 }
 
-auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity        identity,
-                                                     const EditorAdjustmentPatch& patch)
+auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity identity,
+                                                     EditorAdjustmentPatch patch)
     -> EditorPendingInputAdmitResult {
   if (patch.field_key.empty()) {
     return RejectAdmit("Adjustment input requires a field key");
+  }
+  if (!patch.write.has_value()) {
+    return RejectAdmit("Adjustment input requires a typed field write");
   }
   if (!patch.target.field_key.empty() && patch.target.field_key != patch.field_key) {
     return RejectAdmit("Editor parameter target field_key must match the patch field_key");
@@ -131,8 +140,8 @@ auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity      
   }
 
   EditorPendingFieldChange change;
-  change.identity    = identity;
-  change.target      = patch.target;
+  change.identity         = identity;
+  change.target           = patch.target;
   change.target.field_key = patch.field_key;
   if (HasCompleteWriteIdentity(open_->captured_target)) {
     change.target.owner_kind             = open_->captured_target.owner_kind;
@@ -140,8 +149,8 @@ auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity      
     change.target.adjustment_instance_id = open_->captured_target.adjustment_instance_id;
     change.target.mask_id                = open_->captured_target.mask_id;
   }
-  change.params_json = patch.params_json;
-  change.enabled     = patch.enabled;
+  change.write   = std::move(*patch.write);
+  change.enabled = patch.enabled;
 
   const auto existing = open_field_index_.find(patch.field_key);
   if (existing != open_field_index_.end()) {

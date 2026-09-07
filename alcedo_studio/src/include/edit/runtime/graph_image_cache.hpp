@@ -7,13 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <map>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
@@ -29,6 +29,10 @@ namespace alcedo {
  * @ref BindValidResult, and @ref PublishSuccessfulSubmission. A matching
  * ResourceId is allocation reuse, not a content hit. Not thread-safe. One
  * in-flight submission.
+ *
+ * Published results whose required revision still matches are retained. Stale
+ * published results are dropped before a Develop rewrite; idle pool textures
+ * are destroyed by TexturePool::ReleaseUnleased after GPU last-use.
  *
  * @tparam Backend Texture factory used by TexturePool.
  */
@@ -51,34 +55,44 @@ class GraphImageCache {
   /**
    * @brief Bind the current published result of @p id when it satisfies the query.
    *
-   * Counts a validity hit or miss. Misses include revision mismatch, representation
-   * mismatch, and an in-flight last_writer.
+   * Counts a validity hit or a classified miss (missing, revision, representation,
+   * or in-flight writer). Policy bypass must not call this.
    */
   auto BindValidResult(const GraphValueId& id, RuntimeRevision required_revision,
                        const ResultRepresentation& needed, std::uint64_t completed_submission)
       -> ResourceLease<Backend>* {
+    ++lookups_;
     auto* published = FindPublished(id);
-    if (published == nullptr || published->revision != required_revision || required_revision == 0 ||
-        !RepresentationSatisfies(published->representation, needed) ||
-        WriterBusy(*published, completed_submission)) {
-      ++content_misses_;
+    if (published == nullptr) {
+      ++missing_misses_;
+      return nullptr;
+    }
+    if (required_revision == 0 || published->revision != required_revision) {
+      ++revision_misses_;
+      return nullptr;
+    }
+    if (!RepresentationSatisfies(published->representation, needed)) {
+      ++representation_misses_;
+      return nullptr;
+    }
+    if (WriterBusy(*published, completed_submission)) {
+      ++writer_busy_misses_;
       return nullptr;
     }
     ++content_hits_;
-    published->lru_tick = ++lru_clock_;
     return &published->texture;
   }
 
   /**
    * @brief Allocate or reuse a texture for an unpublished write of @p id.
    *
-   * Reuses an in-flight write slot of the same size. Does not steal the current
-   * published result. Overwriting a same-size unpublished slot drops its
-   * unrecorded identity. Evicts completed published results to fit the pool budget.
+   * Reuses an in-flight write slot of the same size, otherwise a matching free
+   * pool entry, otherwise a new allocation. Does not steal a published result.
+   * Throws when the backend cannot create the texture.
    *
-   * @pre @p pool and @p backend outlive this cache.
+   * @pre @p pool outlives this cache.
    */
-  auto AcquireTextureForWrite(TexturePool<Backend>& pool, Backend& backend, const GraphValueId& id,
+  auto AcquireTextureForWrite(TexturePool<Backend>& pool, const GraphValueId& id,
                               const TextureRequest& request) -> ResourceLease<Backend>& {
     if (request.width == 0 || request.height == 0) {
       throw std::runtime_error("GraphImageCache::AcquireTextureForWrite: invalid size");
@@ -88,8 +102,8 @@ class GraphImageCache {
         const auto& tex = slot->texture.Texture();
         if (tex.Width() == request.width && tex.Height() == request.height &&
             tex.Format() == request.format) {
-          slot->has_revision = false;
-          slot->revision     = 0;
+          slot->has_revision   = false;
+          slot->revision       = 0;
           slot->representation = {};
           return slot->texture;
         }
@@ -97,13 +111,11 @@ class GraphImageCache {
       write_slots_.erase(id);
     }
 
-    EvictCompletedUnleased(pool, backend, request);
-
     WriteSlot slot;
-    slot.texture        = pool.Acquire(request);
+    slot.texture               = pool.Acquire(request);
     slot.representation.extent = ImageExtent{request.width, request.height};
     slot.representation.format = request.format;
-    auto [it, inserted] = write_slots_.emplace(id, std::move(slot));
+    auto [it, inserted]        = write_slots_.emplace(id, std::move(slot));
     (void)inserted;
     return it->second.texture;
   }
@@ -130,12 +142,12 @@ class GraphImageCache {
       write_slots_.erase(dest);
     }
 
-    const auto& source_tex = source_lease->Texture();
+    const auto& source_tex         = source_lease->Texture();
     WriteSlot   slot;
-    slot.texture        = pool.DuplicateLease(source_lease->Handle());
-    slot.representation.extent = ImageExtent{source_tex.Width(), source_tex.Height()};
-    slot.representation.format = source_tex.Format();
-    auto [it, inserted] = write_slots_.emplace(dest, std::move(slot));
+    slot.texture                   = pool.DuplicateLease(source_lease->Handle());
+    slot.representation.extent     = ImageExtent{source_tex.Width(), source_tex.Height()};
+    slot.representation.format     = source_tex.Format();
+    auto [it, inserted]            = write_slots_.emplace(dest, std::move(slot));
     (void)inserted;
     return it->second.texture;
   }
@@ -166,15 +178,23 @@ class GraphImageCache {
   }
 
   /**
-   * @brief Atomically publish unpublished writes recorded for @p submission_id.
+   * @brief Publish unpublished writes recorded for @p submission_id.
    *
-   * Write slots without a revision are dropped. Replacing the current result of
-   * an id releases the previous lease. Failed or cancelled submissions must call
-   * @ref DiscardUnpublished instead.
+   * Only values allowed by @p persistence become the current published result.
+   * Other recorded writes stay unpublished until @ref DiscardUnpublished.
+   * @ref ResultPersistenceScope::AllCurrentResults also drops unrecorded slots,
+   * matching the previous publish-then-clear behavior.
    */
-  void PublishSuccessfulSubmission(std::uint64_t submission_id) {
-    for (auto& [id, slot] : write_slots_) {
-      if (!slot.has_revision || slot.last_writer != submission_id) {
+  void PublishSuccessfulSubmission(std::uint64_t submission_id,
+                                   ResultPersistenceScope persistence =
+                                       ResultPersistenceScope::AllCurrentResults,
+                                   const GraphValueId& sensor_linear = {}) {
+    for (auto it = write_slots_.begin(); it != write_slots_.end();) {
+      auto&       slot = it->second;
+      const auto& id   = it->first;
+      if (!slot.has_revision || slot.last_writer != submission_id ||
+          !PersistsGraphValue(persistence, id, sensor_linear)) {
+        ++it;
         continue;
       }
       PublishedResult published;
@@ -183,16 +203,36 @@ class GraphImageCache {
       published.revision       = slot.revision;
       published.last_writer    = slot.last_writer;
       published.auxiliary      = slot.auxiliary;
-      published.lru_tick       = ++lru_clock_;
       published_.insert_or_assign(id, std::move(published));
+      ++persistent_publishes_;
+      it = write_slots_.erase(it);
     }
-    write_slots_.clear();
+    if (persistence == ResultPersistenceScope::AllCurrentResults) {
+      write_slots_.clear();
+    }
   }
 
   /**
    * @brief Drop unpublished writes without publishing. Previously published results stay.
    */
   void               DiscardUnpublished() { write_slots_.clear(); }
+
+  /**
+   * @brief Drop unpublished writes other than @p keep.
+   *
+   * QualityBase presentation may keep the displayed output until the sink
+   * returns it. Geometry and other submission-local writes are released after
+   * GPU last-use so they do not shadow Interactive published results.
+   */
+  void ReleaseUnpublishedExcept(const GraphValueId& keep) {
+    for (auto it = write_slots_.begin(); it != write_slots_.end();) {
+      if (it->first == keep) {
+        ++it;
+        continue;
+      }
+      it = write_slots_.erase(it);
+    }
+  }
 
   /**
    * @brief Drop the unpublished write of @p id and return its texture to the pool.
@@ -228,51 +268,20 @@ class GraphImageCache {
     return Find(GraphValueId{producer, output_port});
   }
 
-  /**
-   * @brief Drop completed published results, oldest first, to free pool budget.
-   *
-   * Eviction causes later recomputation at the same quality. Does not evict
-   * in-flight write slots or results whose last_writer is still busy.
-   */
-  void EvictCompletedUnleased(TexturePool<Backend>& pool, Backend& backend,
-                              const TextureRequest& needed) {
-    if (pool.ByteBudget() == 0) {
-      return;
-    }
-    const auto needed_bytes = static_cast<std::size_t>(needed.width) * needed.height *
-                              TextureFormatBytesPerPixel(needed.format);
-    bool released_matching = false;
-    while (!released_matching && pool.UsedBytes() + needed_bytes > pool.ByteBudget()) {
-      GraphValueId     victim_id;
-      PublishedResult* victim = nullptr;
-      std::uint64_t    oldest = (std::numeric_limits<std::uint64_t>::max)();
-      for (auto& [id, entry] : published_) {
-        if (backend.IsResourceBusy(entry.last_writer)) {
-          continue;
-        }
-        if (write_slots_.contains(id)) {
-          continue;
-        }
-        if (entry.lru_tick < oldest) {
-          oldest    = entry.lru_tick;
-          victim    = &entry;
-          victim_id = id;
-        }
-      }
-      if (victim == nullptr) {
-        break;
-      }
-      released_matching = victim->representation.extent.width == needed.width &&
-                          victim->representation.extent.height == needed.height &&
-                          victim->representation.format == needed.format;
-      published_.erase(victim_id);
-    }
-  }
-
   [[nodiscard]] auto PublishedCount() const -> std::size_t { return published_.size(); }
   [[nodiscard]] auto UnpublishedCount() const -> std::size_t { return write_slots_.size(); }
   [[nodiscard]] auto ContentHitCount() const -> std::uint64_t { return content_hits_; }
-  [[nodiscard]] auto ContentMissCount() const -> std::uint64_t { return content_misses_; }
+  [[nodiscard]] auto ContentMissCount() const -> std::uint64_t {
+    return missing_misses_ + revision_misses_ + representation_misses_ + writer_busy_misses_;
+  }
+  [[nodiscard]] auto LookupCount() const -> std::uint64_t { return lookups_; }
+  [[nodiscard]] auto RevisionMissCount() const -> std::uint64_t { return revision_misses_; }
+  [[nodiscard]] auto RepresentationMissCount() const -> std::uint64_t {
+    return representation_misses_;
+  }
+  [[nodiscard]] auto PersistentPublishCount() const -> std::uint64_t {
+    return persistent_publishes_;
+  }
 
   [[nodiscard]] auto PublishedRevision(const GraphValueId& id) const -> RuntimeRevision {
     const auto* published = FindPublished(id);
@@ -302,6 +311,31 @@ class GraphImageCache {
   void Clear() {
     write_slots_.clear();
     published_.clear();
+  }
+
+  /**
+   * @brief Drop a published result. Extra TexturePool leases keep the texture.
+   *
+   * Unpublished writes are unchanged. No-op when @p id is not published.
+   */
+  void DropPublished(const GraphValueId& id) { published_.erase(id); }
+
+  /**
+   * @brief Drop published results for which @p is_current is false.
+   *
+   * @p is_current receives (id, published revision). Extra leases on those
+   * textures, including a still-displayed frame, keep the device memory.
+   * GPU last-use of dropped results must already be complete.
+   */
+  template <class IsCurrent>
+  void DropStalePublished(IsCurrent&& is_current) {
+    for (auto it = published_.begin(); it != published_.end();) {
+      if (is_current(it->first, it->second.revision)) {
+        ++it;
+        continue;
+      }
+      it = published_.erase(it);
+    }
   }
 
   [[nodiscard]] auto CurrentValueIds() const -> std::vector<GraphValueId> {
@@ -351,6 +385,7 @@ class GraphImageCache {
                  static_cast<unsigned long long>(has_revision ? revision : 0),
                  static_cast<unsigned long long>(last_writer), has_revision ? 1 : 0);
   }
+
   struct WriteSlot {
     ResourceLease<Backend> texture;
     ResultRepresentation   representation{};
@@ -366,7 +401,6 @@ class GraphImageCache {
     RuntimeRevision        revision    = 0;
     std::uint64_t          last_writer = 0;
     std::uint64_t          auxiliary   = 0;
-    std::uint64_t          lru_tick    = 0;
   };
 
   static auto WriterBusy(const PublishedResult& entry, std::uint64_t completed_submission) -> bool {
@@ -395,9 +429,13 @@ class GraphImageCache {
 
   std::map<GraphValueId, WriteSlot>       write_slots_;
   std::map<GraphValueId, PublishedResult> published_;
-  std::uint64_t                           lru_clock_      = 0;
-  std::uint64_t                           content_hits_   = 0;
-  std::uint64_t                           content_misses_ = 0;
+  std::uint64_t                           lookups_               = 0;
+  std::uint64_t                           content_hits_          = 0;
+  std::uint64_t                           missing_misses_        = 0;
+  std::uint64_t                           revision_misses_       = 0;
+  std::uint64_t                           representation_misses_ = 0;
+  std::uint64_t                           writer_busy_misses_    = 0;
+  std::uint64_t                           persistent_publishes_  = 0;
 };
 
 }  // namespace alcedo

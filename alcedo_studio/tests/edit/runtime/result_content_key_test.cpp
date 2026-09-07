@@ -417,6 +417,7 @@ TEST(GpuDagResultContentKey, GradeWithoutPrimaryIdSelectsCompiledNodeKeys) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  ASSERT_EQ(document.Graph().FindNode("grade.primary"), nullptr);
   ASSERT_EQ(document.PrimaryGrade()->Id(), NodeId{"grade.b"});
   auto* remaining =
       dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));

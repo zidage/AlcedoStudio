@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -12,9 +13,9 @@
 namespace alcedo {
 
 struct Cat02WhiteBalancePayload {
-  bool  enabled             = true;
-  float temperature_offset  = 0.0f;
-  float tint_offset         = 0.0f;
+  bool  enabled            = true;
+  float temperature_offset = 0.0f;
+  float tint_offset        = 0.0f;
 };
 
 enum class Cat02WhiteBalanceDirty : std::uint32_t {
@@ -23,6 +24,15 @@ enum class Cat02WhiteBalanceDirty : std::uint32_t {
   Temperature = 1U << 1,
   Tint        = 1U << 2,
   All         = Enabled | Temperature | Tint,
+};
+
+/**
+ * @brief Focused CAT02 white-balance update. Omitted fields retain current values.
+ */
+struct Cat02WhiteBalanceUpdate {
+  std::optional<bool>  enabled;
+  std::optional<float> temperature_offset;
+  std::optional<float> tint_offset;
 };
 
 /**
@@ -38,18 +48,23 @@ class Cat02WhiteBalanceModel final
 
   static constexpr std::string_view kInstanceSuffix = "cat02_wb";
 
-  [[nodiscard]] auto IsDefault() const -> bool override;
+  [[nodiscard]] auto                IsDefault() const -> bool override;
 
-  void SetEnabled(bool enabled);
-  void SetTemperatureOffset(float offset);
-  void SetTintOffset(float offset);
+  /**
+   * @brief Apply validated CAT02 fields atomically and report only changed dirty fields.
+   */
+  void                              ApplyUpdate(Cat02WhiteBalanceUpdate update);
 
-  [[nodiscard]] auto Enabled() const -> bool;
-  [[nodiscard]] auto TemperatureOffset() const -> float;
-  [[nodiscard]] auto TintOffset() const -> float;
+  void                              SetEnabled(bool enabled);
+  void                              SetTemperatureOffset(float offset);
+  void                              SetTintOffset(float offset);
 
-  [[nodiscard]] auto ToJson() const -> nlohmann::json override;
-  void               LoadJson(const nlohmann::json& json) override;
+  [[nodiscard]] auto                Enabled() const -> bool;
+  [[nodiscard]] auto                TemperatureOffset() const -> float;
+  [[nodiscard]] auto                TintOffset() const -> float;
+
+  [[nodiscard]] auto                ToJson() const -> nlohmann::json override;
+  void                              LoadJson(const nlohmann::json& json) override;
 };
 
 }  // namespace alcedo

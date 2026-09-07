@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -14,8 +13,6 @@
 #include "cuda_acescc.cuh"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
-#include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
@@ -65,7 +62,7 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
   }
-  auto pending = TakePendingParameterPatch(develop->Params());
+  auto pending = TakePendingDirtyFields(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
@@ -89,18 +86,7 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
   const auto                  gpu_params = MakeGpuParams(resolved.transform);
   auto&                       arena      = workspace.Parameters();
   const ParameterSlotKey      key{develop->Id(), kDevelopCameraColorSlot};
-  const ParameterFieldBinding field{DirtyFieldMask{DevelopDirty::WhiteBalance}, 0, 0,
-                                    sizeof(CameraColorGpuParams)};
-  auto payload = std::make_shared<TypedOperatorParamPayload<CameraColorGpuParams>>(
-      type_ids::DevelopNode(), 1, gpu_params);
-  if (!arena.Contains(key)) {
-    arena.BindSlot(key, sizeof(CameraColorGpuParams), std::span{&field, 1});
-    arena.InitializeFromFullDto(key, OperatorParamDto{type_ids::DevelopNode(), 1, payload});
-  } else {
-    OperatorParamPatchDto patch{develop->Id(), kDevelopCameraColorSlot, type_ids::DevelopNode(),
-                                DirtyFieldMask{DevelopDirty::WhiteBalance}, payload};
-    arena.ApplyPatch(key, patch);
-  }
+  arena.BindOrWritePackedSlot(key, DirtyFieldMask{DevelopDirty::WhiteBalance}, gpu_params);
   auto& context = device.CommandContext();
   arena.UploadDirty(context);
 

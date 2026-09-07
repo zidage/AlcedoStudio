@@ -30,8 +30,13 @@ struct GpuNodePassStats {
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;
   std::uint64_t source_h2d_bytes       = 0;
-  std::uint64_t result_content_hits    = 0;
-  std::uint64_t result_content_misses  = 0;
+  std::uint64_t result_content_hits         = 0;
+  std::uint64_t result_content_misses       = 0;
+  std::uint64_t result_revision_misses      = 0;
+  std::uint64_t result_representation_misses = 0;
+  std::uint64_t result_policy_bypass        = 0;
+  std::uint64_t persistent_result_lookups   = 0;
+  std::uint64_t persistent_result_publishes = 0;
 
   void Reset() { *this = GpuNodePassStats{}; }
 };

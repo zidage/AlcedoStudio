@@ -32,7 +32,7 @@ class ScalarOperatorModel final
 
   ScalarOperatorModel() { this->payload_.value = Traits::kDefault; }
 
-  static auto TypeId() -> const OperatorTypeId& { return Traits::TypeId(); }
+  static auto        TypeId() -> const OperatorTypeId& { return Traits::TypeId(); }
 
   [[nodiscard]] auto IsDefault() const -> bool override {
     return this->Read([](const Payload& payload) { return payload.value == Traits::kDefault; });
@@ -43,10 +43,13 @@ class ScalarOperatorModel final
    */
   void SetValue(float value) {
     const float clamped = std::clamp(value, Traits::kMin, Traits::kMax);
-    if (Value() == clamped) {
-      return;
-    }
-    this->Mutate(Dirty::Value, [clamped](Payload& payload) { payload.value = clamped; });
+    this->MutateWithDirtyFields([clamped](Payload& payload) {
+      if (payload.value == clamped) {
+        return DirtyFieldMask{};
+      }
+      payload.value = clamped;
+      return DirtyFieldMask{Dirty::Value};
+    });
   }
 
   [[nodiscard]] auto Value() const -> float {
@@ -72,12 +75,12 @@ struct ExposureTraits {
   using Payload = ScalarFloatPayload;
   enum class Dirty : std::uint32_t { None = 0, Value = 1U << 0, All = Value };
   static auto TypeId() -> const OperatorTypeId& { return type_ids::Exposure(); }
-  static constexpr std::string_view kJsonKey    = "exposure_ev";
-  static constexpr std::string_view kDisplayName = "Exposure";
+  static constexpr std::string_view kJsonKey        = "exposure_ev";
+  static constexpr std::string_view kDisplayName    = "Exposure";
   static constexpr std::string_view kInstanceSuffix = "exposure";
-  static constexpr float            kDefault     = 0.0f;
-  static constexpr float            kMin         = -16.0f;
-  static constexpr float            kMax         = 16.0f;
+  static constexpr float            kDefault        = 0.0f;
+  static constexpr float            kMin            = -16.0f;
+  static constexpr float            kMax            = 16.0f;
 };
 
 struct ContrastTraits {
@@ -95,7 +98,7 @@ struct ContrastTraits {
 struct WhiteTraits {
   using Payload = ScalarFloatPayload;
   enum class Dirty : std::uint32_t { None = 0, Value = 1U << 0, All = Value };
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::White(); }
+  static auto                       TypeId() -> const OperatorTypeId& { return type_ids::White(); }
   static constexpr std::string_view kJsonKey        = "white";
   static constexpr std::string_view kDisplayName    = "White";
   static constexpr std::string_view kInstanceSuffix = "white";
@@ -107,7 +110,7 @@ struct WhiteTraits {
 struct BlackTraits {
   using Payload = ScalarFloatPayload;
   enum class Dirty : std::uint32_t { None = 0, Value = 1U << 0, All = Value };
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::Black(); }
+  static auto                       TypeId() -> const OperatorTypeId& { return type_ids::Black(); }
   static constexpr std::string_view kJsonKey        = "black";
   static constexpr std::string_view kDisplayName    = "Black";
   static constexpr std::string_view kInstanceSuffix = "black";
@@ -203,7 +206,7 @@ struct FilmGrainTraits {
 struct TintTraits {
   using Payload = ScalarFloatPayload;
   enum class Dirty : std::uint32_t { None = 0, Value = 1U << 0, All = Value };
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::Tint(); }
+  static auto                       TypeId() -> const OperatorTypeId& { return type_ids::Tint(); }
   static constexpr std::string_view kJsonKey        = "tint";
   static constexpr std::string_view kDisplayName    = "Tint";
   static constexpr std::string_view kInstanceSuffix = "tint";

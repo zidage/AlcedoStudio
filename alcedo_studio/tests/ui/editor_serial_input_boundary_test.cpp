@@ -33,6 +33,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -70,21 +71,39 @@ class QueuedInputSubmitter final : public QObject, public IEditorAdjustmentSubmi
                                 alcedo::EditorSessionIdentity    identity)
       : queue_(queue), identity_(identity) {}
 
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
     if (!can_edit_ || queue_ == nullptr) {
       return false;
     }
     alcedo::EditorAdjustmentPatch patch;
-    patch.field_key   = fieldKey.toStdString();
-    patch.params_json = paramsJson.toStdString();
-    patch.settled     = settled;
+    patch.field_key = fieldKey.toStdString();
+    patch.write     = std::move(write);
+    patch.settled   = settled;
     if (target_.owner_kind != alcedo::EditorParameterOwnerKind::Unspecified) {
       patch.target           = target_;
       patch.target.field_key = patch.field_key;
     }
-    const auto admitted = queue_->AdmitFieldChange(identity_, patch);
+    const auto admitted = queue_->AdmitFieldChange(identity_, std::move(patch));
     last_error_         = admitted.error;
     return admitted.accepted;
+  }
+
+  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
+    }
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      last_error_ = error;
+      return false;
+    }
+    return submitWrite(std::move(fieldKey), std::move(*write), settled);
   }
 
   auto canEdit() const -> bool override { return can_edit_; }
@@ -168,9 +187,7 @@ TEST_F(SerialInputBoundaryTest, SliderMovesWhileBlockedRenderLeaveLiveParameters
   EXPECT_EQ(pending.sequences.front().seal, alcedo::EditorPendingInputBoundaryKind::None);
   const auto* exposure = alcedo::FindPendingField(pending, "exposure");
   ASSERT_NE(exposure, nullptr);
-  EXPECT_EQ(exposure->params_json.find("0.5") != std::string::npos ||
-                exposure->params_json.find("0.50") != std::string::npos,
-            true);
+  EXPECT_EQ(alcedo::PendingScalarValue(*exposure), 0.50f);
   EXPECT_EQ(exposure->identity.element_id, identity_.element_id);
   EXPECT_EQ(exposure->identity.image_id, identity_.image_id);
 
@@ -213,8 +230,8 @@ TEST_F(SerialInputBoundaryTest, PendingDifferentFieldsSurviveInputCoalescing) {
   const auto* contrast_field = alcedo::FindPendingField(pending, "contrast");
   ASSERT_NE(exposure_field, nullptr);
   ASSERT_NE(contrast_field, nullptr);
-  EXPECT_NE(exposure_field->params_json.find("0.75"), std::string::npos);
-  EXPECT_NE(contrast_field->params_json.find("18"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(*exposure_field), 0.75f);
+  EXPECT_EQ(alcedo::PendingScalarValue(*contrast_field), 18.0f);
 }
 
 TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewKeepsFinalQueuedValuesOnce) {
@@ -238,7 +255,7 @@ TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewKeepsFinalQueuedValuesO
   EXPECT_EQ(pending.sequences.front().fields.size(), 1u);
   const auto* exposure = alcedo::FindPendingField(pending, "exposure");
   ASSERT_NE(exposure, nullptr);
-  EXPECT_NE(exposure->params_json.find("1.25"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(*exposure), 1.25f);
 }
 
 TEST_F(SerialInputBoundaryTest, NodeSwitchKeepsQueuedEditOnOriginalTarget) {
@@ -267,7 +284,7 @@ TEST_F(SerialInputBoundaryTest, NodeSwitchKeepsQueuedEditOnOriginalTarget) {
   EXPECT_EQ(pending.sequences[0].seal, alcedo::EditorPendingInputBoundaryKind::NodeSwitch);
   ASSERT_EQ(pending.sequences[0].fields.size(), 1u);
   EXPECT_EQ(pending.sequences[0].fields.front().target.node_id, alcedo::NodeId{"grade.a"});
-  EXPECT_NE(pending.sequences[0].fields.front().params_json.find("0.4"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences[0].fields.front()), 0.4f);
   EXPECT_EQ(pending.sequences[1].captured_target.node_id, alcedo::NodeId{"grade.b"});
   ASSERT_FALSE(pending.sequences[1].fields.empty());
   EXPECT_EQ(pending.sequences[1].fields.front().target.node_id, alcedo::NodeId{"grade.b"});

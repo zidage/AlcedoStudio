@@ -41,6 +41,24 @@ requirements and do not depend on a task-specific skill being activated.
 - Name types, functions, variables, and tests after the data they represent or the operation they
   perform. Apply the terminology rules below to identifiers as well as prose.
 
+### Include the defining header; do not forward-declare by default
+
+Do **not** add a `class` / `struct` / `enum` forward declaration to skip an include. Include the
+header that defines the type.
+
+A forward declaration is allowed only when every condition below is true:
+
+- The type is used solely as a pointer or reference in that header (no members, `sizeof`,
+  `std::optional`/`std::vector`/`std::unique_ptr` destruction, or inline method bodies that need
+  a complete type).
+- Including the defining header would create a real include cycle, or the header is a PIMPL / ABI
+  boundary that must keep the type incomplete.
+- The corresponding `.cpp` includes the defining header.
+
+Compile-time savings, shorter includes, or "it only appears in a signature" is not enough. Qt and
+other framework headers may already forward-declare their own types; do not copy that pattern into
+Alcedo-owned headers.
+
 ### Update existing data through its owner
 
 **Do not create snapshots, mirror structs, or temporary copies of existing data structures just
@@ -133,6 +151,8 @@ without making those details clear.
   linked files and update their references.
 - Review added copies and snapshot types against the data-update rules above; verify that each
   exception has a concrete need and a defined consistency mechanism.
+- Review new `class` / `struct` / `enum` forward declarations in touched first-party headers.
+  Replace them with the defining include unless the cycle / PIMPL exception above applies.
 
 ## Workspace and Branches
 

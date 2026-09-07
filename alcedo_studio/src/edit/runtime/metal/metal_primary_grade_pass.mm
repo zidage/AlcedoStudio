@@ -16,11 +16,10 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
-#include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/metal/metal_local_tone_pass.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -240,8 +239,6 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
   ops.reserve(compiled_grade->adjustments.size());
   float                       shadows_slider    = 0.0f;
   float                       highlights_slider = 0.0f;
-  const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
-                                    kGradeRuntimeParamBytes};
 
   auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
     auto* model = node.FindAdjustment(compiled.instance_id);
@@ -260,19 +257,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
           "ExecuteMetalPrimaryGrade: Shadows/Highlights were not compiled for LLF");
     }
     const ParameterSlotKey key{node.Id(), compiled.instance_id};
-    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
-    auto payload = std::make_shared<TypedOperatorParamPayload<GradeAdjustmentParams>>(
-        compiled.type, 1, runtime_params);
-    if (!arena.Contains(key)) {
-      arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
-      if (auto first = TakePendingParameterPatch(*model)) {
-        pending.push_back(std::move(*first));
-      }
-    } else if (auto change = TakePendingParameterPatch(*model)) {
-      OperatorParamPatchDto patch{node.Id(), compiled.instance_id, compiled.type,
-                                  DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
-      arena.ApplyPatch(key, patch);
+    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
       pending.push_back(std::move(*change));
     }
   };
@@ -300,12 +285,12 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
                                std::string{compiled.type.Text()} + "'");
     }
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
+      const float slider = PackedGradeControlValue(arena, key);
       if (*behavior == AdjustmentBehavior::Shadows) {
-        shadows_slider = runtime_params.values[0];
+        shadows_slider = slider;
       } else if (*behavior == AdjustmentBehavior::Highlights) {
-        highlights_slider = runtime_params.values[0];
+        highlights_slider = slider;
       }
       if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
         ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});
@@ -314,7 +299,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
     }
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::Neighborhood ||
         IsNeighborhoodBehavior(*behavior)) {
-      if (runtime_params.values[0] != 0.0f) {
+      if (PackedGradeControlValue(arena, key) != 0.0f) {
         ops.push_back(GradeOp{GradeOpKind::Detail, {arena.Binding(key).offset}, key});
       }
       continue;

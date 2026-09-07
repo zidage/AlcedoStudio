@@ -25,6 +25,7 @@
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -341,8 +342,6 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   ops.reserve(compiled_grade->adjustments.size());
   float                       shadows_slider    = 0.0f;
   float                       highlights_slider = 0.0f;
-  const ParameterFieldBinding field{DirtyFieldMask{kGradeRuntimeParamDirtyBit}, 0, 0,
-                                    sizeof(CudaAdjustmentParams)};
 
   auto BindAdjustmentSlot = [&](ColorGradeNodeModel& node, const CompiledAdjustment& compiled) {
     auto* model = node.FindAdjustment(compiled.instance_id);
@@ -366,17 +365,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
           "ExecuteCudaPrimaryGrade: non-local adjustment was compiled for LLF");
     }
     const ParameterSlotKey key{node.Id(), compiled.instance_id};
-    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
-    auto payload = std::make_shared<TypedOperatorParamPayload<CudaAdjustmentParams>>(
-        compiled.type, 1, runtime_params);
-    if (!arena.Contains(key)) {
-      arena.BindSlot(key, sizeof(CudaAdjustmentParams), std::span{&field, 1});
-      arena.InitializeFromFullDto(key, OperatorParamDto{compiled.type, 1, payload});
-      if (auto first = TakePendingParameterPatch(*model)) pending.push_back(std::move(*first));
-    } else if (auto change = TakePendingParameterPatch(*model)) {
-      OperatorParamPatchDto patch{node.Id(), compiled.instance_id, compiled.type,
-                                  DirtyFieldMask{kGradeRuntimeParamDirtyBit}, payload};
-      arena.ApplyPatch(key, patch);
+    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
       pending.push_back(std::move(*change));
     }
   };
@@ -404,12 +393,12 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
                                std::string{compiled.type.Text()} + "'");
     }
     const ParameterSlotKey key{grade->Id(), compiled.instance_id};
-    const auto             runtime_params = MakeGradeRuntimeParams(*model, *behavior);
     if (compiled.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian) {
+      const float slider = PackedGradeControlValue(arena, key);
       if (*behavior == CudaAdjustmentBehavior::Shadows) {
-        shadows_slider = runtime_params.values[0];
+        shadows_slider = slider;
       } else {
-        highlights_slider = runtime_params.values[0];
+        highlights_slider = slider;
       }
       if (ops.empty() || ops.back().kind != GradeOpKind::LlfBarrier) {
         ops.push_back(GradeOp{GradeOpKind::LlfBarrier, {}, {}});

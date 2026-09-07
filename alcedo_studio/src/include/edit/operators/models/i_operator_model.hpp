@@ -14,11 +14,30 @@
 namespace alcedo {
 
 /**
+ * @brief Counts @ref IOperatorModel::MakeFullDto copies on this thread.
+ *
+ * Grade GPU packing, CameraColor/DRT packed-slot writes, and panel projection
+ * must leave this at zero. Persistence, history, and device-recovery paths that
+ * still need a full payload snapshot increment it. Tests reset the counter around
+ * the call they are proving.
+ */
+struct OperatorModelFullDtoCopyCount {
+  static void Reset() noexcept { count_ = 0; }
+  [[nodiscard]] static auto Peek() noexcept -> int { return count_; }
+  static void               Note() noexcept { ++count_; }
+
+ private:
+  static inline thread_local int count_ = 0;
+};
+
+/**
  * @brief Pure parameter Model. Does not receive images, allocate GPU memory, or
  * apply pixels.
  *
  * Setters mark dirty field bits. @ref TakeDirtyPatch copies the current payload
  * and clears taken bits under a short lock. Failed uploads call @ref RestoreDirty.
+ * GPU packing uses @ref TakeDirtyFields so it can commit dirty bits without
+ * copying the Model payload. ParameterArena stores packed GPU structs, not DTOs.
  *
  * Thread-safe: setters, take, restore, and JSON load serialize on an internal mutex
  * in OperatorModelBase.
@@ -46,6 +65,21 @@ class IOperatorModel {
    * @return nullopt when no field is dirty.
    */
   virtual auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> = 0;
+
+  /**
+   * @brief Clear taken dirty bits without copying the Model payload.
+   * @return nullopt when no field is dirty.
+   *
+   * The default implementation takes a full patch and discards the payload. Owner
+   * Models override this to copy only the mask.
+   */
+  virtual auto TakeDirtyFields() -> std::optional<DirtyFieldMask> {
+    auto patch = TakeDirtyPatch();
+    if (!patch.has_value()) {
+      return std::nullopt;
+    }
+    return patch->dirty_fields;
+  }
 
   /// Re-set dirty bits after a cancelled or failed parameter transfer.
   virtual void RestoreDirty(DirtyFieldMask fields) = 0;

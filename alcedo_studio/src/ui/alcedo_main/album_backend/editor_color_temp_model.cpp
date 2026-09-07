@@ -368,9 +368,19 @@ void EditorColorTempModel::promoteToCustomForEditing() {
   emit modeIndexChanged();
 }
 
-void EditorColorTempModel::submitInteractive() { submitNow(buildParamsJson(), false); }
+void EditorColorTempModel::submitInteractive() { submitNow(currentColorTempWrite(), false); }
 
-void EditorColorTempModel::submitSettled() { submitNow(buildParamsJson(), true); }
+void EditorColorTempModel::submitSettled() { submitNow(currentColorTempWrite(), true); }
+
+auto EditorColorTempModel::currentColorTempWrite() const -> alcedo::DevelopColorTemperatureUpdate {
+  alcedo::DevelopColorTemperatureUpdate update;
+  update.wb_mode      = ModeString(modeIndex_).toStdString();
+  update.custom_cct   = static_cast<float>(ClampCct(cct_));
+  update.custom_tint  = static_cast<float>(ClampTint(tint_));
+  update.as_shot_cct  = static_cast<float>(ClampCct(asShotCct_));
+  update.as_shot_tint = static_cast<float>(ClampTint(asShotTint_));
+  return update;
+}
 
 auto EditorColorTempModel::buildParamsJson() const -> QString {
   QJsonObject color_temp;

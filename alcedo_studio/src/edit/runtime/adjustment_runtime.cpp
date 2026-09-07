@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -132,59 +133,133 @@ auto IsNeighborhoodBehavior(AdjustmentBehavior behavior) -> bool {
          behavior == AdjustmentBehavior::Halation || behavior == AdjustmentBehavior::FilmGrain;
 }
 
+[[noreturn]] void ThrowModelMismatch() {
+  throw std::runtime_error("Primary grade: Model type does not match adjustment behavior");
+}
+
+template <class Model>
+auto RequireModel(const IOperatorModel& model) -> const Model& {
+  const auto* typed = dynamic_cast<const Model*>(&model);
+  if (typed == nullptr) {
+    ThrowModelMismatch();
+  }
+  return *typed;
+}
+
+template <class Model>
+void PackScalarValue(const IOperatorModel& model, GradeAdjustmentParams& result) {
+  result.values[0] = RequireModel<Model>(model).Read(
+      [](const ScalarFloatPayload& payload) { return payload.value; });
+}
+
 auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior behavior)
     -> GradeAdjustmentParams {
+  const auto resolved = TryResolveAdjustmentBehavior(model.Type());
+  if (!resolved.has_value() || *resolved != behavior) {
+    ThrowModelMismatch();
+  }
+
   GradeAdjustmentParams result;
   result.behavior = static_cast<std::uint32_t>(behavior);
-  const auto dto  = model.MakeFullDto();
 
-  if (const auto* p = PayloadAs<ScalarFloatPayload>(dto.payload.get())) {
-    result.values[0] = p->value;
-    return result;
+  switch (behavior) {
+    case AdjustmentBehavior::Exposure:
+      PackScalarValue<ExposureModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Contrast:
+      PackScalarValue<ContrastModel>(model, result);
+      return result;
+    case AdjustmentBehavior::White:
+      PackScalarValue<WhiteModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Black:
+      PackScalarValue<BlackModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Shadows:
+      PackScalarValue<ShadowsModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Highlights:
+      PackScalarValue<HighlightsModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Saturation:
+      PackScalarValue<SaturationModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Vibrance:
+      PackScalarValue<VibranceModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Clarity:
+      PackScalarValue<ClarityModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Halation:
+      PackScalarValue<HalationModel>(model, result);
+      return result;
+    case AdjustmentBehavior::FilmGrain:
+      PackScalarValue<FilmGrainModel>(model, result);
+      return result;
+    case AdjustmentBehavior::Cat02WhiteBalance:
+      return RequireModel<Cat02WhiteBalanceModel>(model).Read(
+          [behavior](const Cat02WhiteBalancePayload& payload) {
+            GradeAdjustmentParams packed;
+            packed.behavior  = static_cast<std::uint32_t>(behavior);
+            packed.values[0] = payload.enabled ? 1.0f : 0.0f;
+            packed.values[1] = payload.temperature_offset;
+            packed.values[2] = payload.tint_offset;
+            return packed;
+          });
+    case AdjustmentBehavior::Curve:
+      return RequireModel<CurveModel>(model).Read([behavior](const CurvePayload& payload) {
+        GradeAdjustmentParams packed;
+        packed.behavior = static_cast<std::uint32_t>(behavior);
+        packed.count = static_cast<std::uint32_t>(std::min(payload.points.size(), kMaxCurvePoints));
+        for (std::uint32_t i = 0; i < packed.count; ++i) {
+          packed.values[i * 2]     = payload.points[i].x;
+          packed.values[i * 2 + 1] = payload.points[i].y;
+        }
+        return packed;
+      });
+    case AdjustmentBehavior::Hls:
+      return RequireModel<HlsModel>(model).Read([behavior](const HlsPayload& payload) {
+        GradeAdjustmentParams packed;
+        packed.behavior = static_cast<std::uint32_t>(behavior);
+        for (int i = 0; i < kHlsHueBinCount; ++i) {
+          packed.values[i]      = payload.hls_adj_table[static_cast<std::size_t>(i)].h;
+          packed.values[8 + i]  = payload.hls_adj_table[static_cast<std::size_t>(i)].l;
+          packed.values[16 + i] = payload.hls_adj_table[static_cast<std::size_t>(i)].s;
+        }
+        return packed;
+      });
+    case AdjustmentBehavior::ColorWheel:
+      return RequireModel<ColorWheelModel>(model).Read([behavior](const ColorWheelPayload& payload) {
+        GradeAdjustmentParams packed;
+        packed.behavior                     = static_cast<std::uint32_t>(behavior);
+        const ColorWheelControl controls[3] = {payload.lift, payload.gamma, payload.gain};
+        for (int i = 0; i < 3; ++i) {
+          packed.values[i * 4]     = controls[i].color_offset.x;
+          packed.values[i * 4 + 1] = controls[i].color_offset.y;
+          packed.values[i * 4 + 2] = controls[i].color_offset.z;
+          packed.values[i * 4 + 3] = controls[i].luminance_offset;
+        }
+        return packed;
+      });
+    case AdjustmentBehavior::Sharpen:
+      return RequireModel<SharpenModel>(model).Read([behavior](const SharpenPayload& payload) {
+        GradeAdjustmentParams packed;
+        packed.behavior  = static_cast<std::uint32_t>(behavior);
+        packed.values[0] = payload.amount;
+        packed.values[1] = payload.radius;
+        packed.values[2] = payload.threshold;
+        return packed;
+      });
+    case AdjustmentBehavior::Lmt:
+      return RequireModel<LmtModel>(model).Read([behavior](const LmtPayload& payload) {
+        GradeAdjustmentParams packed;
+        packed.behavior  = static_cast<std::uint32_t>(behavior);
+        packed.values[0] = payload.cube_path.empty() ? 0.0f : 1.0f;
+        return packed;
+      });
+    default:
+      throw std::runtime_error("Primary grade: adjustment behavior is not supported");
   }
-  if (const auto* p = PayloadAs<Cat02WhiteBalancePayload>(dto.payload.get())) {
-    result.values[0] = p->enabled ? 1.0f : 0.0f;
-    result.values[1] = p->temperature_offset;
-    result.values[2] = p->tint_offset;
-    return result;
-  }
-  if (const auto* p = PayloadAs<CurvePayload>(dto.payload.get())) {
-    result.count = static_cast<std::uint32_t>(std::min(p->points.size(), kMaxCurvePoints));
-    for (std::uint32_t i = 0; i < result.count; ++i) {
-      result.values[i * 2]     = p->points[i].x;
-      result.values[i * 2 + 1] = p->points[i].y;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<HlsPayload>(dto.payload.get())) {
-    for (int i = 0; i < kHlsHueBinCount; ++i) {
-      result.values[i]      = p->hls_adj_table[static_cast<std::size_t>(i)].h;
-      result.values[8 + i]  = p->hls_adj_table[static_cast<std::size_t>(i)].l;
-      result.values[16 + i] = p->hls_adj_table[static_cast<std::size_t>(i)].s;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<ColorWheelPayload>(dto.payload.get())) {
-    const ColorWheelControl controls[3] = {p->lift, p->gamma, p->gain};
-    for (int i = 0; i < 3; ++i) {
-      result.values[i * 4]     = controls[i].color_offset.x;
-      result.values[i * 4 + 1] = controls[i].color_offset.y;
-      result.values[i * 4 + 2] = controls[i].color_offset.z;
-      result.values[i * 4 + 3] = controls[i].luminance_offset;
-    }
-    return result;
-  }
-  if (const auto* p = PayloadAs<SharpenPayload>(dto.payload.get())) {
-    result.values[0] = p->amount;
-    result.values[1] = p->radius;
-    result.values[2] = p->threshold;
-    return result;
-  }
-  if (const auto* p = PayloadAs<LmtPayload>(dto.payload.get())) {
-    result.values[0] = p->cube_path.empty() ? 0.0f : 1.0f;
-    return result;
-  }
-  throw std::runtime_error("Primary grade: Model DTO is not supported");
 }
 
 auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior behavior,
@@ -192,35 +267,46 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   if (!IsNeighborhoodBehavior(behavior)) {
     throw std::runtime_error("Primary grade: adjustment is not a neighborhood operator");
   }
+  const auto resolved = TryResolveAdjustmentBehavior(model.Type());
+  if (!resolved.has_value() || *resolved != behavior) {
+    ThrowModelMismatch();
+  }
 
   GradeNeighborParams result;
-  result.behavior = static_cast<std::uint32_t>(behavior);
+  result.behavior          = static_cast<std::uint32_t>(behavior);
   CopyRenderMapping(geometry, result);
-  const auto dto = model.MakeFullDto();
-
   const float render_scale = NeighborhoodRenderScale(geometry);
 
   if (behavior == AdjustmentBehavior::Sharpen) {
-    const auto* sharpen = PayloadAs<SharpenPayload>(dto.payload.get());
-    if (sharpen == nullptr) {
-      throw std::runtime_error("Primary grade: Sharpen payload is invalid");
-    }
-    result.amount    = std::clamp(sharpen->amount / 100.0f, 0.0f, 1.0f);
-    result.threshold = std::clamp(sharpen->threshold, 0.0f, 1.0f);
-    result.enabled   = result.amount > 0.0f ? 1U : 0U;
-    result.sigma_x   = sharpen->radius * render_scale;
-    result.sigma_y   = result.sigma_x;
+    RequireModel<SharpenModel>(model).Read([&](const SharpenPayload& sharpen) {
+      result.amount    = std::clamp(sharpen.amount / 100.0f, 0.0f, 1.0f);
+      result.threshold = std::clamp(sharpen.threshold, 0.0f, 1.0f);
+      result.enabled   = result.amount > 0.0f ? 1U : 0U;
+      result.sigma_x   = sharpen.radius * render_scale;
+      result.sigma_y   = result.sigma_x;
+    });
     BuildGaussianWeights(result.sigma_x, kSharpenMaxRadius, result);
     return result;
   }
 
-  const auto* scalar = PayloadAs<ScalarFloatPayload>(dto.payload.get());
-  if (scalar == nullptr) {
-    throw std::runtime_error("Primary grade: neighborhood scalar payload is invalid");
-  }
+  const float scalar = [&]() {
+    switch (behavior) {
+      case AdjustmentBehavior::Clarity:
+        return RequireModel<ClarityModel>(model).Read(
+            [](const ScalarFloatPayload& payload) { return payload.value; });
+      case AdjustmentBehavior::Halation:
+        return RequireModel<HalationModel>(model).Read(
+            [](const ScalarFloatPayload& payload) { return payload.value; });
+      case AdjustmentBehavior::FilmGrain:
+        return RequireModel<FilmGrainModel>(model).Read(
+            [](const ScalarFloatPayload& payload) { return payload.value; });
+      default:
+        throw std::runtime_error("Primary grade: neighborhood scalar payload is invalid");
+    }
+  }();
 
   if (behavior == AdjustmentBehavior::Clarity) {
-    result.amount  = std::clamp(scalar->value / 100.0f, -1.0f, 1.0f);
+    result.amount  = std::clamp(scalar / 100.0f, -1.0f, 1.0f);
     result.enabled = result.amount != 0.0f ? 1U : 0U;
     result.sigma_x = kClarityNeighborhoodSigma * render_scale;
     result.sigma_y = result.sigma_x;
@@ -229,7 +315,7 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
   }
 
   if (behavior == AdjustmentBehavior::Halation) {
-    result.amount  = std::clamp(scalar->value, 0.0f, 1.0f) * kHalationStrengthScale;
+    result.amount  = std::clamp(scalar, 0.0f, 1.0f) * kHalationStrengthScale;
     result.enabled = result.amount > 0.0f ? 1U : 0U;
     result.sigma_x = kHalationSigma * RenderAxisScale(geometry, true);
     result.sigma_y = kHalationSigma * RenderAxisScale(geometry, false);
@@ -237,7 +323,7 @@ auto MakeGradeNeighborParams(const IOperatorModel& model, AdjustmentBehavior beh
     return result;
   }
 
-  result.amount  = std::clamp(scalar->value, 0.0f, 1.0f) / 3.0f;
+  result.amount  = std::clamp(scalar, 0.0f, 1.0f) / 3.0f;
   result.enabled = result.amount > 0.0f ? 1U : 0U;
   result.sigma_x = kFilmGrainDyeCloudSigma * render_scale;
   result.sigma_y = result.sigma_x;

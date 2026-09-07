@@ -33,13 +33,13 @@ enum class EditorPendingInputBoundaryKind : std::uint8_t {
 /**
  * @brief One field write waiting for the session owner to apply.
  *
- * @p params_json is the caller's write payload for this field only. It is not
- * a copy of the live operator, node, or document parameter collection.
+ * @p write is the caller's operation for this field only. It is not a copy of
+ * the live operator, node, or document parameter collection.
  */
 struct EditorPendingFieldChange {
   EditorSessionIdentity identity{};
   EditorParameterTarget target{};
-  std::string           params_json;
+  EditorParameterWrite  write{};
   bool                  enabled = true;
 };
 
@@ -101,15 +101,15 @@ class EditorPendingInputQueue {
    * @brief Queue one absolute field write.
    *
    * @pre @p identity identifies the session/image that produced the write.
-   * @pre @p patch.field_key is non-empty. @p patch.params_json is the field
-   *      write payload, not a live parameter-body copy.
+   * @pre @p patch.field_key is non-empty. @p patch.write is the field operation,
+   *      not a live parameter-body copy.
    * @param identity Session/image ids captured at enqueue. Not a document copy.
-   * @param patch Field key, write payload, optional target ids, and whether
+   * @param patch Field key, typed write, optional target ids, and whether
    *        this write also releases the sequence.
    * @return Accepted with the sequence id, or rejected with @p error. Never
    *         mutates live document or history.
    */
-  auto AdmitFieldChange(EditorSessionIdentity identity, const EditorAdjustmentPatch& patch)
+  auto AdmitFieldChange(EditorSessionIdentity identity, EditorAdjustmentPatch patch)
       -> EditorPendingInputAdmitResult;
 
   /**
@@ -151,7 +151,7 @@ class EditorPendingInputQueue {
   [[nodiscard]] auto empty() const -> bool;
 
  private:
-  auto AdmitFieldChangeLocked(EditorSessionIdentity identity, const EditorAdjustmentPatch& patch)
+  auto AdmitFieldChangeLocked(EditorSessionIdentity identity, EditorAdjustmentPatch patch)
       -> EditorPendingInputAdmitResult;
   auto AdmitBoundaryLocked(EditorSessionIdentity identity, EditorPendingInputBoundaryKind kind)
       -> EditorPendingInputAdmitResult;
@@ -185,6 +185,18 @@ class EditorPendingInputQueue {
     }
   }
   return nullptr;
+}
+
+/**
+ * @brief Read a queued scalar assignment when @p field holds that operation.
+ */
+[[nodiscard]] inline auto PendingScalarValue(const EditorPendingFieldChange& field)
+    -> std::optional<float> {
+  const auto* scalar = std::get_if<EditorScalarWrite>(&field.write);
+  if (scalar == nullptr) {
+    return std::nullopt;
+  }
+  return scalar->value;
 }
 
 }  // namespace alcedo

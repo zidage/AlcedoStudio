@@ -9,11 +9,10 @@ namespace {
 
 using cuda_workspace_test::CudaWorkspaceFixture;
 
-TEST_F(CudaWorkspaceFixture, TextureLeasePreventsEvictionUntilCudaSubmissionCompletes) {
+TEST_F(CudaWorkspaceFixture, TextureLeasePreventsReleaseUntilCudaSubmissionCompletes) {
   CudaRenderDevice device;
   auto&            textures = device.Workspace().Textures();
   constexpr std::uint32_t kSize = 64;
-  textures.SetByteBudget(static_cast<std::size_t>(kSize) * kSize);
 
   device.BeginRender();
   auto lease_a = textures.Acquire({kSize, kSize, TextureFormat::R8});
@@ -24,11 +23,11 @@ TEST_F(CudaWorkspaceFixture, TextureLeasePreventsEvictionUntilCudaSubmissionComp
 
   lease_a.Release();
   lease_b.Release();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_TRUE(textures.Contains(handle_a));
 
   device.BeginRender();
-  textures.EvictUntil(static_cast<std::size_t>(kSize) * kSize);
+  textures.ReleaseUnleased();
   EXPECT_FALSE(textures.Contains(handle_a));
   device.EndRender();
   device.WaitIdle();

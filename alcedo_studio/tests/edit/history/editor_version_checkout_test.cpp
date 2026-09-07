@@ -70,17 +70,10 @@ auto ColorGradeTarget(const std::string& field) -> alcedo::EditorParameterTarget
 auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
                    const std::string& field, const std::string& after_json, std::string* error)
     -> bool {
-  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
-  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
-  if (field == "exposure") {
-    auto params = nlohmann::json::parse(after_json);
-    if (params.contains("exposure")) {
-      params["exposure_ev"] = params.at("exposure");
-      params.erase("exposure");
-      preview.params_json = params.dump();
-      settled.params_json = params.dump();
-    }
-  }
+  alcedo::EditorAdjustmentPatch preview =
+      alcedo::test::PatchFromJson(field, after_json, false);
+  alcedo::EditorAdjustmentPatch settled =
+      alcedo::test::PatchFromJson(field, after_json, true);
   preview = alcedo::test::WithColorGradeTarget(std::move(preview));
   settled = alcedo::test::WithColorGradeTarget(std::move(settled));
   if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
@@ -90,8 +83,10 @@ auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGu
 auto CommitPanelField(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
                       const std::string& field, const std::string& after_json, std::string* error)
     -> bool {
-  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
-  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
+  alcedo::EditorAdjustmentPatch preview =
+      alcedo::test::PatchFromJson(field, after_json, false);
+  alcedo::EditorAdjustmentPatch settled =
+      alcedo::test::PatchFromJson(field, after_json, true);
   if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
   return port.CommitAdjustment(handle, settled, error);
 }

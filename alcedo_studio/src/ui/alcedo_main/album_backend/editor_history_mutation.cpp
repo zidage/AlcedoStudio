@@ -11,7 +11,9 @@
 #include <vector>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_pipeline_command_service.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
@@ -47,8 +49,16 @@ auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* e
     if (!holds_render_lock) {
       render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
     }
-    return MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
-                                                  &state.committed_snapshot, error);
+    if (!MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
+                                                &state.committed_snapshot, error)) {
+      return false;
+    }
+    if (state.pipeline_guard->document_ == nullptr) {
+      state.panel_projection = {};
+      return true;
+    }
+    return alcedo::ProjectCurrentPanelFields(*state.pipeline_guard->document_, 0,
+                                             &state.panel_projection, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
@@ -79,6 +89,14 @@ void ProjectDocumentEdit(HistoryWorkingState&                          state,
   UpsertCommittedSnapshot(&state.committed_snapshot, edit.target.field_key,
                           HistoryParams(edit.target, params), true);
   state.committed_snapshot.params_json.clear();
+  if (state.pipeline_guard != nullptr && state.pipeline_guard->document_ != nullptr) {
+    alcedo::EditorPanelFieldPresentation field;
+    std::string                          ignore;
+    if (alcedo::ReadEditorPanelField(*state.pipeline_guard->document_, edit.target, &field,
+                                     &ignore)) {
+      alcedo::UpsertEditorPanelField(&state.panel_projection, std::move(field));
+    }
+  }
 }
 
 /// Restore local before-values in reverse order under the caller's render lock.
@@ -97,22 +115,9 @@ auto RestoreDocumentFields(HistoryWorkingState&                                 
   return true;
 }
 
-auto MirrorPatchToExecutor(CPUPipelineExecutor& executor, const alcedo::EditorAdjustmentPatch& patch,
-                           std::string* error) -> bool {
-  nlohmann::json parsed;
-  try {
-    parsed = patch.params_json.empty() ? nlohmann::json::object()
-                                       : nlohmann::json::parse(patch.params_json);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-  alcedo::EditorAdjustmentPatch executor_patch = patch;
-  executor_patch.params_json =
-      alcedo::EditorAdjustmentExecutorParamsFromWrite(patch.field_key, std::move(parsed)).dump();
-  alcedo::EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {std::move(executor_patch)};
-  return alcedo::ApplyEditorAdjustmentSnapshot(executor, snapshot, error);
+auto MirrorTargetToExecutor(CPUPipelineExecutor& executor, const PipelineDocument& document,
+                            const EditorParameterTarget& target, std::string* error) -> bool {
+  return RemirrorEditorParameterToExecutor(executor, document, target, error);
 }
 
 auto ApplyContext(MaskStore* mask_store) -> PipelineHistoryApplyContext {
@@ -338,17 +343,8 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
     return false;
   }
-
-  nlohmann::json patch_params;
-  try {
-    patch_params = patch.params_json.empty() ? nlohmann::json::object()
-                                             : nlohmann::json::parse(patch.params_json);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-  if (!patch_params.is_object()) {
-    if (error) *error = "Editor adjustment params must be a JSON object";
+  if (!patch.write.has_value()) {
+    if (error) *error = "Typed field write is required";
     return false;
   }
 
@@ -380,16 +376,23 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   } else {
     edit = sequence->second;
   }
-  const auto document_params =
-      alcedo::EditorAdjustmentDocumentParamsFromWrite(patch.field_key, patch_params);
-  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target, document_params,
+  if (!ApplyEditorParameterWrite(*state->pipeline_guard->document_, edit.target, *patch.write,
                                  error)) {
     return false;
   }
-  if (!MirrorPatchToExecutor(*state->pipeline_guard->pipeline_, patch, error)) {
+  if (!MirrorTargetToExecutor(*state->pipeline_guard->pipeline_, *state->pipeline_guard->document_,
+                              edit.target, error)) {
     (void)ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
                                     edit.before_model_json, error);
     return false;
+  }
+  {
+    alcedo::EditorPanelFieldPresentation field;
+    std::string                          ignore;
+    if (alcedo::ReadEditorPanelField(*state->pipeline_guard->document_, edit.target, &field,
+                                     &ignore)) {
+      alcedo::UpsertEditorPanelField(&state->panel_projection, std::move(field));
+    }
   }
   // Only the first successful patch locks a target. Rejected input does not capture state.
   if (sequence == state->pending_document_sequence.end()) {
@@ -430,11 +433,8 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
     return false;
   }
   for (const auto& edit : fields) {
-    alcedo::EditorAdjustmentPatch patch;
-    patch.field_key   = edit.target.field_key;
-    patch.target      = edit.target;
-    patch.params_json = edit.before_model_json.dump();
-    if (!MirrorPatchToExecutor(*state->pipeline_guard->pipeline_, patch, error)) {
+    if (!MirrorTargetToExecutor(*state->pipeline_guard->pipeline_, *state->pipeline_guard->document_,
+                                edit.target, error)) {
       return false;
     }
     ProjectDocumentEdit(*state, edit, true);
@@ -471,20 +471,12 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     if (error) *error = "Settled adjustment has no locked document target";
     return false;
   }
+  if (!patch.write.has_value()) {
+    if (error) *error = "Typed field write is required";
+    return false;
+  }
   if (!state->pipeline_guard->document_) {
     if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-
-  nlohmann::json after_params;
-  try {
-    after_params = nlohmann::json::parse(patch.params_json);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-  if (!after_params.is_object()) {
-    if (error) *error = "Editor adjustment params must be a JSON object";
     return false;
   }
 
@@ -494,11 +486,6 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   }
   auto       render_lock   = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto locked_target = sequence->second.target;
-  const auto document_after =
-      alcedo::EditorAdjustmentDocumentParamsFromWrite(patch.field_key, after_params);
-  if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, locked_target, document_after,
-                                 error))
-    return false;
   HistoryWorkingState::DocumentFieldEdit recorded = sequence->second;
   if (!ReadEditorParameterJson(*state->pipeline_guard->document_, locked_target,
                                &recorded.after_model_json, error))

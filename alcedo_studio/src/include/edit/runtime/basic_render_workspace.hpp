@@ -10,15 +10,15 @@
 #include <span>
 #include <stdexcept>
 
-#include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
+#include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
-#include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_arena.hpp"
 
 namespace alcedo {
@@ -74,6 +74,24 @@ class BasicRenderWorkspace {
   }
 
   /**
+   * @brief Persistence used by the current @ref BeginRender until End/Cancel.
+   *
+   * QualityBase sets @ref ResultPersistenceScope::SensorDevelopOnly so Geometry
+   * and downstream writes stay unpublished. Interactive keeps every current result.
+   */
+  void SetResultPersistence(ResultPersistenceScope scope, GraphValueId sensor_linear) {
+    persistence_scope_ = scope;
+    persist_sensor_    = std::move(sensor_linear);
+  }
+  [[nodiscard]] auto ResultPersistence() const -> ResultPersistenceScope {
+    return persistence_scope_;
+  }
+  [[nodiscard]] auto PersistSensorLinear() const -> const GraphValueId& { return persist_sensor_; }
+  [[nodiscard]] auto PersistsResult(const GraphValueId& id) const -> bool {
+    return PersistsGraphValue(persistence_scope_, id, persist_sensor_);
+  }
+
+  /**
    * @brief Collect dependency revisions once for the current @ref BeginRender.
    *
    * PlanExecutor and standalone grade encodes share this so a frame cannot assign
@@ -88,47 +106,25 @@ class BasicRenderWorkspace {
     invalidation_.CollectAndPropagate(plan, document, input, active_raster_masks);
     validity_prepared_ = true;
   }
-  [[nodiscard]] auto DevelopTransientHighWater() -> DevelopTransientHighWaterCache& {
-    return develop_high_water_;
-  }
-  [[nodiscard]] auto DevelopTransientHighWater() const -> const DevelopTransientHighWaterCache& {
-    return develop_high_water_;
-  }
-
   /**
-   * @brief Reserve a conservative exclusive-stage slab from last observed capacity.
+   * @brief Drop stale published GPU images, then destroy unleased idle textures.
    *
-   * First use of a layout uses @ref ConservativeDevelopInitialBytes. Does not use
-   * compiled peak_transient_bytes. @p demosaic_method is part of the high-water
-   * key so Neural Engine and Legacy (RCD) do not share a working-set size.
+   * Call after GPU last-use of the previous submission, before a Develop rewrite
+   * allocates new scratch. Results whose required revision still matches stay so
+   * ordinary downstream edits can skip Develop. Extra TexturePool leases, such as
+   * a still-displayed frame, keep those textures alive.
    */
-  void PrepareDevelopTransients(const DevelopCompileSource& source,
-                                 std::uint32_t backend_capability_version,
-                                 RawDemosaicMethod demosaic_method) {
-    if (transients_.allocation_policy() == TransientAllocationPolicy::ExactRelease) {
-      return;
-    }
-    const auto bytes =
-        develop_high_water_.SuggestInitial(source, backend_capability_version, demosaic_method);
-    if (bytes == 0) {
-      return;
-    }
-    transients_.Reserve(bytes);
+  void ReleaseStalePublishedImagesAndIdleTextures() {
+    images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision) {
+      return invalidation_.HasCurrentRevision(id, revision);
+    });
+    textures_.ReleaseUnleased();
   }
 
-  void RecordDevelopTransients(const DevelopCompileSource& source,
-                                std::uint32_t backend_capability_version,
-                                RawDemosaicMethod demosaic_method) {
-    develop_high_water_.Record(source, backend_capability_version, demosaic_method,
-                               transients_.capacity_bytes());
-  }
-
-  /**
-   * @brief Allocate an unpublished write texture for @p id. See GraphImageCache.
-   */
+  /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
   auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
       -> ResourceLease<Backend>& {
-    auto&      lease = images_.AcquireTextureForWrite(textures_, backend_, id, request);
+    auto&      lease = images_.AcquireTextureForWrite(textures_, id, request);
     const auto bytes = static_cast<std::size_t>(request.width) * request.height *
                        TextureFormatBytesPerPixel(request.format);
     if (ShouldTraceGpuPoolAlloc(bytes)) {
@@ -148,10 +144,10 @@ class BasicRenderWorkspace {
             ? device_memory.total_bytes - device_memory.free_bytes
             : 0;
     std::fprintf(stderr,
-                 "[GPU_POOL] %s textures=%.1f/%.1f MiB n=%zu  transient=%.1f/%.1f MiB  "
+                 "[GPU_POOL] %s textures=%.1f MiB n=%zu  transient=%.1f/%.1f MiB  "
                  "images=pub%zu/write%zu  values=%.1f n=%zu  masks=%.1f n=%zu",
                  reason == nullptr ? "" : reason, GpuPoolMiB(textures_.UsedBytes()),
-                 GpuPoolMiB(textures_.ByteBudget()), textures_.EntryCount(),
+                 textures_.EntryCount(),
                  GpuPoolMiB(transients_.used_bytes()), GpuPoolMiB(transients_.capacity_bytes()),
                  images_.PublishedCount(), images_.UnpublishedCount(),
                  GpuPoolMiB(values_.UsedBytes()), values_.Size(),
@@ -184,6 +180,8 @@ class BasicRenderWorkspace {
    */
   void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
 
+  [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+
   /**
    * @brief Wait the previous submission, drop leftover unpublished writes, start a new id.
    * @throws std::runtime_error if called re-entrantly.
@@ -199,8 +197,10 @@ class BasicRenderWorkspace {
     mask_textures_.BeginFrame();
     active_raster_textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
-    rendering_           = true;
-    validity_prepared_   = false;
+    rendering_         = true;
+    validity_prepared_ = false;
+    persistence_scope_ = ResultPersistenceScope::AllCurrentResults;
+    persist_sensor_    = {};
   }
 
   /**
@@ -217,7 +217,16 @@ class BasicRenderWorkspace {
     rendering_ = false;
   }
 
-  [[nodiscard]] auto IsRendering() const -> bool { return rendering_; }
+  /**
+   * @brief Publish recorded writes allowed by the current result persistence.
+   *
+   * QualityBase publishes only `develop:sensor_linear`. Other recorded writes
+   * stay until @ref DiscardUnpublished after present/download. Interactive
+   * publishes every recorded write and drops leftover slots.
+   */
+  void PublishImageResults(std::uint64_t submission_id) {
+    images_.PublishSuccessfulSubmission(submission_id, persistence_scope_, persist_sensor_);
+  }
 
   /**
    * @brief Leave a failed encode without submitting. Unpublished writes are discarded.
@@ -276,8 +285,9 @@ class BasicRenderWorkspace {
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   RuntimeInvalidationState       invalidation_{};
-  DevelopTransientHighWaterCache develop_high_water_{};
+  GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
+  ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;
   bool                           rendering_             = false;
   bool                           validity_prepared_     = false;
 };

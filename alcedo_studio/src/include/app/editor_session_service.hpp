@@ -15,6 +15,7 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_pending_input.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_serial_frame_admission.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_render_intent.hpp"
@@ -75,6 +76,10 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
     return {};
   }
+  /// Load-only panel values copied from Graph Node Models. Empty when the
+  /// backend has no image. GUI delivery is discarded when session_generation
+  /// does not match the live session.
+  [[nodiscard]] virtual auto panel_projection() const -> EditorPanelProjection { return {}; }
   /// Monotonic counter incremented only when history-display-affecting state
   /// changes (active Version ID, a Version ref creation/removal/rename/head
   /// move, working head or redo suffix, visible commit set, recovered-head
@@ -393,6 +398,7 @@ class EditorSessionService final : public IEditorSessionBackend {
     return render_.first_frame_request_id();
   }
   [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override;
+  [[nodiscard]] auto panel_projection() const -> EditorPanelProjection override;
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);
   }

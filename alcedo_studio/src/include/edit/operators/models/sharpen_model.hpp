@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -26,6 +27,15 @@ enum class SharpenDirty : std::uint32_t {
 };
 
 /**
+ * @brief Focused unsharp-mask update. Omitted fields retain current values.
+ */
+struct SharpenUpdate {
+  std::optional<float> amount;
+  std::optional<float> radius;
+  std::optional<float> threshold;
+};
+
+/**
  * @brief Unsharp-mask parameters. Amount 0 is identity; radius defaults to 3.
  */
 class SharpenModel final : public OperatorModelBase<SharpenModel, SharpenPayload, SharpenDirty> {
@@ -33,18 +43,23 @@ class SharpenModel final : public OperatorModelBase<SharpenModel, SharpenPayload
   static auto TypeId() -> const OperatorTypeId& { return type_ids::Sharpen(); }
   static constexpr std::string_view kInstanceSuffix = "sharpen";
 
-  [[nodiscard]] auto IsDefault() const -> bool override;
+  [[nodiscard]] auto                IsDefault() const -> bool override;
 
-  void SetAmount(float amount);
-  void SetRadius(float radius);
-  void SetThreshold(float threshold);
+  /**
+   * @brief Apply validated sharpen fields atomically and avoid dirtying equal values.
+   */
+  void                              ApplyUpdate(SharpenUpdate update);
 
-  [[nodiscard]] auto Amount() const -> float;
-  [[nodiscard]] auto Radius() const -> float;
-  [[nodiscard]] auto Threshold() const -> float;
+  void                              SetAmount(float amount);
+  void                              SetRadius(float radius);
+  void                              SetThreshold(float threshold);
 
-  [[nodiscard]] auto ToJson() const -> nlohmann::json override;
-  void               LoadJson(const nlohmann::json& json) override;
+  [[nodiscard]] auto                Amount() const -> float;
+  [[nodiscard]] auto                Radius() const -> float;
+  [[nodiscard]] auto                Threshold() const -> float;
+
+  [[nodiscard]] auto                ToJson() const -> nlohmann::json override;
+  void                              LoadJson(const nlohmann::json& json) override;
 };
 
 }  // namespace alcedo

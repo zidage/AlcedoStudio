@@ -7,8 +7,10 @@
 #include <gtest/gtest.h>
 
 #include <alcedo/metal/Metal.hpp>
+#include <cmath>
 #include <cstdint>
 #include <memory>
+#include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -18,6 +20,7 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/scope/detail/scope_metal_shared.hpp"
 #include "edit/scope/final_display_frame_tap.hpp"
 #include "edit/scope/scope_analyzer.hpp"
@@ -152,6 +155,67 @@ class MetalRendererFixture : public ::testing::Test {
   auto RenderTo(IFrameSink& sink, const FrameCompletionSubmission& submission = {})
       -> std::shared_ptr<ImageBuffer> {
     return renderer_->Render(image_, DecodeRes::FULL, RenderRequest{}, &sink, submission, false);
+  }
+
+  auto RenderRole(FrameRole role, std::uint32_t max_edge) -> std::shared_ptr<ImageBuffer> {
+    RenderRequest request;
+    request.resolution.max_edge = max_edge;
+    FrameCompletionSubmission submission;
+    submission.metadata.frame_role = role;
+    return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
+  }
+
+  auto GeometryId() const -> GraphValueId {
+    return {NodeId{"geometry"}, PortId{"scene_source"}};
+  }
+
+  auto HostRgbaIsFinite(const std::shared_ptr<ImageBuffer>& image) const -> bool {
+    if (!image || !image->cpu_data_valid_) {
+      return false;
+    }
+    const auto& mat = image->GetCPUData();
+    if (mat.empty() || mat.type() != CV_32FC4) {
+      return false;
+    }
+    for (int row = 0; row < mat.rows; ++row) {
+      const auto* pixels = mat.ptr<cv::Vec4f>(row);
+      for (int col = 0; col < mat.cols; ++col) {
+        for (int channel = 0; channel < 4; ++channel) {
+          if (!std::isfinite(pixels[col][channel])) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  auto CompareHostRgba(const std::shared_ptr<ImageBuffer>& left,
+                       const std::shared_ptr<ImageBuffer>& right, float max_abs) const -> bool {
+    if (!left || !right || !left->cpu_data_valid_ || !right->cpu_data_valid_) {
+      return false;
+    }
+    const auto& a = left->GetCPUData();
+    const auto& b = right->GetCPUData();
+    if (a.empty() || b.empty() || a.size() != b.size() || a.type() != CV_32FC4 ||
+        b.type() != CV_32FC4) {
+      return false;
+    }
+    for (int row = 0; row < a.rows; ++row) {
+      const auto* pa = a.ptr<cv::Vec4f>(row);
+      const auto* pb = b.ptr<cv::Vec4f>(row);
+      for (int col = 0; col < a.cols; ++col) {
+        for (int channel = 0; channel < 3; ++channel) {
+          if (!std::isfinite(pa[col][channel]) || !std::isfinite(pb[col][channel])) {
+            return false;
+          }
+          if (std::abs(pa[col][channel] - pb[col][channel]) > max_abs) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   std::shared_ptr<PipelineDocument> document_;
@@ -293,6 +357,67 @@ TEST_F(MetalRendererFixture, MetalRealRawEditorUsesTheThreeNodeDag) {
   ASSERT_NE(host, nullptr);
   EXPECT_EQ(renderer_->Stats().pass.drt_execute, 1U);
   EXPECT_EQ(document_->Graph().Nodes().size(), 3U);
+}
+
+TEST_F(MetalRendererFixture, QualityBaseBypassesEveryResultCacheAfterSensorDevelop) {
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(40.0f);
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto geometry_handle  = images.Find(GeometryId())->Handle();
+  const auto geometry_rev     = images.PublishedRevision(GeometryId());
+  const auto publishes_before = images.PersistentPublishCount();
+  renderer_->ResetStats();
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_skip, 0U);
+  EXPECT_GE(stats.pass.geometry_execute, 1U);
+  EXPECT_GT(stats.pass.result_policy_bypass, 0U);
+  EXPECT_EQ(stats.pass.persistent_result_lookups, 1U);
+  EXPECT_EQ(images.PersistentPublishCount(), publishes_before);
+  EXPECT_EQ(images.UnpublishedCount(), 0U);
+  EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent.width, 16U);
+}
+
+TEST_F(MetalRendererFixture, InteractiveQualityBaseInteractiveReuses2560PixelResults) {
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  auto& images = renderer_->Device().Workspace().Images();
+  const auto geometry_handle = images.Find(GeometryId())->Handle();
+  const auto geometry_rev    = images.PublishedRevision(GeometryId());
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::QualityBase, 32)));
+  EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
+  EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
+  renderer_->ResetStats();
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(stats.pass.geometry_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.drt_execute, 0U);
+}
+
+TEST_F(MetalRendererFixture, QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance) {
+  auto* shadows = dynamic_cast<ShadowsModel*>(
+      document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(35.0f);
+  document_->Geometry().SetCropRect({0.05f, 0.05f, 0.9f, 0.9f});
+  ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
+  const auto quality = RenderRole(FrameRole::QualityBase, 32);
+  ASSERT_TRUE(HostRgbaIsFinite(quality));
+  RenderRequest fresh_request;
+  fresh_request.resolution.max_edge = 32;
+  const auto fresh = renderer_->Render(image_, DecodeRes::FULL, fresh_request, nullptr, {}, true,
+                                       RenderCachePolicy::BypassSessionCache);
+  ASSERT_TRUE(HostRgbaIsFinite(fresh));
+  EXPECT_EQ(quality->GetCPUData().cols, fresh->GetCPUData().cols);
+  EXPECT_EQ(quality->GetCPUData().rows, fresh->GetCPUData().rows);
+  EXPECT_TRUE(CompareHostRgba(quality, fresh, 1.0e-4f));
 }
 
 }  // namespace

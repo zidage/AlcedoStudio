@@ -546,6 +546,21 @@ auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustment
   return snapshot;
 }
 
+auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return {};
+  }
+  EditorPanelProjection projection;
+  std::string           error;
+  auto&                 history = *dependencies_.history;
+  if (!const_cast<IEditorHistoryPort&>(history).ReadPanelProjection(
+          lifecycle_.history_guard(), &projection, &error)) {
+    return {};
+  }
+  projection.session_generation = lifecycle_.active_image_load_request().value;
+  return projection;
+}
+
 auto EditorSessionService::CreateRootVersion(std::string display_name) -> EditorSessionResult {
   if (!reducing_command_) {
     EditorSessionCommand command;

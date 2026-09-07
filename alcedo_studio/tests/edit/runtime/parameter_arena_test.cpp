@@ -17,7 +17,8 @@ namespace {
 using cuda_workspace_test::BindSharpen;
 using cuda_workspace_test::CudaWorkspaceFixture;
 using cuda_workspace_test::ExposureFieldBindings;
-using cuda_workspace_test::UploadFullAndClearDirty;
+using cuda_workspace_test::UploadPackedAndClearDirty;
+using cuda_workspace_test::WritePackedOwnerBytes;
 
 TEST_F(CudaWorkspaceFixture, ParameterArenaKeepsStableOffsetsAcrossRenders) {
   CudaRenderDevice device;
@@ -37,53 +38,57 @@ TEST_F(CudaWorkspaceFixture, ParameterArenaKeepsStableOffsetsAcrossRenders) {
   EXPECT_EQ(again.fields[0].destination_offset, first.fields[0].destination_offset);
 }
 
-TEST_F(CudaWorkspaceFixture, ParameterArenaUploadsOnlyDirtyFieldRanges) {
+TEST_F(CudaWorkspaceFixture, ParameterArenaWritePackedSlotUploadsBoundSlotOnce) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel     model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetAmount(12.0f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
-  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, 4U);
-  EXPECT_EQ(backend.HostToDeviceBytes(), 4U);
-  EXPECT_LT(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
+  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
+  EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
+
+  backend.ResetCounters();
+  device.Workspace().Parameters().UploadDirty(device.CommandContext());
+  EXPECT_EQ(backend.HostToDeviceBytes(), 0U);
+  EXPECT_EQ(backend.HostToDeviceCopyCount(), 0U);
 }
 
-TEST_F(CudaWorkspaceFixture, AdjacentDirtyParameterRangesMergeBeforeCudaCopy) {
+TEST_F(CudaWorkspaceFixture, PackedSlotUploadCopiesBoundSlotOnceWhenTwoFieldsDirty) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel     model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetAmount(8.0f);
   model.SetRadius(5.0f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
-  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, 8U);
+  EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
   EXPECT_EQ(backend.HostToDeviceCopyCount(), 1U);
-  EXPECT_EQ(backend.HostToDeviceBytes(), 8U);
+  EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
 }
 
 TEST_F(CudaWorkspaceFixture, RepeatedDirtyWritesUseLatestValue) {
@@ -95,9 +100,9 @@ TEST_F(CudaWorkspaceFixture, RepeatedDirtyWritesUseLatestValue) {
 
   model.SetValue(0.25f);
   model.SetValue(1.5f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   pending->Commit();
@@ -117,22 +122,22 @@ TEST_F(CudaWorkspaceFixture, CancelledCudaParameterCopyRestoresDirtyFields) {
   ExposureModel    model;
   const auto       fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
   {
-    auto pending = TakePendingParameterPatch(model);
+    auto pending = TakePendingDirtyFields(model);
     ASSERT_TRUE(pending.has_value());
     device.Workspace().Device().FailNextUpload();
-    device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+    WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
     EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                  std::runtime_error);
   }
   EXPECT_TRUE(model.IsDirty());
 
-  auto retry = TakePendingParameterPatch(model);
+  auto retry = TakePendingDirtyFields(model);
   ASSERT_TRUE(retry.has_value());
-  device.Workspace().Parameters().ApplyPatch(key, retry->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
   retry->Commit();
@@ -145,7 +150,7 @@ TEST_F(CudaWorkspaceFixture, UnchangedParametersIssueNoHostToDeviceCopy) {
   ExposureModel    model;
   const auto       fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
@@ -168,8 +173,8 @@ TEST_F(CudaWorkspaceFixture, SameAdjustmentTypeUsesDistinctNodeSlots) {
   ExposureModel model_b;
   model_a.SetValue(0.25f);
   model_b.SetValue(1.75f);
-  device.Workspace().Parameters().InitializeFromFullDto(grade_a, model_a.MakeFullDto());
-  device.Workspace().Parameters().InitializeFromFullDto(grade_b, model_b.MakeFullDto());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), grade_a, model_a);
+  WritePackedOwnerBytes(device.Workspace().Parameters(), grade_b, model_b);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
 
@@ -194,13 +199,13 @@ TEST_F(CudaWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
   ExposureModel    model;
   const auto       fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadFullAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
 
   model.SetValue(0.75f);
-  auto pending = TakePendingParameterPatch(model);
+  auto pending = TakePendingDirtyFields(model);
   ASSERT_TRUE(pending.has_value());
   device.Workspace().Device().FailNextUpload();
-  device.Workspace().Parameters().ApplyPatch(key, pending->Patch());
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
   EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
                std::runtime_error);

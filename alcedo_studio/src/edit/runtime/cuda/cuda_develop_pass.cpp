@@ -17,6 +17,9 @@
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/cuda/geometry_resample_pass.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "gpu/transient_allocation_policy.hpp"
+#include "gpu/transient_buffer_scope.hpp"
+#include "gpu/transient_last_use.hpp"
 
 namespace alcedo {
 namespace {
@@ -57,16 +60,14 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaDevelop: BeginRender has not been called");
   }
+  TransientAllocationPolicyScope<CudaBackend> exact_release(
+      workspace.TransientBuffers(), TransientAllocationPolicy::ExactRelease);
   auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaDevelop: missing develop node");
   }
 
-  auto pending = TakePendingParameterPatch(develop->Params());
-
-  if (workspace.Textures().ByteBudget() == 0) {
-    workspace.Textures().SetByteBudget(DefaultProductTextureBudgetBytes());
-  }
+  auto pending = TakePendingDirtyFields(develop->Params());
 
   auto&              ctx           = device.CommandContext();
   auto               stream        = WrapStream(ctx.Stream());
@@ -118,6 +119,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     if (!hlr) {
       CUDA::Clamp01(linear, &stream);
     }
+    ReleaseTransientSlabsAfterGpuLastUse(device, {u16_ptr});
 
     cv::cuda::GpuMat packed =
         WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));

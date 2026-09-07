@@ -7,6 +7,7 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "support/editor_parameter_write_test.hpp"
 #include "support/latch_blocked_pipeline_scheduler_port.hpp"
 #include "support/manual_monotonic_clock.hpp"
 
@@ -67,11 +68,8 @@ class SerialFrameConsumptionTest : public ::testing::Test {
     ASSERT_FALSE(runtime_->coordinator->has_inflight());
   }
 
-  void EnqueueExposure(const std::string& json, bool settled = false) {
-    EditorAdjustmentPatch patch;
-    patch.field_key   = "exposure";
-    patch.params_json = json;
-    patch.settled     = settled;
+  void EnqueueExposure(float value, bool settled = false) {
+    EditorAdjustmentPatch patch = test::ScalarPatch("exposure", value, settled);
     ASSERT_EQ(service_->EnqueueAdjustmentInput(patch).kind, EditorSessionResultKind::Accepted);
   }
 
@@ -98,12 +96,13 @@ class SerialFrameConsumptionTest : public ::testing::Test {
 TEST_F(SerialFrameConsumptionTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOnce) {
   OpenInteractive();
   const int captures_before = history_->capture_count;
-  EnqueueExposure(R"({"value":1.25})", true);
+  EnqueueExposure(1.25f, true);
   ConsumeQueued();
   ASSERT_TRUE(latch_->running());
   EXPECT_EQ(history_->capture_count, captures_before + 1);
   EXPECT_EQ(history_->commit_count, 1);
-  EXPECT_EQ(history_->last_committed_patch.params_json, R"({"value":1.25})");
+  ASSERT_TRUE(history_->last_committed_patch.write.has_value());
+  EXPECT_EQ(alcedo::test::ScalarValue(*history_->last_committed_patch.write), 1.25f);
   ASSERT_FALSE(latch_->scheduled().empty());
   EXPECT_EQ(latch_->scheduled().back().intent.quality, EditorRenderQuality::Quality);
   EXPECT_TRUE(latch_->scheduled().back().intent.live_parameters_applied);
@@ -114,14 +113,14 @@ TEST_F(SerialFrameConsumptionTest, InteractiveCycleUsesRemainingTimeWithinSixtee
   OpenInteractive();
   const auto scheduled_open = latch_->scheduled().size();
   clock_->clock.set_ns(0);
-  EnqueueExposure(R"({"value":0.10})");
+  EnqueueExposure(0.10f);
   ConsumeQueued();
   ASSERT_TRUE(latch_->running());
   EXPECT_EQ(latch_->scheduled().size(), scheduled_open + 1);
   ASSERT_EQ(service_->serial_frame_admission().interactive_start_times_ns().size(), 1u);
   EXPECT_EQ(service_->serial_frame_admission().interactive_start_times_ns().front(), 0);
 
-  EnqueueExposure(R"({"value":0.20})");
+  EnqueueExposure(0.20f);
   service_->DrainCommandQueueForTests();
   EXPECT_EQ(latch_->scheduled().size(), scheduled_open + 1);
   EXPECT_EQ(latch_->rejected_while_running(), 0);
@@ -145,10 +144,10 @@ TEST_F(SerialFrameConsumptionTest, InteractiveCycleUsesRemainingTimeWithinSixtee
 TEST_F(SerialFrameConsumptionTest, OverBudgetInteractiveCycleStartsNextOnlyAfterCompletion) {
   OpenInteractive();
   clock_->clock.set_ns(0);
-  EnqueueExposure(R"({"value":0.10})");
+  EnqueueExposure(0.10f);
   ConsumeQueued();
   ASSERT_TRUE(latch_->running());
-  EnqueueExposure(R"({"value":0.30})");
+  EnqueueExposure(0.30f);
   clock_->clock.set_ns(22'000'000);
   latch_->Complete(true);
   service_->DrainCommandQueueForTests();
@@ -160,10 +159,10 @@ TEST_F(SerialFrameConsumptionTest, OverBudgetInteractiveCycleStartsNextOnlyAfter
 TEST_F(SerialFrameConsumptionTest, QualityReleaseBypassesPacingAfterCurrentFrameCompletes) {
   OpenInteractive();
   clock_->clock.set_ns(0);
-  EnqueueExposure(R"({"value":0.10})");
+  EnqueueExposure(0.10f);
   ConsumeQueued();
   ASSERT_TRUE(latch_->running());
-  EnqueueExposure(R"({"value":0.40})", true);
+  EnqueueExposure(0.40f, true);
   clock_->clock.set_ns(5'000'000);
   latch_->Complete(true);
   service_->DrainCommandQueueForTests();
@@ -175,7 +174,7 @@ TEST_F(SerialFrameConsumptionTest, QualityReleaseBypassesPacingAfterCurrentFrame
 
 TEST_F(SerialFrameConsumptionTest, FailedOrCancelledRenderReleasesOwnerWithoutPublishingResult) {
   OpenInteractive();
-  EnqueueExposure(R"({"value":0.15})");
+  EnqueueExposure(0.15f);
   ConsumeQueued();
   ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
   const auto ready_before = runtime_->coordinator->diagnostics().ready_count;
@@ -186,7 +185,7 @@ TEST_F(SerialFrameConsumptionTest, FailedOrCancelledRenderReleasesOwnerWithoutPu
   EXPECT_GT(runtime_->coordinator->diagnostics().failed_count, 0u);
   EXPECT_FALSE(runtime_->coordinator->has_inflight());
 
-  EnqueueExposure(R"({"value":0.16})");
+  EnqueueExposure(0.16f);
   ConsumeQueued();
   EXPECT_TRUE(service_->serial_frame_admission().HoldsOwnership());
   EXPECT_TRUE(latch_->running());
@@ -194,12 +193,12 @@ TEST_F(SerialFrameConsumptionTest, FailedOrCancelledRenderReleasesOwnerWithoutPu
 
 TEST_F(SerialFrameConsumptionTest, GuiRemainsResponsiveWhilePresentNeedsAnUpdate) {
   OpenInteractive();
-  EnqueueExposure(R"({"value":0.11})");
+  EnqueueExposure(0.11f);
   ConsumeQueued();
   ASSERT_TRUE(latch_->running());
   EditorAdjustmentPatch follow_up;
   follow_up.field_key   = "exposure";
-  follow_up.params_json = R"({"value":0.12})";
+  follow_up.write = alcedo::EditorScalarWrite{0.12f};
   const auto queued     = service_->EnqueueAdjustmentInput(follow_up);
   EXPECT_EQ(queued.kind, EditorSessionResultKind::Accepted);
   EXPECT_TRUE(latch_->running());
@@ -207,12 +206,12 @@ TEST_F(SerialFrameConsumptionTest, GuiRemainsResponsiveWhilePresentNeedsAnUpdate
   const auto pending = service_->PeekPendingInput();
   ASSERT_EQ(pending.sequences.size(), 1u);
   ASSERT_FALSE(pending.sequences.front().fields.empty());
-  EXPECT_EQ(pending.sequences.front().fields.front().params_json, R"({"value":0.12})");
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences.front().fields.front()), 0.12f);
 }
 
 TEST_F(SerialFrameConsumptionTest, UndoAndCheckoutWaitForOwnerWithoutBlockingGui) {
   OpenInteractive();
-  EnqueueExposure(R"({"value":0.21})");
+  EnqueueExposure(0.21f);
   ConsumeQueued();
   ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
   const int  undos_before = history_->undo_count;
@@ -227,7 +226,7 @@ TEST_F(SerialFrameConsumptionTest, UndoAndCheckoutWaitForOwnerWithoutBlockingGui
   EXPECT_EQ(history_->undo_count, undos_before + 1);
   EXPECT_FALSE(service_->serial_frame_admission().HasDeferredOwnerWork());
 
-  EnqueueExposure(R"({"value":0.22})");
+  EnqueueExposure(0.22f);
   ConsumeQueued();
   ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
   const int  checkouts_before = history_->checkout_count;
@@ -254,7 +253,7 @@ TEST_F(SerialFrameConsumptionTest, DeadlineWithEmptyQueueDoesNotScheduleAnEmptyF
 TEST_F(SerialFrameConsumptionTest, HiddenViewportAbortsCycleWithoutStrandingOwnership) {
   OpenInteractive();
   service_->SetPresentationSinkId(0);
-  EnqueueExposure(R"({"value":0.33})");
+  EnqueueExposure(0.33f);
   ConsumeQueued();
   EXPECT_FALSE(service_->serial_frame_admission().HoldsOwnership());
   EXPECT_FALSE(runtime_->coordinator->has_inflight());

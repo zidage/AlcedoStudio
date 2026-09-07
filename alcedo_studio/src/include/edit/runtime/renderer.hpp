@@ -213,7 +213,6 @@ Renderer<Backend>::~Renderer() = default;
 
 template <class Backend>
 void Renderer<Backend>::ConfigureDevice(RenderDevice& device, const char* error_label) {
-  device.Workspace().Textures().SetByteBudget(Backend::DefaultTextureBudgetBytes());
   device.SetErrorReporter([error_label](std::string_view message) {
     std::fprintf(stderr, "[ERROR] %s DAG %s render failed: %.*s\n", Backend::kName, error_label,
                  static_cast<int>(message.size()), message.data());

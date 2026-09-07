@@ -19,7 +19,9 @@ auto TablesAreIdentity(const HlsPayload& payload) -> bool {
   return payload.hls_adj.h == 0.0f && payload.hls_adj.l == 0.0f && payload.hls_adj.s == 0.0f;
 }
 
-auto VecToJson(const HlsVec3& vec) -> nlohmann::json { return nlohmann::json::array({vec.h, vec.l, vec.s}); }
+auto VecToJson(const HlsVec3& vec) -> nlohmann::json {
+  return nlohmann::json::array({vec.h, vec.l, vec.s});
+}
 
 auto VecFromJson(const nlohmann::json& json, HlsVec3 fallback) -> HlsVec3 {
   if (!json.is_array() || json.size() < 3) {
@@ -38,10 +40,81 @@ auto HlsModel::IsDefault() const -> bool {
   return Read([](const HlsPayload& payload) { return TablesAreIdentity(payload); });
 }
 
+auto HlsModel::HueBins() const -> std::array<float, kHlsHueBinCount> {
+  return Read([](const HlsPayload& payload) { return payload.hue_bins; });
+}
+
+auto HlsModel::AdjustmentTable() const -> std::array<HlsVec3, kHlsHueBinCount> {
+  return Read([](const HlsPayload& payload) { return payload.hls_adj_table; });
+}
+
+auto HlsModel::HueRangeTable() const -> std::array<float, kHlsHueBinCount> {
+  return Read([](const HlsPayload& payload) { return payload.h_range_table; });
+}
+
+auto HlsModel::TargetHls() const -> HlsVec3 {
+  return Read([](const HlsPayload& payload) { return payload.target_hls; });
+}
+
+auto HlsModel::Adjustment() const -> HlsVec3 {
+  return Read([](const HlsPayload& payload) { return payload.hls_adj; });
+}
+
+auto HlsModel::HueRange() const -> float {
+  return Read([](const HlsPayload& payload) { return payload.h_range; });
+}
+
+auto HlsModel::LightnessRange() const -> float {
+  return Read([](const HlsPayload& payload) { return payload.l_range; });
+}
+
+auto HlsModel::SaturationRange() const -> float {
+  return Read([](const HlsPayload& payload) { return payload.s_range; });
+}
+
+void HlsModel::ApplyUpdate(HlsUpdate update) {
+  MutateWithDirtyFields([update = std::move(update)](HlsPayload& payload) mutable {
+    bool changed = false;
+    if (update.hue_bins.has_value() && payload.hue_bins != *update.hue_bins) {
+      payload.hue_bins = *update.hue_bins;
+      changed          = true;
+    }
+    if (update.hls_adj_table.has_value() && payload.hls_adj_table != *update.hls_adj_table) {
+      payload.hls_adj_table = *update.hls_adj_table;
+      changed               = true;
+    }
+    if (update.h_range_table.has_value() && payload.h_range_table != *update.h_range_table) {
+      payload.h_range_table = *update.h_range_table;
+      changed               = true;
+    }
+    if (update.target_hls.has_value() && payload.target_hls != *update.target_hls) {
+      payload.target_hls = *update.target_hls;
+      changed            = true;
+    }
+    if (update.hls_adj.has_value() && payload.hls_adj != *update.hls_adj) {
+      payload.hls_adj = *update.hls_adj;
+      changed         = true;
+    }
+    if (update.h_range.has_value() && payload.h_range != *update.h_range) {
+      payload.h_range = *update.h_range;
+      changed         = true;
+    }
+    if (update.l_range.has_value() && payload.l_range != *update.l_range) {
+      payload.l_range = *update.l_range;
+      changed         = true;
+    }
+    if (update.s_range.has_value() && payload.s_range != *update.s_range) {
+      payload.s_range = *update.s_range;
+      changed         = true;
+    }
+    return changed ? DirtyFieldMask{HlsDirty::Table} : DirtyFieldMask{};
+  });
+}
+
 auto HlsModel::ToJson() const -> nlohmann::json {
-  const auto     payload = PayloadCopy();
-  nlohmann::json hue_bins = nlohmann::json::array();
-  nlohmann::json adj_table = nlohmann::json::array();
+  const auto     payload     = PayloadCopy();
+  nlohmann::json hue_bins    = nlohmann::json::array();
+  nlohmann::json adj_table   = nlohmann::json::array();
   nlohmann::json range_table = nlohmann::json::array();
   for (int i = 0; i < kHlsHueBinCount; ++i) {
     hue_bins.push_back(payload.hue_bins[static_cast<std::size_t>(i)]);

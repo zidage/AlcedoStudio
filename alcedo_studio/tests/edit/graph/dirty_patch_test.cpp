@@ -77,4 +77,18 @@ TEST(GpuDagModelGraph, CommittedParameterTransferLeavesFieldsClean) {
   EXPECT_FALSE(model.IsDirty());
 }
 
+TEST(GpuDagModelGraph, TakeDirtyFieldsClearsBitsWithoutCopyingFullDto) {
+  ExposureModel model;
+  model.SetValue(0.5f);
+  OperatorModelFullDtoCopyCount::Reset();
+  const auto fields = model.TakeDirtyFields();
+  ASSERT_TRUE(fields.has_value());
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+  EXPECT_FALSE(model.IsDirty());
+  {
+    PendingParameterPatch pending(model, *fields);
+  }
+  EXPECT_TRUE(model.IsDirty());
+}
+
 }  // namespace alcedo

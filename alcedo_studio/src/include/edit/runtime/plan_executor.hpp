@@ -19,6 +19,8 @@
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
+#include "edit/runtime/gpu_node_pass_stats.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
@@ -45,6 +47,8 @@ class PlanExecutor {
    * @param device Session or one-shot device that owns workspace and stats.
    * @param publish_on_success When true, publishes unpublished writes after EndRender.
    *        Product present paths pass false and publish after the sink succeeds.
+   * @param persistence Which published results this task may look up or replace.
+   *        QualityBase uses @ref ResultPersistenceScope::SensorDevelopOnly.
    * @return Display GraphValueId of the compiled plan.
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
@@ -53,7 +57,8 @@ class PlanExecutor {
                       PipelineDocument& document, MaskStore* mask_store, bool publish_on_success,
                       TransientAllocationPolicy transient_policy =
                           TransientAllocationPolicy::SessionPacked,
-                      std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+                      std::span<const ActiveRasterMaskInput> active_raster_masks = {},
+                      ResultPersistenceScope persistence = ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();
@@ -65,10 +70,8 @@ class PlanExecutor {
                     }) {
         workspace.Device().WarmUpPlan(plan);
       }
-      if (workspace.Textures().ByteBudget() == 0) {
-        workspace.Textures().SetByteBudget(Backend::DefaultTextureBudgetBytes());
-      }
       device.BeginRender();
+      workspace.SetResultPersistence(persistence, plan.sensor_linear_output);
       workspace.AlignParameterLayout(plan.static_key.topology_hash);
       auto&      invalidation  = workspace.ResultInvalidation();
       workspace.PrepareResultValidity(plan, document, input, active_raster_masks);
@@ -78,10 +81,15 @@ class PlanExecutor {
                                         plan.geometry.render_extent.height};
       const auto completed     = workspace.Device().CompletedSubmission();
       auto&      stats         = device.PassStats();
-      const auto hits_before   = workspace.Images().ContentHitCount();
-      const auto misses_before = workspace.Images().ContentMissCount();
+      const auto hits_before      = workspace.Images().ContentHitCount();
+      const auto misses_before    = workspace.Images().ContentMissCount();
+      const auto lookups_before   = workspace.Images().LookupCount();
+      const auto revision_before  = workspace.Images().RevisionMissCount();
+      const auto represent_before = workspace.Images().RepresentationMissCount();
+      const auto publishes_before = workspace.Images().PersistentPublishCount();
 
-      if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed)) {
+      if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed,
+                     stats)) {
         ++stats.sensor_develop_skip;
       } else {
         const auto* develop_node = document.Develop();
@@ -92,13 +100,8 @@ class PlanExecutor {
         const bool highlights_reconstruct =
             develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
         const auto h2d_before = workspace.Device().HostToDeviceBytes();
+        workspace.ReleaseStalePublishedImagesAndIdleTextures();
         try {
-        if constexpr (UsesDevelopTransientArena()) {
-          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
-            workspace.PrepareDevelopTransients(plan.source, Backend::kCapabilityVersion,
-                                               develop_method);
-          }
-        }
           if (plan.Contains(GpuPassKind::UploadRgb)) {
             PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
                                                                  mask_store);
@@ -119,14 +122,8 @@ class PlanExecutor {
         ++stats.source_h2d_count;
         Record(device, invalidation, plan.sensor_linear_output, sensor_extent);
         ++stats.sensor_develop_execute;
-        if constexpr (UsesDevelopTransientArena()) {
-          if (transient_policy == TransientAllocationPolicy::SessionPacked) {
-            workspace.RecordDevelopTransients(plan.source, Backend::kCapabilityVersion,
-                                              develop_method);
-          }
-        }
-        // Develop intermediates are not a cache. Finish the recorded work so backend-owned
-        // scratch can be destroyed before Geometry allocates display textures.
+        // Develop intermediates are not a cache. Finish remaining recorded work so
+        // backend-owned scratch can be destroyed before Geometry allocates display textures.
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
       }
       if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
@@ -135,7 +132,8 @@ class PlanExecutor {
       workspace.TransientBuffers().Reset();
       workspace.TransientBuffers().ReleaseDeviceMemory();
 
-      if (BindOrMiss(workspace, invalidation, plan.geometry_output, geometry_extent, completed)) {
+      if (BindOrMiss(workspace, invalidation, plan.geometry_output, geometry_extent, completed,
+                     stats)) {
         ++stats.geometry_skip;
       } else {
         PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input, document,
@@ -148,7 +146,8 @@ class PlanExecutor {
         workspace.ReleaseConsumedImage(plan.sensor_linear_output);
       }
 
-      if (BindOrMiss(workspace, invalidation, plan.develop_output, geometry_extent, completed)) {
+      if (BindOrMiss(workspace, invalidation, plan.develop_output, geometry_extent, completed,
+                     stats)) {
         ++stats.camera_color_skip;
       } else {
         PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document,
@@ -175,7 +174,7 @@ class PlanExecutor {
               continue;
             }
             if (BindOrMiss(workspace, invalidation, source.effective_output, geometry_extent,
-                           completed, TextureFormat::R8)) {
+                           completed, stats, TextureFormat::R8)) {
               ++stats.mask_skip;
             } else {
               PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
@@ -187,7 +186,7 @@ class PlanExecutor {
             }
           }
           if (BindOrMiss(workspace, invalidation, compiled_grade.mask_output, geometry_extent,
-                         completed, TextureFormat::R8)) {
+                         completed, stats, TextureFormat::R8)) {
             ++stats.mask_union_skip;
           } else {
             PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
@@ -200,7 +199,7 @@ class PlanExecutor {
         }
 
         const GraphValueId grade_scene = compiled_grade.scene_output;
-        if (BindOrMiss(workspace, invalidation, grade_scene, geometry_extent, completed)) {
+        if (BindOrMiss(workspace, invalidation, grade_scene, geometry_extent, completed, stats)) {
           ++stats.primary_grade_skip;
         } else {
           PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
@@ -226,7 +225,8 @@ class PlanExecutor {
         }
       }
 
-      if (BindOrMiss(workspace, invalidation, plan.display_output, geometry_extent, completed)) {
+      if (BindOrMiss(workspace, invalidation, plan.display_output, geometry_extent, completed,
+                     stats)) {
         ++stats.drt_skip;
       } else {
         PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document, mask_store);
@@ -240,9 +240,15 @@ class PlanExecutor {
 
       stats.result_content_hits += workspace.Images().ContentHitCount() - hits_before;
       stats.result_content_misses += workspace.Images().ContentMissCount() - misses_before;
+      stats.result_revision_misses += workspace.Images().RevisionMissCount() - revision_before;
+      stats.result_representation_misses +=
+          workspace.Images().RepresentationMissCount() - represent_before;
+      stats.persistent_result_lookups += workspace.Images().LookupCount() - lookups_before;
       device.EndRender();
       if (publish_on_success) {
         device.PublishResults();
+        stats.persistent_result_publishes +=
+            workspace.Images().PersistentPublishCount() - publishes_before;
         invalidation.CompleteMatchingImages(workspace.Images());
       }
       return plan.display_output;
@@ -266,17 +272,14 @@ class PlanExecutor {
  private:
   static constexpr TextureFormat kResultFormat = TextureFormat::Rgba32f;
 
-  static constexpr auto UsesDevelopTransientArena() -> bool {
-    if constexpr (requires { Backend::kUsesDevelopTransientArena; }) {
-      return Backend::kUsesDevelopTransientArena;
-    }
-    return true;
-  }
-
   template <class Workspace>
   static auto BindOrMiss(Workspace& images_owner, RuntimeInvalidationState& invalidation,
                          const GraphValueId& id, ImageExtent extent, std::uint64_t completed,
-                         TextureFormat format = kResultFormat) -> bool {
+                         GpuNodePassStats& stats, TextureFormat format = kResultFormat) -> bool {
+    if (!images_owner.PersistsResult(id)) {
+      ++stats.result_policy_bypass;
+      return false;
+    }
     const auto required = invalidation.RequiredRevision(id);
     const auto needed   = invalidation.MakeImageRepresentation(id, extent, format);
     return images_owner.Images().BindValidResult(id, required, needed, completed) != nullptr;

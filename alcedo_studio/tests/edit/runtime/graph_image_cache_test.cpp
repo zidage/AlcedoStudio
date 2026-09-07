@@ -4,8 +4,6 @@
 
 #include "cuda_workspace_test_support.hpp"
 
-#include <stdexcept>
-
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -35,10 +33,9 @@ void PublishWrite(CudaRenderDevice& device, const GraphValueId& id, RuntimeRevis
   device.WaitIdle();
 }
 
-TEST_F(CudaWorkspaceFixture, ResultCacheDoesNotTreatReusedTextureAllocationAsContentHit) {
+TEST_F(CudaWorkspaceFixture, UnpublishedRewriteKeepsPreviousPublishedResultUntilPublish) {
   CudaRenderDevice device;
   auto&            workspace = device.Workspace();
-  workspace.Textures().SetByteBudget(static_cast<std::size_t>(kWidth) * kHeight * 16);
   const GraphValueId    id         = Value();
   constexpr RuntimeRevision first  = 11;
   constexpr RuntimeRevision second = 22;
@@ -49,8 +46,8 @@ TEST_F(CudaWorkspaceFixture, ResultCacheDoesNotTreatReusedTextureAllocationAsCon
 
   device.BeginRender();
   auto& write = workspace.AcquireImageForWrite(id, {kWidth, kHeight, TextureFormat::Rgba32f});
-  EXPECT_EQ(write.Texture().ResourceId(), resource_a);
-  EXPECT_FALSE(workspace.Images().FindValidResult(id, first, ImageRepr(), completed));
+  EXPECT_NE(write.Texture().ResourceId(), resource_a);
+  EXPECT_TRUE(workspace.Images().FindValidResult(id, first, ImageRepr(), completed));
   workspace.Images().RecordUnpublished(id, second, ImageRepr(),
                                        device.CommandContext().SubmissionId());
   device.EndRender();

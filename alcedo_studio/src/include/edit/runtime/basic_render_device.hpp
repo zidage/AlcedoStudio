@@ -15,6 +15,7 @@
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/plan_executor.hpp"
+#include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
@@ -89,7 +90,7 @@ class BasicRenderDevice {
    * leave results unpublished via CancelRender.
    */
   void PublishResults() {
-    workspace_.Images().PublishSuccessfulSubmission(command_context_.SubmissionId());
+    workspace_.PublishImageResults(command_context_.SubmissionId());
   }
 
   [[nodiscard]] auto PassStats() -> GpuNodePassStats& { return pass_stats_; }
@@ -114,11 +115,13 @@ class BasicRenderDevice {
                              bool publish_on_success = true,
                              TransientAllocationPolicy transient_policy =
                                  TransientAllocationPolicy::SessionPacked,
-                             std::span<const ActiveRasterMaskInput> active_raster_masks = {})
+                             std::span<const ActiveRasterMaskInput> active_raster_masks = {},
+                             ResultPersistenceScope persistence =
+                                 ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, mask_store,
                                           publish_on_success, transient_policy,
-                                          active_raster_masks);
+                                          active_raster_masks, persistence);
   }
 
  private:

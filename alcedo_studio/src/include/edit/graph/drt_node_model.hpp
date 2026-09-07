@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,13 +33,13 @@ enum class DrtColorSpace : int {
 };
 
 enum class DrtEotf : int {
-  Linear   = 0,
-  St2084   = 1,
-  Hlg      = 2,
-  Gamma26  = 3,
-  Bt1886   = 4,
-  Gamma22  = 5,
-  Gamma18  = 6,
+  Linear  = 0,
+  St2084  = 1,
+  Hlg     = 2,
+  Gamma26 = 3,
+  Bt1886  = 4,
+  Gamma22 = 5,
+  Gamma18 = 6,
 };
 
 struct OpenDrtDetailedParams {
@@ -98,34 +99,78 @@ struct OpenDrtDetailedParams {
 };
 
 struct DrtPayload {
-  DrtMethod     method          = DrtMethod::OpenDrt;
-  DrtColorSpace encoding_space  = DrtColorSpace::Rec709;
-  DrtEotf       encoding_eotf   = DrtEotf::Gamma22;
-  DrtColorSpace limiting_space  = DrtColorSpace::Rec709;
-  float         peak_luminance  = 100.0f;
-  std::string   look_preset     = "standard";
-  std::string   tonescale_preset = "use_look_preset";
-  std::string   creative_white  = "use_look_preset";
-  float         creative_white_limit     = 0.25f;
-  float         display_grey_luminance   = 10.0f;
-  float         hdr_grey_boost           = 0.13f;
-  float         hdr_purity               = 0.5f;
+  DrtMethod             method                 = DrtMethod::OpenDrt;
+  DrtColorSpace         encoding_space         = DrtColorSpace::Rec709;
+  DrtEotf               encoding_eotf          = DrtEotf::Gamma22;
+  DrtColorSpace         limiting_space         = DrtColorSpace::Rec709;
+  float                 peak_luminance         = 100.0f;
+  std::string           look_preset            = "standard";
+  std::string           tonescale_preset       = "use_look_preset";
+  std::string           creative_white         = "use_look_preset";
+  float                 creative_white_limit   = 0.25f;
+  float                 display_grey_luminance = 10.0f;
+  float                 hdr_grey_boost         = 0.13f;
+  float                 hdr_purity             = 0.5f;
   OpenDrtDetailedParams parameters{};
 };
 
 enum class DrtDirty : std::uint32_t {
-  None       = 0,
-  Method     = 1U << 0,
-  Encoding   = 1U << 1,
-  OpenDrt    = 1U << 2,
-  All        = Method | Encoding | OpenDrt,
+  None     = 0,
+  Method   = 1U << 0,
+  Encoding = 1U << 1,
+  OpenDrt  = 1U << 2,
+  All      = Method | Encoding | OpenDrt,
+};
+
+/**
+ * @brief Focused DRT/ODT update. Omitted fields retain their current values.
+ *
+ * A detailed OpenDRT parameter object is accepted as one complete update because the
+ * serialized schema exposes that object as a single editor-owned parameter group.
+ */
+struct DrtParameterUpdate {
+  std::optional<DrtMethod>             method;
+  std::optional<DrtColorSpace>         encoding_space;
+  std::optional<DrtEotf>               encoding_eotf;
+  std::optional<DrtColorSpace>         limiting_space;
+  std::optional<float>                 peak_luminance;
+  std::optional<std::string>           look_preset;
+  std::optional<std::string>           tonescale_preset;
+  std::optional<std::string>           creative_white;
+  std::optional<float>                 creative_white_limit;
+  std::optional<float>                 display_grey_luminance;
+  std::optional<float>                 hdr_grey_boost;
+  std::optional<float>                 hdr_purity;
+  std::optional<OpenDrtDetailedParams> parameters;
 };
 
 class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload, DrtDirty> {
  public:
-  static auto TypeId() -> const OperatorTypeId& { return type_ids::DrtNode(); }
+  static auto        TypeId() -> const OperatorTypeId& { return type_ids::DrtNode(); }
 
   [[nodiscard]] auto IsDefault() const -> bool override;
+
+  /**
+   * @brief Read individual DRT/ODT fields through the owning Model lock.
+   */
+  [[nodiscard]] auto Method() const -> DrtMethod;
+  [[nodiscard]] auto EncodingSpace() const -> DrtColorSpace;
+  [[nodiscard]] auto EncodingEotf() const -> DrtEotf;
+  [[nodiscard]] auto LimitingSpace() const -> DrtColorSpace;
+  [[nodiscard]] auto PeakLuminance() const -> float;
+  [[nodiscard]] auto LookPreset() const -> std::string;
+  [[nodiscard]] auto TonescalePreset() const -> std::string;
+  [[nodiscard]] auto CreativeWhite() const -> std::string;
+  [[nodiscard]] auto CreativeWhiteLimit() const -> float;
+  [[nodiscard]] auto DisplayGreyLuminance() const -> float;
+  [[nodiscard]] auto HdrGreyBoost() const -> float;
+  [[nodiscard]] auto HdrPurity() const -> float;
+
+  /**
+   * @brief Apply validated DRT/ODT fields atomically and mark changed groups dirty.
+   */
+  void               ApplyUpdate(DrtParameterUpdate update);
+
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   void               LoadJson(const nlohmann::json& json) override;
 
@@ -160,8 +205,8 @@ class DrtNodeModel final : public INodeModel {
    * Instance ids are `drt.clarity`, `drt.sharpen`, `drt.halation`, and `drt.film_grain`
    * when @p id is `drt`.
    */
-  static auto MakeDefault(NodeId id) -> std::unique_ptr<DrtNodeModel>;
-  static auto FromJson(const nlohmann::json& json) -> std::unique_ptr<DrtNodeModel>;
+  static auto        MakeDefault(NodeId id) -> std::unique_ptr<DrtNodeModel>;
+  static auto        FromJson(const nlohmann::json& json) -> std::unique_ptr<DrtNodeModel>;
 
   [[nodiscard]] auto AdjustmentCount() const -> std::size_t { return adjustments_.size(); }
   [[nodiscard]] auto AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId&;
@@ -170,7 +215,8 @@ class DrtNodeModel final : public INodeModel {
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) const -> const IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel*;
-  [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const -> const IOperatorModel*;
+  [[nodiscard]] auto FindAdjustmentByType(const OperatorTypeId& type) const
+      -> const IOperatorModel*;
   [[nodiscard]] auto FindAdjustmentIdByType(const OperatorTypeId& type) const
       -> const AdjustmentInstanceId*;
 

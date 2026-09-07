@@ -15,6 +15,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -140,6 +141,21 @@ class IEditorHistoryPort {
   virtual auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,
                                       EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool = 0;
+
+  /**
+   * @brief Copy load-only panel values for the GUI.
+   *
+   * Default is an empty projection so fakes that do not own a document can skip
+   * this path. Production reads the owner-copied fields, not Model JSON.
+   */
+  virtual auto ReadPanelProjection(const EditorHistoryGuardHandle& /*guard*/,
+                                   EditorPanelProjection* projection, std::string* /*error*/)
+      -> bool {
+    if (projection != nullptr) {
+      *projection = {};
+    }
+    return true;
+  }
 
   /// Switch the checked-out Version after a successful save checkpoint. Rebuilds
   /// the live pipeline from root + first-parent chain and refreshes the

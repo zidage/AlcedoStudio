@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "app/editor_parameter_write.hpp"
 #include "edit/graph/graph_ids.hpp"
 
 /// Reusable adjustment patch/snapshot data for editor session and render intents.
@@ -105,21 +107,21 @@ struct EditorParameterTarget {
   }
 }
 
-/// One atomic adjustment change (field key + serialized params).
+/// One atomic adjustment change (field key + typed write, or snapshot JSON).
 struct EditorAdjustmentPatch {
   /// Stable field id, e.g. "exposure", "contrast", "lut".
   std::string field_key;
-  /// Serialized operator/panel parameters (JSON text).
-  std::string params_json;
+  /// Live field operation. Required for queue and owner apply.
+  std::optional<EditorParameterWrite> write;
   /// True when the input sequence has settled (quality ladder); false while dragging.
   bool settled = false;
-  /// Enabled state captured with the immutable adjustment value. Interactive callers that do not
-  /// provide a separate enabled flag keep the default and may encode it inside params_json.
+  /// Enabled state captured with the immutable adjustment value.
   bool enabled = true;
   /// Production write identity. Unspecified is filled at history; Apply still requires a complete target.
   EditorParameterTarget target{};
-
-  auto operator==(const EditorAdjustmentPatch& other) const -> bool = default;
+  /// CPU operator JSON for executor remirror, committed snapshots, and history restore.
+  /// Live queue entries must not use this as the write payload.
+  std::string params_json;
 };
 
 /// Full adjustment snapshot stamped onto a render intent.
@@ -127,12 +129,11 @@ struct EditorRenderAdjustmentSnapshot {
   std::uint64_t snapshot_generation = 0;
   /// Compact digest for cheap equality (optional; may equal params hash).
   std::string   fingerprint;
-  /// Full pipeline or panel parameter set for this render (JSON text).
+  /// Unused on the live write path. Checkpoint helpers may still store a stage document here.
   std::string   params_json;
   /// Ordered patches applied since the previous committed snapshot (may be empty).
   std::vector<EditorAdjustmentPatch> patches;
 
-  auto operator==(const EditorRenderAdjustmentSnapshot& other) const -> bool = default;
 };
 
 }  // namespace alcedo

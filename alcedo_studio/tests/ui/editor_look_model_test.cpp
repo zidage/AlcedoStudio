@@ -17,6 +17,7 @@
 #include <QVariantList>
 #include <algorithm>
 #include <memory>
+#include <variant>
 #include <vector>
 
 #include "edit/operators/color/HLS_op.hpp"
@@ -28,46 +29,10 @@
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls.hpp"
+#include "support/recording_adjustment_submitter.hpp"
 
 namespace alcedo::ui::test {
 namespace {
-
-class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
- public:
-  struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
-  };
-  std::vector<Call> calls;
-  bool              canEditState = true;
-
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (!canEditState) {
-      return false;
-    }
-    calls.push_back({fieldKey, paramsJson, settled});
-    return true;
-  }
-  auto canEdit() const -> bool override { return canEditState; }
-
-  auto settledCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return c.settled; }));
-  }
-  auto interactiveCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return !c.settled; }));
-  }
-  auto lastSettledParams() const -> QString {
-    for (auto it = calls.rbegin(); it != calls.rend(); ++it) {
-      if (it->settled) {
-        return it->params;
-      }
-    }
-    return {};
-  }
-};
 
 auto ParseObject(const QString& params) -> QJsonObject {
   return QJsonDocument::fromJson(params.toUtf8()).object();
@@ -112,11 +77,16 @@ TEST(EditorLookModelTest, ColorTempCctDragPromotesToCustomAndSettlesOnce) {
   EXPECT_GE(sub.interactiveCount(), 1);
   EXPECT_EQ(sub.settledCount(), 1);
 
-  const auto ct =
-      ParseObject(sub.lastSettledParams()).value(QStringLiteral("color_temp")).toObject();
-  EXPECT_EQ(ct.value(QStringLiteral("mode")).toString(), QStringLiteral("custom"));
-  EXPECT_NEAR(ct.value(QStringLiteral("custom_cct")).toDouble(), 6400.0, 1e-3);
-  EXPECT_NEAR(ct.value(QStringLiteral("as_shot_cct")).toDouble(), 5600.0, 1e-3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update =
+      std::get_if<alcedo::DevelopColorTemperatureUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->wb_mode.has_value());
+  EXPECT_EQ(*update->wb_mode, "custom");
+  ASSERT_TRUE(update->custom_cct.has_value());
+  EXPECT_NEAR(*update->custom_cct, 6400.0, 1e-3);
+  ASSERT_TRUE(update->as_shot_cct.has_value());
+  EXPECT_NEAR(*update->as_shot_cct, 5600.0, 1e-3);
 }
 
 TEST(EditorLookModelTest, ColorTempLoadFromOperatorParamsUsesGetParamsKeys) {
@@ -256,11 +226,11 @@ TEST(EditorLookModelTest, HlsDragSubmitsInteractiveThenOneSettled) {
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.calls.back().fieldKey, QStringLiteral("hls"));
 
-  const auto hls = ParseObject(sub.lastSettledParams()).value(QStringLiteral("HLS")).toObject();
-  const auto adj = hls.value(QStringLiteral("hls_adj")).toArray();
-  ASSERT_EQ(adj.size(), 3);
-  // UI 30 -> operator 30/1000
-  EXPECT_NEAR(adj.at(1).toDouble(), 30.0 / hls::kAdjUiToParamScale, 1e-6);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update = std::get_if<alcedo::HlsUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->hls_adj.has_value());
+  EXPECT_NEAR(update->hls_adj->l, 30.0f / hls::kAdjUiToParamScale, 1e-6);
 }
 
 // ── CDL trackball ───────────────────────────────────────────────────────────
@@ -298,13 +268,12 @@ TEST(EditorLookModelTest, CdlDiscDragInteractiveThenOneSettled) {
   EXPECT_NEAR(model.liftX(), 0.4, 1e-3);
   EXPECT_NEAR(model.liftY(), 0.2, 1e-3);
 
-  const auto lift = ParseObject(sub.lastSettledParams())
-                        .value(QStringLiteral("color_wheel"))
-                        .toObject()
-                        .value(QStringLiteral("lift"))
-                        .toObject();
-  const auto disc = lift.value(QStringLiteral("disc")).toObject();
-  EXPECT_NEAR(disc.value(QStringLiteral("x")).toDouble(), 0.4, 1e-3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update = std::get_if<alcedo::ColorWheelUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->lift.has_value());
+  ASSERT_TRUE(update->lift->disc.has_value());
+  EXPECT_NEAR(update->lift->disc->x, 0.4, 1e-3);
 }
 
 TEST(EditorLookModelTest, CdlGammaMasterUiIsInverted) {
@@ -356,8 +325,10 @@ TEST(EditorLookModelTest, LutSelectPathCommitsOcioLmtShape) {
 
   model.selectPath(QStringLiteral("D:/fake/look.cube"));
   EXPECT_EQ(sub.settledCount(), 1);
-  const auto root = ParseObject(sub.lastSettledParams());
-  EXPECT_EQ(root.value(QStringLiteral("ocio_lmt")).toString(), QStringLiteral("D:/fake/look.cube"));
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* update = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  EXPECT_EQ(update->cube_path, "D:/fake/look.cube");
 }
 
 TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {
@@ -523,7 +494,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
 
   // Get the submitted params and re-parse as an operator would
   ASSERT_FALSE(sub.calls.empty());
-  const auto settled = sub.lastSettledParams();
+  const auto settled = model.paramsJson();
   ASSERT_FALSE(settled.isEmpty());
 
   const auto json = nlohmann::json::parse(settled.toStdString());

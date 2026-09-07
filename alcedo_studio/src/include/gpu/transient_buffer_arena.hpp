@@ -228,6 +228,29 @@ class TransientBufferArena {
   }
 
   /**
+   * @brief Destroy the slab that contains @p device_pointer.
+   *
+   * GPU last-use of every allocation in that slab must already be complete.
+   * ExactRelease uses one Allocate per slab, so this returns that working set.
+   * SessionPacked may pack several allocations into one slab; releasing then
+   * frees all of them. No-op when @p device_pointer is null or unknown.
+   */
+  void ReleaseSlabContaining(void* device_pointer) noexcept {
+    if (device_pointer == nullptr) {
+      return;
+    }
+    const auto* pointer = static_cast<const char*>(device_pointer);
+    for (auto it = slabs_.begin(); it != slabs_.end(); ++it) {
+      auto* base = static_cast<char*>(it->slab.DevicePointer());
+      if (base == nullptr || pointer < base || pointer >= base + it->size) {
+        continue;
+      }
+      slabs_.erase(it);
+      return;
+    }
+  }
+
+  /**
    * @brief Free device slabs. Caller must GPU-synchronize if kernels still read them.
    *
    * Develop scratch is released after SensorDevelop, not kept for later frames.

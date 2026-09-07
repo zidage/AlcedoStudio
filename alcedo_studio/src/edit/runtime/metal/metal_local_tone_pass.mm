@@ -353,8 +353,12 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
   auto&      invalidation  = workspace.ResultInvalidation();
   const auto source_id     = LocalToneSourceId(grade_id);
   const auto result_id     = LocalToneResultId(grade_id);
-  auto*      cached_source = workspace.Values().Find(source_id);
-  auto*      cached_result = workspace.Values().Find(result_id);
+  const bool persist_llf   = workspace.PersistsResult(source_id);
+  auto*      cached_source = persist_llf ? workspace.Values().Find(source_id) : nullptr;
+  auto*      cached_result = persist_llf ? workspace.Values().Find(result_id) : nullptr;
+  if (!persist_llf) {
+    device.PassStats().result_policy_bypass += 2;
+  }
   const ImageExtent canonical_extent{static_cast<std::uint32_t>(canonical_dims.width),
                                      static_cast<std::uint32_t>(canonical_dims.height)};
   const auto source_needed = invalidation.MakeImageRepresentation(
@@ -522,7 +526,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
   ApplyAdjusted(device, input, output, source[0], result[0], width, height, layout.widths[0],
                 layout.heights[0], apply_uv);
 
-  if (build_canonical || reuse_source) {
+  if (persist_llf && (build_canonical || reuse_source)) {
     const auto bytes =
         static_cast<std::size_t>(layout.widths[0]) * layout.heights[0] * sizeof(float);
     auto& source_buffer = EnsureValueBuffer(workspace, LevelId(grade_id, "source", 0), bytes);
@@ -546,7 +550,7 @@ auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Textur
     }
     invalidation.MarkCompleted(result_id, result_needed);
     tone.reference_resource_id = source_buffer.ResourceId();
-  } else if (workspace.Values().Find(MetaId(grade_id)) != nullptr) {
+  } else if (persist_llf && workspace.Values().Find(MetaId(grade_id)) != nullptr) {
     WriteMeta(device, grade_id, CanonicalLlfMeta{});
     tone.reference_resource_id = 0;
   }

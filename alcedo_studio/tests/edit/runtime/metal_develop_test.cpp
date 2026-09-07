@@ -258,7 +258,6 @@ TEST_F(MetalDevelopFixture, MetalDevelopLinearizeMatchesCudaReferenceWithinToler
 
   MetalRenderDevice device;
   auto&             textures = device.Workspace().Textures();
-  textures.SetByteBudget(32ull * 24ull * 16ull);
   device.BeginRender();
   auto src = textures.Acquire({32, 24, TextureFormat::R16u});
   auto dst = textures.Acquire({32, 24, TextureFormat::R32f});
@@ -356,9 +355,6 @@ TEST_F(MetalDevelopFixture, MetalPlanExecutorDoesNotReserveDevelopTransientArena
   (void)device.Execute(plan, prepared, document);
   device.WaitIdle();
 
-  EXPECT_EQ(device.Workspace().DevelopTransientHighWater().ObservedCapacity(
-                plan.source, MetalBackend::kCapabilityVersion, RawDemosaicMethod::Legacy),
-            0U);
   EXPECT_EQ(device.Workspace().TransientBuffers().capacity_bytes(), 0U);
   EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchBufferCount(), 0U);
   EXPECT_EQ(device.Workspace().Device().RecordedWorkScratchTextureCount(), 0U);
@@ -501,7 +497,6 @@ TEST_F(MetalDevelopFixture, MetalGeometryUsesOneResampleForCropRotationViewportA
 
   const auto host_src = MakeSrcImage(64, 48);
   MetalRenderDevice device;
-  device.Workspace().Textures().SetByteBudget(64ull * 48ull * 16ull * 8ull);
   device.BeginRender();
   ExecuteMetalDevelop(device, plan, prepared, document);
   auto* sensor = device.Workspace().Images().Find(plan.sensor_linear_output);

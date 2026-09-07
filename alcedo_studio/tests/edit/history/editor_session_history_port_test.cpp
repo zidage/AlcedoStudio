@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <variant>
 
 #include "json.hpp"
 #include "app/adjustment_transfer_service.hpp"
@@ -34,6 +35,7 @@
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/document_transfer_test_support.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/editor_history_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
@@ -58,6 +60,8 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   return guard;
 }
 
+using alcedo::test::WithColorGradeTarget;
+
 auto ColorGradeTargetForField(const std::string& field, std::string node_id = "grade.primary")
     -> alcedo::EditorParameterTarget {
   alcedo::EditorParameterTarget target;
@@ -66,20 +70,6 @@ auto ColorGradeTargetForField(const std::string& field, std::string node_id = "g
   target.adjustment_instance_id  = alcedo::AdjustmentInstanceId{node_id + "." + field};
   target.field_key               = field;
   return target;
-}
-
-auto WithColorGradeTarget(alcedo::EditorAdjustmentPatch patch,
-                          std::string node_id = "grade.primary") -> alcedo::EditorAdjustmentPatch {
-  if (patch.field_key == "exposure") {
-    auto params = nlohmann::json::parse(patch.params_json);
-    if (params.contains("exposure")) {
-      params["exposure_ev"] = params.at("exposure");
-      params.erase("exposure");
-      patch.params_json = params.dump();
-    }
-  }
-  patch.target = ColorGradeTargetForField(patch.field_key, std::move(node_id));
-  return patch;
 }
 
 auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
@@ -282,6 +272,29 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   EXPECT_TRUE(guard_->working_head_commit_hash().has_value());
 }
 
+TEST_F(EditorSessionHistoryPortTest, LiveWriteProjectsTypedExposureWithoutReadingParamsJson) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.75})", false});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+
+  alcedo::EditorPanelProjection projection;
+  ASSERT_TRUE(history_.ReadPanelProjection(handle, &projection, &error)) << error;
+  const alcedo::EditorPanelFieldPresentation* exposure = nullptr;
+  for (const auto& field : projection.fields) {
+    if (field.field_key == "exposure") {
+      exposure = &field;
+      break;
+    }
+  }
+  ASSERT_NE(exposure, nullptr);
+  const auto* scalar = std::get_if<alcedo::EditorPanelScalarValue>(&exposure->value);
+  ASSERT_NE(scalar, nullptr);
+  EXPECT_FLOAT_EQ(scalar->value, 0.75f);
+  EXPECT_EQ(exposure->source.adjustment_instance_id.Value(), "grade.primary.exposure");
+}
+
 TEST_F(EditorSessionHistoryPortTest, BranchingVersionHistoryAllowsSwitchingWithoutMergeCommits) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
@@ -300,7 +313,7 @@ TEST_F(EditorSessionHistoryPortTest, BranchingVersionHistoryAllowsSwitchingWitho
   guard_->commit_graph_->SetActiveVersionId(branch_version);
 
   // Commit on branch version.
-  const auto preview2 = WithColorGradeTarget({"contrast", R"({"contrast":0.0})", true});
+  const auto preview2 = WithColorGradeTarget({"contrast", R"({"contrast":0.3})", false});
   const auto settled2 = WithColorGradeTarget({"contrast", R"({"contrast":0.3})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview2, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled2, &error)) << error;
@@ -558,6 +571,7 @@ TEST_F(EditorSessionHistoryPortTest,
     EXPECT_FALSE(patch.params_json.empty());
   }
   EXPECT_EQ(actual_fields, expected_fields);
+  EXPECT_TRUE(snapshot.params_json.empty());
 }
 
 TEST_F(EditorSessionHistoryPortTest,
@@ -1098,7 +1112,7 @@ TEST_F(EditorSessionHistoryPortTest, UnmappedHeadMovePreservesHeadPipelineSnapsh
   EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), before_pipeline);
   EditorRenderAdjustmentSnapshot after_snapshot;
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &after_snapshot, &error)) << error;
-  EXPECT_EQ(after_snapshot, before_snapshot);
+  EXPECT_TRUE(alcedo::test::SameSnapshotProjection(after_snapshot, before_snapshot));
   MiniGitJournal after_journal(journal_path_);
   ASSERT_TRUE(after_journal.Load(&error)) << error;
   EXPECT_EQ(after_journal.records().size(), records);

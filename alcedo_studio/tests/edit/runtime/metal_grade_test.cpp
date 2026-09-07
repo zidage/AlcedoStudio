@@ -346,6 +346,33 @@ TEST_F(MetalGradeFixture, MetalSingleSliderEditUploadsOnlyItsParameterRange) {
   EXPECT_NE(device_.Workspace().Device().GradeCommandTopologyHash(), 0U);
 }
 
+TEST_F(MetalGradeFixture, MetalGradeParameterBindDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderGrade();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
+TEST_F(MetalGradeFixture, MetalCameraColorPackedWriteDoesNotCopyFullDto) {
+  device_.BeginRender();
+  ExecuteMetalDevelop(device_, plan_, prepared_, document_);
+  ExecuteMetalGeometryResample(device_, plan_);
+  OperatorModelFullDtoCopyCount::Reset();
+  ExecuteMetalCameraColor(device_, plan_, document_);
+  device_.EndRender();
+  device_.WaitIdle();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
+TEST_F(MetalGradeFixture, MetalDrtPackedWriteDoesNotCopyFullDto) {
+  OperatorModelFullDtoCopyCount::Reset();
+  (void)RenderThroughDrtPost();
+  EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
 TEST_F(MetalGradeFixture, MetalExposureEditRunsOnlyPrimaryGradeAndDrt) {
   (void)device_.Execute(plan_, prepared_, document_);
   device_.WaitIdle();

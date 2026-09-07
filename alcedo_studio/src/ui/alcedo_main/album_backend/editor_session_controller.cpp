@@ -4,17 +4,16 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QSettings>
 #include <QThread>
 #include <QTimer>
 #include <QtGlobal>
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
+#include <exception>
 
+#include "app/editor_parameter_write.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
@@ -22,6 +21,7 @@
 #include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
+#include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -267,18 +267,26 @@ void EditorSessionController::OnBackendChanged() {
   SyncViewportIdentity();
   ApplyActionAvailability();
 
-  // Phase 6C-7: keep the cached snapshot map warm on every backend change, but
-  // only emit AdjustmentSnapshotChanged when not suppressed. Interactive
-  // submitPatch suppresses the emit so each pointer move does not re-enter
-  // EditorAdjustmentStack.loadFromSnapshot (QML signal storm → GUI stall when
-  // switching sliders rapidly while history/render also touch the pipeline).
-  const auto render_snapshot = session_backend_->adjustment_snapshot();
-  auto       panel_snapshot  = BuildSnapshotMap(render_snapshot);
-  if (panel_snapshot != adjustment_snapshot_) {
-    adjustment_snapshot_ = std::move(panel_snapshot);
-    if (!suppress_snapshot_publish_) {
-      emit AdjustmentSnapshotChanged();
-      SyncAlbumHdrFlagFromSnapshot();
+  // Interactive submit suppresses AdjustmentSnapshotChanged so pointer moves do
+  // not re-enter QML loadFromSnapshot. Typed panel values are copied at the
+  // owner boundary; stale session generations are dropped here.
+  const auto projection = session_backend_->panel_projection();
+  const auto epoch      = static_cast<std::uint64_t>(SessionEpoch());
+  if (alcedo::EditorPanelProjectionIsCurrent(projection, epoch)) {
+    QVariantMap panel_snapshot;
+    if (projection.session_generation != last_applied_panel_generation_) {
+      panel_snapshot = PanelProjectionToVariantMap(projection);
+    } else {
+      panel_snapshot = adjustment_snapshot_;
+      (void)ApplyPanelProjectionToSnapshotMap(projection, epoch, &panel_snapshot);
+    }
+    last_applied_panel_generation_ = projection.session_generation;
+    if (panel_snapshot != adjustment_snapshot_) {
+      adjustment_snapshot_ = std::move(panel_snapshot);
+      if (!suppress_snapshot_publish_) {
+        emit AdjustmentSnapshotChanged();
+        SyncAlbumHdrFlagFromSnapshot();
+      }
     }
   }
   SyncViewportDisplayConfig();
@@ -1173,22 +1181,15 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
   return false;
 }
 
-bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
+                                          bool settled) {
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!can_edit()) {
-    // Pointer release must still stop the vsync consume if edit was lost
-    // mid-drag (image switch / session teardown).
     if (settled && viewport) {
       viewport->endInteractivePresentLoop();
     }
     return false;
   }
-  // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
-  // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. Unsettled writes
-  // also arm a vsync-sampled consume so a Ready frame does not wait for the
-  // next pointer event or a missed requestUpdate. Enqueue does not apply live
-  // parameters; present wakeups stay presentation-only.
   if (viewport) {
     if (settled) {
       viewport->endInteractivePresentLoop();
@@ -1201,12 +1202,28 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
     return false;
   }
   alcedo::EditorAdjustmentPatch patch;
-  patch.field_key   = fieldKey.toStdString();
-  patch.params_json = paramsJson.toStdString();
-  patch.settled     = settled;
+  patch.field_key = fieldKey.toStdString();
+  patch.write     = std::move(write);
+  patch.settled   = settled;
   const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&
          result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  nlohmann::json parsed;
+  try {
+    parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                  : nlohmann::json::parse(paramsJson.toStdString());
+  } catch (const std::exception&) {
+    return false;
+  }
+  std::string error;
+  auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return submitWrite(std::move(fieldKey), std::move(*write), settled);
 }
 
 bool EditorSessionController::enqueueNodeSwitchBoundary() {
@@ -1369,25 +1386,6 @@ auto EditorSessionController::PasteAdjustmentPackage(
     -> alcedo::EditorSessionResult {
   if (!session_backend_) return {};
   return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString());
-}
-
-auto EditorSessionController::BuildSnapshotMap(
-    const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap {
-  QVariantMap map;
-  for (const auto& patch : snapshot.patches) {
-    QJsonParseError error;
-    const auto      json_bytes = QByteArray::fromStdString(patch.params_json);
-    auto            doc        = QJsonDocument::fromJson(json_bytes, &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
-      continue;
-    }
-    const auto obj = doc.object();
-    if (obj.isEmpty()) {
-      continue;
-    }
-    map.insert(QString::fromStdString(patch.field_key), obj.toVariantMap());
-  }
-  return map;
 }
 
 }  // namespace alcedo::ui

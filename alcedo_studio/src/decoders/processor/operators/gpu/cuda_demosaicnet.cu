@@ -142,6 +142,16 @@ void NeuralDemosaicWorkspace::BindExternal(float* input, const std::size_t input
   ++allocation_generation_;
 }
 
+void NeuralDemosaicWorkspace::ReleaseBorrowed() noexcept {
+  if (!borrowed_) {
+    return;
+  }
+  input_buffer_ = {};
+  activation_workspace_.ReleaseDeviceMemory();
+  rgb_buffer_ = cv::cuda::GpuMat();
+  borrowed_   = false;
+}
+
 void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, const int height,
                                              const int width, const std::size_t input_numel) {
   const std::size_t activation_bytes =
