@@ -426,8 +426,8 @@ Brush 的唯一恢复依据。NM3/NM4 旧测试通过不等于参数化格式通
 | Commit hash input `kCommitFormatVersion` | `4` | `3` |
 | Chain-fold `kChainFormatVersion` | `4` | `3` |
 | Typed batch `kPipelineEditBatchFormatVersion` | `3` | `2` |
-| Root envelope `kRootStateFormatVersion` | `4` | `3` |
-| Checkpoint envelope `kCheckpointStateFormatVersion` | `4` | `3` |
+| Root serialized pipeline state `kRootStateFormatVersion` | `4` | `3` |
+| Checkpoint serialized pipeline state `kCheckpointStateFormatVersion` | `4` | `3` |
 | Mini-Git WAL `kMiniGitJournalRecordFormatVersion` | `5` | `4` |
 | Transfer package `kAdjustmentTransferSchema` | `alcedo.adjustment_transfer.v4` | `alcedo.adjustment_transfer.v3` |
 | Brush `source_format_version` | `1` | 不存在；当前 JSON 无此键 |

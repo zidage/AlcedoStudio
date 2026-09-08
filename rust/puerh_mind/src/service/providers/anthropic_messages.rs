@@ -1373,7 +1373,7 @@ mod tests {
 
     /// Build an Anthropic Messages-shaped success body. `input_json` is the
     /// model's tool arguments, placed in `content[0].tool_use.input` as a parsed
-    /// JSON object — the exact envelope the driver-owned parser walks. Mirrors the
+    /// JSON object — the exact JSON object the driver-owned parser walks. Mirrors the
     /// real Anthropic response shape (where `input` is an object, not a string).
     fn ok_messages_body(tool_name: &str, input_json: &str) -> serde_json::Value {
         let input: Value = serde_json::from_str(input_json).expect("input json parses");
@@ -1496,7 +1496,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extracts_tool_use_input_from_messages_envelope() {
+    async fn extracts_tool_use_input_from_messages_tool_use_input() {
         let server = MockServer::start().await;
         // The content array may hold a text block before the tool_use block; the
         // walker must skip the text and find the right tool_use input.

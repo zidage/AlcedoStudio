@@ -203,7 +203,7 @@ void ExpectRoundTrip(const PipelineEditBatch& batch) {
 
 }  // namespace
 
-TEST(PipelineEditChange, EncodeDecodeAndValidateWithoutBatchEnvelope) {
+TEST(PipelineEditChange, EncodeDecodeAndValidateWithoutBatchMake) {
   const auto original = MakeParameterChange(0.25, 0.75);
   ValidatePipelineEditChange(original);
   const auto encoded = EncodePipelineEditChange(original);

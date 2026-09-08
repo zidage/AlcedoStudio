@@ -2101,7 +2101,7 @@ old project version
   -> ProjectPackageBackend rejects before history, checkpoint, or WAL load
   -> original version error remains visible
 
-supported project envelope + ordinary payload / merge payload / non-edit kind / second parent
+supported project file version + ordinary payload / merge payload / non-edit kind / second parent
   -> commit codec, storage mapper, or WAL validation rejects before replay
   -> no document mutation, graph insertion, head move, checkpoint write, or fallback
 ```
@@ -2174,7 +2174,7 @@ old project version (e.g. 0.3.0)
   -> ProjectPackageBackend rejects before history, checkpoint, or WAL load
   -> "Incompatible project format" remains visible; DuckDB / WAL / checkpoint bytes unread
 
-current-format envelope + ordinary payload / merge payload / non-edit kind / second parent
+current-format commit JSON + ordinary payload / merge payload / non-edit kind / second parent
   -> EditCommit::FromJSON, CommitGraphStore::LoadGraph, or MiniGitJournal::Load
   -> reject before graph insertion, document replay, head move, or checkpoint write
   -> WAL isolate on recovery load failure; DuckDB commit count unchanged

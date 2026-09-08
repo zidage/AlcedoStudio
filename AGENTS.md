@@ -121,6 +121,7 @@ surrounding prose. These rules may quote prohibited terms to define or explain t
 | `smoke` | Test names, targets, files, and documentation | State the behavior and expected result. A name that only means "something ran" is insufficient. |
 | `contract`, `contracts` | Everything under `docs/roadmap/`, including prose, headings, link labels, and filenames | Name the exact artifact or guarantee: interface, API, schema, protocol, invariant, behavior specification, acceptance criterion, compatibility requirement, or performance target. |
 | `seed` used as a verb for a non-random operation | Project-authored code identifiers, tests, and comments | Use populate, insert, initialize, restore, copy, or apply. Conventional inputs to random-number generators, cryptographic primitives, and deterministic fuzz runs remain allowed. |
+| `envelope`, `envelop`, and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the object or operation: `PipelineEditBatch::Make`/`Validate`/`CanonicalJSON`/`FromJSON`, `EncodePipelineRootState`/`DecodePipelineRootState`, `EncodePipelineDocumentCheckpoint`/`DecodePipelineDocumentCheckpoint`, queued `EditorSessionCommand`, worker `EditorSessionCompletion`, peak or sustained FP32/Tensor Core throughput, or the provider JSON fields actually parsed. |
 
 ### Test and reference-data names
 

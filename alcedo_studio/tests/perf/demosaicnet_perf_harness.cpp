@@ -503,9 +503,9 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   const auto work =
       perf::EstimateFullFrameWork(topology, cover_w, cover_h, kProductOwned, kProductOwned,
                                   result.product_plan.tile_count);
-  const auto envelope = perf::EstimateDeviceComputeEnvelope(device);
+  const auto limits = perf::EstimateDeviceComputeLimits(device);
   result.roofline =
-      perf::BuildRooflineReport(work, envelope, result.neural_stats.median_ms,
+      perf::BuildRooflineReport(work, limits, result.neural_stats.median_ms,
                                 result.legacy_stats.median_ms, /*stretch_target_ms=*/100.0);
   result.has_roofline = true;
   return result;

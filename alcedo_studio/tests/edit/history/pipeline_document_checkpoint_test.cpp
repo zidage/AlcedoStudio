@@ -128,7 +128,7 @@ TEST(PipelineDocumentCheckpointFormat, OldDocumentFormatIsRejectedWithoutConvers
   EXPECT_THROW((void)PipelineDocument::FromJson(json), std::runtime_error);
 }
 
-TEST(PipelineDocumentCheckpointFormat, OldRootAndCheckpointEnvelopesAreRejected) {
+TEST(PipelineDocumentCheckpointFormat, OldRootAndCheckpointFormatVersionsAreRejected) {
   const auto document = CreateDefaultPipelineDocument();
   auto       root     = EncodePipelineRootState(9, document, std::nullopt);
   root["root_state_format_version"] = 1;
@@ -209,7 +209,7 @@ TEST(PipelineDocumentCheckpointFormat, ImageRootStoresCompleteDefaultDocumentAnd
                    0.5);
 }
 
-TEST(PipelineDocumentCheckpointFormat, ExtraEnvelopeKeysAreRejected) {
+TEST(PipelineDocumentCheckpointFormat, ExtraRootStateKeysAreRejected) {
   const auto document = CreateDefaultPipelineDocument();
   auto       encoded  = EncodePipelineRootState(3, document, std::nullopt);
   encoded["extra"]    = true;

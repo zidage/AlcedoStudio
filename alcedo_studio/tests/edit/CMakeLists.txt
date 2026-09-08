@@ -197,7 +197,7 @@ gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
 alcedo_register_test_target(CommitGraphTest edit)
 
-# Document root/checkpoint envelopes, format table, and open-boundary rejection.
+# Document root/checkpoint serialized pipeline state, format table, and open-boundary rejection.
 add_executable(PipelineDocumentCheckpointTest
   ${ALCEDO_TEST_ROOT}/edit/history/pipeline_document_checkpoint_test.cpp)
 target_include_directories(PipelineDocumentCheckpointTest

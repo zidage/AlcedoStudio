@@ -25,8 +25,8 @@ namespace alcedo {
  * | Commit hash input | @ref kCommitFormatVersion | 4 |
  * | Chain-fold hash input | @ref kChainFormatVersion | 4 |
  * | Typed batch payload | @ref kPipelineEditBatchFormatVersion | 3 |
- * | Immutable root envelope | @ref kRootStateFormatVersion | 4 |
- * | Checkpoint envelope | @ref kCheckpointStateFormatVersion | 4 |
+ * | Immutable root serialized pipeline state | @ref kRootStateFormatVersion | 4 |
+ * | Checkpoint serialized pipeline state | @ref kCheckpointStateFormatVersion | 4 |
  * | Mini-Git WAL record | @ref kMiniGitJournalRecordFormatVersion | 5 |
  * | Transfer package schema | @ref kAdjustmentTransferSchema | alcedo.adjustment_transfer.v4 |
  */
@@ -55,10 +55,10 @@ inline constexpr std::uint32_t kChainFormatVersion = 4;
 /// Typed batch payload schema stored inside a commit. Independent of @ref kCommitFormatVersion.
 inline constexpr std::uint32_t kPipelineEditBatchFormatVersion = 3;
 
-/// Immutable root envelope stored in `PipelineRoot.serialized_pipeline_state`.
+/// Immutable root serialized pipeline state stored in `PipelineRoot.serialized_pipeline_state`.
 inline constexpr std::uint32_t kRootStateFormatVersion = 4;
 
-/// Checkpoint envelope stored in `ImageEditState.serialized_pipeline_state`.
+/// Checkpoint serialized pipeline state stored in `ImageEditState.serialized_pipeline_state`.
 inline constexpr std::uint32_t kCheckpointStateFormatVersion = 4;
 
 /// Mini-Git WAL record JSON `format_version`.
