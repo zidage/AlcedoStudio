@@ -14,8 +14,10 @@
 #include <string_view>
 #include <vector>
 
+#include "edit/geometry/types.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/i_node_model.hpp"
+#include "edit/mask/brush_mask_commands.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
@@ -158,6 +160,55 @@ class ColorGradeNodeModel final : public INodeModel {
    */
   void MoveMaskForDisplay(const MaskId& mask_id, std::size_t index);
 
+  /**
+   * @brief Append one canonical stroke to an existing Brush Mask.
+   *
+   * @param command Exact NodeId, MaskId, StrokeId, sample body, and observed
+   *        Mask content revision. The sample body is shared, not copied.
+   * @throws std::runtime_error when the target is missing or not a Brush, the
+   *         revision does not match, or the stroke is invalid. The Mask list
+   *         is left unchanged. Runs on the document-owning thread.
+   */
+  void AppendBrushStroke(AppendBrushStrokeCommand command);
+  /**
+   * @brief Remove one stroke by StrokeId. Remaining sample bodies are not copied.
+   *
+   * @throws std::runtime_error when the target, revision, or StrokeId fail.
+   *         The Mask list is left unchanged.
+   */
+  void RemoveBrushStroke(const RemoveBrushStrokeCommand& command);
+  /**
+   * @brief Insert a stroke at @p command.index. Values past the end append.
+   *
+   * @throws std::runtime_error when the target, revision, or stroke fail.
+   *         The Mask list is left unchanged.
+   */
+  void InsertBrushStroke(InsertBrushStrokeCommand command);
+  /**
+   * @brief Set Brush placement_translation to @p command.after.
+   *
+   * @p command.before must equal the current translation. Canonical samples are
+   * not copied or rewritten. Equal before/after is a no-op and does not bump
+   * the Mask content revision.
+   *
+   * @throws std::runtime_error when the target, revision, or before-value fail.
+   *         The Mask list is left unchanged.
+   */
+  void SetBrushTranslation(const SetBrushTranslationCommand& command);
+
+  /**
+   * @brief Ordered strokes of a Brush Mask. Load-only; does not copy sample bodies.
+   *
+   * @throws std::runtime_error when @p mask_id is missing or the Mask is not a Brush.
+   */
+  [[nodiscard]] auto BrushStrokes(const MaskId& mask_id) const -> std::span<const BrushStroke>;
+  /**
+   * @brief Current placement_translation of a Brush Mask. Load-only.
+   *
+   * @throws std::runtime_error when @p mask_id is missing or the Mask is not a Brush.
+   */
+  [[nodiscard]] auto BrushPlacementTranslation(const MaskId& mask_id) const -> Vector2;
+
   [[nodiscard]] auto MaskCount() const -> std::size_t { return masks_.size(); }
   [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return masks_; }
   [[nodiscard]] auto MaskAt(std::size_t index) -> MaskModel&;
@@ -167,8 +218,9 @@ class ColorGradeNodeModel final : public INodeModel {
 
  private:
   void TouchMask(const MaskId& mask_id);
+  auto RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
+                        std::uint64_t expected_revision) -> MaskModel&;
 
- private:
   NodeId id_;
   std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;

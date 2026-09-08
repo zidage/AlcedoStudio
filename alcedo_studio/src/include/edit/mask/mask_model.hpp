@@ -12,6 +12,9 @@
 #include <variant>
 #include <vector>
 
+#include "edit/geometry/types.hpp"
+#include "edit/mask/brush_raster_encoding.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "json.hpp"
@@ -26,17 +29,33 @@ enum class MaskSourceKind : std::uint8_t {
 };
 
 /**
- * @brief Settled Brush coverage. A missing asset key is valid and yields zero coverage.
+ * @brief Brush coverage source owned by a Color Grade Mask.
  *
- * @p descriptor must satisfy the raster-axis rule when @p asset_key is present.
+ * Canonical persistent data is ordered immutable strokes, algorithm versions, and
+ * @p placement_translation. Samples live in local reference pixels; translation does
+ * not rewrite them. @p asset_key remains only for already-stored raster documents and
+ * current native evaluation until the NM7.3 format gate and later replay replace it.
+ * A missing asset key with empty strokes yields zero coverage.
  */
 struct BrushMaskSource {
+  std::uint32_t               source_format_version    = kBrushSourceFormatVersion;
+  std::uint32_t               raster_algorithm_version = kBrushRasterAlgorithmVersion;
+  Vector2                     placement_translation{};
+  std::vector<BrushStroke>    strokes;
+  float                       feather_radius = 0.0f;
   std::optional<MaskAssetKey> asset_key;
   MaskAssetDescriptor         descriptor{};
-  float                       feather_radius = 0.0f;
 
   friend auto operator==(const BrushMaskSource&, const BrushMaskSource&) -> bool = default;
 };
+
+/**
+ * @brief True when @p brush stores stroke bodies or a non-zero placement.
+ *
+ * Used to choose parameterized JSON. Raster-only documents without strokes keep
+ * the published asset_key encoding until NM7.3 rejects that format.
+ */
+[[nodiscard]] auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool;
 
 /** @brief Radial ellipse in normalized reference space. */
 struct RadialMaskSource {

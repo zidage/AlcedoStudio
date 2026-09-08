@@ -1,4 +1,4 @@
-# Node-aware Pipeline Editing and Mask Authoring Master Plan
+# Node-aware Pipeline Editing and Mask Creation Master Plan
 
 Date: 2026-08-29
 
@@ -19,6 +19,18 @@ disk cache service 拥有写回/失效机制；不在 R 中实施，也不作为
 2026-09-02 UI revision: NM4 is complete. The approved node-editor UI, VI mapping,
 QuickQanava boundary, and official documentation sources for NM5-NM8 are fixed before NM5 starts.
 See the [NM5 execution plan](node_mask_editor/phase_nm5_nodes_panel_plan.md) for its sub-phases.
+
+2026-09-08 NM7 revised user direction: the
+[NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) now has fourteen
+sub-phases and a companion [algorithm/storage design](node_mask_editor/mask_command_replay_and_project_cache_plan.md).
+Brush paths are parameterized; NM4 records reversible stroke/placement commands. R8 is one
+current Grade Mix cache slot, never a per-stroke Undo asset. Project settings own its root and
+cleanup policy. Moving existing Brush/Radial/Gradient masks updates actual Interactive pixels;
+QSG displays controls without affected-area highlighting. Center-out Radial creation, adjustable
+Brush size/strength with paint/erase, and the temporary Masks body/six tabs remain approved.
+This supersedes the earlier immutable-raster-history requirement in Sections 8–12 and NM7.
+NM3/NM4 completion records remain historical evidence; their source/history/cache interfaces
+must be extended inside NM7 before exposing its UI. NM7 remains planned.
 
 2026-09-05 NM6 design approval: NM5 is complete. The
 [NM6 execution plan](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) now defines
@@ -169,13 +181,15 @@ NM4 才完成 history 对新图的持久化和重放，不能为填阶段空缺�
 现有 adjustment transfer merge 也以 stage/operator 字段冲突为核心。两个独立图之间没有
 足够自然、稳定的自动合并定义，因此本方案删除新的管线 merge 产品操作，只保留 Paste。
 
-### 2.7 MaskStore 写入语义不适合直接 Undo raster stroke
+### 2.7 Brush 持久源必须与 R8 缓存分离
 
-现有 `MaskStore::Save()` 接受调用者提供的 key，并原子替换同名文件。如果 history 只保存
-这个 key，后续 stroke 覆盖同一文件后，Undo 无法恢复旧像素。
+NM3/NM4 已实现不可变、内容寻址的 Mask asset 及 key replacement history。这解决了同名文件
+覆盖破坏 Undo 的问题，但每 stroke 持有完整 R8 会使存储随历史快速增长。2026-09-08 用户明确
+更改方向：持久保存参数化 Brush 路径及可逆命令，R8 只缓存当前 Grade Mix 结果。
 
-Raster mask 必须变为不可变、按内容寻址的资源：每次 settled stroke 产生一个新
-`MaskAssetKey`，历史只在新旧 key 之间切换。
+擦除、max/min 和量化不可直接从像素求逆。Undo 在模型层恢复操作，再按原顺序重放影响区域；
+不产生每步栅格或 tile history checkpoint。项目级路径/清理设置只能删除可重建缓存，不能把
+没有参数源的历史原始 asset 当成缓存删除。算法和格式前置条件由 NM7 详细方案负责。
 
 ### 2.8 Viewer 已有正确的扩展位置
 
@@ -187,7 +201,7 @@ EditorInteractionController    图像空间与输入状态
 EditorOverlayItem              retained QSG 辅助几何
 ```
 
-蒙版 authoring 应继续扩展这个结构，而不是在 QML 中创建第二套坐标系统或把辅助层烘焙到
+蒙版 creation 应继续扩展这个结构，而不是在 QML 中创建第二套坐标系统或把辅助层烘焙到
 最终照片帧。
 
 ---
@@ -277,7 +291,7 @@ Application layer
   EditorNodeController
   EditorAdjustmentContext
   EditorPipelineCommandService
-  EditorMaskAuthoringController
+  EditorMaskCreationController
   EditorHistory projection
           ↓ typed mutations
 Edit model
@@ -291,8 +305,8 @@ Runtime
   GraphCompiler
   ExecutionPlan
   CUDA / OpenCL / Metal workspaces
-          ↓ assets
-MaskStore
+          ↓ current derived coverage
+ProjectMaskCacheService (one current R8 slot per image / Grade)
 ```
 
 QuickQanava 处于 QML 和 app projection 之间。它负责节点图的视觉交互，不拥有
@@ -466,8 +480,11 @@ using MaskSource = std::variant<BrushMaskSource,
                                 LinearGradientMaskSource>;
 ```
 
-Brush 的长期结果是不可变 R8 asset；当前输入序列还可以持有临时 stroke 和 dirty rectangle。
+Brush 长期保存有序参数化 stroke：稳定 StrokeId、paint/erase、规范采样点、radius/strength/
+hardness、算法版本及 Brush placement。多次 stroke 累积到同一个 Brush Mask，不逐笔创建新 Mask。
+整张 Brush 移动只修改 placement；Undo/Redo 恢复命令/参数后重算，不保留每笔 R8 revision。
 Radial 与 Linear Gradient 保存解析参数，在 ReferenceSpace 中求值。
+每个 Grade 用于 Mix 的最终 R8 是所有启用 Mask 合成后的唯一当前缓存，可从这些参数重建。
 
 所有 source 使用稳定的归一化图像空间或现有 ReferenceSpace 约定。viewer zoom、pan、DPR、
 动态渲染分辨率和 ROI 不得改变长期参数含义。
@@ -533,38 +550,41 @@ output = input + node_coverage × (adjusted - input)
 
 ---
 
-## 9. MaskStore 与 raster Undo
+## 9. 参数化蒙版、可逆命令与项目 R8 缓存
 
-Mask asset 必须不可变并按内容寻址：
+2026-09-08 修订取代“每 stroke 保存新完整 R8 asset”的原方案。
+完整算法见 [NM7 参数重放与项目缓存](node_mask_editor/mask_command_replay_and_project_cache_plan.md)。
 
 ```text
-MaskStore::Put(descriptor, pixels)
-  -> 计算内容 key
-  -> 已存在则验证并复用
-  -> 不存在则写完整临时文件、flush、原子发布
-  -> 返回 MaskAssetKey
+Brush canonical samples / analytic fields / placement
+  -> typed reversible command in NM4 history
+  -> ordered regional replay + native feather / Union
+  -> one current Grade coverage R8
+  -> native Mix -> Interactive / Quality photograph
 ```
 
-不得用同一个 key 覆盖不同像素。一次 settled brush stroke：
+### 9.1 可逆对象是命令
 
-1. 输入序列开始时记录旧 `MaskAssetKey`；
-2. pointer move 使用临时 raster buffer 和 dirty rectangle 更新实际预览；
-3. pointer release 生成完整新 asset；
-4. `Put()` 返回新 key；
-5. history 记录 `old_key -> new_key`；
-6. Undo/Redo 只替换引用；
-7. 请求 Quality render。
+追加笔画的 inverse 是移除该 StrokeId；删除笔画的 inverse 恢复原顺序与 samples；移动恢复
+before translation/center/origin。擦除或 Union 的 Undo 通过重新求值恢复被遮盖的早期贡献，
+不能从最终 R8 相减。空间索引只存 ID/span/bounds，不缓存历史像素。Feather 的完整邻域依赖
+仍必须求值，不能以局部 preview 或近似 blur 替代。
 
-Mask 资源回收必须按可达性进行，至少扫描：
+### 9.2 当前缓存而非历史文件
 
-- 每个 image root；
-- 所有 Version head 可达的 commit；
-- 当前 working state；
-- 未 materialize 的 recovery records；
-- 正在进行的 mask authoring session。
+每个 `(ProjectUUID, ImageId, NodeId)` 一个稳定的已发布文件槽。内部 fingerprint、算法版本、
+geometry 与 checksum 验证当前内容；文件名不按 stroke/commit/Version/hash 扩展。
+更新是合并后的原子替换，临时文件和 reader/writer lease 有明确释放，不保留历史栅格。
+参数提交不等待 R8 写回；删光新缓存后，重开、Undo/Redo、Version、Paste 都必须正确。
+QualityBase 继续遵守 NM6 在 RAW Develop 之后的持久结果缓存旁路规则。
 
-不能根据 host/GPU LRU 删除磁盘用户数据。资源回收必须是独立、可审计的 clean-exit 或维护
-操作。
+### 9.3 逐项目设置与清理
+
+`ProjectService` 拥有用户选择的 cache root、Keep/DeleteOnProjectClose 策略及管理入口。
+设置页支持按项目查看字节/文件数、Clear、改路径和项目删除时的缓存保留选择。
+新 cache 使用专有 project UUID namespace；项目 A 清理不影响 B、RAW、stroke 参数或 history。
+停止旧写入者并递增 generation 后再清理；旧任务不得复活已删除文件。路径不可用报告原错误，
+不切换全局 temp。当前旧 raster-only asset 没有参数可重建，不得通过新 cache 清理入口删除。
 
 ---
 
@@ -587,28 +607,26 @@ Mask 资源回收必须按可达性进行，至少扫描：
 蒙版编辑辅助层：
 
 ```text
-Brush cursor / path / radius / feather
-Radial center / radii / rotation / feather / handles
-Linear Gradient line / direction / transition / handles
+Brush cursor / Move handle / temporary initial-creation guides
+Radial center / radii / rotation / feather controls
+Linear Gradient origin / direction / transition controls
   -> EditorOverlayItem retained QSG nodes
 ```
 
 这里的 overlay 特指 viewer 上方的 QSG mask editing overlay；实际调色结果仍然是
 `EditorViewportItem` 显示的管线渲染帧。
 
-### 10.2 简单 source 直接由 QSG 绘制
+### 10.2 QSG 只绘制编辑控件
 
-Brush、Radial 和 Linear Gradient 的辅助范围都可以由 QSG 直接绘制：
+已有 Brush/Radial/Linear Gradient 移动或参数编辑时，QSG 只显示 handles、必要方向线和操作
+连线，不显示受影响区域填充、高亮、heatmap 或已完成 Brush 路径。控件随当前输入定位；
+实际影响通过同一 pipeline 的 Interactive 照片结果实时呈现，不等 release 才更新。
 
-- Brush cursor 和已经采样的 path/dabs 使用 retained geometry；
-- Brush radius 和 feather 使用与实际 mask 相同的半径、硬度和 feather 参数；
-- Radial 使用同一 center、major/minor radius、rotation 和 feather 公式；
-- Linear Gradient 使用同一方向、起止位置、transition 和 feather 公式；
-- 控制点和边界使用已有 overlay 视觉 token；
-- overlay 更新不得等待 pipeline render 完成。
+初次绘制暂定允许随输入变化的 cursor/轮廓/路径创建引导；该细节的澄清记录在 NM7 决策表。
+不以整片蒙版高亮代替照片结果。QSG 与 evaluator 使用同一 ReferenceSpace 映射和参数；
+创建引导若消费笔刷 samples，必须来自同一规范样本序列，不能另行采样原始事件。
 
-QSG 和实际 Mask evaluator 必须共享参数定义、坐标映射和数学函数说明。Brush QSG 与 raster
-生成器消费同一份归一化 `BrushStroke` samples，不能分别从原始 pointer event 推导两条 path。
+---
 
 ### 10.3 内容相关 coverage 留给未来请求
 
@@ -622,21 +640,22 @@ QSG 和实际 Mask evaluator 必须共享参数定义、坐标映射和数学函
 
 | 操作 | Mask editing overlay | 实际管线预览 |
 | --- | ---: | ---: |
-| 选中 Mask | 显示 | 不必立即渲染 |
-| 绘制 Brush | 显示 | Interactive |
-| 修改 Brush radius/feather | 显示 | Interactive |
-| 移动/缩放/旋转 Radial | 显示 | Interactive |
-| 修改 Radial feather | 显示 | Interactive |
-| 修改 Linear Gradient | 显示 | Interactive |
-| 修改 Mask opacity | 显示 | Interactive |
+| 选中已有 Mask | 仅控件 | 不必立即渲染 |
+| 初次绘制 Brush | 控件与暂时创建引导，无区域填充 | Interactive |
+| 修改已有 Brush placement/source feather | 仅控件，无区域高亮 | Interactive |
+| 修改未来 Brush size/strength | 仅工具控件 | 不改变已有像素；后续 samples 使用新值 |
+| 移动/缩放/旋转 Radial | 仅控件，无区域高亮 | Interactive |
+| 修改 Radial feather | 仅控件 | Interactive |
+| 修改 Linear Gradient | 仅控件，无区域高亮 | Interactive |
+| 修改 Mask opacity | 仅控件 | Interactive |
 | 未来修改 Color/Luminance Range | 显示内容相关 coverage | Interactive |
 | 修改 Exposure/Curve/LUT 等调色参数 | 隐藏 | Interactive |
-| pointer release / settled edit | 根据当前 authoring mode 显示 | Quality |
+| pointer release / settled edit | 根据当前 creation mode 显示 | Quality |
 | 删除/重新连接节点 | 隐藏 | Quality |
 | Escape 取消输入序列 | 恢复输入前状态 | 不生成 history commit |
 
 开始调色参数输入时隐藏 overlay，但保留 selected Mask 身份。输入结束后不自动重新显示；用户
-重新进入 Mask 工具或 viewer authoring mode 时再显示，避免遮挡调色判断。
+重新进入 Mask 工具或 viewer creation mode 时再显示，避免遮挡调色判断。
 
 ---
 
@@ -683,7 +702,9 @@ Mask mutation
   AddMask
   RemoveMask
   ReplaceMaskSourceParams
-  ReplaceMaskAsset
+  AppendBrushStroke
+  RemoveBrushStroke / InsertBrushStroke
+  SetBrushTranslation
 ```
 
 Mask 列表 UI 重排和 QuickQanava layout 不属于照片 mutation。
@@ -692,7 +713,7 @@ Mask 列表 UI 重排和 QuickQanava layout 不属于照片 mutation。
 
 原子性表示外部看不到半次修改，输入或结构失败能够恢复；不要求整图复制或多对象发布协议。
 
-1. 解析输入，通过 Model 规范化值，检查目标、参数所有权、连接与 asset 引用；
+1. 解析输入，通过 Model 规范化值，检查目标、参数所有权、连接与 stroke 身份/参数引用；
 2. 预先准备必要的局部参数、节点或资源，保留受影响的 before 数据；
 3. 在统一的 live pipeline 访问互斥范围内原地应用领域函数；
 4. 结构变化验证 graph/Mask 不变量，失败只恢复受影响对象；普通参数修改不做整图拓扑验证；
@@ -728,7 +749,7 @@ PastedPipelineDocument
 | Mask transform/feather/opacity provisional | Interactive |
 | Mask transform/feather/opacity settled | Quality |
 | Brush stroke provisional dirty region | Interactive |
-| Brush stroke settled asset | Quality |
+| Settled Brush command / Mask placement | Quality |
 | 添加/删除 Mask | Quality |
 | 添加/删除/重新连接 Color Grade | Quality |
 | Undo/Redo | Quality |
@@ -737,7 +758,7 @@ PastedPipelineDocument
 | node selection / rename | 不渲染；rename 只进 history 与否由 13.4 决定 |
 | graph node layout / pan / zoom | 不渲染 |
 
-结构变化使 static plan key 变化并重新编译。纯参数值、简单 mask 几何参数和 raster asset key
+结构变化使 static plan key 变化并重新编译。纯参数值、简单 mask 几何参数和 Brush stroke/placement
 变化只更新参数/content key，不应误触发与拓扑无关的 compiler 工作。
 
 ---
@@ -765,7 +786,7 @@ commit hash 对 canonical typed payload 计算。历史回放不能重新推断�
 - Color Grade enabled、mix 和参数修改；
 - Mask 添加、删除；
 - Mask source 参数修改；
-- settled Brush stroke 形成的新 asset key；
+- settled Brush stroke 的规范参数命令，以及 placement 的 before/after 字段；
 - Mask enabled、opacity、invert、feather 等长期参数；
 - 未来 Color Range 和 Luminance Range 修改；
 - 影响导出结果的 Document/Develop/DRT/Post 参数。
@@ -854,7 +875,7 @@ Paste 是“把一份可转移 PipelineDocument 写成目标图片的新 Version
 2. 保留目标 Develop endpoint 及其 RAW metadata/camera profile/lens identity；
 3. 从 transfer package 导入 Color Grade 主链、参数、Mask 和 DRT/Post 可转移参数；
 4. 按目标图片重新映射 NodeId、AdjustmentInstanceId 和 MaskId；
-5. 复制或复用内容寻址 MaskAsset；
+5. 转移参数化 stroke/source，重映射 StrokeId，不复制源项目 R8 缓存或绝对缓存路径；
 6. 验证目标 image backbone 和参数所有权；
 7. 创建一个新的 named Version；
 8. 将该 Version 设为 active；
@@ -864,7 +885,7 @@ Paste 是“把一份可转移 PipelineDocument 写成目标图片的新 Version
 Document geometry 默认不随 Paste 转移，避免把源图片比例和 crop 直接套到目标图片；如果产品
 以后需要“同时粘贴 Geometry”，应作为明确选项和独立 typed mutation 加入，不应隐式发生。
 
-Paste 失败时不得创建空 Version、部分 Mask asset 引用或移动 active Version。
+Paste 失败时不得创建空 Version、部分 stroke/source 引用或移动 active Version。
 
 ---
 
@@ -1352,7 +1373,7 @@ but do not form a history cache. See the NM6 plan for precise ownership, failure
 
 ---
 
-## 18. Mask authoring state machine
+## 18. Mask creation state machine
 
 QuickQanava does not draw the Mask overlay. NM7 uses the official
 [Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html) section and the
@@ -1360,7 +1381,7 @@ QuickQanava does not draw the Mask overlay. NM7 uses the official
 owner Color Grade selected. The Alcedo viewer architecture continues to own viewer input, QSG
 overlays, and Mask pixels.
 
-`EditorMaskAuthoringController` owns the state. Do not distribute this state across QML handlers.
+`EditorMaskCreationController` owns the state. Do not distribute this state across QML handlers.
 
 ```text
 Inactive
@@ -1380,8 +1401,8 @@ version_id / working head generation
 NodeId
 MaskId
 Mask source kind
-before parameters of the edited mask
-provisional params or stroke
+NM4-owned inverse fields / structural payload (no second before-state copy)
+queued changed fields or canonical stroke samples
 dirty rectangle
 ```
 
@@ -1390,35 +1411,42 @@ Creation uses this call chain:
 ```text
 select Color Grade
   -> choose Brush / Radial / Linear Gradient
-  -> AddMask typed mutation
-  -> enter authoring mode
+  -> enter creation mode (no document change yet)
+  -> first valid input applies provisional AddMask, or resumes the existing Brush
   -> viewer input updates provisional source
   -> QSG overlay updates immediately
   -> pipeline Interactive preview
-  -> settle to one history commit and Quality render
+  -> settle to one final AddMask/stroke/placement history commit and Quality render
 ```
 
 Use these interruption rules:
 
-- Settle or cancel authoring before image switch, Version checkout, Undo/Redo, or node deletion.
+- Settle or cancel creation before image switch, Version checkout, Undo/Redo, or node deletion.
 - Reject an asynchronous render result from a stale session generation.
 - Escape restores the before parameters of the edited Mask.
 - Delete removes the selected Mask by `NodeId` and `MaskId`. It does not use a row index as identity.
-- Viewer pan/zoom and Mask authoring use an explicit mode and focus route. They do not interpret the
+- Viewer pan/zoom and Mask creation use an explicit mode and focus route. They do not interpret the
   same pointer input.
 - A keyboard user can select a Mask, move a control point, change a value, and leave the mode.
 
 ### 18.1 Masks panel
 
-Masks is a right-side panel for the Color Grade context. Its controls do not become QuickQanava
-graph content.
+2026-09-08 user decision: Masks is a temporary right-side editing body for the Color Grade
+context. The existing header Brush/Radial/Gradient actions and node Mask rows open it; the six
+ordinary adjustment tabs remain unchanged. Done/Cancel restores the previous ordinary body.
+Its controls do not become QuickQanava graph content.
 
 The panel has this structure:
 
 1. A header shows `Masks`.
-2. Three fixed actions create Brush, Radial, or Linear Gradient Masks.
+2. The existing header actions enter Brush, Radial, or Linear Gradient creation. Brush resumes
+   the selected Grade's current accumulating Brush Mask if present. It creates no extra row per stroke.
 3. A list shows the Masks that the selected Color Grade owns.
-4. The selected row exposes only supported Mask controls, including opacity, rename, and delete.
+4. The selected row exposes supported Mask controls, including opacity, rename, and delete.
+   Brush supports paint/erase and adjustable size/strength; these tool settings affect subsequent
+   samples, while Mask opacity affects the entire accumulated raster. Multiple strokes on a Grade
+   merge into the same current Brush raster and keep its MaskId. Each settled stroke remains
+   independently undoable through parameter commands and regional replay; R8 is only current cache. Radial creation drags from center outward.
 5. A range area shows only fields that the product implements.
 
 The Mask list uses the existing recessed list well. A selected row uses
@@ -1430,9 +1458,9 @@ for one.
 After Mask add, delete, or reorder, update the owning node's Mask drawer rows. Update row identity,
 order, type, and label only. Do not add a Mask count. Do not rebuild the full graph.
 
-### 18.2 Viewer authoring bar
+### 18.2 Viewer creation bar
 
-In authoring mode, the viewer shows a compact authoring bar. It shows the source kind, selected
+In creation mode, the viewer shows a compact creation bar. It shows the source kind, selected
 Mask name, Done, and Cancel. Each value has its own text element. Do not join values with a
 decorative separator.
 
@@ -1440,7 +1468,7 @@ The bar uses `cardSurfaceColor`, `cardBorderColor`, and `panelRadius`. Done and 
 shared action components. Escape is equivalent to Cancel. Enter is equivalent to Done when the
 current source can settle.
 
-The authoring bar does not cover a primary control point. It does not change the viewer coordinate
+The creation bar does not cover a primary control point. It does not change the viewer coordinate
 space.
 
 ### 18.3 QSG overlay VI
@@ -1450,19 +1478,18 @@ needs them:
 
 - `maskOverlayControlColor`
 - `maskOverlayControlOutlineColor`
-- `maskOverlayCoverageColor`
 - `maskOverlayInactiveColor`
 
-Control points use a two-layer, high-contrast stroke. The coverage preview uses a visible alpha and
-an outline. Selection, invalid input, and disabled input also use shape or text. Color is not the
+Control points use a two-layer, high-contrast stroke. Existing-mask editing has no coverage fill
+or affected-area highlight. Selection, invalid input, and disabled input also use shape or text. Color is not the
 only cue. A small point that only reports status is not permitted.
 
-During adjustment input, hide the overlay as specified in Section 10.4. After authoring ends,
+During adjustment input, hide the overlay as specified in Section 10.4. After creation ends,
 restore the overlay from controller state.
 
 ### 18.4 Cross-panel input ownership
 
-After Mask authoring starts:
+After Mask creation starts:
 
 - Nodes keeps the current Color Grade selected.
 - Graph structure actions are temporarily unavailable.
@@ -1471,7 +1498,7 @@ After Mask authoring starts:
 - The viewer receives Mask input.
 - History and Version checkout obey the settle-or-cancel rules.
 
-After authoring ends, graph input becomes available. Reject input and render results from an old
+After creation ends, graph input becomes available. Reject input and render results from an old
 session generation.
 
 ---
@@ -1489,7 +1516,7 @@ The new `PipelineDocument` schema stores at least:
 - each Color Grade Mask list;
 - each `MaskId`, source, enabled value, and opacity;
 - direct `color_range` and `luminance_range` fields;
-- each raster `MaskAssetKey` and descriptor;
+- canonical Brush stroke data, stable StrokeIds, algorithm version and placement;
 - DRT/Post and post-processing parameters.
 
 It does not store:
@@ -1503,7 +1530,9 @@ It does not store:
 - a render request;
 - the active panel page.
 
-NM4 changes the document, history, and project-metadata formats after node, Mask, and history data
+NM7 extends the NM4 document, history, and project-metadata formats for parameterized Mask data.
+The existing NM4 format cutover record below describes its earlier implementation. NM4 changed
+the document, history, and project-metadata formats after node, Mask, and history data
 are ready. The new release creates and reads only the new project format. The project-open boundary
 returns an unsupported-format error for an old project. It does not convert the current v2 or stage
 project and does not recalculate an old commit.
@@ -1550,9 +1579,9 @@ AdjustmentSlider
 ### 20.3 Edit a Radial Mask
 
 ```text
-Masks panel selects Radial
-  -> AddMask(NodeId, MaskId, Radial params)
-  -> viewer authoring mode
+Header action selects Radial
+  -> viewer creation mode and temporary Masks body
+  -> first valid input applies provisional AddMask(NodeId, MaskId, Radial params)
   -> pointer input mapped to ReferenceSpace
   -> provisional params shared by QSG + pipeline
   -> QSG overlay next frame
@@ -1567,14 +1596,14 @@ Masks panel selects Radial
 ```text
 pointer samples
   -> normalized BrushStroke
-  -> QSG retained path/dabs
-  -> temporary raster dirty rectangle
+  -> append provisional parameterized stroke
+  -> QSG controls / allowed initial-creation guides
+  -> regional replay into current Grade coverage
   -> InteractiveMaskEdit render
   -> pointer release
-  -> MaskStore::Put complete R8 asset
-  -> ReplaceMaskAsset(old_key, new_key)
-  -> one edit commit
+  -> one AddMask / AppendBrushStroke parameter commit
   -> Quality render
+  -> coalesced stable project cache write at idle/save/close
 ```
 
 ### 20.5 Version checkout
@@ -1583,7 +1612,7 @@ pointer samples
 Version selected
   -> finish/cancel provisional input
   -> reset the same live document to initial state and apply first-parent commits
-  -> validate graph/assets
+  -> validate graph / parameterized sources
   -> finish WAL/history head move; failure restores prior state through existing operations
   -> replace node/context/history projections
   -> VersionDocumentChanged Quality render
@@ -1594,8 +1623,8 @@ Version selected
 ```text
 Adjustment Transfer Paste
   -> read target initial state and image metadata
-  -> import transferable grade chain + DRT/Post params + Mask assets
-  -> remap IDs
+  -> import transferable grade chain + DRT/Post params + Mask stroke/source parameters
+  -> remap NodeId / MaskId / StrokeId
   -> validate local changes and apply to the same live document
   -> create and activate new Version
   -> finish WAL/history operation and use normal persistence
@@ -1623,7 +1652,7 @@ path with a Markdown link when the file exists.
 | NM4 — History, Version, Recovery, and Paste | complete | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | Complete typed history, one DAG per Version, recovery, and Paste-only transfer. |
 | NM5 — QuickQanava Nodes Panel | complete 2026-09-05 | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
 | NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
-| NM7 — Viewer Mask Authoring | planned | `node_mask_editor/phase_nm7_viewer_mask_authoring_plan.md` | Connect Brush, Radial, and Linear Gradient authoring to QSG overlays, Interactive and Quality rendering, and history. |
+| NM7 — Viewer Mask Creation | planned | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Parameterized reversible Masks, current project R8 cache, control-only QSG and real Interactive movement. |
 | NM8 — Product Qualification and Cutover | planned | `node_mask_editor/phase_nm8_product_qualification_plan.md` | Qualify all three backends, real RAW files, reopen, Version, Paste, performance, and package behavior. |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
@@ -1901,15 +1930,23 @@ current-result storage. Runtime/platform evidence is required; this design appro
   use topology observations only to refresh the visual selection. They do not replace the
   application snapshot signal.
 
-### 21.8 Phase NM7 — Viewer Mask Authoring
+### 21.8 Phase NM7 — Viewer Mask Creation
 
-**Reason for this position:** Viewer authoring needs the selected-node context, multi-Mask runtime,
-immutable `MaskStore`, typed history, and Interactive and Quality rendering. A missing dependency
+2026-09-08 revision: NM7.2–NM7.4 extend the historical NM3/NM4 source/history interfaces before
+viewer integration; NM7.9–NM7.10 replace per-source/history raster retention with current project
+coverage cache. Historical NM3/NM4 asset tests do not qualify the new parameter format.
+
+
+**Reason for this position:** Viewer creation needs the selected-node context, multi-Mask runtime,
+parameterized source/history extensions, project cache ownership, and Interactive/Quality rendering. A missing dependency
 would produce an edit that cannot restore or preview correctly.
 
-**Scope:** Add the Masks panel actions, Brush, Radial, and Linear Gradient creation, viewer input
-routing, `ReferenceSpace` mapping, QSG Mask-editing overlay, provisional raster dirty rectangle,
-settled asset, Escape cancellation, mode interruption, and stale-session fencing. Hide the overlay
+**Scope:** Follow the [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md).
+Connect the header actions and node Mask rows to a temporary Masks editing body while preserving
+the six ordinary adjustment tabs. Add Brush paint/erase with adjustable size and strength; accumulate
+all strokes for a Color Grade in one current Brush raster. Add center-out Radial creation, Linear
+Gradient creation, viewer input routing, `ReferenceSpace` mapping, QSG Mask-editing overlay, provisional raster dirty rectangle,
+settled parameter commands, project cache settings/cleanup, Escape cancellation, mode interruption, and stale-session fencing. Hide the overlay
 during adjustment input. Use the approved Mask type icons. Do not add an unrequested pill, badge,
 chip, tag, or status dot.
 
@@ -1922,7 +1959,7 @@ not create a commit. Image and Version changes reject old results.
 - [Graph `Data Model`](https://cneben.github.io/QuickQanava/graph.html): a Mask stays in the Alcedo
   model. It does not enter Qan topology.
 - [Nodes/Groups `Selection`](https://cneben.github.io/QuickQanava/nodes.html): keep the owner Color
-  Grade selected during authoring.
+  Grade selected during creation.
 
 QuickQanava does not own viewer input, the QSG overlay, or Mask coverage. NM7 does not infer these
 features from QuickQanava examples.
@@ -1930,7 +1967,7 @@ features from QuickQanava examples.
 ### 21.9 Phase NM8 — Product Qualification and Cutover
 
 **Reason for a separate phase:** Unit and component tests cannot prove that the packaged
-QuickQanava module, real RAW input, all backends, history recovery, Mask assets, and final frame use
+QuickQanava module, real RAW input, all backends, history recovery, parameterized Masks, and final frame use
 one correct product path.
 
 **Scope:** Run all tests in Section 23 and the real-RAW end-to-end cases. Record evidence for
@@ -1939,7 +1976,7 @@ cache behavior. Remove old UI and service paths that an earlier phase explicitly
 this document with the completion record.
 
 **Exit criteria:** All global completion criteria in Section 26 pass. There is no legacy-stage
-write-back, single-primary-Color-Grade product branch, mutable raster key, new merge UI, or substitute
+write-back, single-primary-Color-Grade product branch, per-stroke raster history, new merge UI, or substitute
 backend or CPU path.
 
 **Required official QuickQanava documentation:**
@@ -1966,7 +2003,7 @@ NM0 QuickQanava baseline
   -> NM4 History, Version, recovery, and Paste
   -> NM5 QuickQanava Nodes panel
   -> NM6 Node-aware adjustment stack
-  -> NM7 Viewer mask authoring
+  -> NM7 Viewer mask creation
   -> NM8 Product qualification and cutover
 ```
 
@@ -2009,7 +2046,7 @@ feature/color-grade-mask-union
 refactor/pipeline-edit-payload
 feature/editor-nodes-rail-panel
 feature/node-adjustment-context
-feature/radial-mask-viewer-authoring
+feature/radial-mask-viewer-creation
 ```
 
 实施以逐个合入 main 的 PR 为默认方式。只有同一执行方案内部确实无法独立评审的 2–3 个紧密
@@ -2038,7 +2075,7 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - 中间 Color Grade 无 DRT/Post 专属 adjustment；
 - 多 Mask Union 与 CPU reference 一致；
 - zero masks、all-disabled masks、one/many enabled masks 的边界行为；
-- MaskStore 同内容复用 key，不同内容不能覆盖旧 key；
+- 参数化 stroke 可重放；每 Grade 一个当前 R8 槽；删除新缓存不破坏 Undo/Redo；
 - 当前受支持格式的 JSON round-trip；旧项目 metadata 在入口被拒绝。
 
 ### 23.2 Runtime/backend tests
@@ -2059,7 +2096,7 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - Version checkout 得到对应 DAG，而不是当前全局 graph；
 - root Version 始终得到三节点默认文档；
 - Paste 创建新 Version，保留目标 Develop metadata；
-- Paste remap 后无 ID 冲突，Mask asset 可读取；
+- Paste remap 后 NodeId/MaskId/StrokeId 无冲突，无缓存仍能重建 coverage；
 - 不再创建新的 merge commit；
 - 旧项目拒绝打开，不迁移旧 stage/merge 提交；
 - journal/recovery/reopen 后 checkpoint 的 commit 标签与 history HEAD 对应，document 等于该提交链的重放结果。
@@ -2081,8 +2118,8 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 
 - item/logical -> image UV -> ReferenceSpace 映射在 zoom/pan/DPR 下稳定；
 - QSG Radial/Linear 边界与实际 evaluator 使用相同参数；
-- Brush QSG 和 rasterizer 使用同一 sample 序列；
-- mask input 期间 overlay 可见，grade slider 期间隐藏；
+- 初次 Brush 创建引导与 rasterizer 使用同一规范 sample 序列；已有 Mask 不显示影响区高亮；
+- 已有 Brush/Radial/Gradient 移动时仅控件可见，照片 Interactive 实时更新；grade slider 隐藏控件；
 - stale session/result 不污染新 image/Version；
 - pointer release 只产生一次 settled commit；
 - Escape 恢复 before state 且不产生 commit；
@@ -2098,12 +2135,12 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 4. 修改新节点 Exposure，验证只有该节点参数变化；
 5. 添加 Radial、Linear Gradient 和 Brush Mask；
 6. 验证多个 Mask 扩展同一节点范围；
-7. 调整大小/位置/feather 时显示 overlay 和实际 Interactive 结果；
+7. 移动已有 Brush/Radial/Gradient 以及修改 feather 时仅显示控件，照片 Interactive 实时改变；
 8. 调整 grade 参数时 overlay 隐藏；
 9. 删除、重新连接节点并 Undo/Redo；
 10. 创建/切换 Version，验证不同 DAG；
 11. Paste 到另一张 RAW 的新 Version，验证目标 RAW metadata 保留；
-12. 保存、关闭、重开，验证 history、Version、DAG、Mask assets 和最终帧；
+12. 保存、关闭、重开，验证 history、Version、DAG、Brush 参数命令和最终帧；清空项目 R8 后仍可恢复；
 13. 在 Windows/CUDA 与 macOS/Metal 执行产品路径；OpenCL 执行对应集成和一致性测试。
 
 ---
@@ -2115,7 +2152,8 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - parameter-only change 不重建全部 QuickQanava graph；
 - history projection 不监听每帧 render/busy 通知；
 - Brush provisional update 合并 dirty rectangle；
-- settled stroke 只保存一次完整新 asset；
+- settled stroke 仅持久化新增参数命令，不产生新 R8 历史文件；
+- 每项目/图片/Grade 稳定 R8 槽合并写回，千次操作及 Version 切换不增加每步文件；
 - graph static plan 只在 topology/adjustment structure 改变时重建；
 - 多 Color Grade 会话结果按输出身份、依赖变化版本和表示条件验证；不逐帧序列化或哈希整个节点参数体；
 - UI 滑动只更新局部显示并入队；owner 在帧间消费参数，应用、失效处理与渲染严格串行；
@@ -2156,9 +2194,11 @@ NM1.4 删除整图复制和产品 Apply 的 stage 覆盖，再复用后台 execu
 
 处理：共享坐标、参数和公式；使用有明确容差的参考结果测试同时验证 overlay 输入与 evaluator 输出。
 
-### 25.4 Brush asset 可变导致 Undo 损坏
+### 25.4 把缓存误当作历史源导致数据丢失或文件膨胀
 
-处理：N3 在 UI 绘制前完成 content-addressed immutable `Put()`；不允许临时继续覆盖同 key。
+处理：NM7 保存参数化 samples 和可逆命令；R8 是可删除的当前缓存。禁止每步 R8 或像素差分
+历史。缓存清理只能作用于新 cache namespace，不能删除不可重建的旧 asset。先完成 schema、
+WAL/Version/Paste 和 cacheless recovery，再暴露 UI。
 
 ### 25.5 QuickQanava 变成第二份 graph 状态
 
@@ -2191,14 +2231,15 @@ transfer package 显式列出可转移内容。
 - [ ] DRT/Post 专属调整不能出现在中间 Color Grade。
 - [ ] 一个 Color Grade 支持多个 Mask，组合只有 Union。
 - [ ] `color_range` 和 `luminance_range` 是 Mask 的两个直接预留字段。
-- [ ] Brush/Radial/Linear Gradient 的简单辅助范围由 QSG 直接绘制。
+- [ ] 已有 Mask 编辑的 QSG 只显示控件，无影响区域高亮；创建引导遵循 NM7 决策。
 - [ ] 实际蒙版调整通过统一接口产生 Interactive/Quality 结果。
 - [ ] 调色参数输入时不显示 mask editing overlay。
 - [ ] node topology 修改直接请求 Quality render。
 - [ ] node、Mask 和参数操作都能生成准确 history row 并 Undo/Redo。
 - [ ] 每个 Version 对应自己的 DAG，root/new default Version 对应三节点文档。
 - [ ] Adjustment Transfer 只创建 Paste Version，不再创建新的 pipeline merge commit。
-- [ ] Mask raster asset 不可变，stroke Undo/Redo 不依赖被覆盖文件。
+- [ ] Brush source 参数化，Undo/Redo 是可逆命令与重放，不生成每 stroke R8。
+- [ ] 每 Grade 一个当前 Mix R8 槽；项目路径/保留/清理策略与 cacheless recovery 验收通过。
 - [ ] CUDA、OpenCL、Metal 不使用 CPU 或其他 backend 替代路径。
 - [ ] 旧项目 metadata 在打开入口拒绝；当前格式坏图真实失败；产品路径不使用 stage 镜像。
 - [ ] Windows/macOS package 可加载 QuickQanava QML module 和全部新 panel。

@@ -52,6 +52,12 @@ struct Vector2 {
   float y = 0.0f;
 };
 
+inline auto operator==(const Vector2& a, const Vector2& b) -> bool {
+  return a.x == b.x && a.y == b.y;
+}
+
+inline auto operator!=(const Vector2& a, const Vector2& b) -> bool { return !(a == b); }
+
 /**
  * @brief Row-major 3x3 matrix mapping homogeneous 2D points (column vectors).
  *

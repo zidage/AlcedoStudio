@@ -15,6 +15,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/mask/active_raster_mask.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
@@ -190,6 +191,24 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
     hash.MixU32(brush->descriptor.extent.height);
     MixNormalizedRect(hash, brush->descriptor.reference_bounds);
     hash.MixF32(brush->feather_radius);
+    hash.MixU32(brush->source_format_version);
+    hash.MixU32(brush->raster_algorithm_version);
+    hash.MixF32(brush->placement_translation.x);
+    hash.MixF32(brush->placement_translation.y);
+    hash.MixU32(static_cast<std::uint32_t>(brush->strokes.size()));
+    for (const auto& stroke : brush->strokes) {
+      hash.MixText(stroke.id.Value());
+      hash.MixU32(static_cast<std::uint32_t>(stroke.mode));
+      const auto samples = BrushStrokeSamples(stroke);
+      hash.MixU32(static_cast<std::uint32_t>(samples.size()));
+      for (const auto& sample : samples) {
+        hash.MixF32(sample.local_x);
+        hash.MixF32(sample.local_y);
+        hash.MixF32(sample.radius);
+        hash.MixF32(sample.strength);
+        hash.MixF32(sample.hardness);
+      }
+    }
     return;
   }
   if (const auto* radial = std::get_if<RadialMaskSource>(&model.source)) {
