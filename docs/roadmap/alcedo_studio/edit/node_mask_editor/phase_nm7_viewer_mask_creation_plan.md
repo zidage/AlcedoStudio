@@ -2,8 +2,8 @@
 
 Date: 2026-09-08
 
-Status: planned. This document records a source audit and implementation design, not executed
-qualification. NM7.1–NM7.14 are unimplemented at plan creation.
+Status: NM7.1 complete; NM7.2–NM7.14 planned. This document records the NM7.1 source
+audit and format-boundary evidence. Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -181,6 +181,15 @@ current callers and tests when execution starts.
 | [Cache settings UI](../../../../../alcedo_studio/src/ui/alcedo_main/qml/CacheSettingsPanel.qml) | Thumbnail-specific settings/stats via library module | Add separate project Mask cache body/adapter; do not reuse thumbnail configuration keys |
 | [Project package](../../../../../alcedo_studio/src/app/project_package_backend.cpp) | Validates/materializes metadata and package contents | Carry source commands, not source-machine cache paths or raster history |
 | [Existing viewer tests](../../../../../alcedo_studio/tests/ui/editor_overlay_interaction_test.cpp) | Crop/ROI geometry and interaction infrastructure | Extend coverage while preserving navigation/crop behavior |
+
+Rechecked 2026-09-08 on Windows/MSVC debug (`build/debug`), Qt 6.9.3 (`D:/misc/Qt/6.9.3/msvc2022_64`),
+CUDA Toolkit 12.8. NM6.8 and NM6.9 remain planned (lifecycle e2e and cross-backend pixel/perf
+qualification). That does not authorize exposing Mask creation UI. Ordinary adjustment writes still
+reject `ColorGradeMask` with the existing “until NM3” message. `BrushMaskSource` still persists
+`asset_key`; `MaskStore` still publishes immutable `.r8mask` files; history still uses
+`ReplaceMaskAssetChange`; transfer packages still list `mask_assets` keys; native Mask passes still
+load `MaskStore` or request-owned active rasters. `EditorPendingInputQueue` still keeps the newest
+absolute write per field. Parameterized strokes are not present in production JSON.
 
 ### 3.1 Reconcile NM6 product revisions before exposing UI
 
@@ -583,6 +592,58 @@ plan executor/native Mask pass and existing tests.
 record evidence, not a claim that parameterized source already exists.
 
 **Exit:** ownership and replacement inventory complete; no unaccounted product dependency on old R8 history.
+
+##### Phase NM7.1 completion record (2026-09-08)
+
+**Status:** complete — current R8-asset Brush path characterized; encoding/format identities locked; parameterized source not claimed.
+
+**Primary success call chain:**
+
+```text
+saved Brush JSON (asset_key + descriptor + feather_radius)
+  -> PipelineDocument::FromJson / MaskModelFromJson
+  -> CollectPersistentMaskAssetKeys / VerifyPersistentMaskAssets
+  -> MaskStore::Load (shared immutable R8; GPU MaskTextureCache keyed by MaskAssetKey)
+  -> native Mask evaluate / Union / Grade Mix
+```
+
+**Primary failure call chain:**
+
+```text
+unsupported format_version, unknown source kind, or corrupt MaskStore payload
+  -> loader/store throws before owner mutation
+  -> source file bytes unchanged; no raster-to-stroke conversion
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Current published history/document identities | `BrushSourceFormatBoundaryTest` | PASS |
+| Brush JSON stores `asset_key` and omits stroke fields | `BrushSourceFormatBoundaryTest` | PASS |
+| Current loader ignores extra stroke fields (parameterized source absent) | `BrushSourceFormatBoundaryTest` | PASS |
+| Unsupported document format leaves the source file unchanged | `BrushSourceFormatBoundaryTest` | PASS |
+| Unknown source kind rejects without mutating the live document | `BrushSourceFormatBoundaryTest` | PASS |
+| Held `MaskStore` readers keep immutable pixels after host-cache eviction | `BrushSourceFormatBoundaryTest` | PASS |
+| Ordinary adjustment path still rejects Mask targets | `BrushSourceFormatBoundaryTest` | PASS |
+| Dab coverage, round-half-up R8, paint/erase max/min | `BrushSourceFormatBoundaryTest` | PASS |
+| Canonical raster long-edge cap 4096 | `BrushSourceFormatBoundaryTest` | PASS |
+| Feather radius matches native texel scale | `BrushSourceFormatBoundaryTest` | PASS |
+| Packed R8 bilinear sample matches native center filter | `BrushSourceFormatBoundaryTest` | PASS |
+| 65 later parameterized-Brush test names catalogued | `BrushSourceFormatBoundaryTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --preset win_debug`
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target BrushSourceFormatBoundaryTest`
+`ctest --test-dir build/debug -R BrushSourceFormatBoundaryTest --output-on-failure`
+
+Suite totals: `12/12` PASS. Date / HEAD `6c0dae76` / Windows MSVC `win_debug` / Qt 6.9.3 / CUDA Toolkit 12.8 (no GPU tests in this phase).
+
+**Checklist / exit condition:** inventory is in companion Sections 4.4 and 8.1–8.2; current product still depends on `MaskAssetKey` for Brush, which is recorded rather than removed.
+
+**LOC note (grill-code-review):** `brush_raster_encoding.hpp` ~138, `brush_raster_encoding.cpp` ~152, `brush_source_format_boundary_test.cpp` ~290. No split required.
+
+**Residual gaps:** NM7.2 must change `BrushMaskSource` to strokes; NM7.3 must switch the version gate to the Section 8.1 identities and reject raster-only input. Current loaders still accept document format 5 with `asset_key` and ignore unknown source keys. Adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned. Catalogued later test names are not yet executing behavior cases.
 
 ### NM7.2 — Add parameterized Brush data and owner operations
 

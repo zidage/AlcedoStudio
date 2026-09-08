@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: design and algorithm validation only; production implementation pending.
+Status: encoding rules specified; production parameterized Brush source pending.
 
 Parent: [NM7 execution plan](phase_nm7_viewer_mask_creation_plan.md).
 This document defines NM7's revised algorithm, data ownership and storage behavior. It replaces
@@ -144,7 +144,7 @@ Color Grade 的最终 Union R8 包含所有启用 source 的有效 coverage，�
    余数。radius/strength/hardness 改变作为有序边界保留；不跨边界丢弃信息。
 4. 开始 dab 一次、最终 stroke endpoint 一次；不在每个事件结尾额外加 dab。
 5. 存储规范 samples 和算法版本。重放使用这些持久值，不重新读取鼠标速度/设备 pressure。
-6. 规范坐标/半径编码、插值和量化顺序由一个共享定义规定，拒绝 NaN/Inf、重复 StrokeId 和
+6. 规范坐标/半径编码、插值和量化顺序由第 4.4 节规定，拒绝 NaN/Inf、重复 StrokeId 和
    不支持的算法版本。不能通过静默加载另一个算法版本来重放旧历史。
 
 初始值沿用执行计划：size/strength 控件影响后续样本，Mask opacity 影响整张 Brush。无自动
@@ -153,7 +153,7 @@ pressure 动态；不把用户调整过的 size/strength 在松手后丢失。
 ### 4.2 Dab、paint 和 erase
 
 在像素中心求单位 dab：内半径 `hardness * radius` 内为 1，外半径处为 0，中间线性衰减，
-乘 strength。Hardness=1 单独定义硬边，避免除零。按固定 rounding 转成 `a8 ∈ [0,255]`。
+乘 strength。Hardness=1 单独定义硬边，避免除零。量化与组合公式见第 4.4 节。
 
 对一个 Brush 内所有规范 dab，按原始 stroke/sample 顺序：
 
@@ -172,13 +172,40 @@ flow，应显式改变算法版本和测试，不能用不同采样速度无意�
 ### 4.3 精度与缩放
 
 保留 4096 的规范 R8 每轴上限和现有 full-reference 定义，不降低 RAW decode/preview 质量。
-Brush 的规范格网在新文档确定一次，大小随真实 reference extent 的既定规则选择，不随 zoom、
+Brush 的规范格网按第 4.4 节由 `full_reference_extent` 派生，不随 zoom、
 DPR、拖动速度或 Interactive 输出尺寸变化。Brush 在固定格网上重放，再由原有 native sampling
 映射到请求表示；analytic sources 在请求的 reference 坐标求值。固定运算/量化顺序，缓存命中
 和无缓存路径必须满足同一数值标准。
 
 整张 Brush 的移动只更改 translation；samples 永远不做逐次原地平移。每次从原始局部路径
 计算目标位置，因此来回移动不累积插值损失。`before`/`after` 精确恢复，避免反复浮点加减漂移。
+
+### 4.4 规范编码、羽化单位与输出采样
+
+生产共享定义在 `edit/mask/brush_raster_encoding.hpp`。下列数值在 host 规范栅格化和
+native Mask pass 之间必须一致。`source_format_version` 或 `raster_algorithm_version`
+不等于 1 的输入在格式入口拒绝，文件保持原样，不做另一算法的静默重放。
+
+| 量 | 编码 | 规则 |
+| --- | --- | --- |
+| `source_format_version` | `uint32` | 参数化 Brush JSON 为 `kBrushSourceFormatVersion = 1` |
+| `raster_algorithm_version` | `uint32` | dab/paint/erase 为 `kBrushRasterAlgorithmVersion = 1` |
+| Mix cache 容器 | `uint32` | `kProjectMaskCacheFormatVersion = 1`，与 `kMaskAssetFormatVersion`（旧 `.r8mask`）分开 |
+| 样本坐标 / 半径 | IEEE-754 binary32 | 有限；局部坐标 = 参考像素坐标 − `placement_translation`；半径 > 0，单位是参考像素 |
+| strength / hardness | IEEE-754 binary32 | 闭区间 `[0, 1]` |
+| StrokeId | 非空字符串 | 生命周期内稳定；重复 ID 拒绝 |
+| 笔画模式 | `uint8` | `0` paint，`1` erase |
+| 弧长间隔 | 参考像素 | 不超过局部 radius 的 `kBrushDabSpacingRadiusFraction = 1/4`；跨事件批次保留余数 |
+| 规范格网 | `Extent2D` | `CanonicalBrushRasterExtent(full_reference)`：长边 `min(long_edge, 4096)`，ceil 比例缩放，每轴 `[1, 4096]`。`reference_bounds = {0,0,1,1}`。不使用 LLF 的 2048 上限。格网由当前 `full_reference_extent` 派生，不随 zoom、DPR、Interactive 输出尺寸或 DetailPatch 改变 |
+| 像素中心 | 参考像素 | 规范 texel `(i,j)` 的中心是 `(i+0.5)*full_w/raster_w`。连续指针位置不加半像素 |
+| dab 覆盖 | float `[0, 1]` | hardness `>= 1` 时 `distance <= radius` 为 strength，否则为 0。否则内半径 `hardness*radius` 内为 strength，外半径处为 0，中间线性。distance 为参考像素欧氏距离 |
+| R8 量化 | `uint8` | `clamp(coverage * 255 + 0.5, 0, 255)`（正方向 round-half-up）。反变换 `value / 255` |
+| paint / erase | 逐 dab 顺序 | `b0 = 0`；paint `max(prev, a8)`；erase `min(prev, 255-a8)`。max/min 不可从结果反推 |
+| 源羽化 | 现有 `BrushMaskSource.feather_radius` | 非负有限。单位是参考像素度量。native 转为 source texel：`radius_texels = feather_radius * 0.5 * (x_scale + y_scale)`，`x_scale = raster_w / (full_w * max(bounds.w, 1e-6))`。当规范格网等于 full reference 且 bounds 为全图时，该值等于 texel 半径 |
+| 求值顺序 | 固定 | 规范 R8 → signed-distance 羽化（若半径 > 0）→ invert → opacity → clamp → 再量化到请求 R8。Union 是启用 Mask 的逐像素 max，发生在 Grade Mix 之前 |
+| 输出采样 | 现有 `MakeRasterMaskSamplingPlan` | 渲染像素中心 `(x+0.5, y+0.5)` 经 `render_to_texture_uv` 得到归一化 UV。UV 在 `[0,1]` 外为 0。R8 为双线性，texel 中心 `u*width-0.5`。无羽化时按该 plan 的 mip；有羽化时对距离场做同样的双线性。`geometry.filter` 默认双线性。缓存命中要求 extent、geometry、算法版本和 producer 完全一致，禁止把不相符的槽 resize 后当作命中 |
+
+JSON 中的样本数组按上述 binary32 规则读写。非法值、重复 StrokeId 或不支持的算法版本不得部分写入 owner。当前已实现的 `BrushMaskSource` 仍只持久化 `asset_key` / descriptor / `feather_radius`；参数化字段的 owner 写入属于后续阶段。现有加载器会忽略未知 source 键，因此带 `strokes` 的旧格式文档在切换版本门之前不能当作已经参数化。
 
 ## 5. Undo/Redo 的局部重放算法
 
@@ -384,7 +411,57 @@ Brush 的唯一恢复依据。NM3/NM4 旧测试通过不等于参数化格式通
 只有栅格而没有笔画参数的旧格式不能无损反推原始路径。遵守仓库“不自动迁移旧项目”的现有
 规则，在格式入口报告不支持并保持文件不变；不新增自动向量化、隐藏背景 bitmap 或“缓存就是
 原始数据”的兼容路径。修改文件版本前在测试 fixtures 和发布说明明确覆盖的格式范围。
-本轮只是计划，不执行旧项目转换或删除已有文件。
+不执行旧项目转换或删除已有 `.r8mask` 文件。
+
+### 8.1 切换后接受的唯一格式身份
+
+当前生产加载器只接受 `pipeline_history_format.hpp` 中的已发布值（项目 `0.5.0`、packed `5`、
+document `5`、image-edit `3`、commit/chain `3`、batch `2`、root/checkpoint `3`、WAL `4`、
+transfer `alcedo.adjustment_transfer.v3`）。该集合仍把 `asset_key` 当作 Brush 的持久来源。
+参数化 Brush 写入 persistence 时，加载器必须改成**只**接受下表，每一项都是单一值而不是范围。
+旧身份立即不支持；不读取、不改写、不删除被拒绝的文件。
+
+| 身份 | 切换后唯一接受值 | 当前已发布值 |
+| --- | --- | --- |
+| Project metadata `kProjectFileVersion` | `0.6.0` | `0.5.0` |
+| Packed `.alcd` `kPackedProjectFormatVersion` | `6` | `5` |
+| Pipeline document `kPipelineDocumentFormatVersion` | `6` | `5` |
+| Image edit schema `kImageEditSchemaVersion` | `4` | `3` |
+| Commit hash input `kCommitFormatVersion` | `4` | `3` |
+| Chain-fold `kChainFormatVersion` | `4` | `3` |
+| Typed batch `kPipelineEditBatchFormatVersion` | `3` | `2` |
+| Root envelope `kRootStateFormatVersion` | `4` | `3` |
+| Checkpoint envelope `kCheckpointStateFormatVersion` | `4` | `3` |
+| Mini-Git WAL `kMiniGitJournalRecordFormatVersion` | `5` | `4` |
+| Transfer package `kAdjustmentTransferSchema` | `alcedo.adjustment_transfer.v4` | `alcedo.adjustment_transfer.v3` |
+| Brush `source_format_version` | `1` | 不存在；当前 JSON 无此键 |
+| Brush `raster_algorithm_version` | `1` | 不存在 |
+| Project Mix cache `kProjectMaskCacheFormatVersion` | `1` | 不存在 |
+| 旧 Mask 资产文件 `ALCR8MSK` / `kMaskAssetFormatVersion` | 新 Brush 不再写入或要求 | `1`（`.r8mask`） |
+
+拒绝条件（均保持原文件）：document/history/package 仍带 Brush `asset_key` 且没有完整规范
+strokes；`source_format_version`/`raster_algorithm_version` 缺失或不为 1；未知 source kind；
+非有限样本；重复 StrokeId。Radial/Linear 字段集合不变。运行时 `kMaskImplementationVersion`
+（现为 3）在 Brush 内容身份从 asset key 改为 stroke recipe 时再升到 4，它不是项目文件身份。
+
+### 8.2 `MaskAssetKey` 产品依赖与替换
+
+| 现有依赖 | 当前作用 | 参数化路径下的替换 |
+| --- | --- | --- |
+| `BrushMaskSource::asset_key` + descriptor | 持久 Brush 来源 | 有序 strokes、StrokeId、algorithm version、`placement_translation`；保留 `feather_radius` |
+| `MaskStore::Put` / `Load` / `DefaultProductMaskStoreRoot` | 内容寻址 `.r8mask` | 新 Brush 提交不再 `Put`。当前 Grade Mix 使用项目 cache 槽；旧 store 不得当 disposable cache 清理 |
+| `CollectPersistentMaskAssetKeys` / `VerifyPersistentMaskAssets` | 文档引用的 R8 必须存在 | 校验规范笔画；Mix cache 缺失时按同一算法重建，不把缺 cache 当成参数损坏 |
+| `CollectMaskAssetKeysFromBatch` / reachability / `DeleteUnreachableMaskAssetFiles` | 按 key 做 GC | 新 history 不含 per-stroke R8 key。GC 不得删除无法从参数重建的旧 `.r8mask` |
+| `ReplaceMaskAssetChange` 与 `EditorHistoryMutation::ReplaceMaskAsset` | Undo 换 key | `Append/Remove/InsertBrushStroke`、`SetBrushTranslation`；首笔是一次 `AddMask` |
+| `AddMaskChange` / `RemoveMaskChange` / `ReplaceMaskSourceChange` / `SetMaskFieldChange` | 结构与标量 | 保留；`AddMask` 的 JSON 改为笔画而不是 asset key |
+| `AdjustmentTransferPackage::mask_assets_` | Paste 复制 key+descriptor | 复制笔画 JSON；目标项目用自己的 cache 策略；不再要求 listed R8 key 集合 |
+| `result_content_key` 混合 `asset_key` | GPU 结果身份 | 混合 strokes / placement / algorithm version |
+| `MaskTextureCache` keyed by `MaskAssetKey` | 不可变持久纹理 | 每 Grade 一个当前 Mix coverage；source/feather 为 executor scratch |
+| `ActiveRasterMaskInput` / `ActiveRasterTextureCache` | 请求持有的预览 R8 | 仍是请求所有的不可变像素；内容改为规范重放输出，不与 `MaskAssetKey` 共用 key 空间 |
+| `Renderer::MaskAssets()` 临时目录 store | 产品默认根 | `ProjectService` + `ProjectMaskCacheService` 的每项目根 |
+| `EditorPendingInputQueue` 按 field 保留最新绝对写入 | 普通调整 | Brush 需要有序 append，不能把样本当成同一 field 的最新值替换 |
+| `DescribeEditorParameterTargetError` 拒绝 `ColorGradeMask` | 文案仍写 “until NM3” | 增加显式 Mask 命令路由；不能只删掉守卫 |
+| 测试夹具 `grade_mask_test::AddBrushMask(..., MaskAssetKey)` | 现行运行时/历史测试 | 保留作为旧格式证据；新测试走笔画 builder |
 
 ## 9. 移动已有蒙版的完整预览链
 
