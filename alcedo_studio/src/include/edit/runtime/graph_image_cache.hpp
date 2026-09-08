@@ -30,9 +30,9 @@ namespace alcedo {
  * ResourceId is allocation reuse, not a content hit. Not thread-safe. One
  * in-flight submission.
  *
- * Published results whose required revision still matches are retained. Stale
- * published results are dropped before a Develop rewrite; idle pool textures
- * are destroyed by TexturePool::ReleaseUnleased after GPU last-use.
+ * Callers drop published results that this frame cannot reuse. Stale published
+ * results are dropped after collecting each frame's required revisions. Idle
+ * pool textures from obsolete extents are reclaimed after GPU last-use.
  *
  * @tparam Backend Texture factory used by TexturePool.
  */
@@ -238,7 +238,8 @@ class GraphImageCache {
    * @brief Drop the unpublished write of @p id and return its texture to the pool.
    *
    * Published results are unchanged. No-op when @p id has no write slot.
-   * Caller must satisfy GPU last-use of that texture first.
+   * The last reader must already be encoded on the same ordered GPU queue as any
+   * subsequent reuse, or completed. This releases a lease, not device memory.
    */
   void ReleaseWrite(const GraphValueId& id) { write_slots_.erase(id); }
 
@@ -323,14 +324,14 @@ class GraphImageCache {
   /**
    * @brief Drop published results for which @p is_current is false.
    *
-   * @p is_current receives (id, published revision). Extra leases on those
-   * textures, including a still-displayed frame, keep the device memory.
-   * GPU last-use of dropped results must already be complete.
+   * @p is_current receives (id, published revision, published representation).
+   * Extra leases on those textures, including a still-displayed frame, keep the
+   * device memory. GPU last-use of dropped results must already be complete.
    */
   template <class IsCurrent>
   void DropStalePublished(IsCurrent&& is_current) {
     for (auto it = published_.begin(); it != published_.end();) {
-      if (is_current(it->first, it->second.revision)) {
+      if (is_current(it->first, it->second.revision, it->second.representation)) {
         ++it;
         continue;
       }

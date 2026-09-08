@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -163,6 +164,9 @@ class DrtPostExecutor {
       NeighborExecutor<Ops>::Execute(device, scene_id, dest, lut, works[index], width, height);
       scene_id = dest;
     }
+    // Last readers of the neighborhood pair are ordered before the next pass.
+    device.Workspace().ReleaseConsumedImage(GraphValueId{drt_id, PortId{"runtime.ping"}});
+    device.Workspace().ReleaseConsumedImage(GraphValueId{drt_id, PortId{"runtime.pong"}});
     return scene_id;
   }
 

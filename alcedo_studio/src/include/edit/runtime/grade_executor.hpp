@@ -137,10 +137,12 @@ class GradeExecutor {
     if (schedule.gpu_write_count > 0) {
       (void)Ops::AcquireOutput(device, compiled_grade.scene_output, width, height);
     }
-    typename Ops::Scratch ping = need_ping ? Ops::AcquireScratch(device, width, height, ping_id)
-                                           : typename Ops::Scratch{};
-    typename Ops::Scratch pong = need_pong ? Ops::AcquireScratch(device, width, height, pong_id)
-                                           : typename Ops::Scratch{};
+    if (need_ping) {
+      (void)Ops::AcquireScratch(device, width, height, ping_id);
+    }
+    if (need_pong) {
+      (void)Ops::AcquireScratch(device, width, height, pong_id);
+    }
 
     auto Resolve = [&](GradeImageSlot slot) -> typename Ops::Texture& {
       switch (slot) {
@@ -149,9 +151,9 @@ class GradeExecutor {
         case GradeImageSlot::Output:
           return Ops::SceneTexture(device, compiled_grade.scene_output);
         case GradeImageSlot::Ping:
-          return Ops::ScratchTexture(ping);
+          return Ops::SceneTexture(device, ping_id);
         case GradeImageSlot::Pong:
-          return Ops::ScratchTexture(pong);
+          return Ops::SceneTexture(device, pong_id);
       }
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": invalid grade image slot");
     };
@@ -217,6 +219,11 @@ class GradeExecutor {
       Ops::DispatchMix(device, source, adjusted, destination, mix, mask, width, height);
     }
     Ops::CheckAfterEncode(device);
+    // Last readers are now ordered before the next Grade. Release only scratch
+    // leases so later stages can reuse the pair without a device synchronization.
+    // On an encode failure the render owner's cancellation discards all writes.
+    workspace.ReleaseConsumedImage(ping_id);
+    workspace.ReleaseConsumedImage(pong_id);
     return result;
   }
 };

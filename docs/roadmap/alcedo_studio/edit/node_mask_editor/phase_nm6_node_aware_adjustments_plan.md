@@ -1195,6 +1195,61 @@ Suite totals: 58/58 focused PASS plus 6/6 related panel/queue PASS.
 
 **Residual gaps:** NM6.7 QML header/capability-filtered navigation; NM6.8 lifecycle/history e2e; NM6.9 pixel/perf qualification. `CompleteCurrentPanelParameterTarget` still fills PrimaryGrade when no node controller is bound and `panel_projection_node_id` is empty. Production QML can still open Geometry on a Grade until NM6.7 hides that page; `submitWrite` rejects that write.
 
+##### Phase NM6.6 follow-up: GPU image-pool residency after crop (2026-09-07)
+
+**Status:** complete — Interactive crop no longer keeps obsolete-extent published results; idle unused sizes are reclaimed after GPU last-use; DRT ping/pong write slots are released after the last neighborhood reader
+
+**Primary success call chain:**
+
+```text
+crop / viewport extent change
+  -> CollectAndPropagate (revision of Geometry may stay; frame identity changes)
+  -> PrepareResultValidity
+  -> DropUnusablePublishedImages (Interactive: identity mismatch)
+  -> TexturePool::ReleaseUnleasedUnusedSizes
+  -> AcquireImageForWrite at the new extent reuses or allocates one working set
+```
+
+**Primary failure call chain:**
+
+```text
+QualityBase frame while Interactive crop results are current
+  -> DropUnusablePublishedImages keeps revision-current Interactive geometry
+  -> QualityBase writes stay unpublished (SensorDevelopOnly)
+  -> Interactive preview textures remain leased
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CropMismatchesFrameIdentityDropsGeometryAndFreesOldExtent` | `GraphImageCacheRetentionTest` | PASS |
+| `QualityBaseKeepsInteractiveGeometryWhenCropChangesExtent` | `GraphImageCacheRetentionTest` | PASS |
+| `UnusedSizeReclaimFreesReleasedExtentWithoutBeginFrame` | `GraphImageCacheRetentionTest` | PASS |
+| `LatePublishObsoleteExtentsAreReclaimedAtNextFrameStart` | `GraphImageCacheRetentionTest` | PASS |
+| `ChangingExtentReleasesUnusedAllocationsBeforeAllocatingNextTexture` | `GraphImageCacheRetentionTest` | PASS |
+| `LeasedTextureAddressSurvivesPoolGrowth` | `GraphImageCacheRetentionTest` | PASS |
+| `MatchingScratchReusesAllocationWithinAndAcrossFrames` | `GraphImageCacheRetentionTest` | PASS |
+| `TwoEnabledNeighborhoodsUseSharedHorizontalThenVerticalOrder` ping/pong release | `GpuDagRawInputTest` | PASS |
+| `RepeatedFullCropAndExposureEditsBoundTextureEntriesAndBytesAndPreserveSourceHits` | `GpuDagCudaDrtProductTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GraphImageCacheRetentionTest --target GpuDagRawInputTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GraphImageCacheRetentionTest --target GpuDagCudaDrtProductTest
+ctest --test-dir build/debug --output-on-failure -R "GraphImageCacheRetentionTest|DrtPostSchedule|DrtPostExecutor"
+ctest --test-dir build/debug --output-on-failure -R "GraphImageCacheRetentionTest|RepeatedFullCropAndExposureEditsBoundTextureEntriesAndBytes"
+```
+
+Suite totals: GraphImageCacheRetentionTest 15/15 PASS; DrtPostSchedule+DrtPostExecutor 5/5 PASS; CUDA crop-and-exposure bound 1/1 PASS.
+
+**Checklist / exit condition:** crop/identity drop, unused-size reclaim (including this-frame-use after identity-drop), and DRT ping/pong release have named tests. Product CUDA crop-and-exposure bound executed.
+
+**LOC note (grill-code-review):** `texture_pool.hpp` 411, `graph_image_cache.hpp` 442, `basic_render_workspace.hpp` 329, `drt_post_executor.hpp` 188, `graph_image_cache_retention_test.cpp` 475. No new god object.
+
+**Residual gaps:** NM6.7–NM6.9 as above. Metal GPU encode not executed on this Windows host. `ReleaseUnused` at frame end still keeps this-frame scratch of the *current* size; obsolete sizes are freed by `ReleaseUnleasedUnusedSizes` even when that flag is still set.
+
 ### NM6.7 — Build node-name/EXIF header and capability-filtered panels
 
 **Changes:** implement Section 6 header in the existing stack; bind navigation/body to the registry;

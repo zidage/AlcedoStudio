@@ -15,6 +15,7 @@
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/result_persistence.hpp"
+#include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_pool.hpp"
@@ -104,6 +105,10 @@ class BasicRenderWorkspace {
       return;
     }
     invalidation_.CollectAndPropagate(plan, document, input, active_raster_masks);
+    // BeginRender waited for the previous submission. Retire invalid results
+    // even when sensor Develop is a cache hit; matching allocations remain reusable.
+    DropUnusablePublishedImages();
+    textures_.ReleaseUnleasedUnusedSizes();
     validity_prepared_ = true;
   }
   /**
@@ -115,9 +120,7 @@ class BasicRenderWorkspace {
    * a still-displayed frame, keep those textures alive.
    */
   void ReleaseStalePublishedImagesAndIdleTextures() {
-    images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision) {
-      return invalidation_.HasCurrentRevision(id, revision);
-    });
+    DropUnusablePublishedImages();
     textures_.ReleaseUnleased();
   }
 
@@ -144,10 +147,13 @@ class BasicRenderWorkspace {
             ? device_memory.total_bytes - device_memory.free_bytes
             : 0;
     std::fprintf(stderr,
-                 "[GPU_POOL] %s textures=%.1f MiB n=%zu  transient=%.1f/%.1f MiB  "
+                 "[GPU_POOL] %s textures=%.1f MiB n=%zu leased=%.1f unleased=%.1f MiB  "
+                 "transient=%.1f/%.1f MiB  "
                  "images=pub%zu/write%zu  values=%.1f n=%zu  masks=%.1f n=%zu",
                  reason == nullptr ? "" : reason, GpuPoolMiB(textures_.UsedBytes()),
                  textures_.EntryCount(),
+                 GpuPoolMiB(textures_.LeasedBytes()),
+                 GpuPoolMiB(textures_.UsedBytes() - textures_.LeasedBytes()),
                  GpuPoolMiB(transients_.used_bytes()), GpuPoolMiB(transients_.capacity_bytes()),
                  images_.PublishedCount(), images_.UnpublishedCount(),
                  GpuPoolMiB(values_.UsedBytes()), values_.Size(),
@@ -176,7 +182,11 @@ class BasicRenderWorkspace {
   }
 
   /**
-   * @brief Drop an unpublished image after its last consumer. GPU last-use must already be done.
+   * @brief Return an unpublished image to the pool after its last encoded reader.
+   *
+   * Further reuse must be on the same ordered GPU queue. This drops a lease, not
+   * native memory; the pool keeps this-frame entries alive until GPU completion.
+   * Published results are never released by this operation.
    */
   void ReleaseConsumedImage(const GraphValueId& id) { images_.ReleaseWrite(id); }
 
@@ -210,6 +220,7 @@ class BasicRenderWorkspace {
     if (!rendering_) {
       throw std::runtime_error("BasicRenderWorkspace::EndRender: not rendering");
     }
+    textures_.ReleaseUnused();
     textures_.MarkSubmitted(command_context.SubmissionId());
     mask_textures_.MarkSubmitted(command_context.SubmissionId());
     active_raster_textures_.MarkSubmitted(command_context.SubmissionId());
@@ -276,6 +287,29 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto ParameterLayoutHash() const -> std::uint64_t { return parameter_layout_hash_; }
 
  private:
+  /**
+   * @brief Drop published images that this frame cannot reuse.
+   *
+   * Revision mismatches are always dropped. Interactive frames also drop results
+   * whose representation identity no longer matches (crop, viewport, decode).
+   * QualityBase keeps revision-current Interactive results even when this frame's
+   * extent differs.
+   */
+  void DropUnusablePublishedImages() {
+    images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision,
+                                      const ResultRepresentation& published) {
+      if (!invalidation_.HasCurrentRevision(id, revision)) {
+        return false;
+      }
+      if (persistence_scope_ == ResultPersistenceScope::SensorDevelopOnly) {
+        return true;
+      }
+      const auto needed = invalidation_.MakeImageRepresentation(
+          id, published.extent, published.format, published.source_detail);
+      return RepresentationSatisfies(published, needed);
+    });
+  }
+
   Backend                       backend_{};
   ParameterArena<Backend>       parameters_;
   TransientBufferArena<Backend> transients_;
