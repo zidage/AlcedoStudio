@@ -256,6 +256,82 @@ TEST(EditorAdjustmentContextTest, ContextCopiesCallerExifAndDoesNotRereadOnNodeC
   EXPECT_FALSE(MakeEditorAdjustmentContext(document, NodeId{"missing"}, exif).has_value());
 }
 
+TEST(EditorAdjustmentContextTest, FormatsValidShutterIsoApertureAndActualFocalMm) {
+  EditorImageExifDisplay display;
+  display.shutter_speed = std::pair<int, int>{1, 250};
+  display.iso           = 100;
+  display.aperture       = 2.8f;
+  display.focal_mm      = 50.0f;
+  const auto text       = FormatEditorImageExifDisplay(display);
+  EXPECT_EQ(text.shutter, "1/250s");
+  EXPECT_EQ(text.iso, "ISO 100");
+  EXPECT_EQ(text.aperture, "f2.8");
+  EXPECT_EQ(text.focal, "50mm");
+  EXPECT_EQ(FormatEditorImageExifLine(display), "50mm f2.8 1/250s ISO 100");
+}
+
+TEST(EditorAdjustmentContextTest, FormatsWholeSecondShutterAndStripsTrailingFocalZeros) {
+  EditorImageExifDisplay display;
+  display.shutter_speed = std::pair<int, int>{2, 1};
+  display.iso           = 800;
+  display.aperture       = 1.4f;
+  display.focal_mm      = 35.0f;
+  const auto text       = FormatEditorImageExifDisplay(display);
+  EXPECT_EQ(text.shutter, "2s");
+  EXPECT_EQ(text.iso, "ISO 800");
+  EXPECT_EQ(text.aperture, "f1.4");
+  EXPECT_EQ(text.focal, "35mm");
+  EXPECT_EQ(FormatEditorImageExifLine(text), "35mm f1.4 2s ISO 800");
+}
+
+TEST(EditorAdjustmentContextTest, MissingAndInvalidExifRowsUseEmDash) {
+  const auto empty = FormatEditorImageExifDisplay({});
+  EXPECT_EQ(empty.shutter, kMissingExifDisplay);
+  EXPECT_EQ(empty.iso, kMissingExifDisplay);
+  EXPECT_EQ(empty.aperture, kMissingExifDisplay);
+  EXPECT_EQ(empty.focal, kMissingExifDisplay);
+  EXPECT_EQ(FormatEditorImageExifLine(empty), kMissingExifDisplay);
+
+  ExifDisplayMetaData metadata;
+  metadata.shutter_speed_ = {0, 0};
+  metadata.iso_           = 0;
+  metadata.aperture_     = 0.0f;
+  metadata.focal_         = 0.0f;
+  metadata.focal_35mm_    = 75.0f;
+  const auto from_meta    = ReadEditorImageExifDisplay(metadata);
+  EXPECT_FALSE(from_meta.focal_mm.has_value());
+  const auto text = FormatEditorImageExifDisplay(from_meta);
+  EXPECT_EQ(text.shutter, kMissingExifDisplay);
+  EXPECT_EQ(text.iso, kMissingExifDisplay);
+  EXPECT_EQ(text.aperture, kMissingExifDisplay);
+  EXPECT_EQ(text.focal, kMissingExifDisplay);
+  EXPECT_EQ(FormatEditorImageExifLine(from_meta), kMissingExifDisplay);
+}
+
+TEST(EditorAdjustmentContextTest, HeaderFocalUsesActualMmAndIgnoresThirtyFiveMmEquivalent) {
+  ExifDisplayMetaData metadata;
+  metadata.focal_      = 50.0f;
+  metadata.focal_35mm_ = 75.0f;
+  metadata.iso_        = 200;
+  const auto display    = ReadEditorImageExifDisplay(metadata);
+  ASSERT_TRUE(display.focal_mm.has_value());
+  EXPECT_FLOAT_EQ(*display.focal_mm, 50.0f);
+  const auto text = FormatEditorImageExifDisplay(display);
+  EXPECT_EQ(text.focal, "50mm");
+  EXPECT_EQ(text.iso, "ISO 200");
+  EXPECT_TRUE(text.focal.find("75") == std::string::npos);
+  EXPECT_EQ(FormatEditorImageExifLine(display), "50mm ISO 200");
+}
+
+TEST(EditorAdjustmentContextTest, FormatsExampleExifLineFocalApertureShutterIso) {
+  EditorImageExifDisplay display;
+  display.shutter_speed = std::pair<int, int>{1, 500};
+  display.iso           = 100;
+  display.aperture       = 2.8f;
+  display.focal_mm      = 100.0f;
+  EXPECT_EQ(FormatEditorImageExifLine(display), "100mm f2.8 1/500s ISO 100");
+}
+
 TEST(EditorAdjustmentContextTest, CapabilityRegistryMatchesNodeKind) {
   EXPECT_EQ(DefaultAdjustmentPanel(EditorNodeKind::Develop), kAdjustmentPanelRaw);
   EXPECT_EQ(DefaultAdjustmentPanel(EditorNodeKind::ColorGrade), kAdjustmentPanelTone);

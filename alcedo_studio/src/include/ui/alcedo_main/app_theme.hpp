@@ -79,6 +79,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
+  Q_PROPERTY(int editorAdjustmentHeaderMinHeight READ editorAdjustmentHeaderMinHeight CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
@@ -271,6 +272,7 @@ class AppTheme final : public QObject {
   auto        editorSidePanelWidthMax() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
+  auto        editorAdjustmentHeaderMinHeight() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;

@@ -33,17 +33,33 @@ inline constexpr std::string_view kAdjustmentPanelDisplay  = "display";
 inline constexpr std::string_view kAdjustmentPanelDetail   = "detail";
 
 /**
- * @brief Image-owned EXIF rows shown beside the selected node name.
+ * @brief Image-owned EXIF fields shown in the adjustment header.
  *
  * Source owner: Image::exif_display_. This is not PipelineDocument state and is
  * not reread when the selected NodeId changes. Nullopt means missing or invalid;
- * the header formats those rows as an em dash.
+ * the header omits those tokens from the EXIF line.
  */
 struct EditorImageExifDisplay {
   std::optional<std::pair<int, int>> shutter_speed;
   std::optional<std::uint64_t>       iso;
   std::optional<float>               aperture;
   std::optional<float>               focal_mm;
+};
+
+/// UTF-8 em dash used when a header EXIF field is missing or invalid.
+inline constexpr std::string_view kMissingExifDisplay = "\xE2\x80\x94";
+
+/**
+ * @brief Compact header EXIF tokens, including units.
+ *
+ * Missing or invalid fields are @ref kMissingExifDisplay. Tokens match the
+ * one-line readout: `100mm`, `f2.8`, `1/500s`, `ISO 100`.
+ */
+struct EditorExifRowText {
+  std::string shutter;
+  std::string iso;
+  std::string aperture;
+  std::string focal;
 };
 
 /**
@@ -77,6 +93,27 @@ struct EditorAdjustmentContext {
  * @brief Copy the four display EXIF fields from @p image when display metadata is present.
  */
 [[nodiscard]] auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay;
+
+/**
+ * @brief Format compact header EXIF tokens for QML.
+ *
+ * Valid shutter rationals become `1/250s` or `2s`. Positive ISO is `ISO 100`.
+ * Positive aperture is `f2.8`. Focal length uses the actual mm value with a
+ * `mm` unit and no space, never the 35 mm equivalent. Does not parse EXIF JSON.
+ */
+[[nodiscard]] auto FormatEditorImageExifDisplay(const EditorImageExifDisplay& display)
+    -> EditorExifRowText;
+
+/**
+ * @brief Join compact EXIF tokens into one readout line.
+ *
+ * Order is focal, aperture, shutter, ISO. Missing tokens are omitted. If every
+ * field is missing, the result is @ref kMissingExifDisplay. Example:
+ * `100mm f2.8 1/500s ISO 100`.
+ */
+[[nodiscard]] auto FormatEditorImageExifLine(const EditorExifRowText& text) -> std::string;
+
+[[nodiscard]] auto FormatEditorImageExifLine(const EditorImageExifDisplay& display) -> std::string;
 
 /// Panels the selected node kind may show. Geometry is Develop-only.
 [[nodiscard]] auto SupportedAdjustmentPanels(EditorNodeKind kind)

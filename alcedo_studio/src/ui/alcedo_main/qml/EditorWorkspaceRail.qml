@@ -108,9 +108,12 @@ Item {
 
     EditorNodeController {
         id: nodesController
+        objectName: "editorNodeController"
         editorSession: root.editorSession
         layoutStore: nodesLayoutStore
     }
+
+    readonly property alias nodeController: nodesController
 
     function driveFoldProgress(value) {
         foldManualDrive = true

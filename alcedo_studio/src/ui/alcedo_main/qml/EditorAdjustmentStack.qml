@@ -3,18 +3,15 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// Right-side editor tools: histogram/waveform scope slot, adjustment navbar,
-// and stacked panel bodies for Tone / Look / LUT / Display Transform / Geometry /
-// RAW Decode.
+// Right-side editor tools: histogram/waveform scope slot, selected-node
+// name/EXIF header, a stable adjustment navbar, and stacked panel bodies.
+// The navbar does not hide pages when the selected node changes; write
+// targeting still rejects fields the current node does not own.
 //
-// Phase 4D: every surface, button fill, and disabled state uses opaque named
-// theme colors (alpha 255). No parent-shell opacity, withAlpha(…), Qt.rgba(…,
-// alpha), or "transparent" surface fills remain.
-//
-// Surface family: the outer shell always uses the shared card surface so the
-// right column matches History/Versions, the viewport placeholder, and the
-// filmstrip. Disabled state mutes text/icons and disables controls — it does
-// not recolor the shell to a second panel tone.
+// Surfaces use opaque named theme colors. The outer shell always uses the
+// shared card surface so the right column matches History/Versions, the
+// viewport placeholder, and the filmstrip. Disabled state mutes text/icons
+// and disables controls — it does not recolor the shell to a second panel tone.
 //
 // Snapshot loading: stack fans out on AdjustmentSnapshotChanged / session bind.
 // Child panels still bootstrap once on construction so first-frame projection
@@ -26,37 +23,44 @@ Item {
     property var theme: null
     property var editorSession: null
     property var interaction: null
+    property var nodeController: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
-    // Card surface family (DESIGN.md): same as Library cards and left rail.
     readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
     readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
     readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
-    // Sunken inset for scope + nav track (interactive well, not a second card).
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
-    // Bound to editorSession so selection survives Loader teardown.
     readonly property string activePanel: editorSession
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
 
-    // Final sizing contract — editor side-panel tokens (DESIGN.md). The
-    // preferred width matches the History/Versions expanded panel so the two
-    // side columns read as one family.
+    readonly property var navItems: [
+        { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
+          label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
+        { key: "look", icon: "qrc:/panel_icons/palette.svg",
+          label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
+        { key: "lut", icon: "qrc:/panel_icons/box.svg",
+          label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
+        { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
+          label: qsTr("Display Transform"),
+          itemObjectName: "editorAdjustmentNav_display" },
+        { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
+          label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
+        { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
+          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" }
+    ]
+
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
     readonly property int minimumPanelWidth: appTheme.editorSidePanelWidthMin
     readonly property int maximumPanelWidth: appTheme.editorSidePanelWidthMax
     property bool expanded: true
 
-    // Filmstrip-style fold: logical expanded flips immediately; layout width
-    // and opacity track stackExpandProgress so the viewport reflows with the
-    // panel. Layout min/max stay loose during the fold so they cannot snap
-    // the width to 0 or to the expanded floor mid-animation.
     property real stackExpandProgress: 1
     property bool foldManualDrive: false
     property bool _motionArmed: false
@@ -98,24 +102,14 @@ Item {
         }
     }
 
-    // Counts successful fan-outs for tests/diagnostics. Content equality is
-    // gated by the controller: AdjustmentSnapshotChanged only fires when the
-    // cached map actually changes (interactive submit suppresses the emit).
-    // Do not JSON.stringify the full snapshot for idempotency — that freezes
-    // the GUI on large maps (curve/HLS/ODT/crop) every settled commit.
     property int lastAppliedRevision: -1
 
-    // LUT catalog model shared between EditorLookPanel and LUTPanel.
     EditorLutCatalogModel {
         id: lutModel
         objectName: "adjustmentStackLutModel"
         submitter: root.editorSession
     }
 
-    /// Load panel values from the editor session adjustment snapshot.
-    /// Fan-out only: each panel extracts its owned field keys. Panel loaders are
-    /// idempotent (equal values no-op), so a second apply from a panel bootstrap
-    /// path is cheap.
     function loadFromSnapshot(snapshot) {
         if (!editorSession)
             return
@@ -136,8 +130,6 @@ Item {
             rawPanel.loadFromSnapshot(snapshot)
     }
 
-    /// Defer until child panels finish construction (createWithInitialProperties
-    /// can assign editorSession before StackLayout children exist).
     function scheduleLoadFromSession() {
         if (!root.editorSession)
             return
@@ -148,16 +140,11 @@ Item {
     }
 
     function selectPanel(panel) {
-        if (!editorSession) {
+        if (!editorSession)
             return
-        }
-        // GeometryPanel commits from onPanelActiveChanged after the controller
-        // queues the overlay-off refresh. Its final Quality frame therefore owns
-        // the newest request id and cannot be masked by that refresh.
         editorSession.activeAdjustmentPanel = panel
     }
 
-    /// Enter / Return while Geometry is active: commit draft crop and return to Tone.
     function confirmGeometryAndReturnToTone() {
         if (root.activePanel !== "geometry")
             return false
@@ -183,20 +170,14 @@ Item {
         if (!root.controlsEnabled) {
             return qsTr("Select an image to enable adjustments")
         }
-        // Product empty state — no developer/placeholder phrasing.
         return qsTr("No adjustments yet")
     }
 
     Rectangle {
         id: panelShell
         objectName: "editorRightPanelSlot"
-        width: root.preferredPanelWidth
-        height: parent.height
-        anchors.right: parent.right
+        anchors.fill: parent
         radius: root.panelRadius
-        // Always the shared card surface — matches left rail, viewport, filmstrip.
-        // Disabled is expressed through control enablement and muted copy, not a
-        // second shell fill that breaks the editor card family.
         color: root.colCardSurface
         border.width: 1
         border.color: root.colCardBorder
@@ -207,7 +188,6 @@ Item {
             anchors.margins: appTheme.spaceMd
             spacing: appTheme.spaceMd
 
-            // Histogram / waveform placement stays with the right-side tools.
             EditorScopePanel {
                 id: scopeSlot
                 objectName: "editorScopeSlot"
@@ -217,6 +197,27 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 controlsEnabled: root.controlsEnabled
+            }
+
+            EditorAdjustmentHeader {
+                id: adjustmentHeader
+                Layout.fillWidth: true
+                theme: root.theme
+                nodeName: root.nodeController
+                          ? String(root.nodeController.selectedNodeName || "")
+                          : ""
+                focalText: root.editorSession
+                            ? String(root.editorSession.exifFocalText || "\u2014")
+                            : "\u2014"
+                apertureText: root.editorSession
+                              ? String(root.editorSession.exifApertureText || "\u2014")
+                              : "\u2014"
+                shutterText: root.editorSession
+                              ? String(root.editorSession.exifShutterText || "\u2014")
+                              : "\u2014"
+                isoText: root.editorSession
+                         ? String(root.editorSession.exifIsoText || "\u2014")
+                         : "\u2014"
             }
 
             SlidingIconNav {
@@ -229,27 +230,10 @@ Item {
                 trackBorderColor: root.colCardBorder
                 idleIconColor: root.colMuted
                 thumbObjectName: "editorAdjustmentNavThumb"
-                items: [
-                    { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
-                      label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
-                    { key: "look", icon: "qrc:/panel_icons/palette.svg",
-                      label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
-                    { key: "lut", icon: "qrc:/panel_icons/box.svg",
-                      label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
-                    { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
-                      label: qsTr("Display Transform"),
-                      itemObjectName: "editorAdjustmentNav_display" },
-                    { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
-                      label: qsTr("Geometry"),
-                      itemObjectName: "editorAdjustmentNav_geometry" },
-                    { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
-                      label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" }
-                ]
+                items: root.navItems
                 onActivated: key => root.selectPanel(key)
             }
 
-            // Stacked panel bodies. Explicit children keep StackLayout indices
-            // stable while each panel owns its snapshot fields.
             StackLayout {
                 id: panelStack
                 objectName: "editorAdjustmentPanelStack"
@@ -321,21 +305,16 @@ Item {
         }
     }
 
-    // Settled / undo / image-switch publish. Interactive submitPatch suppresses
-    // the emit so pointer moves do not re-enter this fan-out.
     Connections {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
         }
     }
-    // Session rebind: reset apply counter and project after children are ready.
     onEditorSessionChanged: {
         root.lastAppliedRevision = -1
         root.scheduleLoadFromSession()
     }
-    // createWithInitialProperties / first frame: session may already be set
-    // without a change signal.
     Component.onCompleted: {
         stackExpandProgress = expanded ? 1 : 0
         _motionArmed = true

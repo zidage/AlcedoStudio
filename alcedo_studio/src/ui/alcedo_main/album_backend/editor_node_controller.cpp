@@ -9,6 +9,7 @@
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QUuid>
+#include <QVariantMap>
 #include <algorithm>
 #include <exception>
 #include <utility>
@@ -305,6 +306,64 @@ auto EditorNodeController::backbone_node_ids() const -> QStringList {
 auto EditorNodeController::selected_node_name() const -> QString {
   const auto* node = NodeFor(selected_node_id_);
   return node == nullptr ? QString{} : QString::fromStdString(node->display_name);
+}
+
+auto EditorNodeController::selected_node_kind() const -> QString {
+  const auto* node = NodeFor(selected_node_id_);
+  if (node == nullptr) {
+    return {};
+  }
+  switch (node->node_kind) {
+    case EditorNodeKind::Develop:
+      return QStringLiteral("develop");
+    case EditorNodeKind::ColorGrade:
+      return QStringLiteral("colorGrade");
+    case EditorNodeKind::Drt:
+      return QStringLiteral("drt");
+  }
+  return {};
+}
+
+auto EditorNodeController::supported_adjustment_panels() const -> QStringList {
+  const auto* node = NodeFor(selected_node_id_);
+  if (node == nullptr) {
+    return {};
+  }
+  QStringList panels;
+  for (const auto panel : SupportedAdjustmentPanels(node->node_kind)) {
+    panels.push_back(QString::fromUtf8(panel.data(), static_cast<int>(panel.size())));
+  }
+  return panels;
+}
+
+auto EditorNodeController::selected_node_masks() const -> QVariantList {
+  const auto* node = NodeFor(selected_node_id_);
+  if (node == nullptr) {
+    return {};
+  }
+  QVariantList rows;
+  rows.reserve(static_cast<qsizetype>(node->masks.size()));
+  for (const auto& mask : node->masks) {
+    QVariantMap row;
+    row.insert(QStringLiteral("maskId"),
+               QString::fromUtf8(mask.mask_id.Value().data(),
+                                  static_cast<int>(mask.mask_id.Value().size())));
+    QString source_kind;
+    switch (mask.source_kind) {
+      case MaskSourceKind::Brush:
+        source_kind = QStringLiteral("brush");
+        break;
+      case MaskSourceKind::Radial:
+        source_kind = QStringLiteral("radial");
+        break;
+      case MaskSourceKind::LinearGradient:
+        source_kind = QStringLiteral("linearGradient");
+        break;
+    }
+    row.insert(QStringLiteral("sourceKind"), source_kind);
+    rows.push_back(row);
+  }
+  return rows;
 }
 
 auto EditorNodeController::can_add_color_grade() const -> bool {

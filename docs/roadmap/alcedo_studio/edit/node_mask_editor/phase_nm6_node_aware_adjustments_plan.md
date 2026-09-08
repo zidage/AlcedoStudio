@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: NM6.1–NM6.6, NM6.4P, and NM6.P complete; NM6.7–NM6.9 planned.
+Status: NM6.1–NM6.7, NM6.4P, and NM6.P complete; NM6.8–NM6.9 planned.
 
 Prerequisites: NM5 is complete. Preserve NM1 single live document/executor ownership,
 NM2 multi-Grade execution, NM3 multi-Mask data, and NM4 history/recovery guarantees.
@@ -413,7 +413,7 @@ Additional acceptance requirements:
 
 ## 7. Ordered implementation phases
 
-NM6.1–NM6.6, NM6.4P, and NM6.P are complete. NM6.7–NM6.9 remain planned. Each phase must leave a buildable product path and
+NM6.1–NM6.7, NM6.4P, and NM6.P are complete. NM6.8–NM6.9 remain planned. Each phase must leave a buildable product path and
 write its actual call chain and evidence into Section 10. New-file names are proposed; existing
 links are verified entry points. Do not declare a phase complete based on implementation
 inspection alone.
@@ -1267,6 +1267,78 @@ Use alcedo-qml-ui and qt-qml skills for implementation; do not introduce new QML
 reduced motion and both themes. Names and EXIF remain legible without covering navigation.
 Node switches keep compatible pages; LUT selection/scroll survives re-entry without submitting.
 
+##### NM6.7 completion record (2026-09-08)
+
+**Status:** complete — header, image-scoped EXIF, White Balance on RAW Decode, Geometry
+whole-image copy, and a **stable** six-page navbar. Capability-filtered navigation was
+**not** implemented: users who do not operate the node graph keep Tone / Look / LUT /
+Display / Geometry / RAW Decode visible. Selected-node write targeting from NM6.6 still
+rejects fields the current node does not own. Detail/Texture remain on Look. Masks stay on
+the Nodes graph.
+
+**Primary success call chain:**
+
+```text
+Image open / identity change
+  -> EditorSessionController::RefreshImageExifDisplay
+  -> ImagePool ReadEditorImageExifDisplay / FormatEditorImageExifDisplay
+  -> ImageExifChanged
+  -> EditorAdjustmentHeader four rows (em dash when missing)
+
+selectNode
+  -> EditorNodeController SelectionChanged (selectedNodeName)
+  -> EditorAdjustmentHeader node name (elide, two lines)
+  -> ApplySelectedAdjustmentNode (NM6.6) keeps a supported page or falls back
+  -> navbar items stay Tone/Look/LUT/Display/Geometry/RAW Decode
+  -> loadFromSnapshot fan-out (load-only; LUT path/contentY unchanged)
+```
+
+**Primary failure call chain:**
+
+```text
+Missing Image / invalid EXIF / ImagePool Read throw
+  -> empty EditorImageExifDisplay
+  -> four em-dash rows; header layout unchanged
+
+Geometry write while Color Grade selected
+  -> navbar still shows Geometry
+  -> submitWrite / CompleteSelectedNodeParameterTarget rejects (NM6.6)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Header at 260/320/460 px stays above nav | `EditorAdjustmentHeaderQmlTest` | PASS |
+| Long name elides; full name remains on the header | `EditorAdjustmentHeaderQmlTest` | PASS |
+| Missing EXIF uses em dash on four rows | `EditorAdjustmentHeaderQmlTest` / `EditorAdjustmentContextTest` | PASS |
+| Actual focal mm, not 35 mm equivalent | `EditorAdjustmentContextTest` | PASS |
+| Both AppTheme themes use token colors | `EditorAdjustmentHeaderQmlTest` | PASS |
+| reduceMotion + title vs caption; header does not cover nav | `EditorAdjustmentHeaderQmlTest` | PASS |
+| Navbar keeps all six pages when Develop / Grade / DRT is selected | `EditorAdjustmentHeaderQmlTest` | PASS |
+| Geometry body states whole-image scope | `EditorAdjustmentHeaderQmlTest` | PASS |
+| RAW Decode hosts White Balance; load does not submit | `EditorAdjustmentHeaderQmlTest` | PASS |
+| LUT path and contentY survive stack load without submit | `EditorAdjustmentHeaderQmlTest` | PASS |
+| Geometry confirm still returns to Tone | `EditorGeometryPanelQmlTest` | PASS |
+| Snapshot first-bind still load-only | `EditorAdjustmentSnapshotQmlTest` | PASS |
+| RAW Decode existing load/submit cases | `EditorRawDecodePanelQmlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorAdjustmentHeaderQmlTest --target EditorAdjustmentContextTest --target EditorGeometryPanelQmlTest --target EditorAdjustmentSnapshotQmlTest --target EditorRawDecodePanelQmlTest
+ctest --test-dir build/debug --output-on-failure -R "EditorAdjustmentHeaderQmlTest|EditorAdjustmentContextTest|EditorGeometryPanelQmlTest|EditorAdjustmentSnapshotQmlTest|EditorRawDecodePanelQmlTest"
+```
+
+Suite totals: 35/35 PASS (9 header/nav + 11 context including format cases + 10 geometry + 2 snapshot + 3 RAW Decode). WorkspaceShell packed-project click-through not re-run in this slice.
+
+**Checklist / exit condition:** header, EXIF formatting, stable navbar, WB on RAW, Geometry whole-image copy, and load-only LUT restore are evidenced. Capability-filtered nav was dropped by product direction.
+
+**LOC note (grill-code-review):** new `EditorAdjustmentHeader.qml` / `EditorWhiteBalanceSection.qml` / `EditorMonoSlider.qml` split header and Develop WB off the stack and Look. `EditorLookPanel.qml` is ~939 lines after WB removal. `editor_session_controller.cpp` and `editor_node_controller.cpp` remain above 1000 from prior phases; this slice added EXIF QML properties and selected-node name/kind/mask reads. `EditorDetailPanel.qml` and `EditorMasksContextPanel.qml` exist as unused module files after the navbar was kept at six stable pages.
+
+**Residual gaps:** NM6.8 lifecycle/history e2e; NM6.9 pixel/perf qualification. WorkspaceShell editor round-trip with packed RAW not re-run here. Capability-filtered nav will not be added unless product direction changes.
+
 ### NM6.8 — Verify history, lifecycle and end-to-end routing
 
 **Changes:** complete boundary integration and remove old synchronous panel mutation routes;
@@ -1399,8 +1471,8 @@ and any renamed linked files together. No runtime metadata is written into docum
 | NM6.P | complete 2026-09-06 | `feature/nm6-native-parameter-access` | QML/model `submitWrite` → queue → `ApplyEditorParameterWrite` → remirror/render/history → typed panel read; CameraColor/DRT `BindOrWritePackedSlot`; P7 result retention / QualityBase bypass | see [NM6.P plan](phase_nm6p_native_parameter_access_plan.md) | Shared Grade/LLF executors NM6.5; node targeting NM6.6 |
 | NM6.5 | complete 2026-09-06 | uncommitted on `feature/shared-grade-local-tone-executors` | PlanExecutor → GradeExecutor → LocalToneExecutor → specialized GPU op → PersistCanonical source.0/result.0 → RecordUnpublished / PublishResults | 120/120 focused PASS; Metal GPU encode skipped on Windows; see NM6.5 completion record | Shared Point/Neighbor/DRT orchestration is NM6.5B; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
 | NM6.5B | complete 2026-09-07 | uncommitted on `feature/shared-grade-local-tone-executors` | compiled stages → GradeExecutor / NeighborExecutor / DrtPostExecutor → Ops::DispatchPointwise \| DispatchHorizontal \| DispatchVerticalApply \| DispatchDisplayTransform | 118/118 focused PASS plus 2 CUDA product DRT cases; Metal GPU encode skipped on Windows; see NM6.5B completion record | Node targeting NM6.6; Metal GPU execution; Section 8.2 RAW pixel matrix NM6.9 |
-| NM6.6 | complete 2026-09-07 | uncommitted on `feature/selected-node-adjustment-context` @ `9b881864` | selectNode → SetAdjustmentProjectionNode → ProjectSelectedNodePanelFields; submitWrite → CompleteSelectedNodeParameterTarget → queue → CaptureAdjustmentBeforePreview | 58/58 focused PASS plus 6/6 panel/queue PASS; see NM6.6 completion record | QML header/capability filter NM6.7; lifecycle e2e NM6.8; Section 8.2 RAW pixel matrix NM6.9 |
-| NM6.7 | planned | — | — | — | Approved header and panel UI |
+| NM6.6 | complete 2026-09-07 | uncommitted on `feature/selected-node-adjustment-context` @ `9b881864` | selectNode → SetAdjustmentProjectionNode → ProjectSelectedNodePanelFields; submitWrite → CompleteSelectedNodeParameterTarget → queue → CaptureAdjustmentBeforePreview | 58/58 focused PASS plus 6/6 panel/queue PASS; see NM6.6 completion record | QML header NM6.7; lifecycle e2e NM6.8; Section 8.2 RAW pixel matrix NM6.9 |
+| NM6.7 | complete 2026-09-08 | uncommitted on `feature/node-aware-adjustment-header` @ `1c9daafb` | image identity → FormatEditorImageExifDisplay → header rows; selectNode → header name; stable Tone/Look/LUT/Display/Geometry/RAW nav; WB on RAW Decode; loadFromSnapshot load-only | 35/35 focused PASS; see NM6.7 completion record | Lifecycle e2e NM6.8; Section 8.2 RAW pixel matrix NM6.9; no capability-filtered nav |
 | NM6.8 | planned | — | — | — | Lifecycle/history integration |
 | NM6.9 | planned | — | — | — | Cross-platform qualification |
 

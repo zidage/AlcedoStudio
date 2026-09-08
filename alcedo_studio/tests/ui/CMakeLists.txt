@@ -1042,6 +1042,36 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
     TEST_PREFIX "EditorAdjustmentSnapshotQmlTest.")
 alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
 
+add_executable(EditorAdjustmentHeaderQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_header_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorAdjustmentHeaderQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentHeaderQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentHeaderQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorAdjustmentHeaderQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorAdjustmentHeaderQmlTest
+    TEST_PREFIX "EditorAdjustmentHeaderQmlTest."
+    PROPERTIES LABELS "workspace_qml;adjustment_header")
+alcedo_register_test_target(EditorAdjustmentHeaderQmlTest ui)
+
 # Display Transform QML snapshot: verifies ODT params populate the
 # Display Transform panel on first bind and method/space/EOTF changes.
 add_executable(EditorDisplayTransformSnapshotQmlTest

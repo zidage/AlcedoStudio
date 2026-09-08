@@ -706,6 +706,7 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 interaction: editorInteraction
+                nodeController: historyVersionsRail.nodeController
                 controlsEnabled: root.editorControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }
