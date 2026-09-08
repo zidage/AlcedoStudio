@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -134,6 +135,9 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorPanelProjection* projection, std::string* error)
       -> bool override;
+  auto SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
+                              const alcedo::NodeId& node_id, std::uint64_t session_generation,
+                              std::string* error) -> bool override;
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> override;
   auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,

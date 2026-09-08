@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <utility>
 #include <variant>
 
 #include "json.hpp"
@@ -25,6 +26,8 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
@@ -293,6 +296,110 @@ TEST_F(EditorSessionHistoryPortTest, LiveWriteProjectsTypedExposureWithoutReadin
   ASSERT_NE(scalar, nullptr);
   EXPECT_FLOAT_EQ(scalar->value, 0.75f);
   EXPECT_EQ(exposure->source.adjustment_instance_id.Value(), "grade.primary.exposure");
+}
+
+TEST_F(EditorSessionHistoryPortTest, UnspecifiedWriteUsesSelectedProjectionNodeNotPrimaryGrade) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(alcedo::AddCleanColorGrade(*guard_->document_, alcedo::NodeId{"drt"},
+                                        alcedo::NodeId{"grade.b"})
+                  .empty());
+  ASSERT_TRUE(history_.SetPanelProjectionNode(handle, alcedo::NodeId{"grade.b"}, 1, &error))
+      << error;
+
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key = "exposure";
+  patch.write     = alcedo::EditorScalarWrite{0.25f};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error)) << error;
+
+  auto* extra = dynamic_cast<alcedo::ColorGradeNodeModel*>(
+      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.b"}));
+  auto* primary = guard_->document_->PrimaryGrade();
+  ASSERT_NE(extra, nullptr);
+  ASSERT_NE(primary, nullptr);
+  auto* extra_exposure = dynamic_cast<alcedo::ExposureModel*>(
+      extra->FindAdjustmentByType(alcedo::type_ids::Exposure()));
+  auto* primary_exposure = dynamic_cast<alcedo::ExposureModel*>(
+      primary->FindAdjustmentByType(alcedo::type_ids::Exposure()));
+  ASSERT_NE(extra_exposure, nullptr);
+  ASSERT_NE(primary_exposure, nullptr);
+  EXPECT_FLOAT_EQ(extra_exposure->Value(), 0.25f);
+  EXPECT_FLOAT_EQ(primary_exposure->Value(), alcedo::kDefaultPipelineExposureEv);
+
+  alcedo::EditorPanelProjection projection;
+  ASSERT_TRUE(history_.ReadPanelProjection(handle, &projection, &error)) << error;
+  const alcedo::EditorPanelFieldPresentation* exposure = nullptr;
+  for (const auto& field : projection.fields) {
+    if (field.field_key == "exposure") {
+      exposure = &field;
+      break;
+    }
+  }
+  ASSERT_NE(exposure, nullptr);
+  const auto* scalar = std::get_if<alcedo::EditorPanelScalarValue>(&exposure->value);
+  ASSERT_NE(scalar, nullptr);
+  EXPECT_FLOAT_EQ(scalar->value, 0.25f);
+  EXPECT_EQ(exposure->source.node_id, alcedo::NodeId{"grade.b"});
+  EXPECT_NE(exposure->source.adjustment_instance_id.Value(), "grade.primary.exposure");
+}
+
+TEST_F(EditorSessionHistoryPortTest, SelectedNodeProjectionCompletesWhileRenderLockHeld) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(alcedo::AddCleanColorGrade(*guard_->document_, alcedo::NodeId{"drt"},
+                                        alcedo::NodeId{"grade.b"})
+                  .empty());
+
+  std::atomic<bool> worker_ready{false};
+  std::atomic<bool> release_worker{false};
+  std::thread       worker([&] {
+    std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
+    worker_ready.store(true);
+    while (!release_worker.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!worker_ready.load() && std::chrono::steady_clock::now() < ready_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  if (!worker_ready.load()) {
+    release_worker.store(true);
+    if (worker.joinable()) {
+      worker.join();
+    }
+    FAIL() << "render-lock worker did not acquire the lock";
+  }
+
+  auto project_future = std::async(std::launch::async, [&] {
+    std::string project_error;
+    const bool  ok = history_.SetPanelProjectionNode(handle, alcedo::NodeId{"grade.b"}, 1,
+                                                     &project_error);
+    return std::pair<bool, std::string>{ok, std::move(project_error)};
+  });
+  const auto project_status = project_future.wait_for(std::chrono::seconds(2));
+  release_worker.store(true);
+  if (worker.joinable()) {
+    worker.join();
+  }
+  ASSERT_EQ(project_status, std::future_status::ready)
+      << "selected-node panel projection must not wait on the live render lock";
+  const auto projected = project_future.get();
+  EXPECT_TRUE(projected.first) << projected.second;
+
+  alcedo::EditorPanelProjection projection;
+  ASSERT_TRUE(history_.ReadPanelProjection(handle, &projection, &error)) << error;
+  const alcedo::EditorPanelFieldPresentation* exposure = nullptr;
+  for (const auto& field : projection.fields) {
+    if (field.field_key == "exposure") {
+      exposure = &field;
+      break;
+    }
+  }
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_EQ(exposure->source.node_id, alcedo::NodeId{"grade.b"});
 }
 
 TEST_F(EditorSessionHistoryPortTest, BranchingVersionHistoryAllowsSwitchingWithoutMergeCommits) {

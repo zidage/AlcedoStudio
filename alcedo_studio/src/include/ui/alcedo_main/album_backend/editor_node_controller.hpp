@@ -126,6 +126,8 @@ class EditorNodeController : public QObject {
    * @param node_id Product NodeId string.
    */
   Q_INVOKABLE void selectNode(const QString& node_id);
+  /// Select the panel owner, returning to the last live Color Grade when possible.
+  void SelectNodeForAdjustmentPanel(const QString& panel);
   Q_INVOKABLE void selectPreviousBackboneNode();
   Q_INVOKABLE void selectNextBackboneNode();
   Q_INVOKABLE void selectDevelop();
@@ -239,8 +241,12 @@ class EditorNodeController : public QObject {
   void               OnSessionHistoryChanged();
   void               ClearSnapshot();
   void               SetLastError(QString error);
-  void               RestoreSelectionAfterSnapshot();
+  /// @p select_default_color_grade is true only for a new image-load generation.
+  /// Topology edits that drop the current node leave selection empty.
+  void               RestoreSelectionAfterSnapshot(bool select_default_color_grade);
+  void               SyncSessionAdjustmentNode(bool seal_open_sequence);
   [[nodiscard]] auto ContainsNode(const NodeId& node_id) const -> bool;
+  /// Product default Color Grade (`grade.primary`) when that node exists.
   [[nodiscard]] auto DefaultSelectedNodeId() const -> NodeId;
   [[nodiscard]] auto IndexOf(const NodeId& node_id) const -> int;
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> const EditorNodeProjection*;
@@ -294,6 +300,7 @@ class EditorNodeController : public QObject {
   EditorNodeGraphSnapshot                             snapshot_{};
   bool                                                has_snapshot_ = false;
   NodeId                                              selected_node_id_;
+  NodeId                                              last_selected_color_grade_id_;
   NodeId                                              selection_restore_node_id_;
   bool                                                command_active_          = false;
   bool                                                projection_apply_queued_ = false;

@@ -9,14 +9,21 @@
 #include <QCoreApplication>
 #include <QTranslator>
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 #include "app/editor_action_policy.hpp"
 #include "app/editor_node_graph_projection.hpp"
+#include "app/editor_pending_input.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "edit/frame_presentation_types.hpp"
+#include "app/editor_adjustment_context.hpp"
+#include "app/editor_render_intent.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -28,8 +35,14 @@
 
 namespace {
 
+using alcedo::AddCleanColorGrade;
 using alcedo::CreateDefaultPipelineDocument;
 using alcedo::EditorNodeGraphProjection;
+using alcedo::EditorPendingInputBoundaryKind;
+using alcedo::EditorPendingInputView;
+using alcedo::EditorParameterOwnerKind;
+using alcedo::EditorScalarWrite;
+using alcedo::ImageGeometryUpdate;
 using alcedo::EditorSessionIdentity;
 using alcedo::EditorSessionResult;
 using alcedo::EditorSessionState;
@@ -87,6 +100,39 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
 
   void SetPresentationSinkId(alcedo::PresentationSinkId) override {}
   void SetPresentationSize(int, int) override {}
+  auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override {
+    ++set_projection_count_;
+    last_projection_node_ = node_id;
+    return Accepted("Selected node panel projection updated");
+  }
+  auto EnqueueAdjustmentInput(alcedo::EditorAdjustmentPatch patch) -> EditorSessionResult override {
+    ++enqueue_count_;
+    const auto admitted = pending_input_.AdmitFieldChange(identity_, std::move(patch));
+    if (!admitted.accepted) {
+      return Rejected(admitted.error);
+    }
+    return Accepted("Adjustment input queued");
+  }
+  auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
+      -> EditorSessionResult override {
+    ++boundary_count_;
+    last_boundary_      = kind;
+    const auto admitted = pending_input_.AdmitBoundary(identity_, kind);
+    if (!admitted.accepted) {
+      return Rejected(admitted.error);
+    }
+    return Accepted("Adjustment input boundary queued");
+  }
+  [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override {
+    return pending_input_.Peek();
+  }
+  auto RequestViewChange(alcedo::EditorRenderReason, std::optional<alcedo::ViewportRenderRegion>)
+      -> EditorSessionResult override {
+    ++view_change_count_;
+    auto result  = Accepted("View change recorded");
+    result.kind  = alcedo::EditorSessionResultKind::RenderRouted;
+    return result;
+  }
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
     identity_.element_id = element_id;
     identity_.image_id   = image_id;
@@ -158,6 +204,14 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
     return history_snapshot_read_count_;
   }
+  [[nodiscard]] auto set_projection_count() const -> int { return set_projection_count_; }
+  [[nodiscard]] auto last_projection_node() const -> NodeId { return last_projection_node_; }
+  [[nodiscard]] auto enqueue_count() const -> int { return enqueue_count_; }
+  [[nodiscard]] auto boundary_count() const -> int { return boundary_count_; }
+  [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
+  [[nodiscard]] auto last_boundary() const -> EditorPendingInputBoundaryKind {
+    return last_boundary_;
+  }
 
  private:
   auto Accepted(std::string message) const -> EditorSessionResult {
@@ -187,6 +241,13 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   std::uint64_t                                     history_revision_            = 0;
   mutable int                                       active_version_read_count_   = 0;
   int                                               history_snapshot_read_count_ = 0;
+  int                                               set_projection_count_        = 0;
+  int                                               enqueue_count_               = 0;
+  int                                               boundary_count_              = 0;
+  int                                               view_change_count_           = 0;
+  NodeId                                            last_projection_node_;
+  EditorPendingInputBoundaryKind                    last_boundary_ = EditorPendingInputBoundaryKind::None;
+  alcedo::EditorPendingInputQueue                   pending_input_;
   alcedo::NodeGraphTopologyChange                   last_topology_change_{};
 };
 
@@ -207,6 +268,23 @@ TEST(EditorNodeController, PublishDocumentSelectsPrimaryColorGrade) {
   EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
   EXPECT_EQ(controller.backbone_node_ids().size(), 3);
   EXPECT_FALSE(controller.can_add_color_grade());
+}
+
+TEST(EditorNodeController, TopologyEditDoesNotSelectASubstituteGrade) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(17);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.extra"));
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
+
+  ASSERT_TRUE(controller.deleteColorGrade(QStringLiteral("grade.extra")));
+  EXPECT_TRUE(controller.selected_node_id().Empty());
+  EXPECT_TRUE(backend.last_projection_node().Empty());
+  EXPECT_FALSE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.3f}, false));
 }
 
 TEST(EditorNodeController, UnknownNodeDoesNotCreateASecondSelection) {
@@ -315,6 +393,7 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_EQ(controller.ActiveNodes().size(), 3u);
+  EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
 TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBackendMutation) {
@@ -352,7 +431,7 @@ TEST(EditorNodeController, BackendFailurePreservesDocumentCounterProjectionAndSe
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
-TEST(EditorNodeController, MissingNodeAfterRefreshSelectsRemainingColorGrade) {
+TEST(EditorNodeController, MissingDefaultColorGradeAfterRefreshClearsSelection) {
   EditorNodeController controller;
   auto                 document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(controller.PublishDocument(document, 2));
@@ -363,8 +442,7 @@ TEST(EditorNodeController, MissingNodeAfterRefreshSelectsRemainingColorGrade) {
                      [](const auto& node) { return node.node_id == NodeId{"grade.primary"}; }),
       next.nodes.end());
   ASSERT_TRUE(controller.PublishSnapshot(std::move(next)));
-  EXPECT_NE(controller.selected_node_id(), NodeId{"grade.primary"});
-  EXPECT_FALSE(controller.selected_node_id().Empty());
+  EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
 TEST(EditorNodeController, BlockedEditAvailabilityDisablesAddWithoutSnapshotChange) {
@@ -739,6 +817,174 @@ TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {
   EXPECT_TRUE(session.editor_tool_panel_page().isEmpty());
   session.set_editor_tool_panel_page(QStringLiteral("NODES"));
   EXPECT_EQ(session.editor_tool_panel_page(), QStringLiteral("nodes"));
+}
+
+TEST(EditorNodeController, SubmitWriteStampsSelectedColorGradeInstance) {
+  DocumentSessionBackend  backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(NodeIdToQString(NodeId{"grade.b"}));
+  EXPECT_EQ(backend.last_projection_node(), NodeId{"grade.b"});
+
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.4f}, false));
+  const auto pending = session.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().captured_target.owner_kind,
+            EditorParameterOwnerKind::ColorGrade);
+  EXPECT_EQ(pending.sequences.front().captured_target.node_id, NodeId{"grade.b"});
+  const auto* extra =
+      dynamic_cast<alcedo::ColorGradeNodeModel*>(backend.Document().Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(extra, nullptr);
+  const auto* instance = extra->FindAdjustmentIdByType(alcedo::type_ids::Exposure());
+  ASSERT_NE(instance, nullptr);
+  EXPECT_EQ(pending.sequences.front().captured_target.adjustment_instance_id, *instance);
+  EXPECT_NE(pending.sequences.front().captured_target.adjustment_instance_id,
+            alcedo::AdjustmentInstanceId{"grade.primary.exposure"});
+}
+
+TEST(EditorNodeController, GeometryWriteRejectedWhenColorGradeIsSelected) {
+  DocumentSessionBackend  backend;
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.1f}, true));
+  EXPECT_FALSE(session.submitWrite(QStringLiteral("crop_rotate"), ImageGeometryUpdate{}, false));
+  const auto pending = session.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().fields.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().fields.front().target.field_key, "exposure");
+}
+
+TEST(EditorNodeController, EmptySelectionDoesNotQueueBoundaryOrRender) {
+  DocumentSessionBackend  backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  const int views_before      = backend.view_change_count();
+  const int boundaries_before = backend.boundary_count();
+  const int enqueue_before    = backend.enqueue_count();
+  const auto revision_before  = backend.history_revision();
+  nodes.selectNode(NodeIdToQString(NodeId{"grade.b"}));
+  EXPECT_EQ(backend.boundary_count(), boundaries_before);
+  EXPECT_EQ(backend.enqueue_count(), enqueue_before);
+  EXPECT_EQ(backend.view_change_count(), views_before);
+  EXPECT_EQ(backend.history_revision(), revision_before);
+  EXPECT_EQ(backend.last_projection_node(), NodeId{"grade.b"});
+  EXPECT_TRUE(session.PeekPendingInput().sequences.empty());
+}
+
+TEST(EditorNodeController, NodeSwitchSealsOpenSequenceAndLaterWriteTargetsNewGrade) {
+  DocumentSessionBackend  backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"grade.primary"});
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.1f}, false));
+  nodes.selectNode(NodeIdToQString(NodeId{"grade.b"}));
+  EXPECT_EQ(backend.last_boundary(), EditorPendingInputBoundaryKind::NodeSwitch);
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.2f}, false));
+
+  const auto pending = session.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 2u);
+  EXPECT_EQ(pending.sequences[0].seal, EditorPendingInputBoundaryKind::NodeSwitch);
+  EXPECT_EQ(pending.sequences[0].captured_target.node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(pending.sequences[1].captured_target.node_id, NodeId{"grade.b"});
+}
+
+TEST(EditorNodeController, PanelNavigationSelectsOwnersAndReturnsToLastGradeWithoutRendering) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  const int views_before = backend.view_change_count();
+  for (const auto& panel : {"display", "raw", "tone", "look", "lut"}) {
+    session.set_active_adjustment_panel(QString::fromLatin1(panel));
+    const NodeId expected{std::string(panel) == "display" ? "drt"
+                          : std::string(panel) == "raw"   ? "develop"
+                                                          : "grade.b"};
+    EXPECT_EQ(nodes.selected_node_id(), expected);
+    EXPECT_EQ(backend.last_projection_node(), expected);
+    EXPECT_EQ(session.active_adjustment_panel(), QString::fromLatin1(panel));
+  }
+  EXPECT_EQ(backend.view_change_count(), views_before);
+  EXPECT_EQ(backend.enqueue_count(), 0);
+  EXPECT_EQ(backend.boundary_count(), 0);
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.4f}, false));
+  EXPECT_EQ(session.PeekPendingInput().sequences.front().captured_target.node_id,
+            NodeId{"grade.b"});
+}
+
+TEST(EditorNodeController, PanelNavigationWithoutPreviousGradeSelectsFirstGrade) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.first"}).empty());
+  EditorNodeController nodes;
+  ASSERT_TRUE(nodes.PublishDocument(document, 1));
+  nodes.selectNode(QStringLiteral("drt"));
+  ASSERT_TRUE(nodes.PublishDocument(document, 2));
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"drt"});
+  nodes.SelectNodeForAdjustmentPanel(QStringLiteral("look"));
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.first"});
+}
+
+TEST(EditorNodeController, DeletedRememberedGradeReturnsToFirstExistingGrade) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  session.set_active_adjustment_panel(QStringLiteral("display"));
+  backend.Document() = CreateDefaultPipelineDocument();
+  backend.PublishHistoryChange();
+  session.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, GeometryExitSubmitsWhileDevelopSelectedBeforeReturningToGrade) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  const int views_before = backend.view_change_count();
+  session.set_active_adjustment_panel(QStringLiteral("geometry"));
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"develop"});
+  EXPECT_EQ(session.active_adjustment_panel(), QStringLiteral("geometry"));
+  EXPECT_EQ(backend.view_change_count(), views_before + 1);
+  bool submitted = false;
+  QObject::connect(&session, &EditorSessionController::DesktopUiChanged, &session, [&] {
+    if (session.active_adjustment_panel() == QStringLiteral("tone")) {
+      EXPECT_EQ(nodes.selected_node_id(), NodeId{"develop"});
+      submitted = session.submitWrite(QStringLiteral("crop_rotate"), ImageGeometryUpdate{}, true);
+    }
+  });
+  session.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_TRUE(submitted);
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.b"});
+  EXPECT_EQ(backend.view_change_count(), views_before + 2);
+  session.set_active_adjustment_panel(QStringLiteral("look"));
+  EXPECT_EQ(backend.view_change_count(), views_before + 2);
+}
+
+TEST(EditorNodeController, LeavingDevelopGeometryDoesNotRequestViewChange) {
+  DocumentSessionBackend  backend;
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(NodeIdToQString(NodeId{"develop"}));
+  session.set_active_adjustment_panel(QStringLiteral("geometry"));
+  const int views_after_geometry = backend.view_change_count();
+  EXPECT_GT(views_after_geometry, 0);
+  nodes.selectNode(NodeIdToQString(NodeId{"grade.primary"}));
+  EXPECT_EQ(session.active_adjustment_panel(), QStringLiteral("tone"));
+  EXPECT_EQ(backend.view_change_count(), views_after_geometry);
 }
 
 }  // namespace

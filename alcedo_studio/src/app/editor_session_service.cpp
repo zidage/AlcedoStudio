@@ -1224,7 +1224,7 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
                       sequence.seal == EditorPendingInputBoundaryKind::NodeSwitch;
   if (!outcome.schedule_render || outcome.kind != EditorEditOutcome::Kind::RenderRouted) {
     serial_admission_.AbortCycle();
-    if (commit) {
+    if (commit && !sequence.fields.empty()) {
       BumpHistoryRevision();
     }
     EditorSessionResult result;
@@ -1620,6 +1620,40 @@ void EditorSessionService::SetGeometryOverlayActive(bool active) {
     return;
   }
   render_.SetGeometryOverlayActive(active);
+}
+
+auto EditorSessionService::SetAdjustmentProjectionNode(const NodeId& node_id)
+    -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind    = EditorSessionCommandKind::SetAdjustmentProjectionNode;
+    command.node_id = node_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SetAdjustmentProjectionNode(queued.node_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive &&
+      lifecycle_.state() != EditorSessionState::Loading) {
+    return Reject("Adjustment projection requires an open image");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Adjustment projection requires an open image");
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return Reject("Adjustment history is unavailable");
+  }
+  std::string error;
+  const auto  session_generation = lifecycle_.active_image_load_request().value;
+  if (!dependencies_.history->SetPanelProjectionNode(lifecycle_.history_guard(), node_id,
+                                                     session_generation, &error)) {
+    return Reject(error.empty() ? "Selected node panel projection failed" : error);
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Selected node panel projection updated";
+  return Emit(std::move(result));
 }
 
 auto EditorSessionService::RequestViewChange(EditorRenderReason                  reason,

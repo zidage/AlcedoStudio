@@ -112,6 +112,21 @@ class IEditorSessionBackend {
   /// Keep geometry editing on the source-frame overlay until the panel closes.
   /// Backends that do not render through the unified session path may ignore it.
   virtual void SetGeometryOverlayActive(bool /*active*/) {}
+  /**
+   * @brief Reproject load-only panel values from @p node_id.
+   *
+   * Does not enqueue an edit, commit history, or render. Does not wait for an
+   * inflight frame or take the live render lock.
+   * Default fakes accept without changing stored projection.
+   */
+  virtual auto SetAdjustmentProjectionNode(const NodeId& /*node_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Adjustment projection node ignored";
+    return result;
+  }
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
   /// Check out another Version on the open image after a save checkpoint.
@@ -450,6 +465,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
       -> EditorSessionResult override;
+  auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
   void               TryConsumePendingInput() override;
   void SetAdmissionDeadlineHandler(std::function<void(std::int64_t delay_ns)> handler) override;

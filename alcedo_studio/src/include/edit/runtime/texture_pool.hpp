@@ -7,9 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
-#include <vector>
 
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
@@ -73,7 +75,12 @@ struct TextureRequest {
 /**
  * @brief Reusable GPU textures. Matching free entries are recycled; otherwise allocate.
  *
- * Idle unleased textures are destroyed by @ref ReleaseUnleased after GPU last-use.
+ * Idle textures not used by this frame are reclaimed on allocation misses and at
+ * frame end. Idle extents that no live lease still uses are reclaimed after GPU
+ * last-use even when used_this_frame is still set from the last acquire.
+ * Current-size scratch stays reusable while a result of that size remains leased.
+ * Leased texture references remain stable when the pool grows. Reuse within a
+ * frame requires one ordered GPU queue.
  * Not thread-safe. @p Backend must provide Texture2D, CreateTexture2D, and
  * IsResourceBusy(submitted_on_submission_id).
  */
@@ -105,6 +112,7 @@ class TexturePool {
     if (auto* reusable = FindReusable(request)) {
       return TakeLease(*reusable);
     }
+    ReleaseUnused();
     const auto bytes = TextureBytes(request);
     auto texture = backend_->CreateTexture2D(request.width, request.height, request.format);
     Entry entry;
@@ -113,6 +121,13 @@ class TexturePool {
     entry.bytes           = bytes;
     entry.handle          = next_handle_++;
     entry.alive           = true;
+    for (auto& vacant : entries_) {
+      if (!vacant.alive) {
+        vacant = std::move(entry);
+        used_bytes_ += bytes;
+        return TakeLease(vacant);
+      }
+    }
     entries_.push_back(std::move(entry));
     used_bytes_ += bytes;
     return TakeLease(entries_.back());
@@ -161,6 +176,17 @@ class TexturePool {
     return count;
   }
 
+  /// Bytes pinned by image results, active scratch, or external presentation leases.
+  [[nodiscard]] auto LeasedBytes() const -> std::size_t {
+    std::size_t bytes = 0;
+    for (const auto& entry : entries_) {
+      if (entry.alive && entry.lease_count > 0) {
+        bytes += entry.bytes;
+      }
+    }
+    return bytes;
+  }
+
   void ReleaseLease(std::uint64_t handle) {
     auto* entry = Find(handle);
     if (entry == nullptr || entry->lease_count == 0) {
@@ -198,9 +224,52 @@ class TexturePool {
       if (backend_->IsResourceBusy(entry.submitted_on)) {
         continue;
       }
-      used_bytes_ -= entry.bytes;
-      entry.texture = {};
-      entry.alive   = false;
+      Destroy(entry);
+    }
+  }
+
+  /**
+   * @brief Destroy idle, unleased entries that this frame has not used.
+   *
+   * Called before allocating a new extent and after encoding a frame. Scratch
+   * already referenced by recorded work remains alive, even before submission.
+   * Outstanding GPU submissions and external leases also prevent destruction.
+   */
+  void ReleaseUnused() {
+    for (auto& entry : entries_) {
+      if (!entry.alive || entry.lease_count > 0 || entry.used_this_frame ||
+          backend_->IsResourceBusy(entry.submitted_on)) {
+        continue;
+      }
+      Destroy(entry);
+    }
+  }
+
+  /**
+   * @brief Destroy idle textures whose size is not held by any live lease.
+   *
+   * Crop and viewport extent changes leave previous-size scratch unleased after
+   * the published result is dropped. Matching current-size scratch stays because
+   * a live lease still names that extent. The this-frame use flag does not keep an
+   * obsolete size: the last acquire may still have that flag when Interactive
+   * identity-drops a result in the same session. Caller must WaitIdle first so
+   * GPU last-use of the previous submission has completed.
+   */
+  void ReleaseUnleasedUnusedSizes() {
+    std::set<ExtentKey> leased_extents;
+    for (const auto& entry : entries_) {
+      if (entry.alive && entry.lease_count > 0) {
+        leased_extents.insert(MakeExtentKey(entry.request));
+      }
+    }
+    for (auto& entry : entries_) {
+      if (!entry.alive || entry.lease_count > 0 || backend_->IsResourceBusy(entry.submitted_on)) {
+        continue;
+      }
+      if (leased_extents.contains(MakeExtentKey(entry.request))) {
+        continue;
+      }
+      Destroy(entry);
     }
   }
 
@@ -240,9 +309,30 @@ class TexturePool {
     bool                        alive           = false;
   };
 
+  struct ExtentKey {
+    std::uint32_t width  = 0;
+    std::uint32_t height = 0;
+    TextureFormat format = TextureFormat::R8;
+
+    friend auto operator<(const ExtentKey& lhs, const ExtentKey& rhs) -> bool {
+      return std::tie(lhs.width, lhs.height, lhs.format) <
+             std::tie(rhs.width, rhs.height, rhs.format);
+    }
+  };
+
+  static auto MakeExtentKey(const TextureRequest& request) -> ExtentKey {
+    return ExtentKey{request.width, request.height, request.format};
+  }
+
   static auto TextureBytes(const TextureRequest& request) -> std::size_t {
     return static_cast<std::size_t>(request.width) * request.height *
            TextureFormatBytesPerPixel(request.format);
+  }
+
+  void Destroy(Entry& entry) {
+    used_bytes_ -= entry.bytes;
+    entry.texture = {};
+    entry.alive   = false;
   }
 
   auto Find(std::uint64_t handle) -> Entry* {
@@ -269,7 +359,7 @@ class TexturePool {
 
   auto FindReusable(const TextureRequest& request) const -> const Entry* {
     for (const auto& entry : entries_) {
-      if (!entry.alive || entry.lease_count > 0) {
+      if (!entry.alive || entry.lease_count > 0 || backend_->IsResourceBusy(entry.submitted_on)) {
         continue;
       }
       if (entry.request.width != request.width || entry.request.height != request.height ||
@@ -288,7 +378,7 @@ class TexturePool {
   }
 
   Backend*           backend_      = nullptr;
-  std::vector<Entry> entries_;
+  std::deque<Entry> entries_;
   std::size_t        used_bytes_   = 0;
   std::uint64_t      next_handle_  = 1;
 };

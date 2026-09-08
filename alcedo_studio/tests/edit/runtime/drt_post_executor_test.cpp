@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 
 namespace alcedo {
@@ -174,9 +175,11 @@ struct FakeDrtImages {
 };
 
 struct FakeDrtWorkspace {
-  FakeDrtImages images;
-  auto IsRendering() const -> bool { return true; }
-  auto Images() -> FakeDrtImages& { return images; }
+  FakeDrtImages                 images;
+  std::vector<GraphValueId>     released;
+  auto                          IsRendering() const -> bool { return true; }
+  auto                          Images() -> FakeDrtImages& { return images; }
+  void                          ReleaseConsumedImage(const GraphValueId& id) { released.push_back(id); }
 };
 
 struct FakeDrtDevice {
@@ -263,6 +266,9 @@ TEST(DrtPostExecutor, TwoEnabledNeighborhoodsUseSharedHorizontalThenVerticalOrde
       "acquire-output", "acquire-h-scratch", "horizontal", "vertical", "release-h-scratch",
       "acquire-output", "acquire-h-scratch", "horizontal", "vertical", "release-h-scratch"};
   EXPECT_EQ(FakeDrtOps::log, expected);
+  ASSERT_EQ(device.workspace.released.size(), 2U);
+  EXPECT_EQ(device.workspace.released[0], (GraphValueId{NodeId{"drt"}, PortId{"runtime.ping"}}));
+  EXPECT_EQ(device.workspace.released[1], (GraphValueId{NodeId{"drt"}, PortId{"runtime.pong"}}));
 }
 
 TEST(DrtPostExecutor, DisplayTransformStartsBeforeNeighborhoodWrites) {

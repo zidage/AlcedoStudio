@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <opencv2/core.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -23,6 +24,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "image/image_buffer.hpp"
+#include "multi_grade_runtime_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -214,6 +216,111 @@ TEST(GpuDagCudaDrtProduct, LegacyShadowControlExecutesLocalLaplacianWorkspacePat
       LocalToneSourceId(document->PrimaryGrade()->Id()));
   ASSERT_NE(reference, nullptr);
   EXPECT_GT(reference->Texture().Bytes(), sizeof(float));
+}
+
+void ExpectMatchingPixels(ImageBuffer& cached, ImageBuffer& fresh) {
+  const auto& actual = cached.GetCPUData();
+  const auto& expected = fresh.GetCPUData();
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.size(), expected.size());
+  ASSERT_EQ(actual.type(), expected.type());
+  ASSERT_EQ(actual.depth(), CV_32F);
+  ASSERT_TRUE(cv::checkRange(actual));
+  ASSERT_TRUE(cv::checkRange(expected));
+  EXPECT_LE(cv::norm(actual, expected, cv::NORM_INF), 1.0e-5);
+}
+
+TEST(GpuDagCudaDrtProduct,
+     RepeatedFullCropAndExposureEditsBoundTextureEntriesAndBytesAndPreserveSourceHits) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*document);
+  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto image = MakeEncodedImage(51);
+  RenderRequest request;
+  auto& exposure = multi_grade_test::GradeAdjustment<ExposureModel>(
+      *document, document->PrimaryGrade()->Id(), type_ids::Exposure());
+  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  // Two complete full-size frame working sets allow current results and warm scratch.
+  // The bound is fixed before edits; neither iteration count nor visited sizes enters it.
+  const auto max_entries = 2U * renderer.Device().Workspace().Textures().EntryCount();
+  const auto max_bytes = 2U * renderer.Device().Workspace().Textures().UsedBytes();
+  for (int iteration = 0; iteration < 48; ++iteration) {
+    SCOPED_TRACE(iteration);
+    const float side = static_cast<float>(8 + (iteration * 7) % 17) / 24.0f;
+    document->Geometry().SetCropRect({0.0f, 0.0f, side, side});
+    for (int edit = 0; edit < 2; ++edit) {
+      SCOPED_TRACE(edit);
+      exposure.SetValue(static_cast<float>((iteration * 2 + edit) % 9) * 0.15f);
+      renderer.Device().ResetPassStats();
+      const auto cached = RenderHost(renderer, image, DecodeRes::FULL, request);
+      ASSERT_NE(cached, nullptr);
+      EXPECT_EQ(renderer.Device().PassStats().sensor_develop_execute, 0U);
+      EXPECT_EQ(renderer.Device().PassStats().sensor_develop_skip, 1U);
+      EXPECT_EQ(renderer.Device().PassStats().source_h2d_count, 0U);
+      EXPECT_LE(renderer.Device().Workspace().Textures().EntryCount(), max_entries);
+      EXPECT_LE(renderer.Device().Workspace().Textures().UsedBytes(), max_bytes);
+      CudaProductRenderer fresh(document, MakeUnpacker());
+      const auto expected = RenderHost(fresh, image, DecodeRes::FULL, request);
+      ASSERT_NE(expected, nullptr);
+      ExpectMatchingPixels(*cached, *expected);
+    }
+  }
+  EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 1U);
+  EXPECT_EQ(renderer.Stats().prepared_source_misses, 1U);
+  EXPECT_EQ(renderer.Stats().prepared_source_hits, 96U);
+  EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
+}
+
+TEST(GpuDagCudaDrtProduct,
+     MultipleFullGradesReuseOnePingPongWorkingSetWithLocalToneAndExposure) {
+  if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+  const auto unpack = [](std::span<const std::byte>, DecodeRes decode_res) {
+    EXPECT_EQ(decode_res, DecodeRes::FULL);
+    return RawInputLoader::FromDirectRgb(
+        multi_grade_test::MakeNeighborhoodRgbaPlane(64, 64, 0.02f, 0.08f),
+        gpu_dag_test::FullSensor(64, 64));
+  };
+  auto configure_grade = [](PipelineDocument& document, const NodeId& id) {
+    multi_grade_test::GradeAdjustment<ExposureModel>(document, id, type_ids::Exposure())
+        .SetValue(0.4f);
+    // Shadows is the Grade-owned neighborhood operation. Clarity/Sharpen belong to DRT.
+    // Pointwise + Local Laplacian + final mix require both Ping and Pong destinations.
+    multi_grade_test::GradeAdjustment<ShadowsModel>(document, id, type_ids::Shadows())
+        .SetValue(40.0f);
+    multi_grade_test::GradeNode(document, id.Value())->SetMix(0.75f);
+  };
+  auto single = std::make_shared<PipelineDocument>(multi_grade_test::MakeIdentityGradeDocument());
+  configure_grade(*single, NodeId{"grade.primary"});
+  const auto image = MakeEncodedImage(52);
+  const RenderRequest request;
+  CudaProductRenderer single_renderer(single, unpack);
+  ASSERT_NE(RenderHost(single_renderer, image, DecodeRes::FULL, request), nullptr);
+  const auto single_entries = single_renderer.Device().Workspace().Textures().EntryCount();
+  const auto single_bytes = single_renderer.Device().Workspace().Textures().UsedBytes();
+  const auto single_published = single_renderer.Device().Workspace().Images().PublishedCount();
+
+  auto document = std::make_shared<PipelineDocument>(multi_grade_test::MakeIdentityGradeDocument());
+  multi_grade_test::AddCleanGradesBeforeDrt(*document, {"grade.b", "grade.c", "grade.d"});
+  for (const char* id : {"grade.primary", "grade.b", "grade.c", "grade.d"}) {
+    configure_grade(*document, NodeId{id});
+  }
+  CudaProductRenderer renderer(document, unpack);
+  const auto cached = RenderHost(renderer, image, DecodeRes::FULL, request);
+  ASSERT_NE(cached, nullptr);
+  EXPECT_EQ(renderer.Device().PassStats().primary_grade_execute, 4U);
+  // Persistent Grade outputs and LLF source/result planes are legitimate extra storage.
+  // All other storage must fit the same single-Grade working set, including warm idle entries.
+  const auto published = renderer.Device().Workspace().Images().PublishedCount();
+  ASSERT_GE(published, single_published);
+  const auto extra_results = published - single_published;
+  EXPECT_LE(renderer.Device().Workspace().Textures().EntryCount(), single_entries + extra_results);
+  EXPECT_LE(renderer.Device().Workspace().Textures().UsedBytes(),
+            single_bytes + extra_results * 64U * 64U * 4U * sizeof(float));
+  CudaProductRenderer fresh(document, unpack);
+  const auto expected = RenderHost(fresh, image, DecodeRes::FULL, request);
+  ASSERT_NE(expected, nullptr);
+  ExpectMatchingPixels(*cached, *expected);
 }
 
 }  // namespace

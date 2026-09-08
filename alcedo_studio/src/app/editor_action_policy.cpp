@@ -191,6 +191,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
+    case EditorSessionCommandKind::SetAdjustmentProjectionNode:
       return std::nullopt;
   }
   return std::nullopt;

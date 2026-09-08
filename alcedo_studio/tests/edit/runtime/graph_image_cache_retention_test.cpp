@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "../graph/test_camera_profile.hpp"
@@ -278,7 +279,8 @@ TEST(GraphImageCacheRetention, DropStalePublishedKeepsCurrentDevelopAndFreesIdle
   exposure->SetValue(0.5f);
   harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
 
-  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision) {
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
+                                       const ResultRepresentation&) {
     return harness.invalidation.HasCurrentRevision(id, revision);
   });
   harness.pool.ReleaseUnleased();
@@ -302,7 +304,8 @@ TEST(GraphImageCacheRetention, ExtraLeaseKeepsDisplayedTextureAfterStalePublishD
   harness.document.Develop()->Params().ReplaceParams(std::move(payload));
   harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
 
-  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision) {
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
+                                       const ResultRepresentation&) {
     return harness.invalidation.HasCurrentRevision(id, revision);
   });
   harness.pool.ReleaseUnleased();
@@ -312,6 +315,160 @@ TEST(GraphImageCacheRetention, ExtraLeaseKeepsDisplayedTextureAfterStalePublishD
   display_lease.Release();
   harness.pool.ReleaseUnleased();
   EXPECT_FALSE(harness.pool.Contains(handle));
+}
+
+auto KeepPublishedForInteractive(HostRetentionHarness& harness, const GraphValueId& id,
+                                 RuntimeRevision revision, const ResultRepresentation& published)
+    -> bool {
+  if (!harness.invalidation.HasCurrentRevision(id, revision)) {
+    return false;
+  }
+  const auto needed = harness.invalidation.MakeImageRepresentation(
+      id, published.extent, published.format, published.source_detail);
+  return RepresentationSatisfies(published, needed);
+}
+
+void PublishWithFrameIdentity(HostRetentionHarness& harness, const GraphValueId& id,
+                              const TextureRequest& request) {
+  const auto required = harness.invalidation.RequiredRevision(id);
+  const auto needed   = harness.invalidation.MakeImageRepresentation(
+      id, {request.width, request.height}, request.format);
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, id, request);
+  harness.cache.RecordUnpublished(id, required, needed, 1);
+  harness.cache.PublishSuccessfulSubmission(1, ResultPersistenceScope::AllCurrentResults,
+                                            harness.Sensor());
+}
+
+TEST(GraphImageCacheRetention, CropMismatchesFrameIdentityDropsGeometryAndFreesOldExtent) {
+  HostRetentionHarness     harness;
+  constexpr TextureRequest kSensor{16, 16, TextureFormat::Rgba32f};
+  constexpr TextureRequest kGeometry{8, 8, TextureFormat::Rgba32f};
+  PublishWithFrameIdentity(harness, harness.Sensor(), kSensor);
+  PublishWithFrameIdentity(harness, harness.Geometry(), kGeometry);
+  PublishWithFrameIdentity(harness, harness.Grade(), kGeometry);
+  const auto sensor_handle = harness.cache.Find(harness.Sensor())->Handle();
+  const auto geometry_identity =
+      harness.cache.PublishedRepresentation(harness.Geometry()).identity;
+
+  harness.document.Geometry().SetCropRect({0.1f, 0.1f, 0.5f, 0.5f});
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, RenderRequest{});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  const auto geometry_needed = harness.invalidation.MakeImageRepresentation(
+      harness.Geometry(), {kGeometry.width, kGeometry.height}, kGeometry.format);
+  ASSERT_NE(geometry_needed.identity, geometry_identity);
+  ASSERT_TRUE(harness.invalidation.HasCurrentRevision(
+      harness.Geometry(), harness.cache.PublishedRevision(harness.Geometry())));
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
+                                       const ResultRepresentation& published) {
+    return KeepPublishedForInteractive(harness, id, revision, published);
+  });
+  // Product BeginRender clears used_this_frame first. Reclaim must still free
+  // obsolete extents when identity-drop happens in the same session as acquire.
+  harness.pool.ReleaseUnleasedUnusedSizes();
+
+  ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Sensor())->Handle(), sensor_handle);
+  EXPECT_EQ(harness.cache.Find(harness.Geometry()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Grade()), nullptr);
+  EXPECT_EQ(harness.pool.EntryCount(), 1U);
+  EXPECT_FALSE(harness.pool.HasReusable(kGeometry));
+}
+
+TEST(GraphImageCacheRetention, QualityBaseKeepsInteractiveGeometryWhenCropChangesExtent) {
+  HostRetentionHarness     harness;
+  constexpr TextureRequest kSensor{16, 16, TextureFormat::Rgba32f};
+  constexpr TextureRequest kGeometry{8, 8, TextureFormat::Rgba32f};
+  PublishWithFrameIdentity(harness, harness.Sensor(), kSensor);
+  PublishWithFrameIdentity(harness, harness.Geometry(), kGeometry);
+  const auto geometry_handle = harness.cache.Find(harness.Geometry())->Handle();
+
+  harness.document.Geometry().SetCropRect({0.1f, 0.1f, 0.5f, 0.5f});
+  GraphCompiler::BindFrameGeometry(harness.plan, harness.document, RenderRequest{});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
+                                       const ResultRepresentation&) {
+    return harness.invalidation.HasCurrentRevision(id, revision);
+  });
+  harness.pool.ReleaseUnleasedUnusedSizes();
+
+  ASSERT_NE(harness.cache.Find(harness.Geometry()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Geometry())->Handle(), geometry_handle);
+  EXPECT_EQ(harness.pool.EntryCount(), 2U);
+}
+
+TEST(TexturePoolRetention, UnusedSizeReclaimFreesReleasedExtentWithoutBeginFrame) {
+  HostTextureBackend              backend;
+  TexturePool<HostTextureBackend> pool(backend);
+  auto keep     = pool.Acquire({16, 16, TextureFormat::Rgba32f});
+  auto obsolete = pool.Acquire({8, 8, TextureFormat::Rgba32f});
+  obsolete.Release();
+  pool.ReleaseUnleasedUnusedSizes();
+  EXPECT_EQ(pool.EntryCount(), 1U);
+  EXPECT_TRUE(pool.Contains(keep.Handle()));
+  EXPECT_FALSE(pool.HasReusable({8, 8, TextureFormat::Rgba32f}));
+}
+
+TEST(TexturePoolRetention, ChangingExtentReleasesUnusedAllocationsBeforeAllocatingNextTexture) {
+  HostTextureBackend backend;
+  TexturePool<HostTextureBackend> pool(backend);
+  for (std::uint32_t width = 8; width < 40; ++width) {
+    pool.BeginFrame();
+    auto image = pool.Acquire({width, 8, TextureFormat::Rgba32f});
+    EXPECT_EQ(pool.EntryCount(), 1U) << "width=" << width;
+    EXPECT_EQ(pool.UsedBytes(), static_cast<std::size_t>(width) * 8 * 16);
+    pool.MarkSubmitted(width);
+  }
+}
+
+TEST(TexturePoolRetention, LatePublishObsoleteExtentsAreReclaimedAtNextFrameStart) {
+  HostTextureBackend              backend;
+  TexturePool<HostTextureBackend> pool(backend);
+  ResourceLease<HostTextureBackend> published;
+  for (std::uint32_t width = 8; width < 40; ++width) {
+    pool.BeginFrame();
+    pool.ReleaseUnleasedUnusedSizes();
+    auto write = pool.Acquire({width, 8, TextureFormat::Rgba32f});
+    EXPECT_LE(pool.EntryCount(), 2U) << "width=" << width;
+    pool.MarkSubmitted(width);
+    if (!published.Empty()) {
+      published.Release();
+    }
+    published = std::move(write);
+  }
+  pool.BeginFrame();
+  pool.ReleaseUnleasedUnusedSizes();
+  EXPECT_EQ(pool.EntryCount(), 1U);
+}
+
+TEST(TexturePoolRetention, MatchingScratchReusesAllocationWithinAndAcrossFrames) {
+  HostTextureBackend backend;
+  TexturePool<HostTextureBackend> pool(backend);
+  pool.BeginFrame();
+  auto scratch = pool.Acquire({8, 8, TextureFormat::Rgba32f});
+  const auto handle = scratch.Handle();
+  scratch.Release();
+  auto second_stage = pool.Acquire({8, 8, TextureFormat::Rgba32f});
+  EXPECT_EQ(second_stage.Handle(), handle);
+  pool.MarkSubmitted(1);
+  second_stage.Release();
+  pool.BeginFrame();
+  auto next_frame = pool.Acquire({8, 8, TextureFormat::Rgba32f});
+  EXPECT_EQ(next_frame.Handle(), handle);
+  EXPECT_EQ(pool.EntryCount(), 1U);
+}
+
+TEST(TexturePoolRetention, LeasedTextureAddressSurvivesPoolGrowth) {
+  HostTextureBackend backend;
+  TexturePool<HostTextureBackend> pool(backend);
+  auto source = pool.Acquire({8, 8, TextureFormat::Rgba32f});
+  const auto* address = &source.Texture();
+  std::vector<ResourceLease<HostTextureBackend>> stages;
+  for (int stage = 0; stage < 32; ++stage) {
+    stages.push_back(pool.Acquire({8, 8, TextureFormat::Rgba32f}));
+  }
+  EXPECT_EQ(&source.Texture(), address);
 }
 
 }  // namespace

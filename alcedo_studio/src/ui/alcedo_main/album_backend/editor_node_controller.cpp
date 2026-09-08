@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/editor_adjustment_context.hpp"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
@@ -22,6 +23,15 @@
 
 namespace alcedo::ui {
 namespace {
+
+[[nodiscard]] auto HasQueuedFieldWrites(const alcedo::EditorPendingInputView& view) -> bool {
+  for (const auto& sequence : view.sequences) {
+    if (!sequence.fields.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 auto SameTopology(const EditorNodeGraphSnapshot& lhs, const EditorNodeGraphSnapshot& rhs) -> bool {
   if (lhs.nodes.size() != rhs.nodes.size() || lhs.edges.size() != rhs.edges.size()) {
@@ -66,6 +76,9 @@ auto EditorNodeController::editor_session_object() const -> QObject* { return se
 auto EditorNodeController::session() const -> EditorSessionController* { return session_.data(); }
 
 void EditorNodeController::DisconnectSession() {
+  if (session_ != nullptr) {
+    session_->BindNodeSelectionSource(nullptr);
+  }
   if (state_connection_) {
     QObject::disconnect(state_connection_);
     state_connection_ = {};
@@ -89,6 +102,7 @@ void EditorNodeController::set_editor_session(QObject* session) {
   DisconnectSession();
   session_ = typed;
   if (session_ != nullptr) {
+    session_->BindNodeSelectionSource(this);
     state_connection_   = connect(session_.data(), &EditorSessionController::StateChanged, this,
                                   &EditorNodeController::OnSessionStateChanged);
     history_connection_ = connect(session_.data(), &EditorSessionController::HistoryChanged, this,
@@ -121,7 +135,7 @@ void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_i
   if (identity_changed) {
     SyncLayoutKey();
     if (has_snapshot_) {
-      RestoreSelectionAfterSnapshot();
+      RestoreSelectionAfterSnapshot(false);
     }
   }
   emit SnapshotChanged();
@@ -144,15 +158,16 @@ void EditorNodeController::SetLastError(QString error) {
 
 void EditorNodeController::ClearSnapshot() {
   DiscardDraft();
-  snapshot_                  = {};
-  has_snapshot_              = false;
-  selected_node_id_          = {};
-  selection_restore_node_id_ = {};
-  session_generation_        = BoundSessionGeneration().value_or(0);
-  projection_revision_       = 0;
-  topology_revision_         = 0;
-  snapshot_element_id_       = 0;
-  snapshot_image_id_         = 0;
+  snapshot_                     = {};
+  has_snapshot_                 = false;
+  selected_node_id_             = {};
+  last_selected_color_grade_id_ = {};
+  selection_restore_node_id_    = {};
+  session_generation_           = BoundSessionGeneration().value_or(0);
+  projection_revision_          = 0;
+  topology_revision_            = 0;
+  snapshot_element_id_          = 0;
+  snapshot_image_id_            = 0;
   snapshot_version_id_.clear();
   emit SnapshotChanged();
   emit SelectionChanged();
@@ -182,20 +197,8 @@ auto EditorNodeController::ContainsNode(const NodeId& node_id) const -> bool {
 }
 
 auto EditorNodeController::DefaultSelectedNodeId() const -> NodeId {
-  if (!HasActiveGraph()) {
-    return {};
-  }
-  for (const auto& node : ActiveNodes()) {
-    if (node.node_kind == EditorNodeKind::ColorGrade) {
-      return node.node_id;
-    }
-  }
-  for (const auto& node : ActiveNodes()) {
-    if (node.node_kind == EditorNodeKind::Drt) {
-      return node.node_id;
-    }
-  }
-  return ActiveNodes().empty() ? NodeId{} : ActiveNodes().front().node_id;
+  const NodeId default_grade{"grade.primary"};
+  return ContainsNode(default_grade) ? default_grade : NodeId{};
 }
 
 auto EditorNodeController::IndexOf(const NodeId& node_id) const -> int {
@@ -235,7 +238,7 @@ auto EditorNodeController::TopologyChanged(const EditorNodeGraphSnapshot& snapsh
   return !SameTopology(snapshot_, snapshot);
 }
 
-void EditorNodeController::RestoreSelectionAfterSnapshot() {
+void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_color_grade) {
   if (layout_store_ != nullptr) {
     const auto key         = layout_store_->current_key();
     const bool key_changed = key != last_layout_key_;
@@ -260,7 +263,26 @@ void EditorNodeController::RestoreSelectionAfterSnapshot() {
   if (!selected_node_id_.Empty()) {
     selection_restore_node_id_ = selected_node_id_;
   }
-  selected_node_id_ = DefaultSelectedNodeId();
+  selected_node_id_ = select_default_color_grade ? DefaultSelectedNodeId() : NodeId{};
+}
+
+void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
+  if (IsColorGrade(selected_node_id_)) {
+    last_selected_color_grade_id_ = selected_node_id_;
+  }
+  if (session_ == nullptr) {
+    return;
+  }
+  if (seal_open_sequence && session_->can_edit() &&
+      HasQueuedFieldWrites(session_->PeekPendingInput())) {
+    (void)session_->enqueueNodeSwitchBoundary();
+  }
+  const auto* node = NodeFor(selected_node_id_);
+  if (node == nullptr) {
+    session_->ApplySelectedAdjustmentNode({}, EditorNodeKind::ColorGrade);
+    return;
+  }
+  session_->ApplySelectedAdjustmentNode(selected_node_id_, node->node_kind);
 }
 
 auto EditorNodeController::selected_node_id_string() const -> QString {
@@ -338,9 +360,10 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   const bool generation_changed =
       !has_snapshot_ || snapshot.session_generation != session_generation_;
   if (generation_changed) {
-    selection_restore_node_id_ = {};
-    session_generation_        = snapshot.session_generation;
-    topology_revision_         = snapshot.topology_revision == 0 ? 1 : snapshot.topology_revision;
+    last_selected_color_grade_id_ = {};
+    selection_restore_node_id_    = {};
+    session_generation_           = snapshot.session_generation;
+    topology_revision_   = snapshot.topology_revision == 0 ? 1 : snapshot.topology_revision;
     projection_revision_ = snapshot.projection_revision == 0 ? 1 : snapshot.projection_revision;
   } else if (TopologyChanged(snapshot)) {
     topology_revision_   = std::max(topology_revision_ + 1, snapshot.topology_revision);
@@ -357,7 +380,8 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   snapshot_image_id_           = image_id_;
   snapshot_version_id_         = version_id_;
   SyncLayoutKey();
-  RestoreSelectionAfterSnapshot();
+  RestoreSelectionAfterSnapshot(generation_changed);
+  SyncSessionAdjustmentNode(false);
   SetLastError({});
   emit SnapshotChanged();
   emit SelectionChanged();
@@ -661,6 +685,26 @@ void EditorNodeController::OnSessionHistoryChanged() {
   refreshFromSession();
 }
 
+void EditorNodeController::SelectNodeForAdjustmentPanel(const QString& panel) {
+  const auto key = panel.toStdString();
+  const auto* selected = NodeFor(selected_node_id_);
+  if (selected != nullptr && AdjustmentPanelIsSupported(selected->node_kind, key)) {
+    return;
+  }
+  if (IsColorGrade(last_selected_color_grade_id_) &&
+      AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, key)) {
+    selectNode(NodeIdToQString(last_selected_color_grade_id_));
+    return;
+  }
+  for (const auto& node : ActiveNodes()) {
+    if (AdjustmentPanelIsSupported(node.node_kind, key)) {
+      selectNode(NodeIdToQString(node.node_id));
+      return;
+    }
+  }
+  SetLastError(tr("No node supports the selected adjustment panel"));
+}
+
 void EditorNodeController::selectNode(const QString& node_id) {
   const auto id = NodeIdFromQString(node_id);
   if (!ContainsNode(id)) {
@@ -679,6 +723,7 @@ void EditorNodeController::selectNode(const QString& node_id) {
   SetLastError({});
   PersistSavedSelection();
   ApplyLiveSelectionToAdapter();
+  SyncSessionAdjustmentNode(true);
   emit SelectionChanged();
   emit ActionAvailabilityChanged();
 }
@@ -801,9 +846,10 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   emit DraftStateChanged();
   emit ActionAvailabilityChanged();
   if (!ContainsNode(selected_node_id_)) {
-    selected_node_id_ = DefaultSelectedNodeId();
+    selected_node_id_ = {};
     PersistSavedSelection();
     ApplyLiveSelectionToAdapter();
+    SyncSessionAdjustmentNode(false);
     emit SelectionChanged();
     emit ActionAvailabilityChanged();
   }

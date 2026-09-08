@@ -38,7 +38,8 @@ class EditorSessionPipelinePort;
 /// Per-image history state owned by the queue-thread history unit. The command
 /// queue is the sole mutation owner for graph, redo, pending-before, and
 /// committed-snapshot fields. Live parameter writes go to pipeline_guard->document_.
-/// Document reads/writes and rendering use the same executor render lock.
+/// Parameter writes, Version ops, and rendering share the executor render lock.
+/// Load-only selected-node panel projection reads Models without that lock.
 struct HistoryWorkingState {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;
@@ -54,9 +55,12 @@ struct HistoryWorkingState {
   std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
-  /// Load-only panel values copied from live Models under the render lock.
-  /// Not a live Model pointer and not a writable parameter mirror.
+  /// Load-only panel values copied from live Models. Not a live Model pointer
+  /// and not a writable parameter mirror. Selected-node copies do not take the
+  /// render lock.
   alcedo::EditorPanelProjection panel_projection;
+  /// Node last requested for panel projection. Empty means current-panel owners.
+  alcedo::NodeId panel_projection_node_id;
   bool recovered_head = false;
   /// Required for ReplaceMaskAsset undo/redo. Not owned.
   alcedo::MaskStore* mask_store = nullptr;

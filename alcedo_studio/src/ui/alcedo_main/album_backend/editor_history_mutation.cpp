@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "app/editor_adjustment_context.hpp"
+#include "app/editor_session_ports.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_pipeline_command_service.hpp"
@@ -36,7 +38,32 @@ void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
   }
 }
 
-/// Refresh committed_snapshot from the live pipeline after a successful history mutation.
+[[nodiscard]] auto PanelFieldMatchesProjectionNode(const PipelineDocument& document,
+                                                    const NodeId& projection_node,
+                                                    const EditorParameterTarget& target) -> bool {
+  if (projection_node.Empty()) {
+    return true;
+  }
+  if (target.owner_kind == EditorParameterOwnerKind::Document) {
+    const auto* develop = document.Develop();
+    return develop != nullptr && develop->Id() == projection_node;
+  }
+  return target.node_id == projection_node;
+}
+
+auto ProjectPanelFieldsForState(HistoryWorkingState& state, std::string* error) -> bool {
+  if (state.pipeline_guard == nullptr || state.pipeline_guard->document_ == nullptr) {
+    state.panel_projection = {};
+    return true;
+  }
+  const auto& document = *state.pipeline_guard->document_;
+  if (!state.panel_projection_node_id.Empty()) {
+    return alcedo::ProjectSelectedNodePanelFields(document, state.panel_projection_node_id, 0,
+                                                 &state.panel_projection, error);
+  }
+  return alcedo::ProjectCurrentPanelFields(document, 0, &state.panel_projection, error);
+}
+
 /// Prefer live GetOperator/GetParams over root_snapshot + SnapshotAtHead (plan §4.7).
 auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* error,
                                       bool holds_render_lock) -> bool {
@@ -57,8 +84,7 @@ auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* e
       state.panel_projection = {};
       return true;
     }
-    return alcedo::ProjectCurrentPanelFields(*state.pipeline_guard->document_, 0,
-                                             &state.panel_projection, error);
+    return ProjectPanelFieldsForState(state, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
@@ -90,6 +116,10 @@ void ProjectDocumentEdit(HistoryWorkingState&                          state,
                           HistoryParams(edit.target, params), true);
   state.committed_snapshot.params_json.clear();
   if (state.pipeline_guard != nullptr && state.pipeline_guard->document_ != nullptr) {
+    if (!PanelFieldMatchesProjectionNode(*state.pipeline_guard->document_,
+                                         state.panel_projection_node_id, edit.target)) {
+      return;
+    }
     alcedo::EditorPanelFieldPresentation field;
     std::string                          ignore;
     if (alcedo::ReadEditorPanelField(*state.pipeline_guard->document_, edit.target, &field,
@@ -357,10 +387,18 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   HistoryWorkingState::DocumentFieldEdit edit;
   if (sequence == state->pending_document_sequence.end()) {
     if (patch.target.owner_kind == alcedo::EditorParameterOwnerKind::Unspecified) {
-      auto filled = alcedo::CompleteCurrentPanelParameterTarget(*state->pipeline_guard->document_,
-                                                                patch.field_key, error);
-      if (!filled.has_value()) return false;
-      edit.target = std::move(*filled);
+      if (!state->panel_projection_node_id.Empty()) {
+        auto filled = alcedo::CompleteSelectedNodeParameterTarget(
+            *state->pipeline_guard->document_, state->panel_projection_node_id, patch.field_key,
+            error);
+        if (!filled.has_value()) return false;
+        edit.target = std::move(*filled);
+      } else {
+        auto filled = alcedo::CompleteCurrentPanelParameterTarget(*state->pipeline_guard->document_,
+                                                                  patch.field_key, error);
+        if (!filled.has_value()) return false;
+        edit.target = std::move(*filled);
+      }
     } else {
       const auto target_error =
           alcedo::DescribeEditorParameterTargetError(patch.target, patch.field_key);
@@ -389,7 +427,9 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   {
     alcedo::EditorPanelFieldPresentation field;
     std::string                          ignore;
-    if (alcedo::ReadEditorPanelField(*state->pipeline_guard->document_, edit.target, &field,
+    if (PanelFieldMatchesProjectionNode(*state->pipeline_guard->document_,
+                                        state->panel_projection_node_id, edit.target) &&
+        alcedo::ReadEditorPanelField(*state->pipeline_guard->document_, edit.target, &field,
                                      &ignore)) {
       alcedo::UpsertEditorPanelField(&state->panel_projection, std::move(field));
     }
@@ -1033,6 +1073,40 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   state->pending_before.clear();
   state->recovered_head = false;
   return true;
+}
+
+auto EditorHistoryMutation::SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
+                                                   const alcedo::NodeId& node_id,
+                                                   std::uint64_t session_generation,
+                                                   std::string* error) -> bool {
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    if (error) *error = "Editor history working state is unavailable";
+    return false;
+  }
+  if (node_id.Empty()) {
+    state->panel_projection_node_id = {};
+    state->panel_projection         = {};
+    return true;
+  }
+  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+  try {
+    alcedo::EditorPanelProjection next;
+    const auto& document = *state->pipeline_guard->document_;
+    if (!alcedo::ProjectSelectedNodePanelFields(document, node_id, session_generation, &next,
+                                                error)) {
+      return false;
+    }
+    state->panel_projection_node_id = node_id;
+    state->panel_projection         = std::move(next);
+    return true;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
 }
 
 }  // namespace alcedo::ui
