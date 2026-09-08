@@ -5,14 +5,17 @@
 #include "edit/graph/color_grade_node_model.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/mask/brush_mask_commands.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 
@@ -362,6 +365,116 @@ void ColorGradeNodeModel::MoveMaskForDisplay(const MaskId& mask_id, std::size_t 
     index = masks_.size();
   }
   masks_.insert(masks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
+}
+
+auto ColorGradeNodeModel::RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
+                                           std::uint64_t expected_revision) -> MaskModel& {
+  if (node_id != id_) {
+    FailMask("Brush command NodeId does not match this Color Grade");
+  }
+  auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  if (MaskContentRevision(mask_id) != expected_revision) {
+    FailMask("Brush command revision does not match Mask content revision");
+  }
+  if (!std::holds_alternative<BrushMaskSource>(mask->source)) {
+    FailMask("Mask is not a Brush source: " + std::string{mask_id.Value()});
+  }
+  return *mask;
+}
+
+void ColorGradeNodeModel::AppendBrushStroke(AppendBrushStrokeCommand command) {
+  const auto mask_id = command.mask_id;
+  MaskModel  candidate = RequireBrushMask(command.node_id, mask_id, command.expected_revision);
+  auto&      brush     = std::get<BrushMaskSource>(candidate.source);
+  ValidateBrushStroke(command.stroke);
+  if (FindBrushStrokeIndex(brush.strokes, command.stroke.id) != brush.strokes.size()) {
+    FailMask("Duplicate StrokeId: " + std::string{command.stroke.id.Value()});
+  }
+  brush.strokes.push_back(std::move(command.stroke));
+  ValidateMaskModel(candidate);
+  FindMask(mask_id)->source = std::move(candidate.source);
+  TouchMask(mask_id);
+}
+
+void ColorGradeNodeModel::RemoveBrushStroke(const RemoveBrushStrokeCommand& command) {
+  MaskModel candidate =
+      RequireBrushMask(command.node_id, command.mask_id, command.expected_revision);
+  auto&     brush     = std::get<BrushMaskSource>(candidate.source);
+  const auto index    = FindBrushStrokeIndex(brush.strokes, command.stroke_id);
+  if (index == brush.strokes.size()) {
+    FailMask("Unknown StrokeId: " + std::string{command.stroke_id.Value()});
+  }
+  brush.strokes.erase(brush.strokes.begin() + static_cast<std::ptrdiff_t>(index));
+  ValidateMaskModel(candidate);
+  FindMask(command.mask_id)->source = std::move(candidate.source);
+  TouchMask(command.mask_id);
+}
+
+void ColorGradeNodeModel::InsertBrushStroke(InsertBrushStrokeCommand command) {
+  const auto mask_id = command.mask_id;
+  MaskModel  candidate = RequireBrushMask(command.node_id, mask_id, command.expected_revision);
+  auto&      brush     = std::get<BrushMaskSource>(candidate.source);
+  ValidateBrushStroke(command.stroke);
+  if (FindBrushStrokeIndex(brush.strokes, command.stroke.id) != brush.strokes.size()) {
+    FailMask("Duplicate StrokeId: " + std::string{command.stroke.id.Value()});
+  }
+  auto index = command.index;
+  if (index > brush.strokes.size()) {
+    index = brush.strokes.size();
+  }
+  brush.strokes.insert(brush.strokes.begin() + static_cast<std::ptrdiff_t>(index),
+                       std::move(command.stroke));
+  ValidateMaskModel(candidate);
+  FindMask(mask_id)->source = std::move(candidate.source);
+  TouchMask(mask_id);
+}
+
+void ColorGradeNodeModel::SetBrushTranslation(const SetBrushTranslationCommand& command) {
+  if (!std::isfinite(command.before.x) || !std::isfinite(command.before.y) ||
+      !std::isfinite(command.after.x) || !std::isfinite(command.after.y)) {
+    FailMask("Brush translation must be finite");
+  }
+  MaskModel candidate =
+      RequireBrushMask(command.node_id, command.mask_id, command.expected_revision);
+  auto& brush = std::get<BrushMaskSource>(candidate.source);
+  if (brush.placement_translation != command.before) {
+    FailMask("Brush translation before-value does not match the current source");
+  }
+  if (brush.placement_translation == command.after) {
+    return;
+  }
+  brush.placement_translation = command.after;
+  ValidateMaskModel(candidate);
+  FindMask(command.mask_id)->source = std::move(candidate.source);
+  TouchMask(command.mask_id);
+}
+
+auto ColorGradeNodeModel::BrushStrokes(const MaskId& mask_id) const
+    -> std::span<const BrushStroke> {
+  const auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
+  if (brush == nullptr) {
+    FailMask("Mask is not a Brush source: " + std::string{mask_id.Value()});
+  }
+  return brush->strokes;
+}
+
+auto ColorGradeNodeModel::BrushPlacementTranslation(const MaskId& mask_id) const -> Vector2 {
+  const auto* mask = FindMask(mask_id);
+  if (mask == nullptr) {
+    FailMask("Unknown MaskId: " + std::string{mask_id.Value()});
+  }
+  const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
+  if (brush == nullptr) {
+    FailMask("Mask is not a Brush source: " + std::string{mask_id.Value()});
+  }
+  return brush->placement_translation;
 }
 
 auto ColorGradeNodeModel::MaskAt(std::size_t index) -> MaskModel& { return masks_.at(index); }

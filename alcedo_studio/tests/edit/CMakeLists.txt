@@ -318,6 +318,18 @@ gtest_discover_tests(BrushSourceFormatBoundaryTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushSourceFormatBoundaryTest edit)
 
+# NM7.2 parameterized Brush source, owner operations, and JSON without MaskStore.
+add_executable(BrushParameterizedSourceTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/brush_parameterized_source_test.cpp)
+target_include_directories(BrushParameterizedSourceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(BrushParameterizedSourceTest
+  PRIVATE GTest::gtest_main EditGraph)
+gtest_discover_tests(BrushParameterizedSourceTest
+  TEST_PREFIX "BrushParameterizedSourceTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(BrushParameterizedSourceTest edit)
+
 # Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
 add_executable(GraphImageCacheRetentionTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)

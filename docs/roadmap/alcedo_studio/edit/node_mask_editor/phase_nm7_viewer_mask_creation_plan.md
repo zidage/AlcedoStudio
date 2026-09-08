@@ -2,8 +2,8 @@
 
 Date: 2026-09-08
 
-Status: NM7.1 complete; NM7.2–NM7.14 planned. This document records the NM7.1 source
-audit and format-boundary evidence. Remaining sub-phases are unimplemented.
+Status: NM7.1–NM7.2 complete; NM7.3–NM7.14 planned. This document records the NM7.1 source
+audit and NM7.2 parameterized Brush owner operations. Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -662,6 +662,74 @@ proposed `brush_stroke.hpp` / `brush_mask_commands.hpp`; include defining header
 `InvalidStrokeDoesNotPartiallyMutateSource`, `BrushTranslationDoesNotCopyOrRewriteSamples`.
 
 **Exit:** one Brush per new Grade workflow; source can be read independently of `MaskStore`.
+
+##### Phase NM7.2 completion record (2026-09-08)
+
+**Status:** complete — parameterized Brush strokes, versions, and placement are owned by
+`ColorGradeNodeModel`; JSON round-trips without `MaskStore`. Raster-only `asset_key` encoding
+remains for existing documents until NM7.3.
+
+**Primary success call chain:**
+
+```text
+AppendBrushStroke / InsertBrushStroke / RemoveBrushStroke / SetBrushTranslation
+  -> ColorGradeNodeModel (exact NodeId, MaskId, StrokeId, before-revision)
+  -> validate complete stroke or translation on a candidate source
+  -> commit source on the Grade Mask + one MaskContentRevision bump
+  -> MaskModelToJson writes strokes/placement (no asset_key when payload is parameterized)
+```
+
+**Primary failure call chain:**
+
+```text
+wrong NodeId / MaskId / kind / revision, duplicate StrokeId, NaN/empty samples,
+unsupported algorithm version, or stale translation before-value
+  -> throw before live source assignment
+  -> Mask list, stroke bodies, and revision unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `BrushSourceRoundTripsWithoutRasterFiles` | `BrushParameterizedSourceTest` | PASS |
+| `BrushAppendKeepsExistingStrokeIds` | `BrushParameterizedSourceTest` | PASS |
+| `InvalidStrokeDoesNotPartiallyMutateSource` | `BrushParameterizedSourceTest` | PASS |
+| `BrushTranslationDoesNotCopyOrRewriteSamples` | `BrushParameterizedSourceTest` | PASS |
+| Insert/remove keep remaining sample bodies | `BrushParameterizedSourceTest` | PASS |
+| Unsupported algorithm/version JSON rejected | `BrushParameterizedSourceTest` | PASS |
+| Asset-key documents still omit stroke fields | `BrushSourceFormatBoundaryTest` | PASS |
+| Malformed stroke fields on asset Brush rejected | `BrushSourceFormatBoundaryTest` | PASS |
+| Typed batch canonical dump matches stored expected JSON | `PipelineEditBatchTest` | PASS |
+| Grade Mask JSON round-trip and header hygiene | `GpuDagModelGraphTest` | PASS |
+| Result content key still distinguishes Mask edits | `GpuDagRawInputTest` | PASS |
+| Persistent asset-key collection still omits empty Brush | `PipelineHistoryApplierTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --preset win_debug`
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target BrushParameterizedSourceTest --target BrushSourceFormatBoundaryTest --target GpuDagModelGraphTest --target PipelineEditBatchTest`
+`ctest --test-dir build/debug -R "BrushParameterizedSourceTest|BrushSourceFormatBoundaryTest|GpuDagModelGraphTest|PipelineEditBatchTest" --output-on-failure`
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagRawInputTest --target PipelineHistoryApplierTest`
+`ctest --test-dir build/debug -R "GpuDagRawInputTest|PipelineHistoryApplierTest" --output-on-failure`
+
+Suite totals: `6/6` `BrushParameterizedSourceTest` PASS; `12/12` `BrushSourceFormatBoundaryTest` PASS;
+`101/101` combined first filter PASS; `151/151` `GpuDagRawInputTest`+`PipelineHistoryApplierTest` PASS.
+Date / HEAD `f3d93ca2` (working tree) / Windows MSVC `win_debug` / Qt 6.9.3 / CUDA Toolkit 12.8
+(no GPU tests in this phase).
+
+**Checklist / exit condition:** parameterized Brush source is readable without `MaskStore`; append
+targets an existing MaskId (one accumulating Brush for new workflows). Multiple existing Brush
+Masks stay independent. Raster-only `asset_key` JSON is still accepted at document format 5.
+
+**LOC note (grill-code-review):** `brush_stroke.hpp` 151, `brush_stroke.cpp` 193,
+`brush_mask_commands.hpp` 71, `mask_model.hpp` 215, `mask_model.cpp` 533,
+`color_grade_node_model.hpp` 249, `color_grade_node_model.cpp` 503,
+`brush_parameterized_source_test.cpp` 305. No split required.
+
+**Residual gaps:** NM7.3 must add typed history/WAL/Version operations and the Section 8.1
+version gate, and reject raster-only Brush input. Native Mask passes still load `MaskStore` by
+`asset_key` when present. Ordinary adjustment writes still reject Mask targets with the existing
+“until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.3 — Extend NM4 reversible history and persistence
 

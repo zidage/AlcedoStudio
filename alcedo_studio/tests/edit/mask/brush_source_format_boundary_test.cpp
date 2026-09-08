@@ -93,25 +93,24 @@ TEST(BrushSourceFormatBoundary, BrushJsonRoundTripStoresAssetKeyAndOmitsStrokeFi
   EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
 }
 
-TEST(BrushSourceFormatBoundary, CurrentBrushLoaderIgnoresStrokeFieldsAndKeepsAssetKey) {
+TEST(BrushSourceFormatBoundary, MalformedStrokeFieldsOnAssetBrushAreRejected) {
   auto document = CreateDefaultPipelineDocument();
   grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, MaskAssetKey{"asset_01"});
+  const auto before = document.ToJson().dump();
   auto json = document.ToJson();
   auto& source = PrimaryGradeJson(json).at("masks").at(0).at("source");
   source["strokes"] = nlohmann::json::array(
       {{{"id", "stroke.1"}, {"mode", "paint"}, {"samples", nlohmann::json::array({1.0, 2.0})}}});
   source["placement_translation"] = nlohmann::json::array({3.0, 4.0});
   source["source_format_version"] = 1;
-  const auto restored = PipelineDocument::FromJson(json);
-  const auto* mask    = restored.PrimaryGrade()->FindMask(MaskId{"mask.brush"});
-  ASSERT_NE(mask, nullptr);
-  const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
+  source["raster_algorithm_version"] = 1;
+  EXPECT_THROW((void)PipelineDocument::FromJson(json), std::runtime_error);
+  EXPECT_EQ(document.ToJson().dump(), before);
+  const auto* brush = std::get_if<BrushMaskSource>(&document.PrimaryGrade()->FindMask(MaskId{"mask.brush"})->source);
   ASSERT_NE(brush, nullptr);
+  EXPECT_TRUE(brush->strokes.empty());
   ASSERT_TRUE(brush->asset_key.has_value());
   EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
-  const auto rewritten = MaskModelToJson(*mask)["source"];
-  EXPECT_FALSE(rewritten.contains("strokes"));
-  EXPECT_EQ(rewritten.at("asset_key"), "asset_01");
 }
 
 TEST(BrushSourceFormatBoundary, UnsupportedPipelineDocumentFormatLeavesSourceFileUnchanged) {
@@ -235,10 +234,6 @@ TEST(BrushSourceFormatBoundary, PackedR8BilinearSampleMatchesNativeCenterFilter)
 
 TEST(BrushSourceFormatBoundary, PlannedParameterizedBrushTestsAreCatalogued) {
   constexpr std::string_view names[] = {
-      "BrushSourceRoundTripsWithoutRasterFiles",
-      "BrushAppendKeepsExistingStrokeIds",
-      "InvalidStrokeDoesNotPartiallyMutateSource",
-      "BrushTranslationDoesNotCopyOrRewriteSamples",
       "StrokeUndoRedoRestoresCommandOrderWithoutR8",
       "FirstBrushStrokeCreatesOneCommit",
       "BrushMoveUndoRestoresExactTranslation",
@@ -301,10 +296,10 @@ TEST(BrushSourceFormatBoundary, PlannedParameterizedBrushTestsAreCatalogued) {
       "InterruptedCacheReplaceLeavesNoPartialFile",
       "PastedBrushUsesTargetProjectStoragePolicy",
   };
-  EXPECT_EQ(std::size(names), 65u);
-  EXPECT_EQ(names[0], "BrushSourceRoundTripsWithoutRasterFiles");
-  EXPECT_EQ(names[9], "RasterOnlyFormatIsRejectedBeforeCacheCleanup");
-  EXPECT_EQ(names[64], "PastedBrushUsesTargetProjectStoragePolicy");
+  EXPECT_EQ(std::size(names), 61u);
+  EXPECT_EQ(names[0], "StrokeUndoRedoRestoresCommandOrderWithoutR8");
+  EXPECT_EQ(names[5], "RasterOnlyFormatIsRejectedBeforeCacheCleanup");
+  EXPECT_EQ(names[60], "PastedBrushUsesTargetProjectStoragePolicy");
 }
 
 }  // namespace

@@ -5,6 +5,8 @@
 #include "edit/mask/mask_model.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -12,6 +14,8 @@
 #include <unordered_set>
 #include <utility>
 #include <variant>
+
+#include "edit/mask/brush_stroke.hpp"
 
 namespace alcedo {
 namespace {
@@ -45,6 +49,37 @@ void RequireNumber(const nlohmann::json& json, const char* key, std::string_view
   if (!json.contains(key) || !json[key].is_number()) {
     Fail(std::string{owner} + " is missing number " + key);
   }
+}
+
+auto ReadRequiredUint32(const nlohmann::json& json, const char* key, std::string_view owner)
+    -> std::uint32_t {
+  if (!json.contains(key) || !json[key].is_number() || json[key].is_number_float()) {
+    Fail(std::string{owner} + " is missing unsigned integer " + key);
+  }
+  if (json[key].is_number_integer() && json[key].get<std::int64_t>() < 0) {
+    Fail(std::string{owner} + " field " + key + " must fit in uint32");
+  }
+  const auto value = json[key].get<std::uint64_t>();
+  if (value > std::numeric_limits<std::uint32_t>::max()) {
+    Fail(std::string{owner} + " field " + key + " must fit in uint32");
+  }
+  return static_cast<std::uint32_t>(value);
+}
+
+auto TranslationToJson(Vector2 translation) -> nlohmann::json {
+  return nlohmann::json::array({translation.x, translation.y});
+}
+
+auto TranslationFromJson(const nlohmann::json& json, std::string_view owner) -> Vector2 {
+  if (!json.is_array() || json.size() < 2) {
+    Fail(std::string{owner} + " placement_translation must be an array of two numbers");
+  }
+  Vector2 translation;
+  translation.x = json[0].get<float>();
+  translation.y = json[1].get<float>();
+  RequireFinite(translation.x, "placement_translation.x");
+  RequireFinite(translation.y, "placement_translation.y");
+  return translation;
 }
 
 auto ReadRequiredFloat(const nlohmann::json& json, const char* key, std::string_view owner)
@@ -92,6 +127,15 @@ void ValidateRangeObject(const nlohmann::json& json, std::string_view name) {
 
 void ValidateBrush(const BrushMaskSource& brush) {
   RequireNonNegative(brush.feather_radius, "feather_radius");
+  RequireFinite(brush.placement_translation.x, "placement_translation.x");
+  RequireFinite(brush.placement_translation.y, "placement_translation.y");
+  if (brush.source_format_version != kBrushSourceFormatVersion) {
+    Fail("brush source_format_version must be 1");
+  }
+  if (brush.raster_algorithm_version != kBrushRasterAlgorithmVersion) {
+    Fail("brush raster_algorithm_version must be 1");
+  }
+  ValidateBrushStrokeList(brush.strokes);
   RequireFinite(brush.descriptor.reference_bounds.x, "reference_bounds.x");
   RequireFinite(brush.descriptor.reference_bounds.y, "reference_bounds.y");
   RequireFinite(brush.descriptor.reference_bounds.w, "reference_bounds.w");
@@ -149,6 +193,21 @@ void ValidateRange(const std::optional<LuminanceRangeModel>& range, std::string_
 }
 
 auto BrushToJson(const BrushMaskSource& brush) -> nlohmann::json {
+  if (BrushSourceHasParameterizedPayload(brush)) {
+    nlohmann::json json{{"kind", "brush"},
+                        {"source_format_version", brush.source_format_version},
+                        {"raster_algorithm_version", brush.raster_algorithm_version},
+                        {"placement_translation", TranslationToJson(brush.placement_translation)},
+                        {"feather_radius", brush.feather_radius},
+                        {"strokes", BrushStrokeListToJson(brush.strokes)}};
+    if (brush.asset_key.has_value() && !brush.asset_key->Empty()) {
+      json["width"]            = brush.descriptor.extent.width;
+      json["height"]           = brush.descriptor.extent.height;
+      json["reference_bounds"] = BoundsToJson(brush.descriptor.reference_bounds);
+      json["asset_key"]        = std::string{brush.asset_key->Value()};
+    }
+    return json;
+  }
   nlohmann::json json{{"kind", "brush"},
                       {"feather_radius", brush.feather_radius},
                       {"width", brush.descriptor.extent.width},
@@ -201,30 +260,55 @@ auto RangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::j
 auto BrushFromJson(const nlohmann::json& json) -> BrushMaskSource {
   BrushMaskSource brush;
   brush.feather_radius = ReadRequiredFloat(json, "feather_radius", "brush");
-  if (!json.contains("width") || !json["width"].is_number()) {
-    Fail("brush is missing number width");
+  const bool parameterized = json.contains("strokes") || json.contains("placement_translation") ||
+                             json.contains("source_format_version") ||
+                             json.contains("raster_algorithm_version");
+  if (parameterized) {
+    brush.source_format_version = ReadRequiredUint32(json, "source_format_version", "brush");
+    brush.raster_algorithm_version =
+        ReadRequiredUint32(json, "raster_algorithm_version", "brush");
+    if (brush.source_format_version != kBrushSourceFormatVersion) {
+      Fail("brush source_format_version must be 1");
+    }
+    if (brush.raster_algorithm_version != kBrushRasterAlgorithmVersion) {
+      Fail("brush raster_algorithm_version must be 1");
+    }
+    if (!json.contains("placement_translation")) {
+      Fail("brush is missing placement_translation");
+    }
+    if (!json.contains("strokes")) {
+      Fail("brush is missing strokes");
+    }
+    brush.placement_translation = TranslationFromJson(json["placement_translation"], "brush");
+    brush.strokes               = BrushStrokeListFromJson(json["strokes"]);
   }
-  if (!json.contains("height") || !json["height"].is_number()) {
-    Fail("brush is missing number height");
-  }
-  brush.descriptor.extent.width  = json["width"].get<std::uint32_t>();
-  brush.descriptor.extent.height = json["height"].get<std::uint32_t>();
-  if (!json.contains("reference_bounds")) {
-    Fail("brush is missing reference_bounds");
-  }
-  brush.descriptor.reference_bounds = BoundsFromJson(json["reference_bounds"], "brush");
-  if (!json.contains("asset_key") || json["asset_key"].is_null()) {
-    brush.asset_key.reset();
-    return brush;
-  }
-  if (!json["asset_key"].is_string()) {
-    Fail("brush asset_key must be a string or null");
-  }
-  auto key = json["asset_key"].get<std::string>();
-  if (key.empty()) {
-    brush.asset_key.reset();
-  } else {
-    brush.asset_key = MaskAssetKey{std::move(key)};
+  const bool has_legacy_raster = json.contains("width") || json.contains("height") ||
+                                 json.contains("reference_bounds") || json.contains("asset_key");
+  if (!parameterized || has_legacy_raster) {
+    if (!json.contains("width") || !json["width"].is_number()) {
+      Fail("brush is missing number width");
+    }
+    if (!json.contains("height") || !json["height"].is_number()) {
+      Fail("brush is missing number height");
+    }
+    brush.descriptor.extent.width  = json["width"].get<std::uint32_t>();
+    brush.descriptor.extent.height = json["height"].get<std::uint32_t>();
+    if (!json.contains("reference_bounds")) {
+      Fail("brush is missing reference_bounds");
+    }
+    brush.descriptor.reference_bounds = BoundsFromJson(json["reference_bounds"], "brush");
+    if (!json.contains("asset_key") || json["asset_key"].is_null()) {
+      brush.asset_key.reset();
+    } else if (!json["asset_key"].is_string()) {
+      Fail("brush asset_key must be a string or null");
+    } else {
+      auto key = json["asset_key"].get<std::string>();
+      if (key.empty()) {
+        brush.asset_key.reset();
+      } else {
+        brush.asset_key = MaskAssetKey{std::move(key)};
+      }
+    }
   }
   return brush;
 }
@@ -270,6 +354,11 @@ auto LuminanceRangeFromJson(const nlohmann::json& json) -> std::optional<Luminan
 }
 
 }  // namespace
+
+auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool {
+  return !brush.strokes.empty() || brush.placement_translation.x != 0.0f ||
+         brush.placement_translation.y != 0.0f;
+}
 
 auto GetMaskSourceKind(const MaskSource& source) -> MaskSourceKind {
   if (std::holds_alternative<BrushMaskSource>(source)) {

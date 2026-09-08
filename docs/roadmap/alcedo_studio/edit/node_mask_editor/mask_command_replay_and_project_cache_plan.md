@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: encoding rules specified; production parameterized Brush source pending.
+Status: NM7.2 parameterized Brush source and Grade owner operations landed; encoding rules specified; project/schema version gate still pending NM7.3.
 
 Parent: [NM7 execution plan](phase_nm7_viewer_mask_creation_plan.md).
 This document defines NM7's revised algorithm, data ownership and storage behavior. It replaces
@@ -205,7 +205,7 @@ native Mask pass 之间必须一致。`source_format_version` 或 `raster_algori
 | 求值顺序 | 固定 | 规范 R8 → signed-distance 羽化（若半径 > 0）→ invert → opacity → clamp → 再量化到请求 R8。Union 是启用 Mask 的逐像素 max，发生在 Grade Mix 之前 |
 | 输出采样 | 现有 `MakeRasterMaskSamplingPlan` | 渲染像素中心 `(x+0.5, y+0.5)` 经 `render_to_texture_uv` 得到归一化 UV。UV 在 `[0,1]` 外为 0。R8 为双线性，texel 中心 `u*width-0.5`。无羽化时按该 plan 的 mip；有羽化时对距离场做同样的双线性。`geometry.filter` 默认双线性。缓存命中要求 extent、geometry、算法版本和 producer 完全一致，禁止把不相符的槽 resize 后当作命中 |
 
-JSON 中的样本数组按上述 binary32 规则读写。非法值、重复 StrokeId 或不支持的算法版本不得部分写入 owner。当前已实现的 `BrushMaskSource` 仍只持久化 `asset_key` / descriptor / `feather_radius`；参数化字段的 owner 写入属于后续阶段。现有加载器会忽略未知 source 键，因此带 `strokes` 的旧格式文档在切换版本门之前不能当作已经参数化。
+JSON 中的样本数组按上述 binary32 规则读写。非法值、重复 StrokeId 或不支持的算法版本不得部分写入 owner。NM7.2 将规范笔画、算法版本和 `placement_translation` 写入 `BrushMaskSource`；无笔画且平移为零的现有文档仍序列化为 `asset_key` / descriptor / `feather_radius`。带完整 `strokes` 的 JSON 按本节身份读取，不再忽略笔画字段。项目文件版本门和 raster-only 拒绝仍属于 NM7.3。
 
 ## 5. Undo/Redo 的局部重放算法
 

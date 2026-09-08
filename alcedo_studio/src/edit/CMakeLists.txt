@@ -35,6 +35,7 @@ def_library(EditMaskStore
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_store.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_asset.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_model.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_stroke.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_raster_encoding.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
     PUBLIC_DEPS EditGeometry JSON
