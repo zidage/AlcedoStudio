@@ -157,9 +157,32 @@ TEST_F(EditorPendingInputSessionTest, SelectedNodeProjectionDoesNotCaptureOrComm
   EXPECT_EQ(result.kind, EditorSessionResultKind::Accepted);
   EXPECT_EQ(history_->set_panel_projection_node_count, 1);
   EXPECT_EQ(history_->last_panel_projection_node, NodeId{"grade.b"});
+  EXPECT_EQ(history_->last_panel_projection_generation,
+            service_->active_image_load_request().value);
   EXPECT_EQ(service_->history_revision(), revision);
   EXPECT_EQ(history_->capture_count, captures);
   EXPECT_EQ(history_->commit_count, commits);
+}
+
+TEST_F(EditorPendingInputSessionTest, SelectedNodeProjectionDoesNotWaitForInflightFrame) {
+  (void)service_->Open(10, 20);
+  service_->DrainCommandQueueForTests();
+  const auto first_rid = service_->first_frame_request_id();
+  ASSERT_NE(first_rid, 0u);
+  runtime_->coordinator->NotifySchedulerCompleted(first_rid, true);
+  service_->DrainCommandQueueForTests();
+  ASSERT_EQ(service_->state(), EditorSessionState::Interactive);
+  ASSERT_TRUE(runtime_->coordinator->has_inflight());
+  ASSERT_NE(runtime_->coordinator->last_scheduled_request_id(), first_rid);
+
+  const auto result = service_->SetAdjustmentProjectionNode(NodeId{"grade.b"});
+  service_->DrainCommandQueueForTests();
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(history_->set_panel_projection_node_count, 1);
+  EXPECT_EQ(history_->last_panel_projection_node, NodeId{"grade.b"});
+  EXPECT_EQ(history_->last_panel_projection_generation,
+            service_->active_image_load_request().value);
+  EXPECT_TRUE(runtime_->coordinator->has_inflight());
 }
 
 }  // namespace

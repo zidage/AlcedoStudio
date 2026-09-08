@@ -23,7 +23,8 @@ auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock
   // lock after the full frame (configure + Apply + present). Do not call this
   // from the GUI thread while that thread is still required for present — the
   // session defers Version ops until render is idle so the GUI never blocks on
-  // render, only history queues for ownership.
+  // render, only history queues for ownership. Selected-node panel projection
+  // must never call this.
   return std::unique_lock<std::mutex>(executor.GetRenderLock());
 }
 

@@ -115,8 +115,9 @@ class IEditorSessionBackend {
   /**
    * @brief Reproject load-only panel values from @p node_id.
    *
-   * Does not enqueue an edit, commit history, or render. Default fakes accept
-   * without changing stored projection.
+   * Does not enqueue an edit, commit history, or render. Does not wait for an
+   * inflight frame or take the live render lock.
+   * Default fakes accept without changing stored projection.
    */
   virtual auto SetAdjustmentProjectionNode(const NodeId& /*node_id*/) -> EditorSessionResult {
     EditorSessionResult result;

@@ -31,6 +31,7 @@ namespace alcedo::ui {
 /// Acquire sole live-pipeline ownership (`render_lock_`). History waits for
 /// render to finish the current frame. The GUI must not block on this: session
 /// code defers Version ops until render is idle, then takes the lock (free).
+/// Selection / panel projection must never call this.
 auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex>;
 
 /// Stable field names shared by the editor models and the adjustment-transfer /

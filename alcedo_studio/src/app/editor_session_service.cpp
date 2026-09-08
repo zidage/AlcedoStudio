@@ -1643,7 +1643,9 @@ auto EditorSessionService::SetAdjustmentProjectionNode(const NodeId& node_id)
     return Reject("Adjustment history is unavailable");
   }
   std::string error;
-  if (!dependencies_.history->SetPanelProjectionNode(lifecycle_.history_guard(), node_id, &error)) {
+  const auto  session_generation = lifecycle_.active_image_load_request().value;
+  if (!dependencies_.history->SetPanelProjectionNode(lifecycle_.history_guard(), node_id,
+                                                     session_generation, &error)) {
     return Reject(error.empty() ? "Selected node panel projection failed" : error);
   }
   EditorSessionResult result;

@@ -161,10 +161,13 @@ class IEditorHistoryPort {
    * @brief Replace load-only panel values with the selected node's fields.
    *
    * Does not mutate parameters, commit history, or request a photo render.
+   * Must not wait on the live render lock or an inflight present handshake.
    * Default fakes succeed without storing a node.
    */
   virtual auto SetPanelProjectionNode(const EditorHistoryGuardHandle& /*guard*/,
-                                      const NodeId& /*node_id*/, std::string* /*error*/) -> bool {
+                                      const NodeId& /*node_id*/,
+                                      std::uint64_t /*session_generation*/,
+                                      std::string* /*error*/) -> bool {
     return true;
   }
 

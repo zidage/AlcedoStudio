@@ -100,6 +100,7 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   std::string                    last_grade_name;
   int                            set_panel_projection_node_count = 0;
   NodeId                         last_panel_projection_node;
+  std::uint64_t                  last_panel_projection_generation = 0;
   std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
 
@@ -178,10 +179,11 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     return last_render_reason;
   }
 
-  auto SetPanelProjectionNode(const EditorHistoryGuardHandle&, const NodeId& node_id, std::string*)
-      -> bool override {
+  auto SetPanelProjectionNode(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                              std::uint64_t session_generation, std::string*) -> bool override {
     ++set_panel_projection_node_count;
-    last_panel_projection_node = node_id;
+    last_panel_projection_node       = node_id;
+    last_panel_projection_generation = session_generation;
     return true;
   }
 

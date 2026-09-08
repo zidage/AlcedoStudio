@@ -239,9 +239,12 @@ class EditorNodeController : public QObject {
   void               OnSessionHistoryChanged();
   void               ClearSnapshot();
   void               SetLastError(QString error);
-  void               RestoreSelectionAfterSnapshot();
+  /// @p select_default_color_grade is true only for a new image-load generation.
+  /// Topology edits that drop the current node leave selection empty.
+  void               RestoreSelectionAfterSnapshot(bool select_default_color_grade);
   void               SyncSessionAdjustmentNode(bool seal_open_sequence);
   [[nodiscard]] auto ContainsNode(const NodeId& node_id) const -> bool;
+  /// Product default Color Grade (`grade.primary`) when that node exists.
   [[nodiscard]] auto DefaultSelectedNodeId() const -> NodeId;
   [[nodiscard]] auto IndexOf(const NodeId& node_id) const -> int;
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> const EditorNodeProjection*;

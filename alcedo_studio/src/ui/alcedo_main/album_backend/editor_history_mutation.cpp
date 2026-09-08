@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/editor_adjustment_context.hpp"
+#include "app/editor_session_ports.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_pipeline_command_service.hpp"
@@ -1076,28 +1077,27 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
 
 auto EditorHistoryMutation::SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
                                                    const alcedo::NodeId& node_id,
+                                                   std::uint64_t session_generation,
                                                    std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  auto state = state_.PeekWorkingState(guard.element_id);
   if (!state) {
+    if (error) *error = "Editor history working state is unavailable";
     return false;
+  }
+  if (node_id.Empty()) {
+    state->panel_projection_node_id = {};
+    state->panel_projection         = {};
+    return true;
   }
   if (!state->pipeline_guard || !state->pipeline_guard->document_) {
     if (error) *error = "Live pipeline document is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline executor is unavailable";
-    return false;
-  }
   try {
-    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
     alcedo::EditorPanelProjection next;
     const auto& document = *state->pipeline_guard->document_;
-    const bool ok =
-        node_id.Empty()
-            ? alcedo::ProjectCurrentPanelFields(document, 0, &next, error)
-            : alcedo::ProjectSelectedNodePanelFields(document, node_id, 0, &next, error);
-    if (!ok) {
+    if (!alcedo::ProjectSelectedNodePanelFields(document, node_id, session_generation, &next,
+                                                error)) {
       return false;
     }
     state->panel_projection_node_id = node_id;

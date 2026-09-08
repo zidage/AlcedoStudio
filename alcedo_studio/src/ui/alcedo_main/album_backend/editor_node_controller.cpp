@@ -134,7 +134,7 @@ void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_i
   if (identity_changed) {
     SyncLayoutKey();
     if (has_snapshot_) {
-      RestoreSelectionAfterSnapshot();
+      RestoreSelectionAfterSnapshot(false);
     }
   }
   emit SnapshotChanged();
@@ -195,20 +195,8 @@ auto EditorNodeController::ContainsNode(const NodeId& node_id) const -> bool {
 }
 
 auto EditorNodeController::DefaultSelectedNodeId() const -> NodeId {
-  if (!HasActiveGraph()) {
-    return {};
-  }
-  for (const auto& node : ActiveNodes()) {
-    if (node.node_kind == EditorNodeKind::ColorGrade) {
-      return node.node_id;
-    }
-  }
-  for (const auto& node : ActiveNodes()) {
-    if (node.node_kind == EditorNodeKind::Drt) {
-      return node.node_id;
-    }
-  }
-  return ActiveNodes().empty() ? NodeId{} : ActiveNodes().front().node_id;
+  const NodeId default_grade{"grade.primary"};
+  return ContainsNode(default_grade) ? default_grade : NodeId{};
 }
 
 auto EditorNodeController::IndexOf(const NodeId& node_id) const -> int {
@@ -248,7 +236,7 @@ auto EditorNodeController::TopologyChanged(const EditorNodeGraphSnapshot& snapsh
   return !SameTopology(snapshot_, snapshot);
 }
 
-void EditorNodeController::RestoreSelectionAfterSnapshot() {
+void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_color_grade) {
   if (layout_store_ != nullptr) {
     const auto key         = layout_store_->current_key();
     const bool key_changed = key != last_layout_key_;
@@ -273,7 +261,7 @@ void EditorNodeController::RestoreSelectionAfterSnapshot() {
   if (!selected_node_id_.Empty()) {
     selection_restore_node_id_ = selected_node_id_;
   }
-  selected_node_id_ = DefaultSelectedNodeId();
+  selected_node_id_ = select_default_color_grade ? DefaultSelectedNodeId() : NodeId{};
 }
 
 void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
@@ -286,6 +274,7 @@ void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
   }
   const auto* node = NodeFor(selected_node_id_);
   if (node == nullptr) {
+    session_->ApplySelectedAdjustmentNode({}, EditorNodeKind::ColorGrade);
     return;
   }
   session_->ApplySelectedAdjustmentNode(selected_node_id_, node->node_kind);
@@ -385,7 +374,7 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   snapshot_image_id_           = image_id_;
   snapshot_version_id_         = version_id_;
   SyncLayoutKey();
-  RestoreSelectionAfterSnapshot();
+  RestoreSelectionAfterSnapshot(generation_changed);
   SyncSessionAdjustmentNode(false);
   SetLastError({});
   emit SnapshotChanged();
@@ -831,9 +820,10 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   emit DraftStateChanged();
   emit ActionAvailabilityChanged();
   if (!ContainsNode(selected_node_id_)) {
-    selected_node_id_ = DefaultSelectedNodeId();
+    selected_node_id_ = {};
     PersistSavedSelection();
     ApplyLiveSelectionToAdapter();
+    SyncSessionAdjustmentNode(false);
     emit SelectionChanged();
     emit ActionAvailabilityChanged();
   }

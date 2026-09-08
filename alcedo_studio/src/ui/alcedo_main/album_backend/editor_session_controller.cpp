@@ -1266,6 +1266,9 @@ void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId& 
   if (session_backend_ != nullptr) {
     (void)session_backend_->SetAdjustmentProjectionNode(node_id);
   }
+  if (node_id.Empty()) {
+    return;
+  }
   const auto current = active_adjustment_panel_.toStdString();
   if (!alcedo::AdjustmentPanelIsSupported(kind, current)) {
     const auto fallback = alcedo::DefaultAdjustmentPanel(kind);

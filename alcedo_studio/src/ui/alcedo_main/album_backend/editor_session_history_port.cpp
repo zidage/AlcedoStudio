@@ -256,8 +256,9 @@ auto EditorSessionHistoryPort::ReadPanelProjection(const alcedo::EditorHistoryGu
 
 auto EditorSessionHistoryPort::SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
                                                       const alcedo::NodeId& node_id,
+                                                      std::uint64_t session_generation,
                                                       std::string* error) -> bool {
-  return mutation_->SetPanelProjectionNode(guard, node_id, error);
+  return mutation_->SetPanelProjectionNode(guard, node_id, session_generation, error);
 }
 
 auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,

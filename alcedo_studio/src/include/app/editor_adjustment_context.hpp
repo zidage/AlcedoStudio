@@ -120,9 +120,8 @@ struct EditorAdjustmentContext {
  * @brief Project every supported panel field for @p selected_node_id in one read.
  *
  * Failure leaves @p out unchanged. Does not call Model ToJson, LoadJson, or
- * MakeFullDto.
- *
- * @pre Caller holds the executor render lock when @p document is live.
+ * MakeFullDto. Load-only: does not mutate parameters. Must not acquire the live
+ * render lock — selection cannot stall present.
  */
 auto ProjectSelectedNodePanelFields(const PipelineDocument& document, const NodeId& selected_node_id,
                                     std::uint64_t session_generation, EditorPanelProjection* out,

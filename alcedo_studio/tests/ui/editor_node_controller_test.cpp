@@ -270,6 +270,23 @@ TEST(EditorNodeController, PublishDocumentSelectsPrimaryColorGrade) {
   EXPECT_FALSE(controller.can_add_color_grade());
 }
 
+TEST(EditorNodeController, TopologyEditDoesNotSelectASubstituteGrade) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(17);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.extra"));
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
+
+  ASSERT_TRUE(controller.deleteColorGrade(QStringLiteral("grade.extra")));
+  EXPECT_TRUE(controller.selected_node_id().Empty());
+  EXPECT_TRUE(backend.last_projection_node().Empty());
+  EXPECT_FALSE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.3f}, false));
+}
+
 TEST(EditorNodeController, UnknownNodeDoesNotCreateASecondSelection) {
   EditorNodeController controller;
   ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
@@ -376,6 +393,7 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_EQ(controller.ActiveNodes().size(), 3u);
+  EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
 TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBackendMutation) {
@@ -413,7 +431,7 @@ TEST(EditorNodeController, BackendFailurePreservesDocumentCounterProjectionAndSe
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
-TEST(EditorNodeController, MissingNodeAfterRefreshSelectsRemainingColorGrade) {
+TEST(EditorNodeController, MissingDefaultColorGradeAfterRefreshClearsSelection) {
   EditorNodeController controller;
   auto                 document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(controller.PublishDocument(document, 2));
@@ -424,8 +442,7 @@ TEST(EditorNodeController, MissingNodeAfterRefreshSelectsRemainingColorGrade) {
                      [](const auto& node) { return node.node_id == NodeId{"grade.primary"}; }),
       next.nodes.end());
   ASSERT_TRUE(controller.PublishSnapshot(std::move(next)));
-  EXPECT_NE(controller.selected_node_id(), NodeId{"grade.primary"});
-  EXPECT_FALSE(controller.selected_node_id().Empty());
+  EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
 TEST(EditorNodeController, BlockedEditAvailabilityDisablesAddWithoutSnapshotChange) {
