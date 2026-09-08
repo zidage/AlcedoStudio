@@ -5,6 +5,9 @@
 #include "app/editor_adjustment_context.hpp"
 
 #include <array>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 #include "edit/graph/color_grade_node_model.hpp"
@@ -106,6 +109,53 @@ auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay {
     return {};
   }
   return ReadEditorImageExifDisplay(image.exif_display_);
+}
+
+namespace {
+
+auto FormatPositiveNumber(float value) -> std::string {
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(1) << value;
+  std::string out = stream.str();
+  while (out.size() > 1 && out.back() == '0') {
+    out.pop_back();
+  }
+  if (!out.empty() && out.back() == '.') {
+    out.pop_back();
+  }
+  return out;
+}
+
+}  // namespace
+
+auto FormatEditorImageExifDisplay(const EditorImageExifDisplay& display) -> EditorExifRowText {
+  EditorExifRowText text;
+  if (display.shutter_speed.has_value()) {
+    const auto [numerator, denominator] = *display.shutter_speed;
+    if (denominator == 1) {
+      text.shutter = std::to_string(numerator) + " s";
+    } else {
+      text.shutter = std::to_string(numerator) + "/" + std::to_string(denominator) + " s";
+    }
+  } else {
+    text.shutter = std::string(kMissingExifDisplay);
+  }
+  if (display.iso.has_value()) {
+    text.iso = std::to_string(*display.iso);
+  } else {
+    text.iso = std::string(kMissingExifDisplay);
+  }
+  if (display.aperture.has_value() && std::isfinite(*display.aperture)) {
+    text.aperture = "f/" + FormatPositiveNumber(*display.aperture);
+  } else {
+    text.aperture = std::string(kMissingExifDisplay);
+  }
+  if (display.focal_mm.has_value() && std::isfinite(*display.focal_mm)) {
+    text.focal = FormatPositiveNumber(*display.focal_mm) + " mm";
+  } else {
+    text.focal = std::string(kMissingExifDisplay);
+  }
+  return text;
 }
 
 auto SupportedAdjustmentPanels(EditorNodeKind kind) -> std::span<const std::string_view> {

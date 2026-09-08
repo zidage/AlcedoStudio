@@ -13,11 +13,14 @@
 #include <QThread>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <string>
 
-#include "app/editor_save_checkpoint_coordinator.hpp"
+#include "app/editor_adjustment_context.hpp"
+#include "app/image_pool_service.hpp"
+#include "image/image.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
@@ -249,6 +252,27 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorSessionController", editor_session_.get());
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
+  editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {
+    if (image_id == 0 || project_ == nullptr || project_->handler().project() == nullptr) {
+      return {};
+    }
+    auto pool = project_->handler().project()->GetImagePoolService();
+    if (!pool) {
+      return {};
+    }
+    try {
+      return pool->Read<alcedo::EditorImageExifDisplay>(
+          static_cast<std::uint32_t>(image_id),
+          [](const std::shared_ptr<alcedo::Image>& image) {
+            if (!image) {
+              return alcedo::EditorImageExifDisplay{};
+            }
+            return alcedo::ReadEditorImageExifDisplay(*image);
+          });
+    } catch (const std::exception&) {
+      return {};
+    }
+  });
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {

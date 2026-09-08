@@ -219,7 +219,7 @@ Item {
         return ok
     }
 
-    /// Enter / numpad Enter: apply draft crop and return to Tone (legacy shortcut).
+    /// Enter / numpad Enter: apply draft crop and return to Tone.
     function confirmAndReturnToTone() {
         if (root.editorSession)
             root.editorSession.activeAdjustmentPanel = "tone"
@@ -812,6 +812,15 @@ Item {
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightHeading
+            }
+
+            Label {
+                objectName: "editorGeometryWholeImageScope"
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: qsTr("Geometry applies to the whole image.")
+                color: root.colMuted
+                font.pixelSize: appTheme.fontSizeCaption
             }
 
             Label {

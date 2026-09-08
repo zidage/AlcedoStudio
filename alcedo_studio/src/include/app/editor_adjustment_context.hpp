@@ -46,6 +46,22 @@ struct EditorImageExifDisplay {
   std::optional<float>               focal_mm;
 };
 
+/// UTF-8 em dash used when a header EXIF field is missing or invalid.
+inline constexpr std::string_view kMissingExifDisplay = "\xE2\x80\x94";
+
+/**
+ * @brief Formatted header EXIF values, including units.
+ *
+ * Missing or invalid fields are @ref kMissingExifDisplay. Four strings are
+ * always filled so the header can keep stable rows.
+ */
+struct EditorExifRowText {
+  std::string shutter;
+  std::string iso;
+  std::string aperture;
+  std::string focal;
+};
+
 /**
  * @brief Read-only selected-node capabilities for panel navigation.
  *
@@ -77,6 +93,16 @@ struct EditorAdjustmentContext {
  * @brief Copy the four display EXIF fields from @p image when display metadata is present.
  */
 [[nodiscard]] auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay;
+
+/**
+ * @brief Format the four header EXIF rows for QML.
+ *
+ * Valid shutter rationals become `1/250 s` or `2 s`. Positive ISO is the
+ * integer. Positive aperture is `f/2.8`. Focal length uses the actual mm value
+ * with a `mm` unit, never the 35 mm equivalent. Does not parse EXIF JSON.
+ */
+[[nodiscard]] auto FormatEditorImageExifDisplay(const EditorImageExifDisplay& display)
+    -> EditorExifRowText;
 
 /// Panels the selected node kind may show. Geometry is Develop-only.
 [[nodiscard]] auto SupportedAdjustmentPanels(EditorNodeKind kind)

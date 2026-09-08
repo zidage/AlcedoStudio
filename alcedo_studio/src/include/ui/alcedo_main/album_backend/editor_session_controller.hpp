@@ -12,10 +12,12 @@
 #include <QVariantMap>
 #include <QtGlobal>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
+#include "app/editor_adjustment_context.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/editor_node_graph_projection.hpp"
 #include "app/editor_pending_input.hpp"
@@ -91,6 +93,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Survives workspace Loader teardown and application restart (QSettings).
   Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
                  set_active_adjustment_panel NOTIFY DesktopUiChanged)
+  /// Image-owned EXIF rows for the adjustment header. Updated when the open
+  /// image identity changes, not when the selected NodeId changes.
+  Q_PROPERTY(QString exifShutterText READ exif_shutter_text NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString exifIsoText READ exif_iso_text NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString exifApertureText READ exif_aperture_text NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString exifFocalText READ exif_focal_text NOTIFY ImageExifChanged)
   // Left tool rail page: empty string = collapsed; "history", "versions", or
   // "nodes" = expanded. Survives workspace round-trips within the process
   // (not persisted across application restart).
@@ -154,6 +162,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] double  filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
   [[nodiscard]] double  filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
   [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
+  [[nodiscard]] QString exif_shutter_text() const { return exif_shutter_text_; }
+  [[nodiscard]] QString exif_iso_text() const { return exif_iso_text_; }
+  [[nodiscard]] QString exif_aperture_text() const { return exif_aperture_text_; }
+  [[nodiscard]] QString exif_focal_text() const { return exif_focal_text_; }
   [[nodiscard]] QString editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
@@ -198,6 +210,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE bool   enqueueNodeSwitchBoundary();
   /// Bind the Nodes-page selection owner used to stamp submit targets.
   void               BindNodeSelectionSource(EditorNodeController* nodes);
+  /**
+   * @brief Install the Image-owner EXIF reader used by the adjustment header.
+   *
+   * Called when the open image identity changes. Must not be invoked from node
+   * selection. The reader copies Image::exif_display_ and must not parse EXIF
+   * JSON. Throw or missing images yield em-dash rows.
+   */
+  void SetImageExifReader(std::function<alcedo::EditorImageExifDisplay(uint)> reader);
   /// Reproject panels for the selected node without rendering or committing.
   void ApplySelectedAdjustmentNode(const alcedo::NodeId& node_id, alcedo::EditorNodeKind kind);
   [[nodiscard]] auto PeekPendingInput() const -> alcedo::EditorPendingInputView;
@@ -287,6 +307,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void ActionAvailabilityChanged();
 
   void FilmstripUiChanged();
+  void ImageExifChanged();
   void DesktopUiChanged();
   void PresentationBindingChanged();
   void LastEditedImageChanged();
@@ -299,6 +320,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     LoadDesktopUiPrefs();
   void                     SaveDesktopUiPrefs() const;
   void                     SyncIdentityFromBackend();
+  void                     RefreshImageExifDisplay();
+  void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
@@ -359,6 +382,13 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   QString                                        active_adjustment_panel_ = QStringLiteral("tone");
   QString                                        editor_tool_panel_page_;
+  std::function<alcedo::EditorImageExifDisplay(uint)> image_exif_reader_;
+  uint                                           exif_image_id_          = 0;
+  qulonglong                                     exif_session_generation_ = 0;
+  QString exif_shutter_text_  = QString::fromUtf8("\xE2\x80\x94");
+  QString exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
+  QString exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
+  QString exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
   QPointer<QObject>                              presentation_viewport_;
   QPointer<QObject>                              interaction_controller_;
   QMetaObject::Connection                        interaction_view_change_connection_;

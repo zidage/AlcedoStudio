@@ -375,6 +375,40 @@ void EditorSessionController::SyncIdentityFromBackend() {
   session_state_ = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
+  RefreshImageExifDisplay();
+}
+
+void EditorSessionController::RefreshImageExifDisplay() {
+  if (image_id_ == exif_image_id_ && session_generation_ == exif_session_generation_) {
+    return;
+  }
+  exif_image_id_          = image_id_;
+  exif_session_generation_ = session_generation_;
+  alcedo::EditorImageExifDisplay display;
+  if (image_id_ != 0 && image_exif_reader_) {
+    try {
+      display = image_exif_reader_(image_id_);
+    } catch (...) {
+      display = {};
+    }
+  }
+  ApplyExifRowText(alcedo::FormatEditorImageExifDisplay(display));
+}
+
+void EditorSessionController::ApplyExifRowText(const alcedo::EditorExifRowText& text) {
+  const auto shutter  = QString::fromUtf8(text.shutter.data(), static_cast<int>(text.shutter.size()));
+  const auto iso      = QString::fromUtf8(text.iso.data(), static_cast<int>(text.iso.size()));
+  const auto aperture = QString::fromUtf8(text.aperture.data(), static_cast<int>(text.aperture.size()));
+  const auto focal    = QString::fromUtf8(text.focal.data(), static_cast<int>(text.focal.size()));
+  if (exif_shutter_text_ == shutter && exif_iso_text_ == iso && exif_aperture_text_ == aperture &&
+      exif_focal_text_ == focal) {
+    return;
+  }
+  exif_shutter_text_  = shutter;
+  exif_iso_text_      = iso;
+  exif_aperture_text_ = aperture;
+  exif_focal_text_    = focal;
+  emit ImageExifChanged();
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
@@ -390,6 +424,7 @@ void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
     emit LastEditedImageChanged();
   }
   ++session_generation_;
+  RefreshImageExifDisplay();
 }
 
 void EditorSessionController::ApplyCloseLocal() {
@@ -401,6 +436,7 @@ void EditorSessionController::ApplyCloseLocal() {
   element_id_    = 0;
   image_id_      = 0;
   session_state_ = alcedo::EditorSessionState::NoImage;
+  RefreshImageExifDisplay();
 }
 
 void EditorSessionController::SyncViewportIdentity() {
@@ -1259,6 +1295,14 @@ bool EditorSessionController::enqueueNodeSwitchBoundary() {
 
 void EditorSessionController::BindNodeSelectionSource(EditorNodeController* nodes) {
   node_controller_ = nodes;
+}
+
+void EditorSessionController::SetImageExifReader(
+    std::function<alcedo::EditorImageExifDisplay(uint)> reader) {
+  image_exif_reader_     = std::move(reader);
+  exif_image_id_         = 0;
+  exif_session_generation_ = 0;
+  RefreshImageExifDisplay();
 }
 
 void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId&  node_id,

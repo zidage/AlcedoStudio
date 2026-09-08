@@ -3,11 +3,9 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// Phase 6D Look panel — ergonomic IA over the production operator set:
-// White Balance first, global color amount, selective HSL, original three-disc
-// CDL trackballs (Gamma top / Lift+Gain bottom), detail + texture.
-// LUT moved to its own standalone panel (LUTPanel.qml).
-// Values submit through the EditorSessionController submitter seam only.
+// Color Grade Look panel: global color amount, selective HSL, CDL
+// trackballs (Gamma top / Lift+Gain bottom), plus Detail and Texture.
+// White Balance lives on the RAW Decode page. LUT is LUTPanel.qml.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_look"
@@ -34,7 +32,6 @@ Item {
 
     function wireEnabled() {
         const on = root.controlsEnabled
-        colorTempModel.enabled = on
         saturationModel.enabled = on
         vibranceModel.enabled = on
         hlsModel.enabled = on
@@ -56,7 +53,6 @@ Item {
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
-        loadColorTempFromSnapshot(snapshot)
         loadModelFromSnapshot(saturationModel, "saturation", snapshot)
         loadModelFromSnapshot(vibranceModel, "vibrance", snapshot)
         loadHlsFromSnapshot(snapshot)
@@ -86,63 +82,6 @@ Item {
             num = (num - 1.0) * 100.0
         if (Math.abs(model.value - num) > (model.step * 0.1))
             model.value = num
-    }
-
-    function loadNestedStrength(model, fieldKey, nestedKey, snapshot) {
-        if (!model || !snapshot)
-            return
-        // In-flight pointer drag owns the value; settled echo must not fight it.
-        if (model.dragActive)
-            return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined)
-            return
-        const nested = entry[fieldKey]
-        const val = (nested && nested[nestedKey] !== undefined) ? nested[nestedKey]
-                  : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
-        if (val === undefined)
-            return
-        var num = Number(val)
-        if (isNaN(num))
-            return
-        if (fieldKey === "film_grain" || fieldKey === "halation")
-            num *= 100.0
-        if (Math.abs(model.value - num) > (model.step * 0.1))
-            model.value = num
-    }
-
-    function loadSharpenFromSnapshot(snapshot) {
-        if (!snapshot)
-            return
-        if (sharpenModel.dragActive)
-            return
-        const entry = snapshot.sharpen
-        if (entry === undefined)
-            return
-        const nested = entry.sharpen
-        const val = (nested && nested.offset !== undefined) ? nested.offset
-                  : (entry.offset !== undefined ? entry.offset : undefined)
-        if (val === undefined)
-            return
-        const num = Number(val)
-        if (isNaN(num))
-            return
-        if (Math.abs(sharpenModel.value - num) > 0.1)
-            sharpenModel.value = num
-    }
-
-    function loadColorTempFromSnapshot(snapshot) {
-        if (!snapshot || snapshot.color_temp === undefined)
-            return
-        // Continuous CCT/tint drag must not be aborted by the interactive
-        // snapshot echo (EditorAdjustmentStack onAdjustmentSnapshotChanged).
-        if (colorTempModel.dragActive)
-            return
-        // Snapshot field is ColorTempOp::GetParams shape (via live GetOperator).
-        // C++ owns key mapping: mode, custom_*, as_shot_* (+ legacy aliases).
-        // Do not re-interpret cct/tint defaults here — that silently loads 6500/0
-        // when only custom_*/as_shot_* are present and breaks as_shot ↔ custom.
-        colorTempModel.loadFromOperatorParams(snapshot.color_temp)
     }
 
     function loadHlsFromSnapshot(snapshot) {
@@ -197,12 +136,49 @@ Item {
         applyWheel("gain", cw.gain)
     }
 
-
-    EditorColorTempModel {
-        id: colorTempModel
-        objectName: "lookColorTempModel"
-        submitter: root.editorSession
+    function loadNestedStrength(model, fieldKey, nestedKey, snapshot) {
+        if (!model || !snapshot)
+            return
+        if (model.dragActive)
+            return
+        const entry = snapshot[fieldKey]
+        if (entry === undefined)
+            return
+        const nested = entry[fieldKey]
+        const val = (nested && nested[nestedKey] !== undefined) ? nested[nestedKey]
+                  : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
+        if (val === undefined)
+            return
+        var num = Number(val)
+        if (isNaN(num))
+            return
+        if (fieldKey === "film_grain" || fieldKey === "halation")
+            num *= 100.0
+        if (Math.abs(model.value - num) > (model.step * 0.1))
+            model.value = num
     }
+
+    function loadSharpenFromSnapshot(snapshot) {
+        if (!snapshot)
+            return
+        if (sharpenModel.dragActive)
+            return
+        const entry = snapshot.sharpen
+        if (entry === undefined)
+            return
+        const nested = entry.sharpen
+        const val = (nested && nested.offset !== undefined) ? nested.offset
+                  : (entry.offset !== undefined ? entry.offset : undefined)
+        if (val === undefined)
+            return
+        const num = Number(val)
+        if (isNaN(num))
+            return
+        if (Math.abs(sharpenModel.value - num) > 0.1)
+            sharpenModel.value = num
+    }
+
+
     EditorAdjustmentValueModel {
         id: saturationModel
         objectName: "lookSaturationModel"
@@ -298,38 +274,7 @@ Item {
         accentColor: root.colFill
     }
 
-    // Plain chip (replaces Material Button) for As Shot / Custom.
-    component ModeChip: Rectangle {
-        id: chip
-        property string label: ""
-        property bool selected: false
-        property bool chipEnabled: true
-        signal activated()
-
-        implicitWidth: chipLabel.implicitWidth + 20
-        implicitHeight: 26
-        radius: 6
-        color: selected ? root.colFill : root.colBase
-        border.width: 1
-        border.color: root.colCardBorder
-        opacity: chipEnabled ? 1.0 : 0.45
-
-        Text {
-            id: chipLabel
-            anchors.centerIn: parent
-            text: chip.label
-            color: chip.selected ? root.colBase : root.colText
-            font.pixelSize: appTheme.fontSizeCaption
-        }
-        MouseArea {
-            anchors.fill: parent
-            enabled: chip.chipEnabled
-            cursorShape: Qt.PointingHandCursor
-            onClicked: chip.activated()
-        }
-    }
-
-    // Flat monochrome action chip (Refresh / Open folder / Reset wheels).
+    // Flat monochrome action chip (Reset wheels).
     component ActionChip: Rectangle {
         id: action
         property string label: ""
@@ -375,7 +320,7 @@ Item {
         /// Full-track mouse travel maps to this fraction of the value range.
         property real pointerGain: 0.32
 
-        property bool _gestureMoved: false
+        property bool _pointerMoved: false
         property real _pressValue: 0
         property real _pressLocalX: 0
         property double _lastClickMs: 0
@@ -447,9 +392,9 @@ Item {
             return Math.max(mono.from, Math.min(mono.to, v))
         }
 
-        function finishPointerGesture() {
+        function finishPointerPress() {
             var now = Date.now()
-            var isDouble = !_gestureMoved
+            var isDouble = !_pointerMoved
                     && (now - _lastClickMs) < 350
                     && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
             _lastClickMs = now
@@ -506,7 +451,7 @@ Item {
             cursorShape: mono._handleDragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
 
             onPressed: function (mouse) {
-                mono._gestureMoved = false
+                mono._pointerMoved = false
                 mono._pressValue = mono.value
                 mono._pressLocalX = mouse.x
                 mono.lockScroll(true)
@@ -521,13 +466,13 @@ Item {
             onPositionChanged: function (mouse) {
                 if (!mono._handleDragging)
                     return
-                mono._gestureMoved = true
+                mono._pointerMoved = true
                 var v = mono.valueFromDragDelta(mouse.x)
                 mono.value = v
                 mono.onUpdate(v)
             }
             onReleased: function (/*mouse*/) {
-                mono.finishPointerGesture()
+                mono.finishPointerPress()
             }
             onCanceled: {
                 if (mono._handleDragging)
@@ -737,90 +682,6 @@ Item {
                 font.weight: appTheme.fontWeightHeading
             }
 
-            // ── White Balance ─────────────────────────────────────────────
-            SectionShell {
-                objectName: "editorAdjustmentGroupShell_look_wb"
-                title: qsTr("White Balance")
-                expanded: true
-                bodyContentHeight: wbBody.implicitHeight + 8
-
-                ColumnLayout {
-                    id: wbBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 6
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        ModeChip {
-                            label: qsTr("As Shot")
-                            selected: colorTempModel.modeIndex === 0
-                            chipEnabled: root.controlsEnabled && colorTempModel.supported
-                            onActivated: colorTempModel.selectMode(0)
-                        }
-                        ModeChip {
-                            label: qsTr("Custom")
-                            selected: colorTempModel.modeIndex === 1
-                            chipEnabled: root.controlsEnabled && colorTempModel.supported
-                            onActivated: colorTempModel.selectMode(1)
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    Text {
-                        visible: !colorTempModel.supported
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: qsTr("White balance is unavailable for this image.")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
-
-                    MonoSliderRow {
-                        objectName: "lookCctSlider"
-                        title: qsTr("Temperature")
-                        valueText: Math.round(colorTempModel.cct) + " K"
-                        from: 0
-                        to: 4096
-                        value: colorTempModel.cctSliderPos
-                        rowEnabled: root.controlsEnabled && colorTempModel.supported
-                        gradientStops: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#9BD8FF" }
-                            GradientStop { position: 0.5; color: "#FFE8B0" }
-                            GradientStop { position: 1.0; color: "#FF8A3D" }
-                        }
-                        onBegin: function () { colorTempModel.beginCctDrag() }
-                        onUpdate: function (v) { colorTempModel.updateCctSliderDrag(Math.round(v)) }
-                        onFinish: function () { colorTempModel.finishCctDrag() }
-                        onReset: function () { colorTempModel.reset() }
-                    }
-
-                    MonoSliderRow {
-                        objectName: "lookTintSlider"
-                        title: qsTr("Tint")
-                        valueText: String(Math.round(colorTempModel.tint))
-                        from: -150
-                        to: 150
-                        value: colorTempModel.tint
-                        rowEnabled: root.controlsEnabled && colorTempModel.supported
-                        gradientStops: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#49C26D" }
-                            GradientStop { position: 0.5; color: "#E6E6E6" }
-                            GradientStop { position: 1.0; color: "#A85AE6" }
-                        }
-                        onBegin: function () { colorTempModel.beginTintDrag() }
-                        onUpdate: function (v) { colorTempModel.updateTintDrag(v) }
-                        onFinish: function () { colorTempModel.finishTintDrag() }
-                        onReset: function () { colorTempModel.reset() }
-                    }
-                }
-            }
-
             // ── Color amount ──────────────────────────────────────────────
             SectionShell {
                 objectName: "editorAdjustmentGroupShell_look_color"
@@ -1008,7 +869,6 @@ Item {
                 }
             }
 
-            // ── Detail ────────────────────────────────────────────────────
             SectionShell {
                 objectName: "editorAdjustmentGroupShell_look_detail"
                 title: qsTr("Detail")
@@ -1037,7 +897,6 @@ Item {
                 }
             }
 
-            // ── Texture ───────────────────────────────────────────────────
             SectionShell {
                 objectName: "editorAdjustmentGroupShell_look_texture"
                 title: qsTr("Texture")
@@ -1066,8 +925,7 @@ Item {
                 }
             }
 
-
-            // Preserve Phase 4C fold objectName for Look panel selection tests.
+            // Preserve fold objectName for Look panel selection tests.
             Item {
                 objectName: "editorAdjustmentGroupShell_look"
                 width: 0

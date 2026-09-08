@@ -278,6 +278,7 @@ the two side columns read as one family.
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
+| `editorAdjustmentHeaderMinHeight` | 64 | Node-name / EXIF header under the scope: four caption rows plus `spaceXs` padding |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
@@ -563,14 +564,30 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
   (light bone well); active segment icon ink = `editorListSelectedInkColor`;
   idle icons = `iconColor` / hover `textColor`. Do **not** paint the thumb with
   `accentColor` (no blue slab).
-- **Adjustment navbar sliding window:** Tone/Look/LUT/Display/Geometry/RAW track
-  uses the **same monochrome thumb** (`editorAdjustmentNavThumb` =
+- **Adjustment navbar sliding window:** Tone / Look / LUT / Display /
+  Geometry / RAW Decode stay on one stable track. The selected node does not
+  hide pages. Write targeting still rejects fields the current node does not own.
+  Uses the **same monochrome thumb** (`editorAdjustmentNavThumb` =
   `editorListSelectedFillColor`, no accent border). Active segment icon ink =
   `editorListSelectedInkColor`; idle = `textMutedColor`. Segment buttons:
   transparent wells, **no** hover fill, **no** focus ring (capsule family).
   Motion: OutBack slide on `x` + land scale pulse; `reduceMotion` snaps.
   Thumb size is inset from the hit cell (`spaceXs`) so the well is not flush
   with the sunken track edge.
+
+### Adjustment header (node name and EXIF)
+
+Place the header between the scope slot and the adjustment navbar. Surfaces use
+`cardSurfaceColor` with `dividerColor` hairlines. Do not add a second panel fill,
+badge, or status dot.
+
+| Region | Treatment |
+| --- | --- |
+| Left | Selected node display name only. `uiFontFamily`, `fontSizeTitle`, `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines, elided. Full name is the accessible name and tooltip. No node-kind subtitle. |
+| Vertical rule | 1 px `dividerColor` |
+| Right | Four stable rows, top to bottom: Shutter, ISO, Aperture, Focal length. Labels: `fontSizeCaption` + `textMutedColor`. Values: `dataFontFamily` + `fontSizeCaption`. Missing or invalid values are an em dash. Use actual focal length, never 35 mm equivalent. |
+
+Node switching does not reread EXIF. Image identity change updates the four rows.
 - **Display method segments:** shared sunk track + monochrome inverted wells
   (see Display Transform panel); title-only, medium height, always expanded.
 

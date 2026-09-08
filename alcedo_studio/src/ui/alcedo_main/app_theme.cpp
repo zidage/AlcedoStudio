@@ -1108,6 +1108,7 @@ auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
+auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 64; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }

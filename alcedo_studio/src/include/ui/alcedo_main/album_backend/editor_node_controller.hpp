@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -61,6 +62,10 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(
       QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY DraftStateChanged)
   Q_PROPERTY(QString selectedNodeName READ selected_node_name NOTIFY SelectionChanged)
+  Q_PROPERTY(QString selectedNodeKind READ selected_node_kind NOTIFY SelectionChanged)
+  Q_PROPERTY(QStringList supportedAdjustmentPanels READ supported_adjustment_panels NOTIFY
+                 SelectionChanged)
+  Q_PROPERTY(QVariantList selectedNodeMasks READ selected_node_masks NOTIFY SelectionChanged)
   Q_PROPERTY(QObject* graphAdapter READ graph_adapter_object WRITE set_graph_adapter NOTIFY
                  GraphAdapterChanged)
   Q_PROPERTY(QObject* layoutStore READ layout_store_object WRITE set_layout_store NOTIFY
@@ -182,6 +187,12 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto incomplete_draft() const -> bool;
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
   [[nodiscard]] auto selected_node_name() const -> QString;
+  /// Product kind key: develop, colorGrade, or drt. Empty when nothing is selected.
+  [[nodiscard]] auto selected_node_kind() const -> QString;
+  /// Panel keys the selected node may show. Empty when nothing is selected.
+  [[nodiscard]] auto supported_adjustment_panels() const -> QStringList;
+  /// Read-only Mask identity rows for the selected Color Grade. Empty otherwise.
+  [[nodiscard]] auto selected_node_masks() const -> QVariantList;
   [[nodiscard]] auto snapshot() const -> const EditorNodeGraphSnapshot& { return snapshot_; }
   /**
    * @brief Nodes and edges currently shown on the page.
