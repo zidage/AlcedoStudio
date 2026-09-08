@@ -126,6 +126,8 @@ class EditorNodeController : public QObject {
    * @param node_id Product NodeId string.
    */
   Q_INVOKABLE void selectNode(const QString& node_id);
+  /// Select the panel owner, returning to the last live Color Grade when possible.
+  void SelectNodeForAdjustmentPanel(const QString& panel);
   Q_INVOKABLE void selectPreviousBackboneNode();
   Q_INVOKABLE void selectNextBackboneNode();
   Q_INVOKABLE void selectDevelop();
@@ -298,6 +300,7 @@ class EditorNodeController : public QObject {
   EditorNodeGraphSnapshot                             snapshot_{};
   bool                                                has_snapshot_ = false;
   NodeId                                              selected_node_id_;
+  NodeId                                              last_selected_color_grade_id_;
   NodeId                                              selection_restore_node_id_;
   bool                                                command_active_          = false;
   bool                                                projection_apply_queued_ = false;

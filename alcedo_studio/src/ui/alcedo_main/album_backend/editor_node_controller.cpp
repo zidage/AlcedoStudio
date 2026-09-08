@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/editor_adjustment_context.hpp"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
@@ -157,15 +158,16 @@ void EditorNodeController::SetLastError(QString error) {
 
 void EditorNodeController::ClearSnapshot() {
   DiscardDraft();
-  snapshot_                  = {};
-  has_snapshot_              = false;
-  selected_node_id_          = {};
-  selection_restore_node_id_ = {};
-  session_generation_        = BoundSessionGeneration().value_or(0);
-  projection_revision_       = 0;
-  topology_revision_         = 0;
-  snapshot_element_id_       = 0;
-  snapshot_image_id_         = 0;
+  snapshot_                     = {};
+  has_snapshot_                 = false;
+  selected_node_id_             = {};
+  last_selected_color_grade_id_ = {};
+  selection_restore_node_id_    = {};
+  session_generation_           = BoundSessionGeneration().value_or(0);
+  projection_revision_          = 0;
+  topology_revision_            = 0;
+  snapshot_element_id_          = 0;
+  snapshot_image_id_            = 0;
   snapshot_version_id_.clear();
   emit SnapshotChanged();
   emit SelectionChanged();
@@ -265,6 +267,9 @@ void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_col
 }
 
 void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
+  if (IsColorGrade(selected_node_id_)) {
+    last_selected_color_grade_id_ = selected_node_id_;
+  }
   if (session_ == nullptr) {
     return;
   }
@@ -355,9 +360,10 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   const bool generation_changed =
       !has_snapshot_ || snapshot.session_generation != session_generation_;
   if (generation_changed) {
-    selection_restore_node_id_ = {};
-    session_generation_        = snapshot.session_generation;
-    topology_revision_         = snapshot.topology_revision == 0 ? 1 : snapshot.topology_revision;
+    last_selected_color_grade_id_ = {};
+    selection_restore_node_id_    = {};
+    session_generation_           = snapshot.session_generation;
+    topology_revision_   = snapshot.topology_revision == 0 ? 1 : snapshot.topology_revision;
     projection_revision_ = snapshot.projection_revision == 0 ? 1 : snapshot.projection_revision;
   } else if (TopologyChanged(snapshot)) {
     topology_revision_   = std::max(topology_revision_ + 1, snapshot.topology_revision);
@@ -677,6 +683,26 @@ void EditorNodeController::OnSessionHistoryChanged() {
     DiscardDraft();
   }
   refreshFromSession();
+}
+
+void EditorNodeController::SelectNodeForAdjustmentPanel(const QString& panel) {
+  const auto key = panel.toStdString();
+  const auto* selected = NodeFor(selected_node_id_);
+  if (selected != nullptr && AdjustmentPanelIsSupported(selected->node_kind, key)) {
+    return;
+  }
+  if (IsColorGrade(last_selected_color_grade_id_) &&
+      AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, key)) {
+    selectNode(NodeIdToQString(last_selected_color_grade_id_));
+    return;
+  }
+  for (const auto& node : ActiveNodes()) {
+    if (AdjustmentPanelIsSupported(node.node_kind, key)) {
+      selectNode(NodeIdToQString(node.node_id));
+      return;
+    }
+  }
+  SetLastError(tr("No node supports the selected adjustment panel"));
 }
 
 void EditorNodeController::selectNode(const QString& node_id) {

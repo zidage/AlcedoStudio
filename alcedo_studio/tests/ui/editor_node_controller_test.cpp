@@ -895,6 +895,84 @@ TEST(EditorNodeController, NodeSwitchSealsOpenSequenceAndLaterWriteTargetsNewGra
   EXPECT_EQ(pending.sequences[1].captured_target.node_id, NodeId{"grade.b"});
 }
 
+TEST(EditorNodeController, PanelNavigationSelectsOwnersAndReturnsToLastGradeWithoutRendering) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  const int views_before = backend.view_change_count();
+  for (const auto& panel : {"display", "raw", "tone", "look", "lut"}) {
+    session.set_active_adjustment_panel(QString::fromLatin1(panel));
+    const NodeId expected{std::string(panel) == "display" ? "drt"
+                          : std::string(panel) == "raw"   ? "develop"
+                                                          : "grade.b"};
+    EXPECT_EQ(nodes.selected_node_id(), expected);
+    EXPECT_EQ(backend.last_projection_node(), expected);
+    EXPECT_EQ(session.active_adjustment_panel(), QString::fromLatin1(panel));
+  }
+  EXPECT_EQ(backend.view_change_count(), views_before);
+  EXPECT_EQ(backend.enqueue_count(), 0);
+  EXPECT_EQ(backend.boundary_count(), 0);
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.4f}, false));
+  EXPECT_EQ(session.PeekPendingInput().sequences.front().captured_target.node_id,
+            NodeId{"grade.b"});
+}
+
+TEST(EditorNodeController, PanelNavigationWithoutPreviousGradeSelectsFirstGrade) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.first"}).empty());
+  EditorNodeController nodes;
+  ASSERT_TRUE(nodes.PublishDocument(document, 1));
+  nodes.selectNode(QStringLiteral("drt"));
+  ASSERT_TRUE(nodes.PublishDocument(document, 2));
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"drt"});
+  nodes.SelectNodeForAdjustmentPanel(QStringLiteral("look"));
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.first"});
+}
+
+TEST(EditorNodeController, DeletedRememberedGradeReturnsToFirstExistingGrade) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  session.set_active_adjustment_panel(QStringLiteral("display"));
+  backend.Document() = CreateDefaultPipelineDocument();
+  backend.PublishHistoryChange();
+  session.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, GeometryExitSubmitsWhileDevelopSelectedBeforeReturningToGrade) {
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.b"));
+  const int views_before = backend.view_change_count();
+  session.set_active_adjustment_panel(QStringLiteral("geometry"));
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"develop"});
+  EXPECT_EQ(session.active_adjustment_panel(), QStringLiteral("geometry"));
+  EXPECT_EQ(backend.view_change_count(), views_before + 1);
+  bool submitted = false;
+  QObject::connect(&session, &EditorSessionController::DesktopUiChanged, &session, [&] {
+    if (session.active_adjustment_panel() == QStringLiteral("tone")) {
+      EXPECT_EQ(nodes.selected_node_id(), NodeId{"develop"});
+      submitted = session.submitWrite(QStringLiteral("crop_rotate"), ImageGeometryUpdate{}, true);
+    }
+  });
+  session.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_TRUE(submitted);
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.b"});
+  EXPECT_EQ(backend.view_change_count(), views_before + 2);
+  session.set_active_adjustment_panel(QStringLiteral("look"));
+  EXPECT_EQ(backend.view_change_count(), views_before + 2);
+}
+
 TEST(EditorNodeController, LeavingDevelopGeometryDoesNotRequestViewChange) {
   DocumentSessionBackend  backend;
   EditorSessionController session(&backend);

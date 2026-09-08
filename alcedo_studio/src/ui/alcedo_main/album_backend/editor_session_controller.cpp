@@ -1261,7 +1261,7 @@ void EditorSessionController::BindNodeSelectionSource(EditorNodeController* node
   node_controller_ = nodes;
 }
 
-void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId& node_id,
+void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId&  node_id,
                                                           alcedo::EditorNodeKind kind) {
   if (session_backend_ != nullptr) {
     (void)session_backend_->SetAdjustmentProjectionNode(node_id);
@@ -1391,7 +1391,11 @@ auto EditorSessionController::pipeline_document() const -> const alcedo::Pipelin
 }
 
 void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
+  // Publish Geometry exit while Develop still owns any pending crop submission.
   SetActiveAdjustmentPanel(panel, true);
+  if (node_controller_) {
+    node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+  }
 }
 
 void EditorSessionController::SetActiveAdjustmentPanel(const QString& panel, bool request_view) {
@@ -1399,11 +1403,13 @@ void EditorSessionController::SetActiveAdjustmentPanel(const QString& panel, boo
   if (active_adjustment_panel_ == normalized) {
     return;
   }
+  const bool geometry_changed = active_adjustment_panel_ == QLatin1String("geometry") ||
+                                normalized == QLatin1String("geometry");
   active_adjustment_panel_ = normalized;
   SaveDesktopUiPrefs();
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(normalized == QLatin1String("geometry"));
-    if (request_view && session_backend_->has_image() &&
+    if (request_view && geometry_changed && session_backend_->has_image() &&
         session_backend_->state() == alcedo::EditorSessionState::Interactive) {
       session_backend_->RequestViewChange(alcedo::EditorRenderReason::CropRotate, std::nullopt);
     }
