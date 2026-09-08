@@ -206,9 +206,18 @@ Item {
                 nodeName: root.nodeController
                           ? String(root.nodeController.selectedNodeName || "")
                           : ""
-                exifText: root.editorSession
-                          ? String(root.editorSession.exifLineText || "\u2014")
-                          : "\u2014"
+                focalText: root.editorSession
+                            ? String(root.editorSession.exifFocalText || "\u2014")
+                            : "\u2014"
+                apertureText: root.editorSession
+                              ? String(root.editorSession.exifApertureText || "\u2014")
+                              : "\u2014"
+                shutterText: root.editorSession
+                              ? String(root.editorSession.exifShutterText || "\u2014")
+                              : "\u2014"
+                isoText: root.editorSession
+                         ? String(root.editorSession.exifIsoText || "\u2014")
+                         : "\u2014"
             }
 
             SlidingIconNav {

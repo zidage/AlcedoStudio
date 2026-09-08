@@ -2,9 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Selected-node name, image-owned EXIF line, and reserved Mask tool buttons
+// Selected-node name, image-owned EXIF tokens, and reserved Mask tool buttons
 // under the scope slot. Node switching does not reread EXIF; the session
-// publishes the EXIF line when the open image identity changes. Brush / Radial /
+// publishes the four tokens when the open image identity changes. Brush / Radial /
 // Gradient actions are NM7 authoring placeholders: icons only, no command.
 Item {
     id: root
@@ -12,7 +12,10 @@ Item {
 
     property var theme: null
     property string nodeName: ""
-    property string exifText: "\u2014"
+    property string focalText: "\u2014"
+    property string apertureText: "\u2014"
+    property string shutterText: "\u2014"
+    property string isoText: "\u2014"
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colIcon: appTheme.iconColor
@@ -23,31 +26,59 @@ Item {
     Accessible.role: Accessible.Grouping
     Accessible.name: root.nodeName
 
+    component ExifToken: Label {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 0
+        Layout.minimumWidth: 0
+        Layout.preferredHeight: appTheme.lineHeightCaption
+        color: root.colText
+        font.family: appTheme.monoFontFamily
+        font.pixelSize: appTheme.fontSizeCaption
+        font.weight: appTheme.fontWeightRegular
+        lineHeight: appTheme.lineHeightCaption
+        lineHeightMode: Text.FixedHeight
+        elide: Text.ElideRight
+        wrapMode: Text.NoWrap
+        maximumLineCount: 1
+        verticalAlignment: Text.AlignVCenter
+        Accessible.role: Accessible.StaticText
+        Accessible.name: text
+    }
+
     ColumnLayout {
         id: headerColumn
         anchors.fill: parent
         spacing: appTheme.spaceXs
 
-        Label {
-            id: exifLabel
+        RowLayout {
+            id: exifRow
             objectName: "editorAdjustmentHeaderExif"
             Layout.fillWidth: true
             Layout.preferredWidth: 0
             Layout.minimumWidth: 0
             Layout.preferredHeight: appTheme.lineHeightCaption
-            text: root.exifText
-            color: root.colText
-            font.family: appTheme.monoFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
-            font.weight: appTheme.fontWeightRegular
-            lineHeight: appTheme.lineHeightCaption
-            lineHeightMode: Text.FixedHeight
-            elide: Text.ElideRight
-            wrapMode: Text.NoWrap
-            maximumLineCount: 1
-            verticalAlignment: Text.AlignVCenter
-            Accessible.role: Accessible.StaticText
-            Accessible.name: root.exifText
+            spacing: appTheme.spaceXs
+
+            ExifToken {
+                objectName: "editorAdjustmentHeaderFocal"
+                text: root.focalText
+                horizontalAlignment: Text.AlignLeft
+            }
+            ExifToken {
+                objectName: "editorAdjustmentHeaderAperture"
+                text: root.apertureText
+                horizontalAlignment: Text.AlignHCenter
+            }
+            ExifToken {
+                objectName: "editorAdjustmentHeaderShutter"
+                text: root.shutterText
+                horizontalAlignment: Text.AlignHCenter
+            }
+            ExifToken {
+                objectName: "editorAdjustmentHeaderIso"
+                text: root.isoText
+                horizontalAlignment: Text.AlignRight
+            }
         }
 
         RowLayout {

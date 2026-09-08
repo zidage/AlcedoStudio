@@ -39,7 +39,7 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees (IBM Plex Sans) |
-| Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF line. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
+| Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
 Do not hardcode Inter, Roboto, Arial, or system UI fonts in feature QML.
@@ -53,7 +53,7 @@ Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 | Version card commit line | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` or `Commit image root` |
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
-| Adjustment header EXIF line | `monoFontFamily` + `fontSizeCaption` | One camera-metadata line (`100mm f2.8 1/500s ISO 100`) |
+| Adjustment header EXIF tokens | `monoFontFamily` + `fontSizeCaption` | Four equal-width cells: `100mm`, `f2.8`, `1/500s`, `ISO 100` |
 
 Version and transaction **titles**, times, and section chrome stay on
 `uiFontFamily`. The selected node display name in the adjustment header also stays
@@ -586,13 +586,15 @@ badge, or status dot.
 
 The header is one vertical stack. Both rows fill the same header width:
 
-1. Top: one EXIF readout line. `Layout.fillWidth` so the line spans the same
-   width as the name and Mask-tool row. `monoFontFamily`, `fontSizeCaption`,
-   `fontWeightRegular`, `lineHeightCaption`. Single line, elided. Format present
-   tokens as `100mm f2.8 1/500s ISO 100` (actual focal length, aperture, shutter,
-   ISO). Omit missing or invalid tokens. If every field is missing, show one em
-   dash. This is one camera-metadata line, not an `xx · xx` compound of
-   independent UI roles. Use actual focal length, never 35 mm equivalent.
+1. Top: four EXIF tokens in one `RowLayout`. Order is focal length, aperture,
+   shutter, ISO. Each cell uses `Layout.fillWidth` with `preferredWidth` 0 so
+   the four cells share the row equally and span the same width as the name and
+   Mask-tool row. `monoFontFamily`, `fontSizeCaption`, `fontWeightRegular`,
+   `lineHeightCaption`. Single line per cell, elided. Present tokens look like
+   `100mm`, `f2.8`, `1/500s`, `ISO 100`. Missing or invalid values keep their cell
+   and show an em dash. Focal length is actual mm, never 35 mm equivalent. Each
+   token is its own label; do not join them with a centered dot or other
+   compound separator.
 2. Bottom row, horizontal:
    - Left: selected node display name only. `uiFontFamily`, `fontSizeTitle`,
      `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines,
@@ -604,7 +606,8 @@ The header is one vertical stack. Both rows fill the same header width:
      Mask authoring is NM7; the buttons currently have no product command.
      Do not insert a vertical rule between the name and the tools.
 
-Node switching does not reread EXIF. Image identity change updates the EXIF line.
+Node switching does not reread EXIF. Image identity change updates the four EXIF
+cells.
 
 ---
 

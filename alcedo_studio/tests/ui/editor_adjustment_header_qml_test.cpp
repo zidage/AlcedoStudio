@@ -330,6 +330,27 @@ void ExpectExifAboveNameRow(const StackHarness& harness) {
   EXPECT_LE(exif_bottom.y(), name_top.y() + 0.5);
 }
 
+void ExpectFourEqualExifTokens(const StackHarness& harness, const QString& focal,
+                               const QString& aperture, const QString& shutter, const QString& iso) {
+  auto* focal_item    = harness.find(QStringLiteral("editorAdjustmentHeaderFocal"));
+  auto* aperture_item = harness.find(QStringLiteral("editorAdjustmentHeaderAperture"));
+  auto* shutter_item  = harness.find(QStringLiteral("editorAdjustmentHeaderShutter"));
+  auto* iso_item      = harness.find(QStringLiteral("editorAdjustmentHeaderIso"));
+  ASSERT_NE(focal_item, nullptr);
+  ASSERT_NE(aperture_item, nullptr);
+  ASSERT_NE(shutter_item, nullptr);
+  ASSERT_NE(iso_item, nullptr);
+  EXPECT_EQ(focal_item->property("text").toString(), focal);
+  EXPECT_EQ(aperture_item->property("text").toString(), aperture);
+  EXPECT_EQ(shutter_item->property("text").toString(), shutter);
+  EXPECT_EQ(iso_item->property("text").toString(), iso);
+  EXPECT_EQ(focal_item->property("font").value<QFont>().family(),
+            AppTheme::Instance().monoFontFamily());
+  EXPECT_NEAR(focal_item->width(), aperture_item->width(), 1.0);
+  EXPECT_NEAR(aperture_item->width(), shutter_item->width(), 1.0);
+  EXPECT_NEAR(shutter_item->width(), iso_item->width(), 1.0);
+}
+
 void ExpectExifRowMatchesNameRowWidth(const StackHarness& harness) {
   auto* exif = harness.find(QStringLiteral("editorAdjustmentHeaderExif"));
   auto* name = harness.find(QStringLiteral("editorAdjustmentHeaderNameRow"));
@@ -380,16 +401,14 @@ TEST(EditorAdjustmentHeaderQmlTest, HeaderAtMinPreferredAndMaxWidthKeepsNameAndE
     ExpectHeaderAboveNav(harness);
     ExpectExifAboveNameRow(harness);
     ExpectExifRowMatchesNameRowWidth(harness);
+    ExpectFourEqualExifTokens(harness, QStringLiteral("50mm"), QStringLiteral("f2.8"),
+                              QStringLiteral("1/250s"), QStringLiteral("ISO 100"));
     ExpectMaskToolButtons(harness);
     ExpectNameThenMaskTools(harness);
     auto* name = harness.find(QStringLiteral("editorAdjustmentHeaderNodeName"));
-    auto* exif = harness.find(QStringLiteral("editorAdjustmentHeaderExif"));
     ASSERT_NE(name, nullptr);
-    ASSERT_NE(exif, nullptr);
     EXPECT_EQ(name->property("text").toString(), QStringLiteral("Color Grade 2"));
-    EXPECT_EQ(exif->property("text").toString(), QStringLiteral("50mm f2.8 1/250s ISO 100"));
     EXPECT_EQ(name->property("font").value<QFont>().family(), AppTheme::Instance().uiFontFamily());
-    EXPECT_EQ(exif->property("font").value<QFont>().family(), AppTheme::Instance().monoFontFamily());
   }
 }
 
@@ -412,18 +431,19 @@ TEST(EditorAdjustmentHeaderQmlTest, LongNodeNameElidesAndKeepsFullAccessibleName
               name->height() > AppTheme::Instance().lineHeightTitle());
 }
 
-TEST(EditorAdjustmentHeaderQmlTest, MissingExifShowsEmDashOnExifLine) {
+TEST(EditorAdjustmentHeaderQmlTest, MissingExifShowsEmDashOnFourTokens) {
   HeaderSession      session;
   FakeNodeController nodes;
   StackHarness       harness(&session, &nodes, 320);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
   const QString dash = QString::fromUtf8(kEmDash);
   auto* header = harness.find(QStringLiteral("editorAdjustmentHeader"));
-  auto* exif   = harness.find(QStringLiteral("editorAdjustmentHeaderExif"));
   ASSERT_NE(header, nullptr);
-  ASSERT_NE(exif, nullptr);
-  EXPECT_EQ(header->property("exifText").toString(), dash);
-  EXPECT_EQ(exif->property("text").toString(), dash);
+  EXPECT_EQ(header->property("focalText").toString(), dash);
+  EXPECT_EQ(header->property("apertureText").toString(), dash);
+  EXPECT_EQ(header->property("shutterText").toString(), dash);
+  EXPECT_EQ(header->property("isoText").toString(), dash);
+  ExpectFourEqualExifTokens(harness, dash, dash, dash, dash);
   ExpectMaskToolButtons(harness);
 }
 
@@ -460,16 +480,16 @@ TEST(EditorAdjustmentHeaderQmlTest, BothThemesMapHeaderInkToAppThemeTokens) {
   const auto themes  = theme.availableThemes();
   ASSERT_GE(themes.size(), 2);
 
-  auto* name = harness.find(QStringLiteral("editorAdjustmentHeaderNodeName"));
-  auto* exif = harness.find(QStringLiteral("editorAdjustmentHeaderExif"));
+  auto* name  = harness.find(QStringLiteral("editorAdjustmentHeaderNodeName"));
+  auto* focal = harness.find(QStringLiteral("editorAdjustmentHeaderFocal"));
   ASSERT_NE(name, nullptr);
-  ASSERT_NE(exif, nullptr);
+  ASSERT_NE(focal, nullptr);
 
   for (int index = 0; index < 2; ++index) {
     theme.setCurrentThemeIndex(index);
     ProcessEvents(40);
     EXPECT_EQ(name->property("color").value<QColor>(), theme.textColor()) << index;
-    EXPECT_EQ(exif->property("color").value<QColor>(), theme.textColor()) << index;
+    EXPECT_EQ(focal->property("color").value<QColor>(), theme.textColor()) << index;
   }
   theme.setCurrentThemeIndex(original);
 }
