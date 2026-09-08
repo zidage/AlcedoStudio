@@ -101,7 +101,7 @@ struct PipelineParameterTarget {
   MaskId                     mask_id;
   std::string                field_key;
 
-  auto operator==(const PipelineParameterTarget&) const -> bool = default;
+  auto                       operator==(const PipelineParameterTarget&) const -> bool = default;
 };
 
 /**
@@ -115,7 +115,7 @@ struct PipelineSceneEdge {
   NodeId to_node;
   PortId to_port;
 
-  auto operator==(const PipelineSceneEdge&) const -> bool = default;
+  auto   operator==(const PipelineSceneEdge&) const -> bool = default;
 };
 
 struct SetParameterChange {
@@ -125,7 +125,7 @@ struct SetParameterChange {
   bool                    before_enabled = false;
   bool                    after_enabled  = true;
 
-  auto operator==(const SetParameterChange&) const -> bool = default;
+  auto                    operator==(const SetParameterChange&) const -> bool = default;
 };
 
 struct SetNodeEnabledChange {
@@ -134,15 +134,15 @@ struct SetNodeEnabledChange {
   bool                 before_enabled = true;
   bool                 after_enabled  = true;
 
-  auto operator==(const SetNodeEnabledChange&) const -> bool = default;
+  auto                 operator==(const SetNodeEnabledChange&) const -> bool = default;
 };
 
 struct SetNodeMixChange {
   NodeId node_id;
-  float  before_mix = 1.0f;
-  float  after_mix  = 1.0f;
+  float  before_mix                                        = 1.0f;
+  float  after_mix                                         = 1.0f;
 
-  auto operator==(const SetNodeMixChange&) const -> bool = default;
+  auto   operator==(const SetNodeMixChange&) const -> bool = default;
 };
 
 struct RenameColorGradeChange {
@@ -150,33 +150,33 @@ struct RenameColorGradeChange {
   std::string before_display_name;
   std::string after_display_name;
 
-  auto operator==(const RenameColorGradeChange&) const -> bool = default;
+  auto        operator==(const RenameColorGradeChange&) const -> bool = default;
 };
 
 struct AddColorGradeChange {
-  NodeId             node_id;
-  nlohmann::json     node = nlohmann::json::object();
-  NodeId             predecessor_id;
-  NodeId             successor_id;
-  PipelineSceneEdge  incoming_edge;
-  PipelineSceneEdge  outgoing_edge;
+  NodeId            node_id;
+  nlohmann::json    node = nlohmann::json::object();
+  NodeId            predecessor_id;
+  NodeId            successor_id;
+  PipelineSceneEdge incoming_edge;
+  PipelineSceneEdge outgoing_edge;
   // Stored-node insertion uses equal values because it restores an existing display name.
-  std::uint64_t      before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
-  std::uint64_t      after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
+  std::uint64_t     before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
+  std::uint64_t     after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
 
-  auto operator==(const AddColorGradeChange&) const -> bool = default;
+  auto              operator==(const AddColorGradeChange&) const -> bool = default;
 };
 
 struct RemoveColorGradeChange {
-  NodeId             node_id;
-  nlohmann::json     node = nlohmann::json::object();
-  NodeId             predecessor_id;
-  NodeId             successor_id;
-  PipelineSceneEdge  removed_incoming_edge;
-  PipelineSceneEdge  removed_outgoing_edge;
-  PipelineSceneEdge  bridge_edge;
+  NodeId            node_id;
+  nlohmann::json    node = nlohmann::json::object();
+  NodeId            predecessor_id;
+  NodeId            successor_id;
+  PipelineSceneEdge removed_incoming_edge;
+  PipelineSceneEdge removed_outgoing_edge;
+  PipelineSceneEdge bridge_edge;
 
-  auto operator==(const RemoveColorGradeChange&) const -> bool = default;
+  auto              operator==(const RemoveColorGradeChange&) const -> bool = default;
 };
 
 struct ReconnectColorGradeChange {
@@ -190,39 +190,39 @@ struct ReconnectColorGradeChange {
   PipelineSceneEdge after_incoming_edge;
   PipelineSceneEdge after_outgoing_edge;
 
-  auto operator==(const ReconnectColorGradeChange&) const -> bool = default;
+  auto              operator==(const ReconnectColorGradeChange&) const -> bool = default;
 };
 
 /// One Color Grade inserted by a net topology delta.
 struct NodeGraphInsertedNode {
-  nlohmann::json node              = nlohmann::json::object();
-  std::uint32_t  final_node_index = 0;
+  nlohmann::json node                                                   = nlohmann::json::object();
+  std::uint32_t  final_node_index                                       = 0;
 
-  auto operator==(const NodeGraphInsertedNode&) const -> bool = default;
+  auto           operator==(const NodeGraphInsertedNode&) const -> bool = default;
 };
 
 /// One Color Grade removed by a net topology delta.
 struct NodeGraphRemovedNode {
-  nlohmann::json node                 = nlohmann::json::object();
-  std::uint32_t  original_node_index = 0;
+  nlohmann::json node                                                  = nlohmann::json::object();
+  std::uint32_t  original_node_index                                   = 0;
 
-  auto operator==(const NodeGraphRemovedNode&) const -> bool = default;
+  auto           operator==(const NodeGraphRemovedNode&) const -> bool = default;
 };
 
 /// One scene-image edge disconnected from the bound base graph.
 struct NodeGraphDisconnectedEdge {
   PipelineSceneEdge edge;
-  std::uint32_t     original_edge_index = 0;
+  std::uint32_t     original_edge_index                                        = 0;
 
-  auto operator==(const NodeGraphDisconnectedEdge&) const -> bool = default;
+  auto              operator==(const NodeGraphDisconnectedEdge&) const -> bool = default;
 };
 
 /// One scene-image edge present in the final graph.
 struct NodeGraphConnectedEdge {
   PipelineSceneEdge edge;
-  std::uint32_t     final_edge_index = 0;
+  std::uint32_t     final_edge_index                                        = 0;
 
-  auto operator==(const NodeGraphConnectedEdge&) const -> bool = default;
+  auto              operator==(const NodeGraphConnectedEdge&) const -> bool = default;
 };
 
 /**
@@ -240,25 +240,25 @@ struct NodeGraphTopologyChange {
   std::uint64_t before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
   std::uint64_t after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
 
-  auto operator==(const NodeGraphTopologyChange&) const -> bool = default;
+  auto          operator==(const NodeGraphTopologyChange&) const -> bool = default;
 };
 
 struct AddMaskChange {
   NodeId         node_id;
   MaskId         mask_id;
-  nlohmann::json mask = nlohmann::json::object();
-  std::uint32_t  display_index = 0;
+  nlohmann::json mask                                           = nlohmann::json::object();
+  std::uint32_t  display_index                                  = 0;
 
-  auto operator==(const AddMaskChange&) const -> bool = default;
+  auto           operator==(const AddMaskChange&) const -> bool = default;
 };
 
 struct RemoveMaskChange {
   NodeId         node_id;
   MaskId         mask_id;
-  nlohmann::json mask = nlohmann::json::object();
-  std::uint32_t  display_index = 0;
+  nlohmann::json mask                                              = nlohmann::json::object();
+  std::uint32_t  display_index                                     = 0;
 
-  auto operator==(const RemoveMaskChange&) const -> bool = default;
+  auto           operator==(const RemoveMaskChange&) const -> bool = default;
 };
 
 struct ReplaceMaskSourceChange {
@@ -267,26 +267,26 @@ struct ReplaceMaskSourceChange {
   nlohmann::json before_source = nlohmann::json::object();
   nlohmann::json after_source  = nlohmann::json::object();
 
-  auto operator==(const ReplaceMaskSourceChange&) const -> bool = default;
+  auto           operator==(const ReplaceMaskSourceChange&) const -> bool = default;
 };
 
 struct ReplaceMaskAssetChange {
   NodeId         node_id;
   MaskId         mask_id;
-  nlohmann::json before_source = nlohmann::json::object();
-  nlohmann::json after_source  = nlohmann::json::object();
+  nlohmann::json before_source                                           = nlohmann::json::object();
+  nlohmann::json after_source                                            = nlohmann::json::object();
 
-  auto operator==(const ReplaceMaskAssetChange&) const -> bool = default;
+  auto           operator==(const ReplaceMaskAssetChange&) const -> bool = default;
 };
 
 struct SetMaskFieldChange {
   NodeId         node_id;
   MaskId         mask_id;
   std::string    field_key;
-  nlohmann::json before_value = nullptr;
-  nlohmann::json after_value  = nullptr;
+  nlohmann::json before_value                                        = nullptr;
+  nlohmann::json after_value                                         = nullptr;
 
-  auto operator==(const SetMaskFieldChange&) const -> bool = default;
+  auto           operator==(const SetMaskFieldChange&) const -> bool = default;
 };
 
 /**
@@ -300,7 +300,7 @@ struct AppendBrushStrokeChange {
   MaskId      mask_id;
   BrushStroke stroke;
 
-  auto operator==(const AppendBrushStrokeChange&) const -> bool = default;
+  auto        operator==(const AppendBrushStrokeChange&) const -> bool = default;
 };
 
 /**
@@ -316,7 +316,7 @@ struct RemoveBrushStrokeChange {
   std::uint32_t index = 0;
   BrushStroke   stroke;
 
-  auto operator==(const RemoveBrushStrokeChange&) const -> bool = default;
+  auto          operator==(const RemoveBrushStrokeChange&) const -> bool = default;
 };
 
 /**
@@ -330,7 +330,7 @@ struct InsertBrushStrokeChange {
   std::uint32_t index = 0;
   BrushStroke   stroke;
 
-  auto operator==(const InsertBrushStrokeChange&) const -> bool = default;
+  auto          operator==(const InsertBrushStrokeChange&) const -> bool = default;
 };
 
 /**
@@ -344,7 +344,7 @@ struct SetBrushTranslationChange {
   Vector2 before{};
   Vector2 after{};
 
-  auto operator==(const SetBrushTranslationChange&) const -> bool = default;
+  auto    operator==(const SetBrushTranslationChange&) const -> bool = default;
 };
 
 using PipelineEditChange =
@@ -378,15 +378,18 @@ struct PipelineEditHistoryProjection {
  * @brief One user action with ordered typed changes and presentation metadata.
  *
  * The batch is the commit payload. It does not apply itself to a live document.
+ * Nested JSON collection lives in pipeline_edit_json.hpp. Typed change validate
+ * and encode/decode live in pipeline_edit_change.hpp. Inverse/apply stays in
+ * the history applier.
  *
  * @pre @ref Validate succeeds before hashing or persistence.
  */
 struct PipelineEditBatch {
-  std::uint32_t                        batch_format_version = kPipelineEditBatchFormatVersion;
-  PipelineEditOperationKind            operation_kind = PipelineEditOperationKind::SetParameter;
-  std::vector<PipelineEditChange>      changes;
-  std::string                          presentation_key;
-  nlohmann::json                       presentation_args = nlohmann::json::object();
+  std::uint32_t                   batch_format_version = kPipelineEditBatchFormatVersion;
+  PipelineEditOperationKind       operation_kind       = PipelineEditOperationKind::SetParameter;
+  std::vector<PipelineEditChange> changes;
+  std::string                     presentation_key;
+  nlohmann::json                  presentation_args = nlohmann::json::object();
 
   /**
    * @brief Build a validated batch.
@@ -397,9 +400,10 @@ struct PipelineEditBatch {
    * @param presentation_args Localization arguments. Must be a JSON object.
    * @throws std::runtime_error when validation fails.
    */
-  static auto Make(PipelineEditOperationKind operation_kind, std::vector<PipelineEditChange> changes,
-                   std::string presentation_key,
-                   nlohmann::json presentation_args = nlohmann::json::object()) -> PipelineEditBatch;
+  static auto                     Make(PipelineEditOperationKind       operation_kind,
+                                       std::vector<PipelineEditChange> changes, std::string presentation_key,
+                                       nlohmann::json presentation_args = nlohmann::json::object())
+      -> PipelineEditBatch;
 
   /**
    * @brief Reject empty batches, incompatible change kinds, incomplete identity,
@@ -407,7 +411,7 @@ struct PipelineEditBatch {
    *
    * @throws std::runtime_error on the first failed rule. Does not mutate the batch.
    */
-  void Validate() const;
+  void               Validate() const;
 
   [[nodiscard]] auto CanonicalJSON() const -> nlohmann::json;
   [[nodiscard]] auto ToJSON() const -> nlohmann::json { return CanonicalJSON(); }
@@ -415,12 +419,12 @@ struct PipelineEditBatch {
   /**
    * @brief Parse and require canonical dump equality with @ref CanonicalJSON.
    *
-  * Unknown keys, unknown enums, duplicate-incompatible objects, and non-batch
+   * Unknown keys, unknown enums, duplicate-incompatible objects, and non-batch
    * payloads are rejected.
    *
    * @throws std::runtime_error when @p json is not a canonical typed batch.
    */
-  static auto FromJSON(const nlohmann::json& json) -> PipelineEditBatch;
+  static auto        FromJSON(const nlohmann::json& json) -> PipelineEditBatch;
 };
 
 /**
@@ -430,7 +434,8 @@ struct PipelineEditBatch {
  */
 [[nodiscard]] auto IsPipelineEditBatchJson(const nlohmann::json& json) -> bool;
 
-[[nodiscard]] auto PipelineEditOperationKindText(PipelineEditOperationKind kind) -> std::string_view;
+[[nodiscard]] auto PipelineEditOperationKindText(PipelineEditOperationKind kind)
+    -> std::string_view;
 [[nodiscard]] auto PipelineEditOperationKindFromText(std::string_view text)
     -> PipelineEditOperationKind;
 [[nodiscard]] auto PipelineEditChangeKindText(PipelineEditChangeKind kind) -> std::string_view;
@@ -443,7 +448,7 @@ struct PipelineEditBatch {
  * Does not mutate a document and does not copy nested JSON beyond the change
  * values already stored on the batch.
  */
-[[nodiscard]] auto OrderedChangesForApply(const PipelineEditBatch& batch,
+[[nodiscard]] auto OrderedChangesForApply(const PipelineEditBatch&   batch,
                                           PipelineEditApplyDirection direction)
     -> std::vector<PipelineEditChange>;
 

@@ -2,6 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/history/pipeline_edit_batch.hpp"
+
 #include <gtest/gtest.h>
 
 #include <clocale>
@@ -11,6 +13,7 @@
 #include <iterator>
 #include <limits>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -20,7 +23,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
-#include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/history/pipeline_edit_change.hpp"
 #include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
@@ -33,13 +36,12 @@
 namespace alcedo {
 namespace {
 
-constexpr char kOldRootChainHash[]   = "b086b9015c867f88aeca8730b1b8d55c";
+constexpr char kOldRootChainHash[]      = "b086b9015c867f88aeca8730b1b8d55c";
 constexpr char kOldOrdinaryCommitHash[] = "02c397162017dc758e0c06ed5b9e0529";
 
-auto LoadGolden(const std::string& name) -> std::string {
-  const std::filesystem::path path =
-      std::filesystem::path(PIPELINE_EDIT_BATCH_GOLDEN_DIR) / name;
-  std::ifstream input(path, std::ios::binary);
+auto           LoadGolden(const std::string& name) -> std::string {
+  const std::filesystem::path path = std::filesystem::path(PIPELINE_EDIT_BATCH_GOLDEN_DIR) / name;
+  std::ifstream               input(path, std::ios::binary);
   EXPECT_TRUE(input) << path.string();
   std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
   while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
@@ -88,10 +90,10 @@ auto IndependentCommitHashInput(const root_id_t& root_id, std::uint64_t created_
 
 auto MakeParameterTarget() -> PipelineParameterTarget {
   PipelineParameterTarget target;
-  target.owner_kind              = PipelineParameterOwnerKind::ColorGrade;
-  target.node_id                 = NodeId{"grade.primary"};
-  target.adjustment_instance_id  = AdjustmentInstanceId{"grade.primary.exposure"};
-  target.field_key               = "exposure";
+  target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  target.node_id                = NodeId{"grade.primary"};
+  target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  target.field_key              = "exposure";
   return target;
 }
 
@@ -126,10 +128,10 @@ auto MakeBrushMask(MaskId id, std::string display_name, std::string stroke_id) -
   MaskModel mask;
   mask.id           = std::move(id);
   mask.display_name = std::move(display_name);
-  mask.source = grade_mask_test::MakeParameterizedBrushMask(
-                    MaskId{std::string{mask.id.Value()}},
-                    {grade_mask_test::MakePaintStroke(stroke_id)})
-                    .source;
+  mask.source =
+      grade_mask_test::MakeParameterizedBrushMask(MaskId{std::string{mask.id.Value()}},
+                                                  {grade_mask_test::MakePaintStroke(stroke_id)})
+          .source;
   return mask;
 }
 
@@ -165,18 +167,19 @@ auto MakeRemoveGradeBatch() -> PipelineEditBatch {
 
 auto MakeReconnectBatch() -> PipelineEditBatch {
   ReconnectColorGradeChange change;
-  change.node_id                 = NodeId{"grade.b"};
-  change.before_predecessor_id   = NodeId{"grade.primary"};
-  change.before_successor_id     = NodeId{"drt"};
-  change.after_predecessor_id    = NodeId{"develop"};
-  change.after_successor_id      = NodeId{"grade.primary"};
-  change.before_incoming_edge    = MakeSceneEdge("grade.primary", "grade.b");
-  change.before_outgoing_edge    = MakeSceneEdge("grade.b", "drt");
-  change.after_incoming_edge     = MakeSceneEdge("develop", "grade.b");
-  change.after_outgoing_edge     = MakeSceneEdge("grade.b", "grade.primary");
+  change.node_id               = NodeId{"grade.b"};
+  change.before_predecessor_id = NodeId{"grade.primary"};
+  change.before_successor_id   = NodeId{"drt"};
+  change.after_predecessor_id  = NodeId{"develop"};
+  change.after_successor_id    = NodeId{"grade.primary"};
+  change.before_incoming_edge  = MakeSceneEdge("grade.primary", "grade.b");
+  change.before_outgoing_edge  = MakeSceneEdge("grade.b", "drt");
+  change.after_incoming_edge   = MakeSceneEdge("develop", "grade.b");
+  change.after_outgoing_edge   = MakeSceneEdge("grade.b", "grade.primary");
   nlohmann::json args{{"node_id", "grade.b"}};
-  return PipelineEditBatch::Make(PipelineEditOperationKind::ReconnectColorGrade, {std::move(change)},
-                                 "history.operation.reconnect_color_grade", std::move(args));
+  return PipelineEditBatch::Make(PipelineEditOperationKind::ReconnectColorGrade,
+                                 {std::move(change)}, "history.operation.reconnect_color_grade",
+                                 std::move(args));
 }
 
 auto MakeAppendStrokeBatch() -> PipelineEditBatch {
@@ -200,6 +203,33 @@ void ExpectRoundTrip(const PipelineEditBatch& batch) {
 
 }  // namespace
 
+TEST(PipelineEditChange, EncodeDecodeAndValidateWithoutBatchEnvelope) {
+  const auto original = MakeParameterChange(0.25, 0.75);
+  ValidatePipelineEditChange(original);
+  const auto encoded = EncodePipelineEditChange(original);
+  EXPECT_EQ(encoded.at("kind").get<std::string>(), "set_parameter");
+  const auto decoded = DecodePipelineEditChange(encoded);
+  EXPECT_EQ(EncodePipelineEditChange(decoded).dump(), encoded.dump());
+  EXPECT_TRUE(PipelineEditChangeCompatible(PipelineEditOperationKind::SetParameter,
+                                           PipelineEditChangeKindOf(decoded)));
+  EXPECT_FALSE(PipelineEditChangeCompatible(PipelineEditOperationKind::AddMask,
+                                            PipelineEditChangeKindOf(decoded)));
+  EXPECT_EQ(PipelineEditChangeKindFromText("set_parameter"), PipelineEditChangeKind::SetParameter);
+  EXPECT_THROW((void)PipelineEditChangeKindFromText("not_a_change"), std::runtime_error);
+
+  AppendBrushStrokeChange stroke;
+  stroke.node_id = NodeId{"grade.look"};
+  stroke.mask_id = MaskId{"mask.brush"};
+  stroke.stroke  = grade_mask_test::MakePaintStroke("stroke.append", 16.0f, 9.0f, 5.0f);
+  ValidatePipelineEditChange(stroke);
+  const auto stroke_json    = EncodePipelineEditChange(stroke);
+  const auto stroke_decoded = DecodePipelineEditChange(stroke_json);
+  EXPECT_EQ(EncodePipelineEditChange(stroke_decoded).dump(), stroke_json.dump());
+
+  SetParameterChange incomplete;
+  EXPECT_THROW(ValidatePipelineEditChange(incomplete), std::runtime_error);
+}
+
 TEST(PipelineEditBatch, TypedBatchGoldenBytesAndHashRemainStable) {
   const auto golden = LoadGolden("set_parameter_batch.json");
   const auto parsed = nlohmann::json::parse(golden);
@@ -208,7 +238,7 @@ TEST(PipelineEditBatch, TypedBatchGoldenBytesAndHashRemainStable) {
   EXPECT_FALSE(parsed.contains("stage_name"));
   EXPECT_FALSE(parsed.at("changes").at(0).contains("operator_type"));
   EXPECT_FALSE(parsed.at("changes").at(0).contains("stage_name"));
-  const auto batch  = PipelineEditBatch::FromJSON(parsed);
+  const auto batch = PipelineEditBatch::FromJSON(parsed);
   EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
 
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
@@ -245,7 +275,7 @@ TEST(PipelineEditBatch, TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval) 
   EXPECT_FALSE(parsed.contains("stage_name"));
   EXPECT_FALSE(parsed.contains("merge_field_keys"));
   EXPECT_FALSE(parsed.contains("conflicts"));
-  const auto batch  = PipelineEditBatch::FromJSON(parsed);
+  const auto batch = PipelineEditBatch::FromJSON(parsed);
   EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
 
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
@@ -300,8 +330,8 @@ TEST(PipelineEditBatch, AppendBrushStrokeGoldenBytesRemainStable) {
 }
 
 TEST(PipelineEditBatch, AppendHistoryDoesNotRepeatEarlierSamples) {
-  auto first  = grade_mask_test::MakePaintStroke("stroke.keep", 1.0f, 2.0f, 3.0f);
-  auto second = grade_mask_test::MakePaintStroke("stroke.new", 4.0f, 5.0f, 6.0f);
+  auto      first  = grade_mask_test::MakePaintStroke("stroke.keep", 1.0f, 2.0f, 3.0f);
+  auto      second = grade_mask_test::MakePaintStroke("stroke.new", 4.0f, 5.0f, 6.0f);
   MaskModel mask;
   mask.id     = MaskId{"mask.brush"};
   mask.source = grade_mask_test::MakeParameterizedBrushMask(MaskId{"mask.brush"}, {first}).source;
@@ -393,8 +423,8 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   RemoveMaskChange remove_mask = {};
   remove_mask.node_id          = NodeId{"grade.look"};
   remove_mask.mask_id          = MaskId{"mask.radial"};
-  remove_mask.mask = MaskModelToJson(MakeRadialMask(MaskId{"mask.radial"}, "Radial"));
-  remove_mask.display_index = 0;
+  remove_mask.mask             = MaskModelToJson(MakeRadialMask(MaskId{"mask.radial"}, "Radial"));
+  remove_mask.display_index    = 0;
   ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::RemoveMask, {remove_mask},
                                           "history.operation.remove_mask"));
 
@@ -474,20 +504,20 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   paste_mask.mask_id       = MaskId{"mask.radial"};
   paste_mask.mask          = MaskModelToJson(MakeRadialMask(MaskId{"mask.radial"}, "Radial"));
   paste_mask.display_index = 0;
-  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::Paste,
-                                          {add, paste_mask}, "history.operation.paste"));
+  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::Paste, {add, paste_mask},
+                                          "history.operation.paste"));
 }
 
 TEST(PipelineEditBatch, ChangingTypedChangeOrderChangesCommitIdentity) {
-  auto first  = MakeParameterChange(0.0, 1.25);
-  auto second = MakeParameterChange(1.25, 0.5);
+  auto first                           = MakeParameterChange(0.0, 1.25);
+  auto second                          = MakeParameterChange(1.25, 0.5);
   second.target.field_key              = "contrast";
   second.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.contrast"};
   second.before_value                  = nlohmann::json{{"contrast", 0.0}};
   second.after_value                   = nlohmann::json{{"contrast", 20.0}};
 
-  const auto forward = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
-                                               {first, second}, "history.operation.set_parameter");
+  const auto forward  = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
+                                                {first, second}, "history.operation.set_parameter");
   const auto reversed = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
                                                 {second, first}, "history.operation.set_parameter");
   EXPECT_NE(forward.CanonicalJSON().dump(), reversed.CanonicalJSON().dump());
@@ -501,7 +531,7 @@ TEST(PipelineEditBatch, ChangingTypedChangeOrderChangesCommitIdentity) {
 }
 
 TEST(PipelineEditBatch, UnknownOrMissingTypedPayloadFieldsAreRejected) {
-  auto json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  auto json     = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["extra"] = true;
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
@@ -509,39 +539,39 @@ TEST(PipelineEditBatch, UnknownOrMissingTypedPayloadFieldsAreRejected) {
   json.erase("presentation_key");
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json                   = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["operation_kind"] = "unknown_kind";
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json                       = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["changes"][0]["kind"] = "not_a_change";
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json                        = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["changes"][0]["extra"] = true;
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeRemoveGradeBatch().CanonicalJSON();
+  json                                = MakeRemoveGradeBatch().CanonicalJSON();
   json["changes"][0]["node"]["extra"] = true;
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json                                       = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["changes"][0]["target"]["owner_kind"] = "stage";
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json            = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["changes"] = nlohmann::json::array();
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 
-  json = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
+  json                         = MakeParameterBatch(0.0, 1.25).CanonicalJSON();
   json["batch_format_version"] = 99;
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(json), std::runtime_error);
 }
 
 TEST(PipelineEditBatch, ParameterHistoryRequiresCompleteOwnerNodeAndInstance) {
   SetParameterChange incomplete;
-  incomplete.before_value = nlohmann::json::object();
-  incomplete.after_value  = nlohmann::json{{"exposure_ev", 1.0}};
+  incomplete.before_value      = nlohmann::json::object();
+  incomplete.after_value       = nlohmann::json{{"exposure_ev", 1.0}};
   incomplete.target.field_key  = "exposure";
   incomplete.target.owner_kind = PipelineParameterOwnerKind::ColorGrade;
   EXPECT_THROW((void)PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter, {incomplete},
@@ -573,11 +603,8 @@ TEST(PipelineEditBatch, ParameterHistoryRequiresCompleteOwnerNodeAndInstance) {
 
 TEST(PipelineEditBatch, OrdinaryAndMergePayloadsAreRejected) {
   nlohmann::json ordinary = {
-      {"operator_type", 1},
-      {"stage_name", 2},
-      {"field_name", "exposure"},
-      {"before_value", 0.0},
-      {"after_value", 1.0},
+      {"operator_type", 1},  {"stage_name", 2},    {"field_name", "exposure"},
+      {"before_value", 0.0}, {"after_value", 1.0},
   };
   EXPECT_THROW((void)PipelineEditBatch::FromJSON(ordinary), std::runtime_error);
 
@@ -612,18 +639,16 @@ TEST(PipelineEditBatch, NonFiniteMixAndNumbersAreRejected) {
 }
 
 TEST(PipelineEditBatch, OrderedChangesForApplyReverseWithoutDocumentMutation) {
-  auto first  = MakeParameterChange(0.0, 1.0);
-  auto second = MakeParameterChange(1.0, 2.0);
+  auto first                           = MakeParameterChange(0.0, 1.0);
+  auto second                          = MakeParameterChange(1.0, 2.0);
   second.target.field_key              = "contrast";
   second.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.contrast"};
   second.before_value                  = nlohmann::json{{"contrast", 0.0}};
   second.after_value                   = nlohmann::json{{"contrast", 10.0}};
-  const auto batch = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
-                                             {first, second}, "history.operation.set_parameter");
-  const auto forward =
-      OrderedChangesForApply(batch, PipelineEditApplyDirection::Forward);
-  const auto inverse =
-      OrderedChangesForApply(batch, PipelineEditApplyDirection::Inverse);
+  const auto batch   = PipelineEditBatch::Make(PipelineEditOperationKind::SetParameter,
+                                               {first, second}, "history.operation.set_parameter");
+  const auto forward = OrderedChangesForApply(batch, PipelineEditApplyDirection::Forward);
+  const auto inverse = OrderedChangesForApply(batch, PipelineEditApplyDirection::Inverse);
   ASSERT_EQ(forward.size(), 2u);
   ASSERT_EQ(inverse.size(), 2u);
   EXPECT_EQ(std::get<SetParameterChange>(forward[0]).target.field_key, "exposure");
@@ -655,8 +680,8 @@ TEST(PipelineEditBatch, TypedHistoryRowsUseSavedIdentityAndLocalizationData) {
 }
 
 TEST(PipelineEditBatch, LocaleIndependentHashEquality) {
-  const auto batch = MakeParameterBatch(0.0, 1.25);
-  const auto dump  = batch.CanonicalJSON().dump();
+  const auto  batch    = MakeParameterBatch(0.0, 1.25);
+  const auto  dump     = batch.CanonicalJSON().dump();
   const char* previous = std::setlocale(LC_ALL, nullptr);
   const char* german   = std::setlocale(LC_ALL, "de-DE");
   if (german == nullptr) {
@@ -674,7 +699,7 @@ TEST(PipelineEditBatch, LocaleIndependentHashEquality) {
 }
 
 TEST(PipelineEditBatch, FuzzParseRejectsNonCanonicalPayloads) {
-  const auto golden = LoadGolden("set_parameter_batch.json");
+  const auto   golden = LoadGolden("set_parameter_batch.json");
   std::mt19937 rng(20260901);
   for (int i = 0; i < 64; ++i) {
     std::string mutated = golden;
@@ -682,7 +707,7 @@ TEST(PipelineEditBatch, FuzzParseRejectsNonCanonicalPayloads) {
       break;
     }
     const auto index = static_cast<std::size_t>(rng() % mutated.size());
-    mutated[index] = static_cast<char>(static_cast<unsigned char>(mutated[index]) ^ 0x20u);
+    mutated[index]   = static_cast<char>(static_cast<unsigned char>(mutated[index]) ^ 0x20u);
     try {
       const auto parsed = nlohmann::json::parse(mutated);
       const auto batch  = PipelineEditBatch::FromJSON(parsed);
@@ -697,7 +722,7 @@ TEST(PipelineEditBatch, GraphInsertAndTypedCommitVerification) {
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
   EXPECT_NE(ComputeRootChainHash(root).ToString(), kOldRootChainHash);
 
-  auto graph = CommitGraph::CreateEmpty(44);
+  auto       graph = CommitGraph::CreateEmpty(44);
   const auto typed = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
       graph.GetRootId(), std::nullopt, 100, MakeParameterBatch(0.0, 1.25));
   ASSERT_TRUE(graph.InsertCommit(typed));
