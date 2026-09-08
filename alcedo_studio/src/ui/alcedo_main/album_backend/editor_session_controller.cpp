@@ -400,10 +400,13 @@ void EditorSessionController::ApplyExifRowText(const alcedo::EditorExifRowText& 
   const auto iso      = QString::fromUtf8(text.iso.data(), static_cast<int>(text.iso.size()));
   const auto aperture = QString::fromUtf8(text.aperture.data(), static_cast<int>(text.aperture.size()));
   const auto focal    = QString::fromUtf8(text.focal.data(), static_cast<int>(text.focal.size()));
-  if (exif_shutter_text_ == shutter && exif_iso_text_ == iso && exif_aperture_text_ == aperture &&
-      exif_focal_text_ == focal) {
+  const auto line_utf8 = alcedo::FormatEditorImageExifLine(text);
+  const auto line = QString::fromUtf8(line_utf8.data(), static_cast<int>(line_utf8.size()));
+  if (exif_line_text_ == line && exif_shutter_text_ == shutter && exif_iso_text_ == iso &&
+      exif_aperture_text_ == aperture && exif_focal_text_ == focal) {
     return;
   }
+  exif_line_text_     = line;
   exif_shutter_text_  = shutter;
   exif_iso_text_      = iso;
   exif_aperture_text_ = aperture;

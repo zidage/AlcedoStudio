@@ -126,6 +126,16 @@ auto FormatPositiveNumber(float value) -> std::string {
   return out;
 }
 
+auto AppendExifToken(std::string* line, const std::string& token) -> void {
+  if (line == nullptr || token.empty() || token == kMissingExifDisplay) {
+    return;
+  }
+  if (!line->empty()) {
+    *line += ' ';
+  }
+  *line += token;
+}
+
 }  // namespace
 
 auto FormatEditorImageExifDisplay(const EditorImageExifDisplay& display) -> EditorExifRowText {
@@ -133,29 +143,45 @@ auto FormatEditorImageExifDisplay(const EditorImageExifDisplay& display) -> Edit
   if (display.shutter_speed.has_value()) {
     const auto [numerator, denominator] = *display.shutter_speed;
     if (denominator == 1) {
-      text.shutter = std::to_string(numerator) + " s";
+      text.shutter = std::to_string(numerator) + "s";
     } else {
-      text.shutter = std::to_string(numerator) + "/" + std::to_string(denominator) + " s";
+      text.shutter = std::to_string(numerator) + "/" + std::to_string(denominator) + "s";
     }
   } else {
     text.shutter = std::string(kMissingExifDisplay);
   }
   if (display.iso.has_value()) {
-    text.iso = std::to_string(*display.iso);
+    text.iso = "ISO " + std::to_string(*display.iso);
   } else {
     text.iso = std::string(kMissingExifDisplay);
   }
   if (display.aperture.has_value() && std::isfinite(*display.aperture)) {
-    text.aperture = "f/" + FormatPositiveNumber(*display.aperture);
+    text.aperture = "f" + FormatPositiveNumber(*display.aperture);
   } else {
     text.aperture = std::string(kMissingExifDisplay);
   }
   if (display.focal_mm.has_value() && std::isfinite(*display.focal_mm)) {
-    text.focal = FormatPositiveNumber(*display.focal_mm) + " mm";
+    text.focal = FormatPositiveNumber(*display.focal_mm) + "mm";
   } else {
     text.focal = std::string(kMissingExifDisplay);
   }
   return text;
+}
+
+auto FormatEditorImageExifLine(const EditorExifRowText& text) -> std::string {
+  std::string line;
+  AppendExifToken(&line, text.focal);
+  AppendExifToken(&line, text.aperture);
+  AppendExifToken(&line, text.shutter);
+  AppendExifToken(&line, text.iso);
+  if (line.empty()) {
+    return std::string(kMissingExifDisplay);
+  }
+  return line;
+}
+
+auto FormatEditorImageExifLine(const EditorImageExifDisplay& display) -> std::string {
+  return FormatEditorImageExifLine(FormatEditorImageExifDisplay(display));
 }
 
 auto SupportedAdjustmentPanels(EditorNodeKind kind) -> std::span<const std::string_view> {

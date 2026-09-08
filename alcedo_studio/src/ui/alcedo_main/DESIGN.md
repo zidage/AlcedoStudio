@@ -39,24 +39,25 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees (IBM Plex Sans) |
-| Mono (minigit) | `monoFontFamily` | body/caption | regular | matching | **Only** minigit history/Versions data: commit hashes, before/after delta lines. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, or crop degrees — those stay on `dataFontFamily`. |
+| Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF line. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
 Do not hardcode Inter, Roboto, Arial, or system UI fonts in feature QML.
 
-### Minigit typography
+### Monospace typography
 
-The editor history / Versions rail (mini-Git) is the only product surface that
-uses monospace:
+Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 
 | Surface | Token | What |
 | --- | --- | --- |
 | Version card commit line | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` or `Commit image root` |
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
+| Adjustment header EXIF line | `monoFontFamily` + `fontSizeCaption` | One camera-metadata line (`100mm f2.8 1/500s ISO 100`) |
 
 Version and transaction **titles**, times, and section chrome stay on
-`uiFontFamily`. Active Version is outline-only (1 px text-color border); no
+`uiFontFamily`. The selected node display name in the adjustment header also stays
+on `uiFontFamily`. Active Version is outline-only (1 px text-color border); no
 `CURRENT HEAD` pill and no separate "Checked out" / dual Head+Commit labels.
 
 ---
@@ -278,7 +279,7 @@ the two side columns read as one family.
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
-| `editorAdjustmentHeaderMinHeight` | 64 | Node-name / EXIF header under the scope: four caption rows plus `spaceXs` padding |
+| `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
@@ -574,22 +575,36 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
   Motion: OutBack slide on `x` + land scale pulse; `reduceMotion` snaps.
   Thumb size is inset from the hit cell (`spaceXs`) so the well is not flush
   with the sunken track edge.
+- **Display method segments:** shared sunk track + monochrome inverted wells
+  (see Display Transform panel); title-only, medium height, always expanded.
 
-### Adjustment header (node name and EXIF)
+### Adjustment header (node name, EXIF, and Mask tools)
 
 Place the header between the scope slot and the adjustment navbar. Surfaces use
 `cardSurfaceColor` with `dividerColor` hairlines. Do not add a second panel fill,
 badge, or status dot.
 
-| Region | Treatment |
-| --- | --- |
-| Left | Selected node display name only. `uiFontFamily`, `fontSizeTitle`, `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines, elided. Full name is the accessible name and tooltip. No node-kind subtitle. |
-| Vertical rule | 1 px `dividerColor` |
-| Right | Four stable rows, top to bottom: Shutter, ISO, Aperture, Focal length. Labels: `fontSizeCaption` + `textMutedColor`. Values: `dataFontFamily` + `fontSizeCaption`. Missing or invalid values are an em dash. Use actual focal length, never 35 mm equivalent. |
+The header is one vertical stack. Both rows fill the same header width:
 
-Node switching does not reread EXIF. Image identity change updates the four rows.
-- **Display method segments:** shared sunk track + monochrome inverted wells
-  (see Display Transform panel); title-only, medium height, always expanded.
+1. Top: one EXIF readout line. `Layout.fillWidth` so the line spans the same
+   width as the name and Mask-tool row. `monoFontFamily`, `fontSizeCaption`,
+   `fontWeightRegular`, `lineHeightCaption`. Single line, elided. Format present
+   tokens as `100mm f2.8 1/500s ISO 100` (actual focal length, aperture, shutter,
+   ISO). Omit missing or invalid tokens. If every field is missing, show one em
+   dash. This is one camera-metadata line, not an `xx · xx` compound of
+   independent UI roles. Use actual focal length, never 35 mm equivalent.
+2. Bottom row, horizontal:
+   - Left: selected node display name only. `uiFontFamily`, `fontSizeTitle`,
+     `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines,
+     elided. Full name is the accessible name and tooltip. No node-kind subtitle.
+     Do not use `monoFontFamily`.
+   - Right: Brush, Radial, then Gradient `IconActionButton` compact actions using
+     `qrc:/mask_icons/brush.svg`, `qrc:/mask_icons/radial.svg`, and
+     `qrc:/mask_icons/gradient.svg`. Idle fill is `buttonIdleFillColor`. Viewer
+     Mask authoring is NM7; the buttons currently have no product command.
+     Do not insert a vertical rule between the name and the tools.
+
+Node switching does not reread EXIF. Image identity change updates the EXIF line.
 
 ---
 

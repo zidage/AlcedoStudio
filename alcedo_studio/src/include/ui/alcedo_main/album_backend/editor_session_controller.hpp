@@ -93,8 +93,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Survives workspace Loader teardown and application restart (QSettings).
   Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
                  set_active_adjustment_panel NOTIFY DesktopUiChanged)
-  /// Image-owned EXIF rows for the adjustment header. Updated when the open
+  /// Image-owned EXIF readout for the adjustment header. Updated when the open
   /// image identity changes, not when the selected NodeId changes.
+  Q_PROPERTY(QString exifLineText READ exif_line_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifShutterText READ exif_shutter_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifIsoText READ exif_iso_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifApertureText READ exif_aperture_text NOTIFY ImageExifChanged)
@@ -162,6 +163,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] double  filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
   [[nodiscard]] double  filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
   [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
+  [[nodiscard]] QString exif_line_text() const { return exif_line_text_; }
   [[nodiscard]] QString exif_shutter_text() const { return exif_shutter_text_; }
   [[nodiscard]] QString exif_iso_text() const { return exif_iso_text_; }
   [[nodiscard]] QString exif_aperture_text() const { return exif_aperture_text_; }
@@ -215,7 +217,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
    *
    * Called when the open image identity changes. Must not be invoked from node
    * selection. The reader copies Image::exif_display_ and must not parse EXIF
-   * JSON. Throw or missing images yield em-dash rows.
+   * JSON. Throw or missing images yield an em-dash EXIF line.
    */
   void SetImageExifReader(std::function<alcedo::EditorImageExifDisplay(uint)> reader);
   /// Reproject panels for the selected node without rendering or committing.
@@ -385,6 +387,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   std::function<alcedo::EditorImageExifDisplay(uint)> image_exif_reader_;
   uint                                           exif_image_id_          = 0;
   qulonglong                                     exif_session_generation_ = 0;
+  QString exif_line_text_     = QString::fromUtf8("\xE2\x80\x94");
   QString exif_shutter_text_  = QString::fromUtf8("\xE2\x80\x94");
   QString exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
   QString exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
