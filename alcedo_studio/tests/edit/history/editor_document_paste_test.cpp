@@ -139,6 +139,7 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
       return alcedo::MakeAdjustmentInstanceId(node_id, type);
     }
     auto NextMaskId() -> alcedo::MaskId override { return alcedo::MaskId{"mask.t1"}; }
+    auto NextStrokeId() -> alcedo::StrokeId override { return alcedo::StrokeId{"stroke.t1"}; }
   } colliding;
   alcedo::SetDocumentTransferIdentitySourceForTesting(&colliding);
   alcedo::AdjustmentPasteResult collision_result;
@@ -147,23 +148,14 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
   EXPECT_FALSE(collision_result.pasted);
   alcedo::SetDocumentTransferIdentitySourceForTesting(nullptr);
 
-  const auto mask_root =
-      std::filesystem::path{"build/tmp/node_history"} / "failed_paste_missing_asset";
-  std::error_code ignored;
-  std::filesystem::remove_all(mask_root, ignored);
-  alcedo::MaskStore source_store(mask_root);
-  alcedo::MaskAssetDescriptor descriptor;
-  descriptor.extent           = {2, 2};
-  descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
-  const std::vector<std::uint8_t> pixels(4, 73);
-  const auto                      key = source_store.Put(descriptor, pixels);
-  auto                            masked = test::DocumentWithExposureEv(0.4);
-  grade_mask_test::AddBrushMask(masked, alcedo::MaskId{"mask.brush"}, key, descriptor);
-  const auto missing_asset_package = alcedo::CaptureDocumentTransfer(masked, &source_store);
-  alcedo::AdjustmentPasteResult missing_result;
-  EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(handle, missing_asset_package, "Missing asset",
-                                                     &missing_result, &error));
-  EXPECT_FALSE(missing_result.pasted);
+  auto listed_key_package = test::MakeExposureTransferPackage(0.4);
+  listed_key_package.mask_assets_.push_back(
+      alcedo::DocumentTransferMaskAsset{alcedo::MaskAssetKey{"0123456789abcdef0123456789abcdef"},
+                                        {}});
+  alcedo::AdjustmentPasteResult listed_key_result;
+  EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(
+      handle, listed_key_package, "Unreferenced mask asset", &listed_key_result, &error));
+  EXPECT_FALSE(listed_key_result.pasted);
 
   EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), prior_version);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), prior_count);

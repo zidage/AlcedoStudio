@@ -29,8 +29,8 @@ constexpr std::array<char, 8> kPackedProjectMagic{
     {'P', 'U', 'E', 'R', 'H', 'P', 'K', '1'}};
 constexpr uint32_t kPackedProjectVersion = kPackedProjectFormatVersion;
 constexpr uint64_t kMaxPackedComponentBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
-// 0.5.0 is a destructive cutover: full PipelineDocument root and checkpoint replace
-// CPU-parameter snapshots. Older project packages are rejected with no migration.
+// 0.6.0 is a destructive cutover: parameterized Brush strokes replace raster-only
+// `asset_key` persistence. Older project packages are rejected with no migration.
 constexpr std::string_view kProjectFileVersion = ::alcedo::kProjectFileVersion;
 constexpr std::string_view kMinSupportedProjectFileVersion =
     ::alcedo::kMinSupportedProjectFileVersion;

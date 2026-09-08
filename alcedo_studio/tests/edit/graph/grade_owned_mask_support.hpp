@@ -4,14 +4,35 @@
 
 #pragma once
 
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo::grade_mask_test {
+
+inline auto MakePaintStroke(std::string_view id, float local_x = 8.0f, float local_y = 12.0f,
+                            float radius = 4.0f) -> BrushStroke {
+  return MakeBrushStroke(StrokeId{std::string{id}}, BrushStrokeMode::Paint,
+                         {{local_x, local_y, radius, 1.0f, 1.0f}});
+}
+
+inline auto MakeParameterizedBrushMask(MaskId id, std::vector<BrushStroke> strokes = {},
+                                       Vector2 translation = {}) -> MaskModel {
+  MaskModel mask;
+  mask.id = std::move(id);
+  BrushMaskSource brush;
+  brush.strokes               = std::move(strokes);
+  brush.placement_translation = translation;
+  mask.source                 = std::move(brush);
+  return mask;
+}
 
 inline auto MakeBrushMask(MaskId id, MaskAssetKey key, MaskAssetDescriptor descriptor = {},
                           float feather = 0.0f, bool invert = false) -> MaskModel {
@@ -57,6 +78,15 @@ inline auto AddMask(ColorGradeNodeModel& grade, MaskModel mask) -> MaskModel& {
   grade.AddMask(std::move(mask), grade.MaskCount());
   auto* found = grade.FindMask(id);
   return *found;
+}
+
+inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
+                                      std::vector<BrushStroke> strokes = {},
+                                      Vector2 translation = {}) -> MaskModel& {
+  auto& mask = AddMask(*document.PrimaryGrade(), MakeParameterizedBrushMask(
+                                                     std::move(id), std::move(strokes), translation));
+  document.MarkTopologyDirty();
+  return mask;
 }
 
 inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key,

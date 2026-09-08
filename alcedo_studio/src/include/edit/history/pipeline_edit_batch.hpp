@@ -11,9 +11,11 @@
 #include <variant>
 #include <vector>
 
+#include "edit/geometry/types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_history_format.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "json.hpp"
 
@@ -33,6 +35,10 @@ enum class PipelineEditOperationKind : std::uint8_t {
   ReplaceMaskSource,
   ReplaceMaskAsset,
   SetMaskField,
+  AppendBrushStroke,
+  RemoveBrushStroke,
+  InsertBrushStroke,
+  SetBrushTranslation,
   Paste,
   EditNodeGraph,
 };
@@ -51,6 +57,10 @@ enum class PipelineEditChangeKind : std::uint8_t {
   ReplaceMaskSource,
   ReplaceMaskAsset,
   SetMaskField,
+  AppendBrushStroke,
+  RemoveBrushStroke,
+  InsertBrushStroke,
+  SetBrushTranslation,
   NodeGraphTopologyChange,
 };
 
@@ -279,11 +289,70 @@ struct SetMaskFieldChange {
   auto operator==(const SetMaskFieldChange&) const -> bool = default;
 };
 
+/**
+ * @brief Append one canonical stroke body to an existing Brush.
+ *
+ * Stores only the new stroke. Earlier strokes are not copied into this change.
+ * Inverse apply removes the same StrokeId.
+ */
+struct AppendBrushStrokeChange {
+  NodeId      node_id;
+  MaskId      mask_id;
+  BrushStroke stroke;
+
+  auto operator==(const AppendBrushStrokeChange&) const -> bool = default;
+};
+
+/**
+ * @brief Remove one stroke by StrokeId and restore it by insert on inverse.
+ *
+ * @p stroke is the removed sample body. @p index is the evaluation order at
+ * removal. Inverse insert restores that body at @p index.
+ */
+struct RemoveBrushStrokeChange {
+  NodeId        node_id;
+  MaskId        mask_id;
+  StrokeId      stroke_id;
+  std::uint32_t index = 0;
+  BrushStroke   stroke;
+
+  auto operator==(const RemoveBrushStrokeChange&) const -> bool = default;
+};
+
+/**
+ * @brief Insert one canonical stroke body at @p index on an existing Brush.
+ *
+ * Values past the end append. Inverse apply removes the same StrokeId.
+ */
+struct InsertBrushStrokeChange {
+  NodeId        node_id;
+  MaskId        mask_id;
+  std::uint32_t index = 0;
+  BrushStroke   stroke;
+
+  auto operator==(const InsertBrushStrokeChange&) const -> bool = default;
+};
+
+/**
+ * @brief Replace Brush placement_translation with exact before and after values.
+ *
+ * Inverse restores @p before. Canonical samples are not stored on this change.
+ */
+struct SetBrushTranslationChange {
+  NodeId  node_id;
+  MaskId  mask_id;
+  Vector2 before{};
+  Vector2 after{};
+
+  auto operator==(const SetBrushTranslationChange&) const -> bool = default;
+};
+
 using PipelineEditChange =
     std::variant<SetParameterChange, SetNodeEnabledChange, SetNodeMixChange, RenameColorGradeChange,
                  AddColorGradeChange, RemoveColorGradeChange, ReconnectColorGradeChange,
                  AddMaskChange, RemoveMaskChange, ReplaceMaskSourceChange, ReplaceMaskAssetChange,
-                 SetMaskFieldChange, NodeGraphTopologyChange>;
+                 SetMaskFieldChange, AppendBrushStrokeChange, RemoveBrushStrokeChange,
+                 InsertBrushStrokeChange, SetBrushTranslationChange, NodeGraphTopologyChange>;
 
 /**
  * @brief Saved identity used by history rows. Never reads a live document.

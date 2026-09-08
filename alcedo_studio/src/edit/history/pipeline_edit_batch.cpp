@@ -15,6 +15,8 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/geometry/types.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo {
@@ -252,6 +254,18 @@ auto ChangeKindFromText(std::string_view text) -> PipelineEditChangeKind {
   }
   if (text == "set_mask_field") {
     return PipelineEditChangeKind::SetMaskField;
+  }
+  if (text == "append_brush_stroke") {
+    return PipelineEditChangeKind::AppendBrushStroke;
+  }
+  if (text == "remove_brush_stroke") {
+    return PipelineEditChangeKind::RemoveBrushStroke;
+  }
+  if (text == "insert_brush_stroke") {
+    return PipelineEditChangeKind::InsertBrushStroke;
+  }
+  if (text == "set_brush_translation") {
+    return PipelineEditChangeKind::SetBrushTranslation;
   }
   Fail("PipelineEditChange: unknown kind '" + std::string{text} + "'");
 }
@@ -691,6 +705,48 @@ void ValidateMaskFieldValue(const nlohmann::json& value, const std::string& fiel
   Fail(std::string{context} + ": unsupported field_key '" + field_key + "'");
 }
 
+auto CanonicalBrushStrokeJson(const BrushStroke& stroke, std::string_view context)
+    -> nlohmann::json {
+  try {
+    const auto json      = BrushStrokeToJson(stroke);
+    const auto canonical = BrushStrokeToJson(BrushStrokeFromJson(json));
+    RequireCanonicalDump(json, canonical, context);
+    return canonical;
+  } catch (const std::exception& ex) {
+    Fail(std::string{context} + ": " + ex.what());
+  }
+}
+
+auto StrokeFromCanonicalJson(const nlohmann::json& json, std::string_view context) -> BrushStroke {
+  RequireObject(json, context);
+  RejectNonFiniteNumbers(json, context);
+  try {
+    auto stroke          = BrushStrokeFromJson(json);
+    const auto canonical = BrushStrokeToJson(stroke);
+    RequireCanonicalDump(json, canonical, context);
+    return stroke;
+  } catch (const std::exception& ex) {
+    Fail(std::string{context} + ": " + ex.what());
+  }
+}
+
+auto TranslationVectorFromJson(const nlohmann::json& json, std::string_view context) -> Vector2 {
+  if (!json.is_array() || json.size() != 2 || !json[0].is_number() || !json[1].is_number()) {
+    Fail(std::string{context} + ": translation must be an array of two numbers");
+  }
+  Vector2 value;
+  value.x = json[0].get<float>();
+  value.y = json[1].get<float>();
+  if (!std::isfinite(value.x) || !std::isfinite(value.y)) {
+    Fail(std::string{context} + ": translation components must be finite");
+  }
+  return value;
+}
+
+auto TranslationVectorToJson(Vector2 value) -> nlohmann::json {
+  return nlohmann::json::array({value.x, value.y});
+}
+
 void ValidateSetMaskField(const SetMaskFieldChange& change) {
   ValidateMaskOwner(change.node_id, change.mask_id, "SetMaskField");
   if (change.field_key.empty()) {
@@ -698,6 +754,38 @@ void ValidateSetMaskField(const SetMaskFieldChange& change) {
   }
   ValidateMaskFieldValue(change.before_value, change.field_key, "SetMaskField before_value");
   ValidateMaskFieldValue(change.after_value, change.field_key, "SetMaskField after_value");
+}
+
+void ValidateAppendBrushStroke(const AppendBrushStrokeChange& change) {
+  ValidateMaskOwner(change.node_id, change.mask_id, "AppendBrushStroke");
+  (void)CanonicalBrushStrokeJson(change.stroke, "AppendBrushStroke stroke");
+}
+
+void ValidateRemoveBrushStroke(const RemoveBrushStrokeChange& change) {
+  ValidateMaskOwner(change.node_id, change.mask_id, "RemoveBrushStroke");
+  if (change.stroke_id.Empty()) {
+    Fail("RemoveBrushStroke: stroke_id must not be empty");
+  }
+  (void)CanonicalBrushStrokeJson(change.stroke, "RemoveBrushStroke stroke");
+  if (change.stroke.id != change.stroke_id) {
+    Fail("RemoveBrushStroke: stroke.id must match stroke_id");
+  }
+}
+
+void ValidateInsertBrushStroke(const InsertBrushStrokeChange& change) {
+  ValidateMaskOwner(change.node_id, change.mask_id, "InsertBrushStroke");
+  (void)CanonicalBrushStrokeJson(change.stroke, "InsertBrushStroke stroke");
+}
+
+void ValidateSetBrushTranslation(const SetBrushTranslationChange& change) {
+  ValidateMaskOwner(change.node_id, change.mask_id, "SetBrushTranslation");
+  if (!std::isfinite(change.before.x) || !std::isfinite(change.before.y) ||
+      !std::isfinite(change.after.x) || !std::isfinite(change.after.y)) {
+    Fail("SetBrushTranslation: before and after must be finite");
+  }
+  if (change.before == change.after) {
+    Fail("SetBrushTranslation: before and after must differ");
+  }
 }
 
 void ValidateChange(const PipelineEditChange& change) {
@@ -726,10 +814,20 @@ void ValidateChange(const PipelineEditChange& change) {
           ValidateReplaceMaskSource(typed);
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
           ValidateReplaceMaskAsset(typed);
+        } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
+          ValidateSetMaskField(typed);
+        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
+          ValidateAppendBrushStroke(typed);
+        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
+          ValidateRemoveBrushStroke(typed);
+        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
+          ValidateInsertBrushStroke(typed);
+        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
+          ValidateSetBrushTranslation(typed);
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           ValidateNodeGraphTopology(typed);
         } else {
-          ValidateSetMaskField(typed);
+          Fail("PipelineEditChange: unhandled typed change");
         }
       },
       change);
@@ -764,6 +862,14 @@ auto ChangeCompatible(PipelineEditOperationKind operation, PipelineEditChangeKin
       return change == PipelineEditChangeKind::ReplaceMaskAsset;
     case PipelineEditOperationKind::SetMaskField:
       return change == PipelineEditChangeKind::SetMaskField;
+    case PipelineEditOperationKind::AppendBrushStroke:
+      return change == PipelineEditChangeKind::AppendBrushStroke;
+    case PipelineEditOperationKind::RemoveBrushStroke:
+      return change == PipelineEditChangeKind::RemoveBrushStroke;
+    case PipelineEditOperationKind::InsertBrushStroke:
+      return change == PipelineEditChangeKind::InsertBrushStroke;
+    case PipelineEditOperationKind::SetBrushTranslation:
+      return change == PipelineEditChangeKind::SetBrushTranslation;
     case PipelineEditOperationKind::Paste:
       return change != PipelineEditChangeKind::NodeGraphTopologyChange;
     case PipelineEditOperationKind::EditNodeGraph:
@@ -854,6 +960,37 @@ auto ChangeToJson(const PipelineEditChange& change) -> nlohmann::json {
                   {"kind", "replace_mask_asset"},
                   {"mask_id", std::string{typed.mask_id.Value()}},
                   {"node_id", std::string{typed.node_id.Value()}}};
+        } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
+          return {{"after_value", typed.after_value},
+                  {"before_value", typed.before_value},
+                  {"field_key", typed.field_key},
+                  {"kind", "set_mask_field"},
+                  {"mask_id", std::string{typed.mask_id.Value()}},
+                  {"node_id", std::string{typed.node_id.Value()}}};
+        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
+          return {{"kind", "append_brush_stroke"},
+                  {"mask_id", std::string{typed.mask_id.Value()}},
+                  {"node_id", std::string{typed.node_id.Value()}},
+                  {"stroke", BrushStrokeToJson(typed.stroke)}};
+        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
+          return {{"index", typed.index},
+                  {"kind", "remove_brush_stroke"},
+                  {"mask_id", std::string{typed.mask_id.Value()}},
+                  {"node_id", std::string{typed.node_id.Value()}},
+                  {"stroke", BrushStrokeToJson(typed.stroke)},
+                  {"stroke_id", std::string{typed.stroke_id.Value()}}};
+        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
+          return {{"index", typed.index},
+                  {"kind", "insert_brush_stroke"},
+                  {"mask_id", std::string{typed.mask_id.Value()}},
+                  {"node_id", std::string{typed.node_id.Value()}},
+                  {"stroke", BrushStrokeToJson(typed.stroke)}};
+        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
+          return {{"after", TranslationVectorToJson(typed.after)},
+                  {"before", TranslationVectorToJson(typed.before)},
+                  {"kind", "set_brush_translation"},
+                  {"mask_id", std::string{typed.mask_id.Value()}},
+                  {"node_id", std::string{typed.node_id.Value()}}};
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           nlohmann::json inserted = nlohmann::json::array();
           for (const auto& item : typed.inserted_nodes) {
@@ -882,12 +1019,7 @@ auto ChangeToJson(const PipelineEditChange& change) -> nlohmann::json {
                   {"kind", "node_graph_topology_change"},
                   {"removed_nodes", std::move(removed)}};
         } else {
-          return {{"after_value", typed.after_value},
-                  {"before_value", typed.before_value},
-                  {"field_key", typed.field_key},
-                  {"kind", "set_mask_field"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}}};
+          Fail("PipelineEditChange: unhandled typed change");
         }
       },
       change);
@@ -1083,6 +1215,49 @@ auto ChangeFromJson(const nlohmann::json& json) -> PipelineEditChange {
       ValidateSetMaskField(change);
       return change;
     }
+    case PipelineEditChangeKind::AppendBrushStroke: {
+      RequireExactObjectKeys(json, {"kind", "mask_id", "node_id", "stroke"}, "AppendBrushStroke");
+      AppendBrushStrokeChange change;
+      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "AppendBrushStroke")};
+      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "AppendBrushStroke")};
+      change.stroke  = StrokeFromCanonicalJson(json.at("stroke"), "AppendBrushStroke stroke");
+      ValidateAppendBrushStroke(change);
+      return change;
+    }
+    case PipelineEditChangeKind::RemoveBrushStroke: {
+      RequireExactObjectKeys(json, {"index", "kind", "mask_id", "node_id", "stroke", "stroke_id"},
+                             "RemoveBrushStroke");
+      RemoveBrushStrokeChange change;
+      change.node_id   = NodeId{RequiredIdFromJson(json, "node_id", "RemoveBrushStroke")};
+      change.mask_id   = MaskId{RequiredIdFromJson(json, "mask_id", "RemoveBrushStroke")};
+      change.stroke_id = StrokeId{RequiredIdFromJson(json, "stroke_id", "RemoveBrushStroke")};
+      change.index     = RequireNonNegativeUint32(json, "index", "RemoveBrushStroke");
+      change.stroke    = StrokeFromCanonicalJson(json.at("stroke"), "RemoveBrushStroke stroke");
+      ValidateRemoveBrushStroke(change);
+      return change;
+    }
+    case PipelineEditChangeKind::InsertBrushStroke: {
+      RequireExactObjectKeys(json, {"index", "kind", "mask_id", "node_id", "stroke"},
+                             "InsertBrushStroke");
+      InsertBrushStrokeChange change;
+      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "InsertBrushStroke")};
+      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "InsertBrushStroke")};
+      change.index   = RequireNonNegativeUint32(json, "index", "InsertBrushStroke");
+      change.stroke  = StrokeFromCanonicalJson(json.at("stroke"), "InsertBrushStroke stroke");
+      ValidateInsertBrushStroke(change);
+      return change;
+    }
+    case PipelineEditChangeKind::SetBrushTranslation: {
+      RequireExactObjectKeys(json, {"after", "before", "kind", "mask_id", "node_id"},
+                             "SetBrushTranslation");
+      SetBrushTranslationChange change;
+      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "SetBrushTranslation")};
+      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "SetBrushTranslation")};
+      change.before  = TranslationVectorFromJson(json.at("before"), "SetBrushTranslation before");
+      change.after   = TranslationVectorFromJson(json.at("after"), "SetBrushTranslation after");
+      ValidateSetBrushTranslation(change);
+      return change;
+    }
     case PipelineEditChangeKind::NodeGraphTopologyChange: {
       RequireExactObjectKeys(json,
                              {"after_next_color_grade_name_number",
@@ -1179,6 +1354,14 @@ auto PipelineEditOperationKindText(PipelineEditOperationKind kind) -> std::strin
       return "replace_mask_asset";
     case PipelineEditOperationKind::SetMaskField:
       return "set_mask_field";
+    case PipelineEditOperationKind::AppendBrushStroke:
+      return "append_brush_stroke";
+    case PipelineEditOperationKind::RemoveBrushStroke:
+      return "remove_brush_stroke";
+    case PipelineEditOperationKind::InsertBrushStroke:
+      return "insert_brush_stroke";
+    case PipelineEditOperationKind::SetBrushTranslation:
+      return "set_brush_translation";
     case PipelineEditOperationKind::Paste:
       return "paste";
     case PipelineEditOperationKind::EditNodeGraph:
@@ -1224,6 +1407,18 @@ auto PipelineEditOperationKindFromText(std::string_view text) -> PipelineEditOpe
   if (text == "set_mask_field") {
     return PipelineEditOperationKind::SetMaskField;
   }
+  if (text == "append_brush_stroke") {
+    return PipelineEditOperationKind::AppendBrushStroke;
+  }
+  if (text == "remove_brush_stroke") {
+    return PipelineEditOperationKind::RemoveBrushStroke;
+  }
+  if (text == "insert_brush_stroke") {
+    return PipelineEditOperationKind::InsertBrushStroke;
+  }
+  if (text == "set_brush_translation") {
+    return PipelineEditOperationKind::SetBrushTranslation;
+  }
   if (text == "paste") {
     return PipelineEditOperationKind::Paste;
   }
@@ -1259,6 +1454,14 @@ auto PipelineEditChangeKindText(PipelineEditChangeKind kind) -> std::string_view
       return "replace_mask_asset";
     case PipelineEditChangeKind::SetMaskField:
       return "set_mask_field";
+    case PipelineEditChangeKind::AppendBrushStroke:
+      return "append_brush_stroke";
+    case PipelineEditChangeKind::RemoveBrushStroke:
+      return "remove_brush_stroke";
+    case PipelineEditChangeKind::InsertBrushStroke:
+      return "insert_brush_stroke";
+    case PipelineEditChangeKind::SetBrushTranslation:
+      return "set_brush_translation";
     case PipelineEditChangeKind::NodeGraphTopologyChange:
       return "node_graph_topology_change";
   }
@@ -1291,10 +1494,20 @@ auto PipelineEditChangeKindOf(const PipelineEditChange& change) -> PipelineEditC
           return PipelineEditChangeKind::ReplaceMaskSource;
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
           return PipelineEditChangeKind::ReplaceMaskAsset;
+        } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
+          return PipelineEditChangeKind::SetMaskField;
+        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
+          return PipelineEditChangeKind::AppendBrushStroke;
+        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
+          return PipelineEditChangeKind::RemoveBrushStroke;
+        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
+          return PipelineEditChangeKind::InsertBrushStroke;
+        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
+          return PipelineEditChangeKind::SetBrushTranslation;
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           return PipelineEditChangeKind::NodeGraphTopologyChange;
         } else {
-          return PipelineEditChangeKind::SetMaskField;
+          Fail("PipelineEditChange: unhandled typed change");
         }
       },
       change);
@@ -1455,6 +1668,27 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
           row.mask_id              = std::string{typed.mask_id.Value()};
           row.before_display_value = typed.before_source;
           row.after_display_value  = typed.after_source;
+        } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
+          row.node_id              = std::string{typed.node_id.Value()};
+          row.mask_id              = std::string{typed.mask_id.Value()};
+          row.field_key            = typed.field_key;
+          row.before_display_value = typed.before_value;
+          row.after_display_value  = typed.after_value;
+        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange> ||
+                             std::is_same_v<Typed, InsertBrushStrokeChange>) {
+          row.node_id             = std::string{typed.node_id.Value()};
+          row.mask_id             = std::string{typed.mask_id.Value()};
+          row.after_display_value = BrushStrokeToJson(typed.stroke);
+        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
+          row.node_id              = std::string{typed.node_id.Value()};
+          row.mask_id              = std::string{typed.mask_id.Value()};
+          row.before_display_value = BrushStrokeToJson(typed.stroke);
+        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
+          row.node_id              = std::string{typed.node_id.Value()};
+          row.mask_id              = std::string{typed.mask_id.Value()};
+          row.field_key            = "placement_translation";
+          row.before_display_value = TranslationVectorToJson(typed.before);
+          row.after_display_value  = TranslationVectorToJson(typed.after);
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           if (!typed.inserted_nodes.empty()) {
             row.node_id             = StringArg(typed.inserted_nodes.front().node, "id");
@@ -1465,12 +1699,6 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
             row.node_display_name   = StringArg(typed.removed_nodes.front().node, "display_name");
             row.before_display_value = typed.removed_nodes.front().node;
           }
-        } else {
-          row.node_id              = std::string{typed.node_id.Value()};
-          row.mask_id              = std::string{typed.mask_id.Value()};
-          row.field_key            = typed.field_key;
-          row.before_display_value = typed.before_value;
-          row.after_display_value  = typed.after_value;
         }
       },
       change);

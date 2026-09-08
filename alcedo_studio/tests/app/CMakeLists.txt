@@ -130,6 +130,18 @@ gtest_discover_tests(DocumentTransferTest
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(DocumentTransferTest app)
 
+add_executable(ParameterizedBrushHistoryPersistenceTest
+    ${ALCEDO_TEST_ROOT}/app/parameterized_brush_history_persistence_test.cpp)
+target_include_directories(ParameterizedBrushHistoryPersistenceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(ParameterizedBrushHistoryPersistenceTest
+    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService EditGraph)
+gtest_discover_tests(ParameterizedBrushHistoryPersistenceTest
+    TEST_PREFIX "ParameterizedBrushHistoryPersistenceTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(ParameterizedBrushHistoryPersistenceTest app)
+
 add_executable(MaskAssetReachabilityTest
     ${ALCEDO_TEST_ROOT}/app/mask_asset_reachability_test.cpp)
 target_include_directories(MaskAssetReachabilityTest

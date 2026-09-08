@@ -12,6 +12,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
@@ -20,7 +21,7 @@
 namespace alcedo {
 
 /**
- * @brief Supplies new node, adjustment, and Mask identities during Paste remap.
+ * @brief Supplies new node, adjustment, Mask, and Stroke identities during Paste remap.
  *
  * Implementations must return non-empty IDs. The paste planner rejects a value
  * that collides with a source ID, a target ID, or an earlier generated ID.
@@ -45,13 +46,16 @@ class TransferIdentitySource {
 
   /** @brief Next MaskId. Must not be empty. */
   virtual auto NextMaskId() -> MaskId = 0;
+
+  /** @brief Next StrokeId. Must not be empty. */
+  virtual auto NextStrokeId() -> StrokeId = 0;
 };
 
 /**
  * @brief Sequential identity source for deterministic Paste tests.
  *
- * Node ids are `grade.tN` and Mask ids are `mask.tN` with N starting at 1.
- * Adjustment ids use @ref MakeAdjustmentInstanceId.
+ * Node ids are `grade.tN`, Mask ids are `mask.tN`, and Stroke ids are `stroke.tN`
+ * with N starting at 1. Adjustment ids use @ref MakeAdjustmentInstanceId.
  */
 class CountingTransferIdentitySource final : public TransferIdentitySource {
  public:
@@ -59,18 +63,19 @@ class CountingTransferIdentitySource final : public TransferIdentitySource {
   auto NextAdjustmentInstanceId(const NodeId& node_id, const OperatorTypeId& type)
       -> AdjustmentInstanceId override;
   auto NextMaskId() -> MaskId override;
+  auto NextStrokeId() -> StrokeId override;
 
  private:
-  std::uint32_t next_node_ = 1;
-  std::uint32_t next_mask_ = 1;
+  std::uint32_t next_node_   = 1;
+  std::uint32_t next_mask_   = 1;
+  std::uint32_t next_stroke_ = 1;
 };
 
 /**
- * @brief Prepared Paste: remapped package, typed batch, and copied asset keys.
+ * @brief Prepared Paste: remapped package and typed batch.
  *
- * @p batch is validated. It is not applied to a live document. Asset copies into
- * the target store finish before this value is returned. An unreferenced equal
- * asset is harmless.
+ * @p batch is validated. It is not applied to a live document. Referenced Brush
+ * raster assets, when listed, are copied into the target store before return.
  */
 struct PreparedDocumentPaste {
   AdjustmentTransferPackage package;
@@ -95,7 +100,8 @@ struct DocumentTransferPasteOptions {
  * Brush keys are recorded with their descriptors. Raster bytes stay in @p mask_store.
  *
  * @param document Source DAG. Must have at least one Color Grade on the backbone.
- * @param mask_store Required when the document references persistent Brush keys.
+ * @param mask_store Required only when the document still references persistent
+ *        Brush asset keys. Parameterized Brush packages do not copy raster files.
  * @return Validated package with a computed fingerprint.
  * @throws std::runtime_error when the document, owners, or referenced assets fail.
  */

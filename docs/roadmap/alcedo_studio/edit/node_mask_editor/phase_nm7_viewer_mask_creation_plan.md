@@ -2,8 +2,9 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.2 complete; NM7.3–NM7.14 planned. This document records the NM7.1 source
-audit and NM7.2 parameterized Brush owner operations. Remaining sub-phases are unimplemented.
+Status: NM7.1–NM7.3 complete; NM7.4–NM7.14 planned. This document records the NM7.1 source
+audit, NM7.2 parameterized Brush owner operations, and NM7.3 typed stroke history plus the
+project/schema cutover. Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -752,6 +753,62 @@ history materializer, transfer/package and current project-version owner.
 `ParameterizedBrushSurvivesWalRecoveryAndPaste`, `RasterOnlyFormatIsRejectedBeforeCacheCleanup`.
 
 **Exit:** delete all new cache files and history/Version source restoration still succeeds.
+
+##### Phase NM7.3 completion record (2026-09-08)
+
+**Status:** complete — typed Append/Remove/InsertBrushStroke and SetBrushTranslation history, first stroke as one AddMask commit, WAL/Version/Paste remapping without R8 keys, and the companion Section 8.1 project/schema cutover (old identities rejected; raster-only Brush JSON rejected).
+
+**Primary success call chain:**
+
+```text
+settled stroke or placement
+  -> MakeAddMaskBatch (first stroke, parameterized Brush JSON)
+     or MakeAppendBrushStrokeBatch / MakeRemoveBrushStrokeBatch
+     / MakeInsertBrushStrokeBatch / MakeSetBrushTranslationBatch
+  -> ApplyPipelineEditBatch (live MaskContentRevision; exact inverse fields)
+  -> MiniGitWorkingHistory::AppendEdit -> WAL record
+  -> Version first-parent replay / ReplayPipelineDocumentFromRoot
+     / CaptureDocumentTransfer + PrepareDocumentPaste (StrokeId remap)
+  -> parameterized Brush source restored after deleting disposable .r8mask files
+```
+
+**Primary failure call chain:**
+
+```text
+raster-only Brush JSON (asset_key / width / height / reference_bounds),
+missing parameterized fields, or old project/document/batch/WAL identity
+  -> BrushFromJson / PipelineDocument::FromJson / batch/WAL format gate
+  -> source and cache bytes left unchanged; no Apply; no new HEAD
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `StrokeUndoRedoRestoresCommandOrderWithoutR8` | `PipelineHistoryApplierTest` | PASS |
+| `FirstBrushStrokeCreatesOneCommit` | `PipelineHistoryApplierTest` | PASS |
+| `BrushMoveUndoRestoresExactTranslation` | `PipelineHistoryApplierTest` | PASS |
+| `AppendHistoryDoesNotRepeatEarlierSamples` | `PipelineEditBatchTest` | PASS |
+| `ParameterizedBrushSurvivesWalRecoveryAndPaste` | `ParameterizedBrushHistoryPersistenceTest` | PASS |
+| `RasterOnlyFormatIsRejectedBeforeCacheCleanup` | `BrushSourceFormatBoundaryTest` | PASS |
+| Append undo restores earlier stroke without raster files | `EditorSessionHistoryPortTest` | PASS |
+| Checkout restores strokes after cache deletion | `EditorSessionHistoryPortTest` | PASS |
+| Project reopen restores DAG, versions, history, and stroke bodies | `EditorSessionHistoryPortTest` | PASS |
+| Paste remaps NodeId/MaskId/StrokeId without MaskStore | `DocumentTransferTest` | PASS |
+| Published identities 0.6.0 / 6 / 4 / 3 / 5 / v4; `kMaskImplementationVersion` stays 3 | `PipelineDocumentCheckpointTest`, `CommitGraphTest` | PASS |
+| Expected document/batch dumps match parameterized Brush JSON | `PipelineDocumentCheckpointTest`, `PipelineEditBatchTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineEditBatchTest --target BrushSourceFormatBoundaryTest --target BrushParameterizedSourceTest --target PipelineHistoryApplierTest --target DocumentTransferTest --target ParameterizedBrushHistoryPersistenceTest --target PipelineDocumentCheckpointTest --target GpuDagModelGraphTest --target EditorSessionHistoryPortTest --target CommitGraphTest`
+`ctest --test-dir build/debug --output-on-failure -R "PipelineEditBatchTest|BrushSourceFormatBoundaryTest|BrushParameterizedSourceTest|PipelineHistoryApplierTest|DocumentTransferTest|ParameterizedBrushHistoryPersistenceTest|PipelineDocumentCheckpointTest|GpuDagModelGraphTest|EditorSessionHistoryPortTest|^CommitGraphTest$"`
+
+Suite totals: `219/219` PASS. Date / working tree on `feature/brush-stroke-history-persistence` (base `ef109e52`) / Windows MSVC `win_debug` / Qt 6.9.3 / CUDA Toolkit 12.8 (no GPU tests in this phase).
+
+**Checklist / exit condition:** all required tests PASS; deleting dummy cache files still restores stroke order, IDs, sample bodies, and translation from history/WAL/Version/Paste.
+
+**LOC note (grill-code-review):** `pipeline_edit_batch.cpp` 1714 (already over ~1000; future split should be encode/validate/inverse by change family, not a method-file split), `pipeline_edit_batch.hpp` 459, `pipeline_history_applier.cpp` 797, `pipeline_document_history.cpp` 593, `document_transfer.cpp` 625, `mask_model.cpp` 464, `parameterized_brush_history_persistence_test.cpp` 153. No split in this phase.
+
+**Residual gaps:** native Mask evaluation still loads `MaskStore` when in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned. NM7.4 regional replay is not started. Project Mix cache service is NM7.10. `ReplaceMaskAsset` remains in the typed batch surface but cannot validate parameterized or raster-only Brush JSON through the current source gate.
 
 ### NM7.4 — Implement deterministic Brush replay and spatial indexing
 

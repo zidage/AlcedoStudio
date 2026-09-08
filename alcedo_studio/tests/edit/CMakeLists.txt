@@ -224,7 +224,8 @@ alcedo_register_test_target(PipelineDocumentDefaultNameTest edit)
 
 # Typed pipeline-edit batch schema, canonical JSON, and commit identity.
 add_executable(PipelineEditBatchTest ${ALCEDO_TEST_ROOT}/edit/history/pipeline_edit_batch_test.cpp)
-target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineEditBatchTest EditHistory GTest::gtest_main)
 target_compile_definitions(PipelineEditBatchTest PRIVATE
   PIPELINE_EDIT_BATCH_GOLDEN_DIR="${ALCEDO_TEST_ROOT}/edit/history/goldens")
@@ -306,7 +307,7 @@ gtest_discover_tests(GpuDagMaskStoreTest TEST_PREFIX "GpuDagMaskStoreTest."
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(GpuDagMaskStoreTest edit)
 
-# Current Brush raster-key format boundary, encoding rules, and later test names.
+# Current Brush format identities, raster-only rejection, and later test names.
 add_executable(BrushSourceFormatBoundaryTest
   ${ALCEDO_TEST_ROOT}/edit/mask/brush_source_format_boundary_test.cpp)
 target_include_directories(BrushSourceFormatBoundaryTest
@@ -318,7 +319,7 @@ gtest_discover_tests(BrushSourceFormatBoundaryTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushSourceFormatBoundaryTest edit)
 
-# NM7.2 parameterized Brush source, owner operations, and JSON without MaskStore.
+# Parameterized Brush source, owner operations, and JSON without MaskStore.
 add_executable(BrushParameterizedSourceTest
   ${ALCEDO_TEST_ROOT}/edit/mask/brush_parameterized_source_test.cpp)
 target_include_directories(BrushParameterizedSourceTest

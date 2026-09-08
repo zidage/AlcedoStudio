@@ -90,26 +90,6 @@ auto ReadRequiredFloat(const nlohmann::json& json, const char* key, std::string_
   return value;
 }
 
-auto BoundsToJson(NormalizedRect bounds) -> nlohmann::json {
-  return nlohmann::json::array({bounds.x, bounds.y, bounds.w, bounds.h});
-}
-
-auto BoundsFromJson(const nlohmann::json& json, std::string_view owner) -> NormalizedRect {
-  if (!json.is_array() || json.size() < 4) {
-    Fail(std::string{owner} + " reference_bounds must be an array of four numbers");
-  }
-  NormalizedRect bounds;
-  bounds.x = json[0].get<float>();
-  bounds.y = json[1].get<float>();
-  bounds.w = json[2].get<float>();
-  bounds.h = json[3].get<float>();
-  RequireFinite(bounds.x, "reference_bounds.x");
-  RequireFinite(bounds.y, "reference_bounds.y");
-  RequireFinite(bounds.w, "reference_bounds.w");
-  RequireFinite(bounds.h, "reference_bounds.h");
-  return bounds;
-}
-
 void ValidateRangeObject(const nlohmann::json& json, std::string_view name) {
   RequireObject(json, name);
   for (const auto& [key, value] : json.items()) {
@@ -193,32 +173,12 @@ void ValidateRange(const std::optional<LuminanceRangeModel>& range, std::string_
 }
 
 auto BrushToJson(const BrushMaskSource& brush) -> nlohmann::json {
-  if (BrushSourceHasParameterizedPayload(brush)) {
-    nlohmann::json json{{"kind", "brush"},
-                        {"source_format_version", brush.source_format_version},
-                        {"raster_algorithm_version", brush.raster_algorithm_version},
-                        {"placement_translation", TranslationToJson(brush.placement_translation)},
-                        {"feather_radius", brush.feather_radius},
-                        {"strokes", BrushStrokeListToJson(brush.strokes)}};
-    if (brush.asset_key.has_value() && !brush.asset_key->Empty()) {
-      json["width"]            = brush.descriptor.extent.width;
-      json["height"]           = brush.descriptor.extent.height;
-      json["reference_bounds"] = BoundsToJson(brush.descriptor.reference_bounds);
-      json["asset_key"]        = std::string{brush.asset_key->Value()};
-    }
-    return json;
-  }
-  nlohmann::json json{{"kind", "brush"},
-                      {"feather_radius", brush.feather_radius},
-                      {"width", brush.descriptor.extent.width},
-                      {"height", brush.descriptor.extent.height},
-                      {"reference_bounds", BoundsToJson(brush.descriptor.reference_bounds)}};
-  if (brush.asset_key.has_value() && !brush.asset_key->Empty()) {
-    json["asset_key"] = std::string{brush.asset_key->Value()};
-  } else {
-    json["asset_key"] = nullptr;
-  }
-  return json;
+  return {{"kind", "brush"},
+          {"source_format_version", brush.source_format_version},
+          {"raster_algorithm_version", brush.raster_algorithm_version},
+          {"placement_translation", TranslationToJson(brush.placement_translation)},
+          {"feather_radius", brush.feather_radius},
+          {"strokes", BrushStrokeListToJson(brush.strokes)}};
 }
 
 auto RadialToJson(const RadialMaskSource& radial) -> nlohmann::json {
@@ -258,58 +218,29 @@ auto RangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::j
 }
 
 auto BrushFromJson(const nlohmann::json& json) -> BrushMaskSource {
+  if (json.contains("asset_key") || json.contains("width") || json.contains("height") ||
+      json.contains("reference_bounds")) {
+    Fail("brush raster-only asset_key encoding is not supported");
+  }
   BrushMaskSource brush;
   brush.feather_radius = ReadRequiredFloat(json, "feather_radius", "brush");
-  const bool parameterized = json.contains("strokes") || json.contains("placement_translation") ||
-                             json.contains("source_format_version") ||
-                             json.contains("raster_algorithm_version");
-  if (parameterized) {
-    brush.source_format_version = ReadRequiredUint32(json, "source_format_version", "brush");
-    brush.raster_algorithm_version =
-        ReadRequiredUint32(json, "raster_algorithm_version", "brush");
-    if (brush.source_format_version != kBrushSourceFormatVersion) {
-      Fail("brush source_format_version must be 1");
-    }
-    if (brush.raster_algorithm_version != kBrushRasterAlgorithmVersion) {
-      Fail("brush raster_algorithm_version must be 1");
-    }
-    if (!json.contains("placement_translation")) {
-      Fail("brush is missing placement_translation");
-    }
-    if (!json.contains("strokes")) {
-      Fail("brush is missing strokes");
-    }
-    brush.placement_translation = TranslationFromJson(json["placement_translation"], "brush");
-    brush.strokes               = BrushStrokeListFromJson(json["strokes"]);
+  brush.source_format_version = ReadRequiredUint32(json, "source_format_version", "brush");
+  brush.raster_algorithm_version =
+      ReadRequiredUint32(json, "raster_algorithm_version", "brush");
+  if (brush.source_format_version != kBrushSourceFormatVersion) {
+    Fail("brush source_format_version must be 1");
   }
-  const bool has_legacy_raster = json.contains("width") || json.contains("height") ||
-                                 json.contains("reference_bounds") || json.contains("asset_key");
-  if (!parameterized || has_legacy_raster) {
-    if (!json.contains("width") || !json["width"].is_number()) {
-      Fail("brush is missing number width");
-    }
-    if (!json.contains("height") || !json["height"].is_number()) {
-      Fail("brush is missing number height");
-    }
-    brush.descriptor.extent.width  = json["width"].get<std::uint32_t>();
-    brush.descriptor.extent.height = json["height"].get<std::uint32_t>();
-    if (!json.contains("reference_bounds")) {
-      Fail("brush is missing reference_bounds");
-    }
-    brush.descriptor.reference_bounds = BoundsFromJson(json["reference_bounds"], "brush");
-    if (!json.contains("asset_key") || json["asset_key"].is_null()) {
-      brush.asset_key.reset();
-    } else if (!json["asset_key"].is_string()) {
-      Fail("brush asset_key must be a string or null");
-    } else {
-      auto key = json["asset_key"].get<std::string>();
-      if (key.empty()) {
-        brush.asset_key.reset();
-      } else {
-        brush.asset_key = MaskAssetKey{std::move(key)};
-      }
-    }
+  if (brush.raster_algorithm_version != kBrushRasterAlgorithmVersion) {
+    Fail("brush raster_algorithm_version must be 1");
   }
+  if (!json.contains("placement_translation")) {
+    Fail("brush is missing placement_translation");
+  }
+  if (!json.contains("strokes")) {
+    Fail("brush is missing strokes");
+  }
+  brush.placement_translation = TranslationFromJson(json["placement_translation"], "brush");
+  brush.strokes               = BrushStrokeListFromJson(json["strokes"]);
   return brush;
 }
 

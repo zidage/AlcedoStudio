@@ -33,9 +33,9 @@ enum class MaskSourceKind : std::uint8_t {
  *
  * Canonical persistent data is ordered immutable strokes, algorithm versions, and
  * @p placement_translation. Samples live in local reference pixels; translation does
- * not rewrite them. @p asset_key remains only for already-stored raster documents and
- * current native evaluation until the NM7.3 format gate and later replay replace it.
- * A missing asset key with empty strokes yields zero coverage.
+ * not rewrite them. JSON loaders reject raster-only `asset_key` encoding.
+ * @p asset_key remains only for in-memory native evaluation of already-constructed
+ * Brush values. A missing asset key with empty strokes yields zero coverage.
  */
 struct BrushMaskSource {
   std::uint32_t               source_format_version    = kBrushSourceFormatVersion;
@@ -52,8 +52,8 @@ struct BrushMaskSource {
 /**
  * @brief True when @p brush stores stroke bodies or a non-zero placement.
  *
- * Used to choose parameterized JSON. Raster-only documents without strokes keep
- * the published asset_key encoding until NM7.3 rejects that format.
+ * Persistent JSON always uses the parameterized encoding. This predicate is a
+ * load-only query of in-memory contents.
  */
 [[nodiscard]] auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool;
 

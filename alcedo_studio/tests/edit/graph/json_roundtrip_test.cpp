@@ -12,6 +12,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -21,16 +22,22 @@
 
 namespace alcedo {
 
-TEST(GpuDagModelGraph, BrushMaskRoundTripPreservesMaskAssetKey) {
+TEST(GpuDagModelGraph, BrushMaskRoundTripPreservesStrokeBodiesWithoutAssetKey) {
   auto document = CreateDefaultPipelineDocument();
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.persisted"}, MaskAssetKey{"asset_01"});
+  grade_mask_test::AddParameterizedBrushMask(
+      document, MaskId{"mask.persisted"},
+      {grade_mask_test::MakePaintStroke("stroke.1", 8.0f, 12.0f, 4.0f)});
   const auto  restored = PipelineDocument::FromJson(document.ToJson());
   const auto* restored_mask = restored.PrimaryGrade()->FindMask(MaskId{"mask.persisted"});
   ASSERT_NE(restored_mask, nullptr);
   const auto* brush = std::get_if<BrushMaskSource>(&restored_mask->source);
   ASSERT_NE(brush, nullptr);
-  ASSERT_TRUE(brush->asset_key.has_value());
-  EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
+  EXPECT_FALSE(brush->asset_key.has_value());
+  ASSERT_EQ(brush->strokes.size(), 1u);
+  EXPECT_EQ(brush->strokes[0].id, StrokeId{"stroke.1"});
+  ASSERT_EQ(BrushStrokeSamples(brush->strokes[0]).size(), 1u);
+  EXPECT_EQ(BrushStrokeSamples(brush->strokes[0])[0].local_x, 8.0f);
+  EXPECT_EQ(document.ToJson().dump().find("asset_key"), std::string::npos);
 }
 
 TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder) {

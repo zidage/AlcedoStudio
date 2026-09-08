@@ -11,11 +11,13 @@
 
 #include "app/editor_adjustment_types.hpp"
 #include "app/editor_render_intent.hpp"
+#include "edit/geometry/types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "json.hpp"
 
@@ -151,6 +153,33 @@ class MaskStore;
 [[nodiscard]] auto MakeSetMaskFieldBatch(const NodeId& node_id, const MaskId& mask_id,
                                          std::string field_key, nlohmann::json before_value,
                                          nlohmann::json after_value) -> PipelineEditBatch;
+
+/**
+ * @brief Build a validated AppendBrushStroke batch that stores only @p stroke.
+ */
+[[nodiscard]] auto MakeAppendBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id,
+                                              BrushStroke stroke) -> PipelineEditBatch;
+
+/**
+ * @brief Build a validated RemoveBrushStroke batch with the removed body and index.
+ */
+[[nodiscard]] auto MakeRemoveBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id,
+                                              StrokeId stroke_id, std::uint32_t index,
+                                              BrushStroke stroke) -> PipelineEditBatch;
+
+/**
+ * @brief Build a validated InsertBrushStroke batch.
+ */
+[[nodiscard]] auto MakeInsertBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id,
+                                              std::uint32_t index, BrushStroke stroke)
+    -> PipelineEditBatch;
+
+/**
+ * @brief Build a validated SetBrushTranslation batch with exact before/after values.
+ */
+[[nodiscard]] auto MakeSetBrushTranslationBatch(const NodeId& node_id, const MaskId& mask_id,
+                                                Vector2 before, Vector2 after)
+    -> PipelineEditBatch;
 
 /**
  * @brief Build one typed Paste batch from ordered document changes.
