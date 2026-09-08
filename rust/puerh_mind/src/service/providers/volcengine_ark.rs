@@ -152,7 +152,7 @@ impl VolcengineArkResponsesProvider {
     /// Driver-owned typed content extraction: walk `output[].content[]` and return
     /// the first `output_text` item's `text`. The config sets
     /// `content_json_pointer = null` for this driver, so the parser is code-owned
-    /// rather than config-driven — Ark's Responses envelope does not have a single
+    /// rather than config-driven — Ark Responses JSON does not have a single
     /// stable content pointer (the `output` array may hold reasoning + message
     /// items), so a typed walk is more robust than a fixed pointer.
     fn extract_output_text(body: &Value) -> Option<String> {
@@ -481,7 +481,7 @@ mod tests {
     }
 
     /// Build an Ark Responses-shaped success body. `content_json` is the model's
-    /// JSON text, placed in `output[0].content[0].output_text` — the exact envelope
+    /// JSON text, placed in `output[0].content[0].output_text` — the exact JSON path
     /// the driver-owned parser walks. This mirrors the real Ark response shape so
     /// the parser is exercised against the live fixture structure.
     fn ok_responses_body(content_json: &str) -> serde_json::Value {
@@ -582,7 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extracts_output_text_from_responses_envelope() {
+    async fn extracts_output_text_from_responses_output_text() {
         let server = MockServer::start().await;
         // The output array may hold extra items (e.g. reasoning); the parser must
         // find the message item's output_text regardless of ordering.

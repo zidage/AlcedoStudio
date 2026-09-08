@@ -11,8 +11,10 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "json.hpp"
@@ -30,7 +32,8 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/mask/mask_store.hpp"
+#include "edit/mask/brush_stroke.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -316,51 +319,57 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
 }
 
-TEST_F(EditorVersionCheckoutTest, MissingReachableMaskAssetFailsBeforeHeadPublication) {
+TEST_F(EditorVersionCheckoutTest, ParameterizedBrushCheckoutRestoresStrokesAfterCacheDeletion) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   const auto default_id = guard_->commit_graph_->GetActiveVersionId();
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.25})", &error)) << error;
 
-  const auto mask_root = NodeHistoryPath("checkout_mask", "");
-  alcedo::MaskStore store(mask_root);
-  alcedo::MaskAssetDescriptor descriptor;
-  descriptor.extent           = {4, 4};
-  descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
-  const std::vector<std::uint8_t> pixels(16, 90);
-  const auto saved_key = store.Put(descriptor, pixels);
+  const auto cache_path = NodeHistoryPath("checkout_mask_cache", ".r8mask");
+  {
+    std::ofstream stream(cache_path, std::ios::binary | std::ios::trunc);
+    stream << "disposable-cache";
+  }
+  const auto first = alcedo::grade_mask_test::MakePaintStroke("stroke.keep", 8.0f, 12.0f, 4.0f);
   ASSERT_TRUE(history_.AddMask(
       handle, alcedo::NodeId{"grade.primary"},
-      alcedo::grade_mask_test::MakeBrushMask(alcedo::MaskId{"mask.brush"}, saved_key, descriptor),
-      0, &error))
+      alcedo::grade_mask_test::MakeParameterizedBrushMask(alcedo::MaskId{"mask.brush"}, {first}), 0,
+      &error))
       << error;
-  const auto after_source =
-      alcedo::MaskModelToJson(alcedo::grade_mask_test::MakeBrushMask(
-                                  alcedo::MaskId{"mask.brush"}, saved_key, descriptor))
-          .at("source");
-  ASSERT_TRUE(history_.ReplaceMaskAsset(handle, alcedo::NodeId{"grade.primary"},
-                                       alcedo::MaskId{"mask.brush"}, after_source, store, &error))
+  const auto second = alcedo::grade_mask_test::MakePaintStroke("stroke.next", 16.0f, 9.0f, 5.0f);
+  ASSERT_TRUE(history_.CommitPipelineEditBatch(
+      handle,
+      alcedo::MakeAppendBrushStrokeBatch(alcedo::NodeId{"grade.primary"},
+                                        alcedo::MaskId{"mask.brush"}, second),
+      &error))
       << error;
+  const auto painted_hash = DocumentHash(*guard_);
 
   alcedo::version_ref_id_t root_version{};
   ASSERT_TRUE(history_.CreateRootVersionAndCheckout(handle, "Clean", &root_version, &error))
       << error;
   EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), root_version);
-  const auto root_hash = DocumentHash(*guard_);
+  EXPECT_EQ(guard_->document_->PrimaryGrade()->FindMask(alcedo::MaskId{"mask.brush"}), nullptr);
   EXPECT_TRUE(alcedo::CollectPersistentMaskAssetKeys(*guard_->document_).empty());
 
-  store.SetHostCacheBudget(1);
   std::error_code ignored;
-  std::filesystem::remove(store.PathFor(saved_key), ignored);
-  ASSERT_FALSE(std::filesystem::exists(store.PathFor(saved_key)));
+  std::filesystem::remove(cache_path, ignored);
+  ASSERT_FALSE(std::filesystem::exists(cache_path));
 
   error.clear();
-  EXPECT_FALSE(history_.CheckoutVersion(handle, default_id, &error));
-  EXPECT_NE(error.find("Mask"), std::string::npos);
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), root_version);
-  EXPECT_EQ(DocumentHash(*guard_), root_hash);
-  EXPECT_TRUE(alcedo::CollectPersistentMaskAssetKeys(*guard_->document_).empty());
+  ASSERT_TRUE(history_.CheckoutVersion(handle, default_id, &error)) << error;
+  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), default_id);
+  EXPECT_EQ(DocumentHash(*guard_), painted_hash);
+  const auto* mask = guard_->document_->PrimaryGrade()->FindMask(alcedo::MaskId{"mask.brush"});
+  ASSERT_NE(mask, nullptr);
+  const auto* brush = std::get_if<alcedo::BrushMaskSource>(&mask->source);
+  ASSERT_NE(brush, nullptr);
+  ASSERT_EQ(brush->strokes.size(), 2u);
+  EXPECT_EQ(brush->strokes[0].id, alcedo::StrokeId{"stroke.keep"});
+  EXPECT_EQ(brush->strokes[1].id, alcedo::StrokeId{"stroke.next"});
+  EXPECT_FALSE(brush->asset_key.has_value());
+  EXPECT_FALSE(std::filesystem::exists(cache_path));
 }
 
 TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExactlyOnce) {
@@ -444,20 +453,24 @@ TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExa
   std::filesystem::remove(journal_path, ec);
 }
 
-TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHistoryAndMaskAssets) {
+TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHistoryAndParameterizedBrushStrokes) {
   RegisterAllOperators();
   const auto db_path      = NodeHistoryPath("reopen_versions", ".db");
   const auto meta_path    = NodeHistoryPath("reopen_versions", ".json");
   const auto journal_path = NodeHistoryPath("reopen_versions", ".wal");
-  const auto mask_root    = NodeHistoryPath("reopen_masks", "");
+  const auto cache_path   = NodeHistoryPath("reopen_cache", ".r8mask");
   std::error_code ec;
   constexpr sl_element_id_t element_id = 832;
   std::string               saved_hash;
   alcedo::version_ref_id_t  default_id{};
   alcedo::head_commit_hash_t saved_head;
   alcedo::transaction_chain_hash_t saved_chain{};
-  alcedo::MaskAssetKey      saved_key;
   std::size_t               saved_refs = 0;
+
+  {
+    std::ofstream stream(cache_path, std::ios::binary | std::ios::trunc);
+    stream << "disposable-cache";
+  }
 
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
@@ -477,23 +490,18 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     const auto  handle = history.Acquire(element_id, &error);
     ASSERT_TRUE(handle.valid) << error;
     ASSERT_TRUE(CommitSettled(history, handle, "exposure", R"({"exposure":0.9})", &error)) << error;
-    alcedo::MaskStore store(mask_root);
-    alcedo::MaskAssetDescriptor descriptor;
-    descriptor.extent           = {4, 4};
-    descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
-    const std::vector<std::uint8_t> pixels(16, 17);
-    saved_key = store.Put(descriptor, pixels);
+    const auto first = alcedo::grade_mask_test::MakePaintStroke("stroke.keep", 8.0f, 12.0f, 4.0f);
     ASSERT_TRUE(history.AddMask(
         handle, alcedo::NodeId{"grade.primary"},
-        alcedo::grade_mask_test::MakeBrushMask(alcedo::MaskId{"mask.brush"}, saved_key, descriptor),
+        alcedo::grade_mask_test::MakeParameterizedBrushMask(alcedo::MaskId{"mask.brush"}, {first}),
         0, &error))
         << error;
-    const auto after_source =
-        alcedo::MaskModelToJson(alcedo::grade_mask_test::MakeBrushMask(
-                                    alcedo::MaskId{"mask.brush"}, saved_key, descriptor))
-            .at("source");
-    ASSERT_TRUE(history.ReplaceMaskAsset(handle, alcedo::NodeId{"grade.primary"},
-                                         alcedo::MaskId{"mask.brush"}, after_source, store, &error))
+    const auto second = alcedo::grade_mask_test::MakePaintStroke("stroke.next", 16.0f, 9.0f, 5.0f);
+    ASSERT_TRUE(history.CommitPipelineEditBatch(
+        handle,
+        alcedo::MakeAppendBrushStrokeBatch(alcedo::NodeId{"grade.primary"},
+                                          alcedo::MaskId{"mask.brush"}, second),
+        &error))
         << error;
     alcedo::version_ref_id_t root_version{};
     ASSERT_TRUE(history.CreateRootVersionAndCheckout(handle, "Clean", &root_version, &error))
@@ -503,6 +511,7 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     saved_head  = guard->working_head_commit_hash();
     saved_chain = guard->transaction_chain_hash();
     saved_refs  = guard->commit_graph_->GetAllVersionRefs().size();
+    EXPECT_EQ(saved_hash.find("asset_key"), std::string::npos);
     auto capture = history.CaptureSaveCheckpoint(handle, &error);
     ASSERT_TRUE(static_cast<bool>(capture)) << error;
     {
@@ -519,6 +528,9 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     pipeline_service->SavePipeline(guard);
     project.SaveProject(meta_path);
   }
+
+  std::filesystem::remove(cache_path, ec);
+  ASSERT_FALSE(std::filesystem::exists(cache_path));
 
   {
     alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kLoadExisting);
@@ -544,10 +556,19 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
     EXPECT_EQ(guard->transaction_chain_hash(), saved_chain);
     EXPECT_EQ(guard->commit_graph_->GetAllVersionRefs().size(), saved_refs);
     EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard->document_), saved_hash);
-    const auto keys = alcedo::CollectPersistentMaskAssetKeys(*guard->document_);
-    ASSERT_EQ(keys.size(), 1u);
-    EXPECT_EQ(keys.front(), saved_key);
-    EXPECT_TRUE(std::filesystem::exists(alcedo::MaskStore(mask_root).PathFor(saved_key)));
+    EXPECT_TRUE(alcedo::CollectPersistentMaskAssetKeys(*guard->document_).empty());
+    const auto* mask = guard->document_->PrimaryGrade()->FindMask(alcedo::MaskId{"mask.brush"});
+    ASSERT_NE(mask, nullptr);
+    const auto* brush = std::get_if<alcedo::BrushMaskSource>(&mask->source);
+    ASSERT_NE(brush, nullptr);
+    ASSERT_EQ(brush->strokes.size(), 2u);
+    EXPECT_EQ(brush->strokes[0].id, alcedo::StrokeId{"stroke.keep"});
+    EXPECT_EQ(brush->strokes[1].id, alcedo::StrokeId{"stroke.next"});
+    EXPECT_EQ(alcedo::BrushStrokeSamples(brush->strokes[0])[0].local_x, 8.0f);
+    EXPECT_EQ(alcedo::BrushStrokeSamples(brush->strokes[1])[0].local_x, 16.0f);
+    EXPECT_FALSE(brush->asset_key.has_value());
+    EXPECT_EQ(saved_hash.find("asset_key"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(cache_path));
     history.Release(handle);
     pipeline_service->SavePipeline(guard);
   }

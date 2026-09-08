@@ -11,6 +11,8 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/geometry/types.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo {
@@ -109,6 +111,10 @@ auto RenderReasonForBatch(const PipelineEditBatch& batch) -> std::optional<Edito
     case PipelineEditOperationKind::ReplaceMaskSource:
     case PipelineEditOperationKind::ReplaceMaskAsset:
     case PipelineEditOperationKind::SetMaskField:
+    case PipelineEditOperationKind::AppendBrushStroke:
+    case PipelineEditOperationKind::RemoveBrushStroke:
+    case PipelineEditOperationKind::InsertBrushStroke:
+    case PipelineEditOperationKind::SetBrushTranslation:
       return EditorRenderReason::SettledMaskEdit;
     case PipelineEditOperationKind::SetParameter:
     case PipelineEditOperationKind::SetNodeEnabled:
@@ -378,6 +384,65 @@ auto MakeSetMaskFieldBatch(const NodeId& node_id, const MaskId& mask_id, std::st
   return PipelineEditBatch::Make(PipelineEditOperationKind::SetMaskField, {std::move(change)},
                                  PresentationKeyForOperation(PipelineEditOperationKind::SetMaskField),
                                  std::move(args));
+}
+
+auto MakeAppendBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id, BrushStroke stroke)
+    -> PipelineEditBatch {
+  AppendBrushStrokeChange change;
+  change.node_id = node_id;
+  change.mask_id = mask_id;
+  change.stroke  = std::move(stroke);
+  nlohmann::json args{{"mask_id", std::string{mask_id.Value()}},
+                      {"node_id", std::string{node_id.Value()}},
+                      {"stroke_id", std::string{change.stroke.id.Value()}}};
+  return PipelineEditBatch::Make(
+      PipelineEditOperationKind::AppendBrushStroke, {std::move(change)},
+      PresentationKeyForOperation(PipelineEditOperationKind::AppendBrushStroke), std::move(args));
+}
+
+auto MakeRemoveBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id, StrokeId stroke_id,
+                                std::uint32_t index, BrushStroke stroke) -> PipelineEditBatch {
+  RemoveBrushStrokeChange change;
+  change.node_id   = node_id;
+  change.mask_id   = mask_id;
+  change.stroke_id = std::move(stroke_id);
+  change.index     = index;
+  change.stroke    = std::move(stroke);
+  nlohmann::json args{{"mask_id", std::string{mask_id.Value()}},
+                      {"node_id", std::string{node_id.Value()}},
+                      {"stroke_id", std::string{change.stroke_id.Value()}}};
+  return PipelineEditBatch::Make(
+      PipelineEditOperationKind::RemoveBrushStroke, {std::move(change)},
+      PresentationKeyForOperation(PipelineEditOperationKind::RemoveBrushStroke), std::move(args));
+}
+
+auto MakeInsertBrushStrokeBatch(const NodeId& node_id, const MaskId& mask_id, std::uint32_t index,
+                                BrushStroke stroke) -> PipelineEditBatch {
+  InsertBrushStrokeChange change;
+  change.node_id = node_id;
+  change.mask_id = mask_id;
+  change.index   = index;
+  change.stroke  = std::move(stroke);
+  nlohmann::json args{{"mask_id", std::string{mask_id.Value()}},
+                      {"node_id", std::string{node_id.Value()}},
+                      {"stroke_id", std::string{change.stroke.id.Value()}}};
+  return PipelineEditBatch::Make(
+      PipelineEditOperationKind::InsertBrushStroke, {std::move(change)},
+      PresentationKeyForOperation(PipelineEditOperationKind::InsertBrushStroke), std::move(args));
+}
+
+auto MakeSetBrushTranslationBatch(const NodeId& node_id, const MaskId& mask_id, Vector2 before,
+                                  Vector2 after) -> PipelineEditBatch {
+  SetBrushTranslationChange change;
+  change.node_id = node_id;
+  change.mask_id = mask_id;
+  change.before  = before;
+  change.after   = after;
+  nlohmann::json args{{"mask_id", std::string{mask_id.Value()}},
+                      {"node_id", std::string{node_id.Value()}}};
+  return PipelineEditBatch::Make(
+      PipelineEditOperationKind::SetBrushTranslation, {std::move(change)},
+      PresentationKeyForOperation(PipelineEditOperationKind::SetBrushTranslation), std::move(args));
 }
 
 auto MakePasteBatch(std::vector<PipelineEditChange> changes) -> PipelineEditBatch {

@@ -6,8 +6,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/mask/brush_raster_encoding.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_store.hpp"
+#include "edit/runtime/content_key.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 
@@ -45,19 +47,19 @@ auto PrimaryGradeJson(nlohmann::json& document_json) -> nlohmann::json& {
 }
 
 TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants) {
-  EXPECT_EQ(kProjectFileVersion, "0.5.0");
-  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.5.0");
-  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.5.0");
-  EXPECT_EQ(kPackedProjectFormatVersion, 5u);
-  EXPECT_EQ(kPipelineDocumentFormatVersion, 5u);
-  EXPECT_EQ(kImageEditSchemaVersion, 3u);
-  EXPECT_EQ(kCommitFormatVersion, 3u);
-  EXPECT_EQ(kChainFormatVersion, 3u);
-  EXPECT_EQ(kPipelineEditBatchFormatVersion, 2u);
-  EXPECT_EQ(kRootStateFormatVersion, 3u);
-  EXPECT_EQ(kCheckpointStateFormatVersion, 3u);
-  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 4u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v3");
+  EXPECT_EQ(kProjectFileVersion, "0.6.0");
+  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.6.0");
+  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.6.0");
+  EXPECT_EQ(kPackedProjectFormatVersion, 6u);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 6u);
+  EXPECT_EQ(kImageEditSchemaVersion, 4u);
+  EXPECT_EQ(kCommitFormatVersion, 4u);
+  EXPECT_EQ(kChainFormatVersion, 4u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 3u);
+  EXPECT_EQ(kRootStateFormatVersion, 4u);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 4u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 5u);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v4");
   EXPECT_EQ(kMaskAssetFormatVersion, 1u);
   EXPECT_EQ(kMaskAssetPackedR8FormatId, 1u);
   EXPECT_EQ(kMaximumRasterMaskAxis, 4096u);
@@ -65,23 +67,28 @@ TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants)
   EXPECT_EQ(kBrushRasterAlgorithmVersion, 1u);
   EXPECT_EQ(kProjectMaskCacheFormatVersion, 1u);
   EXPECT_EQ(kBrushDabSpacingRadiusFraction, 0.25f);
-  EXPECT_NE(kPipelineDocumentFormatVersion, 6u);
+  EXPECT_EQ(kMaskImplementationVersion, 3u);
   EXPECT_EQ(static_cast<std::uint8_t>(BrushStrokeMode::Paint), 0);
   EXPECT_EQ(static_cast<std::uint8_t>(BrushStrokeMode::Erase), 1);
 }
 
-TEST(BrushSourceFormatBoundary, BrushJsonRoundTripStoresAssetKeyAndOmitsStrokeFields) {
+TEST(BrushSourceFormatBoundary, BrushJsonRoundTripStoresStrokeFieldsAndOmitsAssetKey) {
   auto document = CreateDefaultPipelineDocument();
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.persisted"}, MaskAssetKey{"asset_01"});
+  grade_mask_test::AddParameterizedBrushMask(
+      document, MaskId{"mask.persisted"},
+      {grade_mask_test::MakePaintStroke("stroke.1", 8.0f, 12.0f, 4.0f)});
   auto       json   = document.ToJson();
   const auto source = PrimaryGradeJson(json).at("masks").at(0).at("source");
   ASSERT_TRUE(source.is_object());
   EXPECT_EQ(source.at("kind"), "brush");
-  EXPECT_EQ(source.at("asset_key"), "asset_01");
-  EXPECT_FALSE(source.contains("strokes"));
-  EXPECT_FALSE(source.contains("placement_translation"));
-  EXPECT_FALSE(source.contains("source_format_version"));
-  EXPECT_FALSE(source.contains("raster_algorithm_version"));
+  EXPECT_FALSE(source.contains("asset_key"));
+  EXPECT_FALSE(source.contains("width"));
+  EXPECT_FALSE(source.contains("height"));
+  EXPECT_FALSE(source.contains("reference_bounds"));
+  EXPECT_EQ(source.at("source_format_version"), kBrushSourceFormatVersion);
+  EXPECT_EQ(source.at("raster_algorithm_version"), kBrushRasterAlgorithmVersion);
+  ASSERT_EQ(source.at("strokes").size(), 1u);
+  EXPECT_EQ(source.at("strokes").at(0).at("id"), "stroke.1");
   EXPECT_EQ(json.at("format_version"), kPipelineDocumentFormatVersion);
 
   const auto restored = PipelineDocument::FromJson(json);
@@ -89,8 +96,9 @@ TEST(BrushSourceFormatBoundary, BrushJsonRoundTripStoresAssetKeyAndOmitsStrokeFi
   ASSERT_NE(mask, nullptr);
   const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
   ASSERT_NE(brush, nullptr);
-  ASSERT_TRUE(brush->asset_key.has_value());
-  EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
+  EXPECT_FALSE(brush->asset_key.has_value());
+  ASSERT_EQ(brush->strokes.size(), 1u);
+  EXPECT_EQ(brush->strokes[0].id, StrokeId{"stroke.1"});
 }
 
 TEST(BrushSourceFormatBoundary, MalformedStrokeFieldsOnAssetBrushAreRejected) {
@@ -111,6 +119,56 @@ TEST(BrushSourceFormatBoundary, MalformedStrokeFieldsOnAssetBrushAreRejected) {
   EXPECT_TRUE(brush->strokes.empty());
   ASSERT_TRUE(brush->asset_key.has_value());
   EXPECT_EQ(*brush->asset_key, MaskAssetKey{"asset_01"});
+}
+
+TEST(BrushSourceFormatBoundary, RasterOnlyFormatIsRejectedBeforeCacheCleanup) {
+  const auto root = TestRoot("raster_only_rejected");
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  std::filesystem::create_directories(root);
+  auto json = CreateDefaultPipelineDocument().ToJson();
+  PrimaryGradeJson(json)["masks"] = nlohmann::json::array(
+      {nlohmann::json{{"id", "mask.brush"},
+                      {"display_name", "Brush"},
+                      {"enabled", true},
+                      {"opacity", 1.0},
+                      {"invert", false},
+                      {"source",
+                       {{"asset_key", "0123456789abcdef0123456789abcdef"},
+                        {"feather_radius", 0.0},
+                        {"height", 1},
+                        {"kind", "brush"},
+                        {"reference_bounds", nlohmann::json::array({0.0, 0.0, 1.0, 1.0})},
+                        {"width", 1}}},
+                      {"color_range", nullptr},
+                      {"luminance_range", nullptr}}});
+  const auto source_path = root / "pipeline.json";
+  const auto cache_path  = root / "0123456789abcdef0123456789abcdef.r8mask";
+  {
+    std::ofstream stream(source_path, std::ios::binary | std::ios::trunc);
+    stream << json.dump();
+  }
+  {
+    std::ofstream stream(cache_path, std::ios::binary | std::ios::trunc);
+    stream << "dummy-cache-bytes";
+  }
+  const auto source_before = ReadFileBytes(source_path);
+  const auto cache_before  = ReadFileBytes(cache_path);
+  EXPECT_THROW(
+      {
+        try {
+          (void)PipelineDocument::FromJson(nlohmann::json::parse(source_before));
+        } catch (const std::runtime_error& error) {
+          EXPECT_NE(std::string{error.what()}.find("brush raster-only asset_key encoding is not supported"),
+                    std::string::npos);
+          throw;
+        }
+      },
+      std::runtime_error);
+  EXPECT_EQ(ReadFileBytes(source_path), source_before);
+  EXPECT_EQ(ReadFileBytes(cache_path), cache_before);
+  EXPECT_TRUE(std::filesystem::exists(cache_path));
+  EXPECT_NE(source_before.find("asset_key"), std::string::npos);
 }
 
 TEST(BrushSourceFormatBoundary, UnsupportedPipelineDocumentFormatLeavesSourceFileUnchanged) {

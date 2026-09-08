@@ -12,8 +12,7 @@
 
 namespace alcedo {
 
-/// First parameterized Brush source JSON identity. Raster-only documents still
-/// serialize without this key until the NM7.3 persistence cutover.
+/// First parameterized Brush source JSON identity. Loaders accept only this value.
 inline constexpr std::uint32_t kBrushSourceFormatVersion = 1;
 /// Host dab/paint/erase algorithm identity. Replay must reject any other value.
 inline constexpr std::uint32_t kBrushRasterAlgorithmVersion = 1;

@@ -45,27 +45,29 @@ auto LoadGolden(const std::string& name) -> std::string {
 auto MultiGradeDocument() -> PipelineDocument {
   auto document = CreateDefaultPipelineDocument();
   EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.look"}).empty());
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, MaskAssetKey{"asset_01"});
+  grade_mask_test::AddParameterizedBrushMask(
+      document, MaskId{"mask.brush"}, {grade_mask_test::MakePaintStroke("stroke.1")});
   return document;
 }
 
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.5.0");
+  EXPECT_EQ(kProjectFileVersion, "0.6.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
-  EXPECT_EQ(kPackedProjectFormatVersion, 5u);
-  EXPECT_EQ(kPipelineDocumentFormatVersion, 5u);
-  EXPECT_EQ(kImageEditSchemaVersion, 3u);
-  EXPECT_EQ(kCommitFormatVersion, 3u);
-  EXPECT_EQ(kChainFormatVersion, 3u);
-  EXPECT_EQ(kPipelineEditBatchFormatVersion, 2u);
-  EXPECT_EQ(kRootStateFormatVersion, 3u);
-  EXPECT_EQ(kCheckpointStateFormatVersion, 3u);
-  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 4u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v3");
+  EXPECT_EQ(kPackedProjectFormatVersion, 6u);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 6u);
+  EXPECT_EQ(kImageEditSchemaVersion, 4u);
+  EXPECT_EQ(kCommitFormatVersion, 4u);
+  EXPECT_EQ(kChainFormatVersion, 4u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 3u);
+  EXPECT_EQ(kRootStateFormatVersion, 4u);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 4u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 5u);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v4");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(kProjectFileVersion));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));
 }
 
@@ -126,7 +128,7 @@ TEST(PipelineDocumentCheckpointFormat, OldDocumentFormatIsRejectedWithoutConvers
   EXPECT_THROW((void)PipelineDocument::FromJson(json), std::runtime_error);
 }
 
-TEST(PipelineDocumentCheckpointFormat, OldRootAndCheckpointEnvelopesAreRejected) {
+TEST(PipelineDocumentCheckpointFormat, OldRootAndCheckpointFormatVersionsAreRejected) {
   const auto document = CreateDefaultPipelineDocument();
   auto       root     = EncodePipelineRootState(9, document, std::nullopt);
   root["root_state_format_version"] = 1;
@@ -207,7 +209,7 @@ TEST(PipelineDocumentCheckpointFormat, ImageRootStoresCompleteDefaultDocumentAnd
                    0.5);
 }
 
-TEST(PipelineDocumentCheckpointFormat, ExtraEnvelopeKeysAreRejected) {
+TEST(PipelineDocumentCheckpointFormat, ExtraRootStateKeysAreRejected) {
   const auto document = CreateDefaultPipelineDocument();
   auto       encoded  = EncodePipelineRootState(3, document, std::nullopt);
   encoded["extra"]    = true;

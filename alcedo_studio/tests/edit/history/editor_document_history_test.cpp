@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -730,41 +732,57 @@ TEST_F(EditorDocumentHistoryTest, MaskSourceUndoRestoresExactVariantValues) {
   EXPECT_EQ(alcedo::MaskModelToJson(grade->MaskAt(0)).at("source").dump(), before_source.dump());
 }
 
-TEST_F(EditorDocumentHistoryTest, BrushAssetUndoSwitchesImmutableKeysWithoutChangingFiles) {
+TEST_F(EditorDocumentHistoryTest, BrushStrokeAppendUndoRestoresEarlierStrokeWithoutRasterFiles) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  alcedo::MaskStore store(journal_path_.parent_path() / "mask_assets");
-  alcedo::MaskAssetDescriptor descriptor;
-  descriptor.extent           = {4, 4};
-  descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
-  const std::vector<std::uint8_t> first_pixels(16, 40);
-  const std::vector<std::uint8_t> second_pixels(16, 200);
-  const auto first_key  = store.Put(descriptor, first_pixels);
-  const auto second_key = store.Put(descriptor, second_pixels);
-  EXPECT_NE(first_key, second_key);
+  const auto cache_path =
+      journal_path_.parent_path() / "brush_stroke_append_undo.r8mask";
+  {
+    std::ofstream stream(cache_path, std::ios::binary | std::ios::trunc);
+    stream << "cache-bytes";
+  }
+  const auto cache_before = [&] {
+    std::ifstream stream(cache_path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  }();
   const auto grade_id = alcedo::NodeId{"grade.primary"};
+  const auto first    = alcedo::grade_mask_test::MakePaintStroke("stroke.keep", 1.0f, 2.0f, 3.0f);
+  const auto second   = alcedo::grade_mask_test::MakePaintStroke("stroke.next", 4.0f, 5.0f, 6.0f);
   ASSERT_TRUE(history_.AddMask(
       handle, grade_id,
-      alcedo::grade_mask_test::MakeBrushMask(alcedo::MaskId{"mask.brush"}, first_key, descriptor), 0,
+      alcedo::grade_mask_test::MakeParameterizedBrushMask(alcedo::MaskId{"mask.brush"}, {first}), 0,
       &error))
       << error;
-  const auto after_source =
-      alcedo::MaskModelToJson(alcedo::grade_mask_test::MakeBrushMask(
-                                  alcedo::MaskId{"mask.brush"}, second_key, descriptor))
-          .at("source");
-  ASSERT_TRUE(history_.ReplaceMaskAsset(handle, grade_id, alcedo::MaskId{"mask.brush"}, after_source,
-                                        store, &error))
+  ASSERT_TRUE(history_.CommitPipelineEditBatch(
+      handle,
+      alcedo::MakeAppendBrushStrokeBatch(grade_id, alcedo::MaskId{"mask.brush"}, second), &error))
       << error;
   auto* grade = dynamic_cast<alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(grade_id));
-  EXPECT_EQ(std::get<alcedo::BrushMaskSource>(grade->MaskAt(0).source).asset_key, second_key);
+  ASSERT_NE(grade, nullptr);
+  {
+    const auto* brush =
+        std::get_if<alcedo::BrushMaskSource>(&grade->FindMask(alcedo::MaskId{"mask.brush"})->source);
+    ASSERT_NE(brush, nullptr);
+    ASSERT_EQ(brush->strokes.size(), 2u);
+    EXPECT_EQ(brush->strokes[0].id, alcedo::StrokeId{"stroke.keep"});
+    EXPECT_EQ(brush->strokes[1].id, alcedo::StrokeId{"stroke.next"});
+    EXPECT_FALSE(brush->asset_key.has_value());
+  }
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   grade = dynamic_cast<alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(grade_id));
-  EXPECT_EQ(std::get<alcedo::BrushMaskSource>(grade->MaskAt(0).source).asset_key, first_key);
-  EXPECT_TRUE(std::filesystem::exists(store.PathFor(first_key)));
-  EXPECT_TRUE(std::filesystem::exists(store.PathFor(second_key)));
+  const auto* undone =
+      std::get_if<alcedo::BrushMaskSource>(&grade->FindMask(alcedo::MaskId{"mask.brush"})->source);
+  ASSERT_NE(undone, nullptr);
+  ASSERT_EQ(undone->strokes.size(), 1u);
+  EXPECT_EQ(undone->strokes[0].id, alcedo::StrokeId{"stroke.keep"});
+  EXPECT_EQ(alcedo::BrushStrokeSamples(undone->strokes[0])[0].local_x, 1.0f);
+  std::ifstream cache_stream(cache_path, std::ios::binary);
+  const std::string cache_after((std::istreambuf_iterator<char>(cache_stream)),
+                                std::istreambuf_iterator<char>());
+  EXPECT_EQ(cache_after, cache_before);
 }
 
 TEST_F(EditorDocumentHistoryTest, MultiChangeActionCreatesOneCommitAndOneChainFold) {

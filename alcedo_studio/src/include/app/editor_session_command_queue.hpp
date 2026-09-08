@@ -88,7 +88,7 @@ enum class EditorSessionQueueState : std::uint8_t {
   Stopped,
 };
 
-/// Fully typed user command envelope. The queue stamps `operation.command_id`
+/// Fully typed user command. The queue stamps `operation.command_id`
 /// before reduction; all other fields are immutable command input.
 struct EditorSessionCommand {
   EditorSessionOperationId                operation{};
@@ -113,7 +113,7 @@ struct EditorSessionCommand {
   NodeGraphTopologyChange                 topology_change{};
 };
 
-/// Typed worker completion envelope. Payload-specific values are kept as
+/// Typed worker completion. Payload-specific values are kept as
 /// immutable fields so the worker never needs a callback into session code.
 struct EditorSessionCompletion {
   EditorSessionCompletionKind  kind = EditorSessionCompletionKind::WorkerRequestFailed;

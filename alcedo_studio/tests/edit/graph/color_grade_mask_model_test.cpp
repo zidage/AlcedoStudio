@@ -97,7 +97,8 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   auto  document = CreateDefaultPipelineDocument();
   auto* grade    = document.PrimaryGrade();
 
-  MaskModel brush = grade_mask_test::MakeBrushMask(MaskId{"mask.brush"}, MaskAssetKey{"asset_01"});
+  MaskModel brush = grade_mask_test::MakeParameterizedBrushMask(
+      MaskId{"mask.brush"}, {grade_mask_test::MakePaintStroke("stroke.1")});
   brush.display_name   = "Brush";
   brush.opacity        = 0.25f;
   brush.invert         = true;
@@ -144,6 +145,9 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   }
   ASSERT_FALSE(grade_json.is_null());
   EXPECT_EQ(grade_json["masks"][0]["source"]["kind"], "brush");
+  EXPECT_FALSE(grade_json["masks"][0]["source"].contains("asset_key"));
+  EXPECT_EQ(grade_json["masks"][0]["source"]["strokes"].size(), 1u);
+  EXPECT_EQ(grade_json["masks"][0]["source"]["strokes"][0]["id"], "stroke.1");
   EXPECT_EQ(grade_json["masks"][1]["source"]["kind"], "radial");
   EXPECT_EQ(grade_json["masks"][2]["source"]["kind"], "linear_gradient");
   EXPECT_TRUE(grade_json["masks"][0]["luminance_range"].is_null());

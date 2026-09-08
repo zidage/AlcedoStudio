@@ -26,6 +26,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
+#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/operator_registeration.hpp"
@@ -267,7 +268,6 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
   std::vector<NodeId>            topology_nodes;
   std::vector<PipelineSceneEdge> topology_edges;
   nlohmann::json                 expected_mask;
-  MaskAssetKey                   saved_asset_key;
 
   {
     PersistentEditor editor(paths, ProjectOpenMode::kCreateNew, kElementId);
@@ -360,19 +360,10 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_EQ(*editor.history().LastPublishedRenderReason(),
               EditorRenderReason::VersionDocumentChanged);
 
-    MaskStore           store(paths.mask_root);
-    MaskAssetDescriptor descriptor;
-    descriptor.extent           = {4, 4};
-    descriptor.reference_bounds = {0.0f, 0.0f, 1.0f, 1.0f};
-    saved_asset_key             = store.Put(descriptor, std::vector<std::uint8_t>(16, 19));
-    const auto mask =
-        grade_mask_test::MakeBrushMask(MaskId{"mask.topology"}, saved_asset_key, descriptor);
+    const auto mask = grade_mask_test::MakeParameterizedBrushMask(
+        MaskId{"mask.topology"}, {grade_mask_test::MakePaintStroke("stroke.topology")});
     expected_mask = MaskModelToJson(mask);
     ASSERT_TRUE(editor.history().AddMask(editor.handle(), NodeId{"grade.primary"}, mask, 0, &error))
-        << error;
-    ASSERT_TRUE(editor.history().ReplaceMaskAsset(editor.handle(), NodeId{"grade.primary"},
-                                                  MaskId{"mask.topology"},
-                                                  expected_mask.at("source"), store, &error))
         << error;
     EXPECT_EQ(MaskJson(*guard.document_, MaskId{"mask.topology"}), expected_mask);
     after_mask_hash = CanonicalPipelineDocumentJson(*guard.document_);
@@ -391,7 +382,7 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_EQ(guard.commit_graph_->GetAllVersionRefs().size(), 2u);
     ExpectGraphOrder(*guard.document_, topology_nodes, topology_edges);
     EXPECT_EQ(MaskJson(*guard.document_, MaskId{"mask.topology"}), expected_mask);
-    EXPECT_TRUE(std::filesystem::exists(MaskStore(paths.mask_root).PathFor(saved_asset_key)));
+    EXPECT_TRUE(CollectPersistentMaskAssetKeys(*guard.document_).empty());
 
     EditorHistorySnapshot snapshot;
     ASSERT_TRUE(editor.history().ReadHistorySnapshot(editor.handle(), &snapshot, &error)) << error;

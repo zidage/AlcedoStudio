@@ -16,9 +16,9 @@
 namespace alcedo {
 
 /**
- * @brief Immutable image-root envelope stored in `PipelineRoot`.
+ * @brief Immutable image-root serialized pipeline state stored in `PipelineRoot`.
  *
- * The envelope owns the full default `PipelineDocument` after image-specific
+ * `PipelineRootState` owns the full default `PipelineDocument` after image-specific
  * Develop data is bound. `root_id` is computed from this payload and the image
  * owner; it is the DuckDB primary key, not a field inside the blob.
  */
@@ -58,7 +58,7 @@ struct PipelineDocumentCheckpoint {
     -> root_id_t;
 
 /**
- * @brief Encode the immutable root envelope.
+ * @brief Encode the immutable root serialized pipeline state.
  *
  * Writes every required field, including an explicit JSON null for a missing
  * raw-color context. Rejects a document whose format version is not
@@ -72,12 +72,12 @@ struct PipelineDocumentCheckpoint {
     -> nlohmann::json;
 
 /**
- * @brief Parse and require a canonical immutable root envelope.
+ * @brief Parse and require canonical root serialized pipeline state.
  *
  * Unknown keys, wrong format versions, a mismatched nested document dump, and
- * a mismatched `element_id` type are rejected. Does not convert older envelopes.
+ * a mismatched `element_id` type are rejected. Does not convert older root JSON.
  *
- * @throws std::runtime_error when @p json is not a canonical root envelope.
+ * @throws std::runtime_error when @p json is not canonical root serialized state.
  */
 [[nodiscard]] auto DecodePipelineRootState(const nlohmann::json& json) -> PipelineRootState;
 
@@ -96,7 +96,7 @@ struct PipelineDocumentCheckpoint {
     -> nlohmann::json;
 
 /**
- * @brief Parse and require a canonical checkpoint envelope.
+ * @brief Parse and require canonical checkpoint serialized pipeline state.
  *
  * Unknown keys, wrong format versions, and a mismatched nested document dump
  * are rejected. Does not convert older `pipeline_params` checkpoints.
@@ -107,7 +107,7 @@ struct PipelineDocumentCheckpoint {
     -> PipelineDocumentCheckpoint;
 
 /**
- * @brief True when @p json looks like a current checkpoint envelope.
+ * @brief True when @p json looks like current checkpoint serialized pipeline state.
  *
  * Distinguishes the document checkpoint from a CPU-parameter snapshot without
  * fully decoding the nested DAG.

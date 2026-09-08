@@ -62,6 +62,11 @@ auto OccupiedIdentities(const PipelineDocument& document) -> std::set<std::strin
       }
       for (const auto& mask : grade->Masks()) {
         occupied.insert(std::string{mask.id.Value()});
+        if (const auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
+          for (const auto& stroke : brush->strokes) {
+            occupied.insert(std::string{stroke.id.Value()});
+          }
+        }
       }
     }
     if (const auto* drt = dynamic_cast<const DrtNodeModel*>(node.get())) {
@@ -82,6 +87,15 @@ void CollectSourceIdentities(const AdjustmentTransferPackage& package,
     }
     for (const auto& mask : grade.at("masks")) {
       occupied->insert(mask.at("id").get<std::string>());
+      if (!mask.contains("source") || !mask.at("source").is_object() ||
+          !mask.at("source").contains("strokes") || !mask.at("source").at("strokes").is_array()) {
+        continue;
+      }
+      for (const auto& stroke : mask.at("source").at("strokes")) {
+        if (stroke.is_object() && stroke.contains("id") && stroke.at("id").is_string()) {
+          occupied->insert(stroke.at("id").get<std::string>());
+        }
+      }
     }
   }
 }
@@ -223,6 +237,7 @@ class DefaultTransferIdentitySource final : public TransferIdentitySource {
     return AdjustmentInstanceId{std::string{id.Value()} + "." + Token()};
   }
   auto NextMaskId() -> MaskId override { return MaskId{"mask." + Token()}; }
+  auto NextStrokeId() -> StrokeId override { return StrokeId{"stroke." + Token()}; }
 
  private:
   auto Token() -> std::string {
@@ -263,6 +278,16 @@ auto RemapGrade(nlohmann::json grade, TransferIdentitySource& identity,
     RejectCollision(std::string{new_id.Value()}, *occupied, "MaskId");
     occupied->insert(std::string{new_id.Value()});
     mask["id"] = std::string{new_id.Value()};
+    if (!mask.contains("source") || !mask.at("source").is_object() ||
+        !mask.at("source").contains("strokes") || !mask.at("source").at("strokes").is_array()) {
+      continue;
+    }
+    for (auto& stroke : mask.at("source").at("strokes")) {
+      const auto new_stroke = identity.NextStrokeId();
+      RejectCollision(std::string{new_stroke.Value()}, *occupied, "StrokeId");
+      occupied->insert(std::string{new_stroke.Value()});
+      stroke["id"] = std::string{new_stroke.Value()};
+    }
   }
   return grade;
 }
@@ -406,6 +431,10 @@ auto CountingTransferIdentitySource::NextAdjustmentInstanceId(const NodeId&     
 
 auto CountingTransferIdentitySource::NextMaskId() -> MaskId {
   return MaskId{"mask.t" + std::to_string(next_mask_++)};
+}
+
+auto CountingTransferIdentitySource::NextStrokeId() -> StrokeId {
+  return StrokeId{"stroke.t" + std::to_string(next_stroke_++)};
 }
 
 void SetDocumentTransferIdentitySourceForTesting(TransferIdentitySource* source) {

@@ -14,7 +14,7 @@
 //! `anthropic_messages.rs` cover the drivers' request/response shapes against
 //! `wiremock` fixtures. These live smokes
 //! are the ground-truth check that the documented shapes match the real providers —
-//! if a provider changes its envelope, the smoke fails and the parser/fixture gap
+//! if a provider changes its response JSON shape, the live test fails and the parser/fixture gap
 //! surfaces here rather than in production. On success they assert the parsed
 //! outcome validates against the code-owned Alcedo contract (no active annotation
 //! on a malformed real response), and print usage + provider request id for manual
@@ -137,7 +137,7 @@ async fn live_opencode_openai_batch_analyze_smoke() {
     // Ground-truth check for the OpenAI Chat-compatible batch parser against an
     // Opencode-routed model. Some OpenAI-compatible providers return structured
     // JSON in `message.tool_calls[].function.arguments` with `message.content =
-    // null`; this smoke catches that real envelope drift for the batch path.
+    // null`; this live test catches that real response JSON drift for the batch path.
     let _ = dotenvy::from_filename(".env.test").ok();
     if !live_smoke_enabled_or_skip() {
         return;

@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: NM7.2 parameterized Brush source and Grade owner operations landed; encoding rules specified; project/schema version gate still pending NM7.3.
+Status: NM7.2 parameterized Brush source and Grade owner operations landed; NM7.3 typed stroke/placement history, WAL/Version/Paste remapping, and the Section 8.1 project/schema version gate landed. Raster-only Brush JSON is rejected. NM7.4+ regional replay and cache service remain planned.
 
 Parent: [NM7 execution plan](phase_nm7_viewer_mask_creation_plan.md).
 This document defines NM7's revised algorithm, data ownership and storage behavior. It replaces
@@ -205,7 +205,7 @@ native Mask pass 之间必须一致。`source_format_version` 或 `raster_algori
 | 求值顺序 | 固定 | 规范 R8 → signed-distance 羽化（若半径 > 0）→ invert → opacity → clamp → 再量化到请求 R8。Union 是启用 Mask 的逐像素 max，发生在 Grade Mix 之前 |
 | 输出采样 | 现有 `MakeRasterMaskSamplingPlan` | 渲染像素中心 `(x+0.5, y+0.5)` 经 `render_to_texture_uv` 得到归一化 UV。UV 在 `[0,1]` 外为 0。R8 为双线性，texel 中心 `u*width-0.5`。无羽化时按该 plan 的 mip；有羽化时对距离场做同样的双线性。`geometry.filter` 默认双线性。缓存命中要求 extent、geometry、算法版本和 producer 完全一致，禁止把不相符的槽 resize 后当作命中 |
 
-JSON 中的样本数组按上述 binary32 规则读写。非法值、重复 StrokeId 或不支持的算法版本不得部分写入 owner。NM7.2 将规范笔画、算法版本和 `placement_translation` 写入 `BrushMaskSource`；无笔画且平移为零的现有文档仍序列化为 `asset_key` / descriptor / `feather_radius`。带完整 `strokes` 的 JSON 按本节身份读取，不再忽略笔画字段。项目文件版本门和 raster-only 拒绝仍属于 NM7.3。
+JSON 中的样本数组按上述 binary32 规则读写。非法值、重复 StrokeId 或不支持的算法版本不得部分写入 owner。NM7.2 将规范笔画、算法版本和 `placement_translation` 写入 `BrushMaskSource`。NM7.3 起 JSON 只写参数化笔画，拒绝 `asset_key` / width / height / `reference_bounds` raster-only 编码；项目文件版本门只接受 8.1 表中切换后身份。
 
 ## 5. Undo/Redo 的局部重放算法
 
@@ -415,11 +415,7 @@ Brush 的唯一恢复依据。NM3/NM4 旧测试通过不等于参数化格式通
 
 ### 8.1 切换后接受的唯一格式身份
 
-当前生产加载器只接受 `pipeline_history_format.hpp` 中的已发布值（项目 `0.5.0`、packed `5`、
-document `5`、image-edit `3`、commit/chain `3`、batch `2`、root/checkpoint `3`、WAL `4`、
-transfer `alcedo.adjustment_transfer.v3`）。该集合仍把 `asset_key` 当作 Brush 的持久来源。
-参数化 Brush 写入 persistence 时，加载器必须改成**只**接受下表，每一项都是单一值而不是范围。
-旧身份立即不支持；不读取、不改写、不删除被拒绝的文件。
+当前生产加载器只接受下表「切换后唯一接受值」（NM7.3 已切换）。旧身份立即不支持；不读取、不改写、不删除被拒绝的文件。`asset_key` 不再是 Brush 的持久来源。
 
 | 身份 | 切换后唯一接受值 | 当前已发布值 |
 | --- | --- | --- |
@@ -430,8 +426,8 @@ transfer `alcedo.adjustment_transfer.v3`）。该集合仍把 `asset_key` 当作
 | Commit hash input `kCommitFormatVersion` | `4` | `3` |
 | Chain-fold `kChainFormatVersion` | `4` | `3` |
 | Typed batch `kPipelineEditBatchFormatVersion` | `3` | `2` |
-| Root envelope `kRootStateFormatVersion` | `4` | `3` |
-| Checkpoint envelope `kCheckpointStateFormatVersion` | `4` | `3` |
+| Root serialized pipeline state `kRootStateFormatVersion` | `4` | `3` |
+| Checkpoint serialized pipeline state `kCheckpointStateFormatVersion` | `4` | `3` |
 | Mini-Git WAL `kMiniGitJournalRecordFormatVersion` | `5` | `4` |
 | Transfer package `kAdjustmentTransferSchema` | `alcedo.adjustment_transfer.v4` | `alcedo.adjustment_transfer.v3` |
 | Brush `source_format_version` | `1` | 不存在；当前 JSON 无此键 |

@@ -111,7 +111,8 @@ class EditorMiniGitProjectFixture {
   [[nodiscard]] auto journal(sl_element_id_t element_id) -> MiniGitJournal&;
   [[nodiscard]] auto root_id(sl_element_id_t element_id) const -> root_id_t;
 
-  /// Read Default Color Grade exposure from a labeled document checkpoint envelope.
+  /// Read Default Color Grade exposure from labeled checkpoint JSON
+  /// (`DecodePipelineDocumentCheckpoint`).
   [[nodiscard]] static auto CheckpointDocumentExposure(const nlohmann::json& checkpoint) -> float;
 
  private:

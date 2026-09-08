@@ -6,27 +6,35 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
+#include "edit/geometry/types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
+#include "edit/mask/brush_stroke.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
 #include "grade_owned_mask_support.hpp"
+#include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
 
 namespace alcedo {
@@ -84,6 +92,23 @@ auto TwoFieldPaste(const PipelineDocument& document) -> PipelineEditBatch {
   second.after_enabled  = true;
   return PipelineEditBatch::Make(PipelineEditOperationKind::Paste, {first, second},
                                  PresentationKeyForOperation(PipelineEditOperationKind::Paste));
+}
+
+auto BatchFromCommit(const EditCommit& commit) -> PipelineEditBatch {
+  return PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+}
+
+auto RequireBrush(const PipelineDocument& document, const MaskId& mask_id)
+    -> const BrushMaskSource& {
+  const auto* mask = document.PrimaryGrade()->FindMask(mask_id);
+  if (mask == nullptr) {
+    throw std::runtime_error("expected Brush mask " + std::string{mask_id.Value()});
+  }
+  const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
+  if (brush == nullptr) {
+    throw std::runtime_error("mask is not a Brush source");
+  }
+  return *brush;
 }
 
 }  // namespace
@@ -313,6 +338,159 @@ TEST(PipelineHistoryApplierTest, VerifyPersistentMaskAssetsLoadsPublishedBrushKe
   grade_mask_test::AddBrushMask(document, MaskId{"mask.brush"}, key, descriptor);
   std::string error;
   EXPECT_TRUE(VerifyPersistentMaskAssets(document, &store, &error)) << error;
+}
+
+TEST(PipelineHistoryApplierTest, FirstBrushStrokeCreatesOneCommit) {
+  const auto dir = std::filesystem::path{"build/tmp/brush_stroke_history"} / "first_stroke";
+  std::filesystem::create_directories(dir);
+  const auto journal_path = dir / "image.wal";
+  std::error_code ec;
+  std::filesystem::remove(journal_path, ec);
+
+  auto journal = std::make_shared<MiniGitJournal>(journal_path);
+  auto graph   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(31));
+  MiniGitWorkingHistory history(graph, journal);
+
+  auto document = CreateDefaultPipelineDocument();
+  const auto first = grade_mask_test::MakePaintStroke("stroke.first", 8.0f, 12.0f, 4.0f);
+  auto mask = grade_mask_test::MakeParameterizedBrushMask(MaskId{"mask.brush"}, {first});
+  const auto add =
+      MakeAddMaskBatch(document.PrimaryGrade()->Id(), mask.id, MaskModelToJson(mask), 0);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, add, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto append = history.AppendEdit(add);
+  ASSERT_TRUE(append.committed) << append.error;
+  EXPECT_EQ(graph->CommitCount(), 1u);
+  EXPECT_EQ(journal->records().size(), 1u);
+  ASSERT_EQ(document.PrimaryGrade()->MaskCount(), 1u);
+  const auto& brush = RequireBrush(document, MaskId{"mask.brush"});
+  ASSERT_EQ(brush.strokes.size(), 1u);
+  EXPECT_EQ(brush.strokes[0].id, StrokeId{"stroke.first"});
+  EXPECT_EQ(document.ToJson().dump().find("asset_key"), std::string::npos);
+
+  const auto undone = history.Undo();
+  ASSERT_TRUE(undone.moved) << undone.error;
+  ASSERT_TRUE(undone.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, BatchFromCommit(*undone.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(document.PrimaryGrade()->FindMask(MaskId{"mask.brush"}), nullptr);
+  EXPECT_EQ(journal->records().size(), 2u);
+
+  const auto redone = history.Redo();
+  ASSERT_TRUE(redone.moved) << redone.error;
+  ASSERT_TRUE(redone.selected_commit.has_value());
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, BatchFromCommit(*redone.selected_commit),
+                                     PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto& restored = RequireBrush(document, MaskId{"mask.brush"});
+  ASSERT_EQ(restored.strokes.size(), 1u);
+  EXPECT_EQ(restored.strokes[0].id, StrokeId{"stroke.first"});
+  EXPECT_EQ(BrushStrokeSamples(restored.strokes[0])[0].local_x, 8.0f);
+}
+
+TEST(PipelineHistoryApplierTest, StrokeUndoRedoRestoresCommandOrderWithoutR8) {
+  const auto dir = std::filesystem::path{"build/tmp/brush_stroke_history"} / "stroke_order";
+  std::filesystem::create_directories(dir);
+  const auto journal_path = dir / "image.wal";
+  const auto cache_path   = dir / "dummy.r8mask";
+  std::error_code ec;
+  std::filesystem::remove(journal_path, ec);
+  {
+    std::ofstream stream(cache_path, std::ios::binary | std::ios::trunc);
+    stream << "cache-bytes";
+  }
+  const auto cache_before = [&] {
+    std::ifstream stream(cache_path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  }();
+
+  auto journal = std::make_shared<MiniGitJournal>(journal_path);
+  auto graph   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(32));
+  MiniGitWorkingHistory history(graph, journal);
+
+  auto document = CreateDefaultPipelineDocument();
+  const auto first  = grade_mask_test::MakePaintStroke("stroke.keep", 1.0f, 2.0f, 3.0f);
+  const auto second = grade_mask_test::MakePaintStroke("stroke.next", 4.0f, 5.0f, 6.0f);
+  auto mask = grade_mask_test::MakeParameterizedBrushMask(MaskId{"mask.brush"}, {first});
+  const auto add =
+      MakeAddMaskBatch(document.PrimaryGrade()->Id(), mask.id, MaskModelToJson(mask), 0);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, add, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  ASSERT_TRUE(history.AppendEdit(add).committed);
+
+  const auto append = MakeAppendBrushStrokeBatch(document.PrimaryGrade()->Id(), MaskId{"mask.brush"},
+                                                 second);
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(document, append, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  ASSERT_TRUE(history.AppendEdit(append).committed);
+  {
+    const auto& brush = RequireBrush(document, MaskId{"mask.brush"});
+    ASSERT_EQ(brush.strokes.size(), 2u);
+    EXPECT_EQ(brush.strokes[0].id, StrokeId{"stroke.keep"});
+    EXPECT_EQ(brush.strokes[1].id, StrokeId{"stroke.next"});
+  }
+  EXPECT_EQ(append.CanonicalJSON().dump().find("stroke.keep"), std::string::npos);
+  EXPECT_EQ(document.ToJson().dump().find("asset_key"), std::string::npos);
+
+  const auto undone = history.Undo();
+  ASSERT_TRUE(undone.moved) << undone.error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, BatchFromCommit(*undone.selected_commit),
+                                     PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  {
+    const auto& brush = RequireBrush(document, MaskId{"mask.brush"});
+    ASSERT_EQ(brush.strokes.size(), 1u);
+    EXPECT_EQ(brush.strokes[0].id, StrokeId{"stroke.keep"});
+    EXPECT_EQ(BrushStrokeSamples(brush.strokes[0])[0].local_x, 1.0f);
+  }
+
+  const auto redone = history.Redo();
+  ASSERT_TRUE(redone.moved) << redone.error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, BatchFromCommit(*redone.selected_commit),
+                                     PipelineEditApplyDirection::Forward, &error))
+      << error;
+  {
+    const auto& brush = RequireBrush(document, MaskId{"mask.brush"});
+    ASSERT_EQ(brush.strokes.size(), 2u);
+    EXPECT_EQ(brush.strokes[0].id, StrokeId{"stroke.keep"});
+    EXPECT_EQ(brush.strokes[1].id, StrokeId{"stroke.next"});
+    EXPECT_EQ(BrushStrokeSamples(brush.strokes[1])[0].local_x, 4.0f);
+  }
+  std::ifstream cache_stream(cache_path, std::ios::binary);
+  const std::string cache_after((std::istreambuf_iterator<char>(cache_stream)),
+                                std::istreambuf_iterator<char>());
+  EXPECT_EQ(cache_after, cache_before);
+}
+
+TEST(PipelineHistoryApplierTest, BrushMoveUndoRestoresExactTranslation) {
+  auto document = CreateDefaultPipelineDocument();
+  const auto stroke = grade_mask_test::MakePaintStroke("stroke.1", 10.0f, 20.0f, 5.0f);
+  auto mask = grade_mask_test::MakeParameterizedBrushMask(MaskId{"mask.brush"}, {stroke});
+  const auto add =
+      MakeAddMaskBatch(document.PrimaryGrade()->Id(), mask.id, MaskModelToJson(mask), 0);
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, add, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto* body = RequireBrush(document, MaskId{"mask.brush"}).strokes[0].samples.get();
+  const auto move = MakeSetBrushTranslationBatch(document.PrimaryGrade()->Id(), MaskId{"mask.brush"},
+                                                 {}, {3.5f, -2.0f});
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, move, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  EXPECT_EQ(RequireBrush(document, MaskId{"mask.brush"}).placement_translation,
+            (Vector2{3.5f, -2.0f}));
+  EXPECT_EQ(RequireBrush(document, MaskId{"mask.brush"}).strokes[0].samples.get(), body);
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, move, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(RequireBrush(document, MaskId{"mask.brush"}).placement_translation, Vector2{});
+  EXPECT_EQ(RequireBrush(document, MaskId{"mask.brush"}).strokes[0].samples.get(), body);
+  ASSERT_EQ(RequireBrush(document, MaskId{"mask.brush"}).strokes.size(), 1u);
+  EXPECT_EQ(RequireBrush(document, MaskId{"mask.brush"}).strokes[0].id, StrokeId{"stroke.1"});
+  EXPECT_EQ(BrushStrokeSamples(RequireBrush(document, MaskId{"mask.brush"}).strokes[0])[0].local_x,
+            10.0f);
 }
 
 }  // namespace alcedo

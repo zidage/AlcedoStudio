@@ -185,8 +185,9 @@ class Database {
 
   // Mini-Git commit-graph tables. CREATE IF NOT EXISTS keeps the existing-DB open path
   // aligned with fresh projects; incompatible older project packages are rejected by
-  // project_file_version 0.5.0 before history is loaded. Root and checkpoint JSON
-  // store full PipelineDocument envelopes, not CPU parameter tables.
+  // project_file_version 0.6.0 before history is loaded. Root and checkpoint JSON
+  // store full PipelineDocument JSON from EncodePipelineRootState /
+  // EncodePipelineDocumentCheckpoint, not CPU parameter tables.
   constexpr static const char* commit_graph_table_query =
       "CREATE TABLE IF NOT EXISTS EditCommit ("
       "commit_hash VARCHAR PRIMARY KEY,"
