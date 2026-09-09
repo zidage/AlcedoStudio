@@ -42,7 +42,8 @@ class ViewportMapper {
 
   static auto ImageUvToWidgetPoint(const QPointF& uv, const ViewportWidgetInfo& widget_info,
                                    const ViewportImageInfo& image_info, float zoom,
-                                   const QVector2D& pan) -> std::optional<QPointF>;
+                                   const QVector2D& pan, bool clamp_uv = true)
+      -> std::optional<QPointF>;
 
   static auto ClampPanForZoom(const ViewportWidgetInfo& widget_info,
                               const ViewportImageInfo& image_info, float zoom,

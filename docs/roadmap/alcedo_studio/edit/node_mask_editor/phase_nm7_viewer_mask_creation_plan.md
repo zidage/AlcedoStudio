@@ -2,10 +2,10 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.4 complete; NM7.5–NM7.14 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.5 complete; NM7.6–NM7.14 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
-project/schema cutover, and NM7.4 canonical rasterization with regional Mix replay.
-Remaining sub-phases are unimplemented.
+project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, and NM7.5
+shared ReferenceSpace mapping with Brush placement. Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -909,6 +909,62 @@ and forward mapping of controls.
 
 **Exit:** normalized mapping error ≤ 1e-5 and item round-trip error ≤ 0.25 logical px over documented
 fixtures; move A→B→A recovers exact parameters and expected pixels.
+
+##### Phase NM7.5 completion record (2026-09-08)
+
+**Status:** complete — shared item/logical → photograph UV → `render_to_reference` mapping,
+Brush local/world placement, logical handle hit testing, and resize/DPR mapping identity.
+
+**Primary success call chain:**
+
+```text
+item/logical pointer (QQuickItem space)
+  -> ViewportMapper letterbox/zoom/pan (RoiFrame expands displayed UV through source ROI)
+  -> photograph UV * render_extent
+  -> ResolvedRenderGeometry::render_to_reference
+  -> ReferenceSpace pixels / normalized q
+  -> BrushLocalFromReference / BrushPlacementForReferenceDrag
+  -> ColorGradeNodeModel::SetBrushTranslation or BrushCanonicalSampler
+  -> regional Mix replay; MapReferenceToItem for control positions
+```
+
+**Primary failure call chain:**
+
+```text
+zero extents, noninvertible render_to_reference, unset displayed geometry,
+or press with photograph UV outside [0, 1]
+  -> MaskEditGeometry::MapItemToReference returns empty
+  -> no Mask press / no placement command
+  -> MappingChanged(resize, DPR, geometry) cancels unfinished input before a new mapping is used
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MaskReferenceMappingRoundTripsAcrossZoomPanAndDpr` | `MaskEditGeometryTest` | PASS |
+| `DetailPatchDoesNotChangeMaskReferenceSpace` | `MaskEditGeometryTest` | PASS |
+| `InvalidGeometryRejectsMaskPress` | `MaskEditGeometryTest` | PASS |
+| `BrushMoveThenDrawUsesTranslatedLocalCoordinates` | `BrushPlacementMappingTest` | PASS |
+| `RepeatedBrushMoveDoesNotBlurCoverage` | `BrushPlacementMappingTest` | PASS |
+| Logical handle radius constant across zoom | `MaskEditGeometryTest` | PASS |
+| Existing Brush replay/index/sampler | `BrushRegionalReplayTest`, `BrushCanonicalSamplerTest`, `BrushSpatialIndexTest` | PASS |
+| Crop overlay draft routing unchanged | `EditorGeometryOverlayDraftRoutingTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"`
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MaskEditGeometryTest --target BrushPlacementMappingTest`
+`ctest --test-dir build/debug --output-on-failure -R "MaskEditGeometryTest|BrushPlacementMappingTest"`
+`ctest --test-dir build/debug --output-on-failure -R "BrushRegionalReplayTest|BrushCanonicalSamplerTest|EditorGeometryOverlayDraftRoutingTest|BrushSpatialIndexTest"`
+
+Suite totals: `6/6` NM7.5 binaries PASS; `15/15` related Brush/overlay tests PASS.
+Date / working tree on `feature/mask-reference-mapping` (base `dab6a8e5`) / Windows MSVC `win_debug` / Qt 6.9.3 / CUDA Toolkit 12.8 (host mapping only; no GPU tests in this phase).
+
+**Checklist / exit condition:** required tests PASS. Normalized error ≤ 1e-5 and item round-trip ≤ 0.25 logical px on landscape/portrait, zoom/pan, DPR 1/1.25/1.5/2, and cropped/rotated fixtures. A→B→A restores translation, sample-body pointers, and Mix bytes. DetailPatch ROI overlay does not change FullFrame ReferenceSpace; Interactive `max_edge` does not redefine `full_reference_extent`.
+
+**LOC note (grill-code-review):** `mask_edit_geometry.hpp` 183 / `.cpp` 258, `brush_placement.hpp` 79, `mask_edit_geometry_test.cpp` 270, `brush_placement_mapping_test.cpp` 151, `editor_interaction_controller.cpp` 1027. Mapping math lives in `MaskEditGeometry`; the controller only stores displayed photograph geometry and routes. Do not add Mask business rules to the controller. No split required this phase.
+
+**Residual gaps:** QSG controls are NM7.6. Radial/Linear creation and existing-mask movement UI are NM7.7. Accumulating Brush paint/erase UI is NM7.8. Session does not yet publish live `ResolvedRenderGeometry` into `setDisplayedMaskGeometry` (NM7.9). Open-operation cancel on `MappingChanged` is NM7.12. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.6 — Implement retained QSG controls without affected-area highlighting
 

@@ -360,6 +360,16 @@ gtest_discover_tests(BrushRegionalReplayTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushRegionalReplayTest edit)
 
+add_executable(BrushPlacementMappingTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/brush_placement_mapping_test.cpp)
+target_include_directories(BrushPlacementMappingTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph ${ALCEDO_TEST_ROOT}/edit/mask)
+target_link_libraries(BrushPlacementMappingTest PRIVATE GTest::gtest_main EditGraph)
+gtest_discover_tests(BrushPlacementMappingTest
+  TEST_PREFIX "BrushPlacementMappingTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(BrushPlacementMappingTest edit)
+
 # Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
 add_executable(GraphImageCacheRetentionTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)
