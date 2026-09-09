@@ -82,8 +82,8 @@ namespace alcedo {
 /**
  * @brief Existing Radial: center, axes, rotation, feather handles, and iso-rho lines.
  *
- * Shows the base ellipse and distinct inner/outer feather contours. Coincident
- * rhos are drawn once. No ellipse fill.
+ * Shows the base ellipse (solid) and distinct inner/outer feather contours
+ * (dashed). Coincident rhos are drawn once. No ellipse fill.
  */
 [[nodiscard]] auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                                     const RadialMaskSource&    source,

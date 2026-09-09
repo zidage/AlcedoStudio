@@ -97,8 +97,8 @@ auto RadialFromCenterOut(Vector2 center_normalized, Vector2 current_normalized)
   source.center_y     = center_normalized.y;
   source.major_radius = std::fabs(current_normalized.x - center_normalized.x);
   source.minor_radius = std::fabs(current_normalized.y - center_normalized.y);
-  source.rotation     = 0.0f;
-  source.inner_feather = 0.0f;
+  source.rotation      = 0.0f;
+  source.inner_feather = kAnalyticCreationDefaultInnerFeather;
   source.outer_feather = 0.0f;
   return source;
 }

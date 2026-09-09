@@ -281,20 +281,23 @@ TEST_F(EditorNodesPanelQmlTest, TwoVersionsKeepSeparateLayoutValues) {
   QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
 
   const QString first_version = nodes->version_id();
-  store->SetNodePosition(NodeId{"grade.primary"}, QPointF(15, 25));
+  // Custom positions sit below the default backbone stack: overlap resolution
+  // treats any y inside a predecessor's footprint as illegal and pushes the
+  // node down, which would destroy the stored value this test round-trips.
+  store->SetNodePosition(NodeId{"grade.primary"}, QPointF(15, 400));
   store->SetDrawerOpen(NodeId{"grade.primary"}, false);
 
   backend_.CheckoutVersion(rail_harness::StableId(2));
   ProcessEvents();
   QTRY_VERIFY_WITH_TIMEOUT(nodes->version_id() != first_version, 2000);
-  EXPECT_NE(store->NodePosition(NodeId{"grade.primary"}), QPointF(15, 25));
+  EXPECT_NE(store->NodePosition(NodeId{"grade.primary"}), QPointF(15, 400));
   EXPECT_TRUE(store->DrawerOpen(NodeId{"grade.primary"}));
-  store->SetNodePosition(NodeId{"grade.primary"}, QPointF(70, 80));
+  store->SetNodePosition(NodeId{"grade.primary"}, QPointF(70, 460));
 
   backend_.CheckoutVersion(rail_harness::StableId(1));
   ProcessEvents();
   QTRY_VERIFY_WITH_TIMEOUT(nodes->version_id() == first_version, 2000);
-  EXPECT_EQ(store->NodePosition(NodeId{"grade.primary"}), QPointF(15, 25));
+  EXPECT_EQ(store->NodePosition(NodeId{"grade.primary"}), QPointF(15, 400));
   EXPECT_FALSE(store->DrawerOpen(NodeId{"grade.primary"}));
 }
 
@@ -668,6 +671,42 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowSelectionSelectsItsOwningColorGrade) {
   Click(window_, row, QPointF(row->width() / 4.0, row->height() / 2.0));
 
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGrowthShiftsFollowingNodesDownKeepingRowsClickable) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"drt"}) != nullptr, 2000);
+  auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  auto* drt_item   = adapter->NodeFor(NodeId{"drt"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  ASSERT_NE(drt_item, nullptr);
+  const qreal grade_height_without_masks = grade_item->height();
+  ASSERT_GT(drt_item->y(), grade_item->y());
+
+  // Masks arrive after the initial layout, mirroring a Mask creation settle.
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.two"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.three"}, RadialMaskSource{}));
+
+  const qreal row_height = AppTheme::Instance().graphMaskRowHeight();
+  QTRY_VERIFY_WITH_TIMEOUT(grade_item->height() >= grade_height_without_masks + 3 * row_height - 0.5,
+                           2000);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      grade_item->findChildren<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow")).size() == 3,
+      2000);
+
+  // The following node must move below the grown drawer instead of covering it.
+  EXPECT_GE(drt_item->y(), grade_item->y() + grade_item->height());
+
+  const auto rows = grade_item->findChildren<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  QSignalSpy selected_spy(adapter, &AlcedoQanGraph::MaskRowSelected);
+  Click(window_, rows.constLast());
+  EXPECT_GE(selected_spy.count(), 1);
 }
 
 TEST_F(EditorNodesPanelQmlTest, OrdinaryDraftEditsDoNotReplaceQanTopology) {

@@ -1011,9 +1011,14 @@ TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
   const auto nodes     = ReadQmlFile("EditorNodesPanel.qml");
   ASSERT_FALSE(workspace.isEmpty());
   ASSERT_FALSE(nodes.isEmpty());
-  EXPECT_NE(workspace.indexOf(QStringLiteral("maskControlsActive")), -1);
+  // Delete is Mask-scoped only while a draw is open or a Mask is selected:
+  // an open draw cancels, a selected Mask is removed, and only otherwise does
+  // the Nodes panel fall through to deleting the selected Color Grade.
+  EXPECT_NE(workspace.indexOf(QStringLiteral("maskCreation.creating")), -1);
+  EXPECT_NE(workspace.indexOf(QStringLiteral("selectedMaskId")), -1);
   EXPECT_NE(workspace.indexOf(QStringLiteral("removeSelectedMask")), -1);
-  EXPECT_NE(nodes.indexOf(QStringLiteral("maskControlsActive")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("maskCreation.creating")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("selectedMaskId")), -1);
   EXPECT_NE(nodes.indexOf(QStringLiteral("removeSelectedMask")), -1);
   EXPECT_NE(nodes.indexOf(QStringLiteral("deleteSelectedColorGrade")), -1);
 }

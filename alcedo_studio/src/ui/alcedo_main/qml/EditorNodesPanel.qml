@@ -237,7 +237,12 @@ Item {
             if (root.renameVisible) {
                 return
             }
-            if (root.maskCreation && root.maskCreation.maskControlsActive) {
+            // Mask-scoped Delete wins over node deletion while a Mask draw or
+            // Mask selection is active.
+            if (root.maskCreation && root.maskCreation.creating) {
+                root.maskCreation.cancel()
+            } else if (root.maskCreation
+                       && String(root.maskCreation.selectedMaskId || "").length > 0) {
                 root.maskCreation.removeSelectedMask()
             } else {
                 root.deleteSelectedColorGrade()

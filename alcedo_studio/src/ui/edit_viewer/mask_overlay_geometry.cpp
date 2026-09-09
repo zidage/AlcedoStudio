@@ -197,6 +197,48 @@ void AppendPolylineStroke(std::vector<MaskOverlayVertex>& triangles,
   }
 }
 
+// Dashes follow the polyline arc length, so the dash phase stays continuous
+// across the adaptive tessellation vertices instead of restarting per segment.
+void AppendDashedPolylineStroke(std::vector<MaskOverlayVertex>& triangles,
+                                const std::vector<QPointF>& points, bool closed, float width,
+                                float aa, const QColor& color, const QRectF& clip, float dash_len,
+                                float gap_len) {
+  if (points.size() < 2 || dash_len <= 0.0f || gap_len < 0.0f) {
+    return;
+  }
+  const std::size_t count = closed ? points.size() : points.size() - 1;
+  double            phase = 0.0;
+  bool              draw  = true;
+  for (std::size_t i = 0; i < count; ++i) {
+    const QPointF& a  = points[i];
+    const QPointF& b  = points[(i + 1) % points.size()];
+    const double   dx = b.x() - a.x();
+    const double   dy = b.y() - a.y();
+    const double   len = std::hypot(dx, dy);
+    if (len < kMinLength) {
+      continue;
+    }
+    const double ux = dx / len;
+    const double uy = dy / len;
+    double       t  = 0.0;
+    while (t < len - 1.0e-9) {
+      const double period = draw ? static_cast<double>(dash_len) : static_cast<double>(gap_len);
+      const double step   = std::min(len - t, period - phase);
+      if (draw && step > 1.0e-9) {
+        const QPointF p0(a.x() + ux * t, a.y() + uy * t);
+        const QPointF p1(a.x() + ux * (t + step), a.y() + uy * (t + step));
+        AppendClippedStroke(triangles, p0, p1, width, aa, color, clip, /*round_caps=*/false);
+      }
+      t += step;
+      phase += step;
+      if (phase >= period - 1.0e-9) {
+        phase = 0.0;
+        draw  = !draw;
+      }
+    }
+  }
+}
+
 void AppendFilledDisc(std::vector<MaskOverlayVertex>& triangles, const QPointF& center,
                       float radius, float aa, const QColor& color, const QRectF& clip) {
   if (radius <= 0.0f || !IsFinitePoint(center) ||
@@ -340,12 +382,22 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
   };
 
   for (const auto& contour : display.selected_contours) {
-    if (contour.size() < 2) {
+    if (contour.points.size() < 2) {
       continue;
     }
-    const std::size_t count = contour.size();
+    const std::size_t count = contour.points.size();
+    if (contour.dashed) {
+      AppendDashedPolylineStroke(scene.selected_guides, contour.points, /*closed=*/true,
+                                 guide_outer, aa, style.control_fill, clip,
+                                 kMaskOverlayDashLengthLogicalPx, kMaskOverlayDashGapLogicalPx);
+      AppendDashedPolylineStroke(scene.selected_guides, contour.points, /*closed=*/true,
+                                 guide_inner, aa, style.control_outline, clip,
+                                 kMaskOverlayDashLengthLogicalPx, kMaskOverlayDashGapLogicalPx);
+      scene.selected_guide_segment_count += static_cast<int>(count);
+      continue;
+    }
     for (std::size_t i = 0; i < count; ++i) {
-      append_dual(scene.selected_guides, contour[i], contour[(i + 1) % contour.size()],
+      append_dual(scene.selected_guides, contour.points[i], contour.points[(i + 1) % count],
                   guide_outer, guide_inner);
       ++scene.selected_guide_segment_count;
     }

@@ -42,6 +42,10 @@ inline constexpr float kMaskOverlayGripSpanT1 = 0.62f;
 inline constexpr float kMaskOverlayMaxChordDeviationLogicalPx = 0.25f;
 /// Upper bound on Radial outline vertices after adaptive subdivision.
 inline constexpr int kMaskOverlayMaxEllipseVertices = 256;
+/// Dash on-length for feather-boundary contours, in logical pixels.
+inline constexpr float kMaskOverlayDashLengthLogicalPx = 6.0f;
+/// Dash off-length for feather-boundary contours, in logical pixels.
+inline constexpr float kMaskOverlayDashGapLogicalPx = 4.0f;
 
 /**
  * @brief Published Mask overlay mode. Creating may emit temporary path/outline guides.
@@ -128,6 +132,18 @@ struct MaskOverlayStyle {
 };
 
 /**
+ * @brief One closed Radial iso-rho contour in item/logical coordinates.
+ *
+ * @p dashed marks feather boundaries (inner/outer); the base rho = 1 ellipse is
+ * solid. Dashed contours use @ref kMaskOverlayDashLengthLogicalPx and
+ * @ref kMaskOverlayDashGapLogicalPx with a continuous arc-length phase.
+ */
+struct MaskOverlayContour {
+  std::vector<QPointF> points;
+  bool                 dashed = false;
+};
+
+/**
  * @brief GUI-thread Mask overlay publication. Item coordinates only.
  *
  * Built from current input and read-only mapped control positions. The scene
@@ -149,7 +165,7 @@ struct MaskOverlayDisplay {
   std::vector<QPointF> creation_outline;
   std::vector<std::pair<QPointF, QPointF>> creation_guides;
   /// Selected Radial iso-rho contours. Closed polylines; coincident rhos appear once.
-  std::vector<std::vector<QPointF>> selected_contours;
+  std::vector<MaskOverlayContour> selected_contours;
   /// Selected Gradient loci and other open analytic guides. Not a closed polygon.
   std::vector<MaskOverlayGuide> selected_guides;
   /// Short Geometry-crop edge grips on visible Gradient guides.

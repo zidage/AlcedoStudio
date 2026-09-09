@@ -569,7 +569,15 @@ Item {
                                 editorInteraction.resetView()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Delete) {
-                                if (root.maskCreation && root.maskCreation.maskControlsActive) {
+                                // Mask-scoped Delete: cancel an open draw, else
+                                // remove the selected Mask. Only while the Mask
+                                // tool owns the session.
+                                if (root.maskCreation && root.maskCreation.creating) {
+                                    root.maskCreation.cancel()
+                                    event.accepted = true
+                                } else if (root.maskCreation
+                                           && String(root.maskCreation.selectedMaskId
+                                                     || "").length > 0) {
                                     root.maskCreation.removeSelectedMask()
                                     event.accepted = true
                                 }

@@ -203,7 +203,8 @@ void PopulateRadialHandles(MaskOverlayDisplay& display, const MaskEditViewMappin
 }
 
 void AppendRadialContour(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
-                         const RadialMaskSource& source, float rho, const QRectF& clip) {
+                         const RadialMaskSource& source, float rho, bool dashed,
+                         const QRectF& clip) {
   if (!std::isfinite(rho) || rho < kMinRadius) {
     return;
   }
@@ -211,7 +212,7 @@ void AppendRadialContour(MaskOverlayDisplay& display, const MaskEditViewMapping&
   if (polyline.size() < 3) {
     return;
   }
-  display.selected_contours.push_back(std::move(polyline));
+  display.selected_contours.push_back(MaskOverlayContour{std::move(polyline), dashed});
 }
 
 void PopulateRadialContours(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
@@ -231,7 +232,9 @@ void PopulateRadialContours(MaskOverlayDisplay& display, const MaskEditViewMappi
       continue;
     }
     published.push_back(rho);
-    AppendRadialContour(display, mapping, source, rho, clip);
+    // Feather boundaries are dashed; the base rho = 1 ellipse stays solid.
+    AppendRadialContour(display, mapping, source, rho, std::fabs(rho - 1.0f) > kRhoCoincide,
+                        clip);
   }
 }
 

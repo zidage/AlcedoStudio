@@ -174,6 +174,20 @@ class EditorNodeLayoutStore : public QObject {
   void AssignStagingPosition(const NodeId& node_id, const EditorNodeGraphSnapshot& snapshot);
 
   /**
+   * @brief Push nodes down when a predecessor's current height would cover them.
+   *
+   * Walks @p snapshot in backbone order. A node whose stored y sits above the
+   * previous node's footprint (stored y + current height + vertical gap) is
+   * shifted down to that footprint. Heights come from DefaultHeight with the
+   * snapshot's Mask counts and the stored drawer state, so Mask additions and
+   * drawer folds move following nodes out of the way instead of letting later
+   * siblings paint over the drawer rows. The shift is push-down-only: extra
+   * user spacing is preserved, and nodes on a different column (x ranges do
+   * not intersect) are never constrained. Existing stored x values are kept.
+   */
+  void ResolveVerticalOverlaps(const EditorNodeGraphSnapshot& snapshot);
+
+  /**
    * @brief QML entry that copies defaults from an EditorNodeController snapshot.
    * @param controller EditorNodeController, or ignored when the type does not match.
    */
@@ -192,6 +206,15 @@ class EditorNodeLayoutStore : public QObject {
 
  signals:
   void LayoutChanged();
+  /**
+   * @brief Emitted only when a stored value that changes a node's height
+   *        (currently the drawer open flag) is written.
+   *
+   * Position and view writes do not raise this: an explicit SetNodePosition
+   * (user drag) stays authoritative and must not be rewritten by overlap
+   * resolution. Mask-count changes arrive through projection applies instead.
+   */
+  void NodeHeightChanged();
 
  private:
   [[nodiscard]] auto      MutableCurrent() -> EditorNodeLayoutValue&;

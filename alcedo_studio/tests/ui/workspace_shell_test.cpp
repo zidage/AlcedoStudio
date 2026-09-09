@@ -1099,7 +1099,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   const auto pending = loaded->host.editor_session_service()->PeekPendingInput();
   const auto* exposure = alcedo::FindPendingField(pending, "exposure");
   ASSERT_NE(exposure, nullptr);
-  EXPECT_NE(exposure->params_json.find("0.30"), std::string::npos);
+  EXPECT_EQ(alcedo::PendingScalarValue(*exposure), 0.30f);
   EXPECT_EQ(composed_before_drag, viewport->presentedFrameCount())
       << "queued input must not apply or render until the owner consumes it";
 

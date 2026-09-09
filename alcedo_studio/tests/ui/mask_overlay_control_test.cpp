@@ -478,12 +478,47 @@ TEST(MaskOverlayControlTest, CoincidentRadialBoundariesKeepFeatherControlsReacha
   source.outer_feather     = 0.0f;
   const auto display =
       MakeRadialExistingOverlayDisplay(mapping, source, DefaultMaskOverlayStyle(), {});
-  EXPECT_EQ(display.selected_contours.size(), 1u);
+  ASSERT_EQ(display.selected_contours.size(), 1u);
+  EXPECT_FALSE(display.selected_contours.front().dashed);
   EXPECT_EQ(HandleById(display, MaskOverlayHandleId::RadialInnerFeather), nullptr);
   EXPECT_EQ(HandleById(display, MaskOverlayHandleId::RadialOuterFeather), nullptr);
   EXPECT_NE(HandleById(display, MaskOverlayHandleId::RadialMajor), nullptr);
   const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
   EXPECT_EQ(scene.closed_polygon_edge_count, 0);
+  EXPECT_GT(scene.selected_guide_segment_count, 0);
+}
+
+TEST(MaskOverlayControlTest, RadialFeatherContoursRenderDashedWithArcLengthGaps) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  const auto source  = SampleRadial();
+  const auto display =
+      MakeRadialExistingOverlayDisplay(mapping, source, DefaultMaskOverlayStyle(), {});
+  ASSERT_EQ(display.selected_contours.size(), 3u);
+  std::size_t dashed_count = 0;
+  for (const auto& contour : display.selected_contours) {
+    dashed_count += contour.dashed ? 1u : 0u;
+  }
+  EXPECT_EQ(dashed_count, 2u);
+
+  // Densely sample the inner feather ellipse: a dashed stroke must leave some
+  // samples in gaps while others land on dash segments.
+  const auto scene          = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  const float inner_rho     = 1.0f - source.inner_feather;
+  int         covered_count = 0;
+  int         gap_count     = 0;
+  constexpr float kTwoPi    = 6.28318530718f;
+  for (int i = 0; i < 720; ++i) {
+    const float   theta = (static_cast<float>(i) / 720.0f) * kTwoPi;
+    const QPointF sample =
+        IndependentMapNormalized(mapping, IndependentRadialNormalized(source, inner_rho, theta));
+    if (VerticesCoverPoint(scene.selected_guides, sample)) {
+      ++covered_count;
+    } else {
+      ++gap_count;
+    }
+  }
+  EXPECT_GT(covered_count, 0);
+  EXPECT_GT(gap_count, 0);
   EXPECT_GT(scene.selected_guide_segment_count, 0);
 }
 

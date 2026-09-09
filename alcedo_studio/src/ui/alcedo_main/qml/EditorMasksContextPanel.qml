@@ -91,10 +91,10 @@ Item {
                 from: 0.1; to: 100; stepSize: 0.1; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation ? root.maskCreation.majorRadiusPercent : 0
-                onBegin: root.maskCreation.beginMajorRadius()
+                onBegin: function () { root.maskCreation.beginMajorRadius() }
                 onUpdate: function (v) { root.maskCreation.updateMajorRadius(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginMajorRadius()
                     root.maskCreation.updateMajorRadius(50)
                     root.maskCreation.finishAnalyticControl()
@@ -117,10 +117,10 @@ Item {
                 from: 0.1; to: 100; stepSize: 0.1; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation ? root.maskCreation.minorRadiusPercent : 0
-                onBegin: root.maskCreation.beginMinorRadius()
+                onBegin: function () { root.maskCreation.beginMinorRadius() }
                 onUpdate: function (v) { root.maskCreation.updateMinorRadius(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginMinorRadius()
                     root.maskCreation.updateMinorRadius(50)
                     root.maskCreation.finishAnalyticControl()
@@ -143,10 +143,10 @@ Item {
                 from: -180; to: 180; stepSize: 0.5; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation ? root.maskCreation.rotationDegrees : 0
-                onBegin: root.maskCreation.beginRotation()
+                onBegin: function () { root.maskCreation.beginRotation() }
                 onUpdate: function (v) { root.maskCreation.updateRotation(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginRotation()
                     root.maskCreation.updateRotation(0)
                     root.maskCreation.finishAnalyticControl()
@@ -169,10 +169,10 @@ Item {
                 from: 0; to: 100; stepSize: 1; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation ? root.maskCreation.innerFeatherPercent : 0
-                onBegin: root.maskCreation.beginInnerFeather()
+                onBegin: function () { root.maskCreation.beginInnerFeather() }
                 onUpdate: function (v) { root.maskCreation.updateInnerFeather(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginInnerFeather()
                     root.maskCreation.updateInnerFeather(0)
                     root.maskCreation.finishAnalyticControl()
@@ -195,10 +195,10 @@ Item {
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation
                                ? Math.min(400, root.maskCreation.outerFeatherPercent) : 0
-                onBegin: root.maskCreation.beginOuterFeather()
+                onBegin: function () { root.maskCreation.beginOuterFeather() }
                 onUpdate: function (v) { root.maskCreation.updateOuterFeather(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginOuterFeather()
                     root.maskCreation.updateOuterFeather(0)
                     root.maskCreation.finishAnalyticControl()
@@ -220,10 +220,10 @@ Item {
                 from: 0.1; to: 200; stepSize: 0.1; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 externalValue: root.maskCreation ? root.maskCreation.transitionPercent : 0
-                onBegin: root.maskCreation.beginTransition()
+                onBegin: function () { root.maskCreation.beginTransition() }
                 onUpdate: function (v) { root.maskCreation.updateTransition(v) }
-                onFinish: root.maskCreation.finishAnalyticControl()
-                onReset: {
+                onFinish: function () { root.maskCreation.finishAnalyticControl() }
+                onReset: function () {
                     root.maskCreation.beginTransition()
                     root.maskCreation.updateTransition(20)
                     root.maskCreation.finishAnalyticControl()

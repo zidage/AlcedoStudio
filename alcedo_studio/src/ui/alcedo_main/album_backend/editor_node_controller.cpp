@@ -498,6 +498,32 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
   return true;
 }
 
+void EditorNodeController::ApplyLayoutToAdapter() {
+  auto* layout = layout_store_.data();
+  if (layout == nullptr || graph_adapter_ == nullptr || !HasActiveGraph() || applying_layout_) {
+    return;
+  }
+  applying_layout_ = true;
+  const auto finish = qScopeGuard([this] { applying_layout_ = false; });
+  if (draft_ != nullptr) {
+    const auto view =
+        draft_->CurrentSnapshot(session_generation_, projection_revision_, topology_revision_);
+    layout->EnsureDefaultPositions(view);
+    layout->ResolveVerticalOverlaps(view);
+  } else {
+    layout->EnsureDefaultPositions(snapshot_);
+    layout->ResolveVerticalOverlaps(snapshot_);
+  }
+  for (const auto& node : ActiveNodes()) {
+    const auto id = NodeIdToQString(node.node_id);
+    if (layout->hasNodePosition(id)) {
+      const auto pos = layout->nodePosition(id);
+      graph_adapter_->setNodePosition(id, pos.x(), pos.y());
+    }
+    graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
+  }
+}
+
 auto EditorNodeController::graph_adapter_object() const -> QObject* {
   return graph_adapter_.data();
 }
@@ -534,7 +560,16 @@ void EditorNodeController::set_layout_store(QObject* store) {
   if (layout_store_.data() == layout) {
     return;
   }
-  layout_store_ = layout;
+  if (layout_store_ != nullptr) {
+    disconnect(layout_store_.data(), nullptr, this, nullptr);
+  }
+  layout_store_connection_ = {};
+  layout_store_            = layout;
+  if (layout_store_ != nullptr) {
+    layout_store_connection_ =
+        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this,
+                &EditorNodeController::ApplyLayoutToAdapter);
+  }
   emit LayoutStoreChanged();
   SyncLayoutKey();
 }
@@ -587,21 +622,7 @@ void EditorNodeController::ApplyBoundGraph() {
     return;
   }
   ++completed_projection_apply_count_;
-  auto* layout = layout_store_.data();
-  if (layout != nullptr) {
-    layout->EnsureDefaultPositions(draft_ == nullptr ? snapshot_
-                                                     : draft_->CurrentSnapshot(session_generation_,
-                                                                               projection_revision_,
-                                                                               topology_revision_));
-    for (const auto& node : ActiveNodes()) {
-      const auto id = NodeIdToQString(node.node_id);
-      if (layout->hasNodePosition(id)) {
-        const auto pos = layout->nodePosition(id);
-        graph_adapter_->setNodePosition(id, pos.x(), pos.y());
-      }
-      graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
-    }
-  }
+  ApplyLayoutToAdapter();
   ApplyLiveSelectionToAdapter();
 }
 

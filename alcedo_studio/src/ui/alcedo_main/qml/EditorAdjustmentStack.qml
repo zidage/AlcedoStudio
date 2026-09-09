@@ -153,13 +153,15 @@ Item {
             return
         if (panel === "masks" && !root.maskPanelAvailable)
             return
-        if (root.activePanel === "masks" && panel !== "masks" && root.maskCreation)
+        // Leaving any panel while a Mask draw or edit is open settles it;
+        // finishBody is a no-op when the Mask tool is idle.
+        if (panel !== root.activePanel && root.maskCreation)
             root.maskCreation.finishBody()
         editorSession.activeAdjustmentPanel = panel
     }
 
     function confirmMaskEditAndReturn() {
-        if (root.activePanel !== "masks" || !root.maskCreation)
+        if (!root.maskCreation || !root.maskCreation.maskControlsActive)
             return false
         root.maskCreation.finishBody()
         return true
