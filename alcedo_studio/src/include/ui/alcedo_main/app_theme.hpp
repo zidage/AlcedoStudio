@@ -171,6 +171,18 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
   Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
   Q_PROPERTY(int graphSelectionOutlineWidth READ graphSelectionOutlineWidth CONSTANT)
+  // Mask overlay: two-layer control stroke, no coverage-area color. Sizes are
+  // logical pixels and stay constant at any zoom or DPR.
+  Q_PROPERTY(QColor maskOverlayControlColor READ maskOverlayControlColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor maskOverlayControlOutlineColor READ maskOverlayControlOutlineColor NOTIFY
+                 ThemeChanged)
+  Q_PROPERTY(QColor maskOverlayInactiveColor READ maskOverlayInactiveColor NOTIFY ThemeChanged)
+  Q_PROPERTY(int maskOverlayHandleRadius READ maskOverlayHandleRadius CONSTANT)
+  Q_PROPERTY(qreal maskOverlayHandleOutlineWidth READ maskOverlayHandleOutlineWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayStrokeWidth READ maskOverlayStrokeWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayAntialiasWidth READ maskOverlayAntialiasWidth CONSTANT)
+  Q_PROPERTY(int maskOverlayHandleHitRadius READ maskOverlayHandleHitRadius CONSTANT)
+  Q_PROPERTY(int maskOverlayRotateHandleOffset READ maskOverlayRotateHandleOffset CONSTANT)
 
  public:
   enum class FontRole : int {
@@ -343,6 +355,15 @@ class AppTheme final : public QObject {
   auto graphPortHitSize() const -> int;
   auto graphEdgeWidth() const -> int;
   auto graphSelectionOutlineWidth() const -> int;
+  auto maskOverlayControlColor() const -> QColor;
+  auto maskOverlayControlOutlineColor() const -> QColor;
+  auto maskOverlayInactiveColor() const -> QColor;
+  auto maskOverlayHandleRadius() const -> int;
+  auto maskOverlayHandleOutlineWidth() const -> qreal;
+  auto maskOverlayStrokeWidth() const -> qreal;
+  auto maskOverlayAntialiasWidth() const -> qreal;
+  auto maskOverlayHandleHitRadius() const -> int;
+  auto maskOverlayRotateHandleOffset() const -> int;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

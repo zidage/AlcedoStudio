@@ -19,6 +19,8 @@ def_library(EditorViewerLogic
         "${ALCEDO_UI_ROOT}/edit_viewer/edit_viewer_overlay_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/viewport_mapper.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/mask_edit_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_layout.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/view_transform_controller.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_interaction_controller.cpp"
@@ -26,6 +28,8 @@ def_library(EditorViewerLogic
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewer_state.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewport_mapper.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_edit_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_layout.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_geometry.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/view_transform_controller.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_interaction_controller.hpp"
@@ -34,6 +38,7 @@ def_library(EditorViewerLogic
         Qt6::Core
         Qt6::Gui
         opencv_core
+        EditMaskStore
 )
 
 def_library(BackgroundTaskController

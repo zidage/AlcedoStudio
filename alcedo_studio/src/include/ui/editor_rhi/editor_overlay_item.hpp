@@ -4,18 +4,20 @@
 
 #pragma once
 
+#include <QColor>
 #include <QPointF>
 #include <QQuickItem>
 
 #include <vector>
 
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
+#include "ui/edit_viewer/mask_overlay_geometry.hpp"
 
 namespace alcedo::editor_rhi {
 
 class EditorInteractionController;
 
-// Pure geometry description used by both the QSG item and golden tests.
+// Pure geometry description used by both the QSG item and overlay tests.
 // Vertices are in item/logical coordinates (not physical pixels).
 // All stroke content is triangle lists so D3D11 (no reliable lineWidth) matches
 // OpenGL and the legacy QPainter overlay appearance.
@@ -54,8 +56,9 @@ struct OverlaySceneGeometry {
 auto BuildOverlaySceneGeometry(const CropOverlayWidgetGeometry& geometry,
                                bool crop_tool_visible) -> OverlaySceneGeometry;
 
-// QQuickItem that renders crop mask/grid/handles and detail-ROI bounds as
-// retained QSGGeometryNode content. Photograph pixels stay in EditorViewportItem.
+// QQuickItem that renders crop mask/grid/handles, detail-ROI bounds, and Mask
+// controls as retained QSGGeometryNode content. Photograph pixels stay in
+// EditorViewportItem. The overlay accepts no pointer grab.
 class EditorOverlayItem : public QQuickItem {
   Q_OBJECT
   Q_PROPERTY(EditorInteractionController* interaction READ interaction WRITE setInteraction NOTIFY
@@ -65,6 +68,22 @@ class EditorOverlayItem : public QQuickItem {
   // Diagnostics for tests: rebuilds coalesce; paint updates vertices in place.
   Q_PROPERTY(int geometryRebuildCount READ geometryRebuildCount NOTIFY GeometryRevisionChanged)
   Q_PROPERTY(int paintNodeCreateCount READ paintNodeCreateCount NOTIFY GeometryRevisionChanged)
+  Q_PROPERTY(int maskPaintNodeCreateCount READ maskPaintNodeCreateCount NOTIFY
+                 MaskOverlayRevisionChanged)
+  Q_PROPERTY(QColor maskOverlayControlColor READ maskOverlayControlColor WRITE
+                 setMaskOverlayControlColor NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(QColor maskOverlayControlOutlineColor READ maskOverlayControlOutlineColor WRITE
+                 setMaskOverlayControlOutlineColor NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(QColor maskOverlayInactiveColor READ maskOverlayInactiveColor WRITE
+                 setMaskOverlayInactiveColor NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayHandleRadius READ maskOverlayHandleRadius WRITE
+                 setMaskOverlayHandleRadius NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayHandleOutlineWidth READ maskOverlayHandleOutlineWidth WRITE
+                 setMaskOverlayHandleOutlineWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayStrokeWidth READ maskOverlayStrokeWidth WRITE
+                 setMaskOverlayStrokeWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayAntialiasWidth READ maskOverlayAntialiasWidth WRITE
+                 setMaskOverlayAntialiasWidth NOTIFY MaskOverlayStyleChanged)
 
  public:
   explicit EditorOverlayItem(QQuickItem* parent = nullptr);
@@ -76,11 +95,60 @@ class EditorOverlayItem : public QQuickItem {
   [[nodiscard]] auto geometryRevision() const -> int { return geometry_revision_; }
   [[nodiscard]] auto geometryRebuildCount() const -> int { return geometry_rebuild_count_; }
   [[nodiscard]] auto paintNodeCreateCount() const -> int { return paint_node_create_count_; }
+  [[nodiscard]] auto maskPaintNodeCreateCount() const -> int {
+    return mask_paint_node_create_count_;
+  }
 
-  // Test access: last built scene geometry after a sync.
+  [[nodiscard]] auto maskOverlayControlColor() const -> QColor {
+    return mask_style_.control_fill;
+  }
+  void setMaskOverlayControlColor(const QColor& color);
+  [[nodiscard]] auto maskOverlayControlOutlineColor() const -> QColor {
+    return mask_style_.control_outline;
+  }
+  void setMaskOverlayControlOutlineColor(const QColor& color);
+  [[nodiscard]] auto maskOverlayInactiveColor() const -> QColor { return mask_style_.inactive; }
+  void setMaskOverlayInactiveColor(const QColor& color);
+  [[nodiscard]] auto maskOverlayHandleRadius() const -> qreal {
+    return static_cast<qreal>(mask_style_.handle_radius_logical_px);
+  }
+  void setMaskOverlayHandleRadius(qreal radius);
+  [[nodiscard]] auto maskOverlayHandleOutlineWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.handle_outline_width_logical_px);
+  }
+  void setMaskOverlayHandleOutlineWidth(qreal width);
+  [[nodiscard]] auto maskOverlayStrokeWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.stroke_width_logical_px);
+  }
+  void setMaskOverlayStrokeWidth(qreal width);
+  [[nodiscard]] auto maskOverlayAntialiasWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.antialias_width_logical_px);
+  }
+  void setMaskOverlayAntialiasWidth(qreal width);
+
+  // Test access: last built crop scene geometry after a sync.
   [[nodiscard]] auto lastSceneGeometry() const -> const OverlaySceneGeometry& {
     return last_scene_geometry_;
   }
+
+  /**
+   * @brief Publish mapped Mask controls for the next scene-graph frame.
+   *
+   * @param display Item-space handles and optional creation guides. Hidden
+   *        clears Mask overlay nodes. Does not lock the pipeline or read
+   *        document/cache state.
+   *
+   * Thread: GUI. Schedules @c update(). @c updatePaintNode copies the derived
+   * triangles while Qt blocks the GUI thread.
+   */
+  void setMaskOverlayDisplay(MaskOverlayDisplay display);
+  [[nodiscard]] auto maskOverlayDisplay() const -> const MaskOverlayDisplay& {
+    return mask_display_;
+  }
+  [[nodiscard]] auto lastMaskSceneGeometry() const -> const MaskOverlaySceneGeometry& {
+    return last_mask_scene_geometry_;
+  }
+  [[nodiscard]] auto maskOverlayStyle() const -> const MaskOverlayStyle& { return mask_style_; }
 
   // Force a rebuild from the current interaction snapshot (also used by tests).
   Q_INVOKABLE void refreshFromInteraction();
@@ -88,6 +156,8 @@ class EditorOverlayItem : public QQuickItem {
  signals:
   void InteractionChanged();
   void GeometryRevisionChanged();
+  void MaskOverlayRevisionChanged();
+  void MaskOverlayStyleChanged();
 
  protected:
   auto updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) -> QSGNode* override;
@@ -97,14 +167,19 @@ class EditorOverlayItem : public QQuickItem {
   struct OverlayRootNode;
   void scheduleRebuildFromInteraction();
   void rebuildSceneGeometry();
+  void rebuildMaskSceneGeometry();
   void bindInteraction(EditorInteractionController* controller);
   void onInteractionOverlayChanged();
 
   EditorInteractionController* interaction_ = nullptr;
   OverlaySceneGeometry last_scene_geometry_{};
+  MaskOverlayDisplay mask_display_{};
+  MaskOverlayStyle mask_style_ = DefaultMaskOverlayStyle();
+  MaskOverlaySceneGeometry last_mask_scene_geometry_{};
   int geometry_revision_ = 0;
   int geometry_rebuild_count_ = 0;
   int paint_node_create_count_ = 0;
+  int mask_paint_node_create_count_ = 0;
   bool geometry_dirty_ = true;
   bool rebuild_scheduled_ = false;
 };

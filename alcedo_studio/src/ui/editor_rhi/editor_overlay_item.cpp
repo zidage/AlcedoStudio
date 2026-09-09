@@ -7,6 +7,9 @@
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
 #include <QMetaObject>
+#include <QSGGeometry>
+#include <QSGGeometryNode>
+#include <QSGNode>
 #include <QSGVertexColorMaterial>
 
 #include <algorithm>
@@ -14,6 +17,7 @@
 #include <utility>
 
 #include "ui/edit_viewer/crop_geometry.hpp"
+#include "ui/edit_viewer/mask_overlay_geometry.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -304,6 +308,48 @@ void UpsertTriangleNode(QSGNode* root, QSGGeometryNode*& slot, const std::vector
   slot->markDirty(QSGNode::DirtyGeometry);
 }
 
+void FillPremultipliedGeometry(QSGGeometry* geometry,
+                               const std::vector<alcedo::MaskOverlayVertex>& points) {
+  geometry->allocate(static_cast<int>(points.size()));
+  geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+  auto* vertices = geometry->vertexDataAsColoredPoint2D();
+  for (size_t i = 0; i < points.size(); ++i) {
+    vertices[i].set(points[i].x, points[i].y, points[i].r, points[i].g, points[i].b, points[i].a);
+  }
+  geometry->markVertexDataDirty();
+}
+
+void UpsertPremultipliedTriangleNode(QSGNode* root, QSGGeometryNode*& slot,
+                                     const std::vector<alcedo::MaskOverlayVertex>& points,
+                                     int& create_count) {
+  if (points.empty()) {
+    if (slot) {
+      slot->setFlag(QSGNode::OwnedByParent, false);
+      root->removeChildNode(slot);
+      delete slot;
+      slot = nullptr;
+    }
+    return;
+  }
+
+  if (!slot) {
+    slot = new QSGGeometryNode;
+    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(),
+                                     static_cast<int>(points.size()));
+    geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+    slot->setGeometry(geometry);
+    slot->setFlag(QSGNode::OwnsGeometry);
+    auto* material = new QSGVertexColorMaterial;
+    slot->setMaterial(material);
+    slot->setFlag(QSGNode::OwnsMaterial);
+    root->appendChildNode(slot);
+    ++create_count;
+  }
+
+  FillPremultipliedGeometry(slot->geometry(), points);
+  slot->markDirty(QSGNode::DirtyGeometry);
+}
+
 }  // namespace
 
 auto BuildOverlaySceneGeometry(const CropOverlayWidgetGeometry& geometry, bool crop_tool_visible)
@@ -391,6 +437,11 @@ struct EditorOverlayItem::OverlayRootNode : public QSGNode {
   QSGGeometryNode* handle_outline_node = nullptr;
   QSGGeometryNode* handle_fill_node = nullptr;
   QSGGeometryNode* detail_roi_node = nullptr;
+  QSGGeometryNode* mask_handle_outline_node = nullptr;
+  QSGGeometryNode* mask_handle_fill_node = nullptr;
+  QSGGeometryNode* mask_connector_node = nullptr;
+  QSGGeometryNode* mask_cursor_node = nullptr;
+  QSGGeometryNode* mask_creation_guide_node = nullptr;
 };
 
 EditorOverlayItem::EditorOverlayItem(QQuickItem* parent) : QQuickItem(parent) {
@@ -412,6 +463,7 @@ auto EditorOverlayItem::cropVisible() const -> bool { return last_scene_geometry
 
 void EditorOverlayItem::refreshFromInteraction() {
   rebuildSceneGeometry();
+  rebuildMaskSceneGeometry();
   ++geometry_revision_;
   ++geometry_rebuild_count_;
   geometry_dirty_ = true;
@@ -478,6 +530,99 @@ void EditorOverlayItem::rebuildSceneGeometry() {
                                                    interaction_->cropOverlayVisible());
 }
 
+void EditorOverlayItem::rebuildMaskSceneGeometry() {
+  last_mask_scene_geometry_ = BuildMaskOverlaySceneGeometry(mask_display_, mask_style_);
+}
+
+void EditorOverlayItem::setMaskOverlayDisplay(MaskOverlayDisplay display) {
+  mask_display_ = std::move(display);
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayRevisionChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayControlColor(const QColor& color) {
+  if (mask_style_.control_fill == color) {
+    return;
+  }
+  mask_style_.control_fill = color;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayControlOutlineColor(const QColor& color) {
+  if (mask_style_.control_outline == color) {
+    return;
+  }
+  mask_style_.control_outline = color;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayInactiveColor(const QColor& color) {
+  if (mask_style_.inactive == color) {
+    return;
+  }
+  mask_style_.inactive = color;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayHandleRadius(qreal radius) {
+  const float value = static_cast<float>(radius);
+  if (mask_style_.handle_radius_logical_px == value) {
+    return;
+  }
+  mask_style_.handle_radius_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayHandleOutlineWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.handle_outline_width_logical_px == value) {
+    return;
+  }
+  mask_style_.handle_outline_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayStrokeWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.stroke_width_logical_px == value) {
+    return;
+  }
+  mask_style_.stroke_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayAntialiasWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.antialias_width_logical_px == value) {
+    return;
+  }
+  mask_style_.antialias_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
 auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) -> QSGNode* {
   auto* root = static_cast<OverlayRootNode*>(old_node);
   if (!root) {
@@ -515,7 +660,20 @@ auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*)
   UpsertTriangleNode(root, root->detail_roi_node, scene.detail_roi_triangles,
                      QColor(120, 200, 255, 200), creates);
 
+  int mask_creates = 0;
+  const auto& mask_scene = last_mask_scene_geometry_;
+  UpsertPremultipliedTriangleNode(root, root->mask_handle_outline_node, mask_scene.handle_outline,
+                                  mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_handle_fill_node, mask_scene.handle_fill,
+                                  mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_connector_node, mask_scene.connectors,
+                                  mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_cursor_node, mask_scene.cursor, mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_creation_guide_node, mask_scene.creation_guides,
+                                  mask_creates);
+
   paint_node_create_count_ += creates;
+  mask_paint_node_create_count_ += mask_creates;
   return root;
 }
 
