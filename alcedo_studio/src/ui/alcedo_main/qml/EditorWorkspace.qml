@@ -218,6 +218,13 @@ Item {
                         anchors.fill: parent
                         visible: root.hasImage
                         interaction: editorInteraction
+                        maskOverlayControlColor: appTheme.maskOverlayControlColor
+                        maskOverlayControlOutlineColor: appTheme.maskOverlayControlOutlineColor
+                        maskOverlayInactiveColor: appTheme.maskOverlayInactiveColor
+                        maskOverlayHandleRadius: appTheme.maskOverlayHandleRadius
+                        maskOverlayHandleOutlineWidth: appTheme.maskOverlayHandleOutlineWidth
+                        maskOverlayStrokeWidth: appTheme.maskOverlayStrokeWidth
+                        maskOverlayAntialiasWidth: appTheme.maskOverlayAntialiasWidth
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2

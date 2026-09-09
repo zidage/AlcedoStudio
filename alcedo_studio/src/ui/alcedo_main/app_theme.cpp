@@ -1012,6 +1012,24 @@ auto AppTheme::graphEdgeWidth() const -> int { return 2; }
 
 auto AppTheme::graphSelectionOutlineWidth() const -> int { return 1; }
 
+auto AppTheme::maskOverlayControlColor() const -> QColor { return textColor(); }
+
+auto AppTheme::maskOverlayControlOutlineColor() const -> QColor { return bgCanvasColor(); }
+
+auto AppTheme::maskOverlayInactiveColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::maskOverlayHandleRadius() const -> int { return 5; }
+
+auto AppTheme::maskOverlayHandleOutlineWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayStrokeWidth() const -> qreal { return 1.5; }
+
+auto AppTheme::maskOverlayAntialiasWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::maskOverlayHandleHitRadius() const -> int { return 12; }
+
+auto AppTheme::maskOverlayRotateHandleOffset() const -> int { return 24; }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

@@ -408,6 +408,31 @@ invisible QuickQanava selection delegate, so the default blue animated
 selection item never renders. Do not set `selectionDelegate` to null in QML;
 null resets the QuickQanava default instead of disabling it.
 
+### Editor viewport Mask overlay
+
+Retained QSG Mask controls sit on `EditorOverlayItem` above the photograph. They
+use a two-layer high-contrast stroke. Existing-mask editing never paints a
+coverage fill, heatmap, or completed Brush path; the Interactive photograph
+supplies coverage feedback. Temporary cursor, outline, and path guides are
+allowed only during initial drawing.
+
+Handle and stroke widths are logical pixels and stay constant at any zoom or
+DPR. Image-space Brush cursor radius is transformed through the shared
+ReferenceSpace mapping. Do not add a coverage-area color. Do not use Material
+controls, badges, pills, or status dots on this overlay.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `maskOverlayControlColor` | `textColor` | Selected handle fill and connector stroke |
+| `maskOverlayControlOutlineColor` | `bgCanvasColor` | Handle outline |
+| `maskOverlayInactiveColor` | `textMutedColor` | Temporary initial-creation guides |
+| `maskOverlayHandleRadius` | 5 | Handle disc radius (logical px) |
+| `maskOverlayHandleOutlineWidth` | 1.2 | Handle outline width (logical px) |
+| `maskOverlayStrokeWidth` | 1.5 | Connector and cursor stroke (logical px) |
+| `maskOverlayAntialiasWidth` | 1.0 | Premultiplied edge-alpha fringe (logical px) |
+| `maskOverlayHandleHitRadius` | 12 | Pointer hit radius (logical px) |
+| `maskOverlayRotateHandleOffset` | 24 | Rotation/direction handle offset (logical px) |
+
 ### Color Grade node content
 
 A Color Grade node shows only:

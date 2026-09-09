@@ -1226,6 +1226,31 @@ alcedo_ui_gtest_discover_tests(MaskEditGeometryTest
     PROPERTIES LABELS "mask_edit;interaction")
 alcedo_register_test_target(MaskEditGeometryTest ui)
 
+add_executable(MaskOverlayControlTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_overlay_control_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(MaskOverlayControlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MaskOverlayControlTest
+    PRIVATE
+        EditorRhiViewport
+        AppTheme
+        EditGeometry
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(MaskOverlayControlTest
+    TEST_PREFIX "MaskOverlayControlTest."
+    PROPERTIES LABELS "mask_overlay;editor_rhi")
+alcedo_register_test_target(MaskOverlayControlTest ui)
+
 
 # Real-project regression: replay production Main.qml Copy/Paste and verify
 # that a reopened target publishes the saved Tone values to its QML models.

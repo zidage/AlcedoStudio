@@ -2,10 +2,11 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.5 complete; NM7.6–NM7.14 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.6 complete; NM7.7–NM7.14 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
-project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, and NM7.5
-shared ReferenceSpace mapping with Brush placement. Remaining sub-phases are unimplemented.
+project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
+shared ReferenceSpace mapping with Brush placement, and NM7.6 control-only retained QSG.
+Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -984,6 +985,60 @@ triangle strokes and explicit antialiasing; preserve crop/ROI layer behavior and
 
 **Exit:** real accelerated window captures show no mask-area tint while dragging an existing Mask;
 no live pipeline lock or raster I/O inside Qt synchronization.
+
+##### Phase NM7.6 completion record (2026-09-08)
+
+**Status:** complete — retained QSG Mask controls (handles, connectors, Brush cursor, initial-creation
+guides) with zero coverage-fill geometry; AppTheme/DESIGN tokens; crop/ROI overlay unchanged.
+
+**Primary success call chain:**
+
+```text
+GUI publishes MaskOverlayDisplay (item-space handles from MaskOverlayLayout + MaskEditGeometry)
+  -> EditorOverlayItem::setMaskOverlayDisplay
+  -> BuildMaskOverlaySceneGeometry (triangle lists, premultiplied AA fringes)
+  -> update()
+  -> updatePaintNode(oldNode) reuses QSGGeometryNode children
+  -> Qt Quick frame (controls only; photograph remains EditorViewportItem)
+```
+
+**Primary failure call chain:**
+
+```text
+Hidden display, degenerate Radial radii, or unmappable controls
+  -> empty MaskOverlaySceneGeometry (coverage_fill_vertex_count stays 0)
+  -> UpsertPremultipliedTriangleNode removes stale child nodes
+  -> no pipeline lock, MaskStore I/O, or document mutation
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ExistingMaskEditHasControlsAndNoCoverageFill` | `MaskOverlayControlTest` | PASS |
+| `MaskControlsUpdateWhileRenderIsHeld` | `MaskOverlayControlTest` | PASS |
+| `MaskOverlayReusesNodesForMovement` | `MaskOverlayControlTest` | PASS |
+| `MaskControlsRecreateAfterSceneInvalidation` | `MaskOverlayControlTest` | PASS |
+| `MaskControlsKeepLogicalSizeAndThemeColors` | `MaskOverlayControlTest` | PASS |
+| Degenerate Radial yields empty geometry | `MaskOverlayControlTest` | PASS |
+| Radial creation outline chord error | `MaskOverlayControlTest` | PASS |
+| Hidden display clears Mask nodes | `MaskOverlayControlTest` | PASS |
+| Existing mapping / crop draft routing | `MaskEditGeometryTest`, `BrushPlacementMappingTest`, `EditorGeometryOverlayDraftRoutingTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"`
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MaskOverlayControlTest`
+`ctest --test-dir build/debug --output-on-failure -R "MaskOverlayControlTest"`
+`ctest --test-dir build/debug --output-on-failure -R "MaskEditGeometryTest|EditorGeometryOverlayDraftRoutingTest|BrushPlacementMappingTest"`
+
+Suite totals: `8/8` `MaskOverlayControlTest` PASS; `7/7` related mapping/overlay tests PASS.
+Date / working tree on `feature/mask-qsg-controls` (base `e01bafdb`) / Windows MSVC `win_debug` / Qt 6.9.3 (`D:/misc/Qt/6.9.3/msvc2022_64`) / CUDA Toolkit 12.8. Window grabs used Qt `offscreen` QPA scene graph, not a native desktop GPU surface.
+
+**Checklist / exit condition:** required tests PASS. Existing Brush/Radial/Linear displays emit handles and connectors with `coverage_fill_vertex_count == 0`. Offscreen `grabWindow` of an existing Radial interior matches the window color (no Mask-area tint). Overlay geometry rebuilds from the published display while a dummy render thread stays busy. `updatePaintNode` reuses Mask child nodes on movement and reconstructs them on a new window from current display state. Handle draw radius is constant across zoom/DPR; Brush cursor radius scales with the mapping. Theme tokens match DESIGN.md.
+
+**LOC note (grill-code-review):** `mask_overlay_geometry.hpp` 155 / `.cpp` 287, `mask_overlay_layout.hpp` 101 / `.cpp` 372, `editor_overlay_item.hpp` 165 / `.cpp` 612, `mask_overlay_control_test.cpp` 402. Layout owns evaluator-inverse handle placement; geometry owns triangle tessellation. Overlay item only copies published triangles onto retained nodes. No split required.
+
+**Residual gaps:** NM7.7 Radial/Linear creation and existing-mask movement UI (controller + Interactive pixels). NM7.8 accumulating Brush paint/erase UI. Session does not yet publish live Mask overlay display (still NM7.9). Accessible handle proxies are NM7.11. Offscreen QPA grabs are not a packaged D3D11/Metal desktop capture (NM7.14). Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.7 — Complete analytic creation and movement
 
