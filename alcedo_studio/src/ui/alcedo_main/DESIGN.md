@@ -413,8 +413,12 @@ null resets the QuickQanava default instead of disabling it.
 Retained QSG Mask controls sit on `EditorOverlayItem` above the photograph. They
 use a two-layer high-contrast stroke. Existing-mask editing never paints a
 coverage fill, heatmap, or completed Brush path; the Interactive photograph
-supplies coverage feedback. Temporary cursor, outline, and path guides are
-allowed only during initial drawing.
+supplies coverage feedback. Temporary Brush cursor/path guides are allowed during initial
+drawing. The planned NM7.8 revision requires selected Radial base ellipse and inner/outer
+feather boundary lines during creation and later editing. Selected Gradient uses three parallel
+lines with Geometry crop-style dual high-contrast strokes and short edge grips, without a kite,
+closed polygon or crop dimming. Radius/feather and direction controls must be independently
+reachable. Unselected analytic masks do not retain editing guides.
 
 Handle and stroke widths are logical pixels and stay constant at any zoom or
 DPR. Image-space Brush cursor radius is transformed through the shared
@@ -481,8 +485,12 @@ The open state is UI layout state. A drawer change does not modify the pipeline,
 create history, or start photo rendering. An empty open drawer has no Mask rows.
 
 Each Mask row is flat. It shows only the approved source-type icon and localized
-type name. Do not show the Mask name, opacity, enabled value, invert value,
-ranges, identity, selection, or actions.
+type name. Do not show the Mask name, opacity, enabled value, invert value, ranges, or identity.
+The planned NM7.8 revision adds stable NodeId/MaskId selection and a compact per-row delete
+`IconActionButton`. Selecting loads the existing Mask into the temporary Masks body and viewer
+without creating a mask or history. Use existing monochrome selection tokens and preserve scroll.
+Delete must not propagate into row selection or graph Grade deletion. Parameter editors stay in
+the Masks body. This supersedes the earlier read-only row rule.
 
 | Model kind | UI label | Icon |
 | --- | --- | --- |

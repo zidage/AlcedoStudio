@@ -1083,7 +1083,9 @@ Each row shows only the approved source-type icon and localized type label:
 | `MaskSourceKind::Radial` | `Radial` | `mask_icons/radial.svg` |
 | `MaskSourceKind::Brush` | `Brush` | `mask_icons/brush.svg` |
 
-Do not show Mask name, opacity, enabled state, invert state, ranges, identity, selection, or actions.
+Do not show Mask name, opacity, enabled state, invert state, ranges, or identity in compact rows.
+The NM7.8 revision requires stable-ID selection and a compact per-row delete action, with
+parameter controls in the temporary Masks body. It supersedes the earlier read-only row rule.
 An empty open drawer has no Mask rows.
 
 Drawer state is local UI layout state. A fold creates no history and no render. The output port and
@@ -1933,8 +1935,15 @@ current-result storage. Runtime/platform evidence is required; this design appro
 ### 21.8 Phase NM7 — Viewer Mask Creation
 
 2026-09-08 revision: NM7.2–NM7.4 extend the historical NM3/NM4 source/history interfaces before
-viewer integration; NM7.9–NM7.10 replace per-source/history raster retention with current project
+viewer integration; NM7.10–NM7.11 replace per-source/history raster retention with current project
 coverage cache. Historical NM3/NM4 asset tests do not qualify the new parameter format.
+
+Parameter-mask revision: NM7.1–NM7.7 remain complete. Some former NM7.11 UI wiring was
+brought forward for Radial/Gradient testing. New NM7.8 adds Radial feather controls and selected
+range contours, Node drawer selection/deletion and re-editing, and Gradient controls styled after
+Geometry crop lines/grips. Selected analytic guide lines are required; coverage fill remains
+prohibited. Former NM7.8–NM7.14 shift to NM7.9–NM7.15; remaining full UI is NM7.12.
+Follow the detailed phase for interaction and acceptance requirements.
 
 
 **Reason for this position:** Viewer creation needs the selected-node context, multi-Mask runtime,
