@@ -40,6 +40,12 @@ def_library(EditMaskStore
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_model.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_stroke.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_raster_encoding.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_source_geometry.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_canonical_sampler.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_spatial_index.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_rasterizer.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_signed_distance.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/grade_mask_coverage.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
     PUBLIC_DEPS EditGeometry JSON
     PRIVATE_DEPS xxHash

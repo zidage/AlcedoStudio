@@ -2,9 +2,10 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.3 complete; NM7.4–NM7.14 planned. This document records the NM7.1 source
-audit, NM7.2 parameterized Brush owner operations, and NM7.3 typed stroke history plus the
-project/schema cutover. Remaining sub-phases are unimplemented.
+Status: NM7.1–NM7.4 complete; NM7.5–NM7.14 planned. This document records the NM7.1 source
+audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
+project/schema cutover, and NM7.4 canonical rasterization with regional Mix replay.
+Remaining sub-phases are unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -831,6 +832,61 @@ recomputed source → effective coverage → current Grade result.
 
 **Exit:** independent full-evaluation oracle passes paint/erase/overlap/translate/Undo/Redo; index
 uses only IDs/spans/bounds. The simplified prototype is not a substitute for these production tests.
+
+##### Phase NM7.4 completion record (2026-09-08)
+
+**Status:** complete — host canonical Brush rasterization, local-space spatial index, regional
+source replay, full-required signed-distance feather, and Grade Mix union without raster history.
+
+**Primary success call chain:**
+
+```text
+reversible Brush/analytic mutation (Append/Remove stroke or SetBrushTranslation)
+  -> BrushSourceOutputTexelSupport / EffectiveMaskTexelSupport (old union new)
+  -> BrushSpatialIndex::QueryOutput (StrokeId + sample spans + local bounds)
+  -> BrushRasterizer::ReplayRegion (b0 = 0 in dirty texels; paint max / erase min)
+  -> BrushSignedDistanceFeather::Apply when feather_radius > 0 (complete field)
+  -> GradeMaskCoverage Mix: empty list 255, all-disabled 0, else max(effective)
+```
+
+**Primary failure call chain:**
+
+```text
+unbound Brush index, unsupported algorithm version, or invalid sample encoding
+  -> throw before Mix commit
+  -> previous Mix region restored from the dirty-rectangle backup
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RegionalBrushReplayMatchesFullEvaluation` | `BrushRegionalReplayTest` | PASS |
+| `EraseUndoRestoresEarlierPaint` | `BrushRegionalReplayTest` | PASS |
+| `RemovingUnionMaximumPreservesOtherMasks` | `BrushRegionalReplayTest` | PASS |
+| `BrushEventGroupingPreservesCanonicalPixels` | `BrushRegionalReplayTest` | PASS |
+| `FeatherRebuildMatchesCompleteDistanceEvaluation` | `BrushRegionalReplayTest` | PASS |
+| Dense/grouped pointer events keep remainder | `BrushCanonicalSamplerTest` | PASS |
+| Winding stroke index does not mark interior tiles | `BrushSpatialIndexTest` | PASS |
+| Translation query does not rebuild local spans | `BrushSpatialIndexTest` | PASS |
+| Missing index leaves Mix unchanged | `BrushRegionalReplayTest` | PASS |
+| Existing parameterized Brush JSON/owner tests | `BrushParameterizedSourceTest`, `BrushSourceFormatBoundaryTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target BrushCanonicalSamplerTest --target BrushSpatialIndexTest --target BrushRegionalReplayTest`
+`ctest --test-dir build/debug --output-on-failure -R "BrushCanonicalSamplerTest|BrushSpatialIndexTest|BrushRegionalReplayTest"`
+`ctest --test-dir build/debug --output-on-failure -R "BrushParameterizedSourceTest|BrushSourceFormatBoundaryTest"`
+
+Suite totals: `14/14` NM7.4 binaries PASS; `19/19` existing Brush source tests PASS.
+Date / working tree on `feature/brush-command-replay` (base `54975ddb`) / Windows MSVC `win_debug` / Qt 6.9.3 / CUDA Toolkit 12.8 (host Mix only; no GPU tests in this phase).
+
+Independent oracle: `alcedo_studio/tests/edit/mask/brush_replay_oracle.hpp` (per-texel dab walk and exhaustive signed distance). Production uses the spatial index, regional stamp, and separable Euclidean distance.
+
+**Checklist / exit condition:** all required tests PASS; index stores StrokeId, sample spans, and local bounds only; Mix/source R8 is current coverage, not a per-stroke checkpoint.
+
+**LOC note (grill-code-review):** `brush_source_geometry.hpp` 112 / `.cpp` 206, `brush_canonical_sampler.hpp` 92 / `.cpp` 137, `brush_spatial_index.hpp` 105 / `.cpp` 140, `brush_rasterizer.hpp` 75 / `.cpp` 128, `brush_signed_distance.hpp` 59 / `.cpp` 167, `grade_mask_coverage.hpp` 99 / `.cpp` 253, `brush_replay_oracle.hpp` 190, `brush_regional_replay_test.cpp` 287. No split required.
+
+**Residual gaps:** host Mix is not yet the Interactive/Quality native Mask pass (NM7.9) or the project Mix-cache slot (NM7.10). Shared ReferenceSpace pointer mapping is NM7.5. Native evaluation still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.5 — Implement shared mapping and parameterized movement
 
