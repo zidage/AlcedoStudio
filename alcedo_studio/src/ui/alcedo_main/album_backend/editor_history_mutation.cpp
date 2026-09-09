@@ -1109,4 +1109,30 @@ auto EditorHistoryMutation::SetPanelProjectionNode(const alcedo::EditorHistoryGu
   }
 }
 
+auto EditorHistoryMutation::WithLockedLiveDocument(
+    const alcedo::EditorHistoryGuardHandle& guard,
+    const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op, std::string* error) -> bool {
+  if (!op) {
+    if (error) *error = "Locked Mask document operation is empty";
+    return false;
+  }
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+  alcedo::IEditorHistoryPort::LockedMaskSettle settle =
+      [this, state](const alcedo::PipelineEditBatch& batch, std::string* settle_error) {
+        return PublishAppliedTypedBatch(*state, state_, batch, true, state->mask_store,
+                                        settle_error);
+      };
+  return op(*state->pipeline_guard->document_, *state->history, settle, error);
+}
+
 }  // namespace alcedo::ui

@@ -25,6 +25,7 @@
 namespace alcedo {
 
 class Hash128;
+class MiniGitWorkingHistory;
 class PipelineDocument;
 struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
@@ -114,6 +115,29 @@ class IEditorHistoryPort {
     if (error != nullptr) *error = "Color Grade rename is not supported by this history port";
     return false;
   }
+
+  using LockedMaskSettle =
+      std::function<bool(const PipelineEditBatch& batch, std::string* error)>;
+  using LockedMaskDocumentOp =
+      std::function<bool(PipelineDocument& document, MiniGitWorkingHistory& history,
+                         const LockedMaskSettle& settle, std::string* error)>;
+
+  /**
+   * @brief Run @p op while holding the live pipeline render lock.
+   *
+   * @p settle publishes a typed batch whose live document already holds after
+   * values. Default fakes reject. Must not be called from a GUI pointer callback
+   * that still needs the GUI thread for present.
+   */
+  virtual auto WithLockedLiveDocument(const EditorHistoryGuardHandle& /*guard*/,
+                                      const LockedMaskDocumentOp& /*op*/, std::string* error)
+      -> bool {
+    if (error != nullptr) {
+      *error = "Locked live document access is not supported by this history port";
+    }
+    return false;
+  }
+
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   /// Render reason published by the last successful history mutation. Default

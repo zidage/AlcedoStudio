@@ -47,6 +47,15 @@ Item {
                                                      && editorSession
                                                      && editorSession.actions
                                                      && editorSession.actions.canEdit)
+    readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
+
+    function bindMaskOverlay() {
+        if (maskCreation && editorOverlayItem)
+            maskCreation.bindOverlayItem(editorOverlayItem)
+    }
+
+    onMaskCreationChanged: bindMaskOverlay()
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession
@@ -228,6 +237,7 @@ Item {
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2
+                        Component.onCompleted: root.bindMaskOverlay()
                     }
 
                     // Spinner / status remain ordinary QML (not baked into the RHI pass).
@@ -346,24 +356,46 @@ Item {
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
                         property bool _pressed: false
+                        property bool _maskStream: false
                         onActiveChanged: {
                             if (active) {
                                 _pressed = true
                                 _activeButton = (point.pressedButtons & Qt.MiddleButton)
                                         ? Qt.MiddleButton : Qt.LeftButton
-                                editorInteraction.handlePress(
-                                            point.position.x, point.position.y, _activeButton)
+                                if (_activeButton === Qt.LeftButton
+                                        && root.maskOwnsLeftButton
+                                        && root.maskCreation
+                                        && root.maskCreation.handlePress(
+                                               point.position.x, point.position.y, _activeButton)) {
+                                    _maskStream = true
+                                } else {
+                                    _maskStream = false
+                                    editorInteraction.handlePress(
+                                                point.position.x, point.position.y, _activeButton)
+                                }
                             } else if (_pressed) {
-                                editorInteraction.handleRelease(
-                                            point.position.x, point.position.y, _activeButton)
+                                if (_maskStream && root.maskCreation) {
+                                    root.maskCreation.handleRelease(
+                                                point.position.x, point.position.y, _activeButton)
+                                } else {
+                                    editorInteraction.handleRelease(
+                                                point.position.x, point.position.y, _activeButton)
+                                }
                                 _pressed = false
+                                _maskStream = false
                             }
                         }
                         onPointChanged: {
                             if (active) {
-                                editorInteraction.handleMove(
-                                            point.position.x, point.position.y,
-                                            point.pressedButtons)
+                                if (_maskStream && root.maskCreation) {
+                                    root.maskCreation.handleMove(
+                                                point.position.x, point.position.y,
+                                                point.pressedButtons)
+                                } else {
+                                    editorInteraction.handleMove(
+                                                point.position.x, point.position.y,
+                                                point.pressedButtons)
+                                }
                             }
                         }
                     }
@@ -389,7 +421,9 @@ Item {
                         id: viewportPanDrag
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
-                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        acceptedButtons: root.maskOwnsLeftButton
+                                         ? Qt.MiddleButton
+                                         : (Qt.LeftButton | Qt.MiddleButton)
                         target: null
                         property bool _forwardingDrag: false
                         property int _activeButton: Qt.LeftButton
@@ -724,6 +758,12 @@ Item {
             objectName: "editorSaveRecoveryBar"
             editorSession: root.editorSession
         }
+    }
+
+    Shortcut {
+        sequences: [ "Escape" ]
+        enabled: root.editorControlsEnabled && root.maskOwnsLeftButton && root.maskCreation
+        onActivated: root.maskCreation.cancel()
     }
 
     // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so

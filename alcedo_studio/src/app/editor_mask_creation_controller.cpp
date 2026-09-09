@@ -73,6 +73,9 @@ namespace {
 
 void EditorMaskCreationController::Bind(PipelineDocument& document,
                                         MiniGitWorkingHistory& history) {
+  if (document_ == &document && history_ == &history) {
+    return;
+  }
   if (open_) {
     throw std::runtime_error("cannot rebind the Mask creation controller during an open operation");
   }
@@ -82,6 +85,19 @@ void EditorMaskCreationController::Bind(PipelineDocument& document,
 
 void EditorMaskCreationController::SetInteractivePreview(std::function<void()> preview) {
   interactive_preview_ = std::move(preview);
+}
+
+void EditorMaskCreationController::SetSettlePublisher(
+    std::function<bool(const PipelineEditBatch&, std::string*)> publish) {
+  settle_publisher_ = std::move(publish);
+}
+
+void EditorMaskCreationController::DetachClosedDocument() {
+  interactive_preview_ = {};
+  settle_publisher_    = {};
+  document_            = nullptr;
+  history_             = nullptr;
+  ResetMode();
 }
 
 auto EditorMaskCreationController::Reject(std::string error) const -> EditorMaskCreationResult {
@@ -467,6 +483,27 @@ auto EditorMaskCreationController::AppendMaskInput(MaskCreationSample sample,
   return UpdateExisting(sample);
 }
 
+auto EditorMaskCreationController::PublishSettledBatch(const PipelineEditBatch& batch,
+                                                       std::string* error) -> bool {
+  if (settle_publisher_) {
+    return settle_publisher_(batch, error);
+  }
+  if (history_ == nullptr) {
+    if (error != nullptr) {
+      *error = "Mask creation controller is not bound to history";
+    }
+    return false;
+  }
+  const auto append = history_->AppendEdit(batch);
+  if (append.committed) {
+    return true;
+  }
+  if (error != nullptr) {
+    *error = append.error;
+  }
+  return false;
+}
+
 auto EditorMaskCreationController::PublishAddMask() -> EditorMaskCreationResult {
   auto* grade = Grade();
   if (grade == nullptr || history_ == nullptr) {
@@ -482,13 +519,13 @@ auto EditorMaskCreationController::PublishAddMask() -> EditorMaskCreationResult 
   }
   const auto batch =
       MakeAddMaskBatch(node_id_, mask_id_, MaskModelToJson(*mask), display_index_);
-  const auto append = history_->AppendEdit(batch);
-  if (!append.committed) {
+  std::string settle_error;
+  if (!PublishSettledBatch(batch, &settle_error)) {
     RestoreLive();
     inserted_ = false;
     state_    = EditorMaskCreationState::Failed;
-    return Reject(append.error.empty() ? std::string{"AddMask history publish failed"}
-                                       : append.error);
+    return Reject(settle_error.empty() ? std::string{"AddMask history publish failed"}
+                                       : settle_error);
   }
   ClearOpenOperation();
   creating_      = false;
@@ -520,12 +557,12 @@ auto EditorMaskCreationController::PublishReplaceSource() -> EditorMaskCreationR
     return Reject("ReplaceMaskSource settle is missing history");
   }
   const auto batch = MakeReplaceMaskSourceBatch(node_id_, mask_id_, before_source_, after);
-  const auto append = history_->AppendEdit(batch);
-  if (!append.committed) {
+  std::string settle_error;
+  if (!PublishSettledBatch(batch, &settle_error)) {
     RestoreLive();
     state_ = EditorMaskCreationState::Failed;
-    return Reject(append.error.empty() ? std::string{"ReplaceMaskSource history publish failed"}
-                                       : append.error);
+    return Reject(settle_error.empty() ? std::string{"ReplaceMaskSource history publish failed"}
+                                       : settle_error);
   }
   ClearOpenOperation();
   before_source_ = after;

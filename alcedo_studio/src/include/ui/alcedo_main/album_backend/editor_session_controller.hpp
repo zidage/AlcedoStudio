@@ -23,9 +23,12 @@
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/mask/mask_id.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
+#include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 
 namespace alcedo {
@@ -38,7 +41,6 @@ struct NodeGraphTopologyChange;
 namespace alcedo::ui {
 class IAlbumCatalog;
 class InteractionPolicyController;
-class EditorNodeController;
 }  // namespace alcedo::ui
 
 namespace alcedo::ui {
@@ -108,6 +110,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
   Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
+  Q_PROPERTY(EditorMaskCreationAdapter* maskCreation READ mask_creation CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
   // (coordinator diagnostics); transitions fire StateChanged via the backend
@@ -289,6 +292,17 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto scope_controller() const -> EditorScopeController* {
     return scope_controller_.get();
   }
+  [[nodiscard]] auto mask_creation() const -> EditorMaskCreationAdapter* {
+    return mask_creation_.get();
+  }
+  [[nodiscard]] auto node_selection_source() const -> EditorNodeController* {
+    return node_controller_;
+  }
+  [[nodiscard]] auto session_backend() const -> alcedo::IEditorSessionBackend* {
+    return session_backend_;
+  }
+  auto EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command) -> bool;
+  [[nodiscard]] auto mask_creation_mask_id() const -> alcedo::MaskId;
 
   // Production pipeline entry: resolves the bound viewport through the scope tap.
   // Returns null when unbound or the object is not an EditorViewportItem.
@@ -397,6 +411,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection                        interaction_view_change_connection_;
   QMetaObject::Connection                        interaction_policy_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
+  std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   QTimer*                                        admission_deadline_timer_ = nullptr;
 };
 

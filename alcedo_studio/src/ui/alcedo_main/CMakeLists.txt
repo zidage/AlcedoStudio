@@ -77,6 +77,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/import_export.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/nikon_he_recovery_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_mask_creation_adapter.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
@@ -217,6 +219,7 @@ target_link_libraries(AlbumBackendLib
         PipelineMgmtService
         AdjustmentTransferService
         EditorSessionService
+        EditorMaskCreationController
         EditorAdjustmentPipeline
         EditorPipelineCommandService
         EditorPanelProjection

@@ -1115,7 +1115,18 @@ Date / working tree on `feature/analytic-mask-creation-movement` (base `6eb68e4b
 
 **LOC note (grill-code-review):** `analytic_mask_edit.hpp` 179 / `.cpp` 310, `editor_mask_creation_controller.hpp` 224 / `.cpp` 611, `analytic_mask_edit_test.cpp` 68, `analytic_mask_creation_test.cpp` 447. Geometry owns evaluator-inverse handle math; the controller owns mode, identities, provisional Grade writes, and settle/cancel. No split required.
 
-**Residual gaps:** NM7.8 accumulating Brush paint/erase UI. Session still does not publish live Mask overlay display or enqueue Interactive GPU frames (NM7.9). Project Mix-cache slot is NM7.10. Header/Masks-body wiring and accessible handles are NM7.11. Open-operation cancel on `MappingChanged` is NM7.12. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
+**In-app test wiring (same branch, after owner-path completion):** Radial/Gradient header buttons, viewport left-button routing, control-only overlay, Escape, and session enqueue/consume are connected. Overlay uses local draft geometry plus identity photograph mapping when `ResolvedRenderGeometry` is unpublished. Interactive frames reuse `EditorRenderReason::InteractiveAdjustment` with `live_parameters_applied`; settle uses `SettledMaskEdit`.
+
+```text
+EditorAdjustmentHeader beginRadial/beginLinear
+  -> EditorMaskCreationAdapter (item → MaskCreationSample, QSG overlay)
+  -> EditorSessionService::EnqueueMaskCreation (coalesced Append)
+  -> TryConsumePendingInput / WithLockedLiveDocument
+  -> EditorMaskCreationController + PublishAppliedTypedBatch(document_already_at_after)
+  -> InteractiveAdjustment or SettledMaskEdit
+```
+
+**Residual gaps:** NM7.8 accumulating Brush paint/erase UI. Live `ResolvedRenderGeometry` publication into `setDisplayedMaskGeometry` remains NM7.9. Project Mix-cache slot is NM7.10. Accessible handle proxies and Masks-body list wiring remain NM7.11. Open-operation cancel on `MappingChanged` is NM7.12. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.8 — Complete accumulating Brush creation, erase and movement
 

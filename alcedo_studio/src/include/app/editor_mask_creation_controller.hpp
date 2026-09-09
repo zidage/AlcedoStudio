@@ -14,6 +14,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/analytic_mask_edit.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -76,6 +77,33 @@ struct EditorMaskCreationResult {
 };
 
 /**
+ * @brief Queued Mask-creation operation for the session owner thread.
+ *
+ * GUI mapping produces these; the serial consumer applies them under the live
+ * pipeline lock. Latest Append samples with the same pointer identity coalesce.
+ */
+enum class EditorMaskCreationCommandKind : std::uint8_t {
+  BeginCreation = 0,
+  SelectMask,
+  BeginInput,
+  BeginMove,
+  Append,
+  Finish,
+  Cancel,
+  CancelMode,
+};
+
+struct EditorMaskCreationCommand {
+  EditorMaskCreationCommandKind kind        = EditorMaskCreationCommandKind::BeginCreation;
+  MaskSourceKind                source_kind = MaskSourceKind::Radial;
+  NodeId                        node_id;
+  MaskId                        mask_id;
+  MaskCreationSample            sample{};
+  MaskPointerIdentity           identity{};
+  AnalyticMaskHandle            handle = AnalyticMaskHandle::None;
+};
+
+/**
  * @brief Application owner of Radial/Linear creation and existing-mask movement.
  *
  * Owns mode, active handle, and captured identities. Does not own the live
@@ -104,6 +132,22 @@ class EditorMaskCreationController {
    * commit history. Empty clears the callback.
    */
   void SetInteractivePreview(std::function<void()> preview);
+
+  /**
+   * @brief Optional settle publisher used instead of @c MiniGitWorkingHistory::AppendEdit.
+   *
+   * Production supplies a locked @c PublishAppliedTypedBatch with the live document
+   * already at after-values. Empty keeps the test AppendEdit path.
+   */
+  void SetSettlePublisher(std::function<bool(const PipelineEditBatch&, std::string*)> publish);
+
+  /**
+   * @brief Drop document/history pointers after cancel or image close.
+   *
+   * Does not restore Grade fields. Callers must Cancel first when an operation
+   * is still open and the document is still alive.
+   */
+  void DetachClosedDocument();
 
   /**
    * @brief Arm Radial or Linear creation on @p grade_id without document mutation.
@@ -173,6 +217,7 @@ class EditorMaskCreationController {
    *
    * Existing-mask edits are false. Armed creation without a press is false.
    */
+  [[nodiscard]] auto HasOpenOperation() const -> bool { return open_; }
   [[nodiscard]] auto OverlayIsCreating() const -> bool;
   /**
    * @brief Live or draft source for overlay layout. Empty when Inactive/hidden.
@@ -196,6 +241,7 @@ class EditorMaskCreationController {
   void ResetMode();
   auto PublishAddMask() -> EditorMaskCreationResult;
   auto PublishReplaceSource() -> EditorMaskCreationResult;
+  auto PublishSettledBatch(const PipelineEditBatch& batch, std::string* error) -> bool;
   void RequestInteractive(EditorMaskCreationResult& result);
   auto UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
@@ -203,6 +249,7 @@ class EditorMaskCreationController {
   PipelineDocument*        document_ = nullptr;
   MiniGitWorkingHistory*   history_  = nullptr;
   std::function<void()>    interactive_preview_;
+  std::function<bool(const PipelineEditBatch&, std::string*)> settle_publisher_;
   EditorMaskCreationState  state_    = EditorMaskCreationState::Inactive;
   MaskSourceKind           kind_     = MaskSourceKind::Radial;
   EditorSessionIdentity    session_{};

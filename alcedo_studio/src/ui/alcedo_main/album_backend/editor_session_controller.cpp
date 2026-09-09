@@ -53,6 +53,7 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
   connect(&actions_, &EditorActionAvailabilityModel::AvailabilityChanged, this,
           &EditorSessionController::ActionAvailabilityChanged);
   scope_controller_ = std::make_unique<EditorScopeController>(this);
+  mask_creation_    = std::make_unique<EditorMaskCreationAdapter>(this);
   connect(scope_controller_.get(), &EditorScopeController::FrameRequested, this, [this]() {
     if (!session_backend_ || !has_image() ||
         session_backend_->state() != alcedo::EditorSessionState::Interactive) {
@@ -292,6 +293,9 @@ void EditorSessionController::OnBackendChanged() {
     }
   }
   SyncViewportDisplayConfig();
+  if (mask_creation_ && !has_image()) {
+    mask_creation_->OnImageClosed();
+  }
   emit       StateChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
@@ -1003,6 +1007,9 @@ void EditorSessionController::bindInteractionController(QObject* interactionCont
   interaction_controller_ = interactionController;
 
   auto* interaction = qobject_cast<editor_rhi::EditorInteractionController*>(interactionController);
+  if (mask_creation_) {
+    mask_creation_->bindInteractionItem(interaction);
+  }
   if (!interaction) {
     return;
   }
@@ -1298,6 +1305,20 @@ bool EditorSessionController::enqueueNodeSwitchBoundary() {
 
 void EditorSessionController::BindNodeSelectionSource(EditorNodeController* nodes) {
   node_controller_ = nodes;
+}
+
+auto EditorSessionController::EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command)
+    -> bool {
+  if (session_backend_ == nullptr || !can_edit()) {
+    return false;
+  }
+  const auto result = session_backend_->EnqueueMaskCreation(std::move(command));
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+auto EditorSessionController::mask_creation_mask_id() const -> alcedo::MaskId {
+  return session_backend_ ? session_backend_->mask_creation_mask_id() : alcedo::MaskId{};
 }
 
 void EditorSessionController::SetImageExifReader(

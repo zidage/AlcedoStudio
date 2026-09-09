@@ -485,7 +485,7 @@ def_library(EditorSessionService
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
-                 EditorSerialFrameAdmission
+                 EditorSerialFrameAdmission EditorMaskCreationController
 )
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp

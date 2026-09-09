@@ -218,6 +218,14 @@ Item {
                 isoText: root.editorSession
                          ? String(root.editorSession.exifIsoText || "\u2014")
                          : "\u2014"
+                maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+                selectedNodeKind: root.nodeController
+                                  ? String(root.nodeController.selectedNodeKind || "")
+                                  : ""
+                cropOverlayVisible: root.interaction
+                                    ? !!root.interaction.cropOverlayVisible
+                                    : false
+                controlsEnabled: root.controlsEnabled
             }
 
             SlidingIconNav {
