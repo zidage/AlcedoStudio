@@ -331,6 +331,35 @@ gtest_discover_tests(BrushParameterizedSourceTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushParameterizedSourceTest edit)
 
+# Canonical Brush sampling, spatial index, and regional Mix replay without raster history.
+add_executable(BrushCanonicalSamplerTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/brush_canonical_sampler_test.cpp)
+target_include_directories(BrushCanonicalSamplerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(BrushCanonicalSamplerTest PRIVATE GTest::gtest_main EditMaskStore)
+gtest_discover_tests(BrushCanonicalSamplerTest
+  TEST_PREFIX "BrushCanonicalSamplerTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(BrushCanonicalSamplerTest edit)
+
+add_executable(BrushSpatialIndexTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/brush_spatial_index_test.cpp)
+target_include_directories(BrushSpatialIndexTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(BrushSpatialIndexTest PRIVATE GTest::gtest_main EditMaskStore)
+gtest_discover_tests(BrushSpatialIndexTest
+  TEST_PREFIX "BrushSpatialIndexTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(BrushSpatialIndexTest edit)
+
+add_executable(BrushRegionalReplayTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/brush_regional_replay_test.cpp)
+target_include_directories(BrushRegionalReplayTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph ${ALCEDO_TEST_ROOT}/edit/mask)
+target_link_libraries(BrushRegionalReplayTest PRIVATE GTest::gtest_main EditGraph)
+gtest_discover_tests(BrushRegionalReplayTest
+  TEST_PREFIX "BrushRegionalReplayTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(BrushRegionalReplayTest edit)
+
 # Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
 add_executable(GraphImageCacheRetentionTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)

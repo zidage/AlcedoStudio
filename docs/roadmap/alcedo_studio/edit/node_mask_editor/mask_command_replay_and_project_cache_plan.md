@@ -2,7 +2,11 @@
 
 Date: 2026-09-08
 
-Status: NM7.2 parameterized Brush source and Grade owner operations landed; NM7.3 typed stroke/placement history, WAL/Version/Paste remapping, and the Section 8.1 project/schema version gate landed. Raster-only Brush JSON is rejected. NM7.4+ regional replay and cache service remain planned.
+Status: NM7.2 parameterized Brush source and Grade owner operations landed; NM7.3 typed
+stroke/placement history, WAL/Version/Paste remapping, and the Section 8.1 project/schema
+version gate landed. NM7.4 host canonical rasterization, spatial index, and regional Mix
+replay landed. Raster-only Brush JSON is rejected. NM7.5+ mapping, viewer, Interactive Mix,
+and cache service remain planned.
 
 Parent: [NM7 execution plan](phase_nm7_viewer_mask_creation_plan.md).
 This document defines NM7's revised algorithm, data ownership and storage behavior. It replaces
