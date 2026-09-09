@@ -11,6 +11,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QFile>
+#include <QFont>
 #include <QList>
 #include <QMetaObject>
 #include <QMetaType>
@@ -23,7 +24,6 @@
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
 #include <QQmlProperty>
-#include <QFont>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -534,14 +534,13 @@ TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurst
     if (src == nullptr || dst == nullptr || item->getHidden()) {
       return false;
     }
-    const QRectF src_br = src->mapRectToItem(container, src->boundingRect());
-    const QRectF dst_br = dst->mapRectToItem(container, dst->boundingRect());
-    const QPointF p1    = item->mapToItem(container, item->getP1());
-    const QPointF p2    = item->mapToItem(container, item->getP2());
+    const QRectF  src_br = src->mapRectToItem(container, src->boundingRect());
+    const QRectF  dst_br = dst->mapRectToItem(container, dst->boundingRect());
+    const QPointF p1     = item->mapToItem(container, item->getP1());
+    const QPointF p2     = item->mapToItem(container, item->getP2());
     return std::abs(p1.x() - src_br.center().x()) < 1.0 &&
            std::abs(p1.y() - src_br.bottom()) < 1.0 &&
-           std::abs(p2.x() - dst_br.center().x()) < 1.0 &&
-           std::abs(p2.y() - dst_br.top()) < 1.0;
+           std::abs(p2.x() - dst_br.center().x()) < 1.0 && std::abs(p2.y() - dst_br.top()) < 1.0;
   };
 
   ASSERT_TRUE(WaitFor([&] { return glued(incoming) && glued(outgoing); }))
@@ -651,6 +650,13 @@ TEST_F(EditorNodeDelegateQml, ProductionNodeQmlHasNoMaterialImportOrEffectChrome
     EXPECT_FALSE(source.contains(QStringLiteral("gradient:"))) << file;
   }
 
+  const char* style_independent_files[] = {"EditorNodeMaskTypeRow.qml"};
+  for (const auto* file : style_independent_files) {
+    const auto source = ReadQmlFile(file);
+    ASSERT_FALSE(source.isEmpty()) << file;
+    EXPECT_FALSE(source.contains(QStringLiteral("import QtQuick.Controls\n"))) << file;
+  }
+
   ui::AlcedoQanGraph adapter;
   ApplyDefault(&adapter);
   auto* port = FindDescendant(adapter.OutputPortFor(NodeId{"develop"}, PortId{"image"}),
@@ -683,7 +689,7 @@ TEST_F(EditorNodeDelegateQml, PortSquareIsHollowGreenOutlineAcrossThemes) {
 
 TEST_F(EditorNodeDelegateQml, BackboneEdgeStrokeMatchesGraphEdgeTokens) {
   ui::AlcedoQanGraph adapter;
-  const auto           snapshot = ApplyDefault(&adapter);
+  const auto         snapshot = ApplyDefault(&adapter);
   ASSERT_FALSE(snapshot.edges.empty());
 
   for (const auto& edge : snapshot.edges) {
@@ -725,8 +731,8 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerWellIsInsetInsideVisibleCardBorder) {
   const auto border_width = QQmlProperty::read(card, QStringLiteral("border.width")).toDouble();
   EXPECT_NEAR(well->mapToItem(card, QPointF(0, 0)).x(), border_width, 0.5);
   EXPECT_NEAR(well->width(), card->width() - 2.0 * border_width, 0.5);
-  EXPECT_NEAR(well->mapToItem(card, QPointF(0, well->height())).y(),
-              card->height() - border_width, 0.5)
+  EXPECT_NEAR(well->mapToItem(card, QPointF(0, well->height())).y(), card->height() - border_width,
+              0.5)
       << "well leaves the card border visible along the bottom edge";
 }
 
@@ -766,8 +772,7 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerHeaderWashKeepsCardBorderVisibleOnHover)
   }));
   EXPECT_NEAR(wash->property("bottomLeftRadius").toDouble(), well_radius, 0.01);
   EXPECT_NEAR(wash->property("bottomRightRadius").toDouble(), well_radius, 0.01);
-  EXPECT_LE(wash->mapToItem(drawer, QPointF(0, wash->height())).y(),
-            drawer->height() - inset + 0.5)
+  EXPECT_LE(wash->mapToItem(drawer, QPointF(0, wash->height())).y(), drawer->height() - inset + 0.5)
       << "hover wash must not paint over the card border row";
 }
 
@@ -813,12 +818,12 @@ TEST_F(EditorNodeDelegateQml, NameRowGrowsWithLargeTitleFontWithoutChangingCardW
 TEST_F(EditorNodeDelegateQml, SelectedAndUnselectedOutlinesUseThemeTokensInBothThemes) {
   ui::AlcedoQanGraph adapter;
   ApplyDefault(&adapter);
-  auto* grade_item    = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
-  auto* develop_item  = adapter.NodeFor(NodeId{"develop"})->getItem();
-  auto* drt_item      = adapter.NodeFor(NodeId{"drt"})->getItem();
-  auto* grade_card    = FindDescendant(grade_item, QStringLiteral("editorNodeCard"));
-  auto* develop_card  = FindDescendant(develop_item, QStringLiteral("editorEndpointNodeCard"));
-  auto* drt_card      = FindDescendant(drt_item, QStringLiteral("editorEndpointNodeCard"));
+  auto* grade_item   = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  auto* develop_item = adapter.NodeFor(NodeId{"develop"})->getItem();
+  auto* drt_item     = adapter.NodeFor(NodeId{"drt"})->getItem();
+  auto* grade_card   = FindDescendant(grade_item, QStringLiteral("editorNodeCard"));
+  auto* develop_card = FindDescendant(develop_item, QStringLiteral("editorEndpointNodeCard"));
+  auto* drt_card     = FindDescendant(drt_item, QStringLiteral("editorEndpointNodeCard"));
   ASSERT_NE(grade_card, nullptr);
   ASSERT_NE(develop_card, nullptr);
   ASSERT_NE(drt_card, nullptr);
@@ -943,7 +948,7 @@ TEST_F(EditorNodeDelegateQml, MaskRowSelectionHighlightDoesNotRebuildList) {
   ASSERT_EQ(rows_before.size(), 3);
   QPointer<QQuickItem> first  = rows_before.at(0);
   QPointer<QQuickItem> second = rows_before.at(1);
-  QPointer<QQuickItem> third = rows_before.at(2);
+  QPointer<QQuickItem> third  = rows_before.at(2);
   EXPECT_EQ(item->property("nodeId").toString(), QStringLiteral("grade.primary"));
   EXPECT_FALSE(first->property("selected").toBool());
 

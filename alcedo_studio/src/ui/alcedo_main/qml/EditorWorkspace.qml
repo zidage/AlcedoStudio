@@ -578,6 +578,11 @@ Item {
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                if (typeof adjustmentStack.confirmMaskEditAndReturn === "function"
+                                        && adjustmentStack.confirmMaskEditAndReturn()) {
+                                    event.accepted = true
+                                    return
+                                }
                                 // Geometry confirm: bake draft crop and return to Tone.
                                 if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
                                         && adjustmentStack.confirmGeometryAndReturnToTone()) {

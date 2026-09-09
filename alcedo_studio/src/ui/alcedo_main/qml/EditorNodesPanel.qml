@@ -141,6 +141,34 @@ Item {
             qanAdapter.selectedMaskId = String(root.maskCreation.selectedMaskId || "")
     }
 
+    function selectDrawerOwner(nodeId) {
+        if (!root.nodeController || String(nodeId).length === 0) {
+            return false
+        }
+
+        // The row's MouseArea owns this click, so Qan.NodeItem does not receive
+        // it and cannot select the Color Grade for us. Select the owning Grade
+        // first because mask authoring is intentionally scoped to that node.
+        root.nodeController.selectNode(nodeId)
+        return String(root.nodeController.selectedNodeId || "") === String(nodeId)
+    }
+
+    function selectMaskFromDrawer(nodeId, maskId) {
+        if (!root.maskCreation || String(maskId).length === 0
+                || !root.selectDrawerOwner(nodeId)) {
+            return
+        }
+        root.maskCreation.selectMask(nodeId, maskId)
+    }
+
+    function removeMaskFromDrawer(nodeId, maskId) {
+        if (!root.maskCreation || String(maskId).length === 0
+                || !root.selectDrawerOwner(nodeId)) {
+            return
+        }
+        root.maskCreation.removeMask(nodeId, maskId)
+    }
+
     function detachAdapter() {
         if (root.nodeController) {
             root.nodeController.graphAdapter = null
@@ -263,12 +291,10 @@ Item {
             root.attachAdapter()
         }
         function onMaskRowSelected(nodeId, maskId) {
-            if (root.maskCreation)
-                root.maskCreation.selectMask(nodeId, maskId)
+            root.selectMaskFromDrawer(nodeId, maskId)
         }
         function onMaskRowDeleteRequested(nodeId, maskId) {
-            if (root.maskCreation)
-                root.maskCreation.removeMask(nodeId, maskId)
+            root.removeMaskFromDrawer(nodeId, maskId)
         }
     }
 

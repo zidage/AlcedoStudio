@@ -64,9 +64,8 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
       navigation_(lifecycle_, save_service_, render_, dependencies_.journal.get(),
                   dependencies_.checkpoint_store.get(), dependencies_.history.get(),
                   &navigation_state_) {
-  navigation_.SetOwnerPoster([this](std::function<void()> task) {
-    command_queue_.PostCompletion(std::move(task));
-  });
+  navigation_.SetOwnerPoster(
+      [this](std::function<void()> task) { command_queue_.PostCompletion(std::move(task)); });
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
     EditorSessionCompletion posted;
     posted.kind                 = EditorSessionCompletionKind::NavigationFinished;
@@ -120,8 +119,8 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
             rejected.operation_id = queued.operation.command_id;
             rejected.state        = lifecycle_.state();
             rejected.identity     = lifecycle_.identity();
-            rejected.message      = decision.reason.empty() ? "Editor command rejected by policy"
-                                                            : decision.reason;
+            rejected.message =
+                decision.reason.empty() ? "Editor command rejected by policy" : decision.reason;
             *reduced_result = Emit(std::move(rejected));
             EndPublication();
             reducing_command_     = previous_reducing;
@@ -491,9 +490,9 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
   if (!reducing_command_) {
-    if (auto deferred = DeferIfLiveOwnershipHeld(
-            [this, version_id] { return CheckoutVersion(version_id); },
-            "Checkout queued behind in-flight frame")) {
+    if (auto deferred =
+            DeferIfLiveOwnershipHeld([this, version_id] { return CheckoutVersion(version_id); },
+                                     "Checkout queued behind in-flight frame")) {
       return *deferred;
     }
     EditorSessionCommand command;
@@ -523,7 +522,7 @@ auto EditorSessionService::active_version_id() const -> version_ref_id_t {
   std::string      error;
   version_ref_id_t version_id;
   if (!dependencies_.history->ReadActiveVersionId(lifecycle_.history_guard(), &version_id,
-                                                   &error)) {
+                                                  &error)) {
     return {};
   }
   return version_id;
@@ -542,9 +541,9 @@ auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustment
   }
   EditorRenderAdjustmentSnapshot snapshot;
   std::string                    error;
-  auto& history = *dependencies_.history;
-  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(
-          lifecycle_.history_guard(), &snapshot, &error)) {
+  auto&                          history = *dependencies_.history;
+  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(lifecycle_.history_guard(),
+                                                                       &snapshot, &error)) {
     return {};
   }
   return snapshot;
@@ -557,8 +556,8 @@ auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
   EditorPanelProjection projection;
   std::string           error;
   auto&                 history = *dependencies_.history;
-  if (!const_cast<IEditorHistoryPort&>(history).ReadPanelProjection(
-          lifecycle_.history_guard(), &projection, &error)) {
+  if (!const_cast<IEditorHistoryPort&>(history).ReadPanelProjection(lifecycle_.history_guard(),
+                                                                    &projection, &error)) {
     return {};
   }
   projection.session_generation = lifecycle_.active_image_load_request().value;
@@ -693,9 +692,9 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   }
   AdjustmentPasteResult paste_result;
   std::string           error;
-  if (!dependencies_.history->PasteLiveRootRelativeVersion(
-          lifecycle_.history_guard(), package, std::move(version_display_name), &paste_result,
-          &error)) {
+  if (!dependencies_.history->PasteLiveRootRelativeVersion(lifecycle_.history_guard(), package,
+                                                           std::move(version_display_name),
+                                                           &paste_result, &error)) {
     return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
 
@@ -710,7 +709,6 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   }
   return started;
 }
-
 
 auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, bool route_render)
     -> EditorSessionResult {
@@ -734,9 +732,8 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   const auto identity = lifecycle_.identity();
   if (dependencies_.journal) {
     std::string finalize_error;
-    if (!dependencies_.journal->FinalizeEdit(identity.element_id,
-                                             lifecycle_.active_image_load_request().value,
-                                             &finalize_error)) {
+    if (!dependencies_.journal->FinalizeEdit(
+            identity.element_id, lifecycle_.active_image_load_request().value, &finalize_error)) {
       return Reject(finalize_error.empty() ? "Editor command could not be finalized"
                                            : std::move(finalize_error));
     }
@@ -754,10 +751,10 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   }
 
   SaveCheckpointRequest request;
-  request.element_id         = identity.element_id;
-  request.operation_id       = current_operation_id_;
+  request.element_id            = identity.element_id;
+  request.operation_id          = current_operation_id_;
   request.image_load_request_id = lifecycle_.active_image_load_request();
-  request.capture            = std::move(capture);
+  request.capture               = std::move(capture);
   if (request.capture->has_journal_range()) {
     request.last_journal_sequence = request.capture->last_journal_sequence;
   }
@@ -889,8 +886,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.task_id  = completion.task_id;
   if (marker.route_render) {
     EditorRenderCommand command;
-    command.reason =
-        dependencies_.history->LastPublishedRenderReason().value_or(EditorRenderReason::InitialFrame);
+    command.reason = dependencies_.history->LastPublishedRenderReason().value_or(
+        EditorRenderReason::InitialFrame);
     command.operation_id = current_operation_id_;
     render_.RouteInitialRender(command, lifecycle_.identity(),
                                lifecycle_.active_image_load_request());
@@ -1105,8 +1102,7 @@ auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
   const auto identity = lifecycle_.identity();
   const auto admitted = pending_input_.AdmitFieldChange(identity, patch);
   if (!admitted.accepted) {
-    return Reject(admitted.error.empty() ? "Queued adjustment input was rejected"
-                                         : admitted.error);
+    return Reject(admitted.error.empty() ? "Queued adjustment input was rejected" : admitted.error);
   }
   RequestPendingInputConsume();
   EditorSessionResult result;
@@ -1150,6 +1146,7 @@ namespace {
 [[nodiscard]] auto MaskCommandIsTerminal(EditorMaskCreationCommandKind kind) -> bool {
   return kind == EditorMaskCreationCommandKind::Finish ||
          kind == EditorMaskCreationCommandKind::Cancel ||
+         kind == EditorMaskCreationCommandKind::FinishMode ||
          kind == EditorMaskCreationCommandKind::CancelMode ||
          kind == EditorMaskCreationCommandKind::RemoveMask;
 }
@@ -1169,15 +1166,16 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
     if (command.kind == EditorMaskCreationCommandKind::RemoveMask && !command.mask_id.Empty()) {
       pending_mask_commands_.erase(
           std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
-                           [&command](const EditorMaskCreationCommand& pending) {
-                             if (pending.mask_id != command.mask_id) {
-                               return false;
-                             }
-                             return pending.kind == EditorMaskCreationCommandKind::Append ||
-                                    pending.kind == EditorMaskCreationCommandKind::BeginMove ||
-                                    pending.kind == EditorMaskCreationCommandKind::Finish ||
-                                    pending.kind == EditorMaskCreationCommandKind::BeginInput;
-                           }),
+                         [&command](const EditorMaskCreationCommand& pending) {
+                           if (pending.mask_id != command.mask_id) {
+                             return false;
+                           }
+                           return pending.kind == EditorMaskCreationCommandKind::Append ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMove ||
+                                  pending.kind == EditorMaskCreationCommandKind::Finish ||
+                                  pending.kind == EditorMaskCreationCommandKind::FinishMode ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput;
+                         }),
           pending_mask_commands_.end());
     }
     if (command.kind == EditorMaskCreationCommandKind::Append && !pending_mask_commands_.empty()) {
@@ -1228,7 +1226,7 @@ void EditorSessionService::AbortMaskCreation() {
     return;
   }
   std::string error;
-  const auto guard = lifecycle_.history_guard();
+  const auto  guard = lifecycle_.history_guard();
   (void)dependencies_.history->WithLockedLiveDocument(
       guard,
       [this](PipelineDocument& document, MiniGitWorkingHistory& history,
@@ -1261,6 +1259,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
       return mask_creation_.FinishMaskInput();
     case EditorMaskCreationCommandKind::Cancel:
       return mask_creation_.CancelMaskInput();
+    case EditorMaskCreationCommandKind::FinishMode:
+      return mask_creation_.FinishCreationMode();
     case EditorMaskCreationCommandKind::CancelMode:
       return mask_creation_.CancelCreationMode();
     case EditorMaskCreationCommandKind::RemoveMask:
@@ -1285,13 +1285,12 @@ auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, boo
     return result;
   }
   EditorRenderCommand render_command;
-  render_command.reason                    = quality_requested ? EditorRenderReason::SettledMaskEdit
-                                                               : EditorRenderReason::InteractiveAdjustment;
-  render_command.live_parameters_applied   = true;
-  render_command.operation_id              = current_operation_id_;
-  const auto request_id =
-      render_.RouteInitialRender(render_command, lifecycle_.identity(),
-                                 lifecycle_.active_image_load_request());
+  render_command.reason                  = quality_requested ? EditorRenderReason::SettledMaskEdit
+                                                             : EditorRenderReason::InteractiveAdjustment;
+  render_command.live_parameters_applied = true;
+  render_command.operation_id            = current_operation_id_;
+  const auto request_id = render_.RouteInitialRender(render_command, lifecycle_.identity(),
+                                                     lifecycle_.active_image_load_request());
   if (request_id == 0) {
     serial_admission_.AbortCycle();
   } else {
@@ -1305,8 +1304,8 @@ auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, boo
   result.state             = lifecycle_.state();
   result.identity          = lifecycle_.identity();
   result.render_request_id = request_id;
-  result.message           = quality_requested ? "Settled Mask render routed"
-                                               : "Interactive Mask render routed";
+  result.message =
+      quality_requested ? "Settled Mask render routed" : "Interactive Mask render routed";
   return result;
 }
 
@@ -1337,11 +1336,11 @@ void EditorSessionService::ConsumePendingMaskCommands() {
     serial_admission_.AbortCycle();
     return;
   }
-  bool interactive_preview = false;
-  bool quality_requested   = false;
-  bool committed           = false;
+  bool        interactive_preview = false;
+  bool        quality_requested   = false;
+  bool        committed           = false;
   std::string error;
-  const auto applied = dependencies_.history->WithLockedLiveDocument(
+  const auto  applied = dependencies_.history->WithLockedLiveDocument(
       lifecycle_.history_guard(),
       [this, &batch, &interactive_preview, &quality_requested, &committed](
           PipelineDocument& document, MiniGitWorkingHistory& history,
@@ -1353,8 +1352,8 @@ void EditorSessionService::ConsumePendingMaskCommands() {
           auto result = ApplyMaskCreationCommand(command);
           if (!result.accepted) {
             if (op_error != nullptr) {
-              *op_error = result.error.empty() ? "Mask creation command was rejected"
-                                               : result.error;
+              *op_error =
+                  result.error.empty() ? "Mask creation command was rejected" : result.error;
             }
             if (mask_creation_.HasOpenOperation()) {
               (void)mask_creation_.CancelMaskInput();
@@ -1367,7 +1366,7 @@ void EditorSessionService::ConsumePendingMaskCommands() {
           if (command.kind == EditorMaskCreationCommandKind::Finish && result.committed &&
               !result.mask_id.Empty()) {
             (void)mask_creation_.SelectMask(mask_creation_.node_id(), result.mask_id,
-                                            lifecycle_.identity());
+                                             lifecycle_.identity());
           }
         }
         return true;
@@ -1438,8 +1437,7 @@ void EditorSessionService::TryConsumePendingInput() {
   if (peek.sequences.empty()) {
     return;
   }
-  const bool interactive =
-      peek.sequences.front().seal == EditorPendingInputBoundaryKind::None;
+  const bool interactive = peek.sequences.front().seal == EditorPendingInputBoundaryKind::None;
   if (!serial_admission_.TryBeginCycle(interactive)) {
     return;
   }
@@ -1459,8 +1457,8 @@ void EditorSessionService::TryConsumePendingInput() {
 
 auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& sequence)
     -> EditorSessionResult {
-  const auto guard = lifecycle_.history_guard();
-  const auto ident = lifecycle_.identity();
+  const auto guard   = lifecycle_.history_guard();
+  const auto ident   = lifecycle_.identity();
   auto       outcome = edit_.HandlePendingSequence(sequence, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
       outcome.kind == EditorEditOutcome::Kind::Failed) {
@@ -1534,7 +1532,7 @@ void EditorSessionService::FinishSerialFrameIfNeeded(const EditorRenderResult& r
 }
 
 auto EditorSessionService::DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry,
-                                                    std::string message)
+                                                    std::string                          message)
     -> std::optional<EditorSessionResult> {
   if (!serial_admission_.HoldsOwnership() || !retry) {
     return std::nullopt;
@@ -1628,7 +1626,7 @@ auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSess
 auto EditorSessionService::Undo() -> EditorSessionResult {
   if (!reducing_command_) {
     if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Undo(); },
-                                                "Undo queued behind in-flight frame")) {
+                                                 "Undo queued behind in-flight frame")) {
       return *deferred;
     }
     EditorSessionCommand command;
@@ -1667,7 +1665,7 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
 auto EditorSessionService::Redo() -> EditorSessionResult {
   if (!reducing_command_) {
     if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Redo(); },
-                                                "Redo queued behind in-flight frame")) {
+                                                 "Redo queued behind in-flight frame")) {
       return *deferred;
     }
     EditorSessionCommand command;
@@ -1922,14 +1920,13 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
     });
   }
   EditorRenderCommand command;
-  command.operation_id = current_operation_id_;
-  command.reason       = reason;
-  command.view_region  = std::move(region);
-  const auto view_identity  = lifecycle_.identity();
-  const auto view_state     = lifecycle_.state();
-  const auto load_request   = lifecycle_.active_image_load_request();
-  const auto event =
-      render_.RouteViewChange(command, view_identity, load_request, view_state);
+  command.operation_id     = current_operation_id_;
+  command.reason           = reason;
+  command.view_region      = std::move(region);
+  const auto view_identity = lifecycle_.identity();
+  const auto view_state    = lifecycle_.state();
+  const auto load_request  = lifecycle_.active_image_load_request();
+  const auto event = render_.RouteViewChange(command, view_identity, load_request, view_state);
   EditorSessionResult result;
   result.state    = event.state;
   result.identity = event.identity;
@@ -2000,28 +1997,26 @@ void EditorSessionService::SetBackgroundActionRestrictions(
 
 auto EditorSessionService::BuildActionInputs() -> EditorActionInputs {
   EditorActionInputs inputs;
-  inputs.session_state = lifecycle_.state();
-  inputs.has_image     = lifecycle_.has_image();
-  inputs.package_available = package_available_;
-  inputs.background_blocks_select_image = background_restrictions_.blocks_select_image;
-  inputs.background_blocks_paste        = background_restrictions_.blocks_paste;
-  inputs.background_blocks_checkout     = background_restrictions_.blocks_checkout;
-  inputs.background_blocks_workspace    = background_restrictions_.blocks_workspace;
+  inputs.session_state                   = lifecycle_.state();
+  inputs.has_image                       = lifecycle_.has_image();
+  inputs.package_available               = package_available_;
+  inputs.background_blocks_select_image  = background_restrictions_.blocks_select_image;
+  inputs.background_blocks_paste         = background_restrictions_.blocks_paste;
+  inputs.background_blocks_checkout      = background_restrictions_.blocks_checkout;
+  inputs.background_blocks_workspace     = background_restrictions_.blocks_workspace;
   // A second selection may queue/replace while a switch save or acquire is
   // already in flight (CQ1 pending_next_target). Allow SelectImage as soon as
   // navigation owns a pending action, not only after a target was queued.
-  inputs.can_replace_unstarted_selection =
-      navigation_state_.pending_action.has_value() ||
-      navigation_state_.pending_next_target.has_value();
-  inputs.recovery_allows_retry =
-      navigation_.has_pending_recovery() &&
-      lifecycle_.state() == EditorSessionState::RetainedImageFailure;
+  inputs.can_replace_unstarted_selection = navigation_state_.pending_action.has_value() ||
+                                           navigation_state_.pending_next_target.has_value();
+  inputs.recovery_allows_retry = navigation_.has_pending_recovery() &&
+                                 lifecycle_.state() == EditorSessionState::RetainedImageFailure;
   inputs.recovery_allows_discard_continue = inputs.recovery_allows_retry;
   inputs.recovery_allows_cancel           = inputs.recovery_allows_retry;
 
   if (dependencies_.history && lifecycle_.has_history_guard()) {
-    std::string error;
-  EditorHistorySnapshot snapshot;
+    std::string           error;
+    EditorHistorySnapshot snapshot;
     if (dependencies_.history->ReadHistorySnapshot(lifecycle_.history_guard(), &snapshot, &error)) {
       inputs.can_undo = snapshot.can_undo;
       inputs.can_redo = snapshot.can_redo;
@@ -2046,7 +2041,7 @@ void EditorSessionService::PublishActionAvailabilityIfChanged() {
 void EditorSessionService::AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
                                         sl_element_id_t element_id, image_id_t image_id,
                                         ImageLoadRequestId image_load_request,
-                                        std::string blocking_reason) {
+                                        std::string        blocking_reason) {
   EditorOperationLease lease;
   lease.operation.command_id = command_id;
   lease.kind                 = kind;
@@ -2068,14 +2063,13 @@ void EditorSessionService::ReleaseLeaseByCommandId(std::uint64_t command_id) {
 }
 
 void EditorSessionService::ReleaseLeasesByKind(EditorOperationLeaseKind kind) {
-  std::erase_if(active_leases_, [kind](const EditorOperationLease& lease) {
-    return lease.kind == kind;
-  });
+  std::erase_if(active_leases_,
+                [kind](const EditorOperationLease& lease) { return lease.kind == kind; });
 }
 
-void EditorSessionService::SetPendingPresentationTarget(sl_element_id_t element_id,
-                                                      image_id_t       image_id,
-                                                      ImageLoadRequestId image_load_request) {
+void EditorSessionService::SetPendingPresentationTarget(sl_element_id_t    element_id,
+                                                        image_id_t         image_id,
+                                                        ImageLoadRequestId image_load_request) {
   pending_presentation_target_ =
       EditorPendingPresentationTarget{element_id, image_id, image_load_request};
 }

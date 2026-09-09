@@ -13,8 +13,8 @@
 #include <exception>
 
 #include "app/editor_adjustment_context.hpp"
-#include "app/editor_parameter_write.hpp"
 #include "app/editor_panel_projection.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
@@ -116,8 +116,7 @@ void EditorSessionController::BindAdmissionDeadline() {
       });
       return;
     }
-    const int delay_ms =
-        static_cast<int>((delay_ns + 999999) / 1000000);
+    const int delay_ms = static_cast<int>((delay_ns + 999999) / 1000000);
     timer->start(std::max(1, delay_ms));
   });
 }
@@ -390,7 +389,7 @@ void EditorSessionController::RefreshImageExifDisplay() {
   if (image_id_ == exif_image_id_ && session_generation_ == exif_session_generation_) {
     return;
   }
-  exif_image_id_          = image_id_;
+  exif_image_id_           = image_id_;
   exif_session_generation_ = session_generation_;
   alcedo::EditorImageExifDisplay display;
   if (image_id_ != 0 && image_exif_reader_) {
@@ -404,12 +403,14 @@ void EditorSessionController::RefreshImageExifDisplay() {
 }
 
 void EditorSessionController::ApplyExifRowText(const alcedo::EditorExifRowText& text) {
-  const auto shutter  = QString::fromUtf8(text.shutter.data(), static_cast<int>(text.shutter.size()));
-  const auto iso      = QString::fromUtf8(text.iso.data(), static_cast<int>(text.iso.size()));
-  const auto aperture = QString::fromUtf8(text.aperture.data(), static_cast<int>(text.aperture.size()));
-  const auto focal    = QString::fromUtf8(text.focal.data(), static_cast<int>(text.focal.size()));
+  const auto shutter =
+      QString::fromUtf8(text.shutter.data(), static_cast<int>(text.shutter.size()));
+  const auto iso = QString::fromUtf8(text.iso.data(), static_cast<int>(text.iso.size()));
+  const auto aperture =
+      QString::fromUtf8(text.aperture.data(), static_cast<int>(text.aperture.size()));
+  const auto focal     = QString::fromUtf8(text.focal.data(), static_cast<int>(text.focal.size()));
   const auto line_utf8 = alcedo::FormatEditorImageExifLine(text);
-  const auto line = QString::fromUtf8(line_utf8.data(), static_cast<int>(line_utf8.size()));
+  const auto line      = QString::fromUtf8(line_utf8.data(), static_cast<int>(line_utf8.size()));
   if (exif_line_text_ == line && exif_shutter_text_ == shutter && exif_iso_text_ == iso &&
       exif_aperture_text_ == aperture && exif_focal_text_ == focal) {
     return;
@@ -1335,13 +1336,13 @@ auto EditorSessionController::mask_creation_source() const -> std::optional<alce
 
 auto EditorSessionController::mask_creation_last_removed_mask_id() const -> alcedo::MaskId {
   return session_backend_ ? session_backend_->mask_creation_last_removed_mask_id()
-                            : alcedo::MaskId{};
+                          : alcedo::MaskId{};
 }
 
 void EditorSessionController::SetImageExifReader(
     std::function<alcedo::EditorImageExifDisplay(uint)> reader) {
-  image_exif_reader_     = std::move(reader);
-  exif_image_id_         = 0;
+  image_exif_reader_       = std::move(reader);
+  exif_image_id_           = 0;
   exif_session_generation_ = 0;
   RefreshImageExifDisplay();
 }
@@ -1368,8 +1369,7 @@ void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId& 
 }
 
 auto EditorSessionController::PeekPendingInput() const -> alcedo::EditorPendingInputView {
-  return session_backend_ ? session_backend_->PeekPendingInput()
-                          : alcedo::EditorPendingInputView{};
+  return session_backend_ ? session_backend_->PeekPendingInput() : alcedo::EditorPendingInputView{};
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {
@@ -1436,10 +1436,12 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("raw") || key == QLatin1String("rawdecode")) {
     return QStringLiteral("raw");
   }
+  if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
+    return QStringLiteral("masks");
+  }
   if (key == QLatin1String("detail")) {
     return QStringLiteral("detail");
   }
-  // The Masks body overlays the six navbar pages. It is not a persisted panel.
   return QStringLiteral("tone");
 }
 
@@ -1464,9 +1466,8 @@ auto EditorSessionController::history_revision() const -> qulonglong {
 }
 
 auto EditorSessionController::active_version_id() const -> QString {
-  return session_backend_
-             ? QString::fromStdString(session_backend_->active_version_id().ToString())
-             : QString{};
+  return session_backend_ ? QString::fromStdString(session_backend_->active_version_id().ToString())
+                          : QString{};
 }
 
 auto EditorSessionController::pipeline_document() const -> const alcedo::PipelineDocument* {
@@ -1518,6 +1519,9 @@ void EditorSessionController::LoadDesktopUiPrefs() {
 }
 
 void EditorSessionController::SaveDesktopUiPrefs() const {
+  if (active_adjustment_panel_ == QLatin1String("masks")) {
+    return;
+  }
   QSettings settings;
   settings.setValue(QLatin1String(kActiveAdjustmentPanelKey), active_adjustment_panel_);
   settings.sync();

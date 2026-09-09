@@ -37,6 +37,8 @@ Item {
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
     readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    readonly property bool maskPanelAvailable: root.maskCreation
+                                               && root.maskCreation.maskControlsActive
     readonly property string activePanel: editorSession
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
@@ -54,7 +56,10 @@ Item {
         { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
           label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
         { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
-          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" }
+          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" },
+        { key: "masks", icon: "qrc:/panel_icons/masks.svg",
+          label: qsTr("Mask"), itemObjectName: "editorAdjustmentNav_masks",
+          enabled: root.maskPanelAvailable }
     ]
 
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
@@ -104,6 +109,7 @@ Item {
     }
 
     property int lastAppliedRevision: -1
+    property string panelBeforeMaskEdit: "tone"
 
     EditorLutCatalogModel {
         id: lutModel
@@ -129,6 +135,8 @@ Item {
             geometryPanel.loadFromSnapshot(snapshot)
         if (typeof rawPanel.loadFromSnapshot === "function")
             rawPanel.loadFromSnapshot(snapshot)
+        if (typeof masksPanel.loadFromSnapshot === "function")
+            masksPanel.loadFromSnapshot(snapshot)
     }
 
     function scheduleLoadFromSession() {
@@ -143,9 +151,18 @@ Item {
     function selectPanel(panel) {
         if (!editorSession)
             return
-        if (root.maskCreation && root.maskCreation.bodyVisible)
-            root.maskCreation.hideBody()
+        if (panel === "masks" && !root.maskPanelAvailable)
+            return
+        if (root.activePanel === "masks" && panel !== "masks" && root.maskCreation)
+            root.maskCreation.finishBody()
         editorSession.activeAdjustmentPanel = panel
+    }
+
+    function confirmMaskEditAndReturn() {
+        if (root.activePanel !== "masks" || !root.maskCreation)
+            return false
+        root.maskCreation.finishBody()
+        return true
     }
 
     function confirmGeometryAndReturnToTone() {
@@ -165,6 +182,7 @@ Item {
         case "display": return qsTr("Display Transform")
         case "geometry": return qsTr("Geometry")
         case "raw": return qsTr("RAW Decode")
+        case "masks": return qsTr("Mask")
         default: return qsTr("Tone")
         }
     }
@@ -260,6 +278,7 @@ Item {
                         case "display": return 3
                         case "geometry": return 4
                         case "raw": return 5
+                        case "masks": return 6
                         default: return 0
                         }
                     }
@@ -315,19 +334,16 @@ Item {
                         editorSession: root.editorSession
                         controlsEnabled: root.controlsEnabled
                     }
-                }
 
-                EditorMasksContextPanel {
-                    id: masksPanel
-                    objectName: "editorAdjustmentPanel_masksOverlay"
-                    anchors.fill: parent
-                    visible: root.maskCreation && root.maskCreation.bodyVisible
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    nodeController: root.nodeController
-                    maskCreation: root.maskCreation
-                    controlsEnabled: root.controlsEnabled
-                    z: 1
+                    EditorMasksContextPanel {
+                        id: masksPanel
+                        objectName: "editorAdjustmentPanel_masks"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        nodeController: root.nodeController
+                        maskCreation: root.maskCreation
+                        controlsEnabled: root.controlsEnabled && root.maskPanelAvailable
+                    }
                 }
             }
         }
@@ -337,6 +353,21 @@ Item {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
+        }
+    }
+    Connections {
+        target: root.maskCreation
+        function onMaskCreationChanged() {
+            if (!root.editorSession)
+                return
+            if (root.maskCreation && root.maskCreation.bodyVisible) {
+                if (root.activePanel !== "masks") {
+                    root.panelBeforeMaskEdit = root.activePanel
+                    root.editorSession.activeAdjustmentPanel = "masks"
+                }
+            } else if (root.activePanel === "masks") {
+                root.editorSession.activeAdjustmentPanel = root.panelBeforeMaskEdit
+            }
         }
     }
     onEditorSessionChanged: {

@@ -380,6 +380,14 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
   void SetFailNodeCommands(bool fail) { fail_node_commands_ = fail; }
+  void AddMaskToPrimaryGrade(MaskModel mask) {
+    auto* grade = document_->PrimaryGrade();
+    if (grade == nullptr) {
+      return;
+    }
+    grade->AddMask(std::move(mask), grade->Masks().size());
+    NotifyHistoryChange();
+  }
 
  private:
   auto Accepted(const char* message) const -> EditorSessionResult {

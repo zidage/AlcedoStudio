@@ -23,7 +23,6 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
-
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -38,6 +37,84 @@ namespace {
 
 constexpr auto kEmDash = "\xE2\x80\x94";
 
+class FakeMaskCreation final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool bodyVisible READ bodyVisible NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool maskControlsActive READ maskControlsActive NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool creating READ creating NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString toolKind READ toolKind NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString selectedMaskId READ selectedMaskId NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal majorRadiusPercent READ majorRadiusPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal minorRadiusPercent READ minorRadiusPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal rotationDegrees READ rotationDegrees NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal innerFeatherPercent READ innerFeatherPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal outerFeatherPercent READ outerFeatherPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal transitionPercent READ transitionPercent NOTIFY maskCreationChanged)
+
+ public:
+  auto             bodyVisible() const -> bool { return active_; }
+  auto             maskControlsActive() const -> bool { return active_; }
+  auto             creating() const -> bool { return creating_; }
+  auto             toolKind() const -> QString { return tool_kind_; }
+  auto             selectedMaskId() const -> QString { return selected_mask_id_; }
+  auto             majorRadiusPercent() const -> qreal { return 28.0; }
+  auto             minorRadiusPercent() const -> qreal { return 18.0; }
+  auto             rotationDegrees() const -> qreal { return 20.0; }
+  auto             innerFeatherPercent() const -> qreal { return 25.0; }
+  auto             outerFeatherPercent() const -> qreal { return 20.0; }
+  auto             transitionPercent() const -> qreal { return 30.0; }
+  auto             finishCount() const -> int { return finish_count_; }
+
+  Q_INVOKABLE void beginRadial() { Open(QStringLiteral("radial"), true); }
+  Q_INVOKABLE void beginLinear() { Open(QStringLiteral("linear"), true); }
+  Q_INVOKABLE void cancel() { Close(); }
+  Q_INVOKABLE void hideBody() { finishBody(); }
+  Q_INVOKABLE void finishBody() {
+    ++finish_count_;
+    Close();
+  }
+  Q_INVOKABLE void beginMajorRadius() {}
+  Q_INVOKABLE void updateMajorRadius(qreal) {}
+  Q_INVOKABLE void beginMinorRadius() {}
+  Q_INVOKABLE void updateMinorRadius(qreal) {}
+  Q_INVOKABLE void beginRotation() {}
+  Q_INVOKABLE void updateRotation(qreal) {}
+  Q_INVOKABLE void beginInnerFeather() {}
+  Q_INVOKABLE void updateInnerFeather(qreal) {}
+  Q_INVOKABLE void beginOuterFeather() {}
+  Q_INVOKABLE void updateOuterFeather(qreal) {}
+  Q_INVOKABLE void beginTransition() {}
+  Q_INVOKABLE void updateTransition(qreal) {}
+  Q_INVOKABLE void finishAnalyticControl() {}
+
+  void             SelectExisting(const QString& kind) { Open(kind, false); }
+
+ signals:
+  void maskCreationChanged();
+
+ private:
+  void Open(const QString& kind, bool creating) {
+    active_           = true;
+    creating_         = creating;
+    tool_kind_        = kind;
+    selected_mask_id_ = creating ? QString{} : QStringLiteral("mask.selected");
+    emit maskCreationChanged();
+  }
+  void Close() {
+    active_   = false;
+    creating_ = false;
+    tool_kind_.clear();
+    selected_mask_id_.clear();
+    emit maskCreationChanged();
+  }
+
+  bool    active_   = false;
+  bool    creating_ = false;
+  QString tool_kind_;
+  QString selected_mask_id_;
+  int     finish_count_ = 0;
+};
+
 class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
   Q_PROPERTY(
@@ -50,8 +127,10 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_PROPERTY(QString exifIsoText READ exifIsoText NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifApertureText READ exifApertureText NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifFocalText READ exifFocalText NOTIFY ImageExifChanged)
+  Q_PROPERTY(QObject* maskCreation READ maskCreation CONSTANT)
 
  public:
+  explicit HeaderSession(QObject* mask_creation = nullptr) : mask_creation_(mask_creation) {}
   auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
   auto snapshotRevision() const -> quint64 { return revision_; }
   auto activeAdjustmentPanel() const -> QString { return panel_; }
@@ -67,15 +146,16 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   auto exifIsoText() const -> QString { return iso_; }
   auto exifApertureText() const -> QString { return aperture_; }
   auto exifFocalText() const -> QString { return focal_; }
+  auto maskCreation() const -> QObject* { return mask_creation_; }
 
   void setExif(const QString& shutter, const QString& iso, const QString& aperture,
-              const QString& focal) {
-    shutter_  = shutter;
-    iso_      = iso;
-    aperture_ = aperture;
-    focal_    = focal;
+               const QString& focal) {
+    shutter_           = shutter;
+    iso_               = iso;
+    aperture_          = aperture;
+    focal_             = focal;
     const QString dash = QString::fromUtf8(kEmDash);
-    QStringList parts;
+    QStringList   parts;
     for (const auto& token : {focal, aperture, shutter, iso}) {
       if (!token.isEmpty() && token != dash) {
         parts.push_back(token);
@@ -116,22 +196,23 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
 
  private:
   QVariantMap snapshot_;
-  quint64     revision_     = 0;
-  QString     panel_        = QStringLiteral("tone");
-  QString     line_         = QString::fromUtf8(kEmDash);
-  QString     shutter_      = QString::fromUtf8(kEmDash);
-  QString     iso_          = QString::fromUtf8(kEmDash);
-  QString     aperture_     = QString::fromUtf8(kEmDash);
-  QString     focal_        = QString::fromUtf8(kEmDash);
-  int         submit_count_ = 0;
+  quint64     revision_      = 0;
+  QString     panel_         = QStringLiteral("tone");
+  QString     line_          = QString::fromUtf8(kEmDash);
+  QString     shutter_       = QString::fromUtf8(kEmDash);
+  QString     iso_           = QString::fromUtf8(kEmDash);
+  QString     aperture_      = QString::fromUtf8(kEmDash);
+  QString     focal_         = QString::fromUtf8(kEmDash);
+  int         submit_count_  = 0;
+  QObject*    mask_creation_ = nullptr;
 };
 
 class FakeNodeController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString selectedNodeName READ selectedNodeName NOTIFY SelectionChanged)
   Q_PROPERTY(QString selectedNodeKind READ selectedNodeKind NOTIFY SelectionChanged)
-  Q_PROPERTY(QStringList supportedAdjustmentPanels READ supportedAdjustmentPanels NOTIFY
-                 SelectionChanged)
+  Q_PROPERTY(
+      QStringList supportedAdjustmentPanels READ supportedAdjustmentPanels NOTIFY SelectionChanged)
   Q_PROPERTY(QVariantList selectedNodeMasks READ selectedNodeMasks NOTIFY SelectionChanged)
 
  public:
@@ -151,8 +232,8 @@ class FakeNodeController final : public QObject {
   void SelectionChanged();
 
  private:
-  QString      name_ = QStringLiteral("Color Grade");
-  QString      kind_ = QStringLiteral("colorGrade");
+  QString      name_   = QStringLiteral("Color Grade");
+  QString      kind_   = QStringLiteral("colorGrade");
   QStringList  panels_ = {QStringLiteral("tone"), QStringLiteral("look"), QStringLiteral("lut"),
                           QStringLiteral("masks")};
   QVariantList masks_;
@@ -161,7 +242,8 @@ class FakeNodeController final : public QObject {
 class FakeLutCatalogModel final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
-  Q_PROPERTY(QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
+  Q_PROPERTY(
+      QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
   Q_PROPERTY(int selectedIndex READ selectedIndex NOTIFY selectedPathChanged)
 
  public:
@@ -237,7 +319,8 @@ class StackHarness {
     engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
 
     QQmlComponent component(
-        &engine_, QUrl::fromLocalFile(QmlDirectory() + QStringLiteral("/EditorAdjustmentStack.qml")));
+        &engine_,
+        QUrl::fromLocalFile(QmlDirectory() + QStringLiteral("/EditorAdjustmentStack.qml")));
     if (component.isError()) {
       errors_ = component.errors();
       return;
@@ -285,8 +368,8 @@ class StackHarness {
 
 void ExpectNavPresent(const StackHarness& harness) {
   for (const auto& panel : {QStringLiteral("tone"), QStringLiteral("look"), QStringLiteral("lut"),
-                             QStringLiteral("display"), QStringLiteral("geometry"),
-                             QStringLiteral("raw")}) {
+                            QStringLiteral("display"), QStringLiteral("geometry"),
+                            QStringLiteral("raw"), QStringLiteral("masks")}) {
     ASSERT_NE(harness.find(QStringLiteral("editorAdjustmentNav_") + panel), nullptr)
         << panel.toStdString();
   }
@@ -311,8 +394,7 @@ void ExpectMaskToolButtons(const StackHarness& harness) {
   ASSERT_NE(brush, nullptr);
   ASSERT_NE(radial, nullptr);
   ASSERT_NE(gradient, nullptr);
-  EXPECT_EQ(brush->property("iconSrc").toUrl(),
-            QUrl(QStringLiteral("qrc:/mask_icons/brush.svg")));
+  EXPECT_EQ(brush->property("iconSrc").toUrl(), QUrl(QStringLiteral("qrc:/mask_icons/brush.svg")));
   EXPECT_EQ(radial->property("iconSrc").toUrl(),
             QUrl(QStringLiteral("qrc:/mask_icons/radial.svg")));
   EXPECT_EQ(gradient->property("iconSrc").toUrl(),
@@ -331,7 +413,8 @@ void ExpectExifAboveNameRow(const StackHarness& harness) {
 }
 
 void ExpectFourEqualExifTokens(const StackHarness& harness, const QString& focal,
-                               const QString& aperture, const QString& shutter, const QString& iso) {
+                               const QString& aperture, const QString& shutter,
+                               const QString& iso) {
   auto* focal_item    = harness.find(QStringLiteral("editorAdjustmentHeaderFocal"));
   auto* aperture_item = harness.find(QStringLiteral("editorAdjustmentHeaderAperture"));
   auto* shutter_item  = harness.find(QStringLiteral("editorAdjustmentHeaderShutter"));
@@ -372,19 +455,19 @@ void ExpectNameThenMaskTools(const StackHarness& harness) {
   ASSERT_NE(radial, nullptr);
   ASSERT_NE(gradient, nullptr);
   EXPECT_EQ(harness.find(QStringLiteral("editorAdjustmentHeaderDivider")), nullptr);
-  const qreal name_right     = name->mapToItem(root, QPointF(name->width(), 0)).x();
-  const qreal brush_left     = brush->mapToItem(root, QPointF(0, 0)).x();
-  const qreal brush_right    = brush->mapToItem(root, QPointF(brush->width(), 0)).x();
-  const qreal radial_left    = radial->mapToItem(root, QPointF(0, 0)).x();
-  const qreal radial_right   = radial->mapToItem(root, QPointF(radial->width(), 0)).x();
-  const qreal gradient_left  = gradient->mapToItem(root, QPointF(0, 0)).x();
+  const qreal name_right    = name->mapToItem(root, QPointF(name->width(), 0)).x();
+  const qreal brush_left    = brush->mapToItem(root, QPointF(0, 0)).x();
+  const qreal brush_right   = brush->mapToItem(root, QPointF(brush->width(), 0)).x();
+  const qreal radial_left   = radial->mapToItem(root, QPointF(0, 0)).x();
+  const qreal radial_right  = radial->mapToItem(root, QPointF(radial->width(), 0)).x();
+  const qreal gradient_left = gradient->mapToItem(root, QPointF(0, 0)).x();
   EXPECT_LE(name_right, brush_left + 0.5);
   EXPECT_LE(brush_right, radial_left + 0.5);
   EXPECT_LE(radial_right, gradient_left + 0.5);
 }
 
 TEST(EditorAdjustmentHeaderQmlTest, HeaderAtMinPreferredAndMaxWidthKeepsNameAndExifAboveNav) {
-  HeaderSession     session;
+  HeaderSession      session;
   FakeNodeController nodes;
   session.setExif(QStringLiteral("1/250s"), QStringLiteral("ISO 100"), QStringLiteral("f2.8"),
                   QStringLiteral("50mm"));
@@ -415,7 +498,7 @@ TEST(EditorAdjustmentHeaderQmlTest, HeaderAtMinPreferredAndMaxWidthKeepsNameAndE
 TEST(EditorAdjustmentHeaderQmlTest, LongNodeNameElidesAndKeepsFullAccessibleName) {
   HeaderSession      session;
   FakeNodeController nodes;
-  const QString long_name =
+  const QString      long_name =
       QStringLiteral("Color Grade with an extremely long display name for elision");
   nodes.setSelection(long_name, QStringLiteral("colorGrade"),
                      {QStringLiteral("tone"), QStringLiteral("look")});
@@ -436,8 +519,8 @@ TEST(EditorAdjustmentHeaderQmlTest, MissingExifShowsEmDashOnFourTokens) {
   FakeNodeController nodes;
   StackHarness       harness(&session, &nodes, 320);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  const QString dash = QString::fromUtf8(kEmDash);
-  auto* header = harness.find(QStringLiteral("editorAdjustmentHeader"));
+  const QString dash   = QString::fromUtf8(kEmDash);
+  auto*         header = harness.find(QStringLiteral("editorAdjustmentHeader"));
   ASSERT_NE(header, nullptr);
   EXPECT_EQ(header->property("focalText").toString(), dash);
   EXPECT_EQ(header->property("apertureText").toString(), dash);
@@ -475,9 +558,9 @@ TEST(EditorAdjustmentHeaderQmlTest, BothThemesMapHeaderInkToAppThemeTokens) {
                      {QStringLiteral("raw"), QStringLiteral("geometry")});
   StackHarness harness(&session, &nodes, 320);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  auto& theme = AppTheme::Instance();
-  const int original = theme.currentThemeIndex();
-  const auto themes  = theme.availableThemes();
+  auto&      theme    = AppTheme::Instance();
+  const int  original = theme.currentThemeIndex();
+  const auto themes   = theme.availableThemes();
   ASSERT_GE(themes.size(), 2);
 
   auto* name  = harness.find(QStringLiteral("editorAdjustmentHeaderNodeName"));
@@ -497,7 +580,7 @@ TEST(EditorAdjustmentHeaderQmlTest, BothThemesMapHeaderInkToAppThemeTokens) {
 TEST(EditorAdjustmentHeaderQmlTest, ReduceMotionAndTitleSizeKeepHeaderAboveNav) {
   HeaderSession      session;
   FakeNodeController nodes;
-  const QString long_name = QStringLiteral("Second Color Grade with wrapped title text");
+  const QString      long_name = QStringLiteral("Second Color Grade with wrapped title text");
   nodes.setSelection(long_name, QStringLiteral("colorGrade"),
                      {QStringLiteral("tone"), QStringLiteral("look"), QStringLiteral("lut")});
   AppTheme::Instance().setReduceMotion(true);
@@ -529,6 +612,67 @@ TEST(EditorAdjustmentHeaderQmlTest, NavbarKeepsAllPagesWhenSelectedNodeKindChang
                                         Q_ARG(QVariant, QVariant(QStringLiteral("geometry")))));
   ProcessEvents(20);
   EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("geometry"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, MaskPageActivatesOnlyForSelectedOrCreatingMask) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  StackHarness       harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* nav   = harness.find(QStringLiteral("editorAdjustmentNav_masks"));
+  auto* panel = harness.find(QStringLiteral("editorAdjustmentPanel_masks"));
+  ASSERT_NE(nav, nullptr);
+  ASSERT_NE(panel, nullptr);
+  EXPECT_FALSE(nav->isEnabled());
+  EXPECT_EQ(harness.find(QStringLiteral("editorMasksDoneButton")), nullptr);
+  EXPECT_EQ(harness.find(QStringLiteral("editorMasksCancelButton")), nullptr);
+
+  mask_creation.beginRadial();
+  ProcessEvents(20);
+  EXPECT_TRUE(nav->isEnabled());
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("masks"));
+  auto* radius = harness.find(QStringLiteral("editorMasksMajorRadiusSlider"));
+  ASSERT_NE(radius, nullptr);
+  EXPECT_FALSE(radius->isVisible());
+
+  mask_creation.SelectExisting(QStringLiteral("radial"));
+  ProcessEvents(20);
+  EXPECT_TRUE(radius->isVisible());
+  EXPECT_NE(harness.find(QStringLiteral("editorMasksMinorRadiusSlider")), nullptr);
+  EXPECT_NE(harness.find(QStringLiteral("editorMasksRotationSlider")), nullptr);
+  EXPECT_NE(harness.find(QStringLiteral("editorMasksInnerFeatherSlider")), nullptr);
+  EXPECT_NE(harness.find(QStringLiteral("editorMasksOuterFeatherSlider")), nullptr);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(harness.root(), "selectPanel",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("look")))));
+  ProcessEvents(20);
+  EXPECT_EQ(mask_creation.finishCount(), 1);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("look"));
+  EXPECT_FALSE(nav->isEnabled());
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, EnterEquivalentFinishesMaskEditAndRestoresPanel) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  session.setActiveAdjustmentPanel(QStringLiteral("lut"));
+  StackHarness harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  mask_creation.SelectExisting(QStringLiteral("linear"));
+  ProcessEvents(20);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("masks"));
+  auto* transition = harness.find(QStringLiteral("editorMasksTransitionSlider"));
+  ASSERT_NE(transition, nullptr);
+  EXPECT_TRUE(transition->isVisible());
+
+  QVariant returned;
+  ASSERT_TRUE(QMetaObject::invokeMethod(harness.root(), "confirmMaskEditAndReturn",
+                                        Q_RETURN_ARG(QVariant, returned)));
+  ProcessEvents(20);
+  EXPECT_TRUE(returned.toBool());
+  EXPECT_EQ(mask_creation.finishCount(), 1);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("lut"));
 }
 
 TEST(EditorAdjustmentHeaderQmlTest, GeometryPanelStatesWholeImageScope) {
@@ -587,7 +731,7 @@ TEST(EditorAdjustmentHeaderQmlTest, LutSelectionAndScrollSurviveStackLoadWithout
     ProcessEvents(20);
   }
   const qreal y_before = list->property("contentY").toReal();
-  const int   submits   = session.submitCount();
+  const int   submits  = session.submitCount();
 
   QVariantMap lut_entry;
   lut_entry.insert(QStringLiteral("path"), QStringLiteral("D:/fake/lut_12.cube"));

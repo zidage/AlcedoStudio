@@ -35,6 +35,14 @@ using rail_harness::Click;
 using rail_harness::ProcessEvents;
 using rail_harness::RailQmlFixture;
 
+auto MakeMask(MaskId id, MaskSource source) -> MaskModel {
+  MaskModel mask;
+  mask.id           = std::move(id);
+  mask.display_name = "Mask";
+  mask.source       = std::move(source);
+  return mask;
+}
+
 auto AttachedName(QObject* object) -> QString {
   if (object == nullptr) {
     return {};
@@ -634,6 +642,31 @@ TEST_F(EditorNodesPanelQmlTest, OpenPageAppliesCommittedProjectionOnce) {
   ProcessEvents();
   EXPECT_EQ(nodes->completed_projection_apply_count(), 1);
   EXPECT_EQ(adapter->topology_replace_count(), 1);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskRowSelectionSelectsItsOwningColorGrade) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenNodesPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Adapter() != nullptr, 2000);
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+
+  nodes->selectDevelop();
+  ASSERT_EQ(nodes->selected_node_id(), NodeId{"develop"});
+
+  auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      grade_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow")) != nullptr, 2000);
+  auto* row =
+      grade_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  Click(window_, row, QPointF(row->width() / 4.0, row->height() / 2.0));
+
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
 }
 

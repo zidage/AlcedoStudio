@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 
@@ -97,7 +96,7 @@ Item {
             visible: root.iconSrc.toString().length > 0
         }
 
-        Label {
+        Text {
             id: typeName
             objectName: "editorNodeMaskTypeLabel"
             Layout.fillWidth: true

@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include <vector>
-
 #include <QPointF>
 #include <QRectF>
+#include <vector>
 
 #include "edit/geometry/types.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -34,6 +33,29 @@ namespace alcedo {
                                          float theta_radians) -> Vector2;
 
 /**
+ * @brief Map the item-space perpendicular foot on one Linear Gradient locus.
+ *
+ * The evaluator normal is a covector under a non-square photograph transform.
+ * This helper keeps the visible control axis perpendicular to the mapped guide
+ * while the returned point remains on the exact normalized-space locus.
+ */
+[[nodiscard]] auto MapLinearLocusNormalPointToItem(const MaskEditViewMapping&      mapping,
+                                                   const LinearGradientMaskSource& source,
+                                                   float signed_distance) -> std::optional<QPointF>;
+
+/**
+ * @brief Convert an item-space direction control point to an evaluator normal sample.
+ *
+ * This is the inverse interaction mapping for
+ * @ref MapLinearLocusNormalPointToItem. The returned normalized point is one
+ * unit normal from the source origin and can be passed to
+ * @c UpdateLinearDirection.
+ */
+[[nodiscard]] auto MapItemPointToLinearDirectionSample(const MaskEditViewMapping&      mapping,
+                                                       const LinearGradientMaskSource& source,
+                                                       QPointF item) -> std::optional<Vector2>;
+
+/**
  * @brief Tessellate a Radial iso-@p rho curve into item-space vertices.
  *
  * Subdivides until projected chord error is at most
@@ -54,7 +76,7 @@ namespace alcedo {
  * @brief Existing Brush: Move handle at @p placement_translation. No stroke path.
  */
 [[nodiscard]] auto MakeBrushExistingOverlayDisplay(const MaskEditViewMapping& mapping,
-                                                   Vector2 placement_translation,
+                                                   Vector2                    placement_translation,
                                                    const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
@@ -64,8 +86,8 @@ namespace alcedo {
  * rhos are drawn once. No ellipse fill.
  */
 [[nodiscard]] auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
-                                                    const RadialMaskSource& source,
-                                                    const MaskOverlayStyle& style,
+                                                    const RadialMaskSource&    source,
+                                                    const MaskOverlayStyle&    style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
@@ -74,9 +96,9 @@ namespace alcedo {
  * Guides are clipped to the photograph with Geometry crop-style dual strokes
  * and short edge grips. Ends are not joined into a kite or closed polygon.
  */
-[[nodiscard]] auto MakeLinearExistingOverlayDisplay(const MaskEditViewMapping& mapping,
+[[nodiscard]] auto MakeLinearExistingOverlayDisplay(const MaskEditViewMapping&      mapping,
                                                     const LinearGradientMaskSource& source,
-                                                    const MaskOverlayStyle& style,
+                                                    const MaskOverlayStyle&         style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
@@ -86,29 +108,28 @@ namespace alcedo {
  * This function does not resample pointer events. No area fill.
  */
 [[nodiscard]] auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path,
-                                                   QPointF cursor_item,
-                                                   float cursor_radius_logical_px,
+                                                   QPointF                     cursor_item,
+                                                   float         cursor_radius_logical_px,
                                                    const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
  * @brief Initial Radial drawing: selected contours and handles while the drag is open.
  */
 [[nodiscard]] auto MakeRadialCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
-                                                    const RadialMaskSource& source,
-                                                    const MaskOverlayStyle& style,
+                                                    const RadialMaskSource&    source,
+                                                    const MaskOverlayStyle&    style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
  * @brief Initial Linear drawing: three photograph-clipped loci plus handles.
  */
-[[nodiscard]] auto MakeLinearCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
+[[nodiscard]] auto MakeLinearCreatingOverlayDisplay(const MaskEditViewMapping&      mapping,
                                                     const LinearGradientMaskSource& source,
-                                                    const MaskOverlayStyle& style,
+                                                    const MaskOverlayStyle&         style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 [[nodiscard]] auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
-                                           float hit_radius_logical_px)
-    -> MaskOverlayHandleId;
+                                            float hit_radius_logical_px) -> MaskOverlayHandleId;
 
 /**
  * @brief Axis-aligned photograph rectangle in item coordinates.

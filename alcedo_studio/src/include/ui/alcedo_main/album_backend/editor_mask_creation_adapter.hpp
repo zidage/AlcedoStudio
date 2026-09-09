@@ -34,15 +34,19 @@ class EditorSessionController;
  */
 class EditorMaskCreationAdapter : public QObject {
   Q_OBJECT
-  Q_PROPERTY(bool active READ active NOTIFY MaskCreationChanged)
-  Q_PROPERTY(bool creating READ creating NOTIFY MaskCreationChanged)
-  Q_PROPERTY(bool ownsLeftButton READ owns_left_button NOTIFY MaskCreationChanged)
-  Q_PROPERTY(bool bodyVisible READ body_visible NOTIFY MaskCreationChanged)
-  Q_PROPERTY(bool maskControlsActive READ mask_controls_active NOTIFY MaskCreationChanged)
-  Q_PROPERTY(QString toolKind READ tool_kind NOTIFY MaskCreationChanged)
-  Q_PROPERTY(QString selectedMaskId READ selected_mask_id NOTIFY MaskCreationChanged)
-  Q_PROPERTY(qreal innerFeatherPercent READ inner_feather_percent NOTIFY MaskCreationChanged)
-  Q_PROPERTY(qreal outerFeatherPercent READ outer_feather_percent NOTIFY MaskCreationChanged)
+  Q_PROPERTY(bool active READ active NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool creating READ creating NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool ownsLeftButton READ owns_left_button NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool bodyVisible READ body_visible NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool maskControlsActive READ mask_controls_active NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString toolKind READ tool_kind NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString selectedMaskId READ selected_mask_id NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal innerFeatherPercent READ inner_feather_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal outerFeatherPercent READ outer_feather_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal majorRadiusPercent READ major_radius_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal minorRadiusPercent READ minor_radius_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal rotationDegrees READ rotation_degrees NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal transitionPercent READ transition_percent NOTIFY maskCreationChanged)
 
  public:
   explicit EditorMaskCreationAdapter(EditorSessionController* session, QObject* parent = nullptr);
@@ -57,49 +61,62 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto selected_mask_id() const -> QString { return selected_mask_id_; }
   [[nodiscard]] auto inner_feather_percent() const -> qreal;
   [[nodiscard]] auto outer_feather_percent() const -> qreal;
+  [[nodiscard]] auto major_radius_percent() const -> qreal;
+  [[nodiscard]] auto minor_radius_percent() const -> qreal;
+  [[nodiscard]] auto rotation_degrees() const -> qreal;
+  [[nodiscard]] auto transition_percent() const -> qreal;
 
-  Q_INVOKABLE void bindInteractionItem(QObject* interaction);
-  Q_INVOKABLE void bindOverlayItem(QObject* overlay);
-  Q_INVOKABLE void beginRadial();
-  Q_INVOKABLE void beginLinear();
-  Q_INVOKABLE void cancel();
-  Q_INVOKABLE void hideBody();
-  Q_INVOKABLE void finishBody();
-  Q_INVOKABLE void selectMask(const QString& node_id, const QString& mask_id);
-  Q_INVOKABLE void removeMask(const QString& node_id, const QString& mask_id);
-  Q_INVOKABLE void removeSelectedMask();
-  Q_INVOKABLE void handleHover(qreal x, qreal y);
-  Q_INVOKABLE void beginInnerFeather();
-  Q_INVOKABLE void beginOuterFeather();
-  Q_INVOKABLE void updateInnerFeather(qreal percent);
-  Q_INVOKABLE void updateOuterFeather(qreal percent);
-  Q_INVOKABLE void finishFeather();
-  Q_INVOKABLE bool handlePress(qreal x, qreal y, int button);
-  Q_INVOKABLE bool handleMove(qreal x, qreal y, int buttons);
-  Q_INVOKABLE bool handleRelease(qreal x, qreal y, int button);
+  Q_INVOKABLE void   bindInteractionItem(QObject* interaction);
+  Q_INVOKABLE void   bindOverlayItem(QObject* overlay);
+  Q_INVOKABLE void   beginRadial();
+  Q_INVOKABLE void   beginLinear();
+  Q_INVOKABLE void   cancel();
+  Q_INVOKABLE void   hideBody();
+  Q_INVOKABLE void   finishBody();
+  Q_INVOKABLE void   selectMask(const QString& node_id, const QString& mask_id);
+  Q_INVOKABLE void   removeMask(const QString& node_id, const QString& mask_id);
+  Q_INVOKABLE void   removeSelectedMask();
+  Q_INVOKABLE void   handleHover(qreal x, qreal y);
+  Q_INVOKABLE void   beginInnerFeather();
+  Q_INVOKABLE void   beginOuterFeather();
+  Q_INVOKABLE void   updateInnerFeather(qreal percent);
+  Q_INVOKABLE void   updateOuterFeather(qreal percent);
+  Q_INVOKABLE void   beginMajorRadius();
+  Q_INVOKABLE void   updateMajorRadius(qreal percent);
+  Q_INVOKABLE void   beginMinorRadius();
+  Q_INVOKABLE void   updateMinorRadius(qreal percent);
+  Q_INVOKABLE void   beginRotation();
+  Q_INVOKABLE void   updateRotation(qreal degrees);
+  Q_INVOKABLE void   beginTransition();
+  Q_INVOKABLE void   updateTransition(qreal percent);
+  Q_INVOKABLE void   finishAnalyticControl();
+  Q_INVOKABLE bool   handlePress(qreal x, qreal y, int button);
+  Q_INVOKABLE bool   handleMove(qreal x, qreal y, int buttons);
+  Q_INVOKABLE bool   handleRelease(qreal x, qreal y, int button);
 
-  void OnImageClosed();
+  void               OnImageClosed();
   /**
    * @brief Copy owner selection/source after consume, Undo, or session rebind.
    *
    * Open pointer/numeric edits keep GUI-predicted overlay fields. Empty
    * selection after Undo selects the restored Mask only when it is present.
    */
-  void SyncFromSession();
+  void               SyncFromSession();
 
  signals:
-  void MaskCreationChanged();
+  void maskCreationChanged();
 
  private:
-  void BeginTool(MaskSourceKind kind, const QString& tool_kind);
-  void ResetLocal();
-  void PublishOverlay();
-  void HideOverlay();
-  void PublishDisplayedGeometry();
-  void ApplyOwnerSource(const MaskId& mask_id, const MaskSource& source);
-  void BeginFeatherMove(AnalyticMaskHandle handle);
-  void UpdateFeatherPercent(AnalyticMaskHandle handle, qreal percent);
-  void EnqueueAppendSample(const MaskCreationSample& sample);
+  void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
+  void               ResetLocal();
+  void               PublishOverlay();
+  void               HideOverlay();
+  void               PublishDisplayedGeometry();
+  void               ApplyOwnerSource(const MaskId& mask_id, const MaskSource& source);
+  void               BeginAnalyticMove(AnalyticMaskHandle handle);
+  void               UpdateFeatherPercent(AnalyticMaskHandle handle, qreal percent);
+  void               UpdateRadialRadiusPercent(AnalyticMaskHandle handle, qreal percent);
+  void               EnqueueAppendSample(const MaskCreationSample& sample);
   [[nodiscard]] auto CurrentGradeId() const -> NodeId;
   [[nodiscard]] auto CanAuthorMasks() const -> bool;
   [[nodiscard]] auto DocumentContainsMask(const MaskId& mask_id) const -> bool;
@@ -109,7 +126,7 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto OverlayClip() const -> QRectF;
   [[nodiscard]] auto OverlayStyle() const -> MaskOverlayStyle;
   [[nodiscard]] auto Enqueue(EditorMaskCreationCommand command) -> bool;
-  void ConnectInteraction(editor_rhi::EditorInteractionController* interaction);
+  void               ConnectInteraction(editor_rhi::EditorInteractionController* interaction);
 
   QPointer<EditorSessionController>                 session_;
   QPointer<editor_rhi::EditorInteractionController> interaction_;
@@ -126,8 +143,8 @@ class EditorMaskCreationAdapter : public QObject {
   Vector2                                           press_normalized_{};
   std::optional<MaskSource>                         overlay_source_;
   MaskOverlayDisplay                                overlay_display_{};
-  AnalyticMaskHandle                                active_handle_ = AnalyticMaskHandle::None;
-  MaskOverlayHandleId                               hovered_handle_ = MaskOverlayHandleId::None;
+  AnalyticMaskHandle                                active_handle_    = AnalyticMaskHandle::None;
+  MaskOverlayHandleId                               hovered_handle_   = MaskOverlayHandleId::None;
   std::uint64_t                                     next_sequence_id_ = 1;
 };
 
