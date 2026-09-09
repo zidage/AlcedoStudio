@@ -8,6 +8,7 @@
 
 #include "app/ai_provider_profile.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
@@ -48,6 +49,8 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "AdjustmentTransferController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorMaskCreationAdapter>(
+      "Alcedo.Main", 1, 0, "EditorMaskCreationAdapter", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<EditorScopeController>("Alcedo.Main", 1, 0, "EditorScopeController",
                                                     "Owned by EditorSessionController");
   qmlRegisterUncreatableType<WorkspaceRouter>("Alcedo.Main", 1, 0, "WorkspaceRouter",

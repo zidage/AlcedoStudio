@@ -40,6 +40,7 @@ def_library(EditMaskStore
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_model.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_stroke.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_raster_encoding.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/analytic_mask_edit.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_source_geometry.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_canonical_sampler.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_spatial_index.cpp

@@ -408,4 +408,26 @@ auto MapReferenceRadiusToItem(const MaskEditViewMapping& mapping, Vector2 center
   return ItemDistance(*center, *edge);
 }
 
+auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
+                              float hit_radius_logical_px) -> MaskOverlayHandleId {
+  if (display.mode == MaskOverlayMode::Hidden || hit_radius_logical_px <= 0.0f ||
+      !std::isfinite(item.x()) || !std::isfinite(item.y())) {
+    return MaskOverlayHandleId::None;
+  }
+  MaskOverlayHandleId hit = MaskOverlayHandleId::None;
+  float               best = hit_radius_logical_px;
+  for (const auto& handle : display.handles) {
+    if (handle.id == MaskOverlayHandleId::None || !std::isfinite(handle.item.x()) ||
+        !std::isfinite(handle.item.y())) {
+      continue;
+    }
+    const float distance = ItemDistance(item, handle.item);
+    if (distance <= best) {
+      best = distance;
+      hit  = handle.id;
+    }
+  }
+  return hit;
+}
+
 }  // namespace alcedo

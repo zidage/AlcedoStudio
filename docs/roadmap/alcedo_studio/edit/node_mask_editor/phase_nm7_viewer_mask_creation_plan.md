@@ -2,11 +2,13 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.6 complete; NM7.7–NM7.14 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.7 complete; NM7.8–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
-shared ReferenceSpace mapping with Brush placement, and NM7.6 control-only retained QSG.
-Remaining sub-phases are unimplemented.
+shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
+and NM7.7 Radial/Linear creation plus existing-mask movement. Some former NM7.11 UI wiring (now NM7.12) was brought forward for Radial/Gradient testing.
+This is partial wiring, not completion of the full UI phase. New NM7.8 addresses the usability
+gaps found in that testing; NM7.8–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -26,8 +28,16 @@ highlighting. This revision supersedes the earlier per-stroke immutable-asset de
 
 Required algorithm/storage design:
 [Parameterized commands, regional replay and project cache](mask_command_replay_and_project_cache_plan.md).
-Read it before implementing NM7.2–NM7.14. It gives equations, inverse operations, replay bounds,
+Read it before implementing NM7.2–NM7.15. It gives equations, inverse operations, replay bounds,
 cache lifecycle, project settings, failure behavior and an initial executable algorithm experiment.
+
+2026-09-08 parameter-mask revision: retain NM7.1–NM7.7 completion records. Insert NM7.8
+for Radial feather/range controls, Node drawer selection/deletion, and Geometry crop-style
+Gradient controls. Former NM7.8–NM7.14 become NM7.9–NM7.15; forward references in historical
+records use the new numbering. Selected analytic boundary lines are required during later
+editing as well as creation; coverage fill remains prohibited. The reported Radial “半圆范围”
+is specified here as the radial/elliptical range contour and feather boundaries of the existing
+full-ellipse evaluator, without introducing a semicircle coverage algorithm.
 
 ## 1. Purpose and background for the executor
 
@@ -103,15 +113,18 @@ User decisions received on 2026-09-08:
 
 | Decision | Required behavior | Implementation dependency |
 | --- | --- | --- |
-| Brush operations | Paint/erase with size and strength controls | NM7.2, NM7.4, NM7.8 |
+| Brush operations | Paint/erase with size and strength controls | NM7.2, NM7.4, NM7.9 |
 | Persistent source | Parameterized ordered strokes; history stores reversible commands, not R8 revisions | NM7.2–NM7.3 |
-| Accumulation/cache | Same Grade's strokes accumulate in one Brush; one current final Grade Mix R8 cache slot | NM7.4, NM7.9–NM7.10 |
+| Accumulation/cache | Same Grade's strokes accumulate in one Brush; one current final Grade Mix R8 cache slot | NM7.4, NM7.10–NM7.11 |
 | Radial initial drag | Center outward | NM7.7 |
-| Existing Mask movement | Brush/Radial/Gradient update real Interactive pixels during drag, Quality after release | NM7.5, NM7.7–NM7.9 |
+| Radial feather/range | Explicit inner/outer feather controls and selected ellipse/boundary lines | NM7.8 |
+| Node Mask drawer | Select existing Mask, reopen its controls and delete with Undo/Redo | NM7.8 |
+| Gradient controls | Geometry crop-style dual strokes and edge grips on three parallel guides; no kite outline | NM7.8 |
+| Existing Mask movement | Brush/Radial/Gradient update real Interactive pixels during drag, Quality after release | NM7.5, NM7.7–NM7.10 |
 | QSG existing-mask display | Controls only, no affected-area fill or completed Brush path | NM7.6 |
 | Initial creation guides | Working interpretation: temporary cursor/outline/path guides are allowed only during initial drawing, never area-fill highlighting; clarification requested | NM7.6 |
-| Editing body | Temporary Masks body; preserve six adjustment tabs | NM7.11 |
-| Project storage | User-selected cache root, per-project Keep/DeleteOnProjectClose and Clear actions | NM7.10–NM7.11 |
+| Editing body | Temporary Masks body; preserve six adjustment tabs; analytic test wiring brought forward | NM7.8, NM7.12 |
+| Project storage | User-selected cache root, per-project Keep/DeleteOnProjectClose and Clear actions | NM7.11–NM7.12 |
 
 Size and strength are explicit user controls. Automatic pen-pressure modulation was not requested;
 this plan specifies manual size/strength, with stylus position accepted through the same input
@@ -245,7 +258,7 @@ These are Alcedo design choices derived from the documented lifecycle and curren
 - Use explicit edge-alpha triangle fringes for antialiasing and premultiplied color consistently.
   Do not assume `QQuickItem::antialiasing` automatically fixes custom geometry. Test control outlines, intersections, joins and caps for
   dark seams or doubled alpha. Feather
-  controls may show a handle/connector, not a highlighted feather band.
+  controls show selected analytic boundary lines and handles, without a filled feather band.
 - QSG coordinates and handle hit areas are logical pixels. Image-space radius is transformed;
   handle and outline widths remain constant in logical pixels at any zoom or DPR.
 - For a growing stroke under Qt 6.9, use bounded geometry chunks or exact allocations with full
@@ -380,9 +393,10 @@ coverage = 1-clamp((rho-inner)/max(outer-inner, evaluator_epsilon), 0, 1)
 ```
 
 Generate each boundary at its `rho` from the inverse equation, then apply the shared viewport
-mapping. Use these boundaries to locate radius/feather controls. Initial creation may display outline
-guides; editing an existing Mask shows the necessary handles/connectors without area highlighting
-or filled feather bands.
+mapping. During creation and while an existing Radial is selected, show the base ellipse
+`rho=1` and inner/outer feather boundaries with independent radius and feather handles.
+Coincident lines render once; `inner=0` reduces to the center without invalid geometry.
+Unselected masks do not retain editing guides. No area highlighting or filled feather bands.
 Rotation is stored in radians. It occurs in normalized coordinates; a rotated ellipse on a
 non-square image is not generally reproduced by QML rotation of a screen-space ellipse.
 
@@ -403,8 +417,11 @@ coverage = start_value + (end_value-start_value)*t
 ```
 
 The three mathematical guide loci are `d = -distance/2`, `d = 0`, and `d = +distance/2`.
-During initial creation, these lines may form guides; for an existing Mask use them to position
-finite direction/width controls without filling or highlighting the affected area. Map control points
+During creation and while an existing Gradient is selected, show all three parallel lines
+clipped to the visible photograph, using Geometry crop-style dual strokes and edge grips.
+Do not connect their ends into a diamond/kite or closed polygon. Center line translates,
+boundary grips change width at fixed center, and a separate direction control rotates.
+No coverage fill or crop outside-dimming. Map control points
 through the shared item transform. On a
 non-square image, a normalized normal is not directly a screen normal. Handle hit tests and edits
 must use the same mapping as evaluation.
@@ -512,7 +529,10 @@ Implement Section 2's approved routing, preserving the landed header and six-tab
 The approved temporary body reuses `EditorMasksContextPanel.qml` as the actual Masks editor and
 loads through the adjustment shell; it is not a hidden unused QML module or a separate window.
 
-The list exposes type icon, Mask name, selection, and supported commands. Selected-row controls
+The Node Mask drawer exposes selectable compact type rows and a per-row delete action.
+Selection targets exact NodeId/MaskId and opens the existing source in the temporary Masks body;
+it never calls a header creation action. Delete must not propagate into row or graph actions.
+The Masks-body list exposes type icon, Mask name, selection, and supported commands. Selected-row controls
 edit name, enabled, invert, opacity and source-specific values plus an explicit Brush Move action. Use exact IDs, stable row updates,
 and a panel-level `selectedMaskId` binding. No list rebuild or forced scroll containment on click.
 After deletion select the next row at the old position, otherwise previous, otherwise no selection.
@@ -551,8 +571,10 @@ transitions immediate, and input-following geometry is never animated behind the
 ## 10. Revised ordered implementation phases
 
 本次改变 NM3 source、NM4 history 与 runtime cache，因此先完成数据和重放能力，再开放 viewer。
-下面的 NM7.1–NM7.14 **替代上一版十二阶段拆分**；旧阶段没有本轮 production completion，
-不能把旧的 immutable asset 测试当作新格式验收。保持总体 NM1→NM6→NM7→NM8 顺序。
+保留已完成的 NM7.1–NM7.7，新增 NM7.8 参数蒙版改进；原 NM7.8–NM7.14
+顺延为 NM7.9–NM7.15。原 NM7.11（现 NM7.12）的部分 UI 已为测试提前接线，
+不代表该阶段全部完成。不能把旧的 immutable asset 测试当作新格式验收。
+保持总体 NM1→NM6→NM7→NM8 顺序。
 
 | Phase | Result | Dependency |
 | --- | --- | --- |
@@ -563,13 +585,14 @@ transitions immediate, and input-following geometry is never animated behind the
 | NM7.5 | Shared ReferenceSpace mapping, Brush placement and hit testing | NM7.4 |
 | NM7.6 | QSG control-only retained rendering | NM7.5 |
 | NM7.7 | Radial and Linear creation plus existing-mask movement | NM7.3, NM7.5–NM7.6 |
-| NM7.8 | Accumulating Brush creation, erase, tool settings and movement | NM7.4–NM7.6 |
-| NM7.9 | Serial Interactive replay and one current Grade R8 result | NM7.7–NM7.8 |
-| NM7.10 | Project-owned cache settings, writeback and cleanup service | NM7.3, NM7.9 |
-| NM7.11 | Production Mask controls and project storage UI | NM7.10 |
-| NM7.12 | Interruptions, late jobs and complete lifecycle | NM7.11 |
-| NM7.13 | Native pixel, persistence, cache bounds and recovery qualification | NM7.12 |
-| NM7.14 | Real viewer/package/performance qualification and NM8 handoff | NM7.13 |
+| NM7.8 | Parameter-mask controls, drawer selection/deletion and crop-style Gradient | NM7.7 |
+| NM7.9 | Accumulating Brush creation, erase, tool settings and movement | NM7.4–NM7.6 |
+| NM7.10 | Serial Interactive replay and one current Grade R8 result | NM7.7–NM7.9 |
+| NM7.11 | Project-owned cache settings, writeback and cleanup service | NM7.3, NM7.10 |
+| NM7.12 | Production Mask controls and project storage UI | NM7.11 |
+| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12 |
+| NM7.14 | Native pixel, persistence, cache bounds and recovery qualification | NM7.13 |
+| NM7.15 | Real viewer/package/performance qualification and NM8 handoff | NM7.14 |
 
 Each phase records actual files/APIs, success and failure call chains, commands, executed test
 counts and remaining gaps. Branch names describe the result, e.g. `feature/brush-command-replay`
@@ -810,7 +833,7 @@ Suite totals: `219/219` PASS. Date / working tree on `feature/brush-stroke-histo
 
 **LOC note (grill-code-review):** After NM7.3 the batch codec was split NM6P-style (named module APIs, not a method-file split): `pipeline_edit_json.cpp` 453 (nested JSON collection), `pipeline_edit_change_validate.cpp` 353, `pipeline_edit_change_json.cpp` 581 (encode/decode), `pipeline_edit_batch.cpp` 423 (Make, Validate, CanonicalJSON, FromJSON, and projection). Headers: `pipeline_edit_batch.hpp` 464, `pipeline_edit_json.hpp` 88, `pipeline_edit_change.hpp` 56. Inverse/apply remains `pipeline_history_applier.cpp` 797. `pipeline_document_history.cpp` 593, `document_transfer.cpp` 625, `mask_model.cpp` 464, `parameterized_brush_history_persistence_test.cpp` 153, `pipeline_edit_batch_test.cpp` 735.
 
-**Residual gaps:** native Mask evaluation still loads `MaskStore` when in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned. NM7.4 regional replay is not started. Project Mix cache service is NM7.10. `ReplaceMaskAsset` remains in the typed batch surface but cannot validate parameterized or raster-only Brush JSON through the current source gate.
+**Residual gaps:** native Mask evaluation still loads `MaskStore` when in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned. NM7.4 regional replay is not started. Project Mix cache service is NM7.11. `ReplaceMaskAsset` remains in the typed batch surface but cannot validate parameterized or raster-only Brush JSON through the current source gate.
 
 ### NM7.4 — Implement deterministic Brush replay and spatial indexing
 
@@ -887,7 +910,7 @@ Independent oracle: `alcedo_studio/tests/edit/mask/brush_replay_oracle.hpp` (per
 
 **LOC note (grill-code-review):** `brush_source_geometry.hpp` 112 / `.cpp` 206, `brush_canonical_sampler.hpp` 92 / `.cpp` 137, `brush_spatial_index.hpp` 105 / `.cpp` 140, `brush_rasterizer.hpp` 75 / `.cpp` 128, `brush_signed_distance.hpp` 59 / `.cpp` 167, `grade_mask_coverage.hpp` 99 / `.cpp` 253, `brush_replay_oracle.hpp` 190, `brush_regional_replay_test.cpp` 287. No split required.
 
-**Residual gaps:** host Mix is not yet the Interactive/Quality native Mask pass (NM7.9) or the project Mix-cache slot (NM7.10). Shared ReferenceSpace pointer mapping is NM7.5. Native evaluation still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
+**Residual gaps:** host Mix is not yet the Interactive/Quality native Mask pass (NM7.10) or the project Mix-cache slot (NM7.11). Shared ReferenceSpace pointer mapping is NM7.5. Native evaluation still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.5 — Implement shared mapping and parameterized movement
 
@@ -965,7 +988,7 @@ Date / working tree on `feature/mask-reference-mapping` (base `dab6a8e5`) / Wind
 
 **LOC note (grill-code-review):** `mask_edit_geometry.hpp` 183 / `.cpp` 258, `brush_placement.hpp` 79, `mask_edit_geometry_test.cpp` 270, `brush_placement_mapping_test.cpp` 151, `editor_interaction_controller.cpp` 1027. Mapping math lives in `MaskEditGeometry`; the controller only stores displayed photograph geometry and routes. Do not add Mask business rules to the controller. No split required this phase.
 
-**Residual gaps:** QSG controls are NM7.6. Radial/Linear creation and existing-mask movement UI are NM7.7. Accumulating Brush paint/erase UI is NM7.8. Session does not yet publish live `ResolvedRenderGeometry` into `setDisplayedMaskGeometry` (NM7.9). Open-operation cancel on `MappingChanged` is NM7.12. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
+**Residual gaps:** QSG controls are NM7.6. Radial/Linear creation and existing-mask movement UI are NM7.7. Accumulating Brush paint/erase UI is NM7.9. Session does not yet publish live `ResolvedRenderGeometry` into `setDisplayedMaskGeometry` (NM7.10). Open-operation cancel on `MappingChanged` is NM7.13. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.6 — Implement retained QSG controls without affected-area highlighting
 
@@ -1038,7 +1061,7 @@ Date / working tree on `feature/mask-qsg-controls` (base `e01bafdb`) / Windows M
 
 **LOC note (grill-code-review):** `mask_overlay_geometry.hpp` 155 / `.cpp` 287, `mask_overlay_layout.hpp` 101 / `.cpp` 372, `editor_overlay_item.hpp` 165 / `.cpp` 612, `mask_overlay_control_test.cpp` 402. Layout owns evaluator-inverse handle placement; geometry owns triangle tessellation. Overlay item only copies published triangles onto retained nodes. No split required.
 
-**Residual gaps:** NM7.7 Radial/Linear creation and existing-mask movement UI (controller + Interactive pixels). NM7.8 accumulating Brush paint/erase UI. Session does not yet publish live Mask overlay display (still NM7.9). Accessible handle proxies are NM7.11. Offscreen QPA grabs are not a packaged D3D11/Metal desktop capture (NM7.14). Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
+**Residual gaps:** NM7.7 Radial/Linear creation and existing-mask movement UI (controller + Interactive pixels). NM7.9 accumulating Brush paint/erase UI. Session does not yet publish live Mask overlay display (still NM7.10). Accessible handle proxies are NM7.12. Offscreen QPA grabs are not a packaged D3D11/Metal desktop capture (NM7.15). Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.7 — Complete analytic creation and movement
 
@@ -1059,7 +1082,166 @@ release to update the photographed result.
 
 **Exit:** both shapes move with actual native preview and control-only QSG on non-square images.
 
-### NM7.8 — Complete accumulating Brush creation, erase and movement
+##### Phase NM7.7 completion record (2026-09-08)
+
+**Status:** complete — Radial/Linear center-out creation, existing-mask movement, and handle
+edits apply provisional Grade source fields before release; one NM4 AddMask or
+ReplaceMaskSource commit on settle; Escape restores with zero commits.
+
+**Primary success call chain:**
+
+```text
+item/logical pointer (MaskEditGeometry::MapItemToReference)
+  -> EditorMaskCreationController::BeginMaskInput / BeginMaskMove / AppendMaskInput
+  -> RadialFromCenterOut / LinearFromEndpoints / ApplyAnalyticMaskHandle
+  -> ColorGradeNodeModel::AddMask (first valid creation) or ReplaceMaskSource
+  -> Interactive Mix callback (GradeMaskCoverage::EvaluateFull)
+  -> FinishMaskInput
+  -> MakeAddMaskBatch / MakeReplaceMaskSourceBatch
+  -> MiniGitWorkingHistory::AppendEdit
+  -> Quality requested (no second Apply; live already holds after values)
+```
+
+**Primary failure call chain:**
+
+```text
+degenerate zero-area creation, unchanged placement, or Escape/Cancel
+  -> no AddMask, or RestoreLive (RemoveMask / ReplaceMaskSource to before JSON)
+  -> history head unchanged; Grade source matches the captured before-state
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ExistingRadialMoveUpdatesInteractivePixelsBeforeRelease` | `AnalyticMaskCreationTest` | PASS |
+| `ExistingGradientMovePreservesDirectionAndUpdatesInteractivePixels` | `AnalyticMaskCreationTest` | PASS |
+| `RadialFeatherControlsMatchEvaluator` | `AnalyticMaskCreationTest` | PASS |
+| `DegenerateAnalyticCreationCreatesNoCommit` | `AnalyticMaskCreationTest` | PASS |
+| `EscapeRestoresAnalyticSourceWithoutCommit` | `AnalyticMaskCreationTest` | PASS |
+| Valid Radial creation commits once; creating overlay has no coverage fill | `AnalyticMaskCreationTest` | PASS |
+| Center-out radii stay positive and unswapped | `AnalyticMaskEditTest` | PASS |
+| Linear endpoints set origin, unit normal, and width | `AnalyticMaskEditTest` | PASS |
+| Rotation unwraps across ±π | `AnalyticMaskEditTest` | PASS |
+| Existing mapping / overlay / Brush placement | `MaskEditGeometryTest`, `MaskOverlayControlTest`, `BrushPlacementMappingTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AnalyticMaskEditTest --target AnalyticMaskCreationTest`
+`ctest --test-dir build/debug --output-on-failure -R "AnalyticMaskEditTest|AnalyticMaskCreationTest"`
+`ctest --test-dir build/debug --output-on-failure -R "MaskOverlayControlTest|MaskEditGeometryTest|BrushPlacementMappingTest"`
+
+Suite totals: `9/9` NM7.7 binaries PASS; `14/14` related mapping/overlay tests PASS.
+Date / working tree on `feature/analytic-mask-creation-movement` (base `6eb68e4b`) / Windows MSVC `win_debug` / Qt 6.9.3 (`D:/misc/Qt/6.9.3/msvc2022_64`) / CUDA Toolkit 12.8. Interactive Mix is host `GradeMaskCoverage` using the native analytic equations; no GPU Mask pass in this phase.
+
+**Checklist / exit condition:** required tests PASS. Existing Radial/Linear center/origin drags update Mix R8 before `AppendEdit`. Shape fields other than center/origin stay fixed. Independent plan-equation coverage at sampled texels matches Mix within 1 R8 code. Degenerate creation and Escape publish no history. Existing and creating overlays on a non-square 64×32 photograph keep `coverage_fill_vertex_count == 0`.
+
+**LOC note (grill-code-review):** `analytic_mask_edit.hpp` 179 / `.cpp` 310, `editor_mask_creation_controller.hpp` 224 / `.cpp` 611, `analytic_mask_edit_test.cpp` 68, `analytic_mask_creation_test.cpp` 447. Geometry owns evaluator-inverse handle math; the controller owns mode, identities, provisional Grade writes, and settle/cancel. No split required.
+
+**In-app test wiring (same branch, after owner-path completion):** Radial/Gradient header buttons, viewport left-button routing, control-only overlay, Escape, and session enqueue/consume are connected. Overlay uses local draft geometry plus identity photograph mapping when `ResolvedRenderGeometry` is unpublished. Interactive frames reuse `EditorRenderReason::InteractiveAdjustment` with `live_parameters_applied`; settle uses `SettledMaskEdit`.
+
+```text
+EditorAdjustmentHeader beginRadial/beginLinear
+  -> EditorMaskCreationAdapter (item → MaskCreationSample, QSG overlay)
+  -> EditorSessionService::EnqueueMaskCreation (coalesced Append)
+  -> TryConsumePendingInput / WithLockedLiveDocument
+  -> EditorMaskCreationController + PublishAppliedTypedBatch(document_already_at_after)
+  -> InteractiveAdjustment or SettledMaskEdit
+```
+
+**Residual gaps:** NM7.9 accumulating Brush paint/erase UI. Live `ResolvedRenderGeometry` publication into `setDisplayedMaskGeometry` remains NM7.10. Project Mix-cache slot is NM7.11. Radial feather/range presentation, drawer selection/deletion and Gradient restyling are NM7.8; remaining Brush/cache UI and accessibility qualification are NM7.12. Open-operation cancel on `MappingChanged` is NM7.13. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
+
+### NM7.8 — Improve parameter-mask controls and existing-mask editing
+
+**Status:** planned. Builds on NM7.7 and the early UI wiring; does not repeat owner-path
+implementation or wait for Brush accumulation and project cache settings.
+
+**Purpose:** make Radial feather/range editable and visible, allow selection/deletion and
+re-editing from the Node Mask drawer, and replace the Gradient kite with Geometry crop-style
+controls in the actual workspace.
+
+**Work / interaction specification:**
+
+1. **Radial feather and range.** Show the selected base ellipse and both feather boundaries
+   from Section 6.2 during creation and later editing, including after release. Provide separate
+   labelled Inner feather and Outer feather sliders/numeric controls plus independently
+   draggable contour handles. Display percentages of the base radius (`100 * stored value`)
+   and enforce the existing source validator limits. Feather changes preserve center, radii
+   and rotation. Distinguish radius and feather handles by position/shape and accessible names;
+   coincident zero-feather controls remain independently reachable through panel/keyboard.
+   Draw coincident contours once and handle a collapsed inner contour without invalid geometry.
+   Range and feather use lines only, with no coverage tint or filled band.
+2. **Node drawer selection.** Every existing Brush/Radial/Gradient row is selectable through
+   stable NodeId/MaskId. Selecting Radial/Gradient loads current fields and viewer handles;
+   later edits update that same MaskId. Selection creates no mask, history or photo render.
+   Bind highlight to session selection and preserve scroll; do not rebuild the list on click.
+   Restore controls on re-entry, session rebind and Undo/Redo using the load-only route. Keep
+   compact type labels and parameter editors in the temporary Masks body. Brush rows support
+   selection/deletion here; new paint/erase controls remain NM7.9.
+3. **Deletion.** Add a compact per-row delete icon with pointer/keyboard access and a clear
+   accessible name. Target the clicked row's exact mask, never its Grade or a reused index.
+   Stop delete-event propagation. Cancel/restore unfinished edits for that target before removal,
+   discard its queued updates and reject delayed results. Use the existing owner and typed
+   `RemoveMaskChange` path for one settled deletion and one history operation. Undo restores
+   source, ID and list position; Redo removes it again. Deleting a selected row chooses next,
+   otherwise previous, otherwise none; deleting another row preserves selection. Undo deletion
+   selects the restored mask only when selection is still empty, otherwise preserves the valid
+   current selection. Deleting the last mask restores full-image Grade coverage, including a
+   disabled last mask. Failed deletion preserves the committed mask and reports the real error.
+   Text-input Delete retains text semantics; Delete with Mask controls focused never deletes
+   the Grade. The cancel/delete boundary belongs here; broader lifecycle work remains NM7.13.
+4. **Gradient design.** Use the three parallel loci from Section 6.3, clipped to the photograph,
+   with Geometry crop overlay's two-layer high-contrast fine lines, short edge grips and
+   hover/active feedback. No kite, diamond, enclosing polygon, or crop dimming. Center line drag
+   translates; boundary grips change transition distance symmetrically around fixed origin;
+   a separate direction/rotation handle rotates. Keep stroke/hit sizes constant in logical px
+   across zoom/DPR. Do not change image crop settings or add another Gradient feather field.
+5. **Owner/input integration.** Pointer, numeric and keyboard controls share the existing
+   begin/update/finish/cancel service and exact target identity. Update actual Interactive pixels
+   before release, then one typed history operation and Quality on settle. Escape restores the
+   original source without a commit. Read/edit through the existing owner without a mirrored
+   editable source. Preserve six tabs and prior-panel restoration. Fix any mapping publication
+   needed for these controls in this phase: cropped/rotated images must use actual resolved
+   geometry, not a guessed identity transform. Remaining serial/cache integration is NM7.10.
+6. **VI.** Follow `alcedo-qml-ui`, reuse shared controls and AppTheme tokens. Update AppTheme
+   and DESIGN together if new values are needed. This revision supersedes the old creation-only
+   guide and read-only drawer restrictions. Keep no-fill coverage policy.
+
+**Files/APIs:** `EditorNodeMaskDrawer.qml`, `EditorNodeMaskTypeRow.qml`,
+`EditorMasksContextPanel.qml`, workspace/adjustment stack, existing creation adapter/controller;
+`EditorOverlayItem`, analytic geometry/hit testing, Grade Mask owner, pending input and typed
+history; AppTheme/DESIGN. Inspect and reuse focused APIs before extending them.
+
+**Primary chains:** drawer select → session selection → load existing source → selected QSG
+controls; handle/numeric edit → queued owner update → Interactive pixels → settle → one typed
+history operation → Quality. Delete → cancel target's unfinished input → owner removal and typed
+history → selection/list/overlay update → rendered remaining coverage.
+
+**Tests:** production QML input, owner/history tests and independent coverage calculations:
+`RadialSelectionShowsEllipseAndBothFeatherBoundaries`,
+`RadialFeatherControlsPreserveCenterRadiiAndRotation`,
+`RadialFeatherDragUpdatesInteractivePixelsBeforeRelease`,
+`CoincidentRadialBoundariesKeepFeatherControlsReachable`,
+`NodeDrawerSelectionLoadsExistingMaskWithoutCreatingOrRendering`,
+`SelectedMaskCanBeEditedAfterWorkspaceReentry`,
+`NodeDrawerDeleteRemovesExactMaskAndUndoRestoresSource`,
+`DeletingLastMaskRestoresFullGradeCoverage`,
+`DeletingUnselectedMaskPreservesSelection`,
+`DeletingMaskRejectsQueuedEditsAndDelayedFrames`,
+`MaskDeleteWithViewerFocusDoesNotDeleteGrade`,
+`GradientGuidesUseThreeParallelLinesWithoutClosedPolygon`,
+`GradientBoundaryDragPreservesOriginAndChangesTransition`,
+`AnalyticControlCancelRestoresSourceWithoutHistory`.
+
+**Exit:** actual workspace create → release → select another row → reselect → edit → Undo/Redo
+→ delete works with multiple Radial/Gradient masks on two Grades. Existing Brush rows can be
+selected/deleted without adding a Brush. Verify 260/320/460 px in both themes, non-square and
+cropped/rotated images, zoom/pan and DPR 1/1.25/1.5/2. Captures show selected radial range/feather
+lines and crop-style Gradient grips without coverage fill. Independent Section 6 formulas match
+sampled coverage within 1 R8 code. Prove exact history counts, stable IDs/scroll and actual photo
+updates before release; control redraw alone does not pass. Record the executed native backend
+and any remaining platform qualification explicitly.
+
+### NM7.9 — Complete accumulating Brush creation, erase and movement
 
 **Purpose:** multiple strokes remain editable data in one Brush, with one current Grade raster.
 
@@ -1078,7 +1260,7 @@ release → corresponding single typed command → Quality.
 
 **Exit:** paint/erase/move/Undo/Redo work after deleting caches, with stable MaskId and StrokeIds.
 
-### NM7.9 — Integrate serial Interactive evaluation and one current Grade R8
+### NM7.10 — Integrate serial Interactive evaluation and one current Grade R8
 
 **Purpose:** connect all provisional movement to real pixels while respecting NM6 reader ownership.
 
@@ -1100,7 +1282,7 @@ presentation → next consume. Release seals → durable command → Quality.
 
 **Exit:** actual end-to-end native request path works; a control redraw alone does not pass.
 
-### NM7.10 — Add project-owned cache storage and maintenance
+### NM7.11 — Add project-owned cache storage and maintenance
 
 **Purpose:** bounded, disposable R8 storage controlled per project.
 
@@ -1123,12 +1305,16 @@ Clear → maintenance boundary → stop old writer → delete only owned cache �
 
 **Exit:** new cache namespace can be completely removed without losing any supported edit/Version.
 
-### NM7.11 — Wire Mask editing and project cache UI
+### NM7.12 — Wire Mask editing and project cache UI
 
 **Purpose:** make the fully working capability reachable through approved surfaces.
 
-**Work:** connect header tools/node Mask rows to temporary Masks body; preserve six tabs and prior
-panel restoration; expose paint/erase/size/strength/Move and existing source/Mask values. Add project
+**Already brought forward:** Radial/Gradient header, viewport and session test wiring after
+NM7.7; NM7.8 owns analytic controls and drawer selection/deletion. Retain and verify those paths.
+The complete UI phase remains planned until its remaining work and acceptance pass.
+
+**Work:** finish Brush header/body routing; preserve six tabs and prior panel restoration;
+expose paint/erase/size/strength/Move and remaining source/Mask values. Add project
 cache section through app APIs with root chooser, policy and per-project usage/Clear. Existing
 cache settings are thumbnail-specific; keep the new project fields separate. Add keyboard/accessible
 controls, focus rules, theme/width/reduced-motion tests and QML registration.
@@ -1143,7 +1329,7 @@ controls, focus rules, theme/width/reduced-motion tests and QML registration.
 
 **Exit:** production QML at 260/320/460 px in both themes; no unregistered/unused-only implementation.
 
-### NM7.12 — Complete cancellation and project/session lifecycle
+### NM7.13 — Complete cancellation and project/session lifecycle
 
 **Purpose:** preserve state when operations terminate without a normal release.
 
@@ -1165,7 +1351,7 @@ operation → stale result rejection / old writer retirement.
 
 **Exit:** delayed native completion, write jobs and genuine Qt input all obey the same outcome.
 
-### NM7.13 — Qualify native pixels, bounded disk storage and recovery
+### NM7.14 — Qualify native pixels, bounded disk storage and recovery
 
 **Purpose:** verify source, command replay and disposable cache as one product path.
 
@@ -1184,7 +1370,7 @@ coverage → expected pixels independent of any previous cache.
 
 **Exit:** registered tests execute nonzero counts; actual file count/bytes and error cases recorded.
 
-### NM7.14 — Qualify real viewer, packages and performance
+### NM7.15 — Qualify real viewer, packages and performance
 
 **Purpose:** measure the requested Interactive editing and ensure it ships in installed builds.
 
@@ -1215,6 +1401,7 @@ helpers to generate both sides of a comparison.
 | Brush pixels | multiple strokes on one MaskId, size/strength changes, click, sparse/dense events, overlaps, duplicates, hard/soft edge, erase, zero changes | Exact R8 bytes for deterministic raster output; different event grouping gives same bytes |
 | Native runtime | CUDA/OpenCL/Metal, one/many Masks, two Grades, invert/opacity/feather, current-cache/fresh-replay | Existing NM3 numerical tolerances; record backend and runtime actually used |
 | Overlay | finite vertices, winding, clipping, alpha seams, constant handle widths, next available Qt frame | Geometry assertions plus accelerated window captures; contour deviation ≤ 0.25 logical px |
+| Parameter-mask UI | selected Radial range/feather lines; crop-style Gradient guides; drawer select/re-edit/delete | NM7.8 production QML input, IDs/history, before-release pixels and captures; no fill |
 | Movement | existing Brush/Radial/Gradient; old/new domains; repeated translation; press/move/release | Interactive pixels update before release; controls only, no coverage fill; one final commit |
 | Project cache | custom root, Clear, close cleanup, two projects, repeated Versions | Stable file count; delete-all-cache restores same history/coverage; no cross-project deletion |
 | Input | press under threshold, outside release, canceled grab, synthesized mouse, second touch, repeated Done | One source stream and exactly one terminal outcome; no duplicate commit |

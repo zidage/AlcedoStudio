@@ -104,6 +104,10 @@ namespace alcedo {
                                                     const MaskOverlayStyle& style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
+[[nodiscard]] auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
+                                           float hit_radius_logical_px)
+    -> MaskOverlayHandleId;
+
 /**
  * @brief Item-space length of a ReferenceSpace radius around @p center_reference.
  *

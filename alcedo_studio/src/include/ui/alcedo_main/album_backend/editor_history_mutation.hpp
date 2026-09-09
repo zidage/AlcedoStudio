@@ -107,6 +107,15 @@ class EditorHistoryMutation {
                               const alcedo::NodeId& node_id, std::uint64_t session_generation,
                               std::string* error) -> bool;
 
+  /**
+   * @brief Run @p op under the live pipeline render lock.
+   *
+   * @p settle publishes typed batches whose live document already holds after values.
+   */
+  auto WithLockedLiveDocument(const alcedo::EditorHistoryGuardHandle& guard,
+                              const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op,
+                              std::string* error) -> bool;
+
  private:
   EditorHistoryState& state_;
 };

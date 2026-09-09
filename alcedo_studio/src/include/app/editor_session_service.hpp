@@ -14,6 +14,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
+#include "app/editor_mask_creation_controller.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_serial_frame_admission.hpp"
@@ -273,6 +274,23 @@ class IEditorSessionBackend {
     result.message  = "Queued adjustment input is not supported by this backend";
     return result;
   }
+
+  /**
+   * @brief Queue one Mask-creation command for owner-thread consume.
+   *
+   * Does not take the render lock or mutate the live Grade. Latest Append
+   * samples with the same pointer identity coalesce. Default backends reject.
+   */
+  virtual auto EnqueueMaskCreation(EditorMaskCreationCommand /*command*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Queued Mask creation is not supported by this backend";
+    return result;
+  }
+  [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
+  [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
   /**
    * @brief Inspect queued change descriptions. Empty when the backend has none.
    *
@@ -465,6 +483,13 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
       -> EditorSessionResult override;
+  auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override;
+  [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
+    return mask_creation_.node_id();
+  }
+  [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
+    return mask_creation_.selected_mask_id();
+  }
   auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
   void               TryConsumePendingInput() override;
@@ -572,6 +597,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry, std::string message)
       -> std::optional<EditorSessionResult>;
   auto ConsumeTakenSequence(const EditorPendingSequence& sequence) -> EditorSessionResult;
+  void AbortMaskCreation();
+  void ConsumePendingMaskCommands();
+  auto ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
+      -> EditorMaskCreationResult;
+  auto RouteMaskCreationRender(bool interactive_preview, bool quality_requested, bool committed)
+      -> EditorSessionResult;
 
   /// Queue-owned publish flavor for one in-flight history save checkpoint.
   /// Set by StartHistoryCheckpoint and consumed by the matching
@@ -591,6 +622,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorSessionNavigationController       navigation_;
   EditorPendingInputQueue                 pending_input_;
   EditorSerialFrameAdmission              serial_admission_;
+  EditorMaskCreationController            mask_creation_;
+  std::vector<EditorMaskCreationCommand>  pending_mask_commands_;
+  mutable std::mutex                      mask_command_mutex_;
   bool                                    reducing_command_     = false;
   std::uint64_t                           current_operation_id_ = 0;
   std::size_t                             publication_depth_    = 0;

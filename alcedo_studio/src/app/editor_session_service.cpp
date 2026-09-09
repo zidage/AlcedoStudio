@@ -5,6 +5,7 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <mutex>
 #include <utility>
 
@@ -14,6 +15,8 @@
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 
 namespace alcedo {
 
@@ -424,6 +427,7 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
       return Open(queued.element_id, queued.image_id);
     });
   }
+  AbortMaskCreation();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -912,6 +916,7 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
       return Switch(queued.element_id, queued.image_id);
     });
   }
+  AbortMaskCreation();
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -996,6 +1001,7 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
       return Close(queued.persist_changes);
     });
   }
+  AbortMaskCreation();
   const auto outcome = navigation_.RequestClose(persist_changes);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1134,6 +1140,52 @@ auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundar
   return result;
 }
 
+namespace {
+
+[[nodiscard]] auto SameMaskPointer(const MaskPointerIdentity& a, const MaskPointerIdentity& b)
+    -> bool {
+  return a.device_id == b.device_id && a.point_id == b.point_id && a.sequence_id == b.sequence_id;
+}
+
+[[nodiscard]] auto MaskCommandIsTerminal(EditorMaskCreationCommandKind kind) -> bool {
+  return kind == EditorMaskCreationCommandKind::Finish ||
+         kind == EditorMaskCreationCommandKind::Cancel ||
+         kind == EditorMaskCreationCommandKind::CancelMode;
+}
+
+}  // namespace
+
+auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Queued Mask creation requires an interactive session");
+  }
+  if (!lifecycle_.has_image()) {
+    return Reject("Queued Mask creation requires an open image");
+  }
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    if (command.kind == EditorMaskCreationCommandKind::Append && !pending_mask_commands_.empty()) {
+      auto& back = pending_mask_commands_.back();
+      if (back.kind == EditorMaskCreationCommandKind::Append &&
+          SameMaskPointer(back.identity, command.identity)) {
+        back = std::move(command);
+      } else {
+        pending_mask_commands_.push_back(std::move(command));
+      }
+    } else {
+      pending_mask_commands_.push_back(std::move(command));
+    }
+  }
+  RequestPendingInputConsume();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Mask creation queued";
+  return result;
+}
+
 auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {
   return pending_input_.Peek();
 }
@@ -1145,6 +1197,181 @@ void EditorSessionService::SetAdmissionDeadlineHandler(
 
 void EditorSessionService::SetMonotonicClock(std::shared_ptr<IEditorMonotonicClock> clock) {
   serial_admission_.SetClock(std::move(clock));
+}
+
+void EditorSessionService::AbortMaskCreation() {
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    pending_mask_commands_.clear();
+  }
+  if (mask_creation_.state() == EditorMaskCreationState::Inactive) {
+    mask_creation_.DetachClosedDocument();
+    return;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    mask_creation_.DetachClosedDocument();
+    return;
+  }
+  std::string error;
+  const auto guard = lifecycle_.history_guard();
+  (void)dependencies_.history->WithLockedLiveDocument(
+      guard,
+      [this](PipelineDocument& document, MiniGitWorkingHistory& history,
+             const IEditorHistoryPort::LockedMaskSettle& settle, std::string*) {
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        (void)mask_creation_.CancelCreationMode();
+        return true;
+      },
+      &error);
+  mask_creation_.DetachClosedDocument();
+}
+
+auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
+    -> EditorMaskCreationResult {
+  const auto identity = lifecycle_.identity();
+  switch (command.kind) {
+    case EditorMaskCreationCommandKind::BeginCreation:
+      return mask_creation_.BeginCreation(command.source_kind, command.node_id, identity);
+    case EditorMaskCreationCommandKind::SelectMask:
+      return mask_creation_.SelectMask(command.node_id, command.mask_id, identity);
+    case EditorMaskCreationCommandKind::BeginInput:
+      return mask_creation_.BeginMaskInput(command.sample, command.identity);
+    case EditorMaskCreationCommandKind::BeginMove:
+      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity);
+    case EditorMaskCreationCommandKind::Append:
+      return mask_creation_.AppendMaskInput(command.sample, command.identity);
+    case EditorMaskCreationCommandKind::Finish:
+      return mask_creation_.FinishMaskInput();
+    case EditorMaskCreationCommandKind::Cancel:
+      return mask_creation_.CancelMaskInput();
+    case EditorMaskCreationCommandKind::CancelMode:
+      return mask_creation_.CancelCreationMode();
+  }
+  EditorMaskCreationResult rejected;
+  rejected.error = "unknown Mask creation command";
+  return rejected;
+}
+
+auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, bool quality_requested,
+                                                   bool committed) -> EditorSessionResult {
+  if (!quality_requested && !interactive_preview) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = "Mask creation applied";
+    if (committed) {
+      BumpHistoryRevision();
+    }
+    return result;
+  }
+  EditorRenderCommand render_command;
+  render_command.reason                    = quality_requested ? EditorRenderReason::SettledMaskEdit
+                                                               : EditorRenderReason::InteractiveAdjustment;
+  render_command.live_parameters_applied   = true;
+  render_command.operation_id              = current_operation_id_;
+  const auto request_id =
+      render_.RouteInitialRender(render_command, lifecycle_.identity(),
+                                 lifecycle_.active_image_load_request());
+  if (request_id == 0) {
+    serial_admission_.AbortCycle();
+  } else {
+    serial_admission_.NoteScheduledRequest(request_id);
+  }
+  if (committed) {
+    BumpHistoryRevision();
+  }
+  EditorSessionResult result;
+  result.kind              = EditorSessionResultKind::RenderRouted;
+  result.state             = lifecycle_.state();
+  result.identity          = lifecycle_.identity();
+  result.render_request_id = request_id;
+  result.message           = quality_requested ? "Settled Mask render routed"
+                                               : "Interactive Mask render routed";
+  return result;
+}
+
+void EditorSessionService::ConsumePendingMaskCommands() {
+  std::vector<EditorMaskCreationCommand> batch;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    batch.swap(pending_mask_commands_);
+  }
+  if (batch.empty()) {
+    return;
+  }
+  bool interactive = true;
+  for (const auto& command : batch) {
+    if (MaskCommandIsTerminal(command.kind)) {
+      interactive = false;
+      break;
+    }
+  }
+  if (!serial_admission_.TryBeginCycle(interactive)) {
+    std::scoped_lock lock(mask_command_mutex_);
+    pending_mask_commands_.insert(pending_mask_commands_.begin(),
+                                  std::make_move_iterator(batch.begin()),
+                                  std::make_move_iterator(batch.end()));
+    return;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    serial_admission_.AbortCycle();
+    return;
+  }
+  bool interactive_preview = false;
+  bool quality_requested   = false;
+  bool committed           = false;
+  std::string error;
+  const auto applied = dependencies_.history->WithLockedLiveDocument(
+      lifecycle_.history_guard(),
+      [this, &batch, &interactive_preview, &quality_requested, &committed](
+          PipelineDocument& document, MiniGitWorkingHistory& history,
+          const IEditorHistoryPort::LockedMaskSettle& settle, std::string* op_error) {
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        for (const auto& command : batch) {
+          auto result = ApplyMaskCreationCommand(command);
+          if (!result.accepted) {
+            if (op_error != nullptr) {
+              *op_error = result.error.empty() ? "Mask creation command was rejected"
+                                               : result.error;
+            }
+            if (mask_creation_.HasOpenOperation()) {
+              (void)mask_creation_.CancelMaskInput();
+            }
+            return false;
+          }
+          interactive_preview = interactive_preview || result.interactive_preview;
+          quality_requested   = quality_requested || result.quality_requested;
+          committed           = committed || result.committed;
+          if (command.kind == EditorMaskCreationCommandKind::Finish && result.committed &&
+              !result.mask_id.Empty()) {
+            (void)mask_creation_.SelectMask(mask_creation_.node_id(), result.mask_id,
+                                            lifecycle_.identity());
+          }
+        }
+        return true;
+      },
+      &error);
+  if (!applied) {
+    serial_admission_.AbortCycle();
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = error.empty() ? "Mask creation consume failed" : std::move(error);
+    (void)Emit(std::move(result));
+    RequestPendingInputConsume();
+    return;
+  }
+  const auto routed = RouteMaskCreationRender(interactive_preview, quality_requested, committed);
+  if (routed.kind == EditorSessionResultKind::Accepted) {
+    serial_admission_.AbortCycle();
+  }
+  (void)Emit(routed);
 }
 
 void EditorSessionService::RequestPendingInputConsume() {
@@ -1176,6 +1403,15 @@ void EditorSessionService::TryConsumePendingInput() {
     if (work) {
       work();
     }
+    return;
+  }
+  bool has_mask_commands = false;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    has_mask_commands = !pending_mask_commands_.empty();
+  }
+  if (has_mask_commands) {
+    ConsumePendingMaskCommands();
     return;
   }
   if (!pending_input_.HasConsumableWork()) {

@@ -2,10 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Selected-node name, image-owned EXIF tokens, and reserved Mask tool buttons
-// under the scope slot. Node switching does not reread EXIF; the session
-// publishes the four tokens when the open image identity changes. Brush / Radial /
-// Gradient actions are NM7 authoring placeholders: icons only, no command.
+// Selected-node name, image-owned EXIF tokens, and Mask tool buttons under the
+// scope slot. Node switching does not reread EXIF; the session publishes the
+// four tokens when the open image identity changes. Radial / Gradient arm
+// analytic creation on the selected Color Grade. Brush remains disabled until
+// accumulating-stroke UI exists.
 Item {
     id: root
     objectName: "editorAdjustmentHeader"
@@ -16,6 +17,10 @@ Item {
     property string apertureText: "\u2014"
     property string shutterText: "\u2014"
     property string isoText: "\u2014"
+    property var maskCreation: null
+    property string selectedNodeKind: ""
+    property bool cropOverlayVisible: false
+    property bool controlsEnabled: true
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colIcon: appTheme.iconColor
@@ -128,6 +133,7 @@ Item {
                 IconActionButton {
                     objectName: "editorAdjustmentHeaderBrushButton"
                     compact: true
+                    enabled: false
                     iconSrc: "qrc:/mask_icons/brush.svg"
                     actionName: qsTr("Brush")
                     iconColorDefault: root.colIcon
@@ -139,8 +145,14 @@ Item {
                 }
 
                 IconActionButton {
+                    id: radialButton
                     objectName: "editorAdjustmentHeaderRadialButton"
                     compact: true
+                    enabled: root.controlsEnabled
+                             && root.selectedNodeKind === "colorGrade"
+                             && !root.cropOverlayVisible
+                    selected: root.maskCreation
+                              && String(root.maskCreation.toolKind || "") === "radial"
                     iconSrc: "qrc:/mask_icons/radial.svg"
                     actionName: qsTr("Radial")
                     iconColorDefault: root.colIcon
@@ -149,11 +161,24 @@ Item {
                     fillHover: appTheme.buttonHoveredFillColor
                     fillPressed: appTheme.buttonPressedFillColor
                     fillSelected: appTheme.buttonSelectedFillColor
+                    onClicked: {
+                        if (root.maskCreation && radialButton.selected) {
+                            root.maskCreation.cancel()
+                        } else if (root.maskCreation) {
+                            root.maskCreation.beginRadial()
+                        }
+                    }
                 }
 
                 IconActionButton {
+                    id: gradientButton
                     objectName: "editorAdjustmentHeaderGradientButton"
                     compact: true
+                    enabled: root.controlsEnabled
+                             && root.selectedNodeKind === "colorGrade"
+                             && !root.cropOverlayVisible
+                    selected: root.maskCreation
+                              && String(root.maskCreation.toolKind || "") === "linear"
                     iconSrc: "qrc:/mask_icons/gradient.svg"
                     actionName: qsTr("Gradient")
                     iconColorDefault: root.colIcon
@@ -162,6 +187,13 @@ Item {
                     fillHover: appTheme.buttonHoveredFillColor
                     fillPressed: appTheme.buttonPressedFillColor
                     fillSelected: appTheme.buttonSelectedFillColor
+                    onClicked: {
+                        if (root.maskCreation && gradientButton.selected) {
+                            root.maskCreation.cancel()
+                        } else if (root.maskCreation) {
+                            root.maskCreation.beginLinear()
+                        }
+                    }
                 }
             }
         }

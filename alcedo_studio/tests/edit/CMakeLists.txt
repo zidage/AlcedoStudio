@@ -360,6 +360,15 @@ gtest_discover_tests(BrushRegionalReplayTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushRegionalReplayTest edit)
 
+add_executable(AnalyticMaskEditTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/analytic_mask_edit_test.cpp)
+target_include_directories(AnalyticMaskEditTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AnalyticMaskEditTest PRIVATE GTest::gtest_main EditMaskStore)
+gtest_discover_tests(AnalyticMaskEditTest
+  TEST_PREFIX "AnalyticMaskEditTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(AnalyticMaskEditTest edit)
+
 add_executable(BrushPlacementMappingTest
   ${ALCEDO_TEST_ROOT}/edit/mask/brush_placement_mapping_test.cpp)
 target_include_directories(BrushPlacementMappingTest
