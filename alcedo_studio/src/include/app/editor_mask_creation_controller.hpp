@@ -91,6 +91,7 @@ enum class EditorMaskCreationCommandKind : std::uint8_t {
   Finish,
   Cancel,
   CancelMode,
+  RemoveMask,
 };
 
 struct EditorMaskCreationCommand {
@@ -159,10 +160,21 @@ class EditorMaskCreationController {
                      EditorSessionIdentity session) -> EditorMaskCreationResult;
 
   /**
-   * @brief Select an existing Radial or Linear Mask. Load-only; no Mix or commit.
+   * @brief Select an existing Brush, Radial, or Linear Mask. Load-only; no Mix or commit.
+   *
+   * Brush selection does not arm paint or movement. Analytic kinds load handles
+   * for later movement.
    */
   auto SelectMask(const NodeId& grade_id, const MaskId& mask_id,
                   EditorSessionIdentity session) -> EditorMaskCreationResult;
+
+  /**
+   * @brief Remove @p mask_id from @p grade_id with one typed history operation.
+   *
+   * Cancels an unfinished operation on that Mask first. Other Masks' open
+   * edits are left alone. Failed publish leaves the committed Mask in place.
+   */
+  auto RemoveMask(const NodeId& grade_id, const MaskId& mask_id) -> EditorMaskCreationResult;
 
   /**
    * @brief Start a creation drag at @p sample.
@@ -223,6 +235,7 @@ class EditorMaskCreationController {
    * @brief Live or draft source for overlay layout. Empty when Inactive/hidden.
    */
   [[nodiscard]] auto CurrentSource() const -> std::optional<MaskSource>;
+  [[nodiscard]] auto last_removed_mask_id() const -> const MaskId& { return last_removed_mask_id_; }
 
  private:
   auto Reject(std::string error) const -> EditorMaskCreationResult;
@@ -266,6 +279,7 @@ class EditorMaskCreationController {
   bool                     inserted_      = false;
   bool                     terminated_    = false;
   std::optional<MaskSource> draft_source_;
+  MaskId                   last_removed_mask_id_;
 };
 
 }  // namespace alcedo

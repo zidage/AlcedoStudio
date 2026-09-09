@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/geometry/render_geometry_resolver.hpp"
+#include "edit/geometry/source_geometry.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -107,6 +110,24 @@ auto MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D extent) -> Resolv
   geometry.render_to_reference    = Matrix3x3::Identity();
   geometry.render_to_decoded      = Matrix3x3::Identity();
   return geometry;
+}
+
+auto MaskEditGeometry::MakeDocumentPhotographGeometry(Extent2D full_reference,
+                                                       const ImageGeometryParams& image)
+    -> ResolvedRenderGeometry {
+  if (full_reference.Empty()) {
+    return {};
+  }
+  const bool identity_crop =
+      std::fabs(image.crop_rect.x) < 1.0e-6f && std::fabs(image.crop_rect.y) < 1.0e-6f &&
+      std::fabs(image.crop_rect.w - 1.0f) < 1.0e-6f &&
+      std::fabs(image.crop_rect.h - 1.0f) < 1.0e-6f &&
+      std::fabs(image.rotation_degrees) < 1.0e-4f;
+  if (identity_crop) {
+    return MakeIdentityPhotographGeometry(full_reference);
+  }
+  return ResolveRenderGeometry(MakeSourceGeometry(full_reference, full_reference), image, {},
+                                {}, {});
 }
 
 auto MaskEditGeometry::IsValid(const MaskEditViewMapping& mapping) -> bool {

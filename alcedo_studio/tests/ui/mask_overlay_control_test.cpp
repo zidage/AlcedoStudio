@@ -134,7 +134,9 @@ namespace {
   return VerticesCoverPoint(scene.handle_fill, point) ||
          VerticesCoverPoint(scene.handle_outline, point) ||
          VerticesCoverPoint(scene.connectors, point) || VerticesCoverPoint(scene.cursor, point) ||
-         VerticesCoverPoint(scene.creation_guides, point);
+         VerticesCoverPoint(scene.creation_guides, point) ||
+         VerticesCoverPoint(scene.selected_guides, point) ||
+         VerticesCoverPoint(scene.edge_grips, point);
 }
 
 [[nodiscard]] auto MaxDistanceFrom(const std::vector<MaskOverlayVertex>& vertices,
@@ -427,10 +429,11 @@ TEST(MaskOverlayControlTest, RadialCreationOutlineStaysWithinChordTolerance) {
   const auto creating =
       MakeRadialCreatingOverlayDisplay(mapping, source, DefaultMaskOverlayStyle(), {});
   EXPECT_EQ(creating.mode, MaskOverlayMode::Creating);
-  EXPECT_FALSE(creating.creation_outline.empty());
+  EXPECT_TRUE(creating.creation_outline.empty());
+  EXPECT_FALSE(creating.selected_contours.empty());
   const auto scene = BuildMaskOverlaySceneGeometry(creating, DefaultMaskOverlayStyle());
   EXPECT_EQ(scene.coverage_fill_vertex_count, 0);
-  EXPECT_FALSE(scene.creation_guides.empty());
+  EXPECT_FALSE(scene.selected_guides.empty());
 }
 
 TEST(MaskOverlayControlTest, HiddenDisplayClearsMaskOverlayNodes) {
@@ -444,6 +447,81 @@ TEST(MaskOverlayControlTest, HiddenDisplayClearsMaskOverlayNodes) {
   host.Present();
   EXPECT_EQ(host.overlay->lastMaskSceneGeometry().handle_count, 0);
   EXPECT_TRUE(host.overlay->lastMaskSceneGeometry().handle_fill.empty());
+}
+
+TEST(MaskOverlayControlTest, RadialSelectionShowsEllipseAndBothFeatherBoundaries) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  const auto source  = SampleRadial();
+  const auto display =
+      MakeRadialExistingOverlayDisplay(mapping, source, DefaultMaskOverlayStyle(), {});
+  EXPECT_EQ(display.selected_contours.size(), 3u);
+  EXPECT_NE(HandleById(display, MaskOverlayHandleId::RadialMajor), nullptr);
+  EXPECT_NE(HandleById(display, MaskOverlayHandleId::RadialInnerFeather), nullptr);
+  EXPECT_NE(HandleById(display, MaskOverlayHandleId::RadialOuterFeather), nullptr);
+  const auto* inner = HandleById(display, MaskOverlayHandleId::RadialInnerFeather);
+  const auto* outer = HandleById(display, MaskOverlayHandleId::RadialOuterFeather);
+  ASSERT_NE(inner, nullptr);
+  ASSERT_NE(outer, nullptr);
+  EXPECT_EQ(inner->shape, MaskOverlayHandleShape::Ring);
+  EXPECT_EQ(outer->shape, MaskOverlayHandleShape::Ring);
+  EXPECT_EQ(HandleById(display, MaskOverlayHandleId::RadialMajor)->shape,
+            MaskOverlayHandleShape::Disc);
+
+  const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  EXPECT_GT(scene.selected_guide_segment_count, 0);
+  EXPECT_EQ(scene.coverage_fill_vertex_count, 0);
+  EXPECT_EQ(scene.closed_polygon_edge_count, 0);
+  const auto interior = IndependentMapNormalized(
+      mapping, IndependentRadialNormalized(source, 0.40f, 1.05f));
+  EXPECT_FALSE(OverlayCoversPoint(scene, interior));
+}
+
+TEST(MaskOverlayControlTest, CoincidentRadialBoundariesKeepFeatherControlsReachable) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  RadialMaskSource source = SampleRadial();
+  source.inner_feather = 0.0f;
+  source.outer_feather = 0.0f;
+  const auto display =
+      MakeRadialExistingOverlayDisplay(mapping, source, DefaultMaskOverlayStyle(), {});
+  EXPECT_EQ(display.selected_contours.size(), 1u);
+  EXPECT_EQ(HandleById(display, MaskOverlayHandleId::RadialInnerFeather), nullptr);
+  EXPECT_EQ(HandleById(display, MaskOverlayHandleId::RadialOuterFeather), nullptr);
+  EXPECT_NE(HandleById(display, MaskOverlayHandleId::RadialMajor), nullptr);
+  const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  EXPECT_EQ(scene.closed_polygon_edge_count, 0);
+  EXPECT_GT(scene.selected_guide_segment_count, 0);
+}
+
+TEST(MaskOverlayControlTest, GradientGuidesUseThreeParallelLinesWithoutClosedPolygon) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  const auto display =
+      MakeLinearExistingOverlayDisplay(mapping, SampleLinear(), DefaultMaskOverlayStyle(), {});
+  ASSERT_EQ(display.selected_guides.size(), 3u);
+  EXPECT_EQ(display.edge_grips.size(), 3u);
+  EXPECT_EQ(display.selected_guides[0].id, MaskOverlayHandleId::LinearStartBoundary);
+  EXPECT_EQ(display.selected_guides[1].id, MaskOverlayHandleId::LinearOrigin);
+  EXPECT_EQ(display.selected_guides[2].id, MaskOverlayHandleId::LinearEndBoundary);
+
+  const auto unit = [](const QPointF& d) {
+    const auto length = std::hypot(d.x(), d.y());
+    EXPECT_GT(length, 1.0e-3);
+    return QPointF(d.x() / length, d.y() / length);
+  };
+  const QPointF d0 = unit(display.selected_guides[0].b - display.selected_guides[0].a);
+  const QPointF d1 = unit(display.selected_guides[1].b - display.selected_guides[1].a);
+  const QPointF d2 = unit(display.selected_guides[2].b - display.selected_guides[2].a);
+  const auto    cross = [](const QPointF& a, const QPointF& b) {
+    return a.x() * b.y() - a.y() * b.x();
+  };
+  EXPECT_NEAR(cross(d0, d1), 0.0, 0.05);
+  EXPECT_NEAR(cross(d1, d2), 0.0, 0.05);
+
+  const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  EXPECT_EQ(scene.closed_polygon_edge_count, 0);
+  EXPECT_EQ(scene.coverage_fill_vertex_count, 0);
+  EXPECT_EQ(scene.selected_guide_segment_count, 3);
+  EXPECT_FALSE(scene.edge_grips.empty());
+  EXPECT_TRUE(display.creation_guides.empty());
 }
 
 }  // namespace alcedo

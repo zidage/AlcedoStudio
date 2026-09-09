@@ -79,6 +79,8 @@ class AlcedoQanGraph : public QObject {
   Q_PROPERTY(bool keyboardConnectActive READ keyboard_connect_active NOTIFY KeyboardConnectChanged)
   Q_PROPERTY(QString keyboardConnectSourceId READ keyboard_connect_source_id_string NOTIFY
                  KeyboardConnectChanged)
+  Q_PROPERTY(QString selectedMaskId READ selected_mask_id_string WRITE set_selected_mask_id NOTIFY
+                 SelectedMaskChanged)
 
  public:
   explicit AlcedoQanGraph(QObject* parent = nullptr);
@@ -291,10 +293,13 @@ class AlcedoQanGraph : public QObject {
    * Does not write PipelineDocument, history, or start a photo render.
    */
   Q_INVOKABLE void cancelKeyboardConnect();
+  Q_INVOKABLE void setSelectedMaskId(const QString& mask_id);
   [[nodiscard]] auto keyboard_connect_active() const -> bool {
     return !keyboard_connect_source_id_.Empty();
   }
   [[nodiscard]] auto keyboard_connect_source_id_string() const -> QString;
+  [[nodiscard]] auto selected_mask_id_string() const -> QString { return selected_mask_id_; }
+  void               set_selected_mask_id(const QString& mask_id);
 
  signals:
   void GraphChanged();
@@ -318,6 +323,9 @@ class AlcedoQanGraph : public QObject {
    * photo render.
    */
   void NodeDrawerOpenChanged(const QString& nodeId, bool open);
+  void SelectedMaskChanged();
+  void MaskRowSelected(const QString& nodeId, const QString& maskId);
+  void MaskRowDeleteRequested(const QString& nodeId, const QString& maskId);
 
  protected:
   /**
@@ -419,6 +427,8 @@ class AlcedoQanGraph : public QObject {
 
  private slots:
   void OnDrawerOpenChanged();
+  void OnMaskSelected(const QString& node_id, const QString& mask_id);
+  void OnMaskDeleteRequested(const QString& node_id, const QString& mask_id);
 
  private:
   void DestroyMappedPrimitives();
@@ -491,6 +501,7 @@ class AlcedoQanGraph : public QObject {
   std::vector<QMetaObject::Connection>              drawer_connections_;
   NodeId                                            product_selected_node_id_;
   NodeId                                            keyboard_connect_source_id_;
+  QString                                           selected_mask_id_;
 };
 
 }  // namespace alcedo::ui

@@ -1150,7 +1150,8 @@ namespace {
 [[nodiscard]] auto MaskCommandIsTerminal(EditorMaskCreationCommandKind kind) -> bool {
   return kind == EditorMaskCreationCommandKind::Finish ||
          kind == EditorMaskCreationCommandKind::Cancel ||
-         kind == EditorMaskCreationCommandKind::CancelMode;
+         kind == EditorMaskCreationCommandKind::CancelMode ||
+         kind == EditorMaskCreationCommandKind::RemoveMask;
 }
 
 }  // namespace
@@ -1165,6 +1166,20 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
   }
   {
     std::scoped_lock lock(mask_command_mutex_);
+    if (command.kind == EditorMaskCreationCommandKind::RemoveMask && !command.mask_id.Empty()) {
+      pending_mask_commands_.erase(
+          std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
+                           [&command](const EditorMaskCreationCommand& pending) {
+                             if (pending.mask_id != command.mask_id) {
+                               return false;
+                             }
+                             return pending.kind == EditorMaskCreationCommandKind::Append ||
+                                    pending.kind == EditorMaskCreationCommandKind::BeginMove ||
+                                    pending.kind == EditorMaskCreationCommandKind::Finish ||
+                                    pending.kind == EditorMaskCreationCommandKind::BeginInput;
+                           }),
+          pending_mask_commands_.end());
+    }
     if (command.kind == EditorMaskCreationCommandKind::Append && !pending_mask_commands_.empty()) {
       auto& back = pending_mask_commands_.back();
       if (back.kind == EditorMaskCreationCommandKind::Append &&
@@ -1248,6 +1263,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
       return mask_creation_.CancelMaskInput();
     case EditorMaskCreationCommandKind::CancelMode:
       return mask_creation_.CancelCreationMode();
+    case EditorMaskCreationCommandKind::RemoveMask:
+      return mask_creation_.RemoveMask(command.node_id, command.mask_id);
   }
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";

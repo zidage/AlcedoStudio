@@ -291,6 +291,10 @@ class IEditorSessionBackend {
   }
   [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
   [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
+  [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual auto mask_creation_last_removed_mask_id() const -> MaskId { return {}; }
   /**
    * @brief Inspect queued change descriptions. Empty when the backend has none.
    *
@@ -489,6 +493,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
     return mask_creation_.selected_mask_id();
+  }
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
+    return mask_creation_.CurrentSource();
+  }
+  [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> MaskId override {
+    return mask_creation_.last_removed_mask_id();
   }
   auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;

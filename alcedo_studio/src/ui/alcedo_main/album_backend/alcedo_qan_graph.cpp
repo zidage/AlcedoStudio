@@ -1306,6 +1306,8 @@ void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNode
   }
   item->setResizable(false);
   item->setProperty("nodeKind", NodeKindKey(node.node_kind));
+  item->setProperty("nodeId", ToQString(node.node_id.Value()));
+  item->setProperty("selectedMaskId", selected_mask_id_);
   item->setProperty("masks", MasksToVariant(node.masks));
 }
 
@@ -1530,11 +1532,19 @@ void AlcedoQanGraph::BindDrawerSignal(QQuickItem* item, const NodeId& /*node_id*
   }
   const auto* meta         = item->metaObject();
   const int   signal_index = meta->indexOfSignal("drawerOpenChanged()");
-  if (signal_index < 0) {
-    return;
+  if (signal_index >= 0) {
+    drawer_connections_.push_back(
+        QObject::connect(item, SIGNAL(drawerOpenChanged()), this, SLOT(OnDrawerOpenChanged())));
   }
-  drawer_connections_.push_back(
-      QObject::connect(item, SIGNAL(drawerOpenChanged()), this, SLOT(OnDrawerOpenChanged())));
+  if (meta->indexOfSignal("maskSelected(QString,QString)") >= 0) {
+    drawer_connections_.push_back(QObject::connect(item, SIGNAL(maskSelected(QString,QString)),
+                                                    this, SLOT(OnMaskSelected(QString,QString))));
+  }
+  if (meta->indexOfSignal("maskDeleteRequested(QString,QString)") >= 0) {
+    drawer_connections_.push_back(
+        QObject::connect(item, SIGNAL(maskDeleteRequested(QString,QString)), this,
+                         SLOT(OnMaskDeleteRequested(QString,QString))));
+  }
 }
 
 void AlcedoQanGraph::OnDrawerOpenChanged() {
@@ -1549,6 +1559,32 @@ void AlcedoQanGraph::OnDrawerOpenChanged() {
     emit NodeDrawerOpenChanged(ToQString(node_id.Value()), item->property("drawerOpen").toBool());
     return;
   }
+}
+
+void AlcedoQanGraph::OnMaskSelected(const QString& node_id, const QString& mask_id) {
+  emit MaskRowSelected(node_id, mask_id);
+}
+
+void AlcedoQanGraph::OnMaskDeleteRequested(const QString& node_id, const QString& mask_id) {
+  emit MaskRowDeleteRequested(node_id, mask_id);
+}
+
+void AlcedoQanGraph::set_selected_mask_id(const QString& mask_id) {
+  if (selected_mask_id_ == mask_id) {
+    return;
+  }
+  selected_mask_id_ = mask_id;
+  for (const auto& [node_id, node] : node_by_id_) {
+    if (node.isNull() || node->getItem() == nullptr) {
+      continue;
+    }
+    node->getItem()->setProperty("selectedMaskId", selected_mask_id_);
+  }
+  emit SelectedMaskChanged();
+}
+
+void AlcedoQanGraph::setSelectedMaskId(const QString& mask_id) {
+  set_selected_mask_id(mask_id);
 }
 
 void AlcedoQanGraph::BindDrawerSignals() {

@@ -12,6 +12,8 @@ Item {
     objectName: "editorNodeMaskDrawer"
 
     property var masks: []
+    property string nodeId: ""
+    property string selectedMaskId: ""
     property bool expanded: true
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
@@ -39,6 +41,8 @@ Item {
     clip: true
 
     signal toggled(bool expanded)
+    signal maskSelected(string nodeId, string maskId)
+    signal maskDeleteRequested(string nodeId, string maskId)
 
     function toggle() {
         root.expanded = !root.expanded
@@ -228,6 +232,10 @@ Item {
                         width: maskList.width
                         sourceKind: modelData.sourceKind !== undefined ? String(modelData.sourceKind) : ""
                         maskId: modelData.maskId !== undefined ? String(modelData.maskId) : ""
+                        selected: root.selectedMaskId.length > 0
+                                  && maskId === root.selectedMaskId
+                        onClicked: root.maskSelected(root.nodeId, maskId)
+                        onDeleteClicked: root.maskDeleteRequested(root.nodeId, maskId)
                     }
                 }
             }

@@ -11,8 +11,13 @@ Qan.NodeItem {
     objectName: "qan::NodeItem"
 
     property string nodeKind: "colorGrade"
+    property string nodeId: ""
     property var masks: []
+    property string selectedMaskId: ""
     property bool drawerOpen: true
+
+    signal maskSelected(string nodeId, string maskId)
+    signal maskDeleteRequested(string nodeId, string maskId)
 
     readonly property string displayName: node ? node.label : ""
 
@@ -86,11 +91,19 @@ Qan.NodeItem {
             EditorNodeMaskDrawer {
                 id: maskDrawer
                 width: parent.width
+                nodeId: root.nodeId
                 masks: root.masks
+                selectedMaskId: root.selectedMaskId
                 expanded: root.drawerOpen
                 surfaceColor: appTheme.graphMaskDrawerSurfaceColor
                 onToggled: function (open) {
                     root.drawerOpen = open
+                }
+                onMaskSelected: function (nodeId, maskId) {
+                    root.maskSelected(nodeId, maskId)
+                }
+                onMaskDeleteRequested: function (nodeId, maskId) {
+                    root.maskDeleteRequested(nodeId, maskId)
                 }
             }
         }

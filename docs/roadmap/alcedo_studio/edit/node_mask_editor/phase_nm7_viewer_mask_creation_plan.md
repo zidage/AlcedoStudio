@@ -2,13 +2,14 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.7 complete; NM7.8–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.8 complete; NM7.9–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
-and NM7.7 Radial/Linear creation plus existing-mask movement. Some former NM7.11 UI wiring (now NM7.12) was brought forward for Radial/Gradient testing.
-This is partial wiring, not completion of the full UI phase. New NM7.8 addresses the usability
-gaps found in that testing; NM7.8–NM7.15 acceptance remains outstanding.
+NM7.7 Radial/Linear creation plus existing-mask movement, and NM7.8 parameter-mask
+controls, drawer selection/deletion, and crop-style Gradient. Some former NM7.11 UI
+wiring (now NM7.12) was brought forward for Radial/Gradient testing. This is partial
+wiring of the full UI phase. NM7.9–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1152,7 +1153,7 @@ EditorAdjustmentHeader beginRadial/beginLinear
 
 ### NM7.8 — Improve parameter-mask controls and existing-mask editing
 
-**Status:** planned. Builds on NM7.7 and the early UI wiring; does not repeat owner-path
+**Status:** complete. Builds on NM7.7 and the early UI wiring; does not repeat owner-path
 implementation or wait for Brush accumulation and project cache settings.
 
 **Purpose:** make Radial feather/range editable and visible, allow selection/deletion and
@@ -1240,6 +1241,84 @@ lines and crop-style Gradient grips without coverage fill. Independent Section 6
 sampled coverage within 1 R8 code. Prove exact history counts, stable IDs/scroll and actual photo
 updates before release; control redraw alone does not pass. Record the executed native backend
 and any remaining platform qualification explicitly.
+
+##### Phase NM7.8 completion record (2026-09-09)
+
+**Status:** complete — selected Radial range/feather lines, crop-style Gradient guides,
+Node Mask drawer select/re-edit/delete, and document Geometry mapping publication.
+
+**Primary success call chain:**
+
+```text
+drawer click / Masks body row
+  -> EditorMaskCreationAdapter::selectMask
+  -> Enqueue SelectMask
+  -> EditorMaskCreationController::SelectMask (load-only; zero Mix / history)
+  -> overlay from live Grade source; Masks body fields
+
+handle or Inner/Outer feather slider
+  -> BeginMove / Append
+  -> ReplaceMaskSource live
+  -> Interactive Mix (host GradeMaskCoverage)
+  -> Finish
+  -> one ReplaceMaskSource commit
+  -> Quality
+
+delete icon / Delete with Mask controls focused
+  -> cancel target op + drop queued Append/BeginMove/Finish/BeginInput
+  -> MakeRemoveMaskBatch
+  -> selection next-then-previous; overlay/list update
+  -> remaining Mix; Grade node retained
+```
+
+**Primary failure call chain:**
+
+```text
+degenerate creation or Escape
+  -> RestoreLive; history head unchanged
+
+failed RemoveMask publish
+  -> re-insert stored Mask at the same index; committed Mask remains
+
+Delete with Mask controls focused
+  -> removeSelectedMask; Grade delete shortcut is not taken
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RadialSelectionShowsEllipseAndBothFeatherBoundaries` | `MaskOverlayControlTest` | PASS |
+| `RadialFeatherControlsPreserveCenterRadiiAndRotation` | `AnalyticMaskCreationTest` | PASS |
+| `RadialFeatherDragUpdatesInteractivePixelsBeforeRelease` | `AnalyticMaskCreationTest` | PASS |
+| `CoincidentRadialBoundariesKeepFeatherControlsReachable` | `MaskOverlayControlTest`, `AnalyticMaskCreationTest` | PASS |
+| `NodeDrawerSelectionLoadsExistingMaskWithoutCreatingOrRendering` | `AnalyticMaskCreationTest` | PASS |
+| `SelectedMaskCanBeEditedAfterWorkspaceReentry` | `AnalyticMaskCreationTest` | PASS |
+| `NodeDrawerDeleteRemovesExactMaskAndUndoRestoresSource` | `AnalyticMaskCreationTest` | PASS |
+| `DeletingLastMaskRestoresFullGradeCoverage` | `AnalyticMaskCreationTest` | PASS |
+| `DeletingUnselectedMaskPreservesSelection` | `AnalyticMaskCreationTest` | PASS |
+| `DeletingMaskRejectsQueuedEditsAndDelayedFrames` | `AnalyticMaskCreationTest` | PASS |
+| `MaskDeleteWithViewerFocusDoesNotDeleteGrade` | `AnalyticMaskCreationTest` | PASS |
+| `GradientGuidesUseThreeParallelLinesWithoutClosedPolygon` | `MaskOverlayControlTest` | PASS |
+| `GradientBoundaryDragPreservesOriginAndChangesTransition` | `AnalyticMaskCreationTest` | PASS |
+| `AnalyticControlCancelRestoresSourceWithoutHistory` | `AnalyticMaskCreationTest` | PASS |
+| Drawer select highlight without list rebuild; delete icon emits exact MaskId | `EditorNodeDelegateQmlTest` | PASS |
+| Cropped/rotated photograph uses resolved geometry, not identity | `MaskEditGeometryTest` | PASS |
+| Independent Section 6 formulas vs Mix within 1 R8 | `AnalyticMaskCreationTest` | PASS |
+| Overlay `coverage_fill_vertex_count == 0`; no closed Gradient polygon | `MaskOverlayControlTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MaskOverlayControlTest --target AnalyticMaskCreationTest --target MaskEditGeometryTest --target EditorNodeDelegateQmlTest --target AlbumBackendLib`
+`ctest --test-dir build/debug --output-on-failure -R "MaskOverlayControlTest|AnalyticMaskCreationTest|MaskEditGeometryTest|EditorNodeDelegateQmlTest"`
+
+Suite totals: `56/56` PASS (`EditorNodeDelegateQmlTest` 21, `MaskEditGeometryTest` 5, `MaskOverlayControlTest` 11, `AnalyticMaskCreationTest` 19).
+Date / working tree on `feature/parameter-mask-controls` / Windows MSVC `win_debug` / Qt 6.9.3 (`D:/misc/Qt/6.9.3/msvc2022_64`) / CUDA Toolkit 12.8. Interactive Mix is host `GradeMaskCoverage` using the native analytic equations; no GPU Mask pass in this phase.
+
+**Checklist / exit condition:** required named tests PASS. Radial selected overlay shows base ellipse plus inner/outer feather lines (rings vs discs); coincident zero-feather contours are drawn once and Inner/Outer remain reachable through `BeginMaskMove` after settle. Drawer selection is load-only. Delete uses typed `RemoveMaskChange`, restores source/ID/index on Undo, chooses next then previous, and does not delete the Grade. Gradient guides are three photograph-clipped parallel loci with edge grips, not a kite. Feather/center/origin edits update Mix before `AppendEdit`. Cropped/rotated mapping uses `MakeDocumentPhotographGeometry` plus displayed photograph size (`interactionImageInfo`), not an unpublished identity transform.
+
+**LOC note (grill-code-review):** `editor_mask_creation_adapter.cpp` 682, `mask_overlay_layout.cpp` 524, `analytic_mask_creation_test.cpp` 785, `EditorMasksContextPanel.qml` 203, `mask_list_selection.hpp` 55. Overlay layout owns selected contours/guides; the adapter routes QML; the controller owns select/delete/settle; `MaskIdAfterDeletion` / `MaskIdAfterUndoRestore` stay pure. No split required.
+
+**Residual gaps:** NM7.9 accumulating Brush paint/erase UI. Live pipeline `ResolvedRenderGeometry` from the Interactive/Quality frame (including Interactive `max_edge`) remains NM7.10. Project Mix-cache slot is NM7.11. Remaining Brush/cache UI, accessibility qualification, and Masks-body width/theme matrix at 260/320/460 px are NM7.12. Open-operation cancel on `MappingChanged` is NM7.13. No single workspace e2e with two Grades was executed. Overlay evidence is geometry/QSG assertions, not PNG captures. Failed `RemoveMask` history publish re-inserts in production but was not driven by a failing history port. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.9 — Complete accumulating Brush creation, erase and movement
 

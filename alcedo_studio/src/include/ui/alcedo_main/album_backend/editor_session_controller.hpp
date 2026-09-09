@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -24,6 +25,7 @@
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/mask/mask_id.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
@@ -303,6 +305,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   }
   auto EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command) -> bool;
   [[nodiscard]] auto mask_creation_mask_id() const -> alcedo::MaskId;
+  [[nodiscard]] auto mask_creation_node_id() const -> alcedo::NodeId;
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<alcedo::MaskSource>;
+  [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> alcedo::MaskId;
 
   // Production pipeline entry: resolves the bound viewport through the scope tap.
   // Returns null when unbound or the object is not an EditorViewportItem.

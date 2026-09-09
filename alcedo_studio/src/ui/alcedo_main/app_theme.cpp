@@ -1030,6 +1030,18 @@ auto AppTheme::maskOverlayHandleHitRadius() const -> int { return 12; }
 
 auto AppTheme::maskOverlayRotateHandleOffset() const -> int { return 24; }
 
+auto AppTheme::maskOverlayGuideOuterWidth() const -> qreal { return 3.0; }
+
+auto AppTheme::maskOverlayGuideInnerWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayGripOuterWidth() const -> qreal { return 5.0; }
+
+auto AppTheme::maskOverlayGripInnerWidth() const -> qreal { return 2.4; }
+
+auto AppTheme::maskOverlayGripSpanT0() const -> qreal { return 0.38; }
+
+auto AppTheme::maskOverlayGripSpanT1() const -> qreal { return 0.62; }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }

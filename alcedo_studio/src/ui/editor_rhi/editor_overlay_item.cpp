@@ -442,6 +442,8 @@ struct EditorOverlayItem::OverlayRootNode : public QSGNode {
   QSGGeometryNode* mask_connector_node = nullptr;
   QSGGeometryNode* mask_cursor_node = nullptr;
   QSGGeometryNode* mask_creation_guide_node = nullptr;
+  QSGGeometryNode* mask_selected_guide_node = nullptr;
+  QSGGeometryNode* mask_edge_grip_node = nullptr;
 };
 
 EditorOverlayItem::EditorOverlayItem(QQuickItem* parent) : QQuickItem(parent) {
@@ -623,6 +625,54 @@ void EditorOverlayItem::setMaskOverlayAntialiasWidth(qreal width) {
   update();
 }
 
+void EditorOverlayItem::setMaskOverlayGuideOuterWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.guide_outer_width_logical_px == value) {
+    return;
+  }
+  mask_style_.guide_outer_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayGuideInnerWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.guide_inner_width_logical_px == value) {
+    return;
+  }
+  mask_style_.guide_inner_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayGripOuterWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.grip_outer_width_logical_px == value) {
+    return;
+  }
+  mask_style_.grip_outer_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
+void EditorOverlayItem::setMaskOverlayGripInnerWidth(qreal width) {
+  const float value = static_cast<float>(width);
+  if (mask_style_.grip_inner_width_logical_px == value) {
+    return;
+  }
+  mask_style_.grip_inner_width_logical_px = value;
+  rebuildMaskSceneGeometry();
+  geometry_dirty_ = true;
+  emit MaskOverlayStyleChanged();
+  update();
+}
+
 auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) -> QSGNode* {
   auto* root = static_cast<OverlayRootNode*>(old_node);
   if (!root) {
@@ -670,6 +720,10 @@ auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*)
                                   mask_creates);
   UpsertPremultipliedTriangleNode(root, root->mask_cursor_node, mask_scene.cursor, mask_creates);
   UpsertPremultipliedTriangleNode(root, root->mask_creation_guide_node, mask_scene.creation_guides,
+                                  mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_selected_guide_node, mask_scene.selected_guides,
+                                  mask_creates);
+  UpsertPremultipliedTriangleNode(root, root->mask_edge_grip_node, mask_scene.edge_grips,
                                   mask_creates);
 
   paint_node_create_count_ += creates;

@@ -6,14 +6,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
+
+#include "ui/edit_viewer/crop_geometry.hpp"
+#include "ui/edit_viewer/viewport_mapper.hpp"
 
 namespace alcedo {
 namespace {
 
-constexpr float kPi          = 3.14159265358979323846f;
-constexpr float kMinRadius   = 1.0e-5f;
-constexpr float kHandleMerge = 2.0f;
+constexpr float kPi           = 3.14159265358979323846f;
+constexpr float kMinRadius    = 1.0e-5f;
+constexpr float kHandleMerge  = 2.0f;
+constexpr float kRhoCoincide  = 1.0e-3f;
+constexpr float kGuideSpan    = 8.0f;
 
 [[nodiscard]] auto IsFiniteVector(Vector2 point) -> bool {
   return std::isfinite(point.x) && std::isfinite(point.y);
@@ -38,7 +44,7 @@ constexpr float kHandleMerge = 2.0f;
 }
 
 void AppendHandle(MaskOverlayDisplay& display, MaskOverlayHandleId id, const QPointF& item,
-                  const QPointF& origin, float merge_px) {
+                  const QPointF& origin, float merge_px, MaskOverlayHandleShape shape) {
   if (id != MaskOverlayHandleId::RadialCenter && id != MaskOverlayHandleId::LinearOrigin &&
       id != MaskOverlayHandleId::BrushMove && ItemDistance(item, origin) < merge_px) {
     return;
@@ -48,7 +54,56 @@ void AppendHandle(MaskOverlayDisplay& display, MaskOverlayHandleId id, const QPo
       return;
     }
   }
-  display.handles.push_back(MaskOverlayHandle{id, item});
+  display.handles.push_back(MaskOverlayHandle{id, item, shape});
+}
+
+[[nodiscard]] auto DistanceToSegment(QPointF point, QPointF a, QPointF b) -> float {
+  const double dx = b.x() - a.x();
+  const double dy = b.y() - a.y();
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < static_cast<double>(kMinRadius) * static_cast<double>(kMinRadius)) {
+    return ItemDistance(point, a);
+  }
+  double t = ((point.x() - a.x()) * dx + (point.y() - a.y()) * dy) / len2;
+  t        = std::clamp(t, 0.0, 1.0);
+  return ItemDistance(point, QPointF(a.x() + t * dx, a.y() + t * dy));
+}
+
+[[nodiscard]] auto ClipSegmentToRect(QPointF a, QPointF b, const QRectF& clip)
+    -> std::optional<std::pair<QPointF, QPointF>> {
+  if (!clip.isValid() || clip.isEmpty()) {
+    if (!std::isfinite(a.x()) || !std::isfinite(a.y()) || !std::isfinite(b.x()) ||
+        !std::isfinite(b.y())) {
+      return std::nullopt;
+    }
+    return std::make_pair(a, b);
+  }
+  const double dx = b.x() - a.x();
+  const double dy = b.y() - a.y();
+  double t0       = 0.0;
+  double t1       = 1.0;
+  const double p[4] = {-dx, dx, -dy, dy};
+  const double q[4] = {a.x() - clip.left(), clip.right() - a.x(), a.y() - clip.top(),
+                       clip.bottom() - a.y()};
+  for (int i = 0; i < 4; ++i) {
+    if (std::abs(p[i]) < 1.0e-12) {
+      if (q[i] < 0.0) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    const double t = q[i] / p[i];
+    if (p[i] < 0.0) {
+      t0 = std::max(t0, t);
+    } else {
+      t1 = std::min(t1, t);
+    }
+    if (t0 > t1) {
+      return std::nullopt;
+    }
+  }
+  return std::make_pair(QPointF(a.x() + t0 * dx, a.y() + t0 * dy),
+                        QPointF(a.x() + t1 * dx, a.y() + t1 * dy));
 }
 
 void AppendConnector(MaskOverlayDisplay& display, const QPointF& a, const QPointF& b) {
@@ -107,41 +162,104 @@ void PopulateRadialHandles(MaskOverlayDisplay& display, const MaskEditViewMappin
   if (!center) {
     return;
   }
-  display.handles.push_back(MaskOverlayHandle{MaskOverlayHandleId::RadialCenter, *center});
+  display.handles.push_back(
+      MaskOverlayHandle{MaskOverlayHandleId::RadialCenter, *center, MaskOverlayHandleShape::Disc});
 
   const auto major = MapRho(mapping, source, 1.0f, 0.0f);
   const auto minor = MapRho(mapping, source, 1.0f, kPi * 0.5f);
   if (major) {
-    AppendHandle(display, MaskOverlayHandleId::RadialMajor, *major, *center, kHandleMerge);
+    AppendHandle(display, MaskOverlayHandleId::RadialMajor, *major, *center, kHandleMerge,
+                 MaskOverlayHandleShape::Disc);
     AppendConnector(display, *center, *major);
     if (const auto rotate =
             OffsetAlongItem(*center, *major, style.rotate_handle_offset_logical_px)) {
       if (clip.isEmpty() || clip.contains(*rotate)) {
-        AppendHandle(display, MaskOverlayHandleId::RadialRotate, *rotate, *center, kHandleMerge);
+        AppendHandle(display, MaskOverlayHandleId::RadialRotate, *rotate, *center, kHandleMerge,
+                     MaskOverlayHandleShape::Disc);
         AppendConnector(display, *major, *rotate);
       }
     }
   }
   if (minor) {
-    AppendHandle(display, MaskOverlayHandleId::RadialMinor, *minor, *center, kHandleMerge);
+    AppendHandle(display, MaskOverlayHandleId::RadialMinor, *minor, *center, kHandleMerge,
+                 MaskOverlayHandleShape::Disc);
     AppendConnector(display, *center, *minor);
   }
 
   const float inner = InnerRho(source);
   const float outer = OuterRho(source);
-  if (std::fabs(inner - 1.0f) > 1.0e-3f && inner > kMinRadius) {
+  if (inner > kMinRadius && std::fabs(inner - 1.0f) > kRhoCoincide) {
     if (const auto inner_item = MapRho(mapping, source, inner, 0.0f)) {
       AppendHandle(display, MaskOverlayHandleId::RadialInnerFeather, *inner_item, *center,
-                   kHandleMerge);
-      AppendConnector(display, *center, *inner_item);
+                   kHandleMerge, MaskOverlayHandleShape::Ring);
     }
   }
-  if (std::fabs(outer - 1.0f) > 1.0e-3f) {
+  if (std::fabs(outer - 1.0f) > kRhoCoincide) {
     if (const auto outer_item = MapRho(mapping, source, outer, 0.0f)) {
       AppendHandle(display, MaskOverlayHandleId::RadialOuterFeather, *outer_item, *center,
-                   kHandleMerge);
-      AppendConnector(display, *center, *outer_item);
+                   kHandleMerge, MaskOverlayHandleShape::Ring);
     }
+  }
+}
+
+void AppendRadialContour(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
+                         const RadialMaskSource& source, float rho, const QRectF& clip) {
+  if (!std::isfinite(rho) || rho < kMinRadius) {
+    return;
+  }
+  auto polyline = TessellateRadialBoundaryItemPolyline(mapping, source, rho, clip);
+  if (polyline.size() < 3) {
+    return;
+  }
+  display.selected_contours.push_back(std::move(polyline));
+}
+
+void PopulateRadialContours(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
+                           const RadialMaskSource& source, const QRectF& clip) {
+  const float rhos[] = {1.0f, InnerRho(source), OuterRho(source)};
+  std::vector<float> published;
+  published.reserve(3);
+  for (float rho : rhos) {
+    bool duplicate = false;
+    for (float existing : published) {
+      if (std::fabs(existing - rho) <= kRhoCoincide) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    published.push_back(rho);
+    AppendRadialContour(display, mapping, source, rho, clip);
+  }
+}
+
+void AppendClippedGuide(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
+                         const LinearGradientMaskSource& source, float signed_distance,
+                         MaskOverlayHandleId id, const MaskOverlayStyle& style,
+                         const QRectF& photograph) {
+  const Vector2 n    = LinearNormal(source);
+  const Vector2 perp = PerpNormalized(n);
+  const Vector2 locus = LinearLocus(source, signed_distance);
+  const Vector2 a{locus.x + perp.x * kGuideSpan, locus.y + perp.y * kGuideSpan};
+  const Vector2 b{locus.x - perp.x * kGuideSpan, locus.y - perp.y * kGuideSpan};
+  const auto item_a = MapNormalizedMaskPointToItem(mapping, a);
+  const auto item_b = MapNormalizedMaskPointToItem(mapping, b);
+  if (!item_a || !item_b) {
+    return;
+  }
+  const auto clipped = ClipSegmentToRect(*item_a, *item_b, photograph);
+  if (!clipped) {
+    return;
+  }
+  display.selected_guides.push_back(MaskOverlayGuide{id, clipped->first, clipped->second});
+  const QPointF grip_a =
+      CropGeometry::LerpPoint(clipped->first, clipped->second, style.grip_span_t0);
+  const QPointF grip_b =
+      CropGeometry::LerpPoint(clipped->first, clipped->second, style.grip_span_t1);
+  if (ItemDistance(grip_a, grip_b) >= kMinRadius) {
+    display.edge_grips.emplace_back(grip_a, grip_b);
   }
 }
 
@@ -153,27 +271,37 @@ void PopulateLinearHandles(MaskOverlayDisplay& display, const MaskEditViewMappin
   if (!origin) {
     return;
   }
-  display.handles.push_back(MaskOverlayHandle{MaskOverlayHandleId::LinearOrigin, *origin});
+  display.handles.push_back(
+      MaskOverlayHandle{MaskOverlayHandleId::LinearOrigin, *origin, MaskOverlayHandleShape::Disc});
 
   const float half = std::max(source.transition_distance, kMinRadius) * 0.5f;
   const auto start = MapNormalizedMaskPointToItem(mapping, LinearLocus(source, -half));
   const auto end   = MapNormalizedMaskPointToItem(mapping, LinearLocus(source, half));
   if (start) {
-    AppendHandle(display, MaskOverlayHandleId::LinearStartBoundary, *start, *origin, kHandleMerge);
-    AppendConnector(display, *origin, *start);
+    AppendHandle(display, MaskOverlayHandleId::LinearStartBoundary, *start, *origin, kHandleMerge,
+                 MaskOverlayHandleShape::Disc);
   }
   if (end) {
-    AppendHandle(display, MaskOverlayHandleId::LinearEndBoundary, *end, *origin, kHandleMerge);
-    AppendConnector(display, *origin, *end);
+    AppendHandle(display, MaskOverlayHandleId::LinearEndBoundary, *end, *origin, kHandleMerge,
+                 MaskOverlayHandleShape::Disc);
     if (const auto direction =
             OffsetAlongItem(*origin, *end, style.rotate_handle_offset_logical_px)) {
       if (clip.isEmpty() || clip.contains(*direction)) {
         AppendHandle(display, MaskOverlayHandleId::LinearDirection, *direction, *origin,
-                     kHandleMerge);
+                     kHandleMerge, MaskOverlayHandleShape::Disc);
         AppendConnector(display, *end, *direction);
       }
     }
   }
+
+  const QRectF photograph = PhotographItemRect(mapping);
+  const QRectF guide_clip = photograph.isEmpty() ? clip : photograph;
+  AppendClippedGuide(display, mapping, source, -half, MaskOverlayHandleId::LinearStartBoundary,
+                     style, guide_clip);
+  AppendClippedGuide(display, mapping, source, 0.0f, MaskOverlayHandleId::LinearOrigin, style,
+                     guide_clip);
+  AppendClippedGuide(display, mapping, source, half, MaskOverlayHandleId::LinearEndBoundary, style,
+                     guide_clip);
 }
 
 [[nodiscard]] auto FiniteRadii(const RadialMaskSource& source) -> bool {
@@ -312,6 +440,7 @@ auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
   display.source_kind = MaskOverlaySourceKind::Radial;
   display.clip_rect   = EffectiveClip(mapping, clip);
   PopulateRadialHandles(display, mapping, source, style, display.clip_rect);
+  PopulateRadialContours(display, mapping, source, display.clip_rect);
   if (display.handles.empty()) {
     display.mode        = MaskOverlayMode::Hidden;
     display.source_kind = MaskOverlaySourceKind::None;
@@ -357,13 +486,11 @@ auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path, QPoi
 auto MakeRadialCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
                                       const RadialMaskSource& source, const MaskOverlayStyle& style,
                                       const QRectF& clip) -> MaskOverlayDisplay {
-  auto display          = MakeRadialExistingOverlayDisplay(mapping, source, style, clip);
+  auto display = MakeRadialExistingOverlayDisplay(mapping, source, style, clip);
   if (display.mode == MaskOverlayMode::Hidden) {
     return display;
   }
-  display.mode             = MaskOverlayMode::Creating;
-  display.creation_outline = TessellateRadialBoundaryItemPolyline(mapping, source, 1.0f,
-                                                                  display.clip_rect);
+  display.mode = MaskOverlayMode::Creating;
   return display;
 }
 
@@ -376,22 +503,21 @@ auto MakeLinearCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
     return display;
   }
   display.mode = MaskOverlayMode::Creating;
-  const Vector2 n    = LinearNormal(source);
-  const Vector2 perp = PerpNormalized(n);
-  const float half   = std::max(source.transition_distance, kMinRadius) * 0.5f;
-  const float span   = 0.35f;
-  const float loci[] = {-half, 0.0f, half};
-  for (float signed_distance : loci) {
-    const Vector2 locus = LinearLocus(source, signed_distance);
-    const Vector2 a{locus.x + perp.x * span, locus.y + perp.y * span};
-    const Vector2 b{locus.x - perp.x * span, locus.y - perp.y * span};
-    const auto item_a = MapNormalizedMaskPointToItem(mapping, a);
-    const auto item_b = MapNormalizedMaskPointToItem(mapping, b);
-    if (item_a && item_b) {
-      display.creation_guides.emplace_back(*item_a, *item_b);
-    }
-  }
   return display;
+}
+
+auto PhotographItemRect(const MaskEditViewMapping& mapping) -> QRectF {
+  if (!MaskEditGeometry::IsValid(mapping)) {
+    return {};
+  }
+  const auto top_left = ViewportMapper::ImageUvToWidgetPoint(
+      QPointF(0.0, 0.0), mapping.widget, mapping.photograph, mapping.zoom, mapping.pan, false);
+  const auto bottom_right = ViewportMapper::ImageUvToWidgetPoint(
+      QPointF(1.0, 1.0), mapping.widget, mapping.photograph, mapping.zoom, mapping.pan, false);
+  if (!top_left || !bottom_right) {
+    return {};
+  }
+  return QRectF(*top_left, *bottom_right).normalized();
 }
 
 auto MapReferenceRadiusToItem(const MaskEditViewMapping& mapping, Vector2 center_reference,
@@ -425,6 +551,19 @@ auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
     if (distance <= best) {
       best = distance;
       hit  = handle.id;
+    }
+  }
+  if (hit != MaskOverlayHandleId::None) {
+    return hit;
+  }
+  for (const auto& guide : display.selected_guides) {
+    if (guide.id == MaskOverlayHandleId::None) {
+      continue;
+    }
+    const float distance = DistanceToSegment(item, guide.a, guide.b);
+    if (distance <= best) {
+      best = distance;
+      hit  = guide.id;
     }
   }
   return hit;

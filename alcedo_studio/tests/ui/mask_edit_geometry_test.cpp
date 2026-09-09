@@ -269,4 +269,46 @@ TEST(MaskEditGeometryTest, HandleHitRadiusStaysLogicalAcrossZoom) {
                                    *zoomed_handle));
 }
 
+TEST(MaskEditGeometryTest, CroppedRotatedPhotographUsesResolvedGeometryNotIdentity) {
+  ImageGeometryParams image;
+  image.crop_rect        = NormalizedRect{0.10f, 0.15f, 0.55f, 0.60f};
+  image.rotation_degrees = 18.0f;
+  image.expand_to_fit    = true;
+  const Extent2D full{400, 300};
+  const auto    resolved = MaskEditGeometry::MakeDocumentPhotographGeometry(full, image);
+  const auto    identity = MaskEditGeometry::MakeIdentityPhotographGeometry(full);
+  EXPECT_NE(resolved.render_extent.width, identity.render_extent.width);
+  EXPECT_NE(resolved.render_to_reference.m[0], identity.render_to_reference.m[0]);
+
+  MaskEditViewMapping mapping;
+  mapping.widget     = {400, 300, 1.0f};
+  mapping.photograph = {static_cast<int>(resolved.edit_extent.width),
+                         static_cast<int>(resolved.edit_extent.height)};
+  mapping.zoom       = 1.0f;
+  mapping.geometry   = resolved;
+  ASSERT_TRUE(MaskEditGeometry::IsValid(mapping));
+  auto identity_mapping     = mapping;
+  identity_mapping.geometry = identity;
+  identity_mapping.photograph = {400, 300};
+  const QPointF item(200.0, 150.0);
+  const auto    cropped = MaskEditGeometry::MapItemToReference(mapping, item, true);
+  const auto    uncropped = MaskEditGeometry::MapItemToReference(identity_mapping, item, true);
+  ASSERT_TRUE(cropped.has_value());
+  ASSERT_TRUE(uncropped.has_value());
+  EXPECT_GT(std::hypot(cropped->normalized.x - uncropped->normalized.x,
+                         cropped->normalized.y - uncropped->normalized.y),
+            1.0e-3f);
+
+  editor_rhi::EditorInteractionController controller;
+  controller.setViewportMetrics(400, 300, 1.0);
+  controller.setImageSize(400, 300);
+  controller.setDisplayedMaskGeometry(resolved);
+  controller.setRenderReferenceSize(static_cast<int>(resolved.edit_extent.width),
+                                     static_cast<int>(resolved.edit_extent.height));
+  const auto published = controller.maskEditViewMapping();
+  EXPECT_EQ(published.photograph.image_width, static_cast<int>(resolved.edit_extent.width));
+  EXPECT_EQ(published.photograph.image_height, static_cast<int>(resolved.edit_extent.height));
+  EXPECT_NE(published.geometry.render_to_reference.m[0], identity.render_to_reference.m[0]);
+}
+
 }  // namespace alcedo

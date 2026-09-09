@@ -36,6 +36,7 @@ Item {
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
+    readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
     readonly property string activePanel: editorSession
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
@@ -142,6 +143,8 @@ Item {
     function selectPanel(panel) {
         if (!editorSession)
             return
+        if (root.maskCreation && root.maskCreation.bodyVisible)
+            root.maskCreation.hideBody()
         editorSession.activeAdjustmentPanel = panel
     }
 
@@ -242,72 +245,89 @@ Item {
                 onActivated: key => root.selectPanel(key)
             }
 
-            StackLayout {
-                id: panelStack
-                objectName: "editorAdjustmentPanelStack"
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: {
-                    switch (root.activePanel) {
-                    case "look": return 1
-                    case "lut": return 2
-                    case "display": return 3
-                    case "geometry": return 4
-                    case "raw": return 5
-                    default: return 0
+
+                StackLayout {
+                    id: panelStack
+                    objectName: "editorAdjustmentPanelStack"
+                    anchors.fill: parent
+                    currentIndex: {
+                        switch (root.activePanel) {
+                        case "look": return 1
+                        case "lut": return 2
+                        case "display": return 3
+                        case "geometry": return 4
+                        case "raw": return 5
+                        default: return 0
+                        }
+                    }
+
+                    EditorTonePanel {
+                        id: tonePanel
+                        objectName: "editorAdjustmentPanel_tone"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
+
+                    EditorLookPanel {
+                        id: lookPanel
+                        objectName: "editorAdjustmentPanel_look"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                        lutModel: lutModel
+                    }
+
+                    LUTPanel {
+                        id: lutPanel
+                        objectName: "editorAdjustmentPanel_lut"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        lutModel: lutModel
+                        controlsEnabled: root.controlsEnabled
+                    }
+
+                    EditorDisplayTransformPanel {
+                        id: displayPanel
+                        objectName: "editorAdjustmentPanel_display"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
+
+                    EditorGeometryPanel {
+                        id: geometryPanel
+                        objectName: "editorAdjustmentPanel_geometry"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        interaction: root.interaction
+                        controlsEnabled: root.controlsEnabled
+                        panelActive: root.activePanel === "geometry"
+                    }
+
+                    EditorRawDecodePanel {
+                        id: rawPanel
+                        objectName: "editorAdjustmentPanel_raw"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
                     }
                 }
 
-                EditorTonePanel {
-                    id: tonePanel
-                    objectName: "editorAdjustmentPanel_tone"
+                EditorMasksContextPanel {
+                    id: masksPanel
+                    objectName: "editorAdjustmentPanel_masksOverlay"
+                    anchors.fill: parent
+                    visible: root.maskCreation && root.maskCreation.bodyVisible
                     theme: root.theme
                     editorSession: root.editorSession
+                    nodeController: root.nodeController
+                    maskCreation: root.maskCreation
                     controlsEnabled: root.controlsEnabled
-                }
-
-                EditorLookPanel {
-                    id: lookPanel
-                    objectName: "editorAdjustmentPanel_look"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
-                    lutModel: lutModel
-                }
-
-                LUTPanel {
-                    id: lutPanel
-                    objectName: "editorAdjustmentPanel_lut"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    lutModel: lutModel
-                    controlsEnabled: root.controlsEnabled
-                }
-
-                EditorDisplayTransformPanel {
-                    id: displayPanel
-                    objectName: "editorAdjustmentPanel_display"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
-                }
-
-                EditorGeometryPanel {
-                    id: geometryPanel
-                    objectName: "editorAdjustmentPanel_geometry"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    interaction: root.interaction
-                    controlsEnabled: root.controlsEnabled
-                    panelActive: root.activePanel === "geometry"
-                }
-
-                EditorRawDecodePanel {
-                    id: rawPanel
-                    objectName: "editorAdjustmentPanel_raw"
-                    theme: root.theme
-                    editorSession: root.editorSession
-                    controlsEnabled: root.controlsEnabled
+                    z: 1
                 }
             }
         }

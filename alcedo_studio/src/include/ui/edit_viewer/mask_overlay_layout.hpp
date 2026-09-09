@@ -58,9 +58,10 @@ namespace alcedo {
                                                    const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
- * @brief Existing Radial: center, axes, rotation, and distinct feather handles.
+ * @brief Existing Radial: center, axes, rotation, feather handles, and iso-rho lines.
  *
- * Connectors only. No ellipse fill and no iso-rho outline.
+ * Shows the base ellipse and distinct inner/outer feather contours. Coincident
+ * rhos are drawn once. No ellipse fill.
  */
 [[nodiscard]] auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                                     const RadialMaskSource& source,
@@ -68,9 +69,10 @@ namespace alcedo {
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
- * @brief Existing Linear Gradient: origin, direction, and transition boundaries.
+ * @brief Existing Linear Gradient: origin, direction, and three parallel loci.
  *
- * Finite connectors only. No filled coverage band.
+ * Guides are clipped to the photograph with Geometry crop-style dual strokes
+ * and short edge grips. Ends are not joined into a kite or closed polygon.
  */
 [[nodiscard]] auto MakeLinearExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                                     const LinearGradientMaskSource& source,
@@ -89,7 +91,7 @@ namespace alcedo {
                                                    const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
- * @brief Initial Radial drawing: existing handles plus a temporary outline at rho = 1.
+ * @brief Initial Radial drawing: selected contours and handles while the drag is open.
  */
 [[nodiscard]] auto MakeRadialCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
                                                     const RadialMaskSource& source,
@@ -97,7 +99,7 @@ namespace alcedo {
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
- * @brief Initial Linear drawing: existing handles plus finite locus guides.
+ * @brief Initial Linear drawing: three photograph-clipped loci plus handles.
  */
 [[nodiscard]] auto MakeLinearCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
                                                     const LinearGradientMaskSource& source,
@@ -107,6 +109,14 @@ namespace alcedo {
 [[nodiscard]] auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
                                            float hit_radius_logical_px)
     -> MaskOverlayHandleId;
+
+/**
+ * @brief Axis-aligned photograph rectangle in item coordinates.
+ *
+ * Maps photograph UV (0,0) and (1,1) through the current view. Empty when mapping
+ * is invalid.
+ */
+[[nodiscard]] auto PhotographItemRect(const MaskEditViewMapping& mapping) -> QRectF;
 
 /**
  * @brief Item-space length of a ReferenceSpace radius around @p center_reference.

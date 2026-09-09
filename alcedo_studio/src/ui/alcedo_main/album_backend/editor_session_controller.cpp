@@ -293,8 +293,12 @@ void EditorSessionController::OnBackendChanged() {
     }
   }
   SyncViewportDisplayConfig();
-  if (mask_creation_ && !has_image()) {
-    mask_creation_->OnImageClosed();
+  if (mask_creation_) {
+    if (!has_image()) {
+      mask_creation_->OnImageClosed();
+    } else {
+      mask_creation_->SyncFromSession();
+    }
   }
   emit       StateChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
@@ -1321,6 +1325,19 @@ auto EditorSessionController::mask_creation_mask_id() const -> alcedo::MaskId {
   return session_backend_ ? session_backend_->mask_creation_mask_id() : alcedo::MaskId{};
 }
 
+auto EditorSessionController::mask_creation_node_id() const -> alcedo::NodeId {
+  return session_backend_ ? session_backend_->mask_creation_node_id() : alcedo::NodeId{};
+}
+
+auto EditorSessionController::mask_creation_source() const -> std::optional<alcedo::MaskSource> {
+  return session_backend_ ? session_backend_->mask_creation_source() : std::nullopt;
+}
+
+auto EditorSessionController::mask_creation_last_removed_mask_id() const -> alcedo::MaskId {
+  return session_backend_ ? session_backend_->mask_creation_last_removed_mask_id()
+                            : alcedo::MaskId{};
+}
+
 void EditorSessionController::SetImageExifReader(
     std::function<alcedo::EditorImageExifDisplay(uint)> reader) {
   image_exif_reader_     = std::move(reader);
@@ -1422,9 +1439,7 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("detail")) {
     return QStringLiteral("detail");
   }
-  if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
-    return QStringLiteral("masks");
-  }
+  // The Masks body overlays the six navbar pages. It is not a persisted panel.
   return QStringLiteral("tone");
 }
 

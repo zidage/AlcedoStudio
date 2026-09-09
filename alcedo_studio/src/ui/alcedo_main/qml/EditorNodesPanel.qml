@@ -17,6 +17,8 @@ Item {
     property var nodeController: null
     property var nodeLayoutStore: null
 
+    readonly property var maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+
     property bool renameVisible: false
     property string renameNodeId: ""
     property string renameOriginalName: ""
@@ -135,6 +137,8 @@ Item {
             return
         }
         root.nodeController.graphAdapter = qanAdapter
+        if (root.maskCreation)
+            qanAdapter.selectedMaskId = String(root.maskCreation.selectedMaskId || "")
     }
 
     function detachAdapter() {
@@ -202,7 +206,14 @@ Item {
         } else if (id === "nodes.renameColorGrade") {
             root.beginRename()
         } else if (id === "nodes.deleteColorGrade") {
-            root.deleteSelectedColorGrade()
+            if (root.renameVisible) {
+                return
+            }
+            if (root.maskCreation && root.maskCreation.maskControlsActive) {
+                root.maskCreation.removeSelectedMask()
+            } else {
+                root.deleteSelectedColorGrade()
+            }
         } else if (id === "nodes.beginConnect") {
             root.startKeyboardConnect()
         } else if (id === "nodes.completeConnect") {
@@ -250,6 +261,24 @@ Item {
         }
         function onGraphChanged() {
             root.attachAdapter()
+        }
+        function onMaskRowSelected(nodeId, maskId) {
+            if (root.maskCreation)
+                root.maskCreation.selectMask(nodeId, maskId)
+        }
+        function onMaskRowDeleteRequested(nodeId, maskId) {
+            if (root.maskCreation)
+                root.maskCreation.removeMask(nodeId, maskId)
+        }
+    }
+
+    Connections {
+        target: root.maskCreation
+        function onMaskCreationChanged() {
+            if (qanAdapter)
+                qanAdapter.selectedMaskId = root.maskCreation
+                        ? String(root.maskCreation.selectedMaskId || "")
+                        : ""
         }
     }
 

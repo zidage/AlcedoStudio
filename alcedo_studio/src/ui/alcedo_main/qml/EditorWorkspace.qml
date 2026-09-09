@@ -234,6 +234,10 @@ Item {
                         maskOverlayHandleOutlineWidth: appTheme.maskOverlayHandleOutlineWidth
                         maskOverlayStrokeWidth: appTheme.maskOverlayStrokeWidth
                         maskOverlayAntialiasWidth: appTheme.maskOverlayAntialiasWidth
+                        maskOverlayGuideOuterWidth: appTheme.maskOverlayGuideOuterWidth
+                        maskOverlayGuideInnerWidth: appTheme.maskOverlayGuideInnerWidth
+                        maskOverlayGripOuterWidth: appTheme.maskOverlayGripOuterWidth
+                        maskOverlayGripInnerWidth: appTheme.maskOverlayGripInnerWidth
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2
@@ -342,6 +346,8 @@ Item {
                         onPointChanged: {
                             if (viewportHover.hovered) {
                                 editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                                if (root.maskCreation)
+                                    root.maskCreation.handleHover(point.position.x, point.position.y)
                             }
                         }
                     }
@@ -562,6 +568,11 @@ Item {
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
                                 editorInteraction.resetView()
                                 event.accepted = true
+                            } else if (event.key === Qt.Key_Delete) {
+                                if (root.maskCreation && root.maskCreation.maskControlsActive) {
+                                    root.maskCreation.removeSelectedMask()
+                                    event.accepted = true
+                                }
                             } else if (event.key === Qt.Key_1) {
                                 // 1:1 (actual pixels). Pro-editor convention.
                                 editorInteraction.zoomToActualPixels()

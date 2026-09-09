@@ -26,17 +26,23 @@ class EditorNodeController;
 class EditorSessionController;
 
 /**
- * @brief QML adapter for Radial/Linear Mask creation and existing-mask movement.
+ * @brief QML adapter for Radial/Linear Mask creation and existing-mask editing.
  *
  * Maps item pointers, publishes control-only overlay geometry, and queues
- * owner-thread Mask commands. Does not take the pipeline lock.
+ * owner-thread Mask commands. Does not take the pipeline lock. Selection is
+ * load-only: it does not create a Mask, history, or photo render.
  */
 class EditorMaskCreationAdapter : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY MaskCreationChanged)
   Q_PROPERTY(bool creating READ creating NOTIFY MaskCreationChanged)
   Q_PROPERTY(bool ownsLeftButton READ owns_left_button NOTIFY MaskCreationChanged)
+  Q_PROPERTY(bool bodyVisible READ body_visible NOTIFY MaskCreationChanged)
+  Q_PROPERTY(bool maskControlsActive READ mask_controls_active NOTIFY MaskCreationChanged)
   Q_PROPERTY(QString toolKind READ tool_kind NOTIFY MaskCreationChanged)
+  Q_PROPERTY(QString selectedMaskId READ selected_mask_id NOTIFY MaskCreationChanged)
+  Q_PROPERTY(qreal innerFeatherPercent READ inner_feather_percent NOTIFY MaskCreationChanged)
+  Q_PROPERTY(qreal outerFeatherPercent READ outer_feather_percent NOTIFY MaskCreationChanged)
 
  public:
   explicit EditorMaskCreationAdapter(EditorSessionController* session, QObject* parent = nullptr);
@@ -44,19 +50,42 @@ class EditorMaskCreationAdapter : public QObject {
 
   [[nodiscard]] auto active() const -> bool { return !tool_kind_.isEmpty(); }
   [[nodiscard]] auto creating() const -> bool { return creating_; }
-  [[nodiscard]] auto owns_left_button() const -> bool { return active(); }
+  [[nodiscard]] auto owns_left_button() const -> bool;
+  [[nodiscard]] auto body_visible() const -> bool;
+  [[nodiscard]] auto mask_controls_active() const -> bool;
   [[nodiscard]] auto tool_kind() const -> QString { return tool_kind_; }
+  [[nodiscard]] auto selected_mask_id() const -> QString { return selected_mask_id_; }
+  [[nodiscard]] auto inner_feather_percent() const -> qreal;
+  [[nodiscard]] auto outer_feather_percent() const -> qreal;
 
   Q_INVOKABLE void bindInteractionItem(QObject* interaction);
   Q_INVOKABLE void bindOverlayItem(QObject* overlay);
   Q_INVOKABLE void beginRadial();
   Q_INVOKABLE void beginLinear();
   Q_INVOKABLE void cancel();
+  Q_INVOKABLE void hideBody();
+  Q_INVOKABLE void finishBody();
+  Q_INVOKABLE void selectMask(const QString& node_id, const QString& mask_id);
+  Q_INVOKABLE void removeMask(const QString& node_id, const QString& mask_id);
+  Q_INVOKABLE void removeSelectedMask();
+  Q_INVOKABLE void handleHover(qreal x, qreal y);
+  Q_INVOKABLE void beginInnerFeather();
+  Q_INVOKABLE void beginOuterFeather();
+  Q_INVOKABLE void updateInnerFeather(qreal percent);
+  Q_INVOKABLE void updateOuterFeather(qreal percent);
+  Q_INVOKABLE void finishFeather();
   Q_INVOKABLE bool handlePress(qreal x, qreal y, int button);
   Q_INVOKABLE bool handleMove(qreal x, qreal y, int buttons);
   Q_INVOKABLE bool handleRelease(qreal x, qreal y, int button);
 
   void OnImageClosed();
+  /**
+   * @brief Copy owner selection/source after consume, Undo, or session rebind.
+   *
+   * Open pointer/numeric edits keep GUI-predicted overlay fields. Empty
+   * selection after Undo selects the restored Mask only when it is present.
+   */
+  void SyncFromSession();
 
  signals:
   void MaskCreationChanged();
@@ -66,10 +95,17 @@ class EditorMaskCreationAdapter : public QObject {
   void ResetLocal();
   void PublishOverlay();
   void HideOverlay();
+  void PublishDisplayedGeometry();
+  void ApplyOwnerSource(const MaskId& mask_id, const MaskSource& source);
+  void BeginFeatherMove(AnalyticMaskHandle handle);
+  void UpdateFeatherPercent(AnalyticMaskHandle handle, qreal percent);
+  void EnqueueAppendSample(const MaskCreationSample& sample);
   [[nodiscard]] auto CurrentGradeId() const -> NodeId;
   [[nodiscard]] auto CanAuthorMasks() const -> bool;
+  [[nodiscard]] auto DocumentContainsMask(const MaskId& mask_id) const -> bool;
   [[nodiscard]] auto MakeSample(qreal x, qreal y, bool allow_outside) const
       -> std::optional<MaskCreationSample>;
+  [[nodiscard]] auto MakeNormalizedSample(Vector2 normalized) const -> MaskCreationSample;
   [[nodiscard]] auto OverlayClip() const -> QRectF;
   [[nodiscard]] auto OverlayStyle() const -> MaskOverlayStyle;
   [[nodiscard]] auto Enqueue(EditorMaskCreationCommand command) -> bool;
@@ -80,15 +116,18 @@ class EditorMaskCreationAdapter : public QObject {
   QPointer<editor_rhi::EditorOverlayItem>           overlay_;
   QMetaObject::Connection                           view_change_connection_;
   QString                                           tool_kind_;
+  QString                                           selected_mask_id_;
   MaskSourceKind                                    source_kind_ = MaskSourceKind::Radial;
   bool                                              creating_    = false;
   bool                                              open_        = false;
   bool                                              selected_    = false;
+  bool                                              body_open_   = false;
   MaskPointerIdentity                               pointer_{};
   Vector2                                           press_normalized_{};
   std::optional<MaskSource>                         overlay_source_;
   MaskOverlayDisplay                                overlay_display_{};
   AnalyticMaskHandle                                active_handle_ = AnalyticMaskHandle::None;
+  MaskOverlayHandleId                               hovered_handle_ = MaskOverlayHandleId::None;
   std::uint64_t                                     next_sequence_id_ = 1;
 };
 

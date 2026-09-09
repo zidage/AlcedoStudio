@@ -26,7 +26,19 @@ inline constexpr float kMaskOverlayAntialiasWidthLogicalPx = 1.0f;
 inline constexpr float kMaskOverlayHandleHitRadiusLogicalPx = 12.0f;
 /// Rotation/direction handle offset from the mapped origin, in logical pixels.
 inline constexpr float kMaskOverlayRotateHandleOffsetLogicalPx = 24.0f;
-/// Maximum chord deviation when tessellating a Radial creation outline, in logical pixels.
+/// Geometry-crop outer stroke for selected analytic guides, in logical pixels.
+inline constexpr float kMaskOverlayGuideOuterWidthLogicalPx = 3.0f;
+/// Geometry-crop inner stroke for selected analytic guides, in logical pixels.
+inline constexpr float kMaskOverlayGuideInnerWidthLogicalPx = 1.2f;
+/// Geometry-crop outer edge-grip width, in logical pixels.
+inline constexpr float kMaskOverlayGripOuterWidthLogicalPx = 5.0f;
+/// Geometry-crop inner edge-grip width, in logical pixels.
+inline constexpr float kMaskOverlayGripInnerWidthLogicalPx = 2.4f;
+/// Start of the short edge grip along a visible guide, in [0, 1].
+inline constexpr float kMaskOverlayGripSpanT0 = 0.38f;
+/// End of the short edge grip along a visible guide, in [0, 1].
+inline constexpr float kMaskOverlayGripSpanT1 = 0.62f;
+/// Maximum chord deviation when tessellating a Radial iso-rho contour, in logical pixels.
 inline constexpr float kMaskOverlayMaxChordDeviationLogicalPx = 0.25f;
 /// Upper bound on Radial outline vertices after adaptive subdivision.
 inline constexpr int kMaskOverlayMaxEllipseVertices = 256;
@@ -66,10 +78,29 @@ enum class MaskOverlayHandleId : std::uint8_t {
   LinearEndBoundary    = 11,
 };
 
-/** @brief One handle disc in item/logical coordinates. */
+/** @brief Disc is a filled radius/origin control. Ring is a feather control. */
+enum class MaskOverlayHandleShape : std::uint8_t {
+  Disc = 0,
+  Ring = 1,
+};
+
+/** @brief One handle in item/logical coordinates. */
 struct MaskOverlayHandle {
+  MaskOverlayHandleId    id    = MaskOverlayHandleId::None;
+  QPointF                item{};
+  MaskOverlayHandleShape shape = MaskOverlayHandleShape::Disc;
+};
+
+/**
+ * @brief One open guide segment in item/logical coordinates.
+ *
+ * Gradient loci and Radial contours use open or closed polylines. These
+ * segments are never joined into a closed polygon.
+ */
+struct MaskOverlayGuide {
   MaskOverlayHandleId id = MaskOverlayHandleId::None;
-  QPointF             item{};
+  QPointF             a{};
+  QPointF             b{};
 };
 
 /**
@@ -88,6 +119,12 @@ struct MaskOverlayStyle {
   float  antialias_width_logical_px        = kMaskOverlayAntialiasWidthLogicalPx;
   float  hit_radius_logical_px             = kMaskOverlayHandleHitRadiusLogicalPx;
   float  rotate_handle_offset_logical_px   = kMaskOverlayRotateHandleOffsetLogicalPx;
+  float  guide_outer_width_logical_px      = kMaskOverlayGuideOuterWidthLogicalPx;
+  float  guide_inner_width_logical_px      = kMaskOverlayGuideInnerWidthLogicalPx;
+  float  grip_outer_width_logical_px       = kMaskOverlayGripOuterWidthLogicalPx;
+  float  grip_inner_width_logical_px       = kMaskOverlayGripInnerWidthLogicalPx;
+  float  grip_span_t0                     = kMaskOverlayGripSpanT0;
+  float  grip_span_t1                     = kMaskOverlayGripSpanT1;
 };
 
 /**
@@ -111,6 +148,14 @@ struct MaskOverlayDisplay {
   std::vector<QPointF> creation_path;
   std::vector<QPointF> creation_outline;
   std::vector<std::pair<QPointF, QPointF>> creation_guides;
+  /// Selected Radial iso-rho contours. Closed polylines; coincident rhos appear once.
+  std::vector<std::vector<QPointF>> selected_contours;
+  /// Selected Gradient loci and other open analytic guides. Not a closed polygon.
+  std::vector<MaskOverlayGuide> selected_guides;
+  /// Short Geometry-crop edge grips on visible Gradient guides.
+  std::vector<std::pair<QPointF, QPointF>> edge_grips;
+  MaskOverlayHandleId hovered_handle = MaskOverlayHandleId::None;
+  MaskOverlayHandleId active_handle  = MaskOverlayHandleId::None;
   QRectF clip_rect{};
 };
 
@@ -141,7 +186,11 @@ struct MaskOverlaySceneGeometry {
   std::vector<MaskOverlayVertex> connectors;
   std::vector<MaskOverlayVertex> cursor;
   std::vector<MaskOverlayVertex> creation_guides;
+  std::vector<MaskOverlayVertex> selected_guides;
+  std::vector<MaskOverlayVertex> edge_grips;
   int handle_count                       = 0;
+  int selected_guide_segment_count      = 0;
+  int closed_polygon_edge_count         = 0;
   int coverage_fill_vertex_count         = 0;
   int settled_stroke_path_vertex_count   = 0;
 };

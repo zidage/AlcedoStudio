@@ -14,6 +14,7 @@ namespace {
 constexpr int kDiscSegments = 20;
 constexpr int kCapSegments  = 10;
 constexpr float kMinLength  = 1.0e-6f;
+constexpr float kHoverHandleScale = 1.25f;
 
 [[nodiscard]] auto IsFinitePoint(const QPointF& point) -> bool {
   return std::isfinite(point.x()) && std::isfinite(point.y());
@@ -277,15 +278,34 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
   const float outline  = style.handle_outline_width_logical_px;
   const float stroke_w = style.stroke_width_logical_px;
   const float aa       = style.antialias_width_logical_px;
+  const float guide_outer = style.guide_outer_width_logical_px;
+  const float guide_inner = style.guide_inner_width_logical_px;
+  const float grip_outer  = style.grip_outer_width_logical_px;
+  const float grip_inner  = style.grip_inner_width_logical_px;
   const QRectF& clip   = display.clip_rect;
+
+  const auto handle_radius = [&](MaskOverlayHandleId id) {
+    if (id == display.hovered_handle || id == display.active_handle) {
+      return handle_r * kHoverHandleScale;
+    }
+    return handle_r;
+  };
 
   for (const auto& handle : display.handles) {
     if (handle.id == MaskOverlayHandleId::None || !IsFinitePoint(handle.item)) {
       continue;
     }
-    AppendRing(scene.handle_outline, handle.item, handle_r, handle_r + outline, aa,
-               style.control_outline, clip);
-    AppendFilledDisc(scene.handle_fill, handle.item, handle_r, 0.0f, style.control_fill, clip);
+    const float radius = handle_radius(handle.id);
+    if (handle.shape == MaskOverlayHandleShape::Ring) {
+      AppendHollowCircle(scene.handle_outline, handle.item, radius + outline * 0.5f, outline, aa,
+                         style.control_outline, clip);
+      AppendHollowCircle(scene.handle_fill, handle.item, radius, outline, aa, style.control_fill,
+                         clip);
+    } else {
+      AppendRing(scene.handle_outline, handle.item, radius, radius + outline, aa,
+                 style.control_outline, clip);
+      AppendFilledDisc(scene.handle_fill, handle.item, radius, 0.0f, style.control_fill, clip);
+    }
     ++scene.handle_count;
   }
 
@@ -310,6 +330,36 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
                           style.inactive, clip, /*round_caps=*/false);
     }
   }
+
+  auto append_dual = [&](std::vector<MaskOverlayVertex>& triangles, const QPointF& a,
+                          const QPointF& b, float outer_w, float inner_w) {
+    AppendClippedStroke(triangles, a, b, outer_w, aa, style.control_fill, clip,
+                        /*round_caps=*/false);
+    AppendClippedStroke(triangles, a, b, inner_w, aa, style.control_outline, clip,
+                        /*round_caps=*/false);
+  };
+
+  for (const auto& contour : display.selected_contours) {
+    if (contour.size() < 2) {
+      continue;
+    }
+    const std::size_t count = contour.size();
+    for (std::size_t i = 0; i < count; ++i) {
+      append_dual(scene.selected_guides, contour[i], contour[(i + 1) % contour.size()],
+                  guide_outer, guide_inner);
+      ++scene.selected_guide_segment_count;
+    }
+  }
+  for (const auto& guide : display.selected_guides) {
+    append_dual(scene.selected_guides, guide.a, guide.b, guide_outer, guide_inner);
+    ++scene.selected_guide_segment_count;
+  }
+  for (const auto& grip : display.edge_grips) {
+    append_dual(scene.edge_grips, grip.first, grip.second, grip_outer, grip_inner);
+  }
+  scene.closed_polygon_edge_count         = 0;
+  scene.coverage_fill_vertex_count       = 0;
+  scene.settled_stroke_path_vertex_count = 0;
 
   return scene;
 }

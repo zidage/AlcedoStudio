@@ -13,6 +13,9 @@
 #include "app/pipeline_document_history.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
+#include "edit/mask/mask_list_selection.hpp"
+
+#include <vector>
 
 namespace alcedo {
 namespace {
@@ -322,8 +325,9 @@ auto EditorMaskCreationController::SelectMask(const NodeId& grade_id, const Mask
     return Reject("Mask is missing");
   }
   const auto kind = GetMaskSourceKind(mask->source);
-  if (kind != MaskSourceKind::Radial && kind != MaskSourceKind::LinearGradient) {
-    return Reject("analytic movement supports Radial and Linear Gradient");
+  if (kind != MaskSourceKind::Brush && kind != MaskSourceKind::Radial &&
+      kind != MaskSourceKind::LinearGradient) {
+    return Reject("Mask source kind is not selectable");
   }
   kind_          = kind;
   session_       = session;
@@ -337,6 +341,84 @@ auto EditorMaskCreationController::SelectMask(const NodeId& grade_id, const Mask
   state_         = EditorMaskCreationState::Selected;
   auto result    = Ok();
   result.mask_id = mask_id_;
+  return result;
+}
+
+auto EditorMaskCreationController::RemoveMask(const NodeId& grade_id, const MaskId& mask_id)
+    -> EditorMaskCreationResult {
+  if (document_ == nullptr || history_ == nullptr) {
+    return Reject("Mask creation controller is not bound to a document");
+  }
+  if (grade_id.Empty() || mask_id.Empty()) {
+    return Reject("RemoveMask requires a Color Grade and Mask identity");
+  }
+  if (open_ && mask_id_ == mask_id) {
+    if (inserted_ && creating_) {
+      return CancelMaskInput();
+    }
+    const auto cancelled = CancelMaskInput();
+    if (!cancelled.accepted) {
+      return cancelled;
+    }
+  }
+  node_id_    = grade_id;
+  auto* grade = Grade();
+  if (grade == nullptr) {
+    node_id_ = NodeId{};
+    return Reject("removal target is not a Color Grade");
+  }
+  std::vector<MaskId> ordered;
+  ordered.reserve(grade->MaskCount());
+  std::optional<std::uint32_t> index;
+  for (std::size_t i = 0; i < grade->MaskCount(); ++i) {
+    const auto& mask = grade->MaskAt(i);
+    ordered.push_back(mask.id);
+    if (mask.id == mask_id) {
+      index = static_cast<std::uint32_t>(i);
+    }
+  }
+  if (!index.has_value()) {
+    return Reject("Mask is missing");
+  }
+  const auto next_selection = MaskIdAfterDeletion(ordered, mask_id, mask_id_);
+  const auto stored        = MaskModelToJson(grade->MaskAt(*index));
+  const auto batch         = MakeRemoveMaskBatch(grade_id, mask_id, stored, *index);
+  try {
+    grade->RemoveMask(mask_id);
+  } catch (const std::exception& ex) {
+    return Reject(ex.what());
+  }
+  std::string settle_error;
+  if (!PublishSettledBatch(batch, &settle_error)) {
+    try {
+      grade->AddMask(MaskModelFromJson(stored), *index);
+    } catch (const std::exception&) {
+    }
+    return Reject(settle_error.empty() ? std::string{"RemoveMask history publish failed"}
+                                        : settle_error);
+  }
+  last_removed_mask_id_ = mask_id;
+  if (next_selection.Empty()) {
+    mask_id_       = MaskId{};
+    draft_source_.reset();
+    before_source_ = nullptr;
+    creating_      = false;
+    handle_        = AnalyticMaskHandle::None;
+    state_         = EditorMaskCreationState::Inactive;
+  } else if (next_selection != mask_id_) {
+    const auto loaded = SelectMask(grade_id, next_selection, session_);
+    if (!loaded.accepted) {
+      mask_id_       = MaskId{};
+      draft_source_.reset();
+      before_source_ = nullptr;
+      state_         = EditorMaskCreationState::Inactive;
+    }
+  }
+  auto result              = Ok();
+  result.mask_id           = mask_id_;
+  result.committed         = true;
+  result.quality_requested = true;
+  RequestInteractive(result);
   return result;
 }
 

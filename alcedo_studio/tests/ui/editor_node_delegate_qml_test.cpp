@@ -27,6 +27,7 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSignalSpy>
 #include <QSize>
 #include <QStringList>
 #include <QUrl>
@@ -923,6 +924,93 @@ TEST_F(EditorNodeDelegateQml, CompactMaskIconsKeepSourceSizeForListedDevicePixel
     EXPECT_EQ(icon->property("sourceSize").toSize().width(), source) << dpr;
     EXPECT_EQ(icon->property("status").toInt(), 1) << dpr;
   }
+}
+
+TEST_F(EditorNodeDelegateQml, MaskRowSelectionHighlightDoesNotRebuildList) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  auto*              grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask(MaskId{"mask.gradient"}, LinearGradientMaskSource{}), 0);
+  grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
+  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 2);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 3; }));
+  const auto rows_before = MaskRows(item);
+  ASSERT_EQ(rows_before.size(), 3);
+  QPointer<QQuickItem> first  = rows_before.at(0);
+  QPointer<QQuickItem> second = rows_before.at(1);
+  QPointer<QQuickItem> third = rows_before.at(2);
+  EXPECT_EQ(item->property("nodeId").toString(), QStringLiteral("grade.primary"));
+  EXPECT_FALSE(first->property("selected").toBool());
+
+  adapter.setSelectedMaskId(QStringLiteral("mask.radial"));
+  ASSERT_TRUE(WaitFor([&] { return second && second->property("selected").toBool(); }));
+  const auto rows_after = MaskRows(item);
+  ASSERT_EQ(rows_after.size(), 3);
+  EXPECT_EQ(rows_after.at(0), first.data());
+  EXPECT_EQ(rows_after.at(1), second.data());
+  EXPECT_EQ(rows_after.at(2), third.data());
+  EXPECT_FALSE(first->property("selected").toBool());
+  EXPECT_TRUE(second->property("selected").toBool());
+  EXPECT_FALSE(third->property("selected").toBool());
+
+  QSignalSpy selected_spy(&adapter, &ui::AlcedoQanGraph::MaskRowSelected);
+  ASSERT_TRUE(QMetaObject::invokeMethod(first.data(), "clicked", Qt::DirectConnection));
+  ASSERT_TRUE(WaitFor([&] { return selected_spy.count() == 1; }));
+  ASSERT_EQ(selected_spy.count(), 1);
+  EXPECT_EQ(selected_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(selected_spy.at(0).at(1).toString(), QStringLiteral("mask.gradient"));
+}
+
+TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  auto*              grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
+  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 1);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 2; }));
+  const auto rows = MaskRows(item);
+  ASSERT_EQ(rows.size(), 2);
+  auto* delete_button = FindDescendant(rows.at(0), QStringLiteral("editorNodeMaskTypeRowDelete"));
+  ASSERT_NE(delete_button, nullptr);
+  EXPECT_EQ(delete_button->property("actionName").toString(), QStringLiteral("Delete Radial"));
+
+  QSignalSpy delete_spy(&adapter, &ui::AlcedoQanGraph::MaskRowDeleteRequested);
+  ASSERT_TRUE(QMetaObject::invokeMethod(delete_button, "clicked", Qt::DirectConnection));
+  ASSERT_TRUE(WaitFor([&] { return delete_spy.count() == 1; }));
+  ASSERT_EQ(delete_spy.count(), 1);
+  EXPECT_EQ(delete_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(delete_spy.at(0).at(1).toString(), QStringLiteral("mask.radial"));
+  EXPECT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
+  EXPECT_EQ(MaskRows(item).size(), 2);
+
+  QSignalSpy brush_delete_spy(&adapter, &ui::AlcedoQanGraph::MaskRowDeleteRequested);
+  auto* brush_delete = FindDescendant(rows.at(1), QStringLiteral("editorNodeMaskTypeRowDelete"));
+  ASSERT_NE(brush_delete, nullptr);
+  EXPECT_EQ(brush_delete->property("actionName").toString(), QStringLiteral("Delete Brush"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(brush_delete, "clicked", Qt::DirectConnection));
+  ASSERT_TRUE(WaitFor([&] { return brush_delete_spy.count() == 1; }));
+  EXPECT_EQ(brush_delete_spy.at(0).at(1).toString(), QStringLiteral("mask.brush"));
+  EXPECT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
+
+  const auto workspace = ReadQmlFile("EditorWorkspace.qml");
+  const auto nodes     = ReadQmlFile("EditorNodesPanel.qml");
+  ASSERT_FALSE(workspace.isEmpty());
+  ASSERT_FALSE(nodes.isEmpty());
+  EXPECT_NE(workspace.indexOf(QStringLiteral("maskControlsActive")), -1);
+  EXPECT_NE(workspace.indexOf(QStringLiteral("removeSelectedMask")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("maskControlsActive")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("removeSelectedMask")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("deleteSelectedColorGrade")), -1);
 }
 
 }  // namespace alcedo

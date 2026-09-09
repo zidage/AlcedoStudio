@@ -3,15 +3,19 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 
-// One read-only Mask source-type row inside a Color Grade drawer.
-// Shows only the approved type icon and localized type name. MaskId stays on
-// the projection for later selection; it is never UI text.
+// One Mask source-type row inside a Color Grade drawer. Selection is
+// NodeId/MaskId owned; click does not rebuild the list. Delete is a compact
+// IconActionButton and does not propagate into row selection.
 Item {
     id: root
     objectName: "editorNodeMaskTypeRow"
 
     property string sourceKind: ""
     property string maskId: ""
+    property bool selected: false
+
+    signal clicked
+    signal deleteClicked
 
     readonly property string typeLabel: {
         if (root.sourceKind === "linearGradient") {
@@ -40,18 +44,40 @@ Item {
     }
 
     implicitWidth: appTheme.graphNodeWidth
-    implicitHeight: Math.max(appTheme.graphMaskRowHeight, typeName.implicitHeight + appTheme.spaceXs)
+    implicitHeight: appTheme.graphMaskRowHeight
     height: implicitHeight
-    activeFocusOnTab: false
+    activeFocusOnTab: true
 
-    Accessible.role: Accessible.StaticText
+    Accessible.role: Accessible.Button
     Accessible.name: root.typeLabel
     Accessible.ignored: !root.visible || root.typeLabel.length === 0
+    Accessible.onPressAction: root.clicked()
+
+    Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
+                || event.key === Qt.Key_Enter) {
+            root.clicked()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+            root.deleteClicked()
+            event.accepted = true
+        }
+    }
+
+    Rectangle {
+        objectName: "editorNodeMaskTypeRowWash"
+        anchors.fill: parent
+        anchors.leftMargin: appTheme.graphSelectionOutlineWidth
+        anchors.rightMargin: appTheme.graphSelectionOutlineWidth
+        color: root.selected ? appTheme.selectedTintColor
+                            : (rowMouse.containsMouse || root.activeFocus
+                               ? appTheme.hoverColor : "transparent")
+    }
 
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: appTheme.spaceSm
-        anchors.rightMargin: appTheme.spaceSm
+        anchors.rightMargin: appTheme.spaceXs
         spacing: appTheme.spaceSm
 
         ColorImage {
@@ -84,5 +110,29 @@ Item {
             wrapMode: Text.NoWrap
             Accessible.ignored: true
         }
+
+        IconActionButton {
+            id: deleteButton
+            objectName: "editorNodeMaskTypeRowDelete"
+            compact: true
+            width: appTheme.graphMaskRowHeight
+            height: appTheme.graphMaskRowHeight
+            Layout.preferredWidth: appTheme.graphMaskRowHeight
+            Layout.preferredHeight: appTheme.graphMaskRowHeight
+            Layout.alignment: Qt.AlignVCenter
+            iconSrc: "qrc:/panel_icons/trash.svg"
+            actionName: qsTr("Delete %1").arg(root.typeLabel)
+            focusOnPointerPress: false
+            onClicked: root.deleteClicked()
+        }
+    }
+
+    MouseArea {
+        id: rowMouse
+        anchors.fill: parent
+        anchors.rightMargin: appTheme.graphMaskRowHeight
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.clicked()
     }
 }
