@@ -2,11 +2,12 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.6 complete; NM7.7–NM7.14 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.7 complete; NM7.8–NM7.14 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
-shared ReferenceSpace mapping with Brush placement, and NM7.6 control-only retained QSG.
-Remaining sub-phases are unimplemented.
+shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
+and NM7.7 Radial/Linear creation plus existing-mask movement. Remaining sub-phases are
+unimplemented.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1058,6 +1059,63 @@ release to update the photographed result.
 `EscapeRestoresAnalyticSourceWithoutCommit`.
 
 **Exit:** both shapes move with actual native preview and control-only QSG on non-square images.
+
+##### Phase NM7.7 completion record (2026-09-08)
+
+**Status:** complete — Radial/Linear center-out creation, existing-mask movement, and handle
+edits apply provisional Grade source fields before release; one NM4 AddMask or
+ReplaceMaskSource commit on settle; Escape restores with zero commits.
+
+**Primary success call chain:**
+
+```text
+item/logical pointer (MaskEditGeometry::MapItemToReference)
+  -> EditorMaskCreationController::BeginMaskInput / BeginMaskMove / AppendMaskInput
+  -> RadialFromCenterOut / LinearFromEndpoints / ApplyAnalyticMaskHandle
+  -> ColorGradeNodeModel::AddMask (first valid creation) or ReplaceMaskSource
+  -> Interactive Mix callback (GradeMaskCoverage::EvaluateFull)
+  -> FinishMaskInput
+  -> MakeAddMaskBatch / MakeReplaceMaskSourceBatch
+  -> MiniGitWorkingHistory::AppendEdit
+  -> Quality requested (no second Apply; live already holds after values)
+```
+
+**Primary failure call chain:**
+
+```text
+degenerate zero-area creation, unchanged placement, or Escape/Cancel
+  -> no AddMask, or RestoreLive (RemoveMask / ReplaceMaskSource to before JSON)
+  -> history head unchanged; Grade source matches the captured before-state
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ExistingRadialMoveUpdatesInteractivePixelsBeforeRelease` | `AnalyticMaskCreationTest` | PASS |
+| `ExistingGradientMovePreservesDirectionAndUpdatesInteractivePixels` | `AnalyticMaskCreationTest` | PASS |
+| `RadialFeatherControlsMatchEvaluator` | `AnalyticMaskCreationTest` | PASS |
+| `DegenerateAnalyticCreationCreatesNoCommit` | `AnalyticMaskCreationTest` | PASS |
+| `EscapeRestoresAnalyticSourceWithoutCommit` | `AnalyticMaskCreationTest` | PASS |
+| Valid Radial creation commits once; creating overlay has no coverage fill | `AnalyticMaskCreationTest` | PASS |
+| Center-out radii stay positive and unswapped | `AnalyticMaskEditTest` | PASS |
+| Linear endpoints set origin, unit normal, and width | `AnalyticMaskEditTest` | PASS |
+| Rotation unwraps across ±π | `AnalyticMaskEditTest` | PASS |
+| Existing mapping / overlay / Brush placement | `MaskEditGeometryTest`, `MaskOverlayControlTest`, `BrushPlacementMappingTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AnalyticMaskEditTest --target AnalyticMaskCreationTest`
+`ctest --test-dir build/debug --output-on-failure -R "AnalyticMaskEditTest|AnalyticMaskCreationTest"`
+`ctest --test-dir build/debug --output-on-failure -R "MaskOverlayControlTest|MaskEditGeometryTest|BrushPlacementMappingTest"`
+
+Suite totals: `9/9` NM7.7 binaries PASS; `14/14` related mapping/overlay tests PASS.
+Date / working tree on `feature/analytic-mask-creation-movement` (base `6eb68e4b`) / Windows MSVC `win_debug` / Qt 6.9.3 (`D:/misc/Qt/6.9.3/msvc2022_64`) / CUDA Toolkit 12.8. Interactive Mix is host `GradeMaskCoverage` using the native analytic equations; no GPU Mask pass in this phase.
+
+**Checklist / exit condition:** required tests PASS. Existing Radial/Linear center/origin drags update Mix R8 before `AppendEdit`. Shape fields other than center/origin stay fixed. Independent plan-equation coverage at sampled texels matches Mix within 1 R8 code. Degenerate creation and Escape publish no history. Existing and creating overlays on a non-square 64×32 photograph keep `coverage_fill_vertex_count == 0`.
+
+**LOC note (grill-code-review):** `analytic_mask_edit.hpp` 179 / `.cpp` 310, `editor_mask_creation_controller.hpp` 224 / `.cpp` 611, `analytic_mask_edit_test.cpp` 68, `analytic_mask_creation_test.cpp` 447. Geometry owns evaluator-inverse handle math; the controller owns mode, identities, provisional Grade writes, and settle/cancel. No split required.
+
+**Residual gaps:** NM7.8 accumulating Brush paint/erase UI. Session still does not publish live Mask overlay display or enqueue Interactive GPU frames (NM7.9). Project Mix-cache slot is NM7.10. Header/Masks-body wiring and accessible handles are NM7.11. Open-operation cancel on `MappingChanged` is NM7.12. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present. Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.8 — Complete accumulating Brush creation, erase and movement
 

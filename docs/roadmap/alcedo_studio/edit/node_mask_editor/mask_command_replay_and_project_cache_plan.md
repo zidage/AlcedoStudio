@@ -6,8 +6,9 @@ Status: NM7.2 parameterized Brush source and Grade owner operations landed; NM7.
 stroke/placement history, WAL/Version/Paste remapping, and the Section 8.1 project/schema
 version gate landed. NM7.4 host canonical rasterization, spatial index, and regional Mix
 replay landed. Raster-only Brush JSON is rejected. NM7.5 shared ReferenceSpace mapping and
-Brush placement landed. NM7.6 control-only retained QSG Mask overlay landed. NM7.7+ viewer
-creation, Interactive Mix, and cache service remain planned.
+Brush placement landed. NM7.6 control-only retained QSG Mask overlay landed. NM7.7 Radial
+and Linear creation plus existing-mask movement landed. NM7.8+ accumulating Brush UI,
+Interactive Mix, and cache service remain planned.
 
 Parent: [NM7 execution plan](phase_nm7_viewer_mask_creation_plan.md).
 This document defines NM7's revised algorithm, data ownership and storage behavior. It replaces
