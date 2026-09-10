@@ -79,6 +79,8 @@ class AlcedoQanGraph : public QObject {
   Q_PROPERTY(bool keyboardConnectActive READ keyboard_connect_active NOTIFY KeyboardConnectChanged)
   Q_PROPERTY(QString keyboardConnectSourceId READ keyboard_connect_source_id_string NOTIFY
                  KeyboardConnectChanged)
+  Q_PROPERTY(QString selectedMaskId READ selected_mask_id_string WRITE set_selected_mask_id NOTIFY
+                 SelectedMaskChanged)
 
  public:
   explicit AlcedoQanGraph(QObject* parent = nullptr);
@@ -291,10 +293,41 @@ class AlcedoQanGraph : public QObject {
    * Does not write PipelineDocument, history, or start a photo render.
    */
   Q_INVOKABLE void cancelKeyboardConnect();
+  Q_INVOKABLE void setSelectedMaskId(const QString& mask_id);
+  /**
+   * @brief Forward a Mask-row press from a Color Grade delegate.
+   *
+   * @p item is the live node visual (or a descendant). The NodeId is resolved
+   * from the adapter identity map so drawer-copied strings cannot drop the
+   * owner. Emits @c MaskRowSelected.
+   */
+  Q_INVOKABLE void notifyMaskRowSelected(QObject* item, const QString& mask_id);
+  /**
+   * @brief Forward a Mask-row delete press from a Color Grade delegate.
+   * @see notifyMaskRowSelected
+   */
+  Q_INVOKABLE void notifyMaskRowDeleteRequested(QObject* item, const QString& mask_id);
+  /**
+   * @brief MaskId under a NodeItem-local point, or empty when the point is not
+   *        on a Mask row (name row, header, and empty canvas return empty).
+   */
+  Q_INVOKABLE QString maskIdAtItemPosition(QObject* node_item, qreal x, qreal y) const;
+  /**
+   * @brief True when the NodeItem-local point is on a Mask-row delete control.
+   */
+  Q_INVOKABLE bool maskDeleteContainsItemPosition(QObject* node_item, qreal x, qreal y) const;
+  /**
+   * @brief Write a Mask-row press diagnostic. Visible at warning so the log
+   *        file flushes immediately while isolating this click path.
+   */
+  Q_INVOKABLE void logMaskRow(const QString& where, const QString& node_id, const QString& mask_id,
+                              bool right_button) const;
   [[nodiscard]] auto keyboard_connect_active() const -> bool {
     return !keyboard_connect_source_id_.Empty();
   }
   [[nodiscard]] auto keyboard_connect_source_id_string() const -> QString;
+  [[nodiscard]] auto selected_mask_id_string() const -> QString { return selected_mask_id_; }
+  void               set_selected_mask_id(const QString& mask_id);
 
  signals:
   void GraphChanged();
@@ -318,6 +351,12 @@ class AlcedoQanGraph : public QObject {
    * photo render.
    */
   void NodeDrawerOpenChanged(const QString& nodeId, bool open);
+  void nodeDrawerOpenChanged(const QString& nodeId, bool open);
+  void SelectedMaskChanged();
+  void MaskRowSelected(const QString& nodeId, const QString& maskId);
+  void maskRowSelected(const QString& nodeId, const QString& maskId);
+  void MaskRowDeleteRequested(const QString& nodeId, const QString& maskId);
+  void maskRowDeleteRequested(const QString& nodeId, const QString& maskId);
 
  protected:
   /**
@@ -410,15 +449,24 @@ class AlcedoQanGraph : public QObject {
   void ClearDrawerConnections();
   void BindDrawerSignals();
   void BindDrawerSignal(QQuickItem* item, const NodeId& node_id);
+  [[nodiscard]] auto NodeIdStringForItem(QObject* item) const -> QString;
   void ConfigureGraphPolicy();
   void ConfigureConnector();
   void ApplyConnectablePolicy();
   void OnGraphDestroyed();
   void OnConnectorRequestEdgeCreation(qan::Node* src, QObject* dst, qan::PortItem* src_port,
                                       qan::PortItem* dst_port);
+  void OnGraphNodeClicked(qan::Node* node, QPointF pos);
+  void OnGraphNodeRightClicked(qan::Node* node, QPointF pos);
+  void HandleNodeItemPress(qan::Node* node, QPointF local_pos, bool right_button);
+  [[nodiscard]] auto MaskRowAt(QQuickItem* node_item, QPointF local_pos) const -> QQuickItem*;
+  [[nodiscard]] auto MaskDeleteButtonContains(QQuickItem* row, const QPointF& scene_pos) const
+      -> bool;
 
  private slots:
   void OnDrawerOpenChanged();
+  void OnMaskSelected(const QString& node_id, const QString& mask_id);
+  void OnMaskDeleteRequested(const QString& node_id, const QString& mask_id);
 
  private:
   void DestroyMappedPrimitives();
@@ -491,6 +539,7 @@ class AlcedoQanGraph : public QObject {
   std::vector<QMetaObject::Connection>              drawer_connections_;
   NodeId                                            product_selected_node_id_;
   NodeId                                            keyboard_connect_source_id_;
+  QString                                           selected_mask_id_;
 };
 
 }  // namespace alcedo::ui

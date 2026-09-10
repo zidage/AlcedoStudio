@@ -39,6 +39,7 @@ def_library(EditorViewerLogic
         Qt6::Gui
         opencv_core
         EditMaskStore
+        EditGeometry
 )
 
 def_library(BackgroundTaskController

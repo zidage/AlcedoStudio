@@ -10,6 +10,7 @@
 #include <QPointF>
 #include <QVector2D>
 
+#include "edit/geometry/render_request.hpp"
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
@@ -106,6 +107,19 @@ class MaskEditGeometry {
    * identity. Empty @p extent yields empty extents so @ref IsValid is false.
    */
   [[nodiscard]] static auto MakeIdentityPhotographGeometry(Extent2D extent)
+      -> ResolvedRenderGeometry;
+
+  /**
+   * @brief Resolved photograph geometry from document crop, rotation, and expand-to-fit.
+   *
+   * @p full_reference is uncropped ReferenceSpace. Identity crop and zero rotation
+   * return @ref MakeIdentityPhotographGeometry. Empty @p full_reference yields
+   * empty extents so @ref IsValid is false.
+   *
+   * Thread: GUI. Pure; does not lock the pipeline.
+   */
+  [[nodiscard]] static auto MakeDocumentPhotographGeometry(Extent2D full_reference,
+                                                            const ImageGeometryParams& image)
       -> ResolvedRenderGeometry;
 
   /**

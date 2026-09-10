@@ -19,6 +19,8 @@ TEST(AnalyticMaskEditTest, CenterOutRadiiStayPositiveAndUnswapped) {
   EXPECT_FLOAT_EQ(left_up.major_radius, 0.15f);
   EXPECT_FLOAT_EQ(left_up.minor_radius, 0.15f);
   EXPECT_FLOAT_EQ(left_up.rotation, 0.0f);
+  EXPECT_FLOAT_EQ(left_up.inner_feather, kAnalyticCreationDefaultInnerFeather);
+  EXPECT_FLOAT_EQ(left_up.outer_feather, 0.0f);
   EXPECT_FALSE(RadialCreationIsValid(RadialFromCenterOut(center, center)));
 
   RadialMaskSource tall;

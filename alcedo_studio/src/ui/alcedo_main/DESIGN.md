@@ -405,8 +405,10 @@ forwarding a dock move — anchor placement after creation or a drawer fold
 changing the host height — leaves edges visually detached from their ports.
 Node selection paints only the card outline: the adapter installs an
 invisible QuickQanava selection delegate, so the default blue animated
-selection item never renders. Do not set `selectionDelegate` to null in QML;
-null resets the QuickQanava default instead of disabling it.
+selection item never renders. That delegate is still a full-size `z: 1` child
+of the node; the card uses `z: 2` and the port dock uses `z: 3` so Mask rows
+and ports stay the pointer target. Do not set `selectionDelegate` to null in
+QML; null resets the QuickQanava default instead of disabling it.
 
 ### Editor viewport Mask overlay
 
@@ -414,16 +416,34 @@ Retained QSG Mask controls sit on `EditorOverlayItem` above the photograph. They
 use a two-layer high-contrast stroke. Existing-mask editing never paints a
 coverage fill, heatmap, or completed Brush path; the Interactive photograph
 supplies coverage feedback. Temporary Brush cursor/path guides are allowed during initial
-drawing. The planned NM7.8 revision requires selected Radial base ellipse and inner/outer
-feather boundary lines during creation and later editing. Selected Gradient uses three parallel
+drawing. Selected Radial shows the base ellipse and inner/outer feather boundary
+lines during creation and later editing. Selected Gradient uses three parallel
 lines with Geometry crop-style dual high-contrast strokes and short edge grips, without a kite,
 closed polygon or crop dimming. Radius/feather and direction controls must be independently
 reachable. Unselected analytic masks do not retain editing guides.
+
+Mask editing has three mutually exclusive states: inactive, creating, and
+editing an existing Mask. The header creation buttons and a Mask row selection
+both enter this state machine and immediately open the transient Mask page.
+`Enter` and `Escape` finish the edit, hide the overlay, and return to the prior
+adjustment page. Selecting any node-parameter adjustment page also finishes the
+Mask edit before opening that page. `Delete` removes the selected Mask and exits;
+before a new Mask exists it exits the armed creation tool. These shortcuts are
+disabled when Mask editing ends, so the Nodes graph resumes ownership of
+`Delete` for Color Grade removal.
 
 Handle and stroke widths are logical pixels and stay constant at any zoom or
 DPR. Image-space Brush cursor radius is transformed through the shared
 ReferenceSpace mapping. Do not add a coverage-area color. Do not use Material
 controls, badges, pills, or status dots on this overlay.
+
+Selected Radial shows the base ellipse plus inner and outer feather boundary
+lines from the evaluator inverse. Coincident rhos are drawn once. A collapsed
+inner contour is omitted rather than producing invalid geometry. Feather
+handles are rings; radius handles are discs. Selected Gradient uses three
+photograph-clipped parallel loci with Geometry crop-style dual strokes and
+short edge grips. Ends are not joined into a kite, diamond, or closed
+polygon. Crop overlay dimming is not reused.
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -436,6 +456,12 @@ controls, badges, pills, or status dots on this overlay.
 | `maskOverlayAntialiasWidth` | 1.0 | Premultiplied edge-alpha fringe (logical px) |
 | `maskOverlayHandleHitRadius` | 12 | Pointer hit radius (logical px) |
 | `maskOverlayRotateHandleOffset` | 24 | Rotation/direction handle offset (logical px) |
+| `maskOverlayGuideOuterWidth` | 3.0 | Geometry-crop outer guide stroke (logical px) |
+| `maskOverlayGuideInnerWidth` | 1.2 | Geometry-crop inner guide stroke (logical px) |
+| `maskOverlayGripOuterWidth` | 5.0 | Geometry-crop outer edge-grip width (logical px) |
+| `maskOverlayGripInnerWidth` | 2.4 | Geometry-crop inner edge-grip width (logical px) |
+| `maskOverlayGripSpanT0` | 0.38 | Start of the short edge grip along a visible guide |
+| `maskOverlayGripSpanT1` | 0.62 | End of the short edge grip along a visible guide |
 
 ### Color Grade node content
 
@@ -484,13 +510,14 @@ of painting square corners over the card.
 The open state is UI layout state. A drawer change does not modify the pipeline,
 create history, or start photo rendering. An empty open drawer has no Mask rows.
 
-Each Mask row is flat. It shows only the approved source-type icon and localized
-type name. Do not show the Mask name, opacity, enabled value, invert value, ranges, or identity.
-The planned NM7.8 revision adds stable NodeId/MaskId selection and a compact per-row delete
-`IconActionButton`. Selecting loads the existing Mask into the temporary Masks body and viewer
-without creating a mask or history. Use existing monochrome selection tokens and preserve scroll.
-Delete must not propagate into row selection or graph Grade deletion. Parameter editors stay in
-the Masks body. This supersedes the earlier read-only row rule.
+Each Mask row is flat. It shows the approved source-type icon, localized type
+name, and a compact per-row delete `IconActionButton`. Do not show the Mask
+name, opacity, enabled value, invert value, ranges, or identity. Selection
+uses stable NodeId/MaskId and loads the existing Mask into the temporary Masks
+body and viewer without creating a mask or history. Bind highlight to session
+selection with existing monochrome selection tokens and preserve scroll. Do
+not rebuild the list on click. Delete must not propagate into row selection or
+graph Grade deletion. Parameter editors stay in the Masks body.
 
 | Model kind | UI label | Icon |
 | --- | --- | --- |

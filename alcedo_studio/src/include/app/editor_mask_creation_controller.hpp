@@ -26,13 +26,13 @@ namespace alcedo {
  * @brief Master Mask-creation states. One controller owns the current state.
  */
 enum class EditorMaskCreationState : std::uint8_t {
-  Inactive  = 0,
-  Selected  = 1,
-  Creating  = 2,
-  Editing   = 3,
-  Painting  = 4,
-  Settling  = 5,
-  Failed    = 6,
+  Inactive = 0,
+  Selected = 1,
+  Creating = 2,
+  Editing  = 3,
+  Painting = 4,
+  Settling = 5,
+  Failed   = 6,
 };
 
 /**
@@ -68,12 +68,12 @@ struct MaskPointerIdentity {
  * @p committed / @p quality_requested are set only by a successful settle.
  */
 struct EditorMaskCreationResult {
-  bool          accepted              = false;
-  bool          interactive_preview   = false;
-  bool          committed             = false;
-  bool          quality_requested     = false;
-  std::string   error;
-  MaskId        mask_id;
+  bool        accepted            = false;
+  bool        interactive_preview = false;
+  bool        committed           = false;
+  bool        quality_requested   = false;
+  std::string error;
+  MaskId      mask_id;
 };
 
 /**
@@ -90,7 +90,9 @@ enum class EditorMaskCreationCommandKind : std::uint8_t {
   Append,
   Finish,
   Cancel,
+  FinishMode,
   CancelMode,
+  RemoveMask,
 };
 
 struct EditorMaskCreationCommand {
@@ -155,14 +157,25 @@ class EditorMaskCreationController {
    * Brush is rejected until accumulating-stroke UI exists. An open operation must
    * be finished or cancelled first.
    */
-  auto BeginCreation(MaskSourceKind kind, const NodeId& grade_id,
-                     EditorSessionIdentity session) -> EditorMaskCreationResult;
+  auto BeginCreation(MaskSourceKind kind, const NodeId& grade_id, EditorSessionIdentity session)
+      -> EditorMaskCreationResult;
 
   /**
-   * @brief Select an existing Radial or Linear Mask. Load-only; no Mix or commit.
+   * @brief Select an existing Brush, Radial, or Linear Mask. Load-only; no Mix or commit.
+   *
+   * Brush selection does not arm paint or movement. Analytic kinds load handles
+   * for later movement.
    */
-  auto SelectMask(const NodeId& grade_id, const MaskId& mask_id,
-                  EditorSessionIdentity session) -> EditorMaskCreationResult;
+  auto SelectMask(const NodeId& grade_id, const MaskId& mask_id, EditorSessionIdentity session)
+      -> EditorMaskCreationResult;
+
+  /**
+   * @brief Remove @p mask_id from @p grade_id with one typed history operation.
+   *
+   * Cancels an unfinished operation on that Mask first. Other Masks' open
+   * edits are left alone. Failed publish leaves the committed Mask in place.
+   */
+  auto RemoveMask(const NodeId& grade_id, const MaskId& mask_id) -> EditorMaskCreationResult;
 
   /**
    * @brief Start a creation drag at @p sample.
@@ -190,22 +203,22 @@ class EditorMaskCreationController {
    *
    * Degenerate creation and unchanged placement publish neither a commit nor Quality.
    */
-  auto FinishMaskInput() -> EditorMaskCreationResult;
+  auto               FinishMaskInput() -> EditorMaskCreationResult;
 
   /**
    * @brief Restore the live Grade to the captured before-state. Zero commits.
    */
-  auto CancelMaskInput() -> EditorMaskCreationResult;
+  auto               CancelMaskInput() -> EditorMaskCreationResult;
 
   /**
    * @brief Leave creation mode. Seals a valid open operation once, then clears mode.
    */
-  auto FinishCreationMode() -> EditorMaskCreationResult;
+  auto               FinishCreationMode() -> EditorMaskCreationResult;
 
   /**
    * @brief Cancel any open operation and leave creation mode. Zero new commits.
    */
-  auto CancelCreationMode() -> EditorMaskCreationResult;
+  auto               CancelCreationMode() -> EditorMaskCreationResult;
 
   [[nodiscard]] auto state() const -> EditorMaskCreationState { return state_; }
   [[nodiscard]] auto source_kind() const -> MaskSourceKind { return kind_; }
@@ -223,10 +236,11 @@ class EditorMaskCreationController {
    * @brief Live or draft source for overlay layout. Empty when Inactive/hidden.
    */
   [[nodiscard]] auto CurrentSource() const -> std::optional<MaskSource>;
+  [[nodiscard]] auto last_removed_mask_id() const -> const MaskId& { return last_removed_mask_id_; }
 
  private:
-  auto Reject(std::string error) const -> EditorMaskCreationResult;
-  auto Ok() const -> EditorMaskCreationResult;
+  auto               Reject(std::string error) const -> EditorMaskCreationResult;
+  auto               Ok() const -> EditorMaskCreationResult;
   [[nodiscard]] auto Grade() -> ColorGradeNodeModel*;
   [[nodiscard]] auto Grade() const -> const ColorGradeNodeModel*;
   [[nodiscard]] auto IdentityMatches(const MaskPointerIdentity& identity) const -> bool;
@@ -234,38 +248,39 @@ class EditorMaskCreationController {
   [[nodiscard]] auto MakeCreationMask(const MaskSource& source) const -> MaskModel;
   [[nodiscard]] auto LiveSourceJson() const -> nlohmann::json;
   [[nodiscard]] auto SourcesEqual(const nlohmann::json& a, const nlohmann::json& b) const -> bool;
-  auto ApplyLiveSource(const MaskSource& source) -> bool;
-  auto InsertProvisional(const MaskSource& source) -> bool;
-  void RestoreLive();
-  void ClearOpenOperation();
-  void ResetMode();
-  auto PublishAddMask() -> EditorMaskCreationResult;
-  auto PublishReplaceSource() -> EditorMaskCreationResult;
-  auto PublishSettledBatch(const PipelineEditBatch& batch, std::string* error) -> bool;
-  void RequestInteractive(EditorMaskCreationResult& result);
-  auto UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
-  auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
+  auto               ApplyLiveSource(const MaskSource& source) -> bool;
+  auto               InsertProvisional(const MaskSource& source) -> bool;
+  void               RestoreLive();
+  void               ClearOpenOperation();
+  void               ResetMode();
+  auto               PublishAddMask() -> EditorMaskCreationResult;
+  auto               PublishReplaceSource() -> EditorMaskCreationResult;
+  auto              PublishSettledBatch(const PipelineEditBatch& batch, std::string* error) -> bool;
+  void              RequestInteractive(EditorMaskCreationResult& result);
+  auto              UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
+  auto              UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
 
-  PipelineDocument*        document_ = nullptr;
-  MiniGitWorkingHistory*   history_  = nullptr;
-  std::function<void()>    interactive_preview_;
+  PipelineDocument* document_                                          = nullptr;
+  MiniGitWorkingHistory*                                      history_ = nullptr;
+  std::function<void()>                                       interactive_preview_;
   std::function<bool(const PipelineEditBatch&, std::string*)> settle_publisher_;
-  EditorMaskCreationState  state_    = EditorMaskCreationState::Inactive;
-  MaskSourceKind           kind_     = MaskSourceKind::Radial;
-  EditorSessionIdentity    session_{};
-  NodeId                   node_id_;
-  MaskId                   mask_id_;
-  AnalyticMaskHandle       handle_ = AnalyticMaskHandle::None;
-  MaskPointerIdentity      pointer_{};
-  Vector2                  press_normalized_{};
-  float                    unwrapped_rotation_ = 0.0f;
-  nlohmann::json           before_source_;
-  std::uint32_t            display_index_ = 0;
-  bool                     open_          = false;
-  bool                     creating_      = false;
-  bool                     inserted_      = false;
-  bool                     terminated_    = false;
+  EditorMaskCreationState   state_ = EditorMaskCreationState::Inactive;
+  MaskSourceKind            kind_  = MaskSourceKind::Radial;
+  EditorSessionIdentity     session_{};
+  NodeId                    node_id_;
+  MaskId                    mask_id_;
+  AnalyticMaskHandle        handle_ = AnalyticMaskHandle::None;
+  MaskPointerIdentity       pointer_{};
+  Vector2                   press_normalized_{};
+  float                     unwrapped_rotation_ = 0.0f;
+  nlohmann::json            before_source_;
+  std::uint32_t             display_index_ = 0;
+  bool                      open_          = false;
+  bool                      creating_      = false;
+  bool                      inserted_      = false;
+  bool                      terminated_    = false;
   std::optional<MaskSource> draft_source_;
+  MaskId                    last_removed_mask_id_;
 };
 
 }  // namespace alcedo

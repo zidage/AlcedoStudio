@@ -11,6 +11,7 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QRectF>
 #include <QVariant>
 #include <QVariantMap>
 #include <algorithm>
@@ -81,6 +82,7 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
     return;
   }
   if (!graph_.isNull()) {
+    graph_->setProperty("alcedoQanGraph", QVariant());
     disconnect(graph_.data(), nullptr, this, nullptr);
   }
   rebuild_in_progress_ = true;
@@ -95,6 +97,7 @@ void AlcedoQanGraph::set_graph(qan::Graph* graph) {
   rebuild_in_progress_ = false;
   graph_               = graph;
   if (!graph_.isNull()) {
+    graph_->setProperty("alcedoQanGraph", QVariant::fromValue(this));
     connect(graph_.data(), &QObject::destroyed, this, &AlcedoQanGraph::OnGraphDestroyed);
     ConfigureGraphPolicy();
   }
@@ -1306,7 +1309,10 @@ void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNode
   }
   item->setResizable(false);
   item->setProperty("nodeKind", NodeKindKey(node.node_kind));
+  item->setProperty("nodeId", ToQString(node.node_id.Value()));
+  item->setProperty("selectedMaskId", selected_mask_id_);
   item->setProperty("masks", MasksToVariant(node.masks));
+  item->setProperty("graphAdapter", QVariant::fromValue(this));
 }
 
 auto AlcedoQanGraph::ComponentFor(EditorNodeKind kind) const -> QQmlComponent* {
@@ -1361,6 +1367,14 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
           Qt::UniqueConnection);
   connect(graph_.data(), &qan::Graph::connectorRequestEdgeCreation, this,
           &AlcedoQanGraph::OnConnectorRequestEdgeCreation, Qt::UniqueConnection);
+  const auto clicked =
+      connect(graph_.data(), &qan::Graph::nodeClicked, this, &AlcedoQanGraph::OnGraphNodeClicked,
+              Qt::UniqueConnection);
+  const auto right_clicked = connect(graph_.data(), &qan::Graph::nodeRightClicked, this,
+                                     &AlcedoQanGraph::OnGraphNodeRightClicked, Qt::UniqueConnection);
+  qWarning()
+      << "[MaskRow] graph signals connected clicked=" << static_cast<bool>(clicked)
+      << "rightClicked=" << static_cast<bool>(right_clicked) << "graph=" << graph_.data();
   ConfigureConnector();
 }
 
@@ -1524,17 +1538,141 @@ void AlcedoQanGraph::ClearDrawerConnections() {
   drawer_connections_.clear();
 }
 
+auto AlcedoQanGraph::NodeIdStringForItem(QObject* item) const -> QString {
+  auto* current = qobject_cast<QQuickItem*>(item);
+  while (current != nullptr) {
+    for (const auto& [node_id, node] : node_by_id_) {
+      if (!node.isNull() && node->getItem() == current) {
+        return ToQString(node_id.Value());
+      }
+    }
+    current = current->parentItem();
+  }
+  return {};
+}
+
+auto AlcedoQanGraph::MaskRowAt(QQuickItem* node_item, QPointF local_pos) const -> QQuickItem* {
+  if (node_item == nullptr) {
+    return nullptr;
+  }
+  const QPointF scene = node_item->mapToScene(local_pos);
+  const auto    rows =
+      node_item->findChildren<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  for (auto* row : rows) {
+    if (row == nullptr || !row->isVisible() || row->width() <= 0.0 || row->height() <= 0.0) {
+      continue;
+    }
+    const QPointF in_row = row->mapFromScene(scene);
+    if (!QRectF(QPointF(0.0, 0.0), row->size()).contains(in_row)) {
+      continue;
+    }
+    auto* body = row->parentItem();
+    while (body != nullptr &&
+           body->objectName() != QLatin1String("editorNodeMaskDrawerBody")) {
+      body = body->parentItem();
+    }
+    if (body != nullptr && body->clip()) {
+      const QPointF in_body = body->mapFromScene(scene);
+      if (!QRectF(QPointF(0.0, 0.0), body->size()).contains(in_body)) {
+        continue;
+      }
+    }
+    return row;
+  }
+  return nullptr;
+}
+
+auto AlcedoQanGraph::MaskDeleteButtonContains(QQuickItem* row, const QPointF& scene_pos) const
+    -> bool {
+  if (row == nullptr) {
+    return false;
+  }
+  auto* button = row->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRowDelete"));
+  if (button == nullptr || !button->isVisible()) {
+    return false;
+  }
+  const QPointF in_button = button->mapFromScene(scene_pos);
+  return QRectF(QPointF(0.0, 0.0), button->size()).contains(in_button);
+}
+
+auto AlcedoQanGraph::maskIdAtItemPosition(QObject* node_item, qreal x, qreal y) const -> QString {
+  auto* item = qobject_cast<QQuickItem*>(node_item);
+  auto* row  = MaskRowAt(item, QPointF(x, y));
+  return row == nullptr ? QString() : row->property("maskId").toString();
+}
+
+auto AlcedoQanGraph::maskDeleteContainsItemPosition(QObject* node_item, qreal x, qreal y) const
+    -> bool {
+  auto* item = qobject_cast<QQuickItem*>(node_item);
+  if (item == nullptr) {
+    return false;
+  }
+  auto* row = MaskRowAt(item, QPointF(x, y));
+  return MaskDeleteButtonContains(row, item->mapToScene(QPointF(x, y)));
+}
+
+void AlcedoQanGraph::logMaskRow(const QString& where, const QString& node_id, const QString& mask_id,
+                                bool right_button) const {
+  qWarning() << "[MaskRow]" << where << "node=" << node_id << "mask=" << mask_id
+             << "right=" << right_button;
+}
+
+void AlcedoQanGraph::HandleNodeItemPress(qan::Node* node, QPointF local_pos, bool right_button) {
+  if (node == nullptr || node->getItem() == nullptr) {
+    qWarning()
+        << "[MaskRow] HandleNodeItemPress abort no node/item right=" << right_button;
+    return;
+  }
+  auto* item = node->getItem();
+  auto* row  = MaskRowAt(item, local_pos);
+  if (row == nullptr) {
+    return;
+  }
+  const auto mask_id = row->property("maskId").toString();
+  const auto node_id = NodeIdStringForItem(item);
+  if (mask_id.isEmpty()) {
+    qWarning()
+        << "[MaskRow] HandleNodeItemPress empty maskId node=" << node_id;
+    return;
+  }
+  const bool on_delete = !right_button && MaskDeleteButtonContains(row, item->mapToScene(local_pos));
+  qWarning()
+      << "[MaskRow] HandleNodeItemPress hit node=" << node_id << "mask=" << mask_id
+      << "delete=" << on_delete << "right=" << right_button << "pos=" << local_pos;
+  if (on_delete) {
+    OnMaskDeleteRequested(node_id, mask_id);
+    return;
+  }
+  OnMaskSelected(node_id, mask_id);
+}
+
+void AlcedoQanGraph::OnGraphNodeClicked(qan::Node* node, QPointF pos) {
+  HandleNodeItemPress(node, pos, false);
+}
+
+void AlcedoQanGraph::OnGraphNodeRightClicked(qan::Node* node, QPointF pos) {
+  HandleNodeItemPress(node, pos, true);
+}
+
+void AlcedoQanGraph::notifyMaskRowSelected(QObject* item, const QString& mask_id) {
+  OnMaskSelected(NodeIdStringForItem(item), mask_id);
+}
+
+void AlcedoQanGraph::notifyMaskRowDeleteRequested(QObject* item, const QString& mask_id) {
+  OnMaskDeleteRequested(NodeIdStringForItem(item), mask_id);
+}
+
 void AlcedoQanGraph::BindDrawerSignal(QQuickItem* item, const NodeId& /*node_id*/) {
   if (item == nullptr) {
     return;
   }
+  item->setProperty("graphAdapter", QVariant::fromValue(this));
   const auto* meta         = item->metaObject();
   const int   signal_index = meta->indexOfSignal("drawerOpenChanged()");
-  if (signal_index < 0) {
-    return;
+  if (signal_index >= 0) {
+    drawer_connections_.push_back(
+        QObject::connect(item, SIGNAL(drawerOpenChanged()), this, SLOT(OnDrawerOpenChanged())));
   }
-  drawer_connections_.push_back(
-      QObject::connect(item, SIGNAL(drawerOpenChanged()), this, SLOT(OnDrawerOpenChanged())));
 }
 
 void AlcedoQanGraph::OnDrawerOpenChanged() {
@@ -1547,8 +1685,39 @@ void AlcedoQanGraph::OnDrawerOpenChanged() {
       continue;
     }
     emit NodeDrawerOpenChanged(ToQString(node_id.Value()), item->property("drawerOpen").toBool());
+    emit nodeDrawerOpenChanged(ToQString(node_id.Value()), item->property("drawerOpen").toBool());
     return;
   }
+}
+
+void AlcedoQanGraph::OnMaskSelected(const QString& node_id, const QString& mask_id) {
+  qWarning() << "[MaskRow] emit maskRowSelected node=" << node_id << "mask=" << mask_id;
+  emit MaskRowSelected(node_id, mask_id);
+  emit maskRowSelected(node_id, mask_id);
+}
+
+void AlcedoQanGraph::OnMaskDeleteRequested(const QString& node_id, const QString& mask_id) {
+  qWarning() << "[MaskRow] emit maskRowDeleteRequested node=" << node_id << "mask=" << mask_id;
+  emit MaskRowDeleteRequested(node_id, mask_id);
+  emit maskRowDeleteRequested(node_id, mask_id);
+}
+
+void AlcedoQanGraph::set_selected_mask_id(const QString& mask_id) {
+  if (selected_mask_id_ == mask_id) {
+    return;
+  }
+  selected_mask_id_ = mask_id;
+  for (const auto& [node_id, node] : node_by_id_) {
+    if (node.isNull() || node->getItem() == nullptr) {
+      continue;
+    }
+    node->getItem()->setProperty("selectedMaskId", selected_mask_id_);
+  }
+  emit SelectedMaskChanged();
+}
+
+void AlcedoQanGraph::setSelectedMaskId(const QString& mask_id) {
+  set_selected_mask_id(mask_id);
 }
 
 void AlcedoQanGraph::BindDrawerSignals() {

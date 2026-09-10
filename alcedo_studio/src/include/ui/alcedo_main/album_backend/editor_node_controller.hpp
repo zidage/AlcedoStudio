@@ -238,7 +238,9 @@ class EditorNodeController : public QObject {
  signals:
   void EditorSessionChanged();
   void SnapshotChanged();
+  void snapshotChanged();
   void SelectionChanged();
+  void selectionChanged();
   void lastErrorChanged();
   void CommandStateChanged();
   void ActionAvailabilityChanged();
@@ -289,6 +291,11 @@ class EditorNodeController : public QObject {
   /// not nested inside a GraphView key or menu handler.
   void               QueueProjectionApply();
   void               ApplyBoundGraphIfCurrent();
+  /// Fill missing backbone positions, push nodes below grown predecessors, then
+  /// push stored positions and drawer state to the adapter. Runs after a
+  /// projection apply and on every layout-store change (drawer folds, drags) so
+  /// a taller node never leaves its drawer rows under the next card.
+  void               ApplyLayoutToAdapter();
   void               SyncLayoutKey();
   void               PersistSavedSelection();
   void               ApplyLiveSelectionToAdapter();
@@ -308,6 +315,7 @@ class EditorNodeController : public QObject {
   QMetaObject::Connection                             history_connection_;
   QMetaObject::Connection                             availability_connection_;
   QMetaObject::Connection                             graph_adapter_connection_;
+  QMetaObject::Connection                             layout_store_connection_;
   EditorNodeGraphSnapshot                             snapshot_{};
   bool                                                has_snapshot_ = false;
   NodeId                                              selected_node_id_;
@@ -315,6 +323,7 @@ class EditorNodeController : public QObject {
   NodeId                                              selection_restore_node_id_;
   bool                                                command_active_          = false;
   bool                                                projection_apply_queued_ = false;
+  bool                                                applying_layout_         = false;
   quint64                                             session_generation_      = 0;
   quint64                                             observed_history_revision_ = 0;
   quint64                                             projection_revision_     = 0;

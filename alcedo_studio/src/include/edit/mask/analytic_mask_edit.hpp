@@ -16,6 +16,10 @@ namespace alcedo {
 inline constexpr float kAnalyticMaskEpsilon = 1.0e-6f;
 /// Minimum positive Radial radii before a center-out drag becomes a Mask.
 inline constexpr float kAnalyticCreationMinRadius = 1.0e-5f;
+/// Default inner feather for center-out Radial creation. The full-strength
+/// boundary starts at rho = 1 - kAnalyticCreationDefaultInnerFeather, so a new
+/// Radial Mask fades out over the outer half of its radii instead of a hard edge.
+inline constexpr float kAnalyticCreationDefaultInnerFeather = 0.5f;
 
 /**
  * @brief Finite analytic handle identity. Not a per-texel or per-dab proxy.
@@ -71,7 +75,9 @@ enum class AnalyticMaskHandle : std::uint8_t {
 /**
  * @brief Center-out Radial: press is the center, drag sets positive x/y radii.
  *
- * Rotation and feathers stay 0. Radii are absolute normalized deltas, never swapped.
+ * Rotation and outer feather stay 0. Inner feather defaults to
+ * @ref kAnalyticCreationDefaultInnerFeather so a new Radial Mask is feathered,
+ * not hard-edged. Radii are absolute normalized deltas, never swapped.
  */
 [[nodiscard]] auto RadialFromCenterOut(Vector2 center_normalized, Vector2 current_normalized)
     -> RadialMaskSource;

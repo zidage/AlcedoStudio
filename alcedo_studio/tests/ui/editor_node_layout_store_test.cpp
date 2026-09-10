@@ -7,14 +7,20 @@
 #include <gtest/gtest.h>
 
 #include "app/editor_node_graph_projection.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
 namespace {
 
 using alcedo::CreateDefaultPipelineDocument;
 using alcedo::EditorNodeGraphProjection;
+using alcedo::EditorNodeKind;
+using alcedo::MaskId;
+using alcedo::MaskModel;
 using alcedo::NodeId;
+using alcedo::RadialMaskSource;
 using alcedo::ui::EditorNodeLayoutMetrics;
 using alcedo::ui::EditorNodeLayoutStore;
 using alcedo::ui::NodeIdToQString;
@@ -146,6 +152,110 @@ TEST(EditorNodeLayoutStore, AssignStagingPositionStacksLaterDraftsDownwardOnTheS
   EXPECT_DOUBLE_EQ(a->x(), static_cast<qreal>(metrics.origin_x));
   EXPECT_DOUBLE_EQ(b->x(), a->x());
   EXPECT_GT(b->y(), a->y());
+}
+
+TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsKeepsInitialLayoutUntouched) {
+  EditorNodeLayoutStore store(MakeMetrics());
+  store.activate("p", 1, 2, "v");
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  store.EnsureDefaultPositions(snapshot);
+  const auto develop = store.NodePosition(NodeId{"develop"});
+  const auto primary = store.NodePosition(NodeId{"grade.primary"});
+  const auto drt     = store.NodePosition(NodeId{"drt"});
+
+  store.ResolveVerticalOverlaps(snapshot);
+
+  EXPECT_EQ(store.NodePosition(NodeId{"develop"}), develop);
+  EXPECT_EQ(store.NodePosition(NodeId{"grade.primary"}), primary);
+  EXPECT_EQ(store.NodePosition(NodeId{"drt"}), drt);
+}
+
+TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsPushesNodesBelowGrownPredecessor) {
+  const auto            metrics = MakeMetrics();
+  EditorNodeLayoutStore store(metrics);
+  store.activate("p", 1, 2, "v");
+  auto document = CreateDefaultPipelineDocument();
+  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1, 1, 1));
+  const auto drt_before = store.NodePosition(NodeId{"drt"});
+  ASSERT_TRUE(drt_before.has_value());
+
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  for (const char* id : {"mask.one", "mask.two", "mask.three"}) {
+    MaskModel mask;
+    mask.id           = MaskId{id};
+    mask.display_name = id;
+    mask.source       = RadialMaskSource{};
+    grade->AddMask(std::move(mask), grade->Masks().size());
+  }
+  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+
+  store.ResolveVerticalOverlaps(grown);
+
+  const auto primary = store.NodePosition(NodeId{"grade.primary"});
+  const auto drt     = store.NodePosition(NodeId{"drt"});
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(drt.has_value());
+  const qreal grown_height = store.DefaultHeight(EditorNodeKind::ColorGrade, 3, true);
+  EXPECT_DOUBLE_EQ(drt->y(), primary->y() + grown_height + metrics.vertical_gap);
+  EXPECT_GT(drt->y(), drt_before->y());
+}
+
+TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsLeavesSpacedAndOffsetNodesAlone) {
+  const auto            metrics = MakeMetrics();
+  EditorNodeLayoutStore store(metrics);
+  store.activate("p", 1, 2, "v");
+  auto document = CreateDefaultPipelineDocument();
+  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1, 1, 1));
+
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  MaskModel mask;
+  mask.id           = MaskId{"mask.one"};
+  mask.display_name = "mask.one";
+  mask.source       = RadialMaskSource{};
+  grade->AddMask(std::move(mask), 0);
+  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+
+  // A node dragged to another column never overlaps the drawer rows, so the
+  // reflow must not move it even when its predecessor grows past its y.
+  store.SetNodePosition(NodeId{"drt"}, QPointF(metrics.origin_x + metrics.node_width + 40,
+                                               metrics.origin_y));
+  store.ResolveVerticalOverlaps(grown);
+  EXPECT_EQ(store.NodePosition(NodeId{"drt"}),
+            QPointF(metrics.origin_x + metrics.node_width + 40, metrics.origin_y));
+
+  // A node the user placed far below the flow keeps its extra spacing.
+  store.SetNodePosition(NodeId{"drt"}, QPointF(metrics.origin_x, 2000));
+  store.ResolveVerticalOverlaps(grown);
+  EXPECT_EQ(store.NodePosition(NodeId{"drt"}), QPointF(metrics.origin_x, 2000));
+}
+
+TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsUsesClosedDrawerHeight) {
+  const auto            metrics = MakeMetrics();
+  EditorNodeLayoutStore store(metrics);
+  store.activate("p", 1, 2, "v");
+  auto document = CreateDefaultPipelineDocument();
+  auto* grade   = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  for (const char* id : {"mask.one", "mask.two", "mask.three"}) {
+    MaskModel mask;
+    mask.id           = MaskId{id};
+    mask.display_name = id;
+    mask.source       = RadialMaskSource{};
+    grade->AddMask(std::move(mask), grade->Masks().size());
+  }
+  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+  store.EnsureDefaultPositions(grown);
+  store.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  const auto drt_before = store.NodePosition(NodeId{"drt"});
+  ASSERT_TRUE(drt_before.has_value());
+
+  store.ResolveVerticalOverlaps(grown);
+
+  // The closed drawer keeps the grade compact, so the stored drt position
+  // still clears it and must not move.
+  EXPECT_EQ(store.NodePosition(NodeId{"drt"}), drt_before);
 }
 
 TEST(EditorNodeLayoutStore, DefaultConstructorReadsMetricsFromAppTheme) {

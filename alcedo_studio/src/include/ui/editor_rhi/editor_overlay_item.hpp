@@ -84,6 +84,14 @@ class EditorOverlayItem : public QQuickItem {
                  setMaskOverlayStrokeWidth NOTIFY MaskOverlayStyleChanged)
   Q_PROPERTY(qreal maskOverlayAntialiasWidth READ maskOverlayAntialiasWidth WRITE
                  setMaskOverlayAntialiasWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayGuideOuterWidth READ maskOverlayGuideOuterWidth WRITE
+                 setMaskOverlayGuideOuterWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayGuideInnerWidth READ maskOverlayGuideInnerWidth WRITE
+                 setMaskOverlayGuideInnerWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayGripOuterWidth READ maskOverlayGripOuterWidth WRITE
+                 setMaskOverlayGripOuterWidth NOTIFY MaskOverlayStyleChanged)
+  Q_PROPERTY(qreal maskOverlayGripInnerWidth READ maskOverlayGripInnerWidth WRITE
+                 setMaskOverlayGripInnerWidth NOTIFY MaskOverlayStyleChanged)
 
  public:
   explicit EditorOverlayItem(QQuickItem* parent = nullptr);
@@ -125,6 +133,22 @@ class EditorOverlayItem : public QQuickItem {
     return static_cast<qreal>(mask_style_.antialias_width_logical_px);
   }
   void setMaskOverlayAntialiasWidth(qreal width);
+  [[nodiscard]] auto maskOverlayGuideOuterWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.guide_outer_width_logical_px);
+  }
+  void setMaskOverlayGuideOuterWidth(qreal width);
+  [[nodiscard]] auto maskOverlayGuideInnerWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.guide_inner_width_logical_px);
+  }
+  void setMaskOverlayGuideInnerWidth(qreal width);
+  [[nodiscard]] auto maskOverlayGripOuterWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.grip_outer_width_logical_px);
+  }
+  void setMaskOverlayGripOuterWidth(qreal width);
+  [[nodiscard]] auto maskOverlayGripInnerWidth() const -> qreal {
+    return static_cast<qreal>(mask_style_.grip_inner_width_logical_px);
+  }
+  void setMaskOverlayGripInnerWidth(qreal width);
 
   // Test access: last built crop scene geometry after a sync.
   [[nodiscard]] auto lastSceneGeometry() const -> const OverlaySceneGeometry& {

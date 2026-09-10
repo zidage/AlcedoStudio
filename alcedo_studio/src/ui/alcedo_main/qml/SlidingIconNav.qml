@@ -116,7 +116,7 @@ Rectangle {
                 objectName: String(entry.itemObjectName || "")
                 visible: itemIndex < root.items.length
                 compact: true
-                enabled: root.controlsEnabled
+                enabled: root.controlsEnabled && entry.enabled !== false
                 selected: root.currentKey === String(entry.key || "")
                 showHoverFill: false
                 showFocusRing: false
@@ -139,6 +139,7 @@ Rectangle {
             NavButton { itemIndex: 3 }
             NavButton { itemIndex: 4 }
             NavButton { itemIndex: 5 }
+            NavButton { itemIndex: 6 }
         }
     }
 }

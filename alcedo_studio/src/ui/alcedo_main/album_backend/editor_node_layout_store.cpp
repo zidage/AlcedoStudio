@@ -225,6 +225,7 @@ void EditorNodeLayoutStore::SetDrawerOpen(const NodeId& node_id, bool open) {
   }
   value.drawer_open[node_id] = open;
   emit LayoutChanged();
+  emit NodeHeightChanged();
 }
 
 auto EditorNodeLayoutStore::DefaultHeight(EditorNodeKind kind, int mask_count,
@@ -288,6 +289,36 @@ void EditorNodeLayoutStore::AssignStagingPosition(const NodeId&                 
   }
   value.node_positions[node_id] = QPointF(column_x, staging_y);
   emit LayoutChanged();
+}
+
+void EditorNodeLayoutStore::ResolveVerticalOverlaps(const EditorNodeGraphSnapshot& snapshot) {
+  auto& value   = MutableCurrent();
+  bool  wrote   = false;
+  bool  have_previous = false;
+  qreal previous_bottom = 0;
+  qreal previous_x      = 0;
+  for (const auto& node : snapshot.nodes) {
+    auto it = value.node_positions.find(node.node_id);
+    if (it == value.node_positions.end()) {
+      continue;
+    }
+    QPointF position = it->second;
+    if (have_previous &&
+        std::fabs(position.x() - previous_x) < static_cast<qreal>(metrics_.node_width) &&
+        position.y() < previous_bottom) {
+      position.setY(previous_bottom);
+      it->second = position;
+      wrote      = true;
+    }
+    const qreal height = DefaultHeight(node.node_kind, static_cast<int>(node.masks.size()),
+                                       DrawerOpen(node.node_id));
+    previous_bottom = position.y() + height + static_cast<qreal>(metrics_.vertical_gap);
+    previous_x      = position.x();
+    have_previous   = true;
+  }
+  if (wrote) {
+    emit LayoutChanged();
+  }
 }
 
 void EditorNodeLayoutStore::ensureDefaultsFrom(QObject* controller) {

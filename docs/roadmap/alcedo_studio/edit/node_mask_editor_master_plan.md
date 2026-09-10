@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P complete
 per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
-NM7–NM8 planned. NML was
+NM7.1–NM7.8 complete; NM7.9–NM7.15 and NM8 planned. NML was
 cancelled on 2026-08-30.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
@@ -21,16 +21,19 @@ QuickQanava boundary, and official documentation sources for NM5-NM8 are fixed b
 See the [NM5 execution plan](node_mask_editor/phase_nm5_nodes_panel_plan.md) for its sub-phases.
 
 2026-09-08 NM7 revised user direction: the
-[NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) now has fourteen
+[NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) now has fifteen
 sub-phases and a companion [algorithm/storage design](node_mask_editor/mask_command_replay_and_project_cache_plan.md).
 Brush paths are parameterized; NM4 records reversible stroke/placement commands. R8 is one
 current Grade Mix cache slot, never a per-stroke Undo asset. Project settings own its root and
 cleanup policy. Moving existing Brush/Radial/Gradient masks updates actual Interactive pixels;
 QSG displays controls without affected-area highlighting. Center-out Radial creation, adjustable
-Brush size/strength with paint/erase, and the temporary Masks body/six tabs remain approved.
+Brush size/strength with paint/erase remain approved. The 2026-09-09 correction makes Mask a
+seventh Adjustment Stack parameter page that is enabled only during Mask creation or selection;
+the Node drawer remains the sole Mask list.
 This supersedes the earlier immutable-raster-history requirement in Sections 8–12 and NM7.
 NM3/NM4 completion records remain historical evidence; their source/history/cache interfaces
-must be extended inside NM7 before exposing its UI. NM7 remains planned.
+must be extended inside NM7 before exposing its UI. NM7.1–NM7.8 are complete; NM7.9–NM7.15 remain
+planned.
 
 2026-09-05 NM6 design approval: NM5 is complete. The
 [NM6 execution plan](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) now defines
@@ -1085,7 +1088,7 @@ Each row shows only the approved source-type icon and localized type label:
 
 Do not show Mask name, opacity, enabled state, invert state, ranges, or identity in compact rows.
 The NM7.8 revision requires stable-ID selection and a compact per-row delete action, with
-parameter controls in the temporary Masks body. It supersedes the earlier read-only row rule.
+parameter controls in the Mask Adjustment Stack page. It supersedes the earlier read-only row rule.
 An empty open drawer has no Mask rows.
 
 Drawer state is local UI layout state. A fold creates no history and no render. The output port and
@@ -1433,18 +1436,21 @@ Use these interruption rules:
 
 ### 18.1 Masks panel
 
-2026-09-08 user decision: Masks is a temporary right-side editing body for the Color Grade
-context. The existing header Brush/Radial/Gradient actions and node Mask rows open it; the six
-ordinary adjustment tabs remain unchanged. Done/Cancel restores the previous ordinary body.
-Its controls do not become QuickQanava graph content.
+2026-09-09 user correction: Mask is the seventh right-side Adjustment Stack page for the Color
+Grade context. It is disabled until an existing header Brush/Radial/Gradient action or Node Mask
+row opens Mask editing. Enter confirms and returns to the previous ordinary page; choosing another
+adjustment page confirms and opens that page. Escape cancels. There are no explicit Done/Cancel
+actions, and the transient Mask page is not persisted as the ordinary panel. Its controls do not
+become QuickQanava graph content.
 
 The panel has this structure:
 
 1. A header shows `Masks`.
 2. The existing header actions enter Brush, Radial, or Linear Gradient creation. Brush resumes
    the selected Grade's current accumulating Brush Mask if present. It creates no extra row per stroke.
-3. A list shows the Masks that the selected Color Grade owns.
-4. The selected row exposes supported Mask controls, including opacity, rename, and delete.
+3. The Node drawer is the sole list and management surface for Masks owned by the selected Color
+   Grade; the Adjustment Stack page does not repeat those rows.
+4. The Mask page exposes supported source-specific controls for the selected Mask.
    Brush supports paint/erase and adjustable size/strength; these tool settings affect subsequent
    samples, while Mask opacity affects the entire accumulated raster. Multiple strokes on a Grade
    merge into the same current Brush raster and keep its MaskId. Each settled stroke remains
@@ -1460,18 +1466,13 @@ for one.
 After Mask add, delete, or reorder, update the owning node's Mask drawer rows. Update row identity,
 order, type, and label only. Do not add a Mask count. Do not rebuild the full graph.
 
-### 18.2 Viewer creation bar
+### 18.2 Mask editing state
 
-In creation mode, the viewer shows a compact creation bar. It shows the source kind, selected
-Mask name, Done, and Cancel. Each value has its own text element. Do not join values with a
-decorative separator.
-
-The bar uses `cardSurfaceColor`, `cardBorderColor`, and `panelRadius`. Done and Cancel use existing
-shared action components. Escape is equivalent to Cancel. Enter is equivalent to Done when the
-current source can settle.
-
-The creation bar does not cover a primary control point. It does not change the viewer coordinate
-space.
+Creation or selection enters the explicit Mask editing state and opens the Mask Adjustment Stack
+page. The viewer contains only the source controls and guides; it does not add a Done/Cancel bar.
+Enter confirms and restores the previous ordinary page. Selecting another enabled adjustment page
+confirms and switches directly to it. Escape cancels and restores the before-state. Leaving the
+state does not change viewer coordinates.
 
 ### 18.3 QSG overlay VI
 
@@ -1582,7 +1583,7 @@ AdjustmentSlider
 
 ```text
 Header action selects Radial
-  -> viewer creation mode and temporary Masks body
+  -> viewer creation mode and Mask Adjustment Stack page
   -> first valid input applies provisional AddMask(NodeId, MaskId, Radial params)
   -> pointer input mapped to ReferenceSpace
   -> provisional params shared by QSG + pipeline
@@ -1951,8 +1952,8 @@ parameterized source/history extensions, project cache ownership, and Interactiv
 would produce an edit that cannot restore or preview correctly.
 
 **Scope:** Follow the [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md).
-Connect the header actions and node Mask rows to a temporary Masks editing body while preserving
-the six ordinary adjustment tabs. Add Brush paint/erase with adjustable size and strength; accumulate
+Connect the header actions and node Mask rows to the disabled-until-editing Mask Adjustment Stack
+page, keeping the Node drawer as the sole Mask list. Add Brush paint/erase with adjustable size and strength; accumulate
 all strokes for a Color Grade in one current Brush raster. Add center-out Radial creation, Linear
 Gradient creation, viewer input routing, `ReferenceSpace` mapping, QSG Mask-editing overlay, provisional raster dirty rectangle,
 settled parameter commands, project cache settings/cleanup, Escape cancellation, mode interruption, and stale-session fencing. Hide the overlay

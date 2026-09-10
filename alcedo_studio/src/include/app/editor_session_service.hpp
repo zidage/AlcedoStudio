@@ -15,18 +15,18 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_mask_creation_controller.hpp"
-#include "app/editor_pending_input.hpp"
 #include "app/editor_panel_projection.hpp"
-#include "app/editor_serial_frame_admission.hpp"
-#include "app/editor_session_request_ids.hpp"
+#include "app/editor_pending_input.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_serial_frame_admission.hpp"
 #include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 
 namespace alcedo {
@@ -44,8 +44,8 @@ struct EditorBackgroundActionRestrictions {
 
 /// Presentation target queued with the active image-load operation.
 struct EditorPendingPresentationTarget {
-  sl_element_id_t    element_id         = 0;
-  image_id_t         image_id           = 0;
+  sl_element_id_t    element_id = 0;
+  image_id_t         image_id   = 0;
   ImageLoadRequestId image_load_request{};
 };
 
@@ -94,10 +94,12 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
   /// Live PipelineDocument for the Nodes-page projection. Null when the backend
   /// has no loaded image document. Default fakes return nullptr.
-  [[nodiscard]] virtual auto pipeline_document() const -> const PipelineDocument* { return nullptr; }
+  [[nodiscard]] virtual auto pipeline_document() const -> const PipelineDocument* {
+    return nullptr;
+  }
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
+  virtual void SetChangeNotifier(ChangeNotifier notifier) {
     change_notifier_ = std::move(notifier);
   }
 
@@ -254,10 +256,10 @@ class IEditorSessionBackend {
    */
   virtual auto EnqueueAdjustmentInput(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
     EditorSessionResult result;
-    result.kind    = EditorSessionResultKind::Rejected;
-    result.state   = state();
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
     result.identity = identity();
-    result.message = "Queued adjustment input is not supported by this backend";
+    result.message  = "Queued adjustment input is not supported by this backend";
     return result;
   }
   /**
@@ -289,8 +291,20 @@ class IEditorSessionBackend {
     result.message  = "Queued Mask creation is not supported by this backend";
     return result;
   }
+  /**
+   * @brief True while queued Mask commands have not reached the session owner.
+   *
+   * UI adapters use this owner read to avoid replacing a just-requested local
+   * selection or removal with the previous owner state. Implementations must
+   * synchronize this read with their Mask command queue.
+   */
+  [[nodiscard]] virtual auto mask_creation_commands_pending() const -> bool { return false; }
   [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
   [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
+  [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual auto mask_creation_last_removed_mask_id() const -> MaskId { return {}; }
   /**
    * @brief Inspect queued change descriptions. Empty when the backend has none.
    *
@@ -304,9 +318,9 @@ class IEditorSessionBackend {
    * session owner thread. Does not take the render lock from a GUI input
    * callback.
    */
-  virtual void TryConsumePendingInput() {}
-  virtual void SetAdmissionDeadlineHandler(std::function<void(std::int64_t /*delay_ns*/)> /*handler*/) {
-  }
+  virtual void               TryConsumePendingInput() {}
+  virtual void               SetAdmissionDeadlineHandler(
+                    std::function<void(std::int64_t /*delay_ns*/)> /*handler*/) {}
   /// Rename a Color Grade as a metadata-only history change. Default backends reject.
   virtual auto RenameColorGrade(const NodeId& /*node_id*/, std::string /*display_name*/)
       -> EditorSessionResult {
@@ -336,12 +350,8 @@ class IEditorSessionBackend {
     return result;
   }
   [[nodiscard]] virtual auto render_busy() const -> bool { return false; }
-  [[nodiscard]] virtual auto action_availability() const -> EditorActionAvailability {
-    return {};
-  }
-  [[nodiscard]] virtual auto active_image_load_request() const -> ImageLoadRequestId {
-    return {};
-  }
+  [[nodiscard]] virtual auto action_availability() const -> EditorActionAvailability { return {}; }
+  [[nodiscard]] virtual auto active_image_load_request() const -> ImageLoadRequestId { return {}; }
   [[nodiscard]] virtual auto pending_presentation_target() const
       -> std::optional<EditorPendingPresentationTarget> {
     return std::nullopt;
@@ -484,11 +494,18 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
       -> EditorSessionResult override;
   auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override;
+  [[nodiscard]] auto mask_creation_commands_pending() const -> bool override;
   [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
     return mask_creation_.node_id();
   }
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
     return mask_creation_.selected_mask_id();
+  }
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
+    return mask_creation_.CurrentSource();
+  }
+  [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> MaskId override {
+    return mask_creation_.last_removed_mask_id();
   }
   auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
@@ -544,22 +561,22 @@ class EditorSessionService final : public IEditorSessionBackend {
   void HandleSaveCheckpointCompletion(const EditorSessionCompletion& completion);
   void PublishActionAvailabilityIfChanged();
   [[nodiscard]] auto BuildActionInputs() -> EditorActionInputs;
-  void AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
-                    sl_element_id_t element_id, image_id_t image_id,
-                    ImageLoadRequestId image_load_request, std::string blocking_reason = {});
-  void ReleaseLeaseByCommandId(std::uint64_t command_id);
-  void ReleaseLeasesByKind(EditorOperationLeaseKind kind);
-  void SetPendingPresentationTarget(sl_element_id_t element_id, image_id_t image_id,
-                                    ImageLoadRequestId image_load_request);
-  void ClearPendingPresentationTarget();
+  void               AcquireLease(EditorOperationLeaseKind kind, std::uint64_t command_id,
+                                  sl_element_id_t element_id, image_id_t image_id,
+                                  ImageLoadRequestId image_load_request, std::string blocking_reason = {});
+  void               ReleaseLeaseByCommandId(std::uint64_t command_id);
+  void               ReleaseLeasesByKind(EditorOperationLeaseKind kind);
+  void               SetPendingPresentationTarget(sl_element_id_t element_id, image_id_t image_id,
+                                                  ImageLoadRequestId image_load_request);
+  void               ClearPendingPresentationTarget();
 
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
-  auto Emit(EditorSessionResult result) -> EditorSessionResult;
-  auto Reject(std::string message) -> EditorSessionResult;
+  auto               Emit(EditorSessionResult result) -> EditorSessionResult;
+  auto               Reject(std::string message) -> EditorSessionResult;
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.
-  auto Fail(std::string message) -> EditorSessionResult;
+  auto               Fail(std::string message) -> EditorSessionResult;
   auto FinishVersionNavigation(const NavigationOutcome& outcome) -> EditorSessionResult;
   /// Persist a graph mutation through the same journal/materialization path as
   /// ordinary editor saves. The terminal outcome is delivered as a typed
@@ -612,33 +629,33 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::string success_message;
   };
 
-  Dependencies                            dependencies_;
-  EditorSessionCommandQueue               command_queue_;
-  EditorSessionNavigationState            navigation_state_;
-  EditorSessionLifecycle                  lifecycle_;
-  EditorSaveCheckpointService             save_service_;
-  EditorSessionRenderController           render_;
-  EditorSessionEditController             edit_;
-  EditorSessionNavigationController       navigation_;
-  EditorPendingInputQueue                 pending_input_;
-  EditorSerialFrameAdmission              serial_admission_;
-  EditorMaskCreationController            mask_creation_;
-  std::vector<EditorMaskCreationCommand>  pending_mask_commands_;
-  mutable std::mutex                      mask_command_mutex_;
-  bool                                    reducing_command_     = false;
-  std::uint64_t                           current_operation_id_ = 0;
-  std::size_t                             publication_depth_    = 0;
-  bool                                    publication_dirty_    = false;
-  std::vector<EditorSessionResult>        results_;
-  mutable std::mutex                      results_mutex_;
-  std::optional<PendingHistoryCheckpoint>          pending_history_checkpoint_;
-  std::vector<EditorOperationLease>       active_leases_;
-  EditorActionAvailability                published_availability_{};
-  ActionAvailabilityObserver              action_availability_observer_;
+  Dependencies                                   dependencies_;
+  EditorSessionCommandQueue                      command_queue_;
+  EditorSessionNavigationState                   navigation_state_;
+  EditorSessionLifecycle                         lifecycle_;
+  EditorSaveCheckpointService                    save_service_;
+  EditorSessionRenderController                  render_;
+  EditorSessionEditController                    edit_;
+  EditorSessionNavigationController              navigation_;
+  EditorPendingInputQueue                        pending_input_;
+  EditorSerialFrameAdmission                     serial_admission_;
+  EditorMaskCreationController                   mask_creation_;
+  std::vector<EditorMaskCreationCommand>         pending_mask_commands_;
+  mutable std::mutex                             mask_command_mutex_;
+  bool                                           reducing_command_     = false;
+  std::uint64_t                                  current_operation_id_ = 0;
+  std::size_t                                    publication_depth_    = 0;
+  bool                                           publication_dirty_    = false;
+  std::vector<EditorSessionResult>               results_;
+  mutable std::mutex                             results_mutex_;
+  std::optional<PendingHistoryCheckpoint>        pending_history_checkpoint_;
+  std::vector<EditorOperationLease>              active_leases_;
+  EditorActionAvailability                       published_availability_{};
+  ActionAvailabilityObserver                     action_availability_observer_;
   std::optional<EditorPendingPresentationTarget> pending_presentation_target_;
-  bool                                    package_available_ = false;
-  EditorBackgroundActionRestrictions      background_restrictions_{};
-  std::atomic<std::uint64_t>              history_revision_{0};
+  bool                                           package_available_ = false;
+  EditorBackgroundActionRestrictions             background_restrictions_{};
+  std::atomic<std::uint64_t>                     history_revision_{0};
 };
 
 }  // namespace alcedo

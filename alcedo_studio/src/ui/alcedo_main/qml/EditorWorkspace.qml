@@ -234,6 +234,10 @@ Item {
                         maskOverlayHandleOutlineWidth: appTheme.maskOverlayHandleOutlineWidth
                         maskOverlayStrokeWidth: appTheme.maskOverlayStrokeWidth
                         maskOverlayAntialiasWidth: appTheme.maskOverlayAntialiasWidth
+                        maskOverlayGuideOuterWidth: appTheme.maskOverlayGuideOuterWidth
+                        maskOverlayGuideInnerWidth: appTheme.maskOverlayGuideInnerWidth
+                        maskOverlayGripOuterWidth: appTheme.maskOverlayGripOuterWidth
+                        maskOverlayGripInnerWidth: appTheme.maskOverlayGripInnerWidth
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2
@@ -342,6 +346,8 @@ Item {
                         onPointChanged: {
                             if (viewportHover.hovered) {
                                 editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                                if (root.maskCreation)
+                                    root.maskCreation.handleHover(point.position.x, point.position.y)
                             }
                         }
                     }
@@ -762,8 +768,29 @@ Item {
 
     Shortcut {
         sequences: [ "Escape" ]
-        enabled: root.editorControlsEnabled && root.maskOwnsLeftButton && root.maskCreation
-        onActivated: root.maskCreation.cancel()
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.finishBody()
+    }
+
+    // Mask editing shortcuts live at workspace scope so the viewport, Nodes
+    // graph, and right-side controls all produce the same outcome. They are
+    // disabled immediately after the transient Mask mode finishes.
+    Shortcut {
+        sequences: [ "Delete" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.deleteActiveMask()
+    }
+
+    Shortcut {
+        sequences: [ "Return", "Enter" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: {
+            if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
+                adjustmentStack.confirmMaskEditAndReturn()
+        }
     }
 
     // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so

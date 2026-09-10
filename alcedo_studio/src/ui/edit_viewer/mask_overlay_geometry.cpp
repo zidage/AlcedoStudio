@@ -14,6 +14,7 @@ namespace {
 constexpr int kDiscSegments = 20;
 constexpr int kCapSegments  = 10;
 constexpr float kMinLength  = 1.0e-6f;
+constexpr float kHoverHandleScale = 1.25f;
 
 [[nodiscard]] auto IsFinitePoint(const QPointF& point) -> bool {
   return std::isfinite(point.x()) && std::isfinite(point.y());
@@ -196,6 +197,48 @@ void AppendPolylineStroke(std::vector<MaskOverlayVertex>& triangles,
   }
 }
 
+// Dashes follow the polyline arc length, so the dash phase stays continuous
+// across the adaptive tessellation vertices instead of restarting per segment.
+void AppendDashedPolylineStroke(std::vector<MaskOverlayVertex>& triangles,
+                                const std::vector<QPointF>& points, bool closed, float width,
+                                float aa, const QColor& color, const QRectF& clip, float dash_len,
+                                float gap_len) {
+  if (points.size() < 2 || dash_len <= 0.0f || gap_len < 0.0f) {
+    return;
+  }
+  const std::size_t count = closed ? points.size() : points.size() - 1;
+  double            phase = 0.0;
+  bool              draw  = true;
+  for (std::size_t i = 0; i < count; ++i) {
+    const QPointF& a  = points[i];
+    const QPointF& b  = points[(i + 1) % points.size()];
+    const double   dx = b.x() - a.x();
+    const double   dy = b.y() - a.y();
+    const double   len = std::hypot(dx, dy);
+    if (len < kMinLength) {
+      continue;
+    }
+    const double ux = dx / len;
+    const double uy = dy / len;
+    double       t  = 0.0;
+    while (t < len - 1.0e-9) {
+      const double period = draw ? static_cast<double>(dash_len) : static_cast<double>(gap_len);
+      const double step   = std::min(len - t, period - phase);
+      if (draw && step > 1.0e-9) {
+        const QPointF p0(a.x() + ux * t, a.y() + uy * t);
+        const QPointF p1(a.x() + ux * (t + step), a.y() + uy * (t + step));
+        AppendClippedStroke(triangles, p0, p1, width, aa, color, clip, /*round_caps=*/false);
+      }
+      t += step;
+      phase += step;
+      if (phase >= period - 1.0e-9) {
+        phase = 0.0;
+        draw  = !draw;
+      }
+    }
+  }
+}
+
 void AppendFilledDisc(std::vector<MaskOverlayVertex>& triangles, const QPointF& center,
                       float radius, float aa, const QColor& color, const QRectF& clip) {
   if (radius <= 0.0f || !IsFinitePoint(center) ||
@@ -277,15 +320,34 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
   const float outline  = style.handle_outline_width_logical_px;
   const float stroke_w = style.stroke_width_logical_px;
   const float aa       = style.antialias_width_logical_px;
+  const float guide_outer = style.guide_outer_width_logical_px;
+  const float guide_inner = style.guide_inner_width_logical_px;
+  const float grip_outer  = style.grip_outer_width_logical_px;
+  const float grip_inner  = style.grip_inner_width_logical_px;
   const QRectF& clip   = display.clip_rect;
+
+  const auto handle_radius = [&](MaskOverlayHandleId id) {
+    if (id == display.hovered_handle || id == display.active_handle) {
+      return handle_r * kHoverHandleScale;
+    }
+    return handle_r;
+  };
 
   for (const auto& handle : display.handles) {
     if (handle.id == MaskOverlayHandleId::None || !IsFinitePoint(handle.item)) {
       continue;
     }
-    AppendRing(scene.handle_outline, handle.item, handle_r, handle_r + outline, aa,
-               style.control_outline, clip);
-    AppendFilledDisc(scene.handle_fill, handle.item, handle_r, 0.0f, style.control_fill, clip);
+    const float radius = handle_radius(handle.id);
+    if (handle.shape == MaskOverlayHandleShape::Ring) {
+      AppendHollowCircle(scene.handle_outline, handle.item, radius + outline * 0.5f, outline, aa,
+                         style.control_outline, clip);
+      AppendHollowCircle(scene.handle_fill, handle.item, radius, outline, aa, style.control_fill,
+                         clip);
+    } else {
+      AppendRing(scene.handle_outline, handle.item, radius, radius + outline, aa,
+                 style.control_outline, clip);
+      AppendFilledDisc(scene.handle_fill, handle.item, radius, 0.0f, style.control_fill, clip);
+    }
     ++scene.handle_count;
   }
 
@@ -310,6 +372,46 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
                           style.inactive, clip, /*round_caps=*/false);
     }
   }
+
+  auto append_dual = [&](std::vector<MaskOverlayVertex>& triangles, const QPointF& a,
+                          const QPointF& b, float outer_w, float inner_w) {
+    AppendClippedStroke(triangles, a, b, outer_w, aa, style.control_fill, clip,
+                        /*round_caps=*/false);
+    AppendClippedStroke(triangles, a, b, inner_w, aa, style.control_outline, clip,
+                        /*round_caps=*/false);
+  };
+
+  for (const auto& contour : display.selected_contours) {
+    if (contour.points.size() < 2) {
+      continue;
+    }
+    const std::size_t count = contour.points.size();
+    if (contour.dashed) {
+      AppendDashedPolylineStroke(scene.selected_guides, contour.points, /*closed=*/true,
+                                 guide_outer, aa, style.control_fill, clip,
+                                 kMaskOverlayDashLengthLogicalPx, kMaskOverlayDashGapLogicalPx);
+      AppendDashedPolylineStroke(scene.selected_guides, contour.points, /*closed=*/true,
+                                 guide_inner, aa, style.control_outline, clip,
+                                 kMaskOverlayDashLengthLogicalPx, kMaskOverlayDashGapLogicalPx);
+      scene.selected_guide_segment_count += static_cast<int>(count);
+      continue;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      append_dual(scene.selected_guides, contour.points[i], contour.points[(i + 1) % count],
+                  guide_outer, guide_inner);
+      ++scene.selected_guide_segment_count;
+    }
+  }
+  for (const auto& guide : display.selected_guides) {
+    append_dual(scene.selected_guides, guide.a, guide.b, guide_outer, guide_inner);
+    ++scene.selected_guide_segment_count;
+  }
+  for (const auto& grip : display.edge_grips) {
+    append_dual(scene.edge_grips, grip.first, grip.second, grip_outer, grip_inner);
+  }
+  scene.closed_polygon_edge_count         = 0;
+  scene.coverage_fill_vertex_count       = 0;
+  scene.settled_stroke_path_vertex_count = 0;
 
   return scene;
 }

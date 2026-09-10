@@ -34,6 +34,7 @@ Qan.NodeItem {
     Rectangle {
         id: card
         objectName: "editorEndpointNodeCard"
+        z: 2
         anchors.fill: parent
         radius: appTheme.controlRadiusSmall
         color: appTheme.cardSurfaceColor

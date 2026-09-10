@@ -183,6 +183,12 @@ class AppTheme final : public QObject {
   Q_PROPERTY(qreal maskOverlayAntialiasWidth READ maskOverlayAntialiasWidth CONSTANT)
   Q_PROPERTY(int maskOverlayHandleHitRadius READ maskOverlayHandleHitRadius CONSTANT)
   Q_PROPERTY(int maskOverlayRotateHandleOffset READ maskOverlayRotateHandleOffset CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGuideOuterWidth READ maskOverlayGuideOuterWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGuideInnerWidth READ maskOverlayGuideInnerWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripOuterWidth READ maskOverlayGripOuterWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripInnerWidth READ maskOverlayGripInnerWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripSpanT0 READ maskOverlayGripSpanT0 CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripSpanT1 READ maskOverlayGripSpanT1 CONSTANT)
 
  public:
   enum class FontRole : int {
@@ -364,6 +370,12 @@ class AppTheme final : public QObject {
   auto maskOverlayAntialiasWidth() const -> qreal;
   auto maskOverlayHandleHitRadius() const -> int;
   auto maskOverlayRotateHandleOffset() const -> int;
+  auto maskOverlayGuideOuterWidth() const -> qreal;
+  auto maskOverlayGuideInnerWidth() const -> qreal;
+  auto maskOverlayGripOuterWidth() const -> qreal;
+  auto maskOverlayGripInnerWidth() const -> qreal;
+  auto maskOverlayGripSpanT0() const -> qreal;
+  auto maskOverlayGripSpanT1() const -> qreal;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

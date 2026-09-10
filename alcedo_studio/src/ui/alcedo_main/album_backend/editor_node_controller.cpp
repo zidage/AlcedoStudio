@@ -140,6 +140,7 @@ void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_i
     }
   }
   emit SnapshotChanged();
+  emit snapshotChanged();
 }
 
 auto EditorNodeController::BoundSessionGeneration() const -> std::optional<std::uint64_t> {
@@ -171,7 +172,9 @@ void EditorNodeController::ClearSnapshot() {
   snapshot_image_id_            = 0;
   snapshot_version_id_.clear();
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
 }
 
@@ -443,7 +446,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   SyncSessionAdjustmentNode(false);
   SetLastError({});
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
   QueueProjectionApply();
   return true;
@@ -498,6 +503,32 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
   return true;
 }
 
+void EditorNodeController::ApplyLayoutToAdapter() {
+  auto* layout = layout_store_.data();
+  if (layout == nullptr || graph_adapter_ == nullptr || !HasActiveGraph() || applying_layout_) {
+    return;
+  }
+  applying_layout_ = true;
+  const auto finish = qScopeGuard([this] { applying_layout_ = false; });
+  if (draft_ != nullptr) {
+    const auto view =
+        draft_->CurrentSnapshot(session_generation_, projection_revision_, topology_revision_);
+    layout->EnsureDefaultPositions(view);
+    layout->ResolveVerticalOverlaps(view);
+  } else {
+    layout->EnsureDefaultPositions(snapshot_);
+    layout->ResolveVerticalOverlaps(snapshot_);
+  }
+  for (const auto& node : ActiveNodes()) {
+    const auto id = NodeIdToQString(node.node_id);
+    if (layout->hasNodePosition(id)) {
+      const auto pos = layout->nodePosition(id);
+      graph_adapter_->setNodePosition(id, pos.x(), pos.y());
+    }
+    graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
+  }
+}
+
 auto EditorNodeController::graph_adapter_object() const -> QObject* {
   return graph_adapter_.data();
 }
@@ -534,7 +565,16 @@ void EditorNodeController::set_layout_store(QObject* store) {
   if (layout_store_.data() == layout) {
     return;
   }
-  layout_store_ = layout;
+  if (layout_store_ != nullptr) {
+    disconnect(layout_store_.data(), nullptr, this, nullptr);
+  }
+  layout_store_connection_ = {};
+  layout_store_            = layout;
+  if (layout_store_ != nullptr) {
+    layout_store_connection_ =
+        connect(layout_store_.data(), &EditorNodeLayoutStore::NodeHeightChanged, this,
+                &EditorNodeController::ApplyLayoutToAdapter);
+  }
   emit LayoutStoreChanged();
   SyncLayoutKey();
 }
@@ -587,21 +627,7 @@ void EditorNodeController::ApplyBoundGraph() {
     return;
   }
   ++completed_projection_apply_count_;
-  auto* layout = layout_store_.data();
-  if (layout != nullptr) {
-    layout->EnsureDefaultPositions(draft_ == nullptr ? snapshot_
-                                                     : draft_->CurrentSnapshot(session_generation_,
-                                                                               projection_revision_,
-                                                                               topology_revision_));
-    for (const auto& node : ActiveNodes()) {
-      const auto id = NodeIdToQString(node.node_id);
-      if (layout->hasNodePosition(id)) {
-        const auto pos = layout->nodePosition(id);
-        graph_adapter_->setNodePosition(id, pos.x(), pos.y());
-      }
-      graph_adapter_->setDrawerOpen(id, layout->drawerOpen(id));
-    }
-  }
+  ApplyLayoutToAdapter();
   ApplyLiveSelectionToAdapter();
 }
 
@@ -644,6 +670,7 @@ bool EditorNodeController::refreshFromSession() {
     ClearSnapshot();
     SetLastError({});
     emit SnapshotChanged();
+    emit snapshotChanged();
     return false;
   }
   return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
@@ -784,6 +811,7 @@ void EditorNodeController::selectNode(const QString& node_id) {
   ApplyLiveSelectionToAdapter();
   SyncSessionAdjustmentNode(true);
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
 }
 
@@ -910,6 +938,7 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
     ApplyLiveSelectionToAdapter();
     SyncSessionAdjustmentNode(false);
     emit SelectionChanged();
+    emit selectionChanged();
     emit ActionAvailabilityChanged();
   }
   return MaybeSubmitDraft();
@@ -1117,6 +1146,7 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     SetLastError({});
   }
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit ActionAvailabilityChanged();
   return true;
 }

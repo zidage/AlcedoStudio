@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -24,6 +25,7 @@
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/mask/mask_id.hpp"
+#include "edit/mask/mask_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
@@ -105,8 +107,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Left tool rail page: empty string = collapsed; "history", "versions", or
   // "nodes" = expanded. Survives workspace round-trips within the process
   // (not persisted across application restart).
-  Q_PROPERTY(QString editorToolPanelPage READ editor_tool_panel_page WRITE set_editor_tool_panel_page
-                 NOTIFY DesktopUiChanged)
+  Q_PROPERTY(QString editorToolPanelPage READ editor_tool_panel_page WRITE
+                 set_editor_tool_panel_page NOTIFY DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
   Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
@@ -142,46 +144,46 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                           QObject*                       parent = nullptr);
   ~EditorSessionController() override;
 
-  void                  SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
-  void                  SetInteractionPolicy(InteractionPolicyController* interaction_policy);
-  void                  SetCopiedPackageAvailable(bool available);
+  void                     SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
+  void                     SetInteractionPolicy(InteractionPolicyController* interaction_policy);
+  void                     SetCopiedPackageAvailable(bool available);
   /// Album catalog used to mirror ODT HDR EOTF into the library HDR badge.
-  void                  SetAlbumCatalog(IAlbumCatalog* album_catalog);
+  void                     SetAlbumCatalog(IAlbumCatalog* album_catalog);
 
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
-  void                  OnBackendChanged();
+  void                     OnBackendChanged();
 
-  [[nodiscard]] bool    active() const;
-  [[nodiscard]] bool    has_image() const;
-  [[nodiscard]] bool    has_pending_recovery() const;
-  [[nodiscard]] uint    element_id() const;
-  [[nodiscard]] uint    image_id() const;
-  [[nodiscard]] uint    last_element_id() const { return last_element_id_; }
-  [[nodiscard]] uint    last_image_id() const { return last_image_id_; }
-  [[nodiscard]] QString viewport_identity_key() const;
-  [[nodiscard]] auto    session_state() const -> alcedo::EditorSessionState;
-  [[nodiscard]] QString session_state_name() const;
-  [[nodiscard]] bool    filmstrip_collapsed() const { return filmstrip_collapsed_; }
-  [[nodiscard]] double  filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
-  [[nodiscard]] double  filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
-  [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
-  [[nodiscard]] QString exif_line_text() const { return exif_line_text_; }
-  [[nodiscard]] QString exif_shutter_text() const { return exif_shutter_text_; }
-  [[nodiscard]] QString exif_iso_text() const { return exif_iso_text_; }
-  [[nodiscard]] QString exif_aperture_text() const { return exif_aperture_text_; }
-  [[nodiscard]] QString exif_focal_text() const { return exif_focal_text_; }
-  [[nodiscard]] QString editor_tool_panel_page() const { return editor_tool_panel_page_; }
+  [[nodiscard]] bool       active() const;
+  [[nodiscard]] bool       has_image() const;
+  [[nodiscard]] bool       has_pending_recovery() const;
+  [[nodiscard]] uint       element_id() const;
+  [[nodiscard]] uint       image_id() const;
+  [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
+  [[nodiscard]] uint       last_image_id() const { return last_image_id_; }
+  [[nodiscard]] QString    viewport_identity_key() const;
+  [[nodiscard]] auto       session_state() const -> alcedo::EditorSessionState;
+  [[nodiscard]] QString    session_state_name() const;
+  [[nodiscard]] bool       filmstrip_collapsed() const { return filmstrip_collapsed_; }
+  [[nodiscard]] double     filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] double     filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
+  [[nodiscard]] QString    active_adjustment_panel() const { return active_adjustment_panel_; }
+  [[nodiscard]] QString    exif_line_text() const { return exif_line_text_; }
+  [[nodiscard]] QString    exif_shutter_text() const { return exif_shutter_text_; }
+  [[nodiscard]] QString    exif_iso_text() const { return exif_iso_text_; }
+  [[nodiscard]] QString    exif_aperture_text() const { return exif_aperture_text_; }
+  [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
+  [[nodiscard]] QString    editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
   [[nodiscard]] QString    active_version_id() const;
   [[nodiscard]] auto       pipeline_document() const -> const alcedo::PipelineDocument*;
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
-  [[nodiscard]] auto    adjustment_snapshot() const -> QVariantMap;
-  [[nodiscard]] auto    history_snapshot() const -> alcedo::EditorHistorySnapshot;
-  [[nodiscard]] auto    actions() -> EditorActionAvailabilityModel* { return &actions_; }
+  [[nodiscard]] auto       adjustment_snapshot() const -> QVariantMap;
+  [[nodiscard]] auto       history_snapshot() const -> alcedo::EditorHistorySnapshot;
+  [[nodiscard]] auto       actions() -> EditorActionAvailabilityModel* { return &actions_; }
 
-  [[nodiscard]] bool    presentation_viewport_bound() const {
+  [[nodiscard]] bool       presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
   // Phase 5D: true when the coordinator has in-flight/pending render work.
@@ -208,13 +210,13 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // the session accepted the write for later owner processing, not that live
   // parameters or history were updated.
   Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
-  auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
-                                 bool settled) -> bool override;
+  auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override;
   /// Queue a node-switch seal so later writes start a new sequence. Old
   /// sequence ids keep their captured target. No live mutation.
-  Q_INVOKABLE bool   enqueueNodeSwitchBoundary();
+  Q_INVOKABLE bool enqueueNodeSwitchBoundary();
   /// Bind the Nodes-page selection owner used to stamp submit targets.
-  void               BindNodeSelectionSource(EditorNodeController* nodes);
+  void             BindNodeSelectionSource(EditorNodeController* nodes);
   /**
    * @brief Install the Image-owner EXIF reader used by the adjustment header.
    *
@@ -222,7 +224,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
    * selection. The reader copies Image::exif_display_ and must not parse EXIF
    * JSON. Throw or missing images yield an em-dash EXIF line.
    */
-  void SetImageExifReader(std::function<alcedo::EditorImageExifDisplay(uint)> reader);
+  void             SetImageExifReader(std::function<alcedo::EditorImageExifDisplay(uint)> reader);
   /// Reproject panels for the selected node without rendering or committing.
   void ApplySelectedAdjustmentNode(const alcedo::NodeId& node_id, alcedo::EditorNodeKind kind);
   [[nodiscard]] auto PeekPendingInput() const -> alcedo::EditorPendingInputView;
@@ -247,7 +249,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   Shutdown();
 
   /** Route a metadata-only Color Grade rename through the active session backend. */
-  auto SubmitRenameColorGrade(const alcedo::NodeId& node_id, std::string display_name)
+  auto               SubmitRenameColorGrade(const alcedo::NodeId& node_id, std::string display_name)
       -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
@@ -301,8 +303,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto session_backend() const -> alcedo::IEditorSessionBackend* {
     return session_backend_;
   }
-  auto EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command) -> bool;
+  auto               EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command) -> bool;
   [[nodiscard]] auto mask_creation_mask_id() const -> alcedo::MaskId;
+  [[nodiscard]] auto mask_creation_node_id() const -> alcedo::NodeId;
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<alcedo::MaskSource>;
+  [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> alcedo::MaskId;
+  [[nodiscard]] auto mask_creation_commands_pending() const -> bool;
 
   // Production pipeline entry: resolves the bound viewport through the scope tap.
   // Returns null when unbound or the object is not an EditorViewportItem.
@@ -358,8 +364,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                      const QString&                     selected_id = {});
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
-  void                     BindAdmissionDeadline();
-  void                     SetActiveAdjustmentPanel(const QString& panel, bool request_view);
+  void BindAdmissionDeadline();
+  void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
+  void SyncMaskAdjustmentPanel();
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto       NormalizeToolPanelPage(const QString& page) -> QString;
 
@@ -387,29 +394,32 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
   /// does not emit AdjustmentSnapshotChanged. Kept so a later owner completion
   /// can suppress panel reload while a pointer drag is still on the stack.
-  bool                            suppress_snapshot_publish_ = false;
+  bool                            suppress_snapshot_publish_     = false;
   // Phase 7A R2: last history revision observed from the backend. OnBackendChanged
   // emits HistoryChanged only when the backend's history_revision advances, so
   // render/preview/task notifications no longer trigger a history projection.
-  std::uint64_t                   last_history_revision_     = 0;
+  std::uint64_t                   last_history_revision_         = 0;
   /// Last panel projection session_generation applied to adjustment_snapshot_.
   /// A matching generation merges changed fields; a new generation replaces.
   std::uint64_t                   last_applied_panel_generation_ = 0;
 
-  QString                                        active_adjustment_panel_ = QStringLiteral("tone");
-  QString                                        editor_tool_panel_page_;
+  QString                         active_adjustment_panel_       = QStringLiteral("tone");
+  QString                         panel_before_mask_edit_        = QStringLiteral("tone");
+  bool                            mask_edit_was_active_          = false;
+  bool                            mask_panel_transition_         = false;
+  QString                         editor_tool_panel_page_;
   std::function<alcedo::EditorImageExifDisplay(uint)> image_exif_reader_;
-  uint                                           exif_image_id_          = 0;
-  qulonglong                                     exif_session_generation_ = 0;
-  QString exif_line_text_     = QString::fromUtf8("\xE2\x80\x94");
-  QString exif_shutter_text_  = QString::fromUtf8("\xE2\x80\x94");
-  QString exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
-  QString exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
-  QString exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
-  QPointer<QObject>                              presentation_viewport_;
-  QPointer<QObject>                              interaction_controller_;
-  QMetaObject::Connection                        interaction_view_change_connection_;
-  QMetaObject::Connection                        interaction_policy_connection_;
+  uint                                                exif_image_id_           = 0;
+  qulonglong                                          exif_session_generation_ = 0;
+  QString                 exif_line_text_     = QString::fromUtf8("\xE2\x80\x94");
+  QString                 exif_shutter_text_  = QString::fromUtf8("\xE2\x80\x94");
+  QString                 exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
+  QString                 exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
+  QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
+  QPointer<QObject>       presentation_viewport_;
+  QPointer<QObject>       interaction_controller_;
+  QMetaObject::Connection interaction_view_change_connection_;
+  QMetaObject::Connection interaction_policy_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   QTimer*                                        admission_deadline_timer_ = nullptr;

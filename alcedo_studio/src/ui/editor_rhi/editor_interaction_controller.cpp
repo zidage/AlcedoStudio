@@ -664,15 +664,11 @@ void EditorInteractionController::setDisplayedMaskGeometry(const ResolvedRenderG
 
 auto EditorInteractionController::maskEditViewMapping() const -> MaskEditViewMapping {
   MaskEditViewMapping mapping;
-  mapping.widget       = widgetInfo();
-  mapping.photograph   = imageInfo();
-  mapping.geometry     = displayed_mask_geometry_;
-  if (mapping.geometry.full_reference_extent.Empty() && mapping.photograph.image_width > 0 &&
-      mapping.photograph.image_height > 0) {
-    mapping.geometry = MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{
-        static_cast<std::uint32_t>(mapping.photograph.image_width),
-        static_cast<std::uint32_t>(mapping.photograph.image_height)});
-  }
+  mapping.widget = widgetInfo();
+  // Crop overlay keeps uncropped source in image_info_. Mask mapping uses the
+  // displayed photograph (render-reference size when the viewport has one).
+  mapping.photograph = interactionImageInfo();
+  mapping.geometry   = displayed_mask_geometry_;
   mapping.presentation = presentation_mode_;
   const auto view     = viewer_state_.GetViewTransform();
   mapping.zoom        = view.zoom;

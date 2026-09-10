@@ -12,6 +12,8 @@ Item {
     objectName: "editorNodeMaskDrawer"
 
     property var masks: []
+    property string nodeId: ""
+    property string selectedMaskId: ""
     property bool expanded: true
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
@@ -29,7 +31,9 @@ Item {
             return 0
         }
         const count = root.masks.length !== undefined ? root.masks.length : 0
-        return count * appTheme.graphMaskRowHeight
+        return count > 0
+                ? count * appTheme.graphMaskRowHeight + appTheme.spaceXs
+                : 0
     }
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
 
@@ -39,6 +43,8 @@ Item {
     clip: true
 
     signal toggled(bool expanded)
+    signal maskSelected(string nodeId, string maskId)
+    signal maskDeleteRequested(string nodeId, string maskId)
 
     function toggle() {
         root.expanded = !root.expanded
@@ -197,6 +203,7 @@ Item {
                 id: headerMouse
                 anchors.fill: parent
                 hoverEnabled: true
+                preventStealing: true
                 focus: false
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.toggle()
@@ -225,9 +232,14 @@ Item {
                     model: root.masks
 
                     EditorNodeMaskTypeRow {
+                        id: maskTypeRow
                         width: maskList.width
                         sourceKind: modelData.sourceKind !== undefined ? String(modelData.sourceKind) : ""
                         maskId: modelData.maskId !== undefined ? String(modelData.maskId) : ""
+                        selected: root.selectedMaskId.length > 0
+                                  && maskId === root.selectedMaskId
+                        onClicked: root.maskSelected(root.nodeId, maskTypeRow.maskId)
+                        onDeleteClicked: root.maskDeleteRequested(root.nodeId, maskTypeRow.maskId)
                     }
                 }
             }
