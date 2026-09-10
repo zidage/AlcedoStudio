@@ -460,6 +460,13 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
 
   const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
                                                  compiled_source.mask_id);
+  ActiveRasterMaskInput parameterized_replay;
+  if (active == nullptr && BrushUsesParameterizedReplay(*brush)) {
+    parameterized_replay = ParameterizedBrushActiveRasterForGrade(
+        document, compiled_grade.node_id, compiled_source.mask_id, *brush,
+        plan.geometry.full_reference_extent);
+    active = &parameterized_replay;
+  }
   const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
                                    bool raster_bytes_changed, const MaskAssetKey* persistent_key) {
     result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
@@ -560,10 +567,6 @@ auto ExecuteOpenClMask(OpenClRenderDevice& device, const ExecutionPlan& plan,
 
   if (store == nullptr) {
     throw std::invalid_argument("ExecuteOpenClMask: raster mask needs MaskStore");
-  }
-  if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
-    EncodeFillZero(device, output.Texture());
-    return result;
   }
   const auto asset = store->Load(*brush->asset_key);
   if (asset == nullptr || asset->descriptor.extent.Empty()) {

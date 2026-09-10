@@ -31,7 +31,9 @@ struct MetalMaskResult {
  * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
  *
  * Raster source textures and mip levels live in workspace MaskTextureCache or the separate
- * active-raster cache. Persistent assets are never patched. Signed-distance intermediates are
+ * active-raster cache. Parameterized Brushes replay onto a request-owned canonical R8
+ * through the active-raster cache instead of MaskStore. Persistent assets are never
+ * patched. Signed-distance intermediates are
  * destroyed after the recorded command buffer completes. The signed-distance result is stored
  * by Mask content key so a feather-radius edit can reuse it. Feather (when present),
  * invert, and opacity run in that order. Failures throw; there is no CPU substitute.

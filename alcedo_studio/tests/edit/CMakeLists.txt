@@ -481,7 +481,8 @@ if(ALCEDO_CUDA_ENABLED)
 
   add_executable(GpuDagCudaMaskTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_resource_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_resource_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_parameterized_grade_mix_test.cpp)
   target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaMaskTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
   gtest_discover_tests(GpuDagCudaMaskTest TEST_PREFIX "GpuDagCudaMaskTest."

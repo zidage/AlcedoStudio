@@ -30,7 +30,9 @@ struct OpenClMaskResult {
  * @brief Evaluate @p compiled_grade's analytic or raster mask into a RenderSpace R8 image.
  *
  * Raster source levels are owned by the workspace mask cache. Persistent assets are never
- * patched. Active Brush pixels use a separate session-generation texture. Feathering uses an
+ * patched. Parameterized Brushes replay onto a request-owned canonical R8 through the
+ * active-raster cache instead of MaskStore. Active Brush pixels use a separate
+ * session-generation texture. Feathering uses an
  * exact signed Euclidean distance field whose node-buffer metadata omits the feather radius, so
  * changing only that radius reuses the distance result. The function only enqueues OpenCL
  * work; failures throw and no CPU or alternate-backend substitute is used.

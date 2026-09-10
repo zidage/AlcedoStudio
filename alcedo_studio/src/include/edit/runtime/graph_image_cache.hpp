@@ -183,7 +183,9 @@ class GraphImageCache {
    * Only values allowed by @p persistence become the current published result.
    * Other recorded writes stay unpublished until @ref DiscardUnpublished.
    * @ref ResultPersistenceScope::AllCurrentResults also drops unrecorded slots,
-   * matching the previous publish-then-clear behavior.
+   * matching the previous publish-then-clear behavior. A recorded write whose
+   * revision is older than the currently published result is dropped without
+   * replacing that result, so a delayed older submission cannot regress Mix.
    */
   void PublishSuccessfulSubmission(std::uint64_t submission_id,
                                    ResultPersistenceScope persistence =
@@ -195,6 +197,11 @@ class GraphImageCache {
       if (!slot.has_revision || slot.last_writer != submission_id ||
           !PersistsGraphValue(persistence, id, sensor_linear)) {
         ++it;
+        continue;
+      }
+      if (const auto* published = FindPublished(id);
+          published != nullptr && published->revision > slot.revision) {
+        it = write_slots_.erase(it);
         continue;
       }
       PublishedResult published;

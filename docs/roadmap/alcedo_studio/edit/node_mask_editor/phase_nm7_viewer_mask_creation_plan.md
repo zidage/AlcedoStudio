@@ -2,15 +2,16 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.9 complete; NM7.10–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.10 complete; NM7.11–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
 NM7.7 Radial/Linear creation plus existing-mask movement, NM7.8 parameter-mask
-controls, drawer selection/deletion, and crop-style Gradient, and NM7.9 accumulating
-Brush paint/erase/move with typed stroke history. Some former NM7.11 UI wiring
+controls, drawer selection/deletion, and crop-style Gradient, NM7.9 accumulating
+Brush paint/erase/move with typed stroke history, and NM7.10 serial Interactive Mix
+with one current Grade coverage result. Some former NM7.11 UI wiring
 (now NM7.12) was brought forward for Radial/Gradient testing. This is partial
-wiring of the full UI phase. NM7.10–NM7.15 acceptance remains outstanding.
+wiring of the full UI phase. NM7.11–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1521,6 +1522,93 @@ presentation → next consume. Release seals → durable command → Quality.
 `QualityMaskEvaluationDoesNotOverwriteInteractiveCache`, `RebuiltMaskMatchesCacheHitPixels`.
 
 **Exit:** actual end-to-end native request path works; a control redraw alone does not pass.
+
+##### Phase NM7.10 completion record (2026-09-10)
+
+**Status:** complete — serial consume plus native parameterized Mix; one current Grade coverage
+result; failed encodes keep last-good Mix
+
+**Primary success call chain:**
+
+```text
+EnqueueMaskCreation (coalesce latest placement; ordered_append keeps samples)
+  -> TryConsumePendingInput (blocked while inflight / 16 ms Interactive pacing)
+  -> WithLockedLiveDocument / ApplyMaskCreationCommand
+  -> RouteMaskCreationRender (Interactive or SettledMaskEdit)
+  -> PlanExecutor MaskEvaluate
+  -> parameterized canonical replay -> ActiveRasterTextures (not MaskStore)
+  -> feather scratch / Union -> mask.union published (one Grade Mix)
+  -> Grade Mix photograph
+```
+
+**Primary failure call chain:**
+
+```text
+inflight or 16 ms pacing
+  -> consume skipped; live Brush placement unchanged; queued Append remains
+missing MaskStore asset_key / injected upload failure
+  -> CancelRender discards unpublished writes
+  -> DropUnusablePublishedImages keeps last-good Mix when frame identity matches
+  -> PublishedRevision stays at the prior successful Mix
+delayed older Mix write
+  -> PublishSuccessfulSubmission drops the write when published revision is newer
+QualityBase (SensorDevelopOnly)
+  -> Mix is not published; DiscardUnpublished leaves Interactive Mix
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MaskMoveNeverMutatesSourceDuringRender` | `EditorSerialMaskInteractiveTest` | PASS |
+| `LatestMoveValueSurvivesRelease` | `EditorSerialMaskInteractiveTest` | PASS |
+| `CurrentGradeCoverageHasOneRetainedResult` | `GpuDagCudaMaskTest` | PASS |
+| `DelayedOldFrameCannotReplaceNewMaskPosition` | `GpuDagCudaWorkspaceTest` | PASS |
+| `QualityMaskEvaluationDoesNotOverwriteInteractiveCache` | `GpuDagCudaMaskTest` | PASS |
+| `RebuiltMaskMatchesCacheHitPixels` | `GpuDagCudaMaskTest` | PASS |
+| `MaskFailurePublishesNoSourceUnionOrGradeWrites` | `GpuDagCudaMaskTest` | PASS |
+| `MaskUploadFailureKeepsPriorPublishedResults` | `GpuDagCudaMaskTest`, `GpuDagOpenClGradeTest` | PASS |
+| `LastGoodGradeSurvivesExposureRevisionWhenFrameIdentityMatches` | `GraphImageCacheRetentionTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target GpuDagCudaMaskTest --target GpuDagCudaWorkspaceTest --target EditorSerialMaskInteractiveTest --target GraphImageCacheRetentionTest --target GpuDagOpenClGradeTest
+ctest --test-dir build/debug --output-on-failure -R "EditorSerialMaskInteractiveTest|GpuDagCudaMaskTest|GpuDagCudaWorkspaceTest.CudaWorkspaceFixture.DelayedOldFrameCannotReplaceNewMaskPosition|GraphImageCacheRetentionTest|GpuDagOpenClGradeTest.OpenClMultiMaskResourceFixture.MaskUploadFailureKeepsPriorPublishedResults"
+```
+
+Suite totals: required names `6/6` PASS; `GpuDagCudaMaskTest` `31/31` PASS;
+`GraphImageCacheRetentionTest` `16/16` PASS; OpenCL `MaskUploadFailureKeepsPriorPublishedResults`
+PASS. Date / working tree on `feature/serial-interactive-grade-mix` (base `34ffdebf`) / Windows
+MSVC `win_debug` / CUDA for native Mix pixels. OpenCL/Metal Mask passes synthesize the same
+request-owned canonical replay; Metal was not executed on this host. Host Mix oracle is
+`GradeMaskCoverage` with `ExpectR8WithinTolerance` (1 code) when canonical raster equals the
+16×12 render extent. QualityBase tests call `DiscardUnpublished` after
+`ResultPersistenceScope::SensorDevelopOnly`, matching product cleanup so unpublished QualityBase
+writes cannot shadow Interactive Mix.
+
+**Checklist / exit condition:** required tests PASS. Native CUDA request path evaluates
+parameterized Brush Mix without `MaskStore` or per-source `MaskTextureCache`. Latest placement
+Append coalesces; `ordered_append` samples are not coalesced. Inflight consume does not mutate
+the live source. One published Grade Mix slot is retained across moves. A delayed older Mix
+write cannot replace a newer published revision. QualityBase does not overwrite Interactive Mix.
+Rebuilding Mix after dropping the published slot matches the prior pixels. Failed Mask encode
+keeps last-good Mix/Union/Grade. A QSG control redraw is not the acceptance path.
+
+**LOC note (grill-code-review):** `parameterized_brush_raster.hpp` 69 / `.cpp` 47;
+`compiled_grade_mask.hpp` 87; `cuda_mask_pass.cu` 580; `opencl_mask_pass.cpp` 690;
+`metal_mask_pass.mm` 670; `graph_image_cache.hpp` 450; `basic_render_workspace.hpp` 330;
+`editor_session_service.hpp` 676 / `.cpp` 2028 (Peek is a mutex copy of the Mask queue; Mix
+rules stay in PlanExecutor / GraphImageCache). `cuda_parameterized_grade_mix_test.cpp` 205;
+`editor_serial_mask_interactive_test.cpp` 278. Session cpp was already above 1000 lines;
+this slice did not add a second Mix owner there.
+
+**Remaining gaps:** project Mix-cache files, keep/delete-on-close, and Clear are NM7.11.
+Mask Adjustment Stack remaining chrome and the 260/320/460 theme matrix are NM7.12.
+Open-operation cancel on `MappingChanged` is NM7.13. Native Mask still loads `MaskStore` when
+an in-memory `asset_key` is present (legacy raster tests). Ordinary adjustment Mask writes still
+fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned. Packaged viewer/performance
+qualification is NM7.14–NM7.15. Metal parameterized Mix was not executed on this Windows host.
 
 ### NM7.11 — Add project-owned cache storage and maintenance
 

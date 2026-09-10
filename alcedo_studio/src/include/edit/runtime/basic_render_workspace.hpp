@@ -288,19 +288,18 @@ class BasicRenderWorkspace {
 
  private:
   /**
-   * @brief Drop published images that this frame cannot reuse.
+   * @brief Drop published images this Interactive frame cannot display.
    *
-   * Revision mismatches are always dropped. Interactive frames also drop results
-   * whose representation identity no longer matches (crop, viewport, decode).
-   * QualityBase keeps revision-current Interactive results even when this frame's
-   * extent differs.
+   * Interactive drops results whose representation identity no longer matches
+   * (crop, viewport, decode). A newer required revision alone does not drop
+   * last-good Mix, Union, or Grade: a failed encode must keep the prior published
+   * result until a successful publish replaces it. QualityBase keeps published
+   * Interactive results even when this frame's extent differs.
    */
   void DropUnusablePublishedImages() {
     images_.DropStalePublished([this](const GraphValueId& id, RuntimeRevision revision,
                                       const ResultRepresentation& published) {
-      if (!invalidation_.HasCurrentRevision(id, revision)) {
-        return false;
-      }
+      (void)revision;
       if (persistence_scope_ == ResultPersistenceScope::SensorDevelopOnly) {
         return true;
       }

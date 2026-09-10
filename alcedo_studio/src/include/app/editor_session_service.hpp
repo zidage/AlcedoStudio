@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -299,6 +300,17 @@ class IEditorSessionBackend {
    * synchronize this read with their Mask command queue.
    */
   [[nodiscard]] virtual auto mask_creation_commands_pending() const -> bool { return false; }
+  /**
+   * @brief Copy of queued Mask-creation commands. Empty when none are waiting.
+   *
+   * Synchronized with the Mask command queue. Latest non-ordered Append samples
+   * with the same pointer identity are already coalesced. Does not take the
+   * render lock or mutate the live Grade.
+   */
+  [[nodiscard]] virtual auto PeekPendingMaskCommands() const
+      -> std::vector<EditorMaskCreationCommand> {
+    return {};
+  }
   [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
   [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
   [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
@@ -495,6 +507,8 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override;
   [[nodiscard]] auto mask_creation_commands_pending() const -> bool override;
+  [[nodiscard]] auto PeekPendingMaskCommands() const
+      -> std::vector<EditorMaskCreationCommand> override;
   [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
     return mask_creation_.node_id();
   }
