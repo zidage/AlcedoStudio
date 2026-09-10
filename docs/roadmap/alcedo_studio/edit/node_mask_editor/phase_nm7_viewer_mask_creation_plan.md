@@ -2,16 +2,17 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.10 complete; NM7.11–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.11 complete; NM7.12–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
 NM7.7 Radial/Linear creation plus existing-mask movement, NM7.8 parameter-mask
 controls, drawer selection/deletion, and crop-style Gradient, NM7.9 accumulating
-Brush paint/erase/move with typed stroke history, and NM7.10 serial Interactive Mix
-with one current Grade coverage result. Some former NM7.11 UI wiring
-(now NM7.12) was brought forward for Radial/Gradient testing. This is partial
-wiring of the full UI phase. NM7.11–NM7.15 acceptance remains outstanding.
+Brush paint/erase/move with typed stroke history, NM7.10 serial Interactive Mix
+with one current Grade coverage result, and NM7.11 project Mix-cache storage plus
+Keep/DeleteOnProjectClose cleanup. Some former NM7.11 UI wiring (now NM7.12) was
+brought forward for Radial/Gradient testing. This is partial wiring of the full UI
+phase. NM7.12–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1632,6 +1633,68 @@ Clear → maintenance boundary → stop old writer → delete only owned cache �
 `CloseCleanupRunsAfterParameterSaveAndReadersFinish`.
 
 **Exit:** new cache namespace can be completely removed without losing any supported edit/Version.
+
+##### Phase NM7.11 completion record (2026-09-10)
+
+**Status:** complete — project Mix-cache settings, one-slot writeback, Clear, root change, and close cleanup
+
+**Primary success call chain:**
+
+```text
+SetMaskCacheRoot / SetMaskCacheRetention
+  -> PrepareNamespace (no temp substitution)
+  -> SaveProject writes mask_cache in metadata JSON
+  -> ProjectMaskCacheService::PublishChosenRoot / EnqueueSettledWrite
+  -> coalesced writer -> temp file + checksum -> atomic replace
+     <chosen-root>/alcedo-mask-cache/<ProjectUUID>/<ImageId>/<hex(NodeId)>.r8cache
+PersistCurrentProjectState / CloseAfterSuccessfulSave(Keep)
+  -> FlushPendingWrites
+DeleteOnProjectClose after parameter save
+  -> close_cleanup_pending persisted
+  -> wait readers/writers -> delete owned .r8cache only
+```
+
+**Primary failure call chain:**
+
+```text
+unusable new root or settings-revision mismatch
+  -> no metadata write of the new root; previous files retained
+publish hook / I/O failure
+  -> temp removed; last-good slot kept; dirty retained; stroke JSON/history untouched
+Clear / generation bump while a writer is in-flight
+  -> old generation refuses atomic replace; cleared namespace stays empty
+unavailable configured root
+  -> error string; no process-temp fallback
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ProjectMaskCacheSettingsSurviveSaveAndReopen` | `ProjectMaskCacheServiceTest` | PASS |
+| `ThousandStrokesKeepOneRasterSlot` | `ProjectMaskCacheServiceTest` | PASS |
+| `CacheClearCannotDeleteAnotherProjectsFiles` | `ProjectMaskCacheServiceTest` | PASS |
+| `OldWriterCannotRecreateClearedCache` | `ProjectMaskCacheServiceTest` | PASS |
+| `RootChangeFailurePreservesOldSetting` | `ProjectMaskCacheServiceTest` | PASS |
+| `CacheWriteFailureDoesNotLoseStrokeHistory` | `ProjectMaskCacheServiceTest` | PASS |
+| `CloseCleanupRunsAfterParameterSaveAndReadersFinish` | `ProjectMaskCacheServiceTest` | PASS |
+| Existing UUID save/load (metadata still round-trips) | `ProjectServiceTest` | PASS `6/6` |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target ProjectMaskCacheServiceTest
+ctest --test-dir build/debug --output-on-failure -R "ProjectMaskCacheSettingsSurviveSaveAndReopen|ThousandStrokesKeepOneRasterSlot|CacheClearCannotDeleteAnotherProjectsFiles|OldWriterCannotRecreateClearedCache|RootChangeFailurePreservesOldSetting|CacheWriteFailureDoesNotLoseStrokeHistory|CloseCleanupRunsAfterParameterSaveAndReadersFinish"
+ctest --test-dir build/debug --output-on-failure -R "ProjectServiceTest."
+```
+
+Suite totals: required names `7/7` PASS; `ProjectMaskCacheServiceTest` `7/7` PASS; `ProjectServiceTest` `6/6` PASS. Date / working tree on `feature/project-mask-cache` / Windows MSVC `win_debug`. Packages still contain only metadata JSON plus the DuckDB file (no `.r8cache`). `.r8mask` files are not deleted by Clear.
+
+**Checklist / exit condition:** required tests PASS. Settings survive Save, Load, and packed reopen. One thousand coalesced writes leave one published slot. Clear of project A leaves project B and `.r8mask` files. A fenced in-flight writer cannot recreate a cleared slot. Failed root change keeps the previous setting and files. Failed cache publish leaves stroke JSON and project metadata intact. DeleteOnProjectClose waits for a held reader, then removes only the Mix-cache namespace after the parameter save.
+
+**LOC note (grill-code-review):** `project_mask_cache_service.hpp` 226 / `.cpp` 745; `project_mask_cache_settings.hpp` 80 / `.cpp` 159; `project_service.hpp` 118 / `.cpp` 742; `project_mask_cache_service_test.cpp` 319. The cache writer owns generation, coalesced pending slots, and namespace deletion. ProjectService owns metadata keys, revision, and close-cleanup persistence. No file crossed 1000 lines.
+
+**Residual gaps:** the serial Interactive Mix owner (GraphImageCache / PlanExecutor) does not yet call `EnqueueSettledWrite`; save/close flush the cache writer, but a settled native Mix is not copied onto disk until that enqueue exists. Mask Adjustment Stack cache UI, root chooser, and Clear copy are NM7.12. Open-operation cancel and project-switch fencing of in-flight cache jobs beyond the current close/switch hooks are NM7.13. Native Mix rebuild after a cacheless reopen is NM7.14. `RemoveRecentProject` still only edits the recent list (KeepFiles). Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain planned.
 
 ### NM7.12 — Wire Mask editing and project cache UI
 

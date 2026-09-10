@@ -258,12 +258,14 @@ def_library(ModelDownloadService
 def_library(ProjectService
     SOURCES
         "${ALCEDO_APP_ROOT}/project_service.cpp"
+        "${ALCEDO_APP_ROOT}/project_mask_cache_settings.cpp"
+        "${ALCEDO_APP_ROOT}/project_mask_cache_service.cpp"
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
     PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
                 AiSidecarRuntimeService ModelDownloadService
-                StrConv JSON xxHash stduuid
+                StrConv JSON xxHash stduuid EditMaskStore
     PRIVATE_DEPS
         AppDiagnostics
         Qt6::Core
