@@ -2,14 +2,15 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.8 complete; NM7.9–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.9 complete; NM7.10–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
-NM7.7 Radial/Linear creation plus existing-mask movement, and NM7.8 parameter-mask
-controls, drawer selection/deletion, and crop-style Gradient. Some former NM7.11 UI
-wiring (now NM7.12) was brought forward for Radial/Gradient testing. This is partial
-wiring of the full UI phase. NM7.9–NM7.15 acceptance remains outstanding.
+NM7.7 Radial/Linear creation plus existing-mask movement, NM7.8 parameter-mask
+controls, drawer selection/deletion, and crop-style Gradient, and NM7.9 accumulating
+Brush paint/erase/move with typed stroke history. Some former NM7.11 UI wiring
+(now NM7.12) was brought forward for Radial/Gradient testing. This is partial
+wiring of the full UI phase. NM7.10–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1415,6 +1416,89 @@ release → corresponding single typed command → Quality.
 `UndoLastStrokePreservesEarlierStrokes`, `BrushReleaseCreatesNoHistoricalRasterFile`.
 
 **Exit:** paint/erase/move/Undo/Redo work after deleting caches, with stable MaskId and StrokeIds.
+
+##### Phase NM7.9 completion record (2026-09-10)
+
+**Status:** complete — one accumulating Brush per Grade for header-created work; paint/erase
+append canonical strokes; Move sets placement without rewriting samples; first release is
+AddMask, later strokes are AppendBrushStroke, moves are SetBrushTranslation.
+
+**Primary success call chain:**
+
+```text
+header beginBrush / BeginCreation(Brush)
+  -> BeginMaskInput (first dab; Paint or Erase)
+  -> BrushMaskInput + ColorGradeNodeModel AddMask (provisional first stroke)
+     or ReplaceMaskSource (draft on an existing Brush)
+  -> Interactive GradeMaskCoverage::EvaluateFull
+  -> FinishMaskInput
+  -> MakeAddMaskBatch (first stroke) or MakeAppendBrushStrokeBatch
+  -> history AppendEdit / PublishAppliedTypedBatch (document already at after)
+  -> Quality requested
+
+SetBrushTool(Move) + BeginMaskMove(BrushMove)
+  -> SetBrushTranslation live (canonical samples unchanged)
+  -> Interactive GradeMaskCoverage::EvaluateFull
+  -> MakeSetBrushTranslationBatch(before, after)
+  -> history AppendEdit / PublishAppliedTypedBatch
+  -> Quality requested
+```
+
+**Primary failure call chain:**
+
+```text
+Escape / cancel of an unfinished first stroke
+  -> RestoreLive RemoveMask of the provisional Brush
+  -> history head unchanged; Grade Mask list empty
+
+several existing Brushes and header BeginCreation without a named Brush
+  -> reject "select an existing Brush before painting"
+  -> document unchanged
+
+Brush Move
+  -> no AppendBrushStroke; sample bodies stay shared
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MultipleStrokesUseOneBrushMask` | `AccumulatingBrushCreationTest` | PASS |
+| `SizeAndStrengthChangesPersistInStrokeSamples` | `AccumulatingBrushCreationTest` | PASS |
+| `MovingExistingBrushUpdatesInteractivePixels` | `AccumulatingBrushCreationTest` | PASS |
+| `BrushMoveDoesNotAppendStroke` | `AccumulatingBrushCreationTest` | PASS |
+| `UndoLastStrokePreservesEarlierStrokes` (Undo + Redo) | `AccumulatingBrushCreationTest` | PASS |
+| `BrushReleaseCreatesNoHistoricalRasterFile` | `AccumulatingBrushCreationTest` | PASS |
+| `HeaderBrushResumesSingleExistingBrush` | `AccumulatingBrushCreationTest` | PASS |
+| `HeaderBrushWithMultipleExistingBrushesRequiresSelection` | `AccumulatingBrushCreationTest` | PASS |
+| `DefaultBrushRadiusIsTwoPercentDiameterOfShorterEdge` | `AccumulatingBrushCreationTest` | PASS |
+| `CancelledFirstStrokeLeavesGradeUnchanged` | `AccumulatingBrushCreationTest` | PASS |
+| `DraftSamplesExposeOpenStrokeWithoutSealing` | `BrushCanonicalSamplerTest` | PASS |
+| Analytic creation/movement and header Mask buttons | `AnalyticMaskCreationTest`, `EditorAdjustmentHeaderQmlTest` | PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AccumulatingBrushCreationTest --target BrushCanonicalSamplerTest --target AnalyticMaskCreationTest --target EditorAdjustmentHeaderQmlTest`
+`ctest --test-dir build/debug --output-on-failure -R "AccumulatingBrushCreationTest|BrushCanonicalSamplerTest|AnalyticMaskCreationTest|EditorAdjustmentHeaderQmlTest"`
+
+Suite totals: `47/47` PASS. Date / working tree on `feature/accumulating-brush-paint-erase-move` (base `0e890073`) / Windows MSVC `win_debug`. Interactive Mix in these tests is host `GradeMaskCoverage`; no GPU Mask pass in this phase. Ordered paint/erase Append is not coalesced (`ordered_append`); analytic and Brush-move Append still coalesce.
+
+**Checklist / exit condition:** required tests PASS. Paint and erase accumulate on one MaskId with stable StrokeIds. Size/strength boundaries persist in the sample body. Move updates Mix R8 before history and does not append a stroke. Undo of the last stroke keeps earlier strokes; Redo restores the erased stroke. First-stroke release JSON has no `asset_key` or `ReplaceMaskAsset`. Header resume of a single existing Brush and rejection when several Brushes exist without a named target are covered. No project Mix-cache files existed to delete (that storage is NM7.11); `BrushReleaseCreatesNoHistoricalRasterFile` shows the owner path does not write raster history.
+
+**LOC note (grill-code-review):** `editor_mask_creation_controller.cpp` 1069 / `.hpp` 318,
+`brush_mask_input.cpp` 49 / `.hpp` 82, `editor_mask_creation_adapter.cpp` 1159 / `.hpp` 168,
+`accumulating_brush_creation_test.cpp` 367, `brush_canonical_sampler.hpp` 86 / `.cpp` 126.
+`BrushMaskInput` owns the open-stroke sampler and dab settings. The controller still orchestrates
+analytic creation plus Brush paint/erase/move above the 1000-line mark; a later split should be a
+second owner (Brush vs analytic), not a method-file split. The adapter remains the QML command
+bridge and overlay publisher; Brush overlay geometry stays in `mask_overlay_layout`.
+
+**Remaining gaps:** native serial Interactive Mix and one Grade R8 slot are NM7.10. Project
+Mix-cache slot, keep/delete-on-close, and Clear are NM7.11. Mask Adjustment Stack paint/erase/
+size/strength/Move chrome and the 260/320/460 theme matrix are NM7.12. Open-operation cancel on
+`MappingChanged` is NM7.13. Header `beginBrush` is wired; the Mask page does not yet expose Brush
+tool settings. Native Mask still loads `MaskStore` when an in-memory `asset_key` is present.
+Ordinary adjustment Mask writes still fail with the existing “until NM3” text. NM6.8–NM6.9 remain
+planned.
 
 ### NM7.10 — Integrate serial Interactive evaluation and one current Grade R8
 

@@ -1274,6 +1274,29 @@ alcedo_ui_gtest_discover_tests(AnalyticMaskCreationTest
     PROPERTIES LABELS "mask_creation;interaction")
 alcedo_register_test_target(AnalyticMaskCreationTest ui)
 
+add_executable(AccumulatingBrushCreationTest
+    ${ALCEDO_TEST_ROOT}/ui/accumulating_brush_creation_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(AccumulatingBrushCreationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph ${ALCEDO_TEST_ROOT}/edit/mask
+)
+target_link_libraries(AccumulatingBrushCreationTest
+    PRIVATE
+        EditorMaskCreationController
+        EditorViewerLogic
+        EditGraph
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+)
+alcedo_ui_gtest_discover_tests(AccumulatingBrushCreationTest
+    TEST_PREFIX "AccumulatingBrushCreationTest."
+    PROPERTIES LABELS "mask_creation;interaction")
+alcedo_register_test_target(AccumulatingBrushCreationTest ui)
+
 # Real-project regression: replay production Main.qml Copy/Paste and verify
 # that a reopened target publishes the saved Tone values to its QML models.
 add_executable(EditorAdjustmentTransferRealProjectE2eTest

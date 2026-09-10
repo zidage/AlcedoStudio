@@ -67,6 +67,7 @@ class FakeMaskCreation final : public QObject {
 
   Q_INVOKABLE void beginRadial() { Open(QStringLiteral("radial"), true); }
   Q_INVOKABLE void beginLinear() { Open(QStringLiteral("linear"), true); }
+  Q_INVOKABLE void beginBrush() { Open(QStringLiteral("brush"), true); }
   Q_INVOKABLE void cancel() { Close(); }
   Q_INVOKABLE void hideBody() { finishBody(); }
   Q_INVOKABLE void finishBody() {

@@ -134,4 +134,11 @@ void BrushCanonicalSampler::CancelStroke() {
   samples_.clear();
 }
 
+auto BrushCanonicalSampler::DraftSamples() const -> std::span<const BrushCanonicalSample> {
+  if (!open_) {
+    return {};
+  }
+  return samples_;
+}
+
 }  // namespace alcedo

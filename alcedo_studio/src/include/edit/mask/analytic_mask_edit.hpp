@@ -39,6 +39,7 @@ enum class AnalyticMaskHandle : std::uint8_t {
   LinearDirection      = 8,
   LinearStartBoundary  = 9,
   LinearEndBoundary    = 10,
+  BrushMove            = 11,
 };
 
 /**

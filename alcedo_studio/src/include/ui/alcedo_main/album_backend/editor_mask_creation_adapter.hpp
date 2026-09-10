@@ -6,10 +6,12 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QPointF>
 #include <QRectF>
 #include <QString>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "app/editor_mask_creation_controller.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -47,6 +49,9 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal minorRadiusPercent READ minor_radius_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal rotationDegrees READ rotation_degrees NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal transitionPercent READ transition_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushRadius READ brush_radius NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushStrengthPercent READ brush_strength_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString brushTool READ brush_tool_name NOTIFY maskCreationChanged)
 
  public:
   enum class EditMode : std::uint8_t {
@@ -72,11 +77,20 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto minor_radius_percent() const -> qreal;
   [[nodiscard]] auto rotation_degrees() const -> qreal;
   [[nodiscard]] auto transition_percent() const -> qreal;
+  [[nodiscard]] auto brush_radius() const -> qreal { return static_cast<qreal>(brush_radius_); }
+  [[nodiscard]] auto brush_strength_percent() const -> qreal {
+    return static_cast<qreal>(brush_strength_) * 100.0;
+  }
+  [[nodiscard]] auto brush_tool_name() const -> QString;
 
   Q_INVOKABLE void   bindInteractionItem(QObject* interaction);
   Q_INVOKABLE void   bindOverlayItem(QObject* overlay);
   Q_INVOKABLE void   beginRadial();
   Q_INVOKABLE void   beginLinear();
+  Q_INVOKABLE void   beginBrush();
+  Q_INVOKABLE void   setBrushTool(const QString& tool);
+  Q_INVOKABLE void   setBrushRadius(qreal radius);
+  Q_INVOKABLE void   setBrushStrengthPercent(qreal percent);
   Q_INVOKABLE void   cancel();
   Q_INVOKABLE void   hideBody();
   Q_INVOKABLE void   finishBody();
@@ -116,6 +130,10 @@ class EditorMaskCreationAdapter : public QObject {
 
  private:
   void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
+  void               BeginBrushTool();
+  [[nodiscard]] auto ResolveBrushResumeMask(const NodeId& grade_id) const -> MaskId;
+  [[nodiscard]] auto BrushRadiusLogicalPx(const MaskCreationSample& sample) const -> float;
+  void               EnqueueBrushSettings(EditorMaskCreationCommand& command) const;
   void               ResetLocal();
   void               PublishOverlay();
   void               HideOverlay();
@@ -149,11 +167,18 @@ class EditorMaskCreationAdapter : public QObject {
   bool                                              open_        = false;
   MaskPointerIdentity                               pointer_{};
   Vector2                                           press_normalized_{};
+  Vector2                                           press_reference_pixels_{};
+  Vector2                                           brush_placement_before_{};
   std::optional<MaskSource>                         overlay_source_;
   MaskOverlayDisplay                                overlay_display_{};
   AnalyticMaskHandle                                active_handle_    = AnalyticMaskHandle::None;
   MaskOverlayHandleId                               hovered_handle_   = MaskOverlayHandleId::None;
   std::uint64_t                                     next_sequence_id_ = 1;
+  EditorBrushTool                                   brush_tool_       = EditorBrushTool::Idle;
+  float                                             brush_radius_     = 0.0f;
+  float                                             brush_strength_   = 1.0f;
+  float                                             brush_hardness_   = 1.0f;
+  std::vector<QPointF>                              brush_item_path_;
 };
 
 }  // namespace alcedo::ui

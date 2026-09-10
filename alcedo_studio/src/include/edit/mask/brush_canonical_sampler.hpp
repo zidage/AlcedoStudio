@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <span>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
@@ -69,6 +70,13 @@ class BrushCanonicalSampler {
    * @brief Drop an unfinished stroke. Idle when already closed.
    */
   void CancelStroke();
+
+  /**
+   * @brief Samples emitted so far on the open stroke, excluding a pending endpoint.
+   *
+   * Empty when idle. Does not copy the vector. Valid until the next mutating call.
+   */
+  [[nodiscard]] auto DraftSamples() const -> std::span<const BrushCanonicalSample>;
 
   [[nodiscard]] auto IsOpen() const -> bool { return open_; }
   [[nodiscard]] auto Mode() const -> BrushStrokeMode { return mode_; }
