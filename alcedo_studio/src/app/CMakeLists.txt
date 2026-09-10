@@ -444,7 +444,9 @@ target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorA
 def_library(EditorMaskCreationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_mask_creation_controller.cpp"
+        "${ALCEDO_APP_ROOT}/brush_mask_input.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_creation_controller.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/brush_mask_input.hpp"
     PUBLIC_DEPS EditGraph PipelineHistoryApplier
 )
 

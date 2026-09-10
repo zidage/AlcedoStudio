@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "edit/geometry/types.hpp"
@@ -12,6 +13,20 @@
 #include "edit/mask/mask_id.hpp"
 
 namespace alcedo {
+
+/**
+ * @brief Initial dab radius: 2% diameter of the shorter full-reference edge.
+ *
+ * Strength and hardness stay at 1. Empty extents yield radius 1 so a later
+ * validator can still reject a missing photograph instead of dividing by zero.
+ */
+[[nodiscard]] inline auto DefaultBrushRadiusReferencePixels(Extent2D full_reference) -> float {
+  const auto shorter = (std::min)(full_reference.width, full_reference.height);
+  if (shorter == 0) {
+    return 1.0f;
+  }
+  return 0.01f * static_cast<float>(shorter);
+}
 
 /**
  * @brief Convert a world ReferenceSpace pixel to Brush-local coordinates.

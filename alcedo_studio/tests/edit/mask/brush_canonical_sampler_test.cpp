@@ -67,6 +67,19 @@ TEST(BrushCanonicalSampler, ParameterBoundaryKeepsSizeChangeAtCurrentPoint) {
   EXPECT_EQ(sampler.Mode(), BrushStrokeMode::Erase);
 }
 
+TEST(BrushCanonicalSampler, DraftSamplesExposeOpenStrokeWithoutSealing) {
+  BrushCanonicalSampler sampler;
+  sampler.BeginStroke(BrushStrokeMode::Paint, {4.0f, 6.0f}, {}, 8.0f, 1.0f, 1.0f);
+  const auto draft = sampler.DraftSamples();
+  ASSERT_EQ(draft.size(), 1u);
+  EXPECT_FLOAT_EQ(draft.front().local_x, 4.0f);
+  sampler.AppendReference({12.0f, 6.0f});
+  EXPECT_GE(sampler.DraftSamples().size(), 1u);
+  const auto finished = sampler.FinishStroke();
+  EXPECT_TRUE(sampler.DraftSamples().empty());
+  EXPECT_GE(finished.size(), 2u);
+}
+
 TEST(BrushCanonicalSampler, CancelAndInvalidInputLeaveNoOpenStroke) {
   BrushCanonicalSampler sampler;
   EXPECT_THROW(sampler.AppendReference({1.0f, 1.0f}), std::runtime_error);
