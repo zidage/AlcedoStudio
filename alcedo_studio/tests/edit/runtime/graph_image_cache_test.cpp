@@ -244,5 +244,30 @@ TEST_F(CudaWorkspaceFixture, SharedInputSurvivesBothBranchReaders) {
   EXPECT_EQ(workspace.Textures().EntryCount(), 1U);
 }
 
+TEST_F(CudaWorkspaceFixture, DelayedOldFrameCannotReplaceNewMaskPosition) {
+  CudaRenderDevice device;
+  auto&            workspace = device.Workspace();
+  const GraphValueId mix{NodeId{"grade.primary"}, PortId{"mask.union"}};
+  constexpr RuntimeRevision newer = 20;
+  constexpr RuntimeRevision older = 10;
+  PublishWrite(device, mix, newer);
+  const auto resource_new = workspace.Images().Find(mix)->Texture().ResourceId();
+  ASSERT_EQ(workspace.Images().PublishedRevision(mix), newer);
+  EXPECT_EQ(workspace.Images().PublishedCount(), 1U);
+
+  device.BeginRender();
+  (void)workspace.AcquireImageForWrite(mix, {kWidth, kHeight, TextureFormat::Rgba32f});
+  workspace.Images().RecordUnpublished(mix, older, ImageRepr(),
+                                       device.CommandContext().SubmissionId());
+  device.EndRender();
+  device.PublishResults();
+  device.WaitIdle();
+
+  EXPECT_EQ(workspace.Images().PublishedRevision(mix), newer);
+  EXPECT_EQ(workspace.Images().Find(mix)->Texture().ResourceId(), resource_new);
+  EXPECT_EQ(workspace.Images().PublishedCount(), 1U);
+  EXPECT_EQ(workspace.Images().UnpublishedCount(), 0U);
+}
+
 }  // namespace
 }  // namespace alcedo

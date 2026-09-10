@@ -313,6 +313,13 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   } else if (const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source)) {
     const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
                                                    compiled_source.mask_id);
+    ActiveRasterMaskInput parameterized_replay;
+    if (active == nullptr && BrushUsesParameterizedReplay(*brush)) {
+      parameterized_replay = ParameterizedBrushActiveRasterForGrade(
+          document, compiled_grade.node_id, compiled_source.mask_id, *brush,
+          plan.geometry.full_reference_extent);
+      active = &parameterized_replay;
+    }
     const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
                                      bool raster_bytes_changed) {
       result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
@@ -450,10 +457,6 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
     } else {
       if (store == nullptr)
         throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
-      if (!brush->asset_key.has_value() || brush->asset_key->Empty()) {
-        MaskFillZeroKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
-            static_cast<std::uint8_t*>(output.Texture().DevicePointer()), render_pixels);
-      } else {
       const auto asset  = store->Load(*brush->asset_key);
       const bool cached = workspace.MaskTextures().Contains(asset->key);
       auto       source = workspace.MaskTextures().Acquire(asset->key, asset->descriptor.extent);
@@ -462,7 +465,6 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         upload_full(source, asset->pixels);
       }
       encode_coverage(source, asset->descriptor, !cached);
-      }
     }
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");

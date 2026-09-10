@@ -1220,6 +1220,12 @@ auto EditorSessionService::mask_creation_commands_pending() const -> bool {
   return !pending_mask_commands_.empty();
 }
 
+auto EditorSessionService::PeekPendingMaskCommands() const
+    -> std::vector<EditorMaskCreationCommand> {
+  std::scoped_lock lock(mask_command_mutex_);
+  return pending_mask_commands_;
+}
+
 auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {
   return pending_input_.Peek();
 }

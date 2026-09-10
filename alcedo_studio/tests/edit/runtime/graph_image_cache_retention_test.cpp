@@ -320,9 +320,7 @@ TEST(GraphImageCacheRetention, ExtraLeaseKeepsDisplayedTextureAfterStalePublishD
 auto KeepPublishedForInteractive(HostRetentionHarness& harness, const GraphValueId& id,
                                  RuntimeRevision revision, const ResultRepresentation& published)
     -> bool {
-  if (!harness.invalidation.HasCurrentRevision(id, revision)) {
-    return false;
-  }
+  (void)revision;
   const auto needed = harness.invalidation.MakeImageRepresentation(
       id, published.extent, published.format, published.source_detail);
   return RepresentationSatisfies(published, needed);
@@ -337,6 +335,33 @@ void PublishWithFrameIdentity(HostRetentionHarness& harness, const GraphValueId&
   harness.cache.RecordUnpublished(id, required, needed, 1);
   harness.cache.PublishSuccessfulSubmission(1, ResultPersistenceScope::AllCurrentResults,
                                             harness.Sensor());
+}
+
+TEST(GraphImageCacheRetention, LastGoodGradeSurvivesExposureRevisionWhenFrameIdentityMatches) {
+  HostRetentionHarness     harness;
+  constexpr TextureRequest kRgba{8, 8, TextureFormat::Rgba32f};
+  PublishWithFrameIdentity(harness, harness.Sensor(), kRgba);
+  PublishWithFrameIdentity(harness, harness.Geometry(), kRgba);
+  PublishWithFrameIdentity(harness, harness.Grade(), kRgba);
+  const auto grade_handle = harness.cache.Find(harness.Grade())->Handle();
+  const auto grade_rev    = harness.cache.PublishedRevision(harness.Grade());
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.5f);
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  ASSERT_NE(harness.invalidation.RequiredRevision(harness.Grade()), grade_rev);
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
+                                       const ResultRepresentation& published) {
+    return KeepPublishedForInteractive(harness, id, revision, published);
+  });
+
+  ASSERT_NE(harness.cache.Find(harness.Grade()), nullptr);
+  EXPECT_EQ(harness.cache.Find(harness.Grade())->Handle(), grade_handle);
+  EXPECT_EQ(harness.cache.PublishedRevision(harness.Grade()), grade_rev);
+  EXPECT_FALSE(harness.invalidation.HasCurrentRevision(harness.Grade(), grade_rev));
 }
 
 TEST(GraphImageCacheRetention, CropMismatchesFrameIdentityDropsGeometryAndFreesOldExtent) {

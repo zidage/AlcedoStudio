@@ -424,6 +424,19 @@ gtest_discover_tests(EditorSerialFrameConsumptionTest
     PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(EditorSerialFrameConsumptionTest app ci_core)
 
+add_executable(EditorSerialMaskInteractiveTest
+    ${ALCEDO_TEST_ROOT}/app/editor_serial_mask_interactive_test.cpp)
+target_include_directories(EditorSerialMaskInteractiveTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorSerialMaskInteractiveTest
+    PRIVATE EditorSessionService EditorSessionCommandQueue EditGraph EditHistory xxHash JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSerialMaskInteractiveTest
+    TEST_PREFIX "EditorSerialMaskInteractiveTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorSerialMaskInteractiveTest app ci_core)
+
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionServiceFacadeTest
