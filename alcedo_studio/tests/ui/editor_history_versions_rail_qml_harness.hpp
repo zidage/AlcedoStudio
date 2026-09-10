@@ -22,6 +22,7 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QuickQanava>
 #include <algorithm>
 #include <filesystem>
 #include <functional>
@@ -40,8 +41,6 @@
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
-#include <QuickQanava>
-
 namespace alcedo::ui::test {
 namespace rail_harness {
 
@@ -59,31 +58,31 @@ inline auto MakeVersion(const Hash128& id, std::string name, const head_commit_h
   return version;
 }
 
-inline auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
-                       std::string after_value_json,
-                       const head_commit_hash_t&     first_parent  = std::nullopt,
-                       EditorHistoryTimelinePosition position =
-                           EditorHistoryTimelinePosition::Applied) -> EditorHistoryCommit {
+inline auto MakeCommit(
+    const Hash128& id, std::string field_key, std::string before_value_json,
+    std::string after_value_json, const head_commit_hash_t& first_parent = std::nullopt,
+    EditorHistoryTimelinePosition position = EditorHistoryTimelinePosition::Applied)
+    -> EditorHistoryCommit {
   EditorHistoryCommit commit;
-  commit.commit_hash        = id;
-  commit.first_parent_hash  = first_parent;
-  commit.created_at_ns      = id.low64();
-  commit.field_key          = std::move(field_key);
-  commit.before_value_json  = std::move(before_value_json);
-  commit.after_value_json   = std::move(after_value_json);
-  commit.before_enabled     = true;
-  commit.after_enabled      = true;
-  commit.position           = position;
+  commit.commit_hash       = id;
+  commit.first_parent_hash = first_parent;
+  commit.created_at_ns     = id.low64();
+  commit.field_key         = std::move(field_key);
+  commit.before_value_json = std::move(before_value_json);
+  commit.after_value_json  = std::move(after_value_json);
+  commit.before_enabled    = true;
+  commit.after_enabled     = true;
+  commit.position          = position;
   return commit;
 }
 
 class RecordingEditorSessionBackend final : public IEditorSessionBackend {
  public:
   RecordingEditorSessionBackend() {
-    const auto first_version   = StableId(1);
-    const auto second_version  = StableId(2);
-    const auto first_commit    = StableId(11);
-    const auto second_commit   = StableId(12);
+    const auto first_version    = StableId(1);
+    const auto second_version   = StableId(2);
+    const auto first_commit     = StableId(11);
+    const auto second_commit    = StableId(12);
 
     snapshot_.active_version_id = first_version;
     snapshot_.active_head       = second_commit;
@@ -110,7 +109,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
   [[nodiscard]] auto action_availability() const -> alcedo::EditorActionAvailability override {
     alcedo::EditorActionAvailability availability;
-    auto allow = [&](alcedo::EditorAction action, bool enabled) {
+    auto                             allow = [&](alcedo::EditorAction action, bool enabled) {
       availability.decisions[static_cast<std::size_t>(action)].allowed = enabled;
     };
     allow(alcedo::EditorAction::Undo, snapshot_.can_undo);
@@ -180,7 +179,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
       -> EditorSessionResult override {
     last_branch_name_ = display_name;
-    const auto id = StableId(next_version_id_++);
+    const auto id     = StableId(next_version_id_++);
     for (auto& version : snapshot_.versions) version.active = false;
     snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), commit_id, true));
     snapshot_.active_version_id = id;
@@ -264,6 +263,32 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("View changed");
   }
 
+  auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override {
+    mask_commands_pending_ = true;
+    mask_commands_.push_back(std::move(command));
+    return Accepted("Mask command queued");
+  }
+
+  [[nodiscard]] auto mask_creation_commands_pending() const -> bool override {
+    return mask_commands_pending_;
+  }
+
+  [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
+    return selected_mask_node_id_;
+  }
+
+  [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override { return selected_mask_id_; }
+
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
+    if (selected_mask_node_id_.Empty() || selected_mask_id_.Empty()) {
+      return std::nullopt;
+    }
+    const auto* node  = document_->Graph().FindNode(selected_mask_node_id_);
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+    const auto* mask  = grade == nullptr ? nullptr : grade->FindMask(selected_mask_id_);
+    return mask == nullptr ? std::nullopt : std::optional<MaskSource>{mask->source};
+  }
+
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override {
     if (fail_node_commands_) return Rejected("mini-Git journal append failed");
@@ -277,8 +302,8 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override {
     if (fail_node_commands_) return Rejected("mini-Git journal append failed");
-    const auto errors = ApplyNodeGraphTopologyChange(*document_, change,
-                                                     PipelineEditApplyDirection::Forward);
+    const auto errors =
+        ApplyNodeGraphTopologyChange(*document_, change, PipelineEditApplyDirection::Forward);
     if (!errors.empty()) return Rejected(errors.front().message.c_str());
     last_topology_change_ = std::move(change);
     ++edit_node_graph_count_;
@@ -319,16 +344,17 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     last_move_head_commit_ = commit_id;
     snapshot_.active_head  = commit_id;
     for (auto& commit : snapshot_.commits) {
-      commit.position = (commit.commit_hash == commit_id)
-                            ? EditorHistoryTimelinePosition::Current
-                            : EditorHistoryTimelinePosition::Applied;
+      commit.position = (commit.commit_hash == commit_id) ? EditorHistoryTimelinePosition::Current
+                                                          : EditorHistoryTimelinePosition::Applied;
     }
     NotifyHistoryChange();
     return Accepted("Head moved");
   }
 
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
-  [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override {
+    return history_revision_;
+  }
   [[nodiscard]] auto active_version_id() const -> version_ref_id_t override {
     return snapshot_.active_version_id;
   }
@@ -365,6 +391,9 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return last_topology_change_;
   }
   [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
+  [[nodiscard]] auto mask_commands() const -> const std::vector<EditorMaskCreationCommand>& {
+    return mask_commands_;
+  }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -386,6 +415,32 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
       return;
     }
     grade->AddMask(std::move(mask), grade->Masks().size());
+    NotifyHistoryChange();
+  }
+
+  void CompleteMaskCommands() {
+    for (const auto& command : mask_commands_) {
+      if (command.kind == EditorMaskCreationCommandKind::SelectMask) {
+        selected_mask_node_id_ = command.node_id;
+        selected_mask_id_      = command.mask_id;
+      } else if (command.kind == EditorMaskCreationCommandKind::RemoveMask) {
+        auto* node  = document_->Graph().FindNode(command.node_id);
+        auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+        if (grade != nullptr && grade->FindMask(command.mask_id) != nullptr) {
+          grade->RemoveMask(command.mask_id);
+        }
+        if (selected_mask_id_ == command.mask_id) {
+          selected_mask_node_id_ = {};
+          selected_mask_id_      = {};
+        }
+      } else if (command.kind == EditorMaskCreationCommandKind::FinishMode ||
+                 command.kind == EditorMaskCreationCommandKind::CancelMode) {
+        selected_mask_node_id_ = {};
+        selected_mask_id_      = {};
+      }
+    }
+    mask_commands_.clear();
+    mask_commands_pending_ = false;
     NotifyHistoryChange();
   }
 
@@ -414,46 +469,50 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyChange();
   }
 
-  std::uint64_t         history_revision_            = 0;
+  std::uint64_t                     history_revision_ = 0;
 
-  EditorSessionState    state_     = EditorSessionState::Interactive;
-  bool                  has_image_ = true;
-  EditorSessionIdentity identity_{1, 2};
-  EditorHistorySnapshot snapshot_;
+  EditorSessionState                state_            = EditorSessionState::Interactive;
+  bool                              has_image_        = true;
+  EditorSessionIdentity             identity_{1, 2};
+  EditorHistorySnapshot             snapshot_;
   std::shared_ptr<PipelineDocument> document_ =
       std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-  std::uint64_t         next_version_id_ = 20;
-  Hash128               last_checkout_id_;
-  Hash128               last_created_id_;
-  Hash128               last_rename_id_;
-  Hash128               last_removed_id_;
-  Hash128               last_move_head_commit_;
-  Hash128               last_branch_commit_;
-  std::string           last_branch_name_;
-  int                   checkout_count_              = 0;
-  int                   create_count_                = 0;
-  int                   rename_count_                = 0;
-  int                   remove_count_                = 0;
-  int                   move_head_count_             = 0;
-  int                   branch_count_                = 0;
-  int                   undo_count_                  = 0;
-  int                   redo_count_                  = 0;
-  int                   paste_count_                 = 0;
-  bool                  recovery_pending_            = false;
-  std::string           last_error_;
-  int                   retry_save_count_      = 0;
-  int                   discard_count_         = 0;
-  int                   cancel_recovery_count_ = 0;
-  bool                  block_version_ops_     = false;
-  bool                  fail_node_commands_    = false;
-  int                   blocked_create_count_  = 0;
-  int                   blocked_rename_count_  = 0;
-  int                   patch_count_           = 0;
-  int                   view_change_count_     = 0;
-  int                   rename_grade_count_    = 0;
-  int                   edit_node_graph_count_ = 0;
-  NodeGraphTopologyChange last_topology_change_{};
-  NodeId                last_renamed_node_id_;
+  std::uint64_t                          next_version_id_ = 20;
+  Hash128                                last_checkout_id_;
+  Hash128                                last_created_id_;
+  Hash128                                last_rename_id_;
+  Hash128                                last_removed_id_;
+  Hash128                                last_move_head_commit_;
+  std::vector<EditorMaskCreationCommand> mask_commands_;
+  NodeId                                 selected_mask_node_id_;
+  MaskId                                 selected_mask_id_;
+  bool                                   mask_commands_pending_ = false;
+  Hash128                                last_branch_commit_;
+  std::string                            last_branch_name_;
+  int                                    checkout_count_   = 0;
+  int                                    create_count_     = 0;
+  int                                    rename_count_     = 0;
+  int                                    remove_count_     = 0;
+  int                                    move_head_count_  = 0;
+  int                                    branch_count_     = 0;
+  int                                    undo_count_       = 0;
+  int                                    redo_count_       = 0;
+  int                                    paste_count_      = 0;
+  bool                                   recovery_pending_ = false;
+  std::string                            last_error_;
+  int                                    retry_save_count_      = 0;
+  int                                    discard_count_         = 0;
+  int                                    cancel_recovery_count_ = 0;
+  bool                                   block_version_ops_     = false;
+  bool                                   fail_node_commands_    = false;
+  int                                    blocked_create_count_  = 0;
+  int                                    blocked_rename_count_  = 0;
+  int                                    patch_count_           = 0;
+  int                                    view_change_count_     = 0;
+  int                                    rename_grade_count_    = 0;
+  int                                    edit_node_graph_count_ = 0;
+  NodeGraphTopologyChange                last_topology_change_{};
+  NodeId                                 last_renamed_node_id_;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -471,7 +530,7 @@ class RecordingAdjustmentTransfer final : public QObject {
   Q_PROPERTY(bool packageAvailable READ packageAvailable CONSTANT)
 
  public:
-  [[nodiscard]] auto packageAvailable() const -> bool { return true; }
+  [[nodiscard]] auto      packageAvailable() const -> bool { return true; }
 
   Q_INVOKABLE QVariantMap PasteIntoEditor(QObject*) {
     ++paste_count_;
@@ -485,7 +544,7 @@ class RecordingAdjustmentTransfer final : public QObject {
   int paste_count_ = 0;
 };
 
-inline constexpr char kHarnessQml[] = R"(
+inline constexpr char kHarnessQml[]         = R"(
 import QtQuick
 import QtQuick.Controls
 
@@ -540,7 +599,7 @@ ApplicationWindow {
 }
 )";
 
-inline auto QmlDirectory() -> QString {
+inline auto           QmlDirectory() -> QString {
   return QString::fromStdString(
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
@@ -610,7 +669,8 @@ class RailQmlFixture : public ::testing::Test {
     engine_.rootContext()->setContextProperty(QStringLiteral("interactionPolicyFake"), &policy_);
     engine_.rootContext()->setContextProperty(QStringLiteral("adjustmentTransferFake"), &transfer_);
     engine_.rootContext()->setContextProperty(QStringLiteral("railSourceUrl"), RailUrl());
-    engine_.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"), RecoveryBarUrl());
+    engine_.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"),
+                                              RecoveryBarUrl());
     QObject::connect(&engine_, &QQmlEngine::warnings, [this](const QList<QQmlError>& warnings) {
       for (const auto& warning : warnings) warnings_.push_back(warning.toString());
     });

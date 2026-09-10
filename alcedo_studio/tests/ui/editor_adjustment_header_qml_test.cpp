@@ -35,7 +35,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-constexpr auto kEmDash = "\xE2\x80\x94";
+constexpr auto         kEmDash = "\xE2\x80\x94";
 
 class FakeMaskCreation final : public QObject {
   Q_OBJECT
@@ -130,11 +130,41 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_PROPERTY(QObject* maskCreation READ maskCreation CONSTANT)
 
  public:
-  explicit HeaderSession(QObject* mask_creation = nullptr) : mask_creation_(mask_creation) {}
+  explicit HeaderSession(QObject* mask_creation = nullptr) : mask_creation_(mask_creation) {
+    auto* mask = qobject_cast<FakeMaskCreation*>(mask_creation_);
+    if (mask == nullptr) {
+      return;
+    }
+    connect(mask, &FakeMaskCreation::maskCreationChanged, this, [this, mask] {
+      const bool active = mask->maskControlsActive();
+      if (active == mask_edit_was_active_) {
+        return;
+      }
+      mask_edit_was_active_ = active;
+      if (active) {
+        if (panel_ != QLatin1String("masks")) {
+          panel_before_mask_edit_ = panel_;
+          SetPanel(QStringLiteral("masks"));
+        }
+      } else if (!mask_panel_transition_ && panel_ == QLatin1String("masks")) {
+        SetPanel(panel_before_mask_edit_);
+      }
+    });
+  }
   auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
   auto snapshotRevision() const -> quint64 { return revision_; }
   auto activeAdjustmentPanel() const -> QString { return panel_; }
   void setActiveAdjustmentPanel(const QString& panel) {
+    auto* mask = qobject_cast<FakeMaskCreation*>(mask_creation_);
+    if (panel != QLatin1String("masks") && mask != nullptr && mask->maskControlsActive()) {
+      mask_panel_transition_ = true;
+      mask->finishBody();
+      mask_panel_transition_ = false;
+    }
+    SetPanel(panel);
+  }
+
+  void SetPanel(const QString& panel) {
     if (panel_ == panel) {
       return;
     }
@@ -196,15 +226,18 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
 
  private:
   QVariantMap snapshot_;
-  quint64     revision_      = 0;
-  QString     panel_         = QStringLiteral("tone");
-  QString     line_          = QString::fromUtf8(kEmDash);
-  QString     shutter_       = QString::fromUtf8(kEmDash);
-  QString     iso_           = QString::fromUtf8(kEmDash);
-  QString     aperture_      = QString::fromUtf8(kEmDash);
-  QString     focal_         = QString::fromUtf8(kEmDash);
-  int         submit_count_  = 0;
-  QObject*    mask_creation_ = nullptr;
+  quint64     revision_               = 0;
+  QString     panel_                  = QStringLiteral("tone");
+  QString     line_                   = QString::fromUtf8(kEmDash);
+  QString     shutter_                = QString::fromUtf8(kEmDash);
+  QString     iso_                    = QString::fromUtf8(kEmDash);
+  QString     aperture_               = QString::fromUtf8(kEmDash);
+  QString     focal_                  = QString::fromUtf8(kEmDash);
+  int         submit_count_           = 0;
+  QObject*    mask_creation_          = nullptr;
+  QString     panel_before_mask_edit_ = QStringLiteral("tone");
+  bool        mask_edit_was_active_   = false;
+  bool        mask_panel_transition_  = false;
 };
 
 class FakeNodeController final : public QObject {

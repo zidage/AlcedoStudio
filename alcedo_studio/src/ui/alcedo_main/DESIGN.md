@@ -405,8 +405,10 @@ forwarding a dock move — anchor placement after creation or a drawer fold
 changing the host height — leaves edges visually detached from their ports.
 Node selection paints only the card outline: the adapter installs an
 invisible QuickQanava selection delegate, so the default blue animated
-selection item never renders. Do not set `selectionDelegate` to null in QML;
-null resets the QuickQanava default instead of disabling it.
+selection item never renders. That delegate is still a full-size `z: 1` child
+of the node; the card uses `z: 2` and the port dock uses `z: 3` so Mask rows
+and ports stay the pointer target. Do not set `selectionDelegate` to null in
+QML; null resets the QuickQanava default instead of disabling it.
 
 ### Editor viewport Mask overlay
 
@@ -419,6 +421,16 @@ lines during creation and later editing. Selected Gradient uses three parallel
 lines with Geometry crop-style dual high-contrast strokes and short edge grips, without a kite,
 closed polygon or crop dimming. Radius/feather and direction controls must be independently
 reachable. Unselected analytic masks do not retain editing guides.
+
+Mask editing has three mutually exclusive states: inactive, creating, and
+editing an existing Mask. The header creation buttons and a Mask row selection
+both enter this state machine and immediately open the transient Mask page.
+`Enter` and `Escape` finish the edit, hide the overlay, and return to the prior
+adjustment page. Selecting any node-parameter adjustment page also finishes the
+Mask edit before opening that page. `Delete` removes the selected Mask and exits;
+before a new Mask exists it exits the armed creation tool. These shortcuts are
+disabled when Mask editing ends, so the Nodes graph resumes ownership of
+`Delete` for Color Grade removal.
 
 Handle and stroke widths are logical pixels and stay constant at any zoom or
 DPR. Image-space Brush cursor radius is transformed through the shared

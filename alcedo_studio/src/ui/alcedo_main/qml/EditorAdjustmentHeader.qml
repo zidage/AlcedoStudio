@@ -19,7 +19,6 @@ Item {
     property string isoText: "\u2014"
     property var maskCreation: null
     property string selectedNodeKind: ""
-    property bool cropOverlayVisible: false
     property bool controlsEnabled: true
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
@@ -150,7 +149,6 @@ Item {
                     compact: true
                     enabled: root.controlsEnabled
                              && root.selectedNodeKind === "colorGrade"
-                             && !root.cropOverlayVisible
                     selected: root.maskCreation
                               && String(root.maskCreation.toolKind || "") === "radial"
                     iconSrc: "qrc:/mask_icons/radial.svg"
@@ -163,7 +161,7 @@ Item {
                     fillSelected: appTheme.buttonSelectedFillColor
                     onClicked: {
                         if (root.maskCreation && radialButton.selected) {
-                            root.maskCreation.cancel()
+                            root.maskCreation.finishBody()
                         } else if (root.maskCreation) {
                             root.maskCreation.beginRadial()
                         }
@@ -176,7 +174,6 @@ Item {
                     compact: true
                     enabled: root.controlsEnabled
                              && root.selectedNodeKind === "colorGrade"
-                             && !root.cropOverlayVisible
                     selected: root.maskCreation
                               && String(root.maskCreation.toolKind || "") === "linear"
                     iconSrc: "qrc:/mask_icons/gradient.svg"
@@ -189,7 +186,7 @@ Item {
                     fillSelected: appTheme.buttonSelectedFillColor
                     onClicked: {
                         if (root.maskCreation && gradientButton.selected) {
-                            root.maskCreation.cancel()
+                            root.maskCreation.finishBody()
                         } else if (root.maskCreation) {
                             root.maskCreation.beginLinear()
                         }

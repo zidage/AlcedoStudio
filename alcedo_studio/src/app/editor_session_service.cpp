@@ -1163,6 +1163,21 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
   }
   {
     std::scoped_lock lock(mask_command_mutex_);
+    if (command.kind == EditorMaskCreationCommandKind::CancelMode && command.mask_id.Empty()) {
+      pending_mask_commands_.erase(
+          std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
+                         [&command](const EditorMaskCreationCommand& pending) {
+                           if (pending.node_id != command.node_id) {
+                             return false;
+                           }
+                           return pending.kind == EditorMaskCreationCommandKind::BeginCreation ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput ||
+                                  pending.kind == EditorMaskCreationCommandKind::Append ||
+                                  pending.kind == EditorMaskCreationCommandKind::Finish ||
+                                  pending.kind == EditorMaskCreationCommandKind::Cancel;
+                         }),
+          pending_mask_commands_.end());
+    }
     if (command.kind == EditorMaskCreationCommandKind::RemoveMask && !command.mask_id.Empty()) {
       pending_mask_commands_.erase(
           std::remove_if(pending_mask_commands_.begin(), pending_mask_commands_.end(),
@@ -1197,6 +1212,11 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
   result.identity = lifecycle_.identity();
   result.message  = "Mask creation queued";
   return result;
+}
+
+auto EditorSessionService::mask_creation_commands_pending() const -> bool {
+  std::scoped_lock lock(mask_command_mutex_);
+  return !pending_mask_commands_.empty();
 }
 
 auto EditorSessionService::PeekPendingInput() const -> EditorPendingInputView {

@@ -154,19 +154,73 @@ Item {
     }
 
     function selectMaskFromDrawer(nodeId, maskId) {
-        if (!root.maskCreation || String(maskId).length === 0
-                || !root.selectDrawerOwner(nodeId)) {
+        if (qanAdapter) {
+            qanAdapter.logMaskRow("selectMaskFromDrawer", String(nodeId || ""),
+                                  String(maskId || ""), false)
+        }
+        if (!root.maskCreation || String(maskId).length === 0) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("selectMaskFromDrawer-abort",
+                                      String(nodeId || ""), String(maskId || ""),
+                                      false)
+            }
             return
         }
+        root.selectDrawerOwner(nodeId)
         root.maskCreation.selectMask(nodeId, maskId)
     }
 
     function removeMaskFromDrawer(nodeId, maskId) {
-        if (!root.maskCreation || String(maskId).length === 0
-                || !root.selectDrawerOwner(nodeId)) {
+        if (qanAdapter) {
+            qanAdapter.logMaskRow("removeMaskFromDrawer", String(nodeId || ""),
+                                  String(maskId || ""), false)
+        }
+        if (!root.maskCreation || String(maskId).length === 0) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("removeMaskFromDrawer-abort",
+                                      String(nodeId || ""), String(maskId || ""),
+                                      false)
+            }
             return
         }
+        root.selectDrawerOwner(nodeId)
         root.maskCreation.removeMask(nodeId, maskId)
+    }
+
+    // NodeItem owns the press for the whole card. GraphView.nodeClicked is the
+    // same path as a working right-click skip, and the same style of call as
+    // beginRadial: a QML handler invoking maskCreation directly.
+    function handleGraphNodePress(node, position, rightButton) {
+        if (!root.nodeController || !qanAdapter || !node) {
+            if (qanAdapter) {
+                qanAdapter.logMaskRow("graph-press-missing", "", "", rightButton)
+            }
+            return false
+        }
+        const id = qanAdapter.liveNodeId(node)
+        if (id.length > 0) {
+            root.nodeController.selectNode(id)
+        }
+        if (!node.item || position === undefined || position === null) {
+            qanAdapter.logMaskRow("graph-press-no-pos", id, "", rightButton)
+            return false
+        }
+        const maskId = String(qanAdapter.maskIdAtItemPosition(
+                                  node.item, position.x, position.y) || "")
+        const onDelete = !rightButton
+                && qanAdapter.maskDeleteContainsItemPosition(
+                       node.item, position.x, position.y)
+        qanAdapter.logMaskRow(onDelete ? "graph-press-delete" : "graph-press",
+                              id, maskId, rightButton)
+        if (maskId.length === 0) {
+            return false
+        }
+        if (onDelete) {
+            root.removeMaskFromDrawer(id, maskId)
+        } else {
+            root.selectMaskFromDrawer(id, maskId)
+        }
+        return true
     }
 
     function detachAdapter() {
@@ -237,16 +291,12 @@ Item {
             if (root.renameVisible) {
                 return
             }
-            // Mask-scoped Delete wins over node deletion while a Mask draw or
-            // Mask selection is active.
-            if (root.maskCreation && root.maskCreation.creating) {
-                root.maskCreation.cancel()
-            } else if (root.maskCreation
-                       && String(root.maskCreation.selectedMaskId || "").length > 0) {
-                root.maskCreation.removeSelectedMask()
-            } else {
-                root.deleteSelectedColorGrade()
+            // Leave the event unaccepted while transient Mask editing owns
+            // Delete; EditorWorkspace's scoped Shortcut handles it exactly once.
+            if (root.maskCreation && root.maskCreation.maskControlsActive) {
+                return
             }
+            root.deleteSelectedColorGrade()
         } else if (id === "nodes.beginConnect") {
             root.startKeyboardConnect()
         } else if (id === "nodes.completeConnect") {
@@ -556,16 +606,24 @@ Item {
                 }
 
                 onNavigated: root.captureView()
-                onNodeClicked: function (node) {
-                    if (!root.nodeController || !qanAdapter) {
+                onNodeClicked: function (node, pos) {
+                    if (qanAdapter) {
+                        qanAdapter.logMaskRow("graphView-nodeClicked",
+                                              node ? qanAdapter.liveNodeId(node) : "",
+                                              "", false)
+                    }
+                    root.handleGraphNodePress(node, pos, false)
+                }
+                onNodeRightClicked: function (node, pos) {
+                    if (qanAdapter) {
+                        qanAdapter.logMaskRow("graphView-nodeRightClicked",
+                                              node ? qanAdapter.liveNodeId(node) : "",
+                                              "", true)
+                    }
+                    const onMaskRow = root.handleGraphNodePress(node, pos, true)
+                    if (onMaskRow) {
                         return
                     }
-                    const id = qanAdapter.liveNodeId(node)
-                    if (id.length > 0) {
-                        root.nodeController.selectNode(id)
-                    }
-                }
-                onNodeRightClicked: function (node, position) {
                     if (!root.nodeController || !qanAdapter || !node || !node.item) {
                         return
                     }
@@ -573,9 +631,7 @@ Item {
                     if (id.length === 0) {
                         return
                     }
-                    root.nodeController.selectNode(id)
-                    const menuPosition = node.item.mapToItem(canvasHost,
-                                                              position.x, position.y)
+                    const menuPosition = node.item.mapToItem(canvasHost, pos.x, pos.y)
                     nodeMenu.openAt(menuPosition.x, menuPosition.y)
                 }
                 onRightClicked: function () {

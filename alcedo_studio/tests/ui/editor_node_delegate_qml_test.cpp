@@ -30,6 +30,7 @@
 #include <QSignalSpy>
 #include <QSize>
 #include <QStringList>
+#include <QTest>
 #include <QUrl>
 #include <QuickQanava>
 #include <algorithm>
@@ -971,6 +972,97 @@ TEST_F(EditorNodeDelegateQml, MaskRowSelectionHighlightDoesNotRebuildList) {
   EXPECT_EQ(selected_spy.at(0).at(1).toString(), QStringLiteral("mask.gradient"));
 }
 
+TEST_F(EditorNodeDelegateQml, PointerClickSelectsAndDeletesMaskRowAboveSelectionOverlay) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
+  adapter.ApplyProductSelection(NodeId{"grade.primary"});
+
+  auto* node_item = qobject_cast<qan::NodeItem*>(item);
+  ASSERT_NE(node_item, nullptr);
+  auto* selection = node_item->getSelectionItem();
+  auto* card      = FindDescendant(item, QStringLiteral("editorNodeCard"));
+  ASSERT_NE(selection, nullptr);
+  ASSERT_NE(card, nullptr);
+  EXPECT_GT(card->z(), selection->z());
+
+  auto* window = harness_->window();
+  ASSERT_NE(window, nullptr);
+  auto* row = MaskRows(item).front();
+  QSignalSpy selected_spy(&adapter, &ui::AlcedoQanGraph::MaskRowSelected);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
+  ASSERT_TRUE(WaitFor([&] { return selected_spy.count() >= 1; }));
+  EXPECT_EQ(selected_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(selected_spy.at(0).at(1).toString(), QStringLiteral("mask.radial"));
+
+  auto* delete_button = FindDescendant(row, QStringLiteral("editorNodeMaskTypeRowDelete"));
+  ASSERT_NE(delete_button, nullptr);
+  QSignalSpy delete_spy(&adapter, &ui::AlcedoQanGraph::MaskRowDeleteRequested);
+  QTest::mouseClick(
+      window, Qt::LeftButton, Qt::NoModifier,
+      delete_button->mapToScene(QPointF(delete_button->width() / 2.0, delete_button->height() / 2.0))
+          .toPoint());
+  ASSERT_TRUE(WaitFor([&] { return delete_spy.count() >= 1; }));
+  EXPECT_EQ(delete_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(delete_spy.at(0).at(1).toString(), QStringLiteral("mask.radial"));
+}
+
+TEST_F(EditorNodeDelegateQml, MaskRowPressResolvesOwnerFromLiveItemWhenNodeIdPropertyIsEmpty) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
+  EXPECT_EQ(item->property("graphAdapter").value<ui::AlcedoQanGraph*>(), &adapter);
+
+  item->setProperty("nodeId", QString());
+  QSignalSpy selected_spy(&adapter, &ui::AlcedoQanGraph::MaskRowSelected);
+  adapter.notifyMaskRowSelected(item, QStringLiteral("mask.radial"));
+  ASSERT_EQ(selected_spy.count(), 1);
+  EXPECT_EQ(selected_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(selected_spy.at(0).at(1).toString(), QStringLiteral("mask.radial"));
+
+  auto* window = harness_->window();
+  ASSERT_NE(window, nullptr);
+  auto* row = MaskRows(item).front();
+  QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier,
+                    row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
+  ASSERT_TRUE(WaitFor([&] { return selected_spy.count() >= 2; }));
+  EXPECT_EQ(selected_spy.at(1).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(selected_spy.at(1).at(1).toString(), QStringLiteral("mask.radial"));
+  QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier,
+                      row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
+}
+
+TEST_F(EditorNodeDelegateQml, RightClickOnMaskRowSelectsMaskThroughNodeItemPress) {
+  ui::AlcedoQanGraph adapter;
+  auto               document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
+  ApplyDocument(&adapter, std::move(document));
+
+  auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(item, nullptr);
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
+  auto* window = harness_->window();
+  ASSERT_NE(window, nullptr);
+  auto* row = MaskRows(item).front();
+  QSignalSpy selected_spy(&adapter, &ui::AlcedoQanGraph::MaskRowSelected);
+  QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+                    row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
+  ASSERT_TRUE(WaitFor([&] { return selected_spy.count() >= 1; }));
+  EXPECT_EQ(selected_spy.at(0).at(0).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(selected_spy.at(0).at(1).toString(), QStringLiteral("mask.radial"));
+}
+
 TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
   ui::AlcedoQanGraph adapter;
   auto               document = CreateDefaultPipelineDocument();
@@ -1011,15 +1103,12 @@ TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
   const auto nodes     = ReadQmlFile("EditorNodesPanel.qml");
   ASSERT_FALSE(workspace.isEmpty());
   ASSERT_FALSE(nodes.isEmpty());
-  // Delete is Mask-scoped only while a draw is open or a Mask is selected:
-  // an open draw cancels, a selected Mask is removed, and only otherwise does
-  // the Nodes panel fall through to deleting the selected Color Grade.
-  EXPECT_NE(workspace.indexOf(QStringLiteral("maskCreation.creating")), -1);
-  EXPECT_NE(workspace.indexOf(QStringLiteral("selectedMaskId")), -1);
-  EXPECT_NE(workspace.indexOf(QStringLiteral("removeSelectedMask")), -1);
-  EXPECT_NE(nodes.indexOf(QStringLiteral("maskCreation.creating")), -1);
-  EXPECT_NE(nodes.indexOf(QStringLiteral("selectedMaskId")), -1);
-  EXPECT_NE(nodes.indexOf(QStringLiteral("removeSelectedMask")), -1);
+  // Workspace scope owns Mask Delete while the transient Mask editor is open;
+  // the Nodes graph leaves that event unaccepted and resumes Grade deletion
+  // after Mask controls close.
+  EXPECT_NE(workspace.indexOf(QStringLiteral("maskCreation.maskControlsActive")), -1);
+  EXPECT_NE(workspace.indexOf(QStringLiteral("deleteActiveMask")), -1);
+  EXPECT_NE(nodes.indexOf(QStringLiteral("maskCreation.maskControlsActive")), -1);
   EXPECT_NE(nodes.indexOf(QStringLiteral("deleteSelectedColorGrade")), -1);
 }
 

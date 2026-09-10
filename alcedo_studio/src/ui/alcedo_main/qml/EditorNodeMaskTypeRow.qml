@@ -110,28 +110,40 @@ Item {
             Accessible.ignored: true
         }
 
-        IconActionButton {
-            id: deleteButton
-            objectName: "editorNodeMaskTypeRowDelete"
-            compact: true
-            width: appTheme.graphMaskRowHeight
-            height: appTheme.graphMaskRowHeight
+        Item {
             Layout.preferredWidth: appTheme.graphMaskRowHeight
             Layout.preferredHeight: appTheme.graphMaskRowHeight
             Layout.alignment: Qt.AlignVCenter
-            iconSrc: "qrc:/panel_icons/trash.svg"
-            actionName: qsTr("Delete %1").arg(root.typeLabel)
-            focusOnPointerPress: false
-            onClicked: root.deleteClicked()
+
+            IconActionButton {
+                id: deleteButton
+                objectName: "editorNodeMaskTypeRowDelete"
+                anchors.fill: parent
+                compact: true
+                stretchInLayout: true
+                iconSrc: "qrc:/panel_icons/trash.svg"
+                actionName: qsTr("Delete %1").arg(root.typeLabel)
+                focusOnPointerPress: false
+                onClicked: root.deleteClicked()
+            }
         }
     }
 
     MouseArea {
         id: rowMouse
         anchors.fill: parent
-        anchors.rightMargin: appTheme.graphMaskRowHeight
+        anchors.rightMargin: appTheme.graphMaskRowHeight + appTheme.spaceXs
         hoverEnabled: true
+        preventStealing: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.clicked()
+        // NodeItem::mousePressEvent accepts the whole card and emits
+        // nodeClicked / nodeRightClicked. When this MouseArea is the pick
+        // target, consume both buttons so the Color Grade menu does not open
+        // on a Mask row. Select on press; the graph also hit-tests rows.
+        onPressed: function (mouse) {
+            mouse.accepted = true
+            root.clicked()
+        }
     }
 }

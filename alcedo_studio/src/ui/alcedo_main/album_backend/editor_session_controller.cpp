@@ -54,6 +54,8 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
           &EditorSessionController::ActionAvailabilityChanged);
   scope_controller_ = std::make_unique<EditorScopeController>(this);
   mask_creation_    = std::make_unique<EditorMaskCreationAdapter>(this);
+  connect(mask_creation_.get(), &EditorMaskCreationAdapter::maskCreationChanged, this,
+          &EditorSessionController::SyncMaskAdjustmentPanel);
   connect(scope_controller_.get(), &EditorScopeController::FrameRequested, this, [this]() {
     if (!session_backend_ || !has_image() ||
         session_backend_->state() != alcedo::EditorSessionState::Interactive) {
@@ -1339,6 +1341,10 @@ auto EditorSessionController::mask_creation_last_removed_mask_id() const -> alce
                           : alcedo::MaskId{};
 }
 
+auto EditorSessionController::mask_creation_commands_pending() const -> bool {
+  return session_backend_ && session_backend_->mask_creation_commands_pending();
+}
+
 void EditorSessionController::SetImageExifReader(
     std::function<alcedo::EditorImageExifDisplay(uint)> reader) {
   image_exif_reader_       = std::move(reader);
@@ -1349,6 +1355,13 @@ void EditorSessionController::SetImageExifReader(
 
 void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId&  node_id,
                                                           alcedo::EditorNodeKind kind) {
+  if (mask_creation_ && mask_creation_->mask_controls_active() &&
+      node_id != mask_creation_->edit_node_id()) {
+    mask_panel_transition_ = true;
+    mask_creation_->finishBody();
+    mask_panel_transition_ = false;
+    SetActiveAdjustmentPanel(panel_before_mask_edit_, true);
+  }
   if (session_backend_ != nullptr) {
     (void)session_backend_->SetAdjustmentProjectionNode(node_id);
   }
@@ -1475,10 +1488,42 @@ auto EditorSessionController::pipeline_document() const -> const alcedo::Pipelin
 }
 
 void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
+  const QString normalized = NormalizeAdjustmentPanel(panel);
+  if (normalized == QLatin1String("masks") &&
+      (!mask_creation_ || !mask_creation_->mask_controls_active())) {
+    return;
+  }
+  if (normalized != QLatin1String("masks") && mask_creation_ &&
+      mask_creation_->mask_controls_active()) {
+    mask_panel_transition_ = true;
+    mask_creation_->finishBody();
+    mask_panel_transition_ = false;
+  }
   // Publish Geometry exit while Develop still owns any pending crop submission.
-  SetActiveAdjustmentPanel(panel, true);
+  SetActiveAdjustmentPanel(normalized, true);
   if (node_controller_) {
     node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+  }
+}
+
+void EditorSessionController::SyncMaskAdjustmentPanel() {
+  const bool mask_active = mask_creation_ && mask_creation_->mask_controls_active();
+  if (mask_active == mask_edit_was_active_) {
+    return;
+  }
+  mask_edit_was_active_ = mask_active;
+  if (mask_active) {
+    if (active_adjustment_panel_ != QLatin1String("masks")) {
+      panel_before_mask_edit_ = active_adjustment_panel_;
+      SetActiveAdjustmentPanel(QStringLiteral("masks"), true);
+    }
+    return;
+  }
+  if (!mask_panel_transition_ && active_adjustment_panel_ == QLatin1String("masks")) {
+    SetActiveAdjustmentPanel(panel_before_mask_edit_, true);
+    if (node_controller_) {
+      node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+    }
   }
 }
 

@@ -140,6 +140,7 @@ void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_i
     }
   }
   emit SnapshotChanged();
+  emit snapshotChanged();
 }
 
 auto EditorNodeController::BoundSessionGeneration() const -> std::optional<std::uint64_t> {
@@ -171,7 +172,9 @@ void EditorNodeController::ClearSnapshot() {
   snapshot_image_id_            = 0;
   snapshot_version_id_.clear();
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
 }
 
@@ -443,7 +446,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   SyncSessionAdjustmentNode(false);
   SetLastError({});
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
   QueueProjectionApply();
   return true;
@@ -665,6 +670,7 @@ bool EditorNodeController::refreshFromSession() {
     ClearSnapshot();
     SetLastError({});
     emit SnapshotChanged();
+    emit snapshotChanged();
     return false;
   }
   return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
@@ -805,6 +811,7 @@ void EditorNodeController::selectNode(const QString& node_id) {
   ApplyLiveSelectionToAdapter();
   SyncSessionAdjustmentNode(true);
   emit SelectionChanged();
+  emit selectionChanged();
   emit ActionAvailabilityChanged();
 }
 
@@ -931,6 +938,7 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
     ApplyLiveSelectionToAdapter();
     SyncSessionAdjustmentNode(false);
     emit SelectionChanged();
+    emit selectionChanged();
     emit ActionAvailabilityChanged();
   }
   return MaybeSubmitDraft();
@@ -1138,6 +1146,7 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     SetLastError({});
   }
   emit SnapshotChanged();
+  emit snapshotChanged();
   emit ActionAvailabilityChanged();
   return true;
 }

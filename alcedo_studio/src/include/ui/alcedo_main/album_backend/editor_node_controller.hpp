@@ -238,7 +238,9 @@ class EditorNodeController : public QObject {
  signals:
   void EditorSessionChanged();
   void SnapshotChanged();
+  void snapshotChanged();
   void SelectionChanged();
+  void selectionChanged();
   void lastErrorChanged();
   void CommandStateChanged();
   void ActionAvailabilityChanged();

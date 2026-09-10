@@ -15,6 +15,12 @@ Qan.NodeItem {
     property var masks: []
     property string selectedMaskId: ""
     property bool drawerOpen: true
+    property var graphAdapter: null
+    readonly property var resolvedAdapter: {
+        if (root.graphAdapter)
+            return root.graphAdapter
+        return (root.graph && root.graph.alcedoQanGraph) ? root.graph.alcedoQanGraph : null
+    }
 
     signal maskSelected(string nodeId, string maskId)
     signal maskDeleteRequested(string nodeId, string maskId)
@@ -39,6 +45,9 @@ Qan.NodeItem {
     Rectangle {
         id: card
         objectName: "editorNodeCard"
+        // QuickQanava parents an invisible selection item at z=1 that covers the
+        // whole node. Keep the card above it so Mask rows receive pointer input.
+        z: 2
         anchors.fill: parent
         radius: appTheme.controlRadiusSmall
         color: appTheme.cardSurfaceColor
@@ -100,10 +109,12 @@ Qan.NodeItem {
                     root.drawerOpen = open
                 }
                 onMaskSelected: function (nodeId, maskId) {
-                    root.maskSelected(nodeId, maskId)
+                    if (root.resolvedAdapter)
+                        root.resolvedAdapter.notifyMaskRowSelected(root, maskId)
                 }
                 onMaskDeleteRequested: function (nodeId, maskId) {
-                    root.maskDeleteRequested(nodeId, maskId)
+                    if (root.resolvedAdapter)
+                        root.resolvedAdapter.notifyMaskRowDeleteRequested(root, maskId)
                 }
             }
         }

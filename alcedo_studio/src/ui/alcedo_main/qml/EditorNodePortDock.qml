@@ -18,7 +18,8 @@ RowLayout {
     property int dockType: -1
 
     spacing: 0
-    z: 1.5
+    // Above the node card (z=2) and the invisible QuickQanava selection item (z=1).
+    z: 3
 
     onXChanged: if (hostNodeItem) hostNodeItem.updatePortsEdges()
     onYChanged: if (hostNodeItem) hostNodeItem.updatePortsEdges()

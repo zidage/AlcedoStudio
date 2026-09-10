@@ -49,16 +49,23 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal transitionPercent READ transition_percent NOTIFY maskCreationChanged)
 
  public:
+  enum class EditMode : std::uint8_t {
+    Inactive = 0,
+    Creating,
+    Editing,
+  };
+
   explicit EditorMaskCreationAdapter(EditorSessionController* session, QObject* parent = nullptr);
   ~EditorMaskCreationAdapter() override;
 
-  [[nodiscard]] auto active() const -> bool { return !tool_kind_.isEmpty(); }
-  [[nodiscard]] auto creating() const -> bool { return creating_; }
+  [[nodiscard]] auto active() const -> bool { return edit_mode_ != EditMode::Inactive; }
+  [[nodiscard]] auto creating() const -> bool { return edit_mode_ == EditMode::Creating; }
   [[nodiscard]] auto owns_left_button() const -> bool;
   [[nodiscard]] auto body_visible() const -> bool;
   [[nodiscard]] auto mask_controls_active() const -> bool;
   [[nodiscard]] auto tool_kind() const -> QString { return tool_kind_; }
   [[nodiscard]] auto selected_mask_id() const -> QString { return selected_mask_id_; }
+  [[nodiscard]] auto edit_node_id() const -> const NodeId& { return edit_node_id_; }
   [[nodiscard]] auto inner_feather_percent() const -> qreal;
   [[nodiscard]] auto outer_feather_percent() const -> qreal;
   [[nodiscard]] auto major_radius_percent() const -> qreal;
@@ -76,6 +83,7 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE void   selectMask(const QString& node_id, const QString& mask_id);
   Q_INVOKABLE void   removeMask(const QString& node_id, const QString& mask_id);
   Q_INVOKABLE void   removeSelectedMask();
+  Q_INVOKABLE void   deleteActiveMask();
   Q_INVOKABLE void   handleHover(qreal x, qreal y);
   Q_INVOKABLE void   beginInnerFeather();
   Q_INVOKABLE void   beginOuterFeather();
@@ -119,6 +127,7 @@ class EditorMaskCreationAdapter : public QObject {
   void               EnqueueAppendSample(const MaskCreationSample& sample);
   [[nodiscard]] auto CurrentGradeId() const -> NodeId;
   [[nodiscard]] auto CanAuthorMasks() const -> bool;
+  [[nodiscard]] auto CanAuthorMasksFor(const NodeId& grade_id) const -> bool;
   [[nodiscard]] auto DocumentContainsMask(const MaskId& mask_id) const -> bool;
   [[nodiscard]] auto MakeSample(qreal x, qreal y, bool allow_outside) const
       -> std::optional<MaskCreationSample>;
@@ -134,11 +143,10 @@ class EditorMaskCreationAdapter : public QObject {
   QMetaObject::Connection                           view_change_connection_;
   QString                                           tool_kind_;
   QString                                           selected_mask_id_;
+  NodeId                                            edit_node_id_;
   MaskSourceKind                                    source_kind_ = MaskSourceKind::Radial;
-  bool                                              creating_    = false;
+  EditMode                                          edit_mode_   = EditMode::Inactive;
   bool                                              open_        = false;
-  bool                                              selected_    = false;
-  bool                                              body_open_   = false;
   MaskPointerIdentity                               pointer_{};
   Vector2                                           press_normalized_{};
   std::optional<MaskSource>                         overlay_source_;

@@ -568,29 +568,11 @@ Item {
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
                                 editorInteraction.resetView()
                                 event.accepted = true
-                            } else if (event.key === Qt.Key_Delete) {
-                                // Mask-scoped Delete: cancel an open draw, else
-                                // remove the selected Mask. Only while the Mask
-                                // tool owns the session.
-                                if (root.maskCreation && root.maskCreation.creating) {
-                                    root.maskCreation.cancel()
-                                    event.accepted = true
-                                } else if (root.maskCreation
-                                           && String(root.maskCreation.selectedMaskId
-                                                     || "").length > 0) {
-                                    root.maskCreation.removeSelectedMask()
-                                    event.accepted = true
-                                }
                             } else if (event.key === Qt.Key_1) {
                                 // 1:1 (actual pixels). Pro-editor convention.
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                                if (typeof adjustmentStack.confirmMaskEditAndReturn === "function"
-                                        && adjustmentStack.confirmMaskEditAndReturn()) {
-                                    event.accepted = true
-                                    return
-                                }
                                 // Geometry confirm: bake draft crop and return to Tone.
                                 if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
                                         && adjustmentStack.confirmGeometryAndReturnToTone()) {
@@ -786,8 +768,29 @@ Item {
 
     Shortcut {
         sequences: [ "Escape" ]
-        enabled: root.editorControlsEnabled && root.maskOwnsLeftButton && root.maskCreation
-        onActivated: root.maskCreation.cancel()
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.finishBody()
+    }
+
+    // Mask editing shortcuts live at workspace scope so the viewport, Nodes
+    // graph, and right-side controls all produce the same outcome. They are
+    // disabled immediately after the transient Mask mode finishes.
+    Shortcut {
+        sequences: [ "Delete" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.deleteActiveMask()
+    }
+
+    Shortcut {
+        sequences: [ "Return", "Enter" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: {
+            if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
+                adjustmentStack.confirmMaskEditAndReturn()
+        }
     }
 
     // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so

@@ -109,8 +109,6 @@ Item {
     }
 
     property int lastAppliedRevision: -1
-    property string panelBeforeMaskEdit: "tone"
-
     EditorLutCatalogModel {
         id: lutModel
         objectName: "adjustmentStackLutModel"
@@ -153,10 +151,6 @@ Item {
             return
         if (panel === "masks" && !root.maskPanelAvailable)
             return
-        // Leaving any panel while a Mask draw or edit is open settles it;
-        // finishBody is a no-op when the Mask tool is idle.
-        if (panel !== root.activePanel && root.maskCreation)
-            root.maskCreation.finishBody()
         editorSession.activeAdjustmentPanel = panel
     }
 
@@ -245,9 +239,6 @@ Item {
                 selectedNodeKind: root.nodeController
                                   ? String(root.nodeController.selectedNodeKind || "")
                                   : ""
-                cropOverlayVisible: root.interaction
-                                    ? !!root.interaction.cropOverlayVisible
-                                    : false
                 controlsEnabled: root.controlsEnabled
             }
 
@@ -355,21 +346,6 @@ Item {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
-        }
-    }
-    Connections {
-        target: root.maskCreation
-        function onMaskCreationChanged() {
-            if (!root.editorSession)
-                return
-            if (root.maskCreation && root.maskCreation.bodyVisible) {
-                if (root.activePanel !== "masks") {
-                    root.panelBeforeMaskEdit = root.activePanel
-                    root.editorSession.activeAdjustmentPanel = "masks"
-                }
-            } else if (root.activePanel === "masks") {
-                root.editorSession.activeAdjustmentPanel = root.panelBeforeMaskEdit
-            }
         }
     }
     onEditorSessionChanged: {
