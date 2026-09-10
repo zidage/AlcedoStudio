@@ -436,6 +436,8 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
     package_service_ = std::make_shared<ProjectPackageService>();
 
     project_uuid_    = GenerateProjectUUID();
+    mask_cache_settings_.chosen_root = DefaultProjectMaskCacheChosenRoot(meta_path_);
+    RecreateMaskCacheService();
   };
 
   switch (open_mode) {
@@ -462,6 +464,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
 }
 
 ProjectService::~ProjectService() {
+  mask_cache_service_.reset();
   package_service_.reset();
   std::shared_ptr<AiSidecarRuntimeService> runtime;
   {
@@ -498,6 +501,7 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
   metadata["start_id"]            = sleeve_service_->GetCurrentID();
   metadata["image_pool_start_id"] = pool_service_->GetCurrentID();
   metadata["data_summary"]        = ComputeProjectDataSummary(*storage_);
+  ApplyProjectMaskCacheSettingsToMetadata(metadata, mask_cache_settings_, meta_path_);
 
   std::ofstream file(meta_path_);
   if (!file.is_open()) {
@@ -508,6 +512,7 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
 }
 
 void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
+  mask_cache_service_.reset();
   std::shared_ptr<AiSidecarRuntimeService> previous_runtime;
   {
     std::lock_guard lock(ai_sidecar_runtime_mutex_);
@@ -629,6 +634,9 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   RegisterSemanticSearchProvider();
   browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
   package_service_ = std::make_shared<ProjectPackageService>();
+  mask_cache_settings_ = ReadProjectMaskCacheSettingsFromMetadata(metadata, meta_path_);
+  RecreateMaskCacheService();
+  FinishPendingMaskCacheCleanup();
 }
 
 void ProjectService::RecreateSleeveService(sl_element_id_t start_id) {
@@ -654,4 +662,162 @@ auto ProjectService::GetAiSidecarRuntimeService() const
   }
   return ai_sidecar_runtime_service_;
 }
+
+void ProjectService::RecreateMaskCacheService() {
+  mask_cache_service_.reset();
+  const auto root = ResolveProjectMaskCacheChosenRoot(mask_cache_settings_, meta_path_);
+  mask_cache_service_ = std::make_unique<ProjectMaskCacheService>(project_uuid_, root);
+}
+
+auto ProjectService::PersistCurrentMetadata(std::string* error) -> bool {
+  try {
+    SaveProject(meta_path_);
+    return true;
+  } catch (const std::exception& exception) {
+    if (error) {
+      *error = exception.what();
+    }
+    return false;
+  }
+}
+
+void ProjectService::FinishPendingMaskCacheCleanup() {
+  if (!mask_cache_settings_.close_cleanup_pending || !mask_cache_service_) {
+    return;
+  }
+  std::string ignored;
+  if (mask_cache_service_->ClearOwnedCache(&ignored)) {
+    mask_cache_settings_.close_cleanup_pending = false;
+    (void)PersistCurrentMetadata(nullptr);
+  }
+}
+
+auto ProjectService::GetMaskCacheSettings() const -> ProjectMaskCacheSettings {
+  return mask_cache_settings_;
+}
+
+auto ProjectService::GetMaskCacheService() -> ProjectMaskCacheService* {
+  return mask_cache_service_.get();
+}
+
+auto ProjectService::GetMaskCacheService() const -> const ProjectMaskCacheService* {
+  return mask_cache_service_.get();
+}
+
+auto ProjectService::SetMaskCacheRoot(std::filesystem::path chosen_root,
+                                      std::uint64_t expected_revision, std::string* error) -> bool {
+  if (expected_revision != mask_cache_settings_.settings_revision) {
+    if (error) {
+      *error = "Project Mask cache settings revision does not match";
+    }
+    return false;
+  }
+  if (!mask_cache_service_) {
+    RecreateMaskCacheService();
+  }
+  if (chosen_root.empty()) {
+    chosen_root = DefaultProjectMaskCacheChosenRoot(meta_path_);
+  }
+  std::error_code absolute_error;
+  auto            resolved = std::filesystem::absolute(chosen_root, absolute_error);
+  if (absolute_error) {
+    if (error) {
+      *error = "Project Mask cache root is not a usable path";
+    }
+    return false;
+  }
+  resolved = resolved.lexically_normal();
+  if (!ProjectMaskCacheService::PrepareNamespace(resolved, project_uuid_, error)) {
+    return false;
+  }
+  const auto previous_root =
+      ResolveProjectMaskCacheChosenRoot(mask_cache_settings_, meta_path_);
+  const auto previous_settings = mask_cache_settings_;
+  mask_cache_settings_.chosen_root       = resolved;
+  mask_cache_settings_.settings_revision = expected_revision + 1;
+  if (!PersistCurrentMetadata(error)) {
+    mask_cache_settings_ = previous_settings;
+    return false;
+  }
+  if (!mask_cache_service_->PublishChosenRoot(resolved, error)) {
+    mask_cache_settings_ = previous_settings;
+    (void)PersistCurrentMetadata(nullptr);
+    return false;
+  }
+  if (previous_root != resolved) {
+    std::string cleanup_error;
+    if (!mask_cache_service_->DeleteOwnedNamespace(previous_root, &cleanup_error)) {
+      mask_cache_settings_.previous_roots.push_back(previous_root);
+      (void)PersistCurrentMetadata(nullptr);
+      if (error) {
+        *error = cleanup_error;
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+auto ProjectService::SetMaskCacheRetention(ProjectMaskCacheRetention retention,
+                                           std::uint64_t expected_revision, std::string* error)
+    -> bool {
+  if (expected_revision != mask_cache_settings_.settings_revision) {
+    if (error) {
+      *error = "Project Mask cache settings revision does not match";
+    }
+    return false;
+  }
+  const auto previous_settings             = mask_cache_settings_;
+  mask_cache_settings_.retention           = retention;
+  mask_cache_settings_.settings_revision   = expected_revision + 1;
+  if (!PersistCurrentMetadata(error)) {
+    mask_cache_settings_ = previous_settings;
+    return false;
+  }
+  return true;
+}
+
+auto ProjectService::ClearMaskCache(std::string* error) -> bool {
+  if (!mask_cache_service_) {
+    RecreateMaskCacheService();
+  }
+  return mask_cache_service_->ClearOwnedCache(error);
+}
+
+auto ProjectService::FlushMaskCacheWrites(std::string* error) -> bool {
+  if (!mask_cache_service_) {
+    return true;
+  }
+  return mask_cache_service_->FlushPendingWrites(error);
+}
+
+auto ProjectService::CloseAfterSuccessfulSave(std::string* error) -> bool {
+  if (mask_cache_settings_.retention != ProjectMaskCacheRetention::DeleteOnProjectClose) {
+    return FlushMaskCacheWrites(error);
+  }
+  mask_cache_settings_.close_cleanup_pending = true;
+  if (!PersistCurrentMetadata(error)) {
+    return false;
+  }
+  std::string cleanup_error;
+  const bool  cleaned = ClearMaskCache(&cleanup_error);
+  if (cleaned) {
+    mask_cache_settings_.close_cleanup_pending = false;
+    (void)PersistCurrentMetadata(nullptr);
+    return true;
+  }
+  if (error) {
+    *error = cleanup_error;
+  }
+  return false;
+}
+
+auto ProjectService::ApplyMaskCacheRemovalChoice(ProjectMaskCacheRemovalChoice choice,
+                                                 std::string* error) -> bool {
+  if (choice == ProjectMaskCacheRemovalChoice::KeepFiles) {
+    return true;
+  }
+  return ClearMaskCache(error);
+}
+
 };  // namespace alcedo

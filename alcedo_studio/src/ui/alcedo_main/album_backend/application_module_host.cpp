@@ -481,6 +481,11 @@ void ApplicationModuleHost::ShutdownModules() {
       if (project_->handler().PersistCurrentProjectState()) {
         QString ignored_error;
         (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
+        auto project_service = project_->handler().project();
+        if (project_service) {
+          std::string cache_close_error;
+          (void)project_service->CloseAfterSuccessfulSave(&cache_close_error);
+        }
       }
       album_util::CleanupWorkspaceDirectory(project_->handler().workspace_dir());
     }

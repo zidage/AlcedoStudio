@@ -8,6 +8,7 @@
 #include <QPointer>
 
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 #include "app/project_package_service.hpp"
@@ -100,6 +101,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
         old_project->GetSleeveService()->Sync();
         old_project->GetImagePoolService()->SyncWithStorage();
         old_project->SaveProject(old_meta);
+        std::string cache_close_error;
+        (void)old_project->CloseAfterSuccessfulSave(&cache_close_error);
 
         if (!old_package.empty()) {
           auto package_service = old_project->GetProjectPackageService();
@@ -279,6 +282,8 @@ bool ProjectHandler::PersistCurrentProjectState() {
       if (!meta_path_.empty()) {
         project_->SaveProject(meta_path_);
       }
+      std::string cache_error;
+      (void)project_->FlushMaskCacheWrites(&cache_error);
     }
     return true;
   } catch (...) {
