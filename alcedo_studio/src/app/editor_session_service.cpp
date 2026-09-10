@@ -1174,7 +1174,9 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::BeginInput ||
                                   pending.kind == EditorMaskCreationCommandKind::Append ||
                                   pending.kind == EditorMaskCreationCommandKind::Finish ||
-                                  pending.kind == EditorMaskCreationCommandKind::Cancel;
+                                  pending.kind == EditorMaskCreationCommandKind::Cancel ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
                          }),
           pending_mask_commands_.end());
     }
@@ -1189,7 +1191,9 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::BeginMove ||
                                   pending.kind == EditorMaskCreationCommandKind::Finish ||
                                   pending.kind == EditorMaskCreationCommandKind::FinishMode ||
-                                  pending.kind == EditorMaskCreationCommandKind::BeginInput;
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
                          }),
           pending_mask_commands_.end());
     }
@@ -1323,8 +1327,12 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
     case EditorMaskCreationCommandKind::SetBrushTool:
       return mask_creation_.SetBrushTool(command.brush_tool);
     case EditorMaskCreationCommandKind::SetBrushStrokeParameters:
-      return mask_creation_.SetBrushStrokeParameters(
-          command.brush_radius, command.brush_strength, command.brush_hardness);
+      return mask_creation_.SetBrushStrokeParameters(command.brush_radius, command.brush_strength,
+                                                     command.brush_hardness);
+    case EditorMaskCreationCommandKind::BeginMaskField:
+      return mask_creation_.BeginMaskFieldEdit(command.field_key);
+    case EditorMaskCreationCommandKind::SetMaskField:
+      return mask_creation_.ApplyMaskFieldValue(command.field_key, command.field_value);
   }
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";

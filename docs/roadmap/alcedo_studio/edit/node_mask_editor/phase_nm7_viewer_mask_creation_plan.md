@@ -2,17 +2,16 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.11 complete; NM7.12–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.12 complete; NM7.13–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
 NM7.7 Radial/Linear creation plus existing-mask movement, NM7.8 parameter-mask
 controls, drawer selection/deletion, and crop-style Gradient, NM7.9 accumulating
 Brush paint/erase/move with typed stroke history, NM7.10 serial Interactive Mix
-with one current Grade coverage result, and NM7.11 project Mix-cache storage plus
-Keep/DeleteOnProjectClose cleanup. Some former NM7.11 UI wiring (now NM7.12) was
-brought forward for Radial/Gradient testing. This is partial wiring of the full UI
-phase. NM7.12–NM7.15 acceptance remains outstanding.
+with one current Grade coverage result, NM7.11 project Mix-cache storage plus
+Keep/DeleteOnProjectClose cleanup, and NM7.12 production Mask controls plus project
+storage UI. NM7.13–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -1719,6 +1718,112 @@ controls, focus rules, theme/width/reduced-motion tests and QML registration.
 `ProjectClearExplainsThatBrushHistoryIsRetained`.
 
 **Exit:** production QML at 260/320/460 px in both themes; no unregistered/unused-only implementation.
+
+##### Phase NM7.12 completion record (2026-09-10)
+
+**Status:** complete — Mask value/Brush editing controls on the Mask page, keyboard move,
+and project Mix-cache settings UI on production QML.
+
+**Resolved decisions and actual files/APIs:**
+
+- `EditorMaskCreationCommandKind::{BeginMaskField, SetMaskField}` queue typed Mask value edits;
+  `BeginMaskFieldEdit`/`ApplyMaskFieldValue` live-apply then settle `SetMaskField` for
+  `enabled`/`invert`/`opacity`/`display_name` and `ReplaceMaskSource` for `brush.feather`.
+  `CancelMode`/`RemoveMask` prune queued field commands in `editor_session_service.cpp`.
+- `EditorMaskCreationAdapter` exposes `maskEnabled`/`maskInvert`/`maskOpacityPercent`/`maskName`,
+  `setMaskEnabled`/`setMaskInvert`/`setMaskName`, `beginMaskOpacity`/`updateMaskOpacity`,
+  `beginBrushFeather`/`updateBrushFeatherPercent`, `brushRadiusPercent`/`setBrushRadiusPercent`,
+  `setBrushStrengthPercent`, `setBrushTool`, and `maskNudgeAvailable`/`beginMaskNudge`/`nudgeMaskBy`.
+  Keyboard move reuses the pointer `BeginMove`/`Append`/`Finish` route with a panel-pointer
+  identity and `open_via_panel_`.
+- `EditorMasksContextPanel.qml` adds the Brush section (Paint/Erase/Move segments, Size,
+  Strength, Feather), Mask values (name, enabled, invert, opacity) and a keyboard Position
+  nudge control; existing objectNames for the analytic controls are unchanged.
+- `EditorMonoSlider.qml` gains `activeFocusOnTab`, arrow-key stepping (Shift = 10×), and
+  `Accessible` Slider role/increase/decrease actions; every key step runs
+  `onBegin → onUpdate → onFinish` so one press is one settled edit.
+- `ProjectModule` publishes `maskCacheState` (`available`, `projectName`, `projectUuid`,
+  `chosenRoot`, `effectiveRoot`, `retention`, `fileCount`, `byteCount`, `pendingWrites`,
+  `dirty`, `lastError`, `applyError`) plus `ApplyMaskCacheRoot`/`ApplyMaskCacheRetention`/
+  `ClearMaskCache`/`RefreshMaskCacheState` over `ProjectService`.
+- `ProjectMaskCacheSettingsPanel.qml` is a separate Settings > Cache section with a root
+  FolderDialog, Keep/DeleteOnProjectClose combo, usage rows, revision-aware reload and Clear;
+  thumbnail settings in `CacheSettingsPanel.qml` are untouched. Registered in
+  `alcedo_main/CMakeLists.txt` and hosted by `SettingDialog.qml` with apply-on-OK and reset-on-open.
+
+**Primary success call chain:**
+
+```text
+Mask page control -> EditorMaskCreationAdapter invokable
+  -> EditorMaskCreationCommand{BeginMaskField|SetMaskField|BeginMove|Append|Finish}
+  -> EditorSessionService queue -> EditorMaskCreationController
+  -> live apply (Interactive preview for pixel fields)
+  -> PublishMaskFieldEdit / PublishSettledBatch
+  -> MakeSetMaskFieldBatch | MakeReplaceMaskSourceBatch -> MiniGitWorkingHistory commit
+  -> maskCreationChanged -> panel republish
+Keyboard Arrow on nudge area -> beginMaskNudge -> SelectMask + BeginMove(handle)
+  -> nudgeMaskBy -> Append samples -> Keys.onReleased -> finishAnalyticControl -> Finish
+Settings OK / Apply -> ProjectMaskCacheSettingsPanel.applyPending
+  -> ProjectModule::ApplyMaskCacheRoot / ApplyMaskCacheRetention
+  -> ProjectService::SetMaskCacheRoot / SetMaskCacheRetention -> settings_revision++
+  -> MaskCacheStateChanged -> reloadPending
+```
+
+**Primary cancel/failure call chain:**
+
+```text
+Mask edit rejection -> result.error; queued SetMaskField for a different field while a
+  field edit is open -> rejected; CancelMaskInput restores before_field_value_/source
+  with no commit; removeMask/CancelMode drop queued field commands
+ApplyMaskCacheRoot/Retention failure -> ProjectService error string -> applyError -> visible
+  status row; no temporary-root substitution
+Clear -> ProjectMaskCacheService generation fence -> MaskCacheStateChanged refresh;
+  hint text states Brush strokes/history survive and cache rebuilds
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MaskPageActivatesOnlyForSelectedOrCreatingMask` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `MaskSelectionDoesNotSubmitOrJumpScroll` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `KeyboardMaskMoveUsesSameInteractiveRoute` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `MaskPageBrushSectionRoutesToolSizeStrengthAndFeather` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `MaskPageLoadsAtPanelWidthsInBothThemesWithoutMotion` (260/320/460 × 2 themes, reduceMotion) | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `CacheSettingsTargetSelectedProjectOnly` | `ProjectMaskCacheSettingsQmlTest` | PASS |
+| `ProjectClearExplainsThatBrushHistoryIsRetained` | `ProjectMaskCacheSettingsQmlTest` | PASS |
+| `ErrorsSurfaceFromProjectModuleState` | `ProjectMaskCacheSettingsQmlTest` | PASS |
+| Field one-shot/drag/cancel/unselected commits | `AccumulatingBrushCreationTest` (`OneShotMaskFieldEditsPublishTypedHistory`, `MaskFieldDragSettlesOneCommit`, `MaskFieldEditCancelRestoresLiveValueWithoutHistory`, `MaskFieldEditRequiresSelectedMask`) | PASS |
+
+Commands:
+
+```text
+cmake --build build/macos-debug-tests --target EditorAdjustmentHeaderQmlTest \
+    ProjectMaskCacheSettingsQmlTest AccumulatingBrushCreationTest AnalyticMaskCreationTest \
+    EditorAdjustmentControlQmlTest EditorSerialInputBoundaryTest MaskOverlayControlTest -j 8
+QT_QPA_PLATFORM=offscreen ./build/macos-debug-tests/alcedo_studio/tests/ui/<binary>
+```
+
+Suite totals (macOS `macos-debug-tests`, Qt 6.9.2, offscreen QPA): required names 9/9 PASS;
+`AccumulatingBrushCreationTest` 14/14; `AnalyticMaskCreationTest` 20/20;
+`EditorAdjustmentHeaderQmlTest` 16/16; `ProjectMaskCacheSettingsQmlTest` 3/3;
+`EditorAdjustmentControlQmlTest` 8/8; `EditorSerialInputBoundaryTest` 7/7;
+`MaskOverlayControlTest` 13/13. `alcedo_main` links in `macos-debug`.
+
+**Checklist / exit condition:** required tests PASS. Production Mask page loads at
+260/320/460 px under both themes with reduceMotion enabled; Brush tool segments, Size,
+Strength, Feather and Mask name/enabled/invert/opacity all route through the adapter;
+arrow-key nudge takes the same BeginMove/Append/Finish interactive route; project cache
+section is separate from thumbnail cache, applies through `ProjectModule`, surfaces
+`applyError`, and Clear explains that Brush strokes/history are retained.
+
+**Residual gaps:** real-viewer/pointer Brush qualification and packaged D3D11/Metal capture
+are NM7.15. Open-operation cancel on `MappingChanged`, grab cancellation and project-switch
+fencing beyond current hooks are NM7.13. Cacheless reopen rebuild is NM7.14. The settled
+native Mix still is not enqueued into the project cache writer from the serial owner.
+`.r8mask` files and the recent-project list retain their existing KeepFiles behavior.
+Ordinary adjustment Mask writes still fail with the existing “until NM3” text.
+NM6.8–NM6.9 remain planned.
 
 ### NM7.13 — Complete cancellation and project/session lifecycle
 

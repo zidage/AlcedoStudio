@@ -14,6 +14,7 @@ Slider {
     property var onUpdate: function (v) {}
     property var onFinish: function () {}
     property var onReset: function () {}
+    property string accessibleName: ""
     property real externalValue: 0
     /// Full-track mouse travel maps to this fraction of the value range.
     property real pointerGain: 0.32
@@ -44,9 +45,46 @@ Slider {
     topPadding: 0
     bottomPadding: 0
     hoverEnabled: false
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Slider
+    Accessible.name: mono.accessibleName
     Layout.fillWidth: true
     Layout.preferredHeight: mono.rowHeight
     implicitHeight: mono.rowHeight
+
+    function keyStep(event) {
+        var step = mono.stepSize > 0 ? mono.stepSize : (mono.to - mono.from) / 100
+        if (event.modifiers & Qt.ShiftModifier)
+            step *= 10
+        var delta = 0
+        if (event.key === Qt.Key_Left || event.key === Qt.Key_Down)
+            delta = -step
+        else if (event.key === Qt.Key_Right || event.key === Qt.Key_Up)
+            delta = step
+        if (delta === 0)
+            return false
+        var v = Math.max(mono.from, Math.min(mono.to, mono.value + delta))
+        mono.onBegin()
+        mono.value = v
+        mono.onUpdate(v)
+        mono.onFinish()
+        return true
+    }
+
+    Keys.priority: Keys.BeforeItem
+    Keys.onPressed: function (event) {
+        if (mono.enabled && mono.keyStep(event))
+            event.accepted = true
+    }
+
+    Accessible.onIncreaseAction: {
+        if (mono.enabled)
+            mono.keyStep({key: Qt.Key_Right, modifiers: Qt.NoModifier})
+    }
+    Accessible.onDecreaseAction: {
+        if (mono.enabled)
+            mono.keyStep({key: Qt.Key_Left, modifiers: Qt.NoModifier})
+    }
 
     Component.onCompleted: value = externalValue
 

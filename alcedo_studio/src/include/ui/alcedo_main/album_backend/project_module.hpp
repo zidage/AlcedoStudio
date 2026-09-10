@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -14,11 +15,11 @@
 #include <string>
 #include <vector>
 
+#include "app/semantic_generation_service.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "ui/alcedo_main/album_backend/project_handler.hpp"
 #include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/i18n.hpp"
-#include "app/semantic_generation_service.hpp"
 
 namespace alcedo::ui {
 
@@ -26,14 +27,14 @@ namespace alcedo::ui {
 /// are behavior seams, not a service bag: project code can ask the composition
 /// root to perform one lifecycle operation without acquiring sibling modules.
 struct ProjectLifecycleHooks {
-  std::function<QString()> project_switch_block_reason;
-  std::function<void()> finalize_editor_session;
-  std::function<void()> clear_project_ui_state;
-  std::function<void()> project_opened;
+  std::function<QString()>            project_switch_block_reason;
+  std::function<void()>               finalize_editor_session;
+  std::function<void()>               clear_project_ui_state;
+  std::function<void()>               project_opened;
   std::function<bool(const QString&)> should_keep_semantic_model_data;
-  std::function<void()> refresh_semantic_state;
-  std::function<bool()> export_inflight;
-  std::function<void()> refresh_translations;
+  std::function<void()>               refresh_semantic_state;
+  std::function<bool()>               export_inflight;
+  std::function<void()>               refresh_translations;
 };
 
 /// Project lifecycle module: open/create/save, accelerator preference, recent
@@ -57,12 +58,13 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_PROPERTY(QString taskStatus READ TaskStatus NOTIFY TaskStateChanged)
   Q_PROPERTY(int taskProgress READ TaskProgress NOTIFY TaskStateChanged)
   Q_PROPERTY(bool taskCancelVisible READ TaskCancelVisible NOTIFY TaskStateChanged)
+  Q_PROPERTY(QVariantMap maskCacheState READ MaskCacheState NOTIFY MaskCacheStateChanged)
 
  public:
   explicit ProjectModule(QObject* parent = nullptr);
   ~ProjectModule() override = default;
 
-  void SetLifecycleHooks(ProjectLifecycleHooks hooks);
+  void               SetLifecycleHooks(ProjectLifecycleHooks hooks);
 
   // ── Core accessors ─────────────────────────────────────────────────────
   [[nodiscard]] auto handler() -> ProjectHandler& { return handler_; }
@@ -70,7 +72,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   [[nodiscard]] auto accelerator_preference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
-  void SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
+  void         SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
   // ── Q_PROPERTY getters ─────────────────────────────────────────────────
   bool         ServiceReady() const { return service_ready_; }
   QString      ServiceMessage() const { return service_message_text_.Render(); }
@@ -91,37 +93,45 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   bool    TaskCancelVisible() const { return task_cancel_visible_; }
 
   // ── IUiStatusSink ──────────────────────────────────────────────────────
-  void SetServiceMessage(const i18n::LocalizedText& message) override;
-  void SetTaskState(const i18n::LocalizedText& status, int progress,
-                    bool cancelVisible) override;
+  void    SetServiceMessage(const i18n::LocalizedText& message) override;
+  void SetTaskState(const i18n::LocalizedText& status, int progress, bool cancelVisible) override;
   void ScheduleIdleTaskStateReset(int delayMs) override;
 
   void SetServiceState(bool ready, const i18n::LocalizedText& message);
   void SetServiceMessageForCurrentProject(const i18n::LocalizedText& message);
 
   // ── Project lifecycle Q_INVOKABLE ──────────────────────────────────────
-  Q_INVOKABLE bool PromptAndLoadProject();
-  Q_INVOKABLE bool PromptAndCreateProject();
-  Q_INVOKABLE bool SetAcceleratorBackend(const QString& backendKey);
-  Q_INVOKABLE void StartAcceleratorPreparation();
-  Q_INVOKABLE void AcknowledgeAcceleratorWarning();
-  Q_INVOKABLE bool LoadProject(const QString& metaFileUrlOrPath);
-  Q_INVOKABLE bool CreateProjectInFolder(const QString& folderUrlOrPath);
-  Q_INVOKABLE bool CreateProjectInFolderNamed(const QString& folderUrlOrPath,
-                                              const QString& projectName);
-  Q_INVOKABLE bool SaveProject();
+  Q_INVOKABLE bool   PromptAndLoadProject();
+  Q_INVOKABLE bool   PromptAndCreateProject();
+  Q_INVOKABLE bool   SetAcceleratorBackend(const QString& backendKey);
+  Q_INVOKABLE void   StartAcceleratorPreparation();
+  Q_INVOKABLE void   AcknowledgeAcceleratorWarning();
+  Q_INVOKABLE bool   LoadProject(const QString& metaFileUrlOrPath);
+  Q_INVOKABLE bool   CreateProjectInFolder(const QString& folderUrlOrPath);
+  Q_INVOKABLE bool   CreateProjectInFolderNamed(const QString& folderUrlOrPath,
+                                                const QString& projectName);
+  Q_INVOKABLE bool   SaveProject();
+
+  // ── Project Mask cache settings (Settings > Cache) ─────────────────────
+  // Project-scoped Mix-cache location/retention/usage. Not photo history and
+  // separate from the thumbnail disk cache surfaced by LibraryModule.
+  [[nodiscard]] auto MaskCacheState() const -> QVariantMap;
+  Q_INVOKABLE bool   ApplyMaskCacheRoot(const QString& chosenRoot);
+  Q_INVOKABLE bool   ApplyMaskCacheRetention(const QString& retentionKey);
+  Q_INVOKABLE bool   ClearMaskCache();
+  Q_INVOKABLE void   RefreshMaskCacheState();
 
   // ── Internals used by ProjectHandler / host ────────────────────────────
-  void InitializeAcceleratorSettings();
-  void RefreshTranslations();
-  void LoadRecentProjectsFromSettings();
-  void RegisterRecentProject(const std::filesystem::path& projectPath);
-  void RemoveRecentProject(const std::filesystem::path& projectPath);
-  void NotifyProjectLoadStateChanged();
-  void HandleProjectOpened();
-  void ClearProjectUiState();
+  void               InitializeAcceleratorSettings();
+  void               RefreshTranslations();
+  void               LoadRecentProjectsFromSettings();
+  void               RegisterRecentProject(const std::filesystem::path& projectPath);
+  void               RemoveRecentProject(const std::filesystem::path& projectPath);
+  void               NotifyProjectLoadStateChanged();
+  void               HandleProjectOpened();
+  void               ClearProjectUiState();
   [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
-  void              FinalizeEditorSession();
+  void               FinalizeEditorSession();
   [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:
@@ -133,22 +143,23 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void ProjectChanged();
   void projectChanged();
   void ProjectLoadStateChanged();
+  void MaskCacheStateChanged();
 
  private:
-  void StartOpenClPreparationIfNeeded();
-  void SetAcceleratorPreparationState(bool preparing, const i18n::LocalizedText& status);
-  void RebuildAcceleratorOptions();
-  bool IsAcceleratorWarningAcknowledged() const;
-  void PersistAcceleratorWarningAcknowledgement() const;
-  void PersistRecentProjects() const;
+  void           StartOpenClPreparationIfNeeded();
+  void           SetAcceleratorPreparationState(bool preparing, const i18n::LocalizedText& status);
+  void           RebuildAcceleratorOptions();
+  bool           IsAcceleratorWarningAcknowledged() const;
+  void           PersistAcceleratorWarningAcknowledgement() const;
+  void           PersistRecentProjects() const;
 
   ProjectHandler handler_;
 
-  ProjectLifecycleHooks lifecycle_hooks_{};
+  ProjectLifecycleHooks        lifecycle_hooks_{};
 
-  i18n::LocalizedText service_message_text_{};
-  bool                service_ready_ = false;
-  QVariantList        recent_projects_{};
+  i18n::LocalizedText          service_message_text_{};
+  bool                         service_ready_ = false;
+  QVariantList                 recent_projects_{};
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
   QString                      accelerator_backend_key_{};
   QString                      accelerator_warning_id_{};
@@ -163,6 +174,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          task_status_text_{};
   int                          task_progress_       = 0;
   bool                         task_cancel_visible_ = false;
+  QString                      mask_cache_apply_error_{};
 };
 
 }  // namespace alcedo::ui

@@ -19,6 +19,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QStringList>
+#include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -50,6 +51,16 @@ class FakeMaskCreation final : public QObject {
   Q_PROPERTY(qreal innerFeatherPercent READ innerFeatherPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal outerFeatherPercent READ outerFeatherPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal transitionPercent READ transitionPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushRadius READ brushRadius NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushRadiusPercent READ brushRadiusPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushStrengthPercent READ brushStrengthPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString brushTool READ brushTool NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushFeatherPercent READ brushFeatherPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool maskEnabled READ maskEnabled NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool maskInvert READ maskInvert NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal maskOpacityPercent READ maskOpacityPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(QString maskName READ maskName NOTIFY maskCreationChanged)
+  Q_PROPERTY(bool maskNudgeAvailable READ maskNudgeAvailable NOTIFY maskCreationChanged)
 
  public:
   auto             bodyVisible() const -> bool { return active_; }
@@ -63,7 +74,25 @@ class FakeMaskCreation final : public QObject {
   auto             innerFeatherPercent() const -> qreal { return 25.0; }
   auto             outerFeatherPercent() const -> qreal { return 20.0; }
   auto             transitionPercent() const -> qreal { return 30.0; }
+  auto             brushRadius() const -> qreal { return brush_radius_; }
+  auto             brushRadiusPercent() const -> qreal { return brush_radius_percent_; }
+  auto             brushStrengthPercent() const -> qreal { return brush_strength_percent_; }
+  auto             brushTool() const -> QString { return brush_tool_; }
+  auto             brushFeatherPercent() const -> qreal { return brush_feather_percent_; }
+  auto             maskEnabled() const -> bool { return mask_enabled_; }
+  auto             maskInvert() const -> bool { return mask_invert_; }
+  auto             maskOpacityPercent() const -> qreal { return mask_opacity_percent_; }
+  auto             maskName() const -> QString { return mask_name_; }
+  auto             maskNudgeAvailable() const -> bool {
+    return !selected_mask_id_.isEmpty() &&
+           (tool_kind_ != QLatin1String("brush") ||
+            brush_tool_ == QLatin1String("move"));
+  }
   auto             finishCount() const -> int { return finish_count_; }
+  auto             nudgeBeginCount() const -> int { return nudge_begin_count_; }
+  auto             nudgeCount() const -> int { return nudge_count_; }
+  auto             nudgeLastDx() const -> qreal { return nudge_last_dx_; }
+  auto             analyticFinishCount() const -> int { return analytic_finish_count_; }
 
   Q_INVOKABLE void beginRadial() { Open(QStringLiteral("radial"), true); }
   Q_INVOKABLE void beginLinear() { Open(QStringLiteral("linear"), true); }
@@ -86,7 +115,42 @@ class FakeMaskCreation final : public QObject {
   Q_INVOKABLE void updateOuterFeather(qreal) {}
   Q_INVOKABLE void beginTransition() {}
   Q_INVOKABLE void updateTransition(qreal) {}
-  Q_INVOKABLE void finishAnalyticControl() {}
+  Q_INVOKABLE void finishAnalyticControl() { ++analytic_finish_count_; }
+
+  Q_INVOKABLE void setBrushTool(const QString& tool) {
+    brush_tool_ = tool;
+    emit maskCreationChanged();
+  }
+  Q_INVOKABLE void setBrushRadius(qreal radius) { brush_radius_ = radius; }
+  Q_INVOKABLE void setBrushRadiusPercent(qreal percent) {
+    brush_radius_percent_ = percent;
+    emit maskCreationChanged();
+  }
+  Q_INVOKABLE void setBrushStrengthPercent(qreal percent) {
+    brush_strength_percent_ = percent;
+    emit maskCreationChanged();
+  }
+  Q_INVOKABLE void setMaskEnabled(bool enabled) { mask_enabled_ = enabled; }
+  Q_INVOKABLE void setMaskInvert(bool invert) { mask_invert_ = invert; }
+  Q_INVOKABLE void setMaskName(const QString& name) { mask_name_ = name; }
+  Q_INVOKABLE void beginMaskOpacity() {}
+  Q_INVOKABLE void updateMaskOpacity(qreal percent) { mask_opacity_percent_ = percent; }
+  Q_INVOKABLE void beginBrushFeather() {}
+  Q_INVOKABLE void updateBrushFeatherPercent(qreal percent) {
+    brush_feather_percent_ = percent;
+  }
+  Q_INVOKABLE bool beginMaskNudge() {
+    if (!maskNudgeAvailable()) {
+      return false;
+    }
+    ++nudge_begin_count_;
+    return true;
+  }
+  Q_INVOKABLE void nudgeMaskBy(qreal dx, qreal dy) {
+    ++nudge_count_;
+    nudge_last_dx_ = dx;
+    nudge_last_dy_ = dy;
+  }
 
   void             SelectExisting(const QString& kind) { Open(kind, false); }
 
@@ -113,7 +177,21 @@ class FakeMaskCreation final : public QObject {
   bool    creating_ = false;
   QString tool_kind_;
   QString selected_mask_id_;
-  int     finish_count_ = 0;
+  int     finish_count_          = 0;
+  int     analytic_finish_count_ = 0;
+  qreal   brush_radius_          = 0.0;
+  qreal   brush_radius_percent_  = 0.0;
+  qreal   brush_strength_percent_ = 100.0;
+  QString brush_tool_;
+  qreal   brush_feather_percent_ = 0.0;
+  bool    mask_enabled_          = true;
+  bool    mask_invert_           = false;
+  qreal   mask_opacity_percent_  = 100.0;
+  QString mask_name_             = QStringLiteral("Mask 1");
+  int     nudge_begin_count_     = 0;
+  int     nudge_count_           = 0;
+  qreal   nudge_last_dx_         = 0.0;
+  qreal   nudge_last_dy_         = 0.0;
 };
 
 class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
@@ -380,6 +458,7 @@ class StackHarness {
   }
 
   auto root() const -> QQuickItem* { return root_.get(); }
+  auto window() -> QQuickWindow* { return &window_; }
   auto errors() const -> QString {
     QStringList text;
     for (const auto& error : errors_) {
@@ -777,6 +856,164 @@ TEST(EditorAdjustmentHeaderQmlTest, LutSelectionAndScrollSurviveStackLoadWithout
   EXPECT_EQ(lut_model->selectedPath(), QStringLiteral("D:/fake/lut_12.cube"));
   EXPECT_NEAR(list->property("contentY").toReal(), y_before, 1.5);
   EXPECT_EQ(session.submitCount(), submits);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, MaskPageBrushSectionRoutesToolSizeStrengthAndFeather) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  StackHarness       harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  mask_creation.SelectExisting(QStringLiteral("brush"));
+  ProcessEvents(40);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("masks"));
+
+  auto* name    = harness.find(QStringLiteral("editorMasksNameField"));
+  auto* enabled = harness.find(QStringLiteral("editorMasksEnabledCheck"));
+  auto* invert  = harness.find(QStringLiteral("editorMasksInvertCheck"));
+  auto* opacity = harness.find(QStringLiteral("editorMasksOpacitySlider"));
+  auto* nudge   = harness.find(QStringLiteral("editorMasksNudgeArea"));
+  auto* tools   = harness.find(QStringLiteral("editorMasksBrushToolSegments"));
+  auto* size    = harness.find(QStringLiteral("editorMasksBrushSizeSlider"));
+  auto* strength = harness.find(QStringLiteral("editorMasksBrushStrengthSlider"));
+  auto* feather = harness.find(QStringLiteral("editorMasksBrushFeatherSlider"));
+  ASSERT_NE(name, nullptr);
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(invert, nullptr);
+  ASSERT_NE(opacity, nullptr);
+  ASSERT_NE(nudge, nullptr);
+  ASSERT_NE(tools, nullptr);
+  ASSERT_NE(size, nullptr);
+  ASSERT_NE(strength, nullptr);
+  ASSERT_NE(feather, nullptr);
+  EXPECT_TRUE(enabled->isVisible());
+  EXPECT_TRUE(tools->isVisible());
+  EXPECT_TRUE(size->isVisible());
+  EXPECT_TRUE(strength->isVisible());
+  EXPECT_TRUE(feather->isVisible());
+  // Brush keeps the analytic sliders hidden while the Brush tool section shows.
+  auto* major_radius = harness.find(QStringLiteral("editorMasksMajorRadiusSlider"));
+  auto* transition   = harness.find(QStringLiteral("editorMasksTransitionSlider"));
+  ASSERT_NE(major_radius, nullptr);
+  ASSERT_NE(transition, nullptr);
+  EXPECT_FALSE(major_radius->isVisible());
+  EXPECT_FALSE(transition->isVisible());
+  // Move stays disabled until a committed Brush is selected — this fake selects
+  // an existing Mask so the segment is enabled and nudge is available.
+  // Nudge stays hidden while a paint-mode tool is active; arming Move shows it.
+  EXPECT_FALSE(nudge->property("visible").toBool());
+  mask_creation.setBrushTool(QStringLiteral("move"));
+  ProcessEvents(20);
+  EXPECT_TRUE(nudge->property("visible").toBool());
+
+  // Segmented tool select routes through the adapter setter.
+  ASSERT_TRUE(QMetaObject::invokeMethod(tools, "selected",
+                                        Q_ARG(int, 1), Q_ARG(QString, QStringLiteral("erase"))));
+  ProcessEvents(20);
+  EXPECT_EQ(mask_creation.brushTool(), QStringLiteral("erase"));
+
+  // Size/strength one-shot updates route through the adapter setters.
+  QVariantMap step_event;
+  step_event.insert(QStringLiteral("key"), QVariant(Qt::Key_Right));
+  step_event.insert(QStringLiteral("modifiers"), QVariant(int(Qt::NoModifier)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(size, "keyStep",
+                                        Q_ARG(QVariant, QVariant::fromValue(step_event))));
+  ProcessEvents(20);
+  EXPECT_GT(mask_creation.brushRadiusPercent(), 0.0);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, KeyboardMaskMoveUsesSameInteractiveRoute) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  StackHarness       harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  mask_creation.SelectExisting(QStringLiteral("brush"));
+  ProcessEvents(20);
+  mask_creation.setBrushTool(QStringLiteral("move"));
+  ProcessEvents(20);
+
+  auto* nudge = harness.find(QStringLiteral("editorMasksNudgeArea"));
+  ASSERT_NE(nudge, nullptr);
+  ASSERT_TRUE(nudge->property("visible").toBool());
+  nudge->forceActiveFocus();
+  ProcessEvents(20);
+
+  // Arrow key press opens the nudge op and appends through the same
+  // BeginMove/Append/Finish sequence a pointer drag uses; release settles it.
+  QTest::keyClick(harness.window(), Qt::Key_Right);
+  ProcessEvents(20);
+  EXPECT_EQ(mask_creation.nudgeBeginCount(), 1);
+  EXPECT_GE(mask_creation.nudgeCount(), 1);
+  EXPECT_DOUBLE_EQ(mask_creation.nudgeLastDx(), 1.0);
+  EXPECT_EQ(mask_creation.analyticFinishCount(), 1);
+
+  // Shift steps ten logical pixels through the identical route.
+  QTest::keyClick(harness.window(), Qt::Key_Left, Qt::ShiftModifier);
+  ProcessEvents(20);
+  EXPECT_EQ(mask_creation.nudgeBeginCount(), 2);
+  EXPECT_GE(mask_creation.nudgeCount(), 2);
+  EXPECT_DOUBLE_EQ(mask_creation.nudgeLastDx(), -10.0);
+  EXPECT_EQ(mask_creation.analyticFinishCount(), 2);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, MaskSelectionDoesNotSubmitOrJumpScroll) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  StackHarness       harness(&session, &nodes, 260);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  const int submits = session.submitCount();
+  mask_creation.SelectExisting(QStringLiteral("radial"));
+  ProcessEvents(40);
+  mask_creation.SelectExisting(QStringLiteral("brush"));
+  ProcessEvents(40);
+  mask_creation.SelectExisting(QStringLiteral("linear"));
+  ProcessEvents(40);
+
+  EXPECT_EQ(session.submitCount(), submits);
+  auto* scroll = harness.find(QStringLiteral("editorMasksScroll"));
+  ASSERT_NE(scroll, nullptr);
+  EXPECT_NEAR(scroll->property("contentY").toReal(), 0.0, 0.5);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, MaskPageLoadsAtPanelWidthsInBothThemesWithoutMotion) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  auto&              theme    = AppTheme::Instance();
+  const int          original = theme.currentThemeIndex();
+  theme.setReduceMotion(true);
+  StackHarness harness(&session, &nodes, 260);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  mask_creation.SelectExisting(QStringLiteral("brush"));
+  ProcessEvents(40);
+  auto* panel = harness.find(QStringLiteral("editorAdjustmentPanel_masks"));
+  auto* name  = harness.find(QStringLiteral("editorMasksNameField"));
+  auto* size  = harness.find(QStringLiteral("editorMasksBrushSizeSlider"));
+  auto* nudge = harness.find(QStringLiteral("editorMasksNudgeArea"));
+  ASSERT_NE(panel, nullptr);
+  ASSERT_NE(name, nullptr);
+  ASSERT_NE(size, nullptr);
+  ASSERT_NE(nudge, nullptr);
+
+  for (const int width : {260, 320, 460}) {
+    harness.root()->setWidth(width);
+    ProcessEvents(40);
+    EXPECT_LE(size->width(), static_cast<qreal>(width));
+    EXPECT_GT(size->width(), 0.0);
+    EXPECT_LE(nudge->width(), static_cast<qreal>(width));
+    for (int index = 0; index < 2; ++index) {
+      theme.setCurrentThemeIndex(index);
+      ProcessEvents(40);
+      EXPECT_EQ(name->property("color").value<QColor>(), theme.textColor());
+    }
+  }
+  theme.setCurrentThemeIndex(original);
 }
 
 }  // namespace
