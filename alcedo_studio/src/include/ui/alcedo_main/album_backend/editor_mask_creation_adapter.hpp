@@ -15,6 +15,7 @@
 
 #include "app/editor_mask_creation_controller.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
 
 namespace alcedo::editor_rhi {
@@ -49,8 +50,8 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(qreal minorRadiusPercent READ minor_radius_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal rotationDegrees READ rotation_degrees NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal transitionPercent READ transition_percent NOTIFY maskCreationChanged)
-  Q_PROPERTY(qreal brushRadius READ brush_radius NOTIFY maskCreationChanged)
-  Q_PROPERTY(qreal brushRadiusPercent READ brush_radius_percent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushDiameter READ brush_diameter NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushDiameterPercent READ brush_diameter_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal brushStrengthPercent READ brush_strength_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(QString brushTool READ brush_tool_name NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal brushFeatherPercent READ brush_feather_percent NOTIFY maskCreationChanged)
@@ -85,13 +86,15 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto rotation_degrees() const -> qreal;
   [[nodiscard]] auto transition_percent() const -> qreal;
   [[nodiscard]] auto brush_radius() const -> qreal { return static_cast<qreal>(brush_radius_); }
+  /// Brush dab diameter in reference pixels (2 * radius).
+  [[nodiscard]] auto brush_diameter() const -> qreal { return 2.0 * static_cast<qreal>(brush_radius_); }
   /**
-   * @brief Brush radius as a percent of the shorter full-reference edge.
+   * @brief Brush dab diameter as a percent of the shorter full-reference edge.
    *
-   * Reference extents are read from the bound interaction mapping. Zero when no
-   * extent is published.
+   * The panel slider edits diameter, not radius. Reference extents are read
+   * from the bound interaction mapping. Zero when no extent is published.
    */
-  [[nodiscard]] auto brush_radius_percent() const -> qreal;
+  [[nodiscard]] auto brush_diameter_percent() const -> qreal;
   [[nodiscard]] auto brush_strength_percent() const -> qreal {
     return static_cast<qreal>(brush_strength_) * 100.0;
   }
@@ -116,7 +119,8 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE void   beginBrush();
   Q_INVOKABLE void   setBrushTool(const QString& tool);
   Q_INVOKABLE void   setBrushRadius(qreal radius);
-  Q_INVOKABLE void   setBrushRadiusPercent(qreal percent);
+  /// Set the dab diameter as a percent of the shorter full-reference edge.
+  Q_INVOKABLE void   setBrushDiameterPercent(qreal percent);
   Q_INVOKABLE void   setBrushStrengthPercent(qreal percent);
   Q_INVOKABLE void   setMaskEnabled(bool enabled);
   Q_INVOKABLE void   setMaskInvert(bool invert);
@@ -168,12 +172,14 @@ class EditorMaskCreationAdapter : public QObject {
   void               BeginTool(MaskSourceKind kind, const QString& tool_kind);
   void               BeginBrushTool();
   [[nodiscard]] auto ResolveBrushResumeMask(const NodeId& grade_id) const -> MaskId;
-  [[nodiscard]] auto BrushRadiusLogicalPx(const MaskCreationSample& sample) const -> float;
+  /// Item-space dab radius at the current mapping. Affine, so position-free.
+  [[nodiscard]] auto BrushRadiusLogicalPx() const -> float;
   void               EnqueueBrushSettings(EditorMaskCreationCommand& command) const;
   void               ResetLocal();
   void               PublishOverlay();
   void               HideOverlay();
-  void               PublishDisplayedGeometry();
+  /// Cancel the open op when the press-time mapping no longer matches.
+  auto               CancelIfMappingChanged() -> bool;
   void               ApplyOwnerSource(const MaskId& mask_id, const MaskSource& source);
   void               BeginAnalyticMove(AnalyticMaskHandle handle);
   void               UpdateFeatherPercent(AnalyticMaskHandle handle, qreal percent);
@@ -221,6 +227,12 @@ class EditorMaskCreationAdapter : public QObject {
   float                                             brush_strength_   = 1.0f;
   float                                             brush_hardness_   = 1.0f;
   std::vector<QPointF>                              brush_item_path_;
+  /// Mapping snapshot taken when the open pointer op started. A presented-frame
+  /// or view change that alters it cancels the op before the next sample.
+  std::optional<MaskEditMappingIdentity>            press_mapping_identity_;
+  /// Last hover point in item space; drives the armed-Brush cursor ring.
+  QPointF                                           hover_item_{};
+  bool                                              hover_valid_ = false;
   Vector2                                           nudge_base_normalized_{};
   Vector2                                           nudge_base_reference_{};
   Vector2                                           nudge_offset_{};

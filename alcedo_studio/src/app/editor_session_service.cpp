@@ -1296,7 +1296,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
           return tool;
         }
       }
-      return mask_creation_.BeginMaskInput(command.sample, command.identity);
+      return mask_creation_.BeginMaskInput(command.sample, command.identity, command.source_kind,
+                                           command.default_feather_reference_px);
     case EditorMaskCreationCommandKind::BeginMove:
       if (command.brush_tool == EditorBrushTool::Move) {
         const auto tool = mask_creation_.SetBrushTool(EditorBrushTool::Move);
@@ -1304,7 +1305,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
           return tool;
         }
       }
-      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity);
+      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity,
+                                          command.source_kind);
     case EditorMaskCreationCommandKind::Append:
       if (command.brush_radius > 0.0f) {
         const auto parameters = mask_creation_.SetBrushStrokeParameters(

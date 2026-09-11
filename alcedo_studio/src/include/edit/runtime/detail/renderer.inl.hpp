@@ -168,7 +168,11 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
 
   try {
     if (request.sink != nullptr) {
-      FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, request.submission,
+      // Attach the exact resolved geometry so viewer-side Mask mapping uses the
+      // frame being presented instead of a separately derived document mapping.
+      FrameCompletionSubmission presented = request.submission;
+      presented.geometry                  = plan.geometry;
+      FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, presented,
                                        display_config);
     }
     if (request.require_host_output) {

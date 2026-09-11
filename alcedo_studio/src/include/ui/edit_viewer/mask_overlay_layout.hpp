@@ -80,6 +80,28 @@ namespace alcedo {
                                                    const QRectF& clip) -> MaskOverlayDisplay;
 
 /**
+ * @brief Existing Brush in Move mode: translated coverage bounds as a frame.
+ *
+ * The quad is the AABB of positive-strength Paint dab supports (each dab's
+ * reference-pixel disc bounding box), expanded by @p source.feather_radius,
+ * then mapped corner-by-corner so rotation stays faithful. CornerTick handles
+ * anchor the four corners; pressing inside the frame or on an edge begins
+ * BrushMove. A Brush with no painted coverage falls back to the single Move
+ * handle at @c placement_translation.
+ */
+[[nodiscard]] auto MakeBrushMoveOverlayDisplay(const MaskEditViewMapping& mapping,
+                                               const BrushMaskSource&     source,
+                                               const QRectF& clip) -> MaskOverlayDisplay;
+
+/**
+ * @brief Translated Paint-dab support AABB of @p source in reference pixels.
+ *
+ * Empty @c RectF when no Paint dab carries positive strength. Feather is not
+ * included; callers expand as needed.
+ */
+[[nodiscard]] auto BrushPaintSupportReferenceBounds(const BrushMaskSource& source) -> QRectF;
+
+/**
  * @brief Existing Radial: center, axes, rotation, feather handles, and iso-rho lines.
  *
  * Shows the base ellipse (solid) and distinct inner/outer feather contours
@@ -110,7 +132,9 @@ namespace alcedo {
 [[nodiscard]] auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path,
                                                    QPointF                     cursor_item,
                                                    float         cursor_radius_logical_px,
-                                                   const QRectF& clip) -> MaskOverlayDisplay;
+                                                   const QRectF& clip,
+                                                   bool          erase_cursor = false)
+    -> MaskOverlayDisplay;
 
 /**
  * @brief Initial Radial drawing: selected contours and handles while the drag is open.

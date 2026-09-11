@@ -48,6 +48,7 @@ def_library(EditMaskStore
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_signed_distance.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/grade_mask_coverage.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_raster.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_replay_cache.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
     PUBLIC_DEPS EditGeometry JSON
     PRIVATE_DEPS xxHash

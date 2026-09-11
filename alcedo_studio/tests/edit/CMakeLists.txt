@@ -360,6 +360,18 @@ gtest_discover_tests(BrushRegionalReplayTest
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(BrushRegionalReplayTest edit)
 
+# Retained canonical Brush rasters: identity diff, regional replay, and eviction.
+add_executable(ParameterizedBrushReplayCacheTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/parameterized_brush_replay_cache_test.cpp)
+target_include_directories(ParameterizedBrushReplayCacheTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/mask)
+target_link_libraries(ParameterizedBrushReplayCacheTest
+  PRIVATE GTest::gtest_main EditMaskStore)
+gtest_discover_tests(ParameterizedBrushReplayCacheTest
+  TEST_PREFIX "ParameterizedBrushReplayCacheTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(ParameterizedBrushReplayCacheTest edit)
+
 add_executable(AnalyticMaskEditTest
   ${ALCEDO_TEST_ROOT}/edit/mask/analytic_mask_edit_test.cpp)
 target_include_directories(AnalyticMaskEditTest PUBLIC ${ALCEDO_INCLUDE_DIR})

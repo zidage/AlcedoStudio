@@ -32,7 +32,7 @@ void RequireAlgorithm(const BrushMaskSource& source) {
 }  // namespace
 
 void BrushRasterizer::RequireGeometry() const {
-  if (raster_.Empty() || pixels_.size() !=
+  if (raster_.Empty() || pixels_->size() !=
                              static_cast<std::size_t>(raster_.width) *
                                  static_cast<std::size_t>(raster_.height)) {
     FailRaster("brush rasterizer geometry is unset");
@@ -45,12 +45,15 @@ void BrushRasterizer::SetGeometry(Extent2D raster, Extent2D full_reference) {
   }
   raster_          = raster;
   full_reference_  = full_reference;
-  pixels_.assign(static_cast<std::size_t>(raster.width) * raster.height, 0);
+  // Fresh storage: SharedPixels handles handed out for the previous geometry
+  // must keep the old bytes immutable.
+  pixels_ = std::make_shared<std::vector<std::uint8_t>>(
+      static_cast<std::size_t>(raster.width) * raster.height, 0);
 }
 
 void BrushRasterizer::ClearToZero() {
   RequireGeometry();
-  std::fill(pixels_.begin(), pixels_.end(), 0);
+  std::fill(pixels_->begin(), pixels_->end(), 0);
 }
 
 void BrushRasterizer::StampDab(const BrushCanonicalSample& sample, Vector2 translation,
@@ -74,8 +77,8 @@ void BrushRasterizer::StampDab(const BrushCanonicalSample& sample, Vector2 trans
                                                     sample.hardness));
       const auto index = PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                                        raster_);
-      pixels_[index]   = mode == BrushStrokeMode::Erase ? EraseBrushR8(pixels_[index], dab)
-                                                        : PaintBrushR8(pixels_[index], dab);
+      (*pixels_)[index] = mode == BrushStrokeMode::Erase ? EraseBrushR8((*pixels_)[index], dab)
+                                                          : PaintBrushR8((*pixels_)[index], dab);
     }
   }
 }
@@ -95,7 +98,7 @@ void BrushRasterizer::ReplayRegion(const BrushMaskSource& source, const BrushSpa
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
       const auto px = static_cast<std::uint32_t>(x);
       const auto py = static_cast<std::uint32_t>(y);
-      pixels_[PackedR8Index(px, py, raster_)] = 0;
+      (*pixels_)[PackedR8Index(px, py, raster_)] = 0;
     }
   }
   const auto spans = index.QueryOutput(region, source.placement_translation);

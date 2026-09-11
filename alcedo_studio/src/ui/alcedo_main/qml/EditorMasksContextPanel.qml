@@ -275,7 +275,8 @@ Item {
                 enabled: root.brushSelected
                 entries: [
                     { "label": qsTr("Paint"), "value": "paint" },
-                    { "label": qsTr("Erase"), "value": "erase" },
+                    { "label": qsTr("Erase"), "value": "erase",
+                      "enabled": root.maskSelected },
                     { "label": qsTr("Move"), "value": "move",
                       "enabled": root.maskSelected }
                 ]
@@ -296,14 +297,14 @@ Item {
                 from: 0.5; to: 50; stepSize: 0.1; pointerGain: 1
                 rowHeight: 28; handleSize: 18
                 flickable: maskScroll
-                externalValue: root.maskCreation ? root.maskCreation.brushRadiusPercent : 0
-                onUpdate: function (v) { root.maskCreation.setBrushRadiusPercent(v) }
+                externalValue: root.maskCreation ? root.maskCreation.brushDiameterPercent : 0
+                onUpdate: function (v) { root.maskCreation.setBrushDiameterPercent(v) }
             }
             ParameterValue {
                 objectName: "editorMasksBrushSizeValue"
                 visible: root.brushSelected
                 text: qsTr("%1 px").arg(Math.round(root.maskCreation
-                                                   ? root.maskCreation.brushRadius : 0))
+                                                   ? root.maskCreation.brushDiameter : 0))
             }
 
             ParameterLabel { visible: root.brushSelected; text: qsTr("Brush strength") }

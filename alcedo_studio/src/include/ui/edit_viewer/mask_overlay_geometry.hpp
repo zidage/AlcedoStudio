@@ -82,10 +82,15 @@ enum class MaskOverlayHandleId : std::uint8_t {
   LinearEndBoundary    = 11,
 };
 
-/** @brief Disc is a filled radius/origin control. Ring is a feather control. */
+/**
+ * @brief Disc is a filled radius/origin control. Ring is a feather control.
+ * CornerTick is a short Brush Move frame anchor: two segments along the frame
+ * edges meeting at the corner point.
+ */
 enum class MaskOverlayHandleShape : std::uint8_t {
-  Disc = 0,
-  Ring = 1,
+  Disc       = 0,
+  Ring       = 1,
+  CornerTick = 2,
 };
 
 /** @brief One handle in item/logical coordinates. */
@@ -161,6 +166,12 @@ struct MaskOverlayDisplay {
   bool    cursor_visible = false;
   QPointF cursor_center{};
   float   cursor_radius_logical_px = 0.0f;
+  /// Erase preview: the cursor outline renders dashed instead of solid.
+  bool    cursor_dashed = false;
+  /// Brush Move affordance: translated coverage bounds (paint supports plus
+  /// feather) mapped to item/logical space as a, possibly rotated, quad. The
+  /// four CornerTick handles anchor it; inside/frame hits resolve to BrushMove.
+  bool move_frame_visible = false;
   std::vector<QPointF> creation_path;
   std::vector<QPointF> creation_outline;
   std::vector<std::pair<QPointF, QPointF>> creation_guides;

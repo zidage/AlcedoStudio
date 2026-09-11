@@ -196,7 +196,8 @@ TEST(AnalyticMaskCreationTest, ExistingRadialMoveUpdatesInteractivePixelsBeforeR
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.28f, 0.62f}), true);
@@ -247,7 +248,8 @@ TEST(AnalyticMaskCreationTest, FinishModeSettlesOnceAndLeavesMaskEditingInactive
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.72f, 0.5f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialMajor, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialMajor, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.80f, 0.5f}), true);
   ASSERT_TRUE(harness.controller.AppendMaskInput(moved, harness.pointer).accepted);
@@ -288,7 +290,8 @@ TEST(AnalyticMaskCreationTest, ExistingGradientMovePreservesDirectionAndUpdatesI
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::LinearOrigin, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::LinearOrigin, press, harness.pointer,
+                          MaskSourceKind::LinearGradient)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.70f, 0.50f}), true);
@@ -341,7 +344,8 @@ TEST(AnalyticMaskCreationTest, RadialFeatherControlsMatchEvaluator) {
                         radial.center_y + std::sin(radial.rotation) * radial.major_radius * 0.55f};
   const auto    press = SampleOf(harness.mapping, ItemOf(harness.mapping, inner_q), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, press, harness.pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(press, harness.pointer).accepted);
 
@@ -356,7 +360,8 @@ TEST(AnalyticMaskCreationTest, RadialFeatherControlsMatchEvaluator) {
   const auto outer_press    = SampleOf(harness.mapping, ItemOf(harness.mapping, outer_q), false);
   outer_pointer.sequence_id = 10;
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(outer_press, outer_pointer).accepted);
 
@@ -388,7 +393,8 @@ TEST(AnalyticMaskCreationTest, DegenerateAnalyticCreationCreatesNoCommit) {
                   .accepted);
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskInput(press, harness.pointer, MaskSourceKind::Radial).accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(press, harness.pointer).accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
   EXPECT_EQ(harness.preview_count, 0);
@@ -406,7 +412,9 @@ TEST(AnalyticMaskCreationTest, DegenerateAnalyticCreationCreatesNoCommit) {
                   .accepted);
   MaskPointerIdentity linear_pointer = harness.pointer;
   linear_pointer.sequence_id         = 11;
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, linear_pointer).accepted);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskInput(press, linear_pointer, MaskSourceKind::LinearGradient)
+          .accepted);
   EXPECT_TRUE(harness.controller.FinishMaskInput().accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
   EXPECT_EQ(harness.history.working_head(), head_before);
@@ -431,7 +439,8 @@ TEST(AnalyticMaskCreationTest, EscapeRestoresAnalyticSourceWithoutCommit) {
   const auto press = SampleOf(
       harness.mapping, ItemOf(harness.mapping, Vector2{radial.center_x, radial.center_y}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.22f, 0.30f}), true);
@@ -460,7 +469,8 @@ TEST(AnalyticMaskCreationTest, ValidRadialCreationCommitsOnceAndKeepsControlOnly
                   .accepted);
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.45f, 0.40f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskInput(press, harness.pointer, MaskSourceKind::Radial).accepted);
   const auto drag = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.62f, 0.58f}), true);
   const auto preview = harness.controller.AppendMaskInput(drag, harness.pointer);
   ASSERT_TRUE(preview.accepted);
@@ -504,7 +514,8 @@ TEST(AnalyticMaskCreationTest, RadialFeatherControlsPreserveCenterRadiiAndRotati
   const auto inner_q = RadialNormalizedPoint(radial, 0.55f, 0.0f);
   const auto press   = SampleOf(harness.mapping, ItemOf(harness.mapping, inner_q), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, press, harness.pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(press, harness.pointer).accepted);
   ASSERT_TRUE(harness.controller.FinishMaskInput().accepted);
@@ -517,7 +528,8 @@ TEST(AnalyticMaskCreationTest, RadialFeatherControlsPreserveCenterRadiiAndRotati
   outer_pointer.sequence_id         = 11;
   const auto outer_press = SampleOf(harness.mapping, ItemOf(harness.mapping, outer_q), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(outer_press, outer_pointer).accepted);
   const auto* live = std::get_if<RadialMaskSource>(
@@ -552,7 +564,8 @@ TEST(AnalyticMaskCreationTest, RadialFeatherDragUpdatesInteractivePixelsBeforeRe
   const auto press = SampleOf(
       harness.mapping, ItemOf(harness.mapping, RadialNormalizedPoint(radial, 1.45f, 0.0f)), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, press, harness.pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   const auto preview = harness.controller.AppendMaskInput(press, harness.pointer);
   ASSERT_TRUE(preview.accepted);
@@ -618,7 +631,8 @@ TEST(AnalyticMaskCreationTest, SelectedMaskCanBeEditedAfterWorkspaceReentry) {
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.33f, 0.58f}), true);
@@ -726,7 +740,8 @@ TEST(AnalyticMaskCreationTest, DeletingMaskRejectsQueuedEditsAndDelayedFrames) {
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.70f, 0.40f}), true);
@@ -772,7 +787,8 @@ TEST(AnalyticMaskCreationTest, GradientBoundaryDragPreservesOriginAndChangesTran
   const Vector2 end{linear.origin_x, linear.origin_y + 0.40f};
   const auto    press = SampleOf(harness.mapping, ItemOf(harness.mapping, end), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::LinearEndBoundary, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::LinearEndBoundary, press, harness.pointer,
+                           MaskSourceKind::LinearGradient)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(press, harness.pointer).accepted);
   const auto* live = std::get_if<LinearGradientMaskSource>(
@@ -799,7 +815,8 @@ TEST(AnalyticMaskCreationTest, AnalyticControlCancelRestoresSourceWithoutHistory
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.50f, 0.50f}), false);
   ASSERT_TRUE(
-      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer)
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                          MaskSourceKind::Radial)
           .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.30f, 0.60f}), true);
@@ -831,7 +848,8 @@ TEST(AnalyticMaskCreationTest, CoincidentRadialBoundariesKeepFeatherControlsReac
       harness.mapping, ItemOf(harness.mapping, RadialNormalizedPoint(radial, 0.70f, 0.0f)), false);
   ASSERT_TRUE(
       harness.controller
-          .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, inner_press, harness.pointer)
+          .BeginMaskMove(AnalyticMaskHandle::RadialInnerFeather, inner_press, harness.pointer,
+                            MaskSourceKind::Radial)
           .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(inner_press, harness.pointer).accepted);
   ASSERT_TRUE(harness.controller.FinishMaskInput().accepted);
@@ -844,7 +862,8 @@ TEST(AnalyticMaskCreationTest, CoincidentRadialBoundariesKeepFeatherControlsReac
   const auto outer_press            = SampleOf(
       harness.mapping, ItemOf(harness.mapping, RadialNormalizedPoint(radial, 1.35f, 0.0f)), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::RadialOuterFeather, outer_press, outer_pointer,
+                           MaskSourceKind::Radial)
                   .accepted);
   ASSERT_TRUE(harness.controller.AppendMaskInput(outer_press, outer_pointer).accepted);
   const auto* live = std::get_if<RadialMaskSource>(

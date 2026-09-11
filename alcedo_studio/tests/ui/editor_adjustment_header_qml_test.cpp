@@ -51,8 +51,8 @@ class FakeMaskCreation final : public QObject {
   Q_PROPERTY(qreal innerFeatherPercent READ innerFeatherPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal outerFeatherPercent READ outerFeatherPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal transitionPercent READ transitionPercent NOTIFY maskCreationChanged)
-  Q_PROPERTY(qreal brushRadius READ brushRadius NOTIFY maskCreationChanged)
-  Q_PROPERTY(qreal brushRadiusPercent READ brushRadiusPercent NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushDiameter READ brushDiameter NOTIFY maskCreationChanged)
+  Q_PROPERTY(qreal brushDiameterPercent READ brushDiameterPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal brushStrengthPercent READ brushStrengthPercent NOTIFY maskCreationChanged)
   Q_PROPERTY(QString brushTool READ brushTool NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal brushFeatherPercent READ brushFeatherPercent NOTIFY maskCreationChanged)
@@ -74,8 +74,8 @@ class FakeMaskCreation final : public QObject {
   auto             innerFeatherPercent() const -> qreal { return 25.0; }
   auto             outerFeatherPercent() const -> qreal { return 20.0; }
   auto             transitionPercent() const -> qreal { return 30.0; }
-  auto             brushRadius() const -> qreal { return brush_radius_; }
-  auto             brushRadiusPercent() const -> qreal { return brush_radius_percent_; }
+  auto             brushDiameter() const -> qreal { return brush_diameter_; }
+  auto             brushDiameterPercent() const -> qreal { return brush_diameter_percent_; }
   auto             brushStrengthPercent() const -> qreal { return brush_strength_percent_; }
   auto             brushTool() const -> QString { return brush_tool_; }
   auto             brushFeatherPercent() const -> qreal { return brush_feather_percent_; }
@@ -121,9 +121,9 @@ class FakeMaskCreation final : public QObject {
     brush_tool_ = tool;
     emit maskCreationChanged();
   }
-  Q_INVOKABLE void setBrushRadius(qreal radius) { brush_radius_ = radius; }
-  Q_INVOKABLE void setBrushRadiusPercent(qreal percent) {
-    brush_radius_percent_ = percent;
+  Q_INVOKABLE void setBrushDiameter(qreal diameter) { brush_diameter_ = diameter; }
+  Q_INVOKABLE void setBrushDiameterPercent(qreal percent) {
+    brush_diameter_percent_ = percent;
     emit maskCreationChanged();
   }
   Q_INVOKABLE void setBrushStrengthPercent(qreal percent) {
@@ -179,8 +179,8 @@ class FakeMaskCreation final : public QObject {
   QString selected_mask_id_;
   int     finish_count_          = 0;
   int     analytic_finish_count_ = 0;
-  qreal   brush_radius_          = 0.0;
-  qreal   brush_radius_percent_  = 0.0;
+  qreal   brush_diameter_          = 0.0;
+  qreal   brush_diameter_percent_  = 0.0;
   qreal   brush_strength_percent_ = 100.0;
   QString brush_tool_;
   qreal   brush_feather_percent_ = 0.0;
@@ -920,7 +920,7 @@ TEST(EditorAdjustmentHeaderQmlTest, MaskPageBrushSectionRoutesToolSizeStrengthAn
   ASSERT_TRUE(QMetaObject::invokeMethod(size, "keyStep",
                                         Q_ARG(QVariant, QVariant::fromValue(step_event))));
   ProcessEvents(20);
-  EXPECT_GT(mask_creation.brushRadiusPercent(), 0.0);
+  EXPECT_GT(mask_creation.brushDiameterPercent(), 0.0);
 }
 
 TEST(EditorAdjustmentHeaderQmlTest, KeyboardMaskMoveUsesSameInteractiveRoute) {

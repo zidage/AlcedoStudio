@@ -138,6 +138,10 @@ struct EditorMaskCreationCommand {
   float                         brush_radius   = 0.0f;
   float                         brush_strength = 1.0f;
   float                         brush_hardness = 1.0f;
+  /// BeginInput only: source feather for a newly created Brush, in reference
+  /// pixels. Existing Brushes keep their stored feather; zero leaves the
+  /// source default unchanged.
+  float                         default_feather_reference_px = 0.0f;
   bool                          ordered_append = false;
   /**
    * @brief Mask-level value edit target.
@@ -267,16 +271,24 @@ class EditorMaskCreationController {
    * @brief Start a creation drag at @p sample.
    *
    * Press outside the photograph is rejected. Degenerate zero-area input stays
-   * transient until a later valid sample.
+   * transient until a later valid sample. @p expected_source must equal the
+   * armed kind so a stale queued dispatch cannot drive the wrong Mask type.
+   * @p default_feather_reference_px is applied only when a new Brush Mask is
+   * created by this stroke.
    */
-  auto BeginMaskInput(MaskCreationSample sample, MaskPointerIdentity identity)
+  auto BeginMaskInput(MaskCreationSample sample, MaskPointerIdentity identity,
+                      MaskSourceKind expected_source, float default_feather_reference_px = 0.0f)
       -> EditorMaskCreationResult;
 
   /**
    * @brief Start an existing-mask handle drag. Shape fields stay fixed for center/origin.
+   *
+   * @p expected_source must equal the selected Mask kind; a mismatch rejects
+   * the stale dispatch without opening an operation.
    */
   auto BeginMaskMove(AnalyticMaskHandle handle, MaskCreationSample sample,
-                     MaskPointerIdentity identity) -> EditorMaskCreationResult;
+                     MaskPointerIdentity identity, MaskSourceKind expected_source)
+      -> EditorMaskCreationResult;
 
   /**
    * @brief Continue the captured sequence. Applies provisional fields and Interactive.
@@ -348,7 +360,8 @@ class EditorMaskCreationController {
   void RequestInteractive(EditorMaskCreationResult& result);
   auto UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
-  auto BeginBrushStroke(const MaskCreationSample& sample) -> EditorMaskCreationResult;
+  auto BeginBrushStroke(const MaskCreationSample& sample, float default_feather_reference_px)
+      -> EditorMaskCreationResult;
   auto UpdateBrushPaint(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto UpdateBrushMove(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto FinishBrushStroke() -> EditorMaskCreationResult;
@@ -389,6 +402,9 @@ class EditorMaskCreationController {
   Vector2                   before_translation_{};
   std::string               field_edit_key_;
   nlohmann::json            before_field_value_;
+  /// Draft-sample count already republished into the live Brush source; appends
+  /// that emit no new canonical dab skip the live-source republish.
+  std::size_t               published_draft_samples_ = 0;
 };
 
 }  // namespace alcedo

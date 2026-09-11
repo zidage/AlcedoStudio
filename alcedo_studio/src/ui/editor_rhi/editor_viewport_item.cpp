@@ -158,7 +158,19 @@ void EditorViewportItem::setImageIdentity(qulonglong identity) {
   if (previous == identity) {
     return;
   }
+  presented_mask_geometry_   = {};
+  presented_mask_request_id_ = 0;
   emit ImageIdentityChanged();
+}
+
+void EditorViewportItem::NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                                   qulonglong                    request_id) {
+  if (request_id != 0 && request_id <= presented_mask_request_id_) {
+    return;
+  }
+  presented_mask_geometry_   = geometry;
+  presented_mask_request_id_ = request_id;
+  emit PresentedMaskGeometryChanged();
 }
 
 void EditorViewportItem::setSessionEpoch(qulonglong epoch) {

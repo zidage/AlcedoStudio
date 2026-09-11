@@ -313,6 +313,15 @@ class IEditorSessionBackend {
   }
   [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
   [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
+  /**
+   * @brief Owner-side Mask-creation state machine value.
+   *
+   * UI adapters compare this with their local armed state so a rejected tool
+   * arming cannot leave a stale armed kind waiting for the next press.
+   */
+  [[nodiscard]] virtual auto mask_creation_state() const -> EditorMaskCreationState {
+    return EditorMaskCreationState::Inactive;
+  }
   [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
     return std::nullopt;
   }
@@ -514,6 +523,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
     return mask_creation_.selected_mask_id();
+  }
+  [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
+    return mask_creation_.state();
   }
   [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
     return mask_creation_.CurrentSource();

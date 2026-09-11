@@ -192,7 +192,7 @@ void EditorMaskCreationAdapter::bindInteractionItem(QObject* interaction) {
   }
   interaction_ = typed;
   ConnectInteraction(typed);
-  PublishDisplayedGeometry();
+  PublishOverlay();
 }
 
 void EditorMaskCreationAdapter::bindOverlayItem(QObject* overlay) {
@@ -278,15 +278,15 @@ auto EditorMaskCreationAdapter::ResolveBrushResumeMask(const NodeId& grade_id) c
   return {};
 }
 
-auto EditorMaskCreationAdapter::BrushRadiusLogicalPx(const MaskCreationSample& sample) const
-    -> float {
+auto EditorMaskCreationAdapter::BrushRadiusLogicalPx() const -> float {
   if (interaction_ == nullptr || brush_radius_ <= 0.0f) {
     return kMaskOverlayHandleRadiusLogicalPx * 2.0f;
   }
   const auto mapping = interaction_->maskEditViewMapping();
-  const auto center  = MaskEditGeometry::MapReferenceToItem(mapping, sample.reference_pixels);
-  const auto edge    = MaskEditGeometry::MapReferenceToItem(
-      mapping, Vector2{sample.reference_pixels.x + brush_radius_, sample.reference_pixels.y});
+  // Reference->item is affine, so the dab radius is position-independent.
+  const auto center = MaskEditGeometry::MapReferenceToItem(mapping, Vector2{0.0f, 0.0f});
+  const auto edge =
+      MaskEditGeometry::MapReferenceToItem(mapping, Vector2{brush_radius_, 0.0f});
   if (!center || !edge) {
     return kMaskOverlayHandleRadiusLogicalPx * 2.0f;
   }
@@ -347,8 +347,7 @@ void EditorMaskCreationAdapter::BeginBrushTool() {
     }
   }
   HideOverlay();
-  PublishDisplayedGeometry();
-  if (overlay_source_.has_value()) {
+  if (overlay_source_.has_value() || hover_valid_) {
     PublishOverlay();
   }
   emit maskCreationChanged();
@@ -382,6 +381,7 @@ void EditorMaskCreationAdapter::setBrushTool(const QString& tool) {
   } else {
     edit_mode_ = EditMode::Creating;
   }
+  PublishOverlay();
   emit maskCreationChanged();
 }
 
@@ -396,6 +396,7 @@ void EditorMaskCreationAdapter::setBrushRadius(qreal radius) {
   command.mask_id = MaskIdFromQString(selected_mask_id_);
   EnqueueBrushSettings(command);
   (void)Enqueue(command);
+  PublishOverlay();
   emit maskCreationChanged();
 }
 
@@ -437,12 +438,12 @@ auto EditorMaskCreationAdapter::ReferenceShorterEdgePx() const -> float {
   return static_cast<float>(std::min(extent.width, extent.height));
 }
 
-auto EditorMaskCreationAdapter::brush_radius_percent() const -> qreal {
+auto EditorMaskCreationAdapter::brush_diameter_percent() const -> qreal {
   const float edge = ReferenceShorterEdgePx();
   if (edge <= 0.0f) {
     return 0.0;
   }
-  return static_cast<qreal>(brush_radius_) * 100.0 / static_cast<qreal>(edge);
+  return 2.0 * static_cast<qreal>(brush_radius_) * 100.0 / static_cast<qreal>(edge);
 }
 
 auto EditorMaskCreationAdapter::brush_feather_percent() const -> qreal {
@@ -485,12 +486,12 @@ auto EditorMaskCreationAdapter::mask_nudge_available() const -> bool {
   return IsAnalyticKind(source_kind_);
 }
 
-void EditorMaskCreationAdapter::setBrushRadiusPercent(qreal percent) {
+void EditorMaskCreationAdapter::setBrushDiameterPercent(qreal percent) {
   const float edge = ReferenceShorterEdgePx();
   if (edge <= 0.0f || !(percent > 0.0)) {
     return;
   }
-  setBrushRadius(static_cast<qreal>(percent) * 0.01 * static_cast<qreal>(edge));
+  setBrushRadius(static_cast<qreal>(percent) * 0.005 * static_cast<qreal>(edge));
 }
 
 void EditorMaskCreationAdapter::EnqueueMaskField(std::string_view field_key, nlohmann::json value) {
@@ -679,7 +680,6 @@ void EditorMaskCreationAdapter::BeginTool(MaskSourceKind kind, const QString& to
   hovered_handle_  = MaskOverlayHandleId::None;
   active_handle_   = AnalyticMaskHandle::None;
   HideOverlay();
-  PublishDisplayedGeometry();
   emit maskCreationChanged();
 }
 
@@ -801,16 +801,27 @@ void EditorMaskCreationAdapter::deleteActiveMask() {
 void EditorMaskCreationAdapter::OnImageClosed() { ResetLocal(); }
 
 void EditorMaskCreationAdapter::SyncFromSession() {
-  PublishDisplayedGeometry();
-  if (open_ || session_ == nullptr || session_->mask_creation_commands_pending()) {
+  if (session_ == nullptr) {
     return;
   }
-  const auto owner_node = session_->mask_creation_node_id();
-  const auto owner_id   = session_->mask_creation_mask_id();
-  const auto source     = session_->mask_creation_source();
+  if (open_ || session_->mask_creation_commands_pending()) {
+    return;
+  }
+  const auto owner_node  = session_->mask_creation_node_id();
+  const auto owner_id    = session_->mask_creation_mask_id();
+  const auto owner_state = session_->mask_creation_state();
+  const auto source      = session_->mask_creation_source();
   if (!owner_id.Empty() && source.has_value()) {
     edit_node_id_ = owner_node;
     ApplyOwnerSource(owner_id, *source);
+    return;
+  }
+  if (owner_state == EditorMaskCreationState::Inactive) {
+    // The owner rejected or dropped the armed tool after this adapter queued
+    // its arm; local state must not advertise a tool the owner will reject.
+    if (active() || open_) {
+      ResetLocal();
+    }
     return;
   }
   if (selected_mask_id_.isEmpty()) {
@@ -819,9 +830,6 @@ void EditorMaskCreationAdapter::SyncFromSession() {
       selectMask(QString{}, MaskIdToQString(restored));
       return;
     }
-  }
-  if (!selected_mask_id_.isEmpty() || active()) {
-    return;
   }
 }
 
@@ -839,16 +847,18 @@ void EditorMaskCreationAdapter::ResetLocal() {
   const bool changed = active() || open_;
   tool_kind_.clear();
   selected_mask_id_.clear();
-  edit_node_id_   = {};
-  edit_mode_      = EditMode::Inactive;
-  open_           = false;
-  open_via_panel_ = false;
+  edit_node_id_            = {};
+  edit_mode_               = EditMode::Inactive;
+  open_                    = false;
+  open_via_panel_          = false;
   overlay_source_.reset();
   overlay_display_ = {};
-  hovered_handle_  = MaskOverlayHandleId::None;
-  active_handle_   = AnalyticMaskHandle::None;
-  brush_tool_      = EditorBrushTool::Idle;
+  hovered_handle_          = MaskOverlayHandleId::None;
+  active_handle_           = AnalyticMaskHandle::None;
+  brush_tool_              = EditorBrushTool::Idle;
   brush_item_path_.clear();
+  press_mapping_identity_  = std::nullopt;
+  hover_valid_             = false;
   HideOverlay();
   if (changed) {
     emit maskCreationChanged();
@@ -948,6 +958,12 @@ auto EditorMaskCreationAdapter::Enqueue(EditorMaskCreationCommand command) -> bo
   if (session_ == nullptr) {
     return false;
   }
+  // Stamp the armed source kind on every dispatched command so the owner can
+  // reject a stale queued dispatch whose kind no longer matches the armed or
+  // selected Mask. BeginCreation carries its own target kind already.
+  if (command.kind != EditorMaskCreationCommandKind::BeginCreation) {
+    command.source_kind = source_kind_;
+  }
   return session_->EnqueueMaskCreation(std::move(command));
 }
 
@@ -958,74 +974,81 @@ void EditorMaskCreationAdapter::HideOverlay() {
   overlay_->setMaskOverlayDisplay(MaskOverlayDisplay{});
 }
 
-void EditorMaskCreationAdapter::PublishDisplayedGeometry() {
-  if (interaction_ == nullptr || session_ == nullptr) {
-    return;
-  }
-  const auto* document = session_->pipeline_document();
-  if (document == nullptr) {
-    return;
-  }
-  const int width  = interaction_->imageWidth();
-  const int height = interaction_->imageHeight();
-  if (width <= 0 || height <= 0) {
-    return;
-  }
-  ImageGeometryParams image;
-  image.crop_rect        = document->Geometry().CropRect();
-  image.rotation_degrees = document->Geometry().RotationDegrees();
-  image.expand_to_fit    = document->Geometry().ExpandToFit();
-  interaction_->setDisplayedMaskGeometry(MaskEditGeometry::MakeDocumentPhotographGeometry(
-      Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)}, image));
-}
-
 void EditorMaskCreationAdapter::PublishOverlay() {
-  if (overlay_ == nullptr || interaction_ == nullptr || !overlay_source_.has_value()) {
+  if (overlay_ == nullptr || interaction_ == nullptr) {
     HideOverlay();
     return;
   }
-  PublishDisplayedGeometry();
   const auto         mapping = interaction_->maskEditViewMapping();
   const auto         style   = OverlayStyle();
   const auto         clip    = OverlayClip();
   MaskOverlayDisplay display;
-  if (const auto* radial = std::get_if<RadialMaskSource>(&*overlay_source_)) {
+  const bool         brush_paint_tool =
+      brush_tool_ == EditorBrushTool::Paint || brush_tool_ == EditorBrushTool::Erase;
+  if (const auto* radial =
+          overlay_source_ ? std::get_if<RadialMaskSource>(&*overlay_source_) : nullptr) {
     display = (creating() && open_)
                   ? MakeRadialCreatingOverlayDisplay(mapping, *radial, style, clip)
                   : MakeRadialExistingOverlayDisplay(mapping, *radial, style, clip);
-  } else if (const auto* linear = std::get_if<LinearGradientMaskSource>(&*overlay_source_)) {
+  } else if (const auto* linear =
+                 overlay_source_ ? std::get_if<LinearGradientMaskSource>(&*overlay_source_)
+                                 : nullptr) {
     display = (creating() && open_)
                   ? MakeLinearCreatingOverlayDisplay(mapping, *linear, style, clip)
                   : MakeLinearExistingOverlayDisplay(mapping, *linear, style, clip);
-  } else if (const auto* brush = std::get_if<BrushMaskSource>(&*overlay_source_)) {
-    if (open_ && !open_via_panel_ &&
-        (brush_tool_ == EditorBrushTool::Paint || brush_tool_ == EditorBrushTool::Erase)) {
-      QPointF cursor;
-      if (!brush_item_path_.empty()) {
-        cursor = brush_item_path_.back();
+  } else if (source_kind_ == MaskSourceKind::Brush) {
+    const auto* brush =
+        overlay_source_ ? std::get_if<BrushMaskSource>(&*overlay_source_) : nullptr;
+    if (open_ && !open_via_panel_ && brush_paint_tool) {
+      // Open stroke: temporary path through canonical samples plus the live
+      // cursor. The cursor follows the last sampled item point so a fast drag
+      // keeps the ring under the pen even between hover callbacks.
+      const QPointF cursor =
+          !brush_item_path_.empty() ? brush_item_path_.back() : hover_item_;
+      display = MakeBrushCreatingOverlayDisplay(brush_item_path_, cursor, BrushRadiusLogicalPx(),
+                                                clip, brush_tool_ == EditorBrushTool::Erase);
+    } else if (brush_paint_tool) {
+      // Armed Paint/Erase with no open stroke: a hollow (dashed for Erase)
+      // cursor ring follows the pointer; it is not a handle.
+      display = MakeBrushCreatingOverlayDisplay(
+          {}, hover_item_, BrushRadiusLogicalPx(), clip,
+          brush_tool_ == EditorBrushTool::Erase);
+      if (!hover_valid_) {
+        display.mode           = MaskOverlayMode::Hidden;
+        display.cursor_visible = false;
       }
-      MaskCreationSample cursor_sample;
-      cursor_sample.reference_pixels = press_reference_pixels_;
-      display                        = MakeBrushCreatingOverlayDisplay(brush_item_path_, cursor,
-                                                                       BrushRadiusLogicalPx(cursor_sample), clip);
-      (void)brush;
-    } else {
-      display = MakeBrushExistingOverlayDisplay(mapping, brush->placement_translation, clip);
+    } else if (brush != nullptr) {
+      display = MakeBrushMoveOverlayDisplay(mapping, *brush, clip);
     }
   }
-  display.hovered_handle = hovered_handle_;
-  display.active_handle  = OverlayHandleFromAnalytic(active_handle_);
-  overlay_display_       = display;
+  if (display.mode == MaskOverlayMode::Hidden || display.handles.empty()) {
+    display.hovered_handle = MaskOverlayHandleId::None;
+  } else {
+    display.hovered_handle = hovered_handle_;
+  }
+  display.active_handle = OverlayHandleFromAnalytic(active_handle_);
+  overlay_display_      = display;
   overlay_->setMaskOverlayDisplay(std::move(display));
 }
 
 void EditorMaskCreationAdapter::handleHover(qreal x, qreal y) {
-  if (!owns_left_button() || overlay_display_.mode == MaskOverlayMode::Hidden) {
+  if (!owns_left_button()) {
+    hover_valid_ = false;
+    return;
+  }
+  hover_item_  = QPointF(x, y);
+  hover_valid_ = true;
+  // An armed Brush paint/erase cursor follows the pointer even when no handles
+  // exist (e.g. before the first stroke creates the Mask).
+  const bool brush_cursor = source_kind_ == MaskSourceKind::Brush &&
+                            (brush_tool_ == EditorBrushTool::Paint ||
+                             brush_tool_ == EditorBrushTool::Erase);
+  if (overlay_display_.mode == MaskOverlayMode::Hidden && !brush_cursor) {
     return;
   }
   const auto hit = HitTestMaskOverlayHandle(overlay_display_, QPointF(x, y),
                                             OverlayStyle().hit_radius_logical_px);
-  if (hit == hovered_handle_) {
+  if (hit == hovered_handle_ && !brush_cursor) {
     return;
   }
   hovered_handle_ = hit;
@@ -1213,6 +1236,31 @@ void EditorMaskCreationAdapter::finishAnalyticControl() {
   emit maskCreationChanged();
 }
 
+auto EditorMaskCreationAdapter::CancelIfMappingChanged() -> bool {
+  if (!open_ || !press_mapping_identity_.has_value() || interaction_ == nullptr) {
+    return false;
+  }
+  if (!MaskEditGeometry::MappingChanged(*press_mapping_identity_,
+                                        interaction_->maskEditMappingIdentity())) {
+    return false;
+  }
+  // The presented-frame or view mapping changed mid-drag; queued samples would
+  // land in the new reference space against a press taken in the old one.
+  EditorMaskCreationCommand cancel;
+  cancel.kind    = EditorMaskCreationCommandKind::Cancel;
+  cancel.node_id = edit_node_id_;
+  cancel.mask_id = MaskIdFromQString(selected_mask_id_);
+  (void)Enqueue(cancel);
+  open_                    = false;
+  open_via_panel_          = false;
+  active_handle_           = AnalyticMaskHandle::None;
+  press_mapping_identity_  = std::nullopt;
+  brush_item_path_.clear();
+  PublishOverlay();
+  emit maskCreationChanged();
+  return true;
+}
+
 void EditorMaskCreationAdapter::EnqueueAppendSample(const MaskCreationSample& sample) {
   EditorMaskCreationCommand command;
   command.kind     = EditorMaskCreationCommandKind::Append;
@@ -1295,10 +1343,11 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
     move.mask_id    = MaskIdFromQString(selected_mask_id_);
     move.brush_tool = EditorBrushTool::Move;
     if (Enqueue(move)) {
-      active_handle_  = AnalyticMaskHandle::BrushMove;
-      open_           = true;
-      open_via_panel_ = false;
-      edit_mode_      = EditMode::Editing;
+      press_mapping_identity_ = interaction_->maskEditMappingIdentity();
+      active_handle_          = AnalyticMaskHandle::BrushMove;
+      open_                   = true;
+      open_via_panel_         = false;
+      edit_mode_              = EditMode::Editing;
       emit maskCreationChanged();
       return true;
     }
@@ -1312,13 +1361,18 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
     input.identity = pointer_;
     input.node_id  = edit_node_id_;
     input.mask_id  = MaskIdFromQString(selected_mask_id_);
+    if (const auto& extent = interaction_->maskEditViewMapping().geometry.full_reference_extent;
+        !extent.Empty()) {
+      input.default_feather_reference_px = DefaultBrushFeatherReferencePixels(extent);
+    }
     EnqueueBrushSettings(input);
     if (!Enqueue(input)) {
       return true;
     }
-    active_handle_  = AnalyticMaskHandle::None;
-    open_           = true;
-    open_via_panel_ = false;
+    press_mapping_identity_ = interaction_->maskEditMappingIdentity();
+    active_handle_          = AnalyticMaskHandle::None;
+    open_                   = true;
+    open_via_panel_         = false;
     brush_item_path_.clear();
     if (interaction_ != nullptr) {
       if (const auto item = MaskEditGeometry::MapReferenceToItem(
@@ -1349,11 +1403,12 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
       move.node_id  = edit_node_id_;
       move.mask_id  = MaskIdFromQString(selected_mask_id_);
       if (Enqueue(move)) {
-        press_normalized_ = sample->normalized;
-        active_handle_    = handle;
-        open_             = true;
-        open_via_panel_   = false;
-        edit_mode_        = EditMode::Editing;
+        press_normalized_       = sample->normalized;
+        press_mapping_identity_ = interaction_->maskEditMappingIdentity();
+        active_handle_          = handle;
+        open_                   = true;
+        open_via_panel_         = false;
+        edit_mode_              = EditMode::Editing;
         emit maskCreationChanged();
         return true;
       }
@@ -1371,10 +1426,11 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
   if (!Enqueue(input)) {
     return true;
   }
-  press_normalized_ = sample->normalized;
-  active_handle_    = AnalyticMaskHandle::None;
-  open_             = true;
-  open_via_panel_   = false;
+  press_normalized_       = sample->normalized;
+  press_mapping_identity_ = interaction_->maskEditMappingIdentity();
+  active_handle_          = AnalyticMaskHandle::None;
+  open_                   = true;
+  open_via_panel_         = false;
   overlay_source_   = source_kind_ == MaskSourceKind::Radial
                           ? MaskSource{RadialFromCenterOut(sample->normalized, sample->normalized)}
                           : MaskSource{LinearFromEndpoints(sample->normalized, sample->normalized)};
@@ -1386,6 +1442,9 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
 auto EditorMaskCreationAdapter::handleMove(qreal x, qreal y, int /*buttons*/) -> bool {
   if (!open_ || open_via_panel_) {
     return owns_left_button();
+  }
+  if (CancelIfMappingChanged()) {
+    return true;
   }
   auto sample = MakeSample(x, y, true);
   if (!sample) {
@@ -1411,6 +1470,9 @@ auto EditorMaskCreationAdapter::handleRelease(qreal x, qreal y, int button) -> b
   if (!open_ || open_via_panel_ || button != static_cast<int>(Qt::LeftButton)) {
     return owns_left_button() && button == static_cast<int>(Qt::LeftButton);
   }
+  if (CancelIfMappingChanged()) {
+    return true;
+  }
   auto sample = MakeSample(x, y, true);
   if (sample && active_handle_ == AnalyticMaskHandle::LinearDirection) {
     const auto* linear =
@@ -1432,9 +1494,10 @@ auto EditorMaskCreationAdapter::handleRelease(qreal x, qreal y, int button) -> b
   finish.mask_id  = MaskIdFromQString(selected_mask_id_);
   finish.identity = pointer_;
   (void)Enqueue(finish);
-  open_           = false;
-  open_via_panel_ = false;
-  active_handle_  = AnalyticMaskHandle::None;
+  open_                   = false;
+  open_via_panel_         = false;
+  active_handle_          = AnalyticMaskHandle::None;
+  press_mapping_identity_ = std::nullopt;
   brush_item_path_.clear();
   if (source_kind_ == MaskSourceKind::Brush &&
       (brush_tool_ == EditorBrushTool::Paint || brush_tool_ == EditorBrushTool::Erase)) {

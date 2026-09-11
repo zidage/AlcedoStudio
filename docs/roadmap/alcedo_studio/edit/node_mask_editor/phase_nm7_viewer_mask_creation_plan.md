@@ -2,7 +2,9 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.12 complete; NM7.13–NM7.15 planned. This document records the NM7.1 source
+Status: NM7.1–NM7.12 completion records retained; NM7.12R implemented and partially
+verified (release latency, real-adapter QML harness, and Metal still open);
+NM7.13–NM7.15 planned. This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
@@ -11,7 +13,8 @@ controls, drawer selection/deletion, and crop-style Gradient, NM7.9 accumulating
 Brush paint/erase/move with typed stroke history, NM7.10 serial Interactive Mix
 with one current Grade coverage result, NM7.11 project Mix-cache storage plus
 Keep/DeleteOnProjectClose cleanup, and NM7.12 production Mask controls plus project
-storage UI. NM7.13–NM7.15 acceptance remains outstanding.
+storage UI. The six reported Brush regressions require NM7.12R acceptance before Brush UI
+can be considered qualified. NM7.13–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -43,6 +46,13 @@ is specified here as the radial/elliptical range contour and feather boundaries 
 full-ellipse evaluator, without introducing a semicircle coverage algorithm.
 
 ## 1. Purpose and background for the executor
+
+2026-09-10 Brush repair revision: insert **NM7.12R** immediately after NM7.12, without
+renumbering NM7.13–NM7.15. The user requested a repair plan only; this revision does not
+execute implementation, builds, tests, or performance qualification. NM7.12R supersedes
+earlier Brush single-point movement controls and hard-edge creation defaults. Historical
+completion records remain evidence for the tests they actually ran, not proof that the six
+reported viewer problems are resolved.
 
 NM7 makes local adjustment possible directly on the photograph. A user selects a Color Grade,
 creates an area of influence with Brush, Radial, or Linear Gradient, and sees that Grade change
@@ -594,7 +604,8 @@ transitions immediate, and input-following geometry is never animated behind the
 | NM7.10 | Serial Interactive replay and one current Grade R8 result | NM7.7–NM7.9 |
 | NM7.11 | Project-owned cache settings, writeback and cleanup service | NM7.3, NM7.10 |
 | NM7.12 | Production Mask controls and project storage UI | NM7.11 |
-| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12 |
+| NM7.12R | Repair Brush tool state, pointer alignment, move frame, erase, drawing cost and default feather | NM7.5–NM7.12 |
+| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12, NM7.12R |
 | NM7.14 | Native pixel, persistence, cache bounds and recovery qualification | NM7.13 |
 | NM7.15 | Real viewer/package/performance qualification and NM8 handoff | NM7.14 |
 
@@ -1824,6 +1835,447 @@ native Mix still is not enqueued into the project cache writer from the serial o
 `.r8mask` files and the recent-project list retain their existing KeepFiles behavior.
 Ordinary adjustment Mask writes still fail with the existing “until NM3” text.
 NM6.8–NM6.9 remain planned.
+
+### NM7.12R — 修复 Brush 创建、坐标、移动框、擦除与绘制性能
+
+**Date:** 2026-09-10。**Status:** planned — 本次仅完成代码路径调查、Qt 文档核对和修复方案；
+未修改产品实现，未执行测试或测量，不声称已复现或修复用户报告的六个问题。
+
+**目标：** 点击 Brush 后第一笔就是笔刷；笔尖与实际受影响像素对齐；Paint/Erase 与 Move
+各有明确的输入和控件；擦除对当前 Brush 的真实 coverage 生效；持续绘制保持响应；新建 Brush
+从第一笔起就带默认羽化。六项一起验收，不能只修控件后把实际像素或绘制性能留给 NM7.15。
+
+**边界：** 沿用一组累计笔触对应一个 `MaskId` 的产品语义。Move 移动该 Brush 内所有 Paint/Erase
+笔触，不新增单笔选择、缩放或旋转；也不改其他 Mask 的合成规则。缓存设置 UI 不在本次修复范围。
+本阶段处理这些输入必需的释放、取消和过期回执；NM7.13 保留完整项目生命周期矩阵，NM7.14–NM7.15
+保留全平台恢复和打包资格验证。当前平台上的六项真实 viewer 验收不能依赖后续阶段才能通过。
+
+#### NM7.12R.1 — 代码证据与复现入口
+
+以下是 2026-09-10 工作树的静态调查。用户现象是问题输入；表内实现事实并不等于运行时根因
+已经确认。执行时先记录当前 commit、工作树、Qt 版本、RAW、viewport、DPR、backend 和 build type，
+通过生产 `EditorAdjustmentHeader.qml` 的 Brush 按钮复现，再把原因与测试绑定。
+
+| 问题 | 当前实现事实与调查位置 | 必须确认的运行时证据 |
+| --- | --- | --- |
+| 第一笔出现随鼠标转动的 Gradient | Header 已调用 `beginBrush()`。`EditorMaskCreationAdapter::handlePress` 与 `EnqueueAppendSample` 在通用创建分支中用“Radial，否则 Linear”构造 source；`BeginBrushTool`、`ApplyOwnerSource` 和 `SyncFromSession` 分别改变工具、source 与编辑状态。正常 Brush 分支本来应在此前返回 | 记录从按钮到首次按下、Append、owner consume、回执的 source kind、Brush tool、operation identity。分别断言文档 source、QSG display kind、实际 coverage；区分错误的是控件还是蒙版本身。覆盖先选 Gradient/Radial 再点 Brush，以及 owner 回执延迟 |
+| 笔触出现在笔尖左上方 | `EditorWorkspace.qml` 直接传 `point.position`；`MakeSample` 通过共享 mapper 转 ReferenceSpace。`PublishDisplayedGeometry` 又用 `imageWidth/imageHeight` 与 document crop/rotation 重建 geometry；它不是直接接收当前照片帧的 resolved geometry。`PointHandler.onActiveChanged(false)` 仍读取可能已经清零的位置 | 同时记录事件所属 Item、映射后的 item/reference/local 点、当前帧 geometry identity、实际像素质心。不能只做同一函数的正反变换测试，也不能先认定是 DPR 或固定偏移 |
+| 单点既像把手又像笔尖 | `MakeBrushExistingOverlayDisplay` 只把 `placement_translation` 映射成一个 `BrushMove` 点；该点不是笔触范围中心。`PublishOverlay` 在 Paint/Erase 未按下时也进入这一显示分支；`handleHover` 只更新把手命中，没有独立笔尖跟随。`setBrushTool` 只发状态通知，未立即重建 overlay | 空闲 Paint、绘制中、提交后、Erase、Move 的 production QML/QSG 截图与命中测试；验证状态切换后首帧即正确 |
+| Erase 看起来没用 | owner 已有 `BrushStrokeMode::Erase`，rasterizer 已有 `min(previous, 255-dab)`；按钮存在不等于 mode、目标、dirty 和 native Mix 都正确。其他启用 Mask 的 max 合成也可能覆盖被擦除区域 | 先用单 Brush、enabled=true、invert=false、opacity=1、非恒等 Grade 验证，再加其他 Mask；检查中间 source R8、最终 Grade R8、照片与 history |
+| 绘制卡顿，提交后调参数流畅 | 每条 Append 都先调用 `SetBrushStrokeParameters`，再调用 `AppendMaskInput`；前者即使参数未变化也可能 `ApplyLiveBrushDraft`。`DraftStroke` 复制当前完整 sample 前缀，`ComposeDraftBrush` 复制 strokes 容器；overlay 每次复制整条 item path。native 没有 active override 时经 `ParameterizedBrushActiveRasterForGrade` 完整重放并把 dirty 标成全图 | 分别测事件、GUI 发布、排队、owner 更新、规范重放、上传、羽化、Union/Mix 和显示。session 当前已把一个 consume batch 汇总成一次渲染，不能把每次 draft 更新错误描述为一次 GPU render |
+| 默认无羽化 | `BrushMaskSource::feather_radius` 默认 0；adapter/input hardness 默认 1；`BeginBrushStroke` 新建分支使用空 Brush 默认值，面板 Feather reset 也写 0 | 第一笔按下到释放后的 canonical source、Feather 数值、边缘剖面一致；旧 Brush 的显式 0 不被加载流程改写 |
+
+重点源文件入口：
+[adapter](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_mask_creation_adapter.cpp)、
+[controller](../../../../../alcedo_studio/src/app/editor_mask_creation_controller.cpp)、
+[serial session](../../../../../alcedo_studio/src/app/editor_session_service.cpp)、
+[mapping](../../../../../alcedo_studio/src/ui/edit_viewer/mask_edit_geometry.cpp)、
+[overlay layout](../../../../../alcedo_studio/src/ui/edit_viewer/mask_overlay_layout.cpp)、
+[native replay bridge](../../../../../alcedo_studio/src/include/edit/runtime/compiled_grade_mask.hpp)、
+[full source replay](../../../../../alcedo_studio/src/edit/mask/parameterized_brush_raster.cpp)。
+
+#### NM7.12R.2 — Qt 输入与几何规则
+
+执行只使用 Qt 6.9 已有 API。下列官方在线页可能显示更新版本；不使用其中标注晚于 6.9 的功能。
+
+| Qt 一手文档 | 对本次修复的约束 |
+| --- | --- |
+| [Qt Quick 坐标系统](https://doc.qt.io/qt-6/qtquick-visualcanvas-coordinates.html) 与 [Item 映射](https://doc.qt.io/qt-6/qml-qtquick-item.html#mapToItem-method) | 输入坐标属于具体 Item。边界上用 `mapToItem`/`mapFromItem` 转到 viewer logical coordinates；不能手减侧栏宽度、margin 或标题栏高度 |
+| [handlerPoint](https://doc.qt.io/qt-6/qml-qtquick-handlerpoint.html#details) | `position` 相对 handler 的 parent；释放或由其他 handler 处理后可能归零。必须在有效事件交付中取值，不能在 inactive 回调把 `(0,0)` 当作真实释放点 |
+| [PointHandler](https://doc.qt.io/qt-6/qml-qtquick-pointhandler.html) 与 [PointerHandler](https://doc.qt.io/qt-6/qml-qtquick-pointerhandler.html#signals) | 被动观察不代表独占输入；区分正常 release、`canceled` 和 grab 转移，携带真实 device/point 标识，一条输入只产生一个终止结果 |
+| [DragHandler](https://doc.qt.io/qt-6/qml-qtquick-draghandler.html#target-prop) | `target: null` 让业务层维护位置。Paint 必须从 press 接收输入，不等 drag threshold；Move 不得让 handler 自动移动 QML Item 再把同一个位移应用到 source |
+| [QQuickItem](https://doc.qt.io/qt-6/qquickitem.html#updatePaintNode) 与 [Scene Graph](https://doc.qt.io/qt-6/qtquick-visualcanvas-scenegraph.html) | GUI 修改控件数据后请求 `update()`；QSG 更新与节点复用在同步/渲染边界完成。`updatePaintNode` 执行期间 GUI 被阻塞，因此不能在其中做长路径扫描、重放或 GPU 等待 |
+
+**统一坐标链：** 令 `p_h` 为 handler parent 的逻辑坐标，`p_v` 为 viewport 逻辑坐标，
+`G` 为当前已显示照片对应的 `ResolvedRenderGeometry`，`t` 为 Brush 的参考像素平移。
+
+```text
+p_v = handlerParent.mapToItem(viewportItem, p_h)
+u_d = ViewportMapper::WidgetPointToImageUv(p_v, widget, photograph, zoom, pan)
+u_p = roi.origin + u_d * roi.extent           only for RoiFrame
+u_p = u_d                                   otherwise
+p_render = (u_p.x * G.render_extent.width, u_p.y * G.render_extent.height)
+p_reference = G.render_to_reference * (p_render.x, p_render.y, 1)
+p_local = p_reference - t
+
+display(p_local) = MapReferenceToItem(G, p_local + t)
+```
+
+`ViewportMapper` 已处理内部 DPR 转换；QML 不再乘一次 DPR。RoiFrame 的 ROI 展开、full-frame
+zoom/pan 和 DetailPatch 呈现规则只在共享 mapper 实现一次。ReferenceSpace 始终是完整参考图，
+不能用缩小后的 Interactive 纹理或 DetailPatch 宽高重新定义。Orientation、裁切、旋转、
+expand-to-fit 和取整后的 render extent 必须来自照片实际采用的 geometry。
+上式先展开 ROI，因此 `G.render_extent`/矩阵必须对应整张 photograph；如果帧携带的是 patch
+局部矩阵，则先在现有 geometry owner 转成同一整图表示，不能再把展开后的 UV 乘 patch extent。
+
+修复步骤：
+
+1. 在现有 presentation/session 边界发布已接纳照片帧的 resolved geometry 与 frame identity，
+   供 `EditorInteractionController` 读取；移除 adapter 每次 `PublishOverlay` 重新推导照片几何
+   的职责。只发布映射所需字段，复用现有 geometry 表示，不复制图像或另建可编辑 document。
+2. press 时锁定本次 operation 的 mapping identity；Append/Release 若身份变化则有序取消，
+   不能把一条笔触的前后半段写入不同坐标系。无有效 geometry 的 press 返回明确错误。
+3. 用真实终止事件坐标采样最后一段；若现有 QML 回调无法保证事件仍有效，则在现有 Qt/C++
+   输入边界提取 release，再路由到 adapter。不得用归零点，也不得用“最后 move 点”悄悄丢失
+   release 独有的最后一段。保留独立 hover 点，仅用于控件，不作为已绘制 sample。
+4. 规范 R8 第 `(i,j)` 个像素中心对应 `((i+0.5)*W/Rw, (j+0.5)*H/Rh)`；native 输出像素中心
+   经现有 `MakeRasterMaskSamplingPlan` 采样。不要在输入或显示端补一个经验性半像素偏移。
+5. 笔尖外形从参考像素圆映射：`p_reference + r*(cos(theta), sin(theta))`。仿射映射非等比时是
+   椭圆，不能只映射 x 方向半径再画屏幕圆；映射为等比时可用中心与标量半径的快速路径。
+   控件线宽/命中宽度保持逻辑像素，笔刷半径与 feather 保持参考像素。
+
+独立数值用例：6000×4000 参考图在 900×700 viewer 中 fit，照片矩形为 `(0,50,900,600)`。
+viewer 点 `(225,200)` 必须对应参考点 `(1500,1000)`；同一行列和中心点在 DPR 1、1.25、1.5、2
+下不变。另用有已知裁切与 90° 旋转的手算点验证矩阵顺序；不能以生产 mapper 生成预期值。
+
+#### NM7.12R.3 — 工具状态与两套控件
+
+**状态归属：** owner 决定可接受的工具和 operation；adapter 只持有当前输入及显示所需的最小数据。
+排队成功不等于 owner 已接受。请求/回执至少携带现有 session identity、`NodeId`、`MaskId`、
+sequence 和工具选择修订标识；旧回执不能覆盖用户刚选择的 Brush，也不能把旧 Gradient source
+重新发布到它的 overlay。未产生 `MaskId` 时仍可准备笔刷参数和显示 hover 轮廓。
+
+| 状态 | 可见控件与输入 | 退出与历史 |
+| --- | --- | --- |
+| Paint ready，包含首次新建 | 跟随鼠标的空心笔刷轮廓；可显示羽化外边界；不显示 Move 点/框。已有 Brush 保持原位 | press 立即进入 Painting；单击也产生一个规范 dab |
+| Painting | 只绘制，任何位置按下都不会移动原笔触；平移参数固定；Size/Strength 变化使用明确参数边界 | release 后等待 owner settle；首次有效笔触一个 `AddMask`，之后每笔一个 `AppendBrushStroke`；随后回 Paint ready |
+| Erase ready / Erasing | 与 Paint 同坐标和半径的轮廓，以短划线区分；不复用实体圆点。只对当前已存在 Brush 擦除 | release 提交一个 Erase stroke；随后回 Erase ready。没有已提交 Brush 时禁用 Erase |
+| Settling | 尚未取得提交结果时禁止 Move 和目标切换造成的半完成编辑；笔尖显示仍可跟随 hover | owner 回执决定可用性；失败取消未完成数据并显示具体错误，不虚报提交 |
+| Move ready | 当前累计 Brush 的边界框与四角短线锚点；框内、边框和锚点统一表示整体平移 | press 命中框内或边框才进入 Moving；框外不绘制；不显示缩放/旋转鼠标图标 |
+| Moving | 原框整体随指针移动，照片在 release 前更新；没有笔尖控件 | release 一个 `SetBrushTranslation`；取消恢复原平移；不新增 StrokeId |
+
+Move 是用户明确切换的工具；release 后继续保留 Paint/Erase，方便连续画多笔。只有已提交 Brush
+且没有打开的 stroke/field edit/待确认 settle 时允许 Move。来自 Node drawer 的 Brush 选择进入
+可移动的编辑态；工具栏 Brush 按钮则明确进入 Paint。切换都必须立即重建 overlay 和鼠标形状。
+Paint/Erase 期间隐藏并禁用平移的指针及键盘入口，owner 同时拒绝交错 BeginMove；仅禁用 UI 不够。
+下一笔可作为新 sequence 排在前一笔 Finish 之后；接收新笔不能等待 Quality 帧或缓存落盘。
+owner 的提交回执、照片呈现回执分开处理，旧笔 settle 回执不得清掉已开始的新笔 cursor 或工具。
+
+**删除歧义分支：** 按 `MaskSourceKind` 明确分发 Brush/Radial/Linear；解析型创建函数只接收解析型
+source，错误 kind 直接拒绝。不能把任何“不是 Radial”的情况构造为 Linear。`BeginBrushTool`
+先确定 Paint 再填 command settings，避免 `EnqueueBrushSettings` 用先前的工具值覆盖请求。
+`ApplyOwnerSource` 同步选中 source 时保留或明确恢复当前合法工具，不能无条件改变输入模式。
+
+**边界框几何：** 在 owner 的只读笔触查询上计算参考像素中的保守范围，按 source revision 缓存
+派生 bounds，禁止在每次 hover 扫描整套 strokes。所有 strength>0 的 Paint dab 的圆形支持域
+取包围盒，包含各自 radius，再按 source feather 支持范围与采样边界向外扩展。Erase 不扩大
+这个框；擦除后可以保留保守框，以便移动和 Undo，不能宣称它是实际非零像素的精确轮廓。
+框不受 invert 后的全图 coverage 支持域影响，也不因裁切把源几何永久缩小。
+
+```text
+B_local = AABB(union of positive-strength Paint dab supports)
+B_reference = expand(B_local, feather_support) + placement_translation
+frame_vertices = MapReferenceToItem(each of the four B_reference corners)
+t_after = t_before + (reference_at_current_pointer - reference_at_press)
+```
+
+保留映射后四边形的四个角，图片旋转时框也对应旋转，不把它再压成屏幕轴对齐框。空范围不创建
+伪造中心点；全擦除但仍有 Paint 历史时可保留原保守框。框外不可见时保留面板键盘移动能力。
+命中区域只与 viewport 可见区相交，crop 样式只复用视觉 token 与线段绘制，不复用 crop 的缩放动作。
+拖动包括所有 Erase 记录的整个 Brush；各 sample body 不改写、不重采样。细线、四角锚点、cursor
+内外轮廓全部走现有 retained QSG，不用逐 dab QML Item，不增加覆盖区域填色。
+
+#### NM7.12R.4 — Erase 的真实像素与历史
+
+沿用已持久化的规范算法，不在 UI 修复中更换擦除数学：
+
+```text
+a8 = clamp(floor(255 * DabCoverage(distance, radius, strength, hardness) + 0.5), 0, 255)
+paint: b_next = max(b_previous, a8)
+erase: b_next = min(b_previous, 255 - a8)
+source strokes in order -> source feather -> invert -> opacity -> enabled Mask max -> Grade Mix
+```
+
+满强度中心的 `a8=255` 必须把已画源像素变成 0；半强度 `a8=128` 将 255 限到 127；重复相同
+半强度擦除仍为 127，这不是持续流量式擦除。不得为了“看得见”改成逐帧乘法衰减。先证明
+feather=0 时逐字节结果，再验证默认 feather 下符合已有羽化公式的软边，不把羽化后的数值当作
+原始 Erase R8。平移后的 Brush 必须先减当前 `placement_translation` 再记录擦除点。
+
+Erase 与 Paint 共用 Begin/ordered Append/Finish，但每笔 mode 在 Begin 固定，不能中途被异步
+选择回执改回 Paint。dirty 区域清理并按 stroke 顺序重放；不能只用 max 把结果叠上去。擦除某个
+Mask 后重算其他启用 Mask 的贡献，不能直接清零整个 Grade Mix。单 Brush 测试后增加重叠 Radial，
+断言 Brush 已减少而重叠处最终 Mix 仍由 Radial 决定；面板说明擦除作用于当前 Brush。
+
+取消丢弃未提交 Erase；Undo 移除该记录并重放，Redo 恢复同一记录。strength=0 或确认未改变任何
+规范源像素的笔触不产生历史提交；不能仅凭最终照片没变化判为无效，因为其他 Mask、invert 或
+恒等 Grade 可能隐藏当前 Brush 的变化。无 Brush 时不允许创建空的 Erase-only Mask。
+
+#### NM7.12R.5 — 默认羽化与参数含义
+
+本阶段将新建 Brush 的默认源羽化确定为短边的 **0.5%**：`f0 = 0.005 * min(W,H)`。
+保留现有初始半径 `r0 = 0.01 * min(W,H)`，因此初始羽化半宽为 `r0/2`。这是新增的产品默认值，
+不是从其他 Mask 的不同单位参数直接复制来的数值。6000×4000 图像的初始 radius=40 px、
+diameter=80 px、source feather=20 px。Strength=100%，dab hardness=1 保留，软边由同一个
+source feather 求值，避免同时修改两套软边语义。
+
+- 在 owner 的新建 Brush 操作中设置 `feather_radius`，在首个 provisional dab 发布之前可见，
+  与首个 `AddMask` 一起持久化。不要只改 QML 数值，也不要全局改反序列化默认值。
+- `brush.feather` 是整组累计 Brush 的源参数，单位为参考像素；不是每条笔触的新字段。改变
+  Size 不联动已存在 source 的 feather，追加到旧 Brush 时保留它原本的 feather，包括显式 0。
+- 未创建时面板显示下一次新建 Brush 的 feather，允许设置；创建后显示 owner 值。新建前参数
+  调整不写历史。已有 Brush 的 Feather 拖动使用一个字段编辑和一次 settle；reset 使用 `f0`，
+  用户仍可手动设 0。加载/重进编辑器不触发 setter 提交，不替换旧项目数值。
+- 明确 Size 显示的是直径还是半径。本阶段面向用户显示“笔刷直径”，像素值为 `2r`，百分比与
+  slider 两端也使用直径；adapter 的既有 radius API 仍用半径，只在面板边界转换一次并测试。
+- 显示空心的 dab 半径轮廓与外羽化提示线，不能把提示线承诺为复杂累计 coverage 的精确等值线。
+  默认 feather 必须从绘制中的第一帧使用，释放时不允许突然由硬边换成软边。
+
+#### NM7.12R.6 — 持续绘制性能与所有权修复
+
+**已有快慢差异的解释范围：** settle 后只调 Grade 参数可以复用已有效的 Mask 结果；画笔不断改变
+source，会触发 sample 发布、重放、上传与羽化。两条路径开销不同是合理的，当前实现中的重复工作
+必须去除。`GradeMaskCoverage` 的 host 区域重放测试通过，不证明 `cuda_mask_pass.cu` 等 native
+生产入口已经使用区域重放；必须在真实入口统计调用次数和处理像素数。
+
+按以下顺序实现，各步都保持完整分辨率、现有算法和用户选择的 backend：
+
+1. **事件接收与显示：** GUI 仅做坐标映射、提交最小输入和更新独立 cursor。hover 更新为 O(1)；
+   同一 Qt 帧只发布一次显示几何。创建引导线使用有界的派生显示数据或追加已有几何，禁止每事件
+   复制全部 `brush_item_path_`。显示简化不得删改 canonical samples 或代替真实照片更新。
+2. **有序批处理：** 保留每个 Paint/Erase 输入及真实参数变化边界，按序消费；一个 serial cycle
+   内完成整批采样后发布一次 source 变化/dirty 通知和最多一次 Interactive 请求。Move 可合并
+   最新绝对值，Paint/Erase 不能这样丢掉弯折。Finish/Cancel 不被限速吞掉，也不跨 sequence 合并。
+3. **去除重复 draft 发布：** 参数没变时 `SetBrushStrokeParameters` 完整返回无变化结果；当前
+   sampler 已避免重复参数 sample，但 controller 仍需避免无变化的 source 重组。Append 没有
+   新规范 sample 时只更新 cursor，不发布 source revision。取消 `DraftStroke` 每次复制整个前缀
+   及 `ComposeDraftBrush` 每次复制已提交列表的做法。
+4. **最小 owner 操作：** `BrushMaskInput` 保持唯一未完成 sample 存储，通过有效生命周期内的
+   const view/新增 sample 范围交给串行求值；`ColorGradeNodeModel` 保持唯一已提交 source。
+   在 `WithLockedLiveDocument` 所属安全周期使用 owner 查询和 focused append/finish/cancel
+   操作，不再复制 source、改副本、写回。Finish 一次移动 sample body 到现有 immutable
+   `BrushStroke`，首次原子 AddMask，后续原子 AppendBrushStroke；取消通过丢弃 draft 和参数
+   重放恢复结果，不增加 R8 before-state。跨线程不能保留指向可增长 vector 的 span。
+   首笔在 Begin 分配 provisional `MaskId` 并在 live Grade 插入仅含源元数据的 Brush，草稿
+   samples 仍只由 input owner 持有；同一安全周期以 `DraftSamples()` 和已提交 source 求出
+   对应 active raster，再用现有 `ActiveRasterMaskInput` 按准确 NodeId/MaskId 送入 native
+   Mask pass。这样 compiled Mask 仍能找到目标，预览无需把草稿整个复制进 document。
+   Finish 把该 provisional Mask 的最终参数以一次 AddMask 提交，不能重复插入；Cancel 或
+   首笔确认无效时移除 provisional Mask。之后每笔的 draft 也经同一 active raster 路由。
+   request 持有的 raster 是必要算法输出，必须说明分配、reader、释放和 dirty 的有效内容来源。
+5. **把局部更新接进 native 入口：** 从新增 dab 支持域形成 outward-rounded dirty，使用空间
+   索引查询相交 stroke 并按原顺序重放，重算该区域内所有必要 Mask 的 Union。复用现有
+   `brush_rasterizer`、`brush_spatial_index`、`brush_source_geometry` 和 active raster 入口；
+   改进 `compiled_grade_mask.hpp` / `parameterized_brush_raster.cpp` 的完整重放调用链，不能
+   只优化没有接线的 host helper。索引追加新段，普通 Append 不重新索引全部历史。
+6. **保持单 Grade R8 限制：** 最终 Mix 已经丢失单个 Brush 的源值，不能在 Mix 上直接做 Erase
+   或用它反推出源 coverage。source/feather 中间结果只用 executor 管理的临时 scratch，按需
+   顺序复用；不新增每 Mask/Stroke/Version 的长期全图 R8。若上传资源不是同一合法旧内容，
+   必须先完整初始化；不能给新纹理只上传 dirty 矩形。读者释放前不原地改已发布资源。
+7. **默认羽化必须一起优化：** 现有 signed-distance pass 可能需要全域计算，dirty dab 小不代表
+   distance field 同样局部。优先消除同一 cycle 的重复重放/上传/羽化，复用分配与 pipeline。
+   若进一步做有限半径区域羽化，先从现有距离公式推导 dirty 扩展、读取 halo 与采样边界；
+   对 inside/outside、擦出洞、贴边、全擦除及相邻旧 stroke，与完整羽化逐像素对照。没有证明
+   等价前，不把全域羽化替换成只处理 dab 矩形。不能把 feather 临时设 0 或把 source feather
+   改成另一种 dab 算法来获得性能。
+8. **依赖与调度：** source 变化只失效受影响的 Mask/Union/Mix 和依赖结果，不重复 RAW decode
+   或清掉仍有效的上游 Grade 结果。继续使用现有 serial admission、revision 和 reader 释放
+   边界；磁盘写回不进入 pointer/owner 热路径。积压输入分批排空并保留顺序；容量不足时报告
+   真实错误并取消未完成笔触，不丢样本或切换 backend。
+
+**度量和通过标准：** 在同一 RAW、viewport、backend、构建和笔刷参数上对比修复前后，分别记录
+默认软笔、小硬笔、大软笔、1/100/1000 条已有笔触、冷/暖缓存、单 Mask/重叠多 Mask。固定轨迹
+包括直线、快速折线和圈，另测 125/500/1000 Hz 输入；sample 数、渲染次数和工作量同时报告。
+使用 Release 做时延资格验证，Debug 做诊断，不拿 Debug CUDA 的慢作为改质量理由。
+
+- 本阶段沿用 Section 12 的 16 ms Interactive owner-cycle 目标，并将普通默认笔刷暖态
+  p95 ≤ 16 ms 作为通过条件；给出 p50/p95/max 与完整硬件说明，不能只报平均帧率。
+- GUI 输入处理 p95 ≤ 1 ms；cursor 应在下一个可用 Qt frame 反映最新位置。60 Hz 空闲显示下
+  event-to-cursor p95 ≤ 16.7 ms；故意阻塞 native render 时仍不等待 GPU 或文档锁。
+- 默认笔刷暖态 event-to-photo p95 ≤ 33.4 ms（60 Hz），持续输入结束后积压必须排空；单独
+  记录 source replay、upload bytes、feather、Union/Mix、queue depth 和 release-to-Quality。
+- 同一无参数变化的轨迹分批方式不同，最终 samples/R8 完全一致；源列表发布次数不随原始
+  pointer event 逐次增长；不存在反复复制长度递增前缀造成的累计二次工作量。
+- 大软笔或高重叠的确切最坏成本必须报告；若默认场景未达到目标，状态仍为 partial，并在当前
+  原算法/backend 内继续优化，不能以“其他参数已经流畅”判为通过。
+
+#### NM7.12R.7 — 文件职责与调用链
+
+| 位置 | 修复职责 |
+| --- | --- |
+| `ui/alcedo_main/qml/EditorWorkspace.qml` | 明确事件 parent/viewport 转换；有效 release/cancel；输入设备和单 sequence 路由；工具对应鼠标形状 |
+| `ui/alcedo_main/qml/EditorAdjustmentHeader.qml`、`EditorMasksContextPanel.qml` | 首次 Brush 入口；Paint/Erase/Move 可用性；直径/Strength/Feather 的单位与 reset；source 加载只读 |
+| `ui/alcedo_main/album_backend/editor_mask_creation_adapter.cpp` 及头文件 | typed source 分发；工具选择回执校验；独立 cursor；立即发布工具切换；消费 bounds，不持有可编辑 Brush 镜像 |
+| `ui/editor_rhi/editor_interaction_controller.cpp`、presentation/session 边界 | 当前已显示帧的 geometry 和 identity；共享正反映射；操作中映射变化的取消 |
+| `ui/edit_viewer/mask_overlay_layout.cpp`、`mask_overlay_geometry.cpp`、`ui/editor_rhi/editor_overlay_item.cpp` | Brush 边界四边形、四角锚点、平移命中、空心笔尖与 QSG 节点复用 |
+| `app/editor_mask_creation_controller.cpp`、`brush_mask_input.cpp`、`app/editor_session_service.cpp` | 新建默认羽化；批量输入与一次发布；唯一 draft 生命周期；提交/取消；禁止 Paint 与 Move 交错 |
+| `edit/graph/color_grade_node_model.cpp` 及头文件、`edit/mask/brush_*` | owner 的最小更新/只读查询、不可变已提交 samples、派生范围/索引、确定性重放 |
+| `include/edit/runtime/compiled_grade_mask.hpp`、`edit/mask/parameterized_brush_raster.cpp`、native Mask passes、`PlanExecutor`/`GraphImageCache` | 区域工作接入真实 backend；正确资源初始内容、羽化依赖、单 Grade R8 和 revision/reader 安全 |
+| `alcedo_main/DESIGN.md`、AppTheme | 记录 Brush cursor、移动框和参数含义；复用 crop/Mask 线宽与配色，新增 token 时同步定义 |
+
+上表源路径均相对 `alcedo_studio/src/`。执行前统计完整文件 LOC。adapter/controller 当前已经很大，
+新增 cursor/框范围逻辑应放入对应 geometry 模块；draft 生命周期由已有 `BrushMaskInput` 承担。
+只有状态归属确实分离才抽出新类型，不用拆几个方法文件或新增整包可变 context 假装解耦。
+新 public API 说明线程、owner、view 有效期、失败与原子更新边界；头文件包含类型定义。
+
+**成功调用链（目标）：**
+
+```text
+Header Brush / Mask panel Paint or Erase
+  -> adapter requests exact tool + target -> serial owner accepts -> ready controls
+Qt valid pointer event -> map parent to viewport -> displayed G -> reference/local sample
+  -> ordered input queue -> safe serial consume -> BrushMaskInput canonical sample append
+  -> owner scoped source read + open-stroke view -> dirty replay / native feather / Union
+  -> one current Grade R8 -> native Grade Mix -> accepted Interactive photograph
+Release with valid endpoint -> finish canonical samples -> AddMask or AppendBrushStroke
+  -> one durable history commit -> owner completion -> ready controls -> Quality
+Move frame press -> BeginMove -> current-reference minus press-reference
+  -> SetBrushTranslation live operation -> old/new domain replay -> Interactive pixels
+  -> release -> one SetBrushTranslation history commit -> Move ready
+```
+
+**取消/失败调用链（目标）：**
+
+```text
+grab cancel / mapping identity change / invalid target / rejected command
+  -> fence remaining sequence input -> owner Cancel -> discard open samples or restore translation
+  -> recompute affected current result -> no unfinished history entry -> ready/error UI
+late owner/frame completion -> compare session + target + sequence/revision -> reject stale display
+allocation / native / history failure -> original error -> discard unpublished output
+  -> keep valid committed document/history and prior successful displayed result
+  -> report failed operation; no alternate algorithm, quality, backend, or cache directory
+```
+
+#### NM7.12R.8 — 必须新增或加强的验收
+
+测试名称如下是待实现验收，不是已存在或已通过声明。复用现有 target；生产入口整合测试建议
+新建 `EditorBrushInteractionQmlTest`（`tests/ui/editor_brush_interaction_qml_test.cpp`），加载
+实际 workspace/header/panel + 真 adapter/串行 owner，而不是仅用 fake model 回显按钮值。
+新目标必须注册到 `tests/ui/CMakeLists.txt` 并执行非零测试。
+
+| 行为 | 测试名称 | 层次/目标与核心断言 |
+| --- | --- | --- |
+| 第一笔类型 | `FirstHeaderBrushPressProducesOnlyBrushSource` | 新 QML target；真实按钮后从 press 到 release 均为 Brush，只有规范 dab coverage，没有 Linear source/guide |
+| 异步切换 | `DelayedAnalyticSelectionCannotReplaceArmedBrush` | 新 QML target + `EditorSerialMaskInteractiveTest`；延迟旧选择回执，Brush source/tool/目标不倒退 |
+| 单击与释放 | `BrushClickRecordsOneDabAtReleasePosition`、`BrushReleaseDoesNotAppendResetOrigin` | 新 QML target；无 move 的单击一次提交；release 独有末段不丢，inactive 归零不产生左上拖尾 |
+| viewer 偏移 | `BrushPointerMatchesPhotoPixelsWithOffsetViewport` | 新 QML target；非零父 Item 偏移、面板宽度变化及已知照片点，校验 cursor 与真实像素，不只比 mapper 往返 |
+| 几何矩阵 | `BrushReferenceMappingMatchesIndependentCropRotationPoints` | `MaskEditGeometryTest`；横/竖图、orientation、crop、旋转、fit/100%/zoom/pan、DPR 1/1.25/1.5/2，手算预期点 |
+| 帧几何 | `BrushMappingUsesPresentedFrameAcrossDetailPatch` | `MaskEditGeometryTest` + 新 QML target；完整参考图不被 Interactive cap/ROI extent 替换，几何变更取消未完成笔触 |
+| 笔尖形状 | `BrushCursorMatchesMappedReferenceCircle` | `MaskOverlayControlTest`；非等比仿射下轮廓为正确椭圆；中心误差 ≤ 0.25 logical px，轮廓离散误差 ≤ 0.25 logical px |
+| Paint 锁定平移 | `PaintingOverMoveFrameNeverChangesBrushTranslation` | 新 QML target + `AccumulatingBrushCreationTest`；新增笔触期间 translation 与既有 samples 不变，Move/键盘平移禁用 |
+| 移动框 | `MoveFrameEnclosesTranslatedPaintSupportWithFeather`、`MoveFrameDragTranslatesAllStrokesWithoutScaling` | `MaskOverlayControlTest` + `AccumulatingBrushCreationTest`；四角/边/内部命中；照片 release 前变化；sample body 身份不变；一次平移提交 |
+| 模式显示 | `PaintEraseAndMovePublishDistinctControlsImmediately` | 新 QML target；hover 无按键即可跟随；Paint/Erase 没有 Move 点；Move 没有笔尖；不出现缩放鼠标形状 |
+| Erase 数学 | `EraseStrokeReducesCoverageAtPointerBeforeRelease` | `AccumulatingBrushCreationTest` + `GpuDagCudaMaskTest`；硬边满/半强度的手写 R8 预期、默认软边的独立距离预期，真实照片在 release 前变化 |
+| Union 与平移 | `ErasingMovedBrushPreservesOtherMaskContribution` | `GpuDagCudaMaskTest`；正确 local 坐标、选中 MaskId、重叠 Radial 保留；错误目标像素不变 |
+| 擦除历史 | `EraseUndoRedoRestoresExpectedSourceCoverage`、`ZeroStrengthBrushInputCreatesNoCommit` | `AccumulatingBrushCreationTest` + 现有参数笔触持久化测试；精确 HEAD/次数/重放像素；取消不留空 stroke |
+| 默认软边 | `FirstBrushDabUsesDefaultSourceFeather`、`ExistingZeroFeatherBrushKeepsItsStoredValue` | owner + 新 QML target + native；首帧到 settled 参数/边缘一致；新建、reset、保存重开；旧值 0 保留 |
+| 参数显示 | `BrushDiameterAndFeatherControlsUseReferencePixelUnits` | `EditorAdjustmentHeaderQmlTest` / 新 QML target；40 px radius 显示 80 px diameter，Feather=20 px/0.5%，load-only 零提交 |
+| 批处理 | `OrderedBrushBatchPublishesOneChangedSourceRevision`、`UnchangedBrushParametersDoNotRepublishDraft` | `EditorSerialMaskInteractiveTest`；Append sample 不丢，参数没变不重复发布；每个消费批次最多一个 source 通知/Interactive 请求 |
+| 重放等价 | `PartitionedBrushInputProducesIdenticalCanonicalPixels`、`NativeRegionalBrushUpdateMatchesCompleteReplay` | `BrushCanonicalSamplerTest`、`BrushRegionalReplayTest` + `GpuDagCudaMaskTest`；不同事件分组同样本同 R8，其他 Mask 的幸存贡献一致 |
+| 羽化区域 | `RegionalBrushFeatherMatchesCompleteFeatherAtDirtyBoundary` | host/native；halo、洞、图像边缘、全擦除、不同半径；未实现区域羽化时仍验证完整原算法，不能声称区域优化通过 |
+| 响应与资源 | `BusyNativeRenderDoesNotBlockBrushCursorOrCancel`、`BrushDrawingKeepsOneRetainedGradeCoverage` | 新 QML target + `EditorSerialMaskInteractiveTest` + native；延迟 reader 时 GUI 可动、无同步等待/源竞争，无每笔 R8 文件 |
+
+**比较方法：** 原始 canonical R8 使用手算/独立完整重放，要求逐字节一致；native 插值/羽化结果
+沿用已有容差，通常最多 1 个 R8 code，不能为通过测试放宽。照片用非恒等 Grade 和确定的输入
+像素验证 Mix 公式，并给出最大误差、失败坐标。像素质心比较要计入明确的 R8/native 采样误差，
+不能把亚像素栅格离散误差与系统性坐标偏移混为一谈。几何正反变换是补充，不替代照片像素。
+
+**生产 UI 资格验证：** 在 260/320/460 px 面板宽、两种主题及 reduceMotion 下完成六项场景；
+用真实 Qt 鼠标事件按按钮和绘制，保留 Windows D3D11 overlay 与 CUDA 照片的截图、像素证据
+及 NM7.12R.6 时延记录。没有对应设备的 Metal/OpenCL 项标为未执行，不用另一 backend 代测。
+未来执行时遵守 MSVC wrapper，并从 `ctest -N` 确认实际注册目标；命令和完整结果写回本节。
+
+**实施顺序：** R.1 先加失败复现与工作量计数；R.2/R.3 完成映射和工具隔离；R.4/R.5 完成擦除
+和默认软边；R.6 在默认羽化开启的真实管线上优化；R.8 完成 UI/native/时延证据。编号按本节引用，
+不得进入生产标识符、测试文件或目标名称。
+
+**退出清单（本次全部保持未勾选）：**
+
+- [ ] 第一笔及从解析型 Mask 切换后的第一笔，无 Gradient source/控件串入。
+- [ ] 指针、QSG 笔尖、reference/local samples 与实际照片在完整几何矩阵内对齐。
+- [ ] Paint/Erase 与 Move 输入完全分离；移动框有四角锚点，整体移动而不缩放。
+- [ ] Erase 在 release 前改变当前 Brush 的真实 coverage，Union、取消、Undo/Redo 均正确。
+- [ ] 新 Brush 第一帧即带默认羽化，参数单位/reset 一致，旧项目数值不被重置。
+- [ ] 默认羽化开启时通过绘制时延目标；无完整前缀重复复制，无未授权的质量/backend 替换。
+- [ ] 生产 QML、owner、native 像素和异步测试均有非零执行记录；结果与截图可追溯。
+- [ ] 无新增 source 镜像或未说明必要性的拷贝；只读 view 生命周期、唯一 owner、reader 边界明确。
+- [ ] 同步记录真实修复文件、主要调用链、测试数量、工作量/时延分布及未执行平台。
+
+**本次规划记录：** 阅读相关生产调用链和既有测试入口，核对上列 Qt 官方文档；只修改本计划的
+状态、依赖表与 NM7.12R 节。历史 NM7.12 完成记录不删除，六项修复不标记完成。
+
+##### Phase NM7.12R implementation record (2026-09-10, win_debug, CUDA 12.8)
+
+**Status:** partial — all six regressions have wired implementation and unit/host/GPU
+coverage; release-build latency qualification, the real-adapter QML harness, and Metal
+execution remain open.
+
+**Primary success call chain:**
+
+```text
+Header Brush / panel Paint-Erase -> adapter stamps source_kind + tool + diameter/feather
+  -> queued BeginInput (ordered, identity-fenced)
+  -> EditorSessionService::ApplyMaskCreationCommand (serial, per-batch)
+  -> controller BeginMaskInput(kind fence) -> BeginBrushStroke
+  -> BrushMaskInput canonical samples -> provisional ApplyLiveBrushDraft / AppendBrushStroke
+  -> workspace ParameterizedBrushReplayCache (regional dirty, retained index + shared pixels)
+  -> ActiveRasterMaskInput(content_revision, dirty_rectangle)
+  -> CUDA/OpenCL partial upload -> mask Mix -> presented frame
+Release -> FinishBrushStroke -> AddMask (first stroke) / AppendBrushStroke -> Settling
+Move drag -> BeginMaskMove(BrushMove fence) -> SetBrushTranslation live ops
+  -> release -> one SetBrushTranslation commit
+FramePresent -> submission.geometry = plan.geometry -> DirectFrameSink::NotifyFrameReady
+  -> EditorViewportItem::NotePresentedMaskGeometry (stale-id fence)
+  -> PresentedMaskGeometryChanged -> interaction->setDisplayedMaskGeometry
+  -> maskEditViewMapping().geometry used by adapter MakeSample + overlays
+```
+
+**Primary failure / fencing chain:**
+
+```text
+mapping identity change mid-stroke -> adapter CancelIfMappingChanged
+  -> owner Cancel -> discard open stroke samples -> controls back to armed
+stale pointer identity / wrong source kind -> owner Reject before mutation
+history publish failure -> RestoreLive + Failed state, no half-committed document
+dirty replay throw -> entry invalidated; next call re-rasterizes full
+erase on no mask / Move on no selection / wrong handle kind -> owner Reject
+```
+
+**What was proven (executed tests):**
+
+| Criterion | Target / binary | Result |
+| --- | --- | --- |
+| Brush creation/erase/move/undo/no-commit | `AccumulatingBrushCreationTest` | 14/14 PASS |
+| Analytic fencing, kind separation, handle drag | `AnalyticMaskCreationTest` | 34/34 PASS (mask_creation+edit labels) |
+| Reference/item mapping, presented geometry | `MaskEditGeometryTest` | PASS (mask_edit label, 5/5) |
+| Move frame quad, corner ticks, dashed cursor, hit-test | `MaskOverlayControlTest` (3 new cases) | 16/16 PASS |
+| Regional replay == full evaluation, erase undo, union | `BrushRegionalReplayTest` | 6/6 PASS |
+| Replay cache identity/dirty/eviction | `ParameterizedBrushReplayCacheTest` (new) | 10/10 PASS |
+| Sampler determinism under event grouping | `BrushCanonicalSamplerTest`, `BrushSpatialIndexTest` | PASS |
+| CUDA dirty-rect upload, feather, union | `GpuDagCudaMaskTest` (+ fixtures) | PASS |
+| OpenCL dirty-rect upload, revision fencing | `GpuDagOpenClGradeTest.OpenClMaskFixture` | PASS (50/50 GPU mask tests) |
+| Diameter semantics, Erase gating, tool switcher | `EditorAdjustmentHeaderQmlTest` | PASS (workspace_qml label) |
+
+Commands: `scripts/msvc_env.cmd --build --preset win_debug --parallel 4`;
+`ctest -R <suites> --output-on-failure` from `build/debug`.
+
+**Checklist (honest state):**
+
+- [x] First press creates `BrushMaskSource` only; analytic creation is kind-fenced.
+- [x] Pointer mapping consumes the presented frame's `ResolvedRenderGeometry`; mapping
+      changes cancel open strokes.
+- [x] Paint/Erase/Move are distinct inputs and controls; Move frame uses translated
+      Paint-support bounds with corner ticks and interior hit-test.
+- [x] Erase replays `min(prev, 255-dab)` regionally; verified on host, CUDA, OpenCL.
+- [x] New Brushes apply `0.5%`-of-short-edge default feather from the first dab;
+      existing explicit 0 is preserved.
+- [x] Continuous drawing replays only dirty regions through a retained workspace cache;
+      immutable shared pixel snapshots; CUDA/OpenCL upload dirty rectangles.
+- [ ] `EditorBrushInteractionQmlTest` (real workspace + real adapter + serial owner)
+      — not created; QML coverage is header/panel level.
+- [ ] Release-build p95 ≤ 16 ms drawing latency measurement — not executed.
+- [ ] Metal pass — source updated for the new API; not compiled or executed (no Metal
+      host in this environment).
+- [ ] Production viewer evidence at 260/320/460 px, both themes, real pointer events —
+      not executed.
+
+**LOC note:** largest touched files — `editor_mask_creation_adapter.cpp` (~1500 LOC,
+kept; brush cursor/geometry lives in `mask_overlay_layout`/`mask_overlay_geometry`),
+`editor_mask_creation_controller.cpp` (dispatch + stroke lifecycle), new
+`parameterized_brush_replay_cache.hpp/.cpp` (~200 LOC, workspace-retained).
+
+**Remaining gaps:** latency qualification on a release build, real-adapter QML harness,
+Metal compile/run, and full-viewer pointer evidence remain open and must be reported
+against NM7.12R acceptance rather than assumed.
 
 ### NM7.13 — Complete cancellation and project/session lifecycle
 

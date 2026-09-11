@@ -321,14 +321,15 @@ void EditorMaskCreationController::RestoreLive() {
 
 void EditorMaskCreationController::ClearOpenOperation() {
   brush_input_.Cancel();
-  open_               = false;
-  terminated_         = true;
-  handle_             = AnalyticMaskHandle::None;
-  pointer_            = {};
-  unwrapped_rotation_ = 0.0f;
+  open_                    = false;
+  terminated_              = true;
+  handle_                  = AnalyticMaskHandle::None;
+  pointer_                 = {};
+  unwrapped_rotation_      = 0.0f;
   field_edit_key_.clear();
-  before_field_value_ = nullptr;
+  before_field_value_      = nullptr;
   draft_source_.reset();
+  published_draft_samples_ = 0;
 }
 
 void EditorMaskCreationController::ResetMode() {
@@ -781,10 +782,15 @@ auto EditorMaskCreationController::PublishMaskFieldEdit() -> EditorMaskCreationR
 }
 
 auto EditorMaskCreationController::BeginMaskInput(MaskCreationSample  sample,
-                                                  MaskPointerIdentity identity)
+                                                  MaskPointerIdentity identity,
+                                                  MaskSourceKind      expected_source,
+                                                  float default_feather_reference_px)
     -> EditorMaskCreationResult {
   if (state_ == EditorMaskCreationState::Settling) {
     return Reject("Mask tool is unavailable until settle is acknowledged");
+  }
+  if (expected_source != kind_) {
+    return Reject("stale Mask tool dispatch does not match the armed source kind");
   }
   if (kind_ == MaskSourceKind::Brush && IsBrushPaintTool(brush_tool_)) {
     const bool armed = (state_ == EditorMaskCreationState::Creating && !open_) ||
@@ -792,13 +798,16 @@ auto EditorMaskCreationController::BeginMaskInput(MaskCreationSample  sample,
     if (!armed) {
       return Reject("BeginMaskInput requires an armed Brush paint or erase tool");
     }
+    if (brush_tool_ == EditorBrushTool::Erase && mask_id_.Empty()) {
+      return Reject("Brush erase requires an existing Brush");
+    }
     if (!FiniteSample(sample) || !sample.inside_photograph) {
       return Reject("Mask press must lie inside the photograph");
     }
     pointer_                = identity;
     press_normalized_       = sample.normalized;
     press_reference_pixels_ = sample.reference_pixels;
-    return BeginBrushStroke(sample);
+    return BeginBrushStroke(sample, default_feather_reference_px);
   }
   if (state_ != EditorMaskCreationState::Creating || open_) {
     return Reject("BeginMaskInput requires an armed creation tool");
@@ -824,10 +833,14 @@ auto EditorMaskCreationController::BeginMaskInput(MaskCreationSample  sample,
 
 auto EditorMaskCreationController::BeginMaskMove(AnalyticMaskHandle  handle,
                                                  MaskCreationSample  sample,
-                                                 MaskPointerIdentity identity)
+                                                 MaskPointerIdentity identity,
+                                                 MaskSourceKind      expected_source)
     -> EditorMaskCreationResult {
   if (state_ == EditorMaskCreationState::Settling) {
     return Reject("Mask tool is unavailable until settle is acknowledged");
+  }
+  if (expected_source != kind_) {
+    return Reject("stale Mask tool dispatch does not match the selected source kind");
   }
   if (state_ != EditorMaskCreationState::Selected || open_) {
     return Reject("BeginMaskMove requires a selected existing Mask");
@@ -879,10 +892,15 @@ auto EditorMaskCreationController::BeginMaskMove(AnalyticMaskHandle  handle,
 auto EditorMaskCreationController::UpdateCreation(const MaskCreationSample& sample)
     -> EditorMaskCreationResult {
   MaskSource next;
-  if (kind_ == MaskSourceKind::Radial) {
-    next = RadialFromCenterOut(press_normalized_, sample.normalized);
-  } else {
-    next = LinearFromEndpoints(press_normalized_, sample.normalized);
+  switch (kind_) {
+    case MaskSourceKind::Radial:
+      next = RadialFromCenterOut(press_normalized_, sample.normalized);
+      break;
+    case MaskSourceKind::LinearGradient:
+      next = LinearFromEndpoints(press_normalized_, sample.normalized);
+      break;
+    case MaskSourceKind::Brush:
+      return Reject("Brush input must route through the Brush stroke path");
   }
   draft_source_ = next;
   if (!CreationSourceValid(next)) {
@@ -942,14 +960,17 @@ auto EditorMaskCreationController::AppendMaskInput(MaskCreationSample  sample,
   if (!FiniteSample(sample)) {
     return Reject("Mask sample is not finite");
   }
-  if (creating_) {
-    return UpdateCreation(sample);
-  }
+  // Brush strokes keep `creating_` armed until PublishAddMask, so the open
+  // Brush input must win over the analytic creation path; otherwise the first
+  // stroke's appends would replace the live source with a Linear draft.
   if (kind_ == MaskSourceKind::Brush && brush_input_.IsOpen()) {
     return UpdateBrushPaint(sample);
   }
   if (kind_ == MaskSourceKind::Brush && handle_ == AnalyticMaskHandle::BrushMove) {
     return UpdateBrushMove(sample);
+  }
+  if (creating_) {
+    return UpdateCreation(sample);
   }
   return UpdateExisting(sample);
 }
@@ -1134,6 +1155,9 @@ auto EditorMaskCreationController::SetBrushTool(EditorBrushTool tool) -> EditorM
   if (tool == EditorBrushTool::Move && (creating_ || mask_id_.Empty())) {
     return Reject("Brush move requires an existing Brush");
   }
+  if (tool == EditorBrushTool::Erase && mask_id_.Empty()) {
+    return Reject("Brush erase requires an existing Brush");
+  }
   brush_tool_ = tool;
   if (IsBrushPaintTool(tool)) {
     brush_input_.SetStrokeMode(BrushStrokeModeFromTool());
@@ -1146,6 +1170,14 @@ auto EditorMaskCreationController::SetBrushTool(EditorBrushTool tool) -> EditorM
 auto EditorMaskCreationController::SetBrushStrokeParameters(float radius, float strength,
                                                             float hardness)
     -> EditorMaskCreationResult {
+  if (radius == brush_input_.radius() && strength == brush_input_.strength() &&
+      hardness == brush_input_.hardness()) {
+    // Queued appends re-send the current parameters; an unchanged set must not
+    // republish the draft or schedule a render.
+    auto result    = Ok();
+    result.mask_id = mask_id_;
+    return result;
+  }
   try {
     brush_input_.SetStrokeParameters(radius, strength, hardness);
   } catch (const std::exception& ex) {
@@ -1159,6 +1191,7 @@ auto EditorMaskCreationController::SetBrushStrokeParameters(float radius, float 
   if (!ApplyLiveBrushDraft()) {
     return Reject("Brush parameter update was rejected");
   }
+  published_draft_samples_ = brush_input_.DraftSamples().size();
   auto result    = Ok();
   result.mask_id = mask_id_;
   RequestInteractive(result);
@@ -1199,7 +1232,8 @@ auto EditorMaskCreationController::ApplyLiveBrushDraft() -> bool {
   return ApplyLiveSource(source);
 }
 
-auto EditorMaskCreationController::BeginBrushStroke(const MaskCreationSample& sample)
+auto EditorMaskCreationController::BeginBrushStroke(const MaskCreationSample& sample,
+                                                    float default_feather_reference_px)
     -> EditorMaskCreationResult {
   auto* grade = Grade();
   if (grade == nullptr) {
@@ -1220,7 +1254,10 @@ auto EditorMaskCreationController::BeginBrushStroke(const MaskCreationSample& sa
     translation      = brush->placement_translation;
   } else {
     committed_brush_ = {};
-    before_source_   = nullptr;
+    if (std::isfinite(default_feather_reference_px) && default_feather_reference_px > 0.0f) {
+      committed_brush_.feather_radius = default_feather_reference_px;
+    }
+    before_source_ = nullptr;
   }
   const auto stroke_id = AllocateStrokeId();
   if (stroke_id.Empty()) {
@@ -1241,6 +1278,7 @@ auto EditorMaskCreationController::BeginBrushStroke(const MaskCreationSample& sa
     open_ = false;
     return Reject("provisional Brush stroke was rejected");
   }
+  published_draft_samples_ = brush_input_.DraftSamples().size();
   auto result    = Ok();
   result.mask_id = mask_id_;
   RequestInteractive(result);
@@ -1254,9 +1292,18 @@ auto EditorMaskCreationController::UpdateBrushPaint(const MaskCreationSample& sa
   } catch (const std::exception& ex) {
     return Reject(ex.what());
   }
+  const auto draft_count = brush_input_.DraftSamples().size();
+  if (draft_count == published_draft_samples_) {
+    // The append emitted no new canonical dab: the live source is unchanged, so
+    // neither a republish nor an Interactive frame is needed.
+    auto result    = Ok();
+    result.mask_id = mask_id_;
+    return result;
+  }
   if (!ApplyLiveBrushDraft()) {
     return Reject("provisional Brush source was rejected");
   }
+  published_draft_samples_ = draft_count;
   auto result    = Ok();
   result.mask_id = mask_id_;
   RequestInteractive(result);
@@ -1301,6 +1348,31 @@ auto EditorMaskCreationController::FinishBrushStroke() -> EditorMaskCreationResu
     RestoreLive();
     state_ = EditorMaskCreationState::Failed;
     return Reject(ex.what());
+  }
+  const bool unchanged =
+      stroke.mode == BrushStrokeMode::Paint
+          ? !BrushStrokeHasCoverageEffect(stroke)
+          : !BrushEraseOverlapsPaint(stroke, committed_brush_);
+  if (unchanged) {
+    // Confirmed no-change stroke: restore the live draft and stay armed without
+    // producing a history commit.
+    const auto id = mask_id_;
+    RestoreLive();
+    ClearOpenOperation();
+    if (creating_) {
+      inserted_      = false;
+      mask_id_       = MaskId{};
+      before_source_ = nullptr;
+      state_         = EditorMaskCreationState::Creating;
+    } else {
+      state_ = EditorMaskCreationState::Selected;
+      if (Grade() != nullptr && Grade()->FindMask(id) != nullptr) {
+        mask_id_       = id;
+        before_source_ = MaskModelToJson(*Grade()->FindMask(id)).at("source");
+        draft_source_  = Grade()->FindMask(id)->source;
+      }
+    }
+    return Ok();
   }
   auto       brush = committed_brush_;
   const auto index = FindBrushStrokeIndex(brush.strokes, stroke.id);

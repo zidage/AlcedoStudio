@@ -928,6 +928,10 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
   if (presentation_viewport_ == viewportItem) {
     return;
   }
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
+  }
   presentation_viewport_ = viewportItem;
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
     if (scope_controller_) {
@@ -935,6 +939,20 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     }
     SyncViewportIdentity();
     SyncViewportDisplayConfig();
+    // Forward the presented frame's resolved geometry to the interaction
+    // controller so Mask pointer mapping shares the displayed frame's
+    // reference space. The connection resolves the interaction controller at
+    // fire time; an unbound interaction simply skips the update.
+    presented_geometry_connection_ =
+        connect(item, &editor_rhi::EditorViewportItem::PresentedMaskGeometryChanged, this,
+                [this, item] {
+                  auto* interaction =
+                      qobject_cast<editor_rhi::EditorInteractionController*>(
+                          interaction_controller_.data());
+                  if (interaction != nullptr) {
+                    interaction->setDisplayedMaskGeometry(item->presentedMaskGeometry());
+                  }
+                });
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
     // DirectFrameSink owns the short scene-graph startup wait when this binding
     // precedes QQuickRhiItem::synchronize().
@@ -1020,6 +1038,14 @@ void EditorSessionController::bindInteractionController(QObject* interactionCont
   if (!interaction) {
     return;
   }
+  // A frame may have been presented before this binding; push the stored
+  // presented-frame geometry so Mask mapping does not wait for the next frame.
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    const auto& geometry = item->presentedMaskGeometry();
+    if (!geometry.full_reference_extent.Empty()) {
+      interaction->setDisplayedMaskGeometry(geometry);
+    }
+  }
   // viewChangeReported follows viewStateChanged. QML has therefore already
   // updated DirectFrameSink with the matching ROI when this route reads it.
   interaction_view_change_connection_ =
@@ -1030,6 +1056,10 @@ void EditorSessionController::bindInteractionController(QObject* interactionCont
 void EditorSessionController::unbindPresentationViewport() {
   if (!presentation_viewport_) {
     return;
+  }
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
   }
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     item->suspendPresentation();
@@ -1330,6 +1360,11 @@ auto EditorSessionController::mask_creation_mask_id() const -> alcedo::MaskId {
 
 auto EditorSessionController::mask_creation_node_id() const -> alcedo::NodeId {
   return session_backend_ ? session_backend_->mask_creation_node_id() : alcedo::NodeId{};
+}
+
+auto EditorSessionController::mask_creation_state() const -> alcedo::EditorMaskCreationState {
+  return session_backend_ ? session_backend_->mask_creation_state()
+                          : alcedo::EditorMaskCreationState::Inactive;
 }
 
 auto EditorSessionController::mask_creation_source() const -> std::optional<alcedo::MaskSource> {

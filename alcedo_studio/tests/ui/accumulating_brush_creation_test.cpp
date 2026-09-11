@@ -123,7 +123,8 @@ struct BrushCreationHarness {
       -> EditorMaskCreationResult {
     const auto press  = SampleOf(mapping, ItemOf(mapping, from_normalized), false);
     const auto move   = SampleOf(mapping, ItemOf(mapping, to_normalized), true);
-    EXPECT_TRUE(controller.BeginMaskInput(press, identity).accepted);
+    EXPECT_TRUE(
+        controller.BeginMaskInput(press, identity, MaskSourceKind::Brush).accepted);
     EXPECT_TRUE(controller.AppendMaskInput(move, identity).accepted);
     return controller.FinishMaskInput();
   }
@@ -188,7 +189,9 @@ TEST(AccumulatingBrushCreationTest, SizeAndStrengthChangesPersistInStrokeSamples
   BrushCreationHarness harness;
   ASSERT_TRUE(harness.ArmPaint().accepted);
   const auto press = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.25f, 0.40f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(harness.controller
+                  .BeginMaskInput(press, harness.pointer, MaskSourceKind::Brush)
+                  .accepted);
   ASSERT_TRUE(harness.controller.SetBrushStrokeParameters(4.0f, 0.5f, 1.0f).accepted);
   const auto move =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.45f, 0.40f}), true);
@@ -230,7 +233,8 @@ TEST(AccumulatingBrushCreationTest, MovingExistingBrushUpdatesInteractivePixels)
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{16.0f / 64.0f, 12.0f / 32.0f}),
                false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer,
+                                 MaskSourceKind::Brush)
                   .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{40.0f / 64.0f, 20.0f / 32.0f}),
@@ -272,7 +276,8 @@ TEST(AccumulatingBrushCreationTest, BrushMoveDoesNotAppendStroke) {
   ASSERT_TRUE(harness.controller.SetBrushTool(EditorBrushTool::Move).accepted);
   const auto press = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.20f, 0.30f}), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer,
+                                 MaskSourceKind::Brush)
                   .accepted);
   const auto moved = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.35f, 0.40f}), true);
   ASSERT_TRUE(harness.controller.AppendMaskInput(moved, harness.pointer).accepted);
@@ -392,7 +397,9 @@ TEST(AccumulatingBrushCreationTest, CancelledFirstStrokeLeavesGradeUnchanged) {
   ASSERT_TRUE(harness.ArmPaint().accepted);
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.30f, 0.40f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(harness.controller
+                  .BeginMaskInput(press, harness.pointer, MaskSourceKind::Brush)
+                  .accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 1u);
   ASSERT_TRUE(harness.controller.CancelMaskInput().accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
