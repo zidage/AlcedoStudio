@@ -4,7 +4,8 @@ Date: 2026-09-08
 
 Status: NM7.1–NM7.12 completion records retained; NM7.12R implemented and partially
 verified (release latency, real-adapter QML harness, and Metal still open);
-NM7.13–NM7.15 planned. This document records the NM7.1 source
+NM7.12RR planned as one complete repair phase; NM7.13–NM7.15 planned.
+This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
@@ -14,7 +15,8 @@ Brush paint/erase/move with typed stroke history, NM7.10 serial Interactive Mix
 with one current Grade coverage result, NM7.11 project Mix-cache storage plus
 Keep/DeleteOnProjectClose cleanup, and NM7.12 production Mask controls plus project
 storage UI. The six reported Brush regressions require NM7.12R acceptance before Brush UI
-can be considered qualified. NM7.13–NM7.15 acceptance remains outstanding.
+can be considered qualified. Newly reported second-scale drawing, first-drag input loss,
+and erased-content reappearance are covered by NM7.12RR. NM7.13–NM7.15 acceptance remains outstanding.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
@@ -605,7 +607,8 @@ transitions immediate, and input-following geometry is never animated behind the
 | NM7.11 | Project-owned cache settings, writeback and cleanup service | NM7.3, NM7.10 |
 | NM7.12 | Production Mask controls and project storage UI | NM7.11 |
 | NM7.12R | Repair Brush tool state, pointer alignment, move frame, erase, drawing cost and default feather | NM7.5–NM7.12 |
-| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12, NM7.12R |
+| NM7.12RR | Complete continuous Brush input, stable Erase, GPU execution and measured viewer responsiveness in one phase | NM7.12R implementation |
+| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12, NM7.12R, NM7.12RR |
 | NM7.14 | Native pixel, persistence, cache bounds and recovery qualification | NM7.13 |
 | NM7.15 | Real viewer/package/performance qualification and NM8 handoff | NM7.14 |
 
@@ -2276,6 +2279,287 @@ kept; brush cursor/geometry lives in `mask_overlay_layout`/`mask_overlay_geometr
 **Remaining gaps:** latency qualification on a release build, real-adapter QML harness,
 Metal compile/run, and full-viewer pointer evidence remain open and must be reported
 against NM7.12R acceptance rather than assumed.
+
+### NM7.12RR — 一次完成连续绘制、擦除稳定性和真实管线性能修复
+
+**Date / source:** 2026-09-10，调查工作树 HEAD `fb95653f`。**Status:** planned。
+本次只研究当前实现、核对 Qt/CUDA 一手资料并制定方案；没有重新运行用户的 RAW 绘制过程，
+没有测得各环节耗时。以下区分源码可确认的执行行为、可以数学证明的判断问题和待复现的因果链。
+
+**本阶段必须交付的整体能力：** Brush/Erase 从第一次 press 起即可连续拖动，不需要先点一下；
+擦除在绘制、释放、Quality 回帧、下一次编辑和 Undo/Redo 后保持正确；默认羽化开启时，实际照片
+随输入连续更新，消除秒级逐帧重绘。Windows CUDA/D3D11 是本次用户问题的直接资格验证路径。
+共享接口改动必须保持 OpenCL/Metal 的既有语义，分别列出编译/执行证据，不能用其他 backend
+替代 CUDA，也不能将未运行的平台说成通过。
+
+**执行约束：** NM7.12RR 只有一个实施范围、一个完成记录和一套退出条件。下文各项是同一阶段
+内必须完成的工作，不再生成 RR.1、RR.2、A/B 或新的补修阶段。输入、擦除、GPU、资源生命周期、
+真实 QML 测试和性能测量都完成才可写 complete；不能再次以“实现已接线，实际拖动/时延以后测”
+作为交付。NM7.12R 的历史记录保留，其未完成的真实 adapter harness 和本机时延验证并入本阶段。
+
+**对“是否每帧生成 R8、是否没有走 GPU”的回答。** 当前路径是 CPU 与 GPU 混合，不是全 CPU，
+也不是已有 GPU 计算就自然足够快：
+
+```text
+Qt input -> adapter -> ordered queue -> serial controller
+  -> DraftStroke copies growing samples -> ComposeDraftBrush -> live source replacement
+  -> ParameterizedBrushReplayCache -> CPU index rebuild / dirty-region rasterization
+  -> shared host R8 -> CUDA active texture acquire -> initial full / later dirty upload
+  -> full mip generation -> full inside/outside distance transform when bytes changed
+  -> feather sampling -> enabled Mask Union -> Grade Mix -> D3D11 photograph presentation
+```
+
+`ParameterizedBrushReplayCache` 已保留 host 像素，`ActiveRasterTextures().Acquire` 也有 GPU
+资源复用，所以**不能说每一帧必然新分配一张纹理**。但源码仍显示下列重复计算，必须分别计时：
+
+| 已确认的执行行为 | 精确位置 | 性能或正确性含义，及尚缺的证据 |
+| --- | --- | --- |
+| 当前 canonical R8 长边上限为 4096，按参考图比例向上取整 | `brush_raster_encoding.cpp::CanonicalBrushRasterExtent` | 6000×4000 参考图产生 4096×2731，约 10.67 MiB R8；不是每次完整 6000×4000 R8，也不能进一步降低上限来掩盖慢 |
+| 增长中的 draft 每次生成新的完整 sample body，source 列表也复制 | `BrushMaskInput::DraftStroke`、`ComposeDraftBrush`、`UpdateBrushPaint` | 无新增 dab 的事件已有早退，但有新 dab 时仍复制旧前缀；一个 batch 的每条有效 Append 仍会发布 source，不能把一批一次 render 当作一批一次 source 更新 |
+| dirty 比较依据 sample body 指针；增长的同一 StrokeId 会计算整条旧/新 stroke 的支持域；每次非空 dirty 重建完整索引 | `parameterized_brush_replay_cache.cpp::BrushReplayDirtyTexels / Replay` | “区域重放”不是“仅新 dab”；长笔划越画越贵，弯曲路径的大包围盒包含大量空白。现有 `RegrownDraftStrokeReplaysItsGrownSupport` 测试正好接受这种扩大行为 |
+| CPU raster 内逐 dab、逐像素计算距离、覆盖与 R8 写入 | `brush_rasterizer.cpp::StampDab / ReplayRegion` | overlap 多时大量重复 host 工作；仅做 GPU 上传局部化没有消除 CPU 栅格化成本 |
+| 每次更高 content revision 上传 dirty 后仍生成完整 mip，并标记 `raster_bytes_changed=true` | `cuda_mask_pass.cu::ExecuteCudaMask` | 只改 feather/invert/opacity 或相同像素的 revision 也要核对是否被当成 source 像素变化；空 dirty 伪造 1×1 上传会触发多余工作 |
+| 源像素变化后，inside/outside 两套 EDT 都扫描完整 canonical raster，再组合距离场 | 同文件 `must_compute`、`ParallelBandHorizontalKernel`、`ParallelBandVerticalKernel` | 羽化不是 CPU 算，但每行/列一个 block，且 launch 的 block size 是 **1**；单线程串行扫描整行/列，不能仅凭函数名把它视为高并行实现 |
+| 纵向 EDT 每个 block 的动态 shared memory 为 `height*(sizeof(int)+sizeof(float))` | 同文件 vertical kernel launch | 4096×2731 源约 21.34 KiB/block，竖图高度 4096 时为 32 KiB/block，却只有一个执行线程；需用 profiler 验证实际占用率、访存与 GPU 时间 |
+| 距离场及 horizontal/inside/outside 共四个源大小 float buffer | 同文件 scratch 分配 | 上述 4096×2731 示例约 170.69 MiB，仅是这四个 buffer；实际峰值还含 R8、mip、Mask outputs 与照片。分清保留分配和逐帧计算，不能靠一个 R8 字节数解释全部成本 |
+| 本地 Debug 的该 `.cu` 实际编译 flags 含 `-G` | `build/debug/build.ninja` 的 `cuda_mask_pass.cu.obj`；根 `CMakeLists.txt` 的 CUDA Debug 选项 | device debug 会抑制优化，是放大器；尚未确认用户运行的 exe/DLL 就是这份 Debug。必须核对进程模块和同 commit Release，不能把换 Release 当成全部修复 |
+
+CPU/GPU、分配/计算、submit/complete 必须分别计时。使用 [CUDA 12.8 性能指南](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-c-best-practices-guide/index.html)
+分析访存、warp 与 shared memory 约束，按 [NVCC 12.8 文档](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-compiler-driver-nvcc/index.html)
+识别 `-G` 与优化配置。GPU launch 的 CPU 返回耗时不是 kernel 耗时；使用同 stream CUDA events，
+需要时间线时使用 [Nsight Systems](https://docs.nvidia.com/nsight-systems/UserGuide/index.html)，
+不能为计时在每个子步骤增加同步而改变原始调度。
+
+**先把三个用户现象放进同一条可追踪输入序列。** 从生产 Header 点击 Brush/Erase，直接 press →
+移动至少 5 个非共线点 → release；不提前点照片、不提前给 adapter 注入选择。对比“先单击后拖动”
+并分别覆盖冷首帧、Quality 已显示、Interactive 已显示、首次创建/已有 Brush、快速连续两笔。
+记录 `device/point/sequence`、按钮、事件阶段、Qt grab、adapter open/tool/target、owner state、
+sample 数、command kind、content revision、frame role、request id 与 terminal reason。
+计数与时间戳写入可开关诊断，临时结果仅存 `build/tmp/brush_continuous_input/`。
+
+重点排查以下路径，取得真实日志或失败测试后在同一阶段修复：
+
+- `EditorWorkspace.qml` 当前仍由 PointHandler 转发，inactive 回调直接当 Release；没有在这里
+  区分正常释放与取消。`handlerPoint` 在释放后可能归零，不能把它作为终点。设备 id/point id
+  也不能由 adapter 固定为 1。Qt 对这些行为的说明见 [handlerPoint](https://doc.qt.io/qt-6/qml-qtquick-handlerpoint.html)。
+- PointHandler 是被动 grab，Qt 文档说明它可继续观察其他独占 grab 期间的移动；不能照抄旧
+  QML 注释就断定 TapHandler 一定吞掉它的 move。实际查 active/point/grab 的交付顺序，见
+  [PointHandler](https://doc.qt.io/qt-6/qml-qtquick-pointhandler.html)。当前 DoubleTap 仍只按
+  `editorControlsEnabled` 开启；Mask 拥有左键时需要隔离双击缩放，防止额外的 view change。
+- `CancelIfMappingChanged` 使用 `MaskEditMappingIdentity` 的逐字段相等；其中包含 render
+  extent、render_to_reference 和呈现模式。Quality/Interactive 换表示时可以字段不同而最终
+  指针映射相同。`ConnectInteraction` 对任何 `viewChangeReported` 都取消也需一并审计。
+  意外 Cancel 会调用 RestoreLive，能造成 draft Erase 的像素重新出现；这条链是高优先级
+  假设，但本次未复现，不能写成用户问题已经定位。
+- `DirectFrameSink::NotifyFrameReady` 在最终 slot gate 之前发送 geometry，
+  `NotePresentedMaskGeometry` 主要按 request id 递增接纳。必须证明 geometry 属于实际已接纳
+  显示的帧，而不是“准备好但未展示”的帧；图像/session identity 也必须参与校验。
+- Erase 回现还要区分四种结果：draft 被 Cancel、Finish 未写入 Erase、host/GPU source 不一致、
+  较旧照片覆盖新照片。逐层读取同一 revision 的 source 字节、effective Mask、Union 和最终帧，
+  不用“有缓存”或“UI 问题”代替具体失败原因。
+
+**输入修复必须保证的行为。** 工具 arm 和第一笔 Begin 保持顺序；在 owner 尚未返回新 `MaskId`
+时也能接收同一 sequence 的后续点。每条有效 move 全部到达规范 sampler；保留弧长插值和参数
+变化边界，不采用仅保存最后坐标的合并。press 立即记录首个 dab，release 使用仍有效的事件终点，
+只产生一个 Finish；cancel/grab loss 只产生一个 Cancel。下一笔排在前一笔 Finish 后即可接收，
+不等待 Quality 或缓存落盘。旧工具/旧笔回执不得清空当前新笔或把 Erase 改回 Paint。
+
+保留单一真实事件写入者。先修现有 PointHandler 的路由和终止语义；若其 QML 回调确实不能在
+当前 Qt 6.9 保证有效 release，则将这套完整 press/move/release/cancel 接收到一个 Qt Quick
+输入 Item，由其持有该设备点的输入；不能再额外加第二个 DragHandler 同时向 owner 写 sample。
+hover 只更新 cursor。pan/crop/双击缩放按工具所有权仲裁；越界释放仍结束原笔，第二触点和
+合成鼠标不能触发重复提交。沿用 [PointerHandler 的取消与 grab 信号](https://doc.qt.io/qt-6/qml-qtquick-pointerhandler.html#signals)。
+
+**用最终几何判断输入是否仍有效。** 把 item → ReferenceSpace 的组合变换作为同一性的基础：
+
+```text
+F = render_to_reference * diag(render_width, render_height, 1)
+    * displayed_uv_to_photograph_uv * item_to_displayed_uv
+
+6000×4000 Quality:     render_to_reference = I,             extent = 6000×4000
+3000×2000 Interactive: render_to_reference = diag(2,2,1),   extent = 3000×2000
+Both give identical F when viewport, crop, orientation, zoom and pan are unchanged.
+```
+
+上述两组 raw fields 不相等，数学上的组合映射却相等；直接按字段取消会把正常换分辨率当作
+坐标变化。对两个 affine `F` 比较有效照片域的角点及测试点，使用明确浮点误差界限，并与原有
+≤0.25 logical px 控件精度一致；image/session、参考图、crop/orientation 语义身份单独校验。
+不把任意近似变化视为相等，更不能整体移除变化校验。等价 Quality/Interactive/ROI 表示切换
+保持笔触；真实缩放/平移/裁切变化按既定策略有序取消，并给出原因。映射发布与呈现 frame 的
+接纳保持同一顺序，修复前后都用独立已知照片点验证，不只做 mapper 自己的往返。
+
+**Erase 的来源、提交和帧发布必须连续一致。** 每条 stroke 的 Paint/Erase mode 在 Begin 固定，
+只作用于准确的 Grade/Mask。继续使用规范 R8 的 `paint=max(b,a8)`、`erase=min(b,255-a8)`；
+GPU 并行不能打乱顺序。满强度擦除后的源像素在没有后续 Paint/Undo 的情况下不得增大。
+该单调性先断言原始 Brush R8；羽化、invert、其他 Mask max 对最终照片的影响另按公式验证。
+
+资源更新以成功完成为准，不能仅以“已排队上传”或较大 revision 判定内容有效：
+
+- 当前 cache 的 `SharedPixels()` 返回 const handle，但其底层 buffer 仍被 rasterizer 原地
+  修改；const shared_ptr 不提供不可变性。明确串行 reader 的持有区间，在所有 CPU/GPU
+  reader 结束前禁止覆盖，测试故意保留 reader。不能为解决它默认每帧复制整张 R8。
+- CPU replay 的 dirty 与 GPU texture 的已完成 base revision 必须匹配。跳过、中断、失败的
+  upload 后，下一次 dirty 若只相对最近 host source，就可能漏掉较早的擦除；按 GPU 实际
+  base 累积变更区域，或在内容未知时从参数执行同一精确重建，不能继续用未初始化旧像素。
+- `SetUploadedPixels`、distance field、effective coverage、Union/Mix 的 pending/completed
+  revision 分开维护，失败使相关未完成结果失效；不得让失败的源更新保留“已上传成功”标签。
+  session/geometry/algorithm/storage identity 改变时清理对应资源，不靠默认 generation=1。
+- 最终照片的接纳除 request 序号外还应验证当前 document/edit revision 与 session。已经显示
+  Erase revision N 后，不得显示未包含该 Erase 的旧 Quality/Interactive 结果，即使其 request
+  编号较大。取消恢复帧应是当前 owner 新的合法状态，不能伪装成陈旧帧绕过校验。
+- Finish 必须提交完整已接受的 Erase sample；无效笔判断不能误丢真实变化。
+  `BrushEraseOverlapsPaint` 当前是 erase×paint dab 的双重遍历，使用空间索引避免 release
+  时另一个长停顿；同时验证无重叠/已擦空/半强度/移动后擦除/下一笔 Paint 的语义。
+- cache 错误注入验证条目原子失效。NM7.12R 记录称 replay throw 会 invalidate，但当前 Replay
+  函数未见对应事务/异常清理；需实测并落实，不能继承记录中的保证。
+
+**性能实现目标：CPU 管输入和有序命令，GPU 管像素。** 本机 CUDA authoring 热路径应去掉
+host 全图 R8 的生成/复制/上传往返。R8 仍是现有 coverage 格式，canonical 分辨率、量化、笔触
+算法版本、source feather 与最终 Mix 语义保持不变；转移计算设备不授权修改图像质量。
+
+同一个 phase 内完成以下整套实现，不能只优化其中一层：
+
+- `BrushMaskInput` 唯一持有可增长 draft，已提交 samples 仍由 document owner 持有现有
+  immutable body。通过安全作用域读取和明确新增 sample 范围消费；一个 serial batch 内
+  接收全部有序点后，仅发布一次 changed source revision/Interactive 请求。取消每事件
+  `DraftStroke` 全前缀复制、`ComposeDraftBrush` 列表复制与 source JSON 往返，Finish 一次
+  移动最终 body 并发布历史。draft/source 不新增平行镜像。
+- 为 GPU 上传新增规范 dab/参数边界和所需 tile 索引，按实际变更上传命令；同一 stroke 的
+  未变前缀不重传。tile 中候选以 stroke/sample 顺序排列，每个输出像素按此序列计算 max/min。
+  不允许 Paint 与 Erase 对同一像素无序原子竞争。与现有 CPU 独立 oracle 比较 canonical R8
+  逐字节相等，包含半值量化、边缘、低强度、半径/硬度变化和重叠；不得用 fast-math 改变边界。
+- dirty 从新增 sample 支持域/实际 owner change 描述生成，索引只追加新增范围。Move、Undo、
+  删除、取消则涵盖 old/new 支持域，并重放所有相交贡献。用 tile 集合表达弯曲路径，避免把
+  整条长笔的包围盒当作每帧 dirty；若 dense/全域变化需要完整求值，明确统计其工作量。
+- 在 `PlanExecutor` 和 `cuda_mask_pass.cu` 的真实生产入口接入 GPU source 求值，不仅新增
+  独立 benchmark kernel。移除本机生产 authoring 对 `ParameterizedBrushReplayCache` host
+  像素缓存的依赖；CPU rasterizer 可作为独立测试 oracle，不作为 GPU 出错时的替代路径。
+- 用真正并行且精确的 Euclidean distance transform 替换当前每 block 单线程行/列扫描。
+  采用分带求解和并行合并的精确方法，可参考作者的 [Parallel Banding Algorithm](https://www.comp.nus.edu.sg/~tants/pba.html)。
+  保留 inside/outside 分类、半像素边界修正、部分 coverage 的距离赋值、双线性距离采样和
+  smoothstep 公式；不是换一个视觉相似的 blur。不能只把 block size 改为 256 后继续让
+  `threadIdx.x != 0` 的线程退出，也不能用未证明等价的近似距离算法代替。
+- 优先完成原分辨率精确 GPU EDT，使默认羽化下的全域必要计算也有效并行。区域距离优化如
+  为达标所需，则同阶段证明读取 halo、dirty 扩展、全擦除/无 inside 或 outside 和纹理边界；
+  特别注意现有路径先插值距离再羽化，不能未经证明先截断距离。没有等价证明就保留精确
+  全域计算并继续优化它，不降低 feather 或先硬边预览、release 再软边。
+- 区分 source-pixel revision、feather 参数和最终 Mask-field revision。source 未变且距离
+  scratch 仍在合法使用期内时，调整 feather 半径复用该距离，invert/opacity 只重算下游。
+  缺少有效中间结果时从规范命令做必要的精确 GPU 求值，并记录重建原因；不能为了声称零重算
+  延长每 Mask 全图 scratch 的有效内容保留期。Grade 自身参数改变应复用仍有效的最终 Mix。
+  未改变内容不再伪造 1×1 上传。soft 路径不生成根本不被读取的 R8 mip；需要 mip 的路径按
+  依赖更新并检查正确采样，不能粗暴删除所有 mip。
+- 当前 replay cache 每 `(Grade,Mask)` 保留一张 host R8（最多四项），已经与原计划“每 Grade
+  一个当前 Mix、source 只作临时 scratch”的要求有差距。此次不扩成每 Mask 的长期 GPU R8
+  副本。继续只保留每 Grade 的当前 Mix；源覆盖、EDT 工作区和 Union 中间结果由 executor
+  scratch 顺序复用，允许池保留分配，但不保留未经授权的多套有效历史内容。冷 cache 从命令
+  精确重建，失败显式返回；不能从最终 Mix 反推单个 Brush 源像素来做 Erase。
+- 新纹理/新 tile 首次使用先初始化完整依赖区域；source buffers、published outputs 和 reader
+  fence 生命周期写在定义处。必须等待的 GPU 边界只发生在 worker 的安全周期，GUI 不等待
+  `WaitIdle`、源重放、history 锁或缓存 I/O。保留有效 RAW/上游 Grade 结果，避免 Mask 编辑
+  重新 decode。照片依然在 press 到 release 之间实际更新，cursor 流畅不能替代照片流畅。
+
+**实施位置与责任。** 路径相对 `alcedo_studio/src/`；新增类型按职责命名，不把 NM 编号写进代码。
+
+| 文件/模块 | 本阶段结束时的责任 |
+| --- | --- |
+| `ui/alcedo_main/qml/EditorWorkspace.qml`、`ui/alcedo_main/album_backend/editor_mask_creation_adapter.*` | 一个输入写入者、真实终止事件、首拖不依赖预点击、模式仲裁与回执身份、独立 cursor |
+| `ui/edit_viewer/mask_edit_geometry.cpp`、`ui/editor_rhi/editor_interaction_controller.cpp` | 比较实际 item→reference 映射；等价表示切换不断笔，真实几何变化明确取消 |
+| `ui/editor_rhi/direct_frame_sink.cpp`、`editor_viewport_item.cpp` 及 presentation queue | geometry 与已接纳照片同序发布；session/edit revision 防止旧擦除前帧覆盖新结果 |
+| `app/editor_mask_creation_controller.cpp`、`brush_mask_input.cpp`、`editor_session_service.cpp`、`edit/graph/color_grade_node_model.*` | 唯一 draft 与 source owner，批量规范采样/一次更新，完整 Finish/Cancel、最小 owner mutation、history |
+| `edit/mask/brush_spatial_index.*`、`brush_source_geometry.*`、`brush_placement.hpp` | 追加索引、精确 dirty、Erase 有效性候选查询；现有 CPU raster 保留独立 oracle 职责 |
+| `edit/mask/parameterized_brush_replay_cache.*`、`include/edit/runtime/compiled_grade_mask.hpp` | 清理 host raster 热路径与源镜像；若其他调用仍使用旧接口，明确 lifetime、invalid-base 和 error 行为并测试 |
+| `edit/runtime/cuda/cuda_mask_pass.cu` 及所需 GPU mask 模块 | GPU 有序 raster、并行精确 EDT、必要采样/Union；避免把更多职责塞进单个 kernel 文件 |
+| `include/edit/runtime/basic_render_workspace.hpp`、active texture/result cache、PlanExecutor | scratch/reader 生命周期，pending/completed revision，实际依赖失效与复用；接口同步检查 OpenCL/Metal |
+| `tests/ui`、`tests/app`、`tests/edit` 的对应测试与 CMake | 真实 production QML 输入整合、异步复现、CPU/GPU oracle、原算法性能统计；必须注册并执行 |
+
+**一套完整验证矩阵。** 以下名称是本阶段新增/加强的验收目标，不是已执行结果。
+必须建立 `EditorBrushInteractionQmlTest`，加载生产 workspace/header/panel、真 adapter、真
+串行 owner；只用 fake mask model 断言按钮调用，不能证明首拖/回现已修复。
+
+| 用户行为或保证 | 必需测试 | 核心断言 |
+| --- | --- | --- |
+| 首次直接画 | `FirstBrushDragWithoutPriorClickPaintsWholePath` | fresh image/工具首次 arm 后直接 Qt press-move-release；非共线路径中段及末段 coverage，准确一次提交，无预点击/预选 MaskId |
+| 首次直接擦 | `FirstEraseDragWithoutPriorClickErasesWholePath` | 切 Erase 后直接拖动；沿路径源像素减少，释放后继续保持；不只断言首个圆 |
+| 连续操作 | `QueuedSecondStrokeSurvivesFirstStrokeCompletion` | owner/render 延迟时快速两笔，点/工具/目标不丢；不能等待 Quality 才接受第二笔 |
+| 等价呈现几何 | `QualityToInteractiveEquivalentMappingKeepsBrushOpen` | 手算等价 F，换 extent/ROI 表示后仍保持同一笔；真实 zoom/crop change 的 Cancel 单独断言 |
+| 事件终止 | `ReleasedBrushUsesValidEndpointAndCommitsExactlyOnce`、`CanceledBrushDoesNotCommit` | 真实 release 末段、归零后的 inactive、越界、重复终止、合成事件、grab cancel；不补原点、不重复提交 |
+| 完成后不回现 | `ErasedCoverageSurvivesReleaseQualityAndNextEdit` | 绘制中、release、settled Quality、下一次 opacity/Grade edit、切页后连续比较 source/Union/photo；非恒等 Grade |
+| 旧帧不能覆盖 | `LatePreEraseFrameCannotReplaceNewerErasePixels` | 延迟旧 Quality/Interactive 的不同到达顺序，含更大 request id 携带旧 edit revision；已显示的新擦除结果不倒退 |
+| base revision 正确 | `FailedOrSkippedUploadPreservesAllPendingEraseRegions` | 两个相离的擦除区 A/B，中断 A 上传后应用 B，两处最终都正确；新纹理初始化、cache eviction、session 重建 |
+| reader 不被改写 | `HeldMaskReaderPreventsRasterMutationUntilRelease` | 故意持有实际 consumer，跨下一次 replay/异常/geometry change；没有同时读写或伪不可变 handle |
+| GPU 像素完全对应 | `GpuOrderedBrushRasterMatchesCanonicalR8Bytes` | 同样规范 samples 的 Paint/Erase 顺序、交叉、不同分批、hard/soft dab、量化边界逐字节相同 |
+| 羽化不降质 | `ParallelGpuDistanceMatchesIndependentEuclideanDistance` | 独立精确 EDT 与 native source/feather；inside/outside 全空、洞、边缘、portrait；沿用既有 ≤1 R8 code 容差，不放宽 |
+| 工作量有界 | `GrowingBrushUpdatesOnlyNewSampleCommandsAndAffectedTiles` | 100/1000 笔与长单笔，命令上传与新增样本相关；不重复复制前缀/重建完整索引/逐次扫完整笔划包围盒 |
+| 参数改变复用正确 | `FeatherOpacityAndGradeEditsReuseValidBrushSourceWork` | Grade 参数改变复用有效 Mix；合法存活的距离不因 feather 参数变化失效；没有 host R8 上传；scratch 已释放时明确计数必要重建 |
+| 历史/合成 | `EraseUndoRedoAndMovedBrushMatchFreshCommandReplay` | 移动后擦除、重叠其他 Mask、Undo/Redo、保存重开；相同参数产生同样 coverage，不依赖旧 cache |
+| 真照片响应 | `BusyMaskRenderKeepsPointerInputAndCancelResponsive`、`ContinuousBrushPresentsIntermediatePhotoFrames` | 压住 native completion 时 GUI 仍接收，松开前至少多个真实照片帧，不允许 cursor-only 通过 |
+
+已有 `AccumulatingBrushCreationTest`、`EditorSerialMaskInteractiveTest`、`MaskEditGeometryTest`、
+`ParameterizedBrushReplayCacheTest`、`BrushCanonicalSamplerTest`、`BrushSpatialIndexTest`、
+`BrushRegionalReplayTest`、`GpuDagCudaMaskTest` 和 frame queue 测试按实际代码复用/扩展。
+保留独立 oracle；不能用同一 GPU/mapper 实现生成 expected 再比较自身。测试发现零案例、只编译
+通过、只做 96×64 小图，均不构成实际绘制资格验证。
+
+**性能验收也必须在这个 phase 完成。** 执行前确认用户运行 exe/DLL 路径、提交和编译 flags，
+保存同 commit Debug 与 Release 对照；Release 实际 flags 不能含 `-G`，profiling 可用正确
+构建中的行号信息。仍保留 Debug 调试用途，不把删掉 Debug 配置作为算法修复。
+参考图至少覆盖 6000×4000 横图、4000×6000 竖图和更大实际 RAW；记录其 canonical extent。
+默认 feather=短边 0.5%，另外测试硬边、大软笔、1/100/1000 strokes、1/5 个 Brush、重叠解析
+Mask、首笔冷缓存和暖态；5 个 Brush 特别检查当前四项 LRU 阈值附近的重复初始化。
+
+同一轨迹至少重复 30 次；鼠标频率 125/500/1000 Hz，60 Hz viewer，fit 与 zoom/pan 都覆盖。
+分开统计 GUI event、queue wait、owner/sample/history、CPU index/replay、命令和像素上传字节、
+GPU raster、mip、EDT 两个方向、feather、Union/Mix、GPU wait 与呈现。所有指标给 p50/p95/max、
+工作量和硬件/软件身份，冷初始化与暖态分列。截图和 traces 保存到 `build/tmp/` 的本任务目录。
+
+- 默认笔刷暖态 GUI 处理 p95 ≤1 ms，cursor 在下一个可用 Qt frame 更新；秒级 native 延迟
+  不阻塞输入或 Cancel。
+- 默认软笔连续 Paint、Erase 和 Move 的完整 Interactive owner-cycle p95 ≤16 ms，
+  event-to-photo p95 ≤33.4 ms，暖态 max <100 ms；不能以跳过中间照片帧或丢弃笔触换平均值。
+- 首笔在既有图像管线暖态但 Brush 资源冷态下，press-to-first-photo ≤100 ms；单独说明 GPU
+  模块首加载与分配成本并在同阶段处理超标，不能要求用户先点一下完成初始化。
+- 长笔划后半段不能出现随完整前缀反复复制导致的累积二次增长；source 未变的参数编辑不走
+  host 像素重放/上传，合法有效结果不因无关 revision 被重复求值。按真实相交样本、像素数
+  和 scratch 失效原因解释必要 GPU 重建、高重叠和大羽化成本，不虚构所有情况 O(1)。
+- 除明确可重建 scratch 和单 Grade 当前 Mix 外，没有每 Mask/Stroke/Version 的长期完整
+  R8 副本。披露 host/device 峰值、资源复用、bytes per update；不通过牺牲 reader 安全达标。
+
+**构建与完成记录。** 通过 `scripts/msvc_env.cmd` 使用 `win_debug`/`win_release`，新 target
+加入 CMake 后配置并构建，`ctest -N` 核对实际注册案例再运行。Windows 每次 configure/build/link
+总等待预算按 AGENTS.md 从 **10–20 分钟起步**，宽目标/CUDA/应用链接优先 20 分钟，仍在编译
+时继续放宽；短工具轮询不是杀进程超时。继续同一个构建 session，不能短超时反复重启。
+本次规划不执行这些构建，不把既有 Debug 测试记录复制为新阶段通过证明。
+
+**目标成功/失败调用链：**
+
+```text
+First real press -> one input owner -> stable item-to-reference mapping -> ordered sequence
+  -> serial canonical sampling -> one batch publication -> GPU ordered tile raster
+  -> exact parallel distance / feather -> Union -> Grade Mix
+  -> accept frame by session + edit revision -> visible intermediate photograph
+Valid release -> finish the same complete stroke -> one history commit -> matching Quality
+
+Equivalent presentation switch -> keep the same stroke and mapping
+Actual geometry change / grab cancel -> one Cancel -> owner restore -> current restore frame
+Stale frame -> reject without replacing newer erased pixels
+Failed GPU work -> invalidate pending content/base -> retain valid published result + real error
+  -> next authorized operation derives exact pixels from current commands; no CPU/quality substitute
+```
+
+**一次性交付清单：**
+
+- [ ] 在未预点击的新图像上，Paint/Erase 第一次直接拖动均覆盖完整轨迹。
+- [ ] Erase 在 release、Quality、下一次编辑、Undo/Redo 与重开后不意外回现。
+- [ ] 已区分并修复真实输入中断、误取消、提交丢失、缓存 base 和旧帧问题；每个实际原因有失败→通过证据。
+- [ ] GPU source raster 与精确并行羽化已接入本机生产链；CPU 前缀复制和重复全域工作已清理。
+- [ ] 实际照片默认软笔达到上述时延，记录冷/暖态、长笔/多 Mask、横/竖图及 Debug/Release 对照。
+- [ ] 真实 workspace QML、owner、GPU、frame queue 和历史测试已注册并非零执行，原有移动框/坐标/默认羽化不回归。
+- [ ] source/reader/资源 revision 生命周期安全，无新源镜像和未授权的长期 R8 多副本。
+- [ ] 完成记录包含 commit、实际文件/API、两个调用链、测试精确命令/数量、像素误差、时延/资源表与平台执行范围。
+
+本阶段任一条未满足时保持 partial，列出本阶段剩余工作并继续处理；不能再命名一个补修子阶段
+把这些退出条件移走。其他原有 NM7.13–NM7.15 内容仍按原范围保留。
 
 ### NM7.13 — Complete cancellation and project/session lifecycle
 

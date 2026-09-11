@@ -188,6 +188,15 @@ reserved for local state and ignored through their nested `.gitignore` files.
 
 ### Windows (MSVC + CUDA)
 
+**Build time allowance:** Start Windows configure/build/link timeout budgets at **10–20 minutes**
+per invocation (at least 10 minutes; prefer 20 minutes for CUDA builds, broad target sets, or
+relinking the application). Increase the budget for a clean build or when compiler/linker progress
+continues; 20 minutes is a starting allowance, not a hard upper limit. Do not terminate or restart
+a healthy build merely because a short tool wait returned no output. Keep the same process/session
+and poll it in short intervals so progress updates remain possible. Tool polling/yield intervals
+are separate from the build's total timeout. Treat a build as failed only on an actual error,
+process exit, or evidence of a stalled process, and put its logs under `build/tmp/`.
+
 ```bash
 # Configure (debug)
 cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
