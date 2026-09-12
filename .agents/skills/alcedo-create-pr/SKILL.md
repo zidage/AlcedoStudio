@@ -43,9 +43,13 @@ Include this heading only when the pull request implements a roadmap phase.
 
 ### Why
 
-- **Plan phase:** rewrite that phase's requirements in short STE sentences.
-  Include extra requirements the user added in the same conversation.
-- **No plan:** paraphrase the user prompt. Do not copy the prompt as a quote.
+Write Why as a Markdown bullet list. One requirement per bullet. Do not write
+a paragraph of stacked sentences.
+
+- **Plan phase:** rewrite that phase's requirements as bullets. Include extra
+  requirements the user added in the same conversation.
+- **No plan:** paraphrase the user prompt as bullets. Do not copy the prompt
+  as a quote.
 
 ### Changes
 
