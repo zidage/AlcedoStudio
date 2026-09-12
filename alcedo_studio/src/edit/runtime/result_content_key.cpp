@@ -14,8 +14,9 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
-#include "edit/mask/active_raster_mask.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
+#endif
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
@@ -158,15 +159,16 @@ auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeMod
   }
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto MixNormalizedRect(ContentHash& hash, NormalizedRect rect) -> void {
   hash.MixF32(rect.x);
   hash.MixF32(rect.y);
   hash.MixF32(rect.w);
   hash.MixF32(rect.h);
 }
+#endif
 
 auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
-                        std::span<const ActiveRasterMaskInput> active_raster_masks,
                         const NodeId& owner_id) -> void {
   hash.MixText(owner_id.Value());
   hash.MixText(model.id.Value());
@@ -176,15 +178,9 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
   hash.MixU32(static_cast<std::uint32_t>(GetMaskSourceKind(model.source)));
   hash.MixBool(model.color_range.has_value());
   hash.MixBool(model.luminance_range.has_value());
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   if (const auto* brush = std::get_if<BrushMaskSource>(&model.source)) {
-    const auto* active = FindActiveRasterMaskInput(active_raster_masks, owner_id, model.id);
-    if (active != nullptr) {
-      hash.MixU64(active->session_generation);
-      hash.MixU64(active->content_revision);
-      hash.MixU32(active->descriptor.extent.width);
-      hash.MixU32(active->descriptor.extent.height);
-      MixNormalizedRect(hash, active->descriptor.reference_bounds);
-    } else if (brush->asset_key.has_value()) {
+    if (brush->asset_key.has_value()) {
       hash.MixText(brush->asset_key->Value());
     }
     hash.MixU32(brush->descriptor.extent.width);
@@ -211,6 +207,7 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
     }
     return;
   }
+#endif
   if (const auto* radial = std::get_if<RadialMaskSource>(&model.source)) {
     hash.MixF32(radial->center_x);
     hash.MixF32(radial->center_y);
@@ -233,8 +230,7 @@ auto MixMaskSourceModel(ContentHash& hash, const MaskModel& model,
 }
 
 auto MixCompiledMaskStack(ContentHash& hash, const PipelineDocument& document,
-                          const CompiledMaskStack& stack,
-                          std::span<const ActiveRasterMaskInput> active_raster_masks) -> void {
+                          const CompiledMaskStack& stack) -> void {
   const auto* grade =
       dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(stack.owner_node_id));
   if (grade == nullptr) {
@@ -247,7 +243,7 @@ auto MixCompiledMaskStack(ContentHash& hash, const PipelineDocument& document,
     if (model == nullptr) {
       continue;
     }
-    MixMaskSourceModel(hash, *model, active_raster_masks, stack.owner_node_id);
+    MixMaskSourceModel(hash, *model, stack.owner_node_id);
   }
 }
 
@@ -295,7 +291,7 @@ auto MixLlfGradeChain(ContentHash& hash, const ExecutionPlan& plan,
     }
     hash.MixText(compiled.node_id.Value());
     if (compiled.mask_stack.has_value()) {
-      MixCompiledMaskStack(hash, document, *compiled.mask_stack, {});
+      MixCompiledMaskStack(hash, document, *compiled.mask_stack);
     }
     const bool target = compiled.node_id == grade_id;
     if (target && !include_local_tone_values) {
@@ -466,9 +462,7 @@ auto HashResolvedRenderGeometry(const ResolvedRenderGeometry& geometry) -> Conte
 }
 
 auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInput& input,
-                                 const PipelineDocument& document,
-                                 std::span<const ActiveRasterMaskInput> active_raster_masks)
-    -> FrameResultContentKeys {
+                                 const PipelineDocument& document) -> FrameResultContentKeys {
   FrameResultContentKeys keys;
   keys.sensor_extent = ImageExtent{plan.source.develop_output_extent.width,
                                    plan.source.develop_output_extent.height};
@@ -522,7 +516,7 @@ auto BuildFrameResultContentKeys(const ExecutionPlan& plan, const PreparedRawInp
         ContentHash source_hash;
         source_hash.MixKey(keys.geometry_scene_source);
         source_hash.MixKey(scene);
-        MixMaskSourceModel(source_hash, *model, active_raster_masks, compiled.node_id);
+        MixMaskSourceModel(source_hash, *model, compiled.node_id);
         source_hash.MixU32(kMaskImplementationVersion);
         const auto source_key = source_hash.Key();
         keys.values[source.effective_output] = source_key;

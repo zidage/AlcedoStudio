@@ -192,28 +192,31 @@ TEST(MaskOverlayControlTest, ExistingMaskEditHasControlsAndNoCoverageFill) {
   const auto style   = DefaultMaskOverlayStyle();
   const auto radial  = MakeRadialExistingOverlayDisplay(mapping, SampleRadial(), style, {});
   const auto linear  = MakeLinearExistingOverlayDisplay(mapping, SampleLinear(), style, {});
-  const auto brush   = MakeBrushExistingOverlayDisplay(mapping, Vector2{200.0f, 150.0f}, {});
 
   EXPECT_EQ(radial.mode, MaskOverlayMode::Existing);
   EXPECT_EQ(linear.mode, MaskOverlayMode::Existing);
-  EXPECT_EQ(brush.mode, MaskOverlayMode::Existing);
   EXPECT_GE(radial.handles.size(), 3u);
   EXPECT_NE(HandleById(radial, MaskOverlayHandleId::RadialCenter), nullptr);
   EXPECT_NE(HandleById(linear, MaskOverlayHandleId::LinearOrigin), nullptr);
-  EXPECT_NE(HandleById(brush, MaskOverlayHandleId::BrushMove), nullptr);
   EXPECT_TRUE(radial.creation_path.empty());
   EXPECT_TRUE(radial.creation_outline.empty());
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+  const auto brush = MakeBrushExistingOverlayDisplay(mapping, Vector2{200.0f, 150.0f}, {});
+  EXPECT_EQ(brush.mode, MaskOverlayMode::Existing);
+  EXPECT_NE(HandleById(brush, MaskOverlayHandleId::BrushMove), nullptr);
   EXPECT_TRUE(brush.creation_path.empty());
+#endif
 
   const auto radial_scene = BuildMaskOverlaySceneGeometry(radial, style);
   const auto linear_scene = BuildMaskOverlaySceneGeometry(linear, style);
-  const auto brush_scene  = BuildMaskOverlaySceneGeometry(brush, style);
   EXPECT_EQ(radial_scene.coverage_fill_vertex_count, 0);
   EXPECT_EQ(radial_scene.settled_stroke_path_vertex_count, 0);
   EXPECT_TRUE(radial_scene.creation_guides.empty());
   EXPECT_GT(radial_scene.handle_count, 0);
   EXPECT_FALSE(radial_scene.handle_fill.empty());
-  EXPECT_TRUE(brush_scene.creation_guides.empty());
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+  EXPECT_TRUE(BuildMaskOverlaySceneGeometry(brush, style).creation_guides.empty());
+#endif
   EXPECT_EQ(linear_scene.coverage_fill_vertex_count, 0);
 
   const auto interior =
@@ -435,7 +438,7 @@ TEST(MaskOverlayControlTest, HiddenDisplayClearsMaskOverlayNodes) {
   OverlayWindow host;
   const auto    mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
   host.overlay->setMaskOverlayDisplay(
-      MakeBrushExistingOverlayDisplay(mapping, Vector2{200.0f, 150.0f}, {}));
+      MakeRadialExistingOverlayDisplay(mapping, SampleRadial(), DefaultMaskOverlayStyle(), {}));
   host.Present();
   EXPECT_GT(host.overlay->lastMaskSceneGeometry().handle_count, 0);
   host.overlay->setMaskOverlayDisplay(MaskOverlayDisplay{});
@@ -583,6 +586,7 @@ TEST(MaskOverlayControlTest, GradientControlAxisIsPerpendicularAfterNonSquareMap
   EXPECT_NEAR(dy, source.normal_y, 1.0e-5f);
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 TEST(MaskOverlayControlTest, MoveFrameEnclosesTranslatedPaintSupportWithFeather) {
   const auto      mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
   BrushMaskSource source;
@@ -683,5 +687,6 @@ TEST(MaskOverlayControlTest, PaintAndEraseCursorsStayDistinctFromMoveFrame) {
   EXPECT_GT(covered, 0);
   EXPECT_GT(gapped, 0);
 }
+#endif
 
 }  // namespace alcedo

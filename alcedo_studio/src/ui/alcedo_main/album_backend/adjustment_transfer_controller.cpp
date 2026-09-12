@@ -15,7 +15,6 @@
 
 #include "app/adjustment_transfer_service.hpp"
 #include "app/document_transfer.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
@@ -568,8 +567,7 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
       if (!guard->document_) {
         throw std::runtime_error("Pipeline document was not available.");
       }
-      alcedo::MaskStore mask_store(alcedo::DefaultProductMaskStoreRoot());
-      package = alcedo::CaptureDocumentTransfer(*guard->document_, &mask_store);
+      package = alcedo::CaptureDocumentTransfer(*guard->document_);
       for (const auto* spec : specs) {
         const bool enabled = OperatorEnabledFor(*guard->pipeline_, *spec);
         const auto summary_value =
@@ -696,10 +694,7 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
         pipeline_service.SavePipeline(guard);
         continue;
       }
-      alcedo::MaskStore mask_store(alcedo::DefaultProductMaskStoreRoot());
       alcedo::DocumentTransferPasteOptions options;
-      options.source_mask_store = &mask_store;
-      options.target_mask_store = &mask_store;
       auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
           *graph, *guard->root_document_, *copied_package_,
           Tr("Pasted Adjustments").toStdString(), options);

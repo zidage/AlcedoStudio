@@ -15,7 +15,9 @@
 #include <vector>
 
 #include "edit/graph/adjustment_ownership.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_mask_commands.hpp"
+#endif
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 
@@ -367,6 +369,7 @@ void ColorGradeNodeModel::MoveMaskForDisplay(const MaskId& mask_id, std::size_t 
   masks_.insert(masks_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto ColorGradeNodeModel::RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
                                            std::uint64_t expected_revision) -> MaskModel& {
   if (node_id != id_) {
@@ -476,6 +479,7 @@ auto ColorGradeNodeModel::BrushPlacementTranslation(const MaskId& mask_id) const
   }
   return brush->placement_translation;
 }
+#endif
 
 auto ColorGradeNodeModel::MaskAt(std::size_t index) -> MaskModel& { return masks_.at(index); }
 

@@ -129,16 +129,6 @@ auto EditorSessionHistoryPort::ReplaceMaskSource(const alcedo::EditorHistoryGuar
   return mutation_->ReplaceMaskSource(guard, node_id, mask_id, std::move(after_source), error);
 }
 
-auto EditorSessionHistoryPort::ReplaceMaskAsset(const alcedo::EditorHistoryGuardHandle& guard,
-                                                const alcedo::NodeId& node_id,
-                                                const alcedo::MaskId& mask_id,
-                                                nlohmann::json after_source,
-                                                alcedo::MaskStore& mask_store, std::string* error)
-    -> bool {
-  return mutation_->ReplaceMaskAsset(guard, node_id, mask_id, std::move(after_source), mask_store,
-                                     error);
-}
-
 auto EditorSessionHistoryPort::SetMaskField(const alcedo::EditorHistoryGuardHandle& guard,
                                             const alcedo::NodeId& node_id,
                                             const alcedo::MaskId& mask_id, std::string field_key,

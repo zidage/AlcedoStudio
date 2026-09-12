@@ -10,7 +10,9 @@
 #include <optional>
 #include <utility>
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
+#endif
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
 
@@ -475,6 +477,7 @@ auto TessellateRadialBoundaryItemPolyline(const MaskEditViewMapping& mapping,
   return points;
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto MakeBrushExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                      Vector2 placement_translation, const QRectF& clip)
     -> MaskOverlayDisplay {
@@ -550,6 +553,7 @@ auto MakeBrushMoveOverlayDisplay(const MaskEditViewMapping& mapping, const Brush
   }
   return display;
 }
+#endif
 
 auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                       const RadialMaskSource& source, const MaskOverlayStyle& style,
@@ -590,6 +594,7 @@ auto MakeLinearExistingOverlayDisplay(const MaskEditViewMapping&      mapping,
   return display;
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path, QPointF cursor_item,
                                      float cursor_radius_logical_px, const QRectF& clip,
                                      bool erase_cursor) -> MaskOverlayDisplay {
@@ -605,6 +610,7 @@ auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path, QPoi
   display.cursor_dashed            = erase_cursor;
   return display;
 }
+#endif
 
 auto MakeRadialCreatingOverlayDisplay(const MaskEditViewMapping& mapping,
                                       const RadialMaskSource& source, const MaskOverlayStyle& style,

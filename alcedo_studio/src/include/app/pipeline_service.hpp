@@ -30,7 +30,6 @@
 
 namespace alcedo {
 
-class MaskStore;
 
 /// Live editor handle: one pipeline executor (parameter table + run state) plus a
 /// pointer to the image's CommitGraph.
@@ -203,26 +202,21 @@ class PipelineMgmtService final {
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: resolves the target first-parent chain and Mask assets, then rebuilds the same live
+  /// Behavior: resolves the target first-parent chain, then rebuilds the same live
   /// document from the immutable root plus typed batches under the render lock. On any failure the
   /// prior Version remains active and the prior document is restored. Does not invent a second head
   /// on the guard.
   ///
-  /// @param mask_store Persistent Mask store used to verify Brush keys before the new head is
-  ///        published. Null is accepted when the target document references no Mask assets.
   /// @return true when the Version tip and live document both match the checked-out head.
   auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                     const version_ref_id_t& version_id, std::string* error = nullptr,
-                                     MaskStore* mask_store = nullptr) -> bool;
+                                     const version_ref_id_t& version_id, std::string* error = nullptr)
+      -> bool;
 
   /// Rebuild the live document from the immutable root and the first-parent chain of the
   /// currently active Version tip. Used when the checkpoint label does not match history.
-  ///
-  /// @param mask_store Persistent Mask store used to verify Brush keys. Null is accepted when
-  ///        the rebuilt document references no Mask assets.
   auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                                 std::string*                          error = nullptr,
-                                                 MaskStore* mask_store = nullptr) -> bool;
+                                                 std::string*                          error = nullptr)
+      -> bool;
 
   /// Clean project-exit garbage collection: mark from every Version head through first-parent
   /// reachability and delete unreachable EditCommit rows. Must run only after the final

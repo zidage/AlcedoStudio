@@ -26,9 +26,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -360,8 +358,7 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_EQ(*editor.history().LastPublishedRenderReason(),
               EditorRenderReason::VersionDocumentChanged);
 
-    const auto mask = grade_mask_test::MakeParameterizedBrushMask(
-        MaskId{"mask.topology"}, {grade_mask_test::MakePaintStroke("stroke.topology")});
+    const auto mask = grade_mask_test::MakeRadialMask(MaskId{"mask.topology"});
     expected_mask = MaskModelToJson(mask);
     ASSERT_TRUE(editor.history().AddMask(editor.handle(), NodeId{"grade.primary"}, mask, 0, &error))
         << error;
@@ -382,7 +379,6 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_EQ(guard.commit_graph_->GetAllVersionRefs().size(), 2u);
     ExpectGraphOrder(*guard.document_, topology_nodes, topology_edges);
     EXPECT_EQ(MaskJson(*guard.document_, MaskId{"mask.topology"}), expected_mask);
-    EXPECT_TRUE(CollectPersistentMaskAssetKeys(*guard.document_).empty());
 
     EditorHistorySnapshot snapshot;
     ASSERT_TRUE(editor.history().ReadHistorySnapshot(editor.handle(), &snapshot, &error)) << error;
@@ -398,7 +394,6 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_FALSE(guard.working_head_commit_hash().has_value());
     ExpectGraphOrder(*guard.document_, initial_nodes, initial_edges);
     EXPECT_EQ(guard.document_->NextColorGradeNameNumber(), 2u);
-    EXPECT_TRUE(CollectPersistentMaskAssetKeys(*guard.document_).empty());
     ASSERT_TRUE(editor.history().LastPublishedRenderReason().has_value());
     EXPECT_EQ(*editor.history().LastPublishedRenderReason(),
               EditorRenderReason::VersionDocumentChanged);

@@ -353,9 +353,11 @@ auto EditorNodeController::selected_node_masks() const -> QVariantList {
                                   static_cast<int>(mask.mask_id.Value().size())));
     QString source_kind;
     switch (mask.source_kind) {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
       case MaskSourceKind::Brush:
         source_kind = QStringLiteral("brush");
         break;
+#endif
       case MaskSourceKind::Radial:
         source_kind = QStringLiteral("radial");
         break;

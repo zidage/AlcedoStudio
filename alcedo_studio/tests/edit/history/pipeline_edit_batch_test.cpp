@@ -24,7 +24,6 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_change.hpp"
-#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -124,17 +123,6 @@ auto MakeRadialMask(MaskId id, std::string display_name) -> MaskModel {
   return mask;
 }
 
-auto MakeBrushMask(MaskId id, std::string display_name, std::string stroke_id) -> MaskModel {
-  MaskModel mask;
-  mask.id           = std::move(id);
-  mask.display_name = std::move(display_name);
-  mask.source =
-      grade_mask_test::MakeParameterizedBrushMask(MaskId{std::string{mask.id.Value()}},
-                                                  {grade_mask_test::MakePaintStroke(stroke_id)})
-          .source;
-  return mask;
-}
-
 auto MakeLookNodeJson() -> nlohmann::json {
   auto node = std::make_unique<ColorGradeNodeModel>(NodeId{"grade.look"});
   node->SetDisplayName("Look");
@@ -142,7 +130,6 @@ auto MakeLookNodeJson() -> nlohmann::json {
   dynamic_cast<ExposureModel*>(exposure.get())->SetValue(0.5f);
   node->InsertAdjustment(0, AdjustmentInstanceId{"grade.look.exposure"}, std::move(exposure));
   node->AddMask(MakeRadialMask(MaskId{"mask.radial"}, "Radial"), 0);
-  node->AddMask(MakeBrushMask(MaskId{"mask.brush"}, "Brush", "stroke.1"), 1);
   return node->ToJson();
 }
 
@@ -182,19 +169,6 @@ auto MakeReconnectBatch() -> PipelineEditBatch {
                                  std::move(args));
 }
 
-auto MakeAppendStrokeBatch() -> PipelineEditBatch {
-  AppendBrushStrokeChange change;
-  change.node_id = NodeId{"grade.look"};
-  change.mask_id = MaskId{"mask.brush"};
-  change.stroke  = grade_mask_test::MakePaintStroke("stroke.append", 16.0f, 9.0f, 5.0f);
-  nlohmann::json args{{"mask_display_name", "Brush"},
-                      {"mask_id", "mask.brush"},
-                      {"node_id", "grade.look"},
-                      {"stroke_id", "stroke.append"}};
-  return PipelineEditBatch::Make(PipelineEditOperationKind::AppendBrushStroke, {std::move(change)},
-                                 "history.operation.append_brush_stroke", std::move(args));
-}
-
 void ExpectRoundTrip(const PipelineEditBatch& batch) {
   const auto json     = batch.CanonicalJSON();
   const auto restored = PipelineEditBatch::FromJSON(json);
@@ -216,15 +190,6 @@ TEST(PipelineEditChange, EncodeDecodeAndValidateWithoutBatchMake) {
                                             PipelineEditChangeKindOf(decoded)));
   EXPECT_EQ(PipelineEditChangeKindFromText("set_parameter"), PipelineEditChangeKind::SetParameter);
   EXPECT_THROW((void)PipelineEditChangeKindFromText("not_a_change"), std::runtime_error);
-
-  AppendBrushStrokeChange stroke;
-  stroke.node_id = NodeId{"grade.look"};
-  stroke.mask_id = MaskId{"mask.brush"};
-  stroke.stroke  = grade_mask_test::MakePaintStroke("stroke.append", 16.0f, 9.0f, 5.0f);
-  ValidatePipelineEditChange(stroke);
-  const auto stroke_json    = EncodePipelineEditChange(stroke);
-  const auto stroke_decoded = DecodePipelineEditChange(stroke_json);
-  EXPECT_EQ(EncodePipelineEditChange(stroke_decoded).dump(), stroke_json.dump());
 
   SetParameterChange incomplete;
   EXPECT_THROW(ValidatePipelineEditChange(incomplete), std::runtime_error);
@@ -321,45 +286,6 @@ TEST(PipelineEditBatch, ReconnectGoldenBytesRemainStable) {
             golden);
 }
 
-TEST(PipelineEditBatch, AppendBrushStrokeGoldenBytesRemainStable) {
-  const auto golden = LoadGolden("append_brush_stroke_batch.json");
-  const auto batch  = MakeAppendStrokeBatch();
-  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
-  EXPECT_EQ(PipelineEditBatch::FromJSON(nlohmann::json::parse(golden)).CanonicalJSON().dump(),
-            golden);
-}
-
-TEST(PipelineEditBatch, AppendHistoryDoesNotRepeatEarlierSamples) {
-  auto      first  = grade_mask_test::MakePaintStroke("stroke.keep", 1.0f, 2.0f, 3.0f);
-  auto      second = grade_mask_test::MakePaintStroke("stroke.new", 4.0f, 5.0f, 6.0f);
-  MaskModel mask;
-  mask.id     = MaskId{"mask.brush"};
-  mask.source = grade_mask_test::MakeParameterizedBrushMask(MaskId{"mask.brush"}, {first}).source;
-  const auto add = PipelineEditBatch::Make(
-      PipelineEditOperationKind::AddMask,
-      {AddMaskChange{NodeId{"grade.look"}, MaskId{"mask.brush"}, MaskModelToJson(mask), 0}},
-      "history.operation.add_mask");
-  AppendBrushStrokeChange append_change;
-  append_change.node_id = NodeId{"grade.look"};
-  append_change.mask_id = MaskId{"mask.brush"};
-  append_change.stroke  = second;
-  const auto append =
-      PipelineEditBatch::Make(PipelineEditOperationKind::AppendBrushStroke, {append_change},
-                              "history.operation.append_brush_stroke");
-  const auto add_dump    = add.CanonicalJSON().dump();
-  const auto append_dump = append.CanonicalJSON().dump();
-  EXPECT_NE(add_dump.find("stroke.keep"), std::string::npos);
-  EXPECT_EQ(append_dump.find("stroke.keep"), std::string::npos);
-  EXPECT_NE(append_dump.find("stroke.new"), std::string::npos);
-  EXPECT_EQ(append_dump.find("asset_key"), std::string::npos);
-  const auto& stored = std::get<AppendBrushStrokeChange>(append.changes.front());
-  EXPECT_EQ(stored.stroke.id, StrokeId{"stroke.new"});
-  ASSERT_EQ(BrushStrokeSamples(stored.stroke).size(), 1u);
-  EXPECT_EQ(BrushStrokeSamples(stored.stroke)[0].local_x, 4.0f);
-  EXPECT_EQ(BrushStrokeSamples(stored.stroke)[0].local_y, 5.0f);
-  EXPECT_EQ(BrushStrokeSamples(stored.stroke)[0].radius, 6.0f);
-}
-
 TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   ExpectRoundTrip(MakeParameterBatch(0.0, 1.25));
 
@@ -441,36 +367,6 @@ TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
   source.after_source = MaskModelToJson(linear).at("source");
   ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::ReplaceMaskSource, {source},
                                           "history.operation.replace_mask_source"));
-
-  ExpectRoundTrip(MakeAppendStrokeBatch());
-
-  RemoveBrushStrokeChange remove_stroke;
-  remove_stroke.node_id   = NodeId{"grade.look"};
-  remove_stroke.mask_id   = MaskId{"mask.brush"};
-  remove_stroke.stroke_id = StrokeId{"stroke.append"};
-  remove_stroke.index     = 1;
-  remove_stroke.stroke    = grade_mask_test::MakePaintStroke("stroke.append", 16.0f, 9.0f, 5.0f);
-  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::RemoveBrushStroke,
-                                          {remove_stroke},
-                                          "history.operation.remove_brush_stroke"));
-
-  InsertBrushStrokeChange insert_stroke;
-  insert_stroke.node_id = NodeId{"grade.look"};
-  insert_stroke.mask_id = MaskId{"mask.brush"};
-  insert_stroke.index   = 0;
-  insert_stroke.stroke  = grade_mask_test::MakePaintStroke("stroke.insert", 2.0f, 3.0f, 4.0f);
-  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::InsertBrushStroke,
-                                          {insert_stroke},
-                                          "history.operation.insert_brush_stroke"));
-
-  SetBrushTranslationChange translation;
-  translation.node_id = NodeId{"grade.look"};
-  translation.mask_id = MaskId{"mask.brush"};
-  translation.before  = {};
-  translation.after   = {3.5f, -2.0f};
-  ExpectRoundTrip(PipelineEditBatch::Make(PipelineEditOperationKind::SetBrushTranslation,
-                                          {translation},
-                                          "history.operation.set_brush_translation"));
 
   SetMaskFieldChange field;
   field.node_id      = NodeId{"grade.look"};

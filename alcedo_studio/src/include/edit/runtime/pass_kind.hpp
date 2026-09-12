@@ -27,7 +27,6 @@ enum class GpuPassKind : std::uint8_t {
   GeometryResample  = 8,
   CameraToAp1       = 9,
   MaskEvaluate      = 10,
-  MaskFeather       = 11,
   PrimaryColorGrade = 12,
   Drt               = 13,
   MaskUnion         = 14,
@@ -57,8 +56,6 @@ enum class GpuPassKind : std::uint8_t {
       return "CameraToAp1";
     case GpuPassKind::MaskEvaluate:
       return "MaskEvaluate";
-    case GpuPassKind::MaskFeather:
-      return "MaskFeather";
     case GpuPassKind::PrimaryColorGrade:
       return "PrimaryColorGrade";
     case GpuPassKind::Drt:

@@ -4,9 +4,10 @@ Date: 2026-09-08
 
 Status: NM7.1–NM7.12 completion records retained; NM7.12R and NM7.12RR remain historical
 partial Brush work. The 2026-09-11 release decision stops Brush delivery in this version.
-NM7.13–NM7.14 are redefined as the disabled-Brush project-format/build cut and complete
-Radial/Linear Gradient qualification. Whole-DAG performance belongs to NM8. All later Node Editor
-work uses `ALCEDO_ENABLE_BRUSH_MASK=OFF`.
+NM7.13 is complete (2026-09-12): the project format is cut to 0.7.0 and Brush is extracted
+into the disabled optional `EditMaskBrush` module with rasterization/glue/storage/UI deleted.
+NM7.14 completes Radial/Linear Gradient qualification. Whole-DAG performance belongs to NM8.
+All later Node Editor work uses `ALCEDO_ENABLE_BRUSH_MASK=OFF`.
 This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
@@ -2775,6 +2776,76 @@ Every product writer emits `0.7.0`; the minimum and maximum accepted project ver
 `0.7.0`; a `0.6.0` project fails before any experimental Brush parameter is decoded. The isolated
 enabled build has no unresolved cross-module ownership, but no Brush product behavior is claimed.
 NM7.14, NM8, and all remaining Node Editor work use only the disabled configuration.
+
+**Status:** complete (2026-09-12, Windows/MSVC debug `win_debug` with `ALCEDO_ENABLE_BRUSH_MASK=OFF`;
+isolated ON configure/build in `build/debug-brush-on`). The user's revised scope landed: Brush
+model, canonical sampling, spatial index, signed distance, and mask-asset types stay in the
+optional `EditMaskBrush` target; Brush rasterization, runtime/application glue, history changes,
+storage/cache services, and product QML were deleted outright rather than kept behind the flag.
+
+**Landed boundary:** `EditMaskCore` carries shared Mask identity/Union/ranges plus analytic
+sources; `EditMaskBrush` (ON only) owns `brush_stroke`, `brush_raster_encoding`,
+`brush_canonical_sampler`, `brush_source_geometry`, `brush_spatial_index`, `brush_signed_distance`,
+and `mask_asset`. Analytic code remains inside the always-built `EditGraph`/`EditRuntime`/UI
+targets — the separate `EditMaskAnalytic`/`EditorMaskAnalytic`/`EditorMaskBrush` libraries in the
+required-boundary sketch were not created because the shipping UI glue was deleted per the revised
+scope; there is no Brush adapter/controller left to isolate. `EditGraph` and `EditRuntime` link
+`EditMaskBrush` only under `ALCEDO_ENABLE_BRUSH_MASK`.
+
+**Landed disabled-build chain:**
+
+```text
+configure ALCEDO_ENABLE_BRUSH_MASK=OFF (all product presets)
+  -> EditMaskCore/EditGraph/EditRuntime without brush sources or symbols
+  -> PlanExecutor pass chain = MaskEvaluate + MaskUnion + grade passes only
+  -> project writers emit project_file_version 0.7.0 (min=max=0.7.0)
+  -> node drawer/header expose Radial / Linear Gradient only
+  -> build.ninja: zero brush objects/flags; qrc/install manifests: zero brush entries
+  -> ctest -N registers no Brush functional tests
+```
+
+**Landed abandoned-format chain:**
+
+```text
+open project_file_version 0.6.0 (or any version outside [0.7.0, 0.7.0])
+  -> project_pack::ProjectVersionIsSupported at the metadata read
+  -> std::runtime_error "Incompatible project format" before document/history decode
+  -> proven by CommitGraphTest.ProjectSchemaBoundaryTests.* — sentinels in the WAL,
+     checkpoint, and DB are never read; the session stays unopened
+```
+
+**Landed invalid-current-document chain:**
+
+```text
+0.7.0 document declares source kind "brush" while Brush is disabled
+  -> MaskModelFromJson kind dispatch (brush branch compiled out)
+  -> runtime_error "Unknown Mask source kind: brush"
+  -> proven by GpuDagModelGraphTest.DisabledBuildRejectsBrushMaskSourceAtDocumentBoundary;
+     history-layer brush change kinds were deleted, so batched brush changes fail the same
+     unknown-kind decode boundary
+```
+
+**Landed enabled-isolation chain:**
+
+```text
+configure ALCEDO_ENABLE_BRUSH_MASK=ON (build/debug-brush-on)
+  -> EditMaskBrush compiles (model, canonical sampler, spatial index, signed distance,
+     R8 encoding, source geometry)
+  -> mask_model/color_grade_node_model/result_content_key/mask overlay brush branches compile
+  -> BrushSourceFormatBoundaryTest + BrushParameterizedSourceTest +
+     BrushCanonicalSamplerTest + BrushSpatialIndexTest: 26/26 pass
+```
+
+**Acceptance evidence (OFF build):** full `win_debug` build completes; affected suite
+`ctest -R "Mask|History|Transfer|GraphCompiler|Invalidation|Overlay|Checkpoint|ResultCache|
+Retention|Qml|AdjustmentHeader|NodeTopology|DocumentTransfer|EditorMasks|MaskOverlay|
+VersionBoundary|Package|ProjectService|AnalyticMask"` → 662/669 pass. Remaining failures are
+unrelated to this phase: `EditorGeometryOverlayPipelineTest` (2 tests, deterministic on code this
+phase did not touch — `CPUPipelineExecutor` geometry/resize path), `OpenClLlf`/`CudaLlf`
+`FailedSubmissionDoesNotPublish*` (identical pre-existing regression on both backends in the
+shared-executor publish path), two temp-DB lock collisions that pass serially, and one
+`WorkspaceShellTest` timeout (known-slow). Checkpoint/document/root/WAL format goldens updated
+to 0.7.0 and pass.
 
 ### NM7.14 — Complete and qualify Radial and Linear Gradient delivery
 

@@ -18,7 +18,8 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
-        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON"
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -36,7 +37,8 @@
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
         "ALCEDO_BUILD_TESTS": "OFF",
         "ALCEDO_ENABLE_WEBGPU": "OFF",
-        "ALCEDO_REQUIRE_UPDATE_KEY": "ON"
+        "ALCEDO_REQUIRE_UPDATE_KEY": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -53,7 +55,8 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
-        "ALCEDO_BUILD_DEMO_TARGETS": "ON"
+        "ALCEDO_BUILD_DEMO_TARGETS": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -63,7 +66,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -73,7 +77,8 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -88,7 +93,8 @@
         "ALCEDO_ENABLE_CUDA": "OFF",
         "ALCEDO_BUILD_TESTS": "OFF",
         "ALCEDO_MACOS_BUNDLE": "OFF",
-        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON"
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -106,7 +112,8 @@
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
         "ALCEDO_GENERATE_QMLTYPES": "OFF",
-        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON"
+        "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -128,7 +135,8 @@
         "ALCEDO_GENERATE_QMLTYPES": "OFF",
         "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     },
     {
@@ -147,7 +155,8 @@
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         "ALCEDO_QT_PREFIX": "/Users/zidage/Qt/6.9.3/macos",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
-        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install"
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
+        "ALCEDO_ENABLE_BRUSH_MASK": "OFF"
       }
     }
   ],

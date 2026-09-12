@@ -392,23 +392,19 @@ TEST_F(EditorNodeDelegateQml, MaskRowsShowOnlyApprovedTypeIconAndLabelInDisplayO
   ASSERT_NE(grade, nullptr);
   grade->AddMask(MakeMask(MaskId{"mask.gradient"}, LinearGradientMaskSource{}), 0);
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
-  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 2);
   ApplyDocument(&adapter, std::move(document));
 
   auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
   ASSERT_NE(item, nullptr);
-  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 3; }));
+  ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 2; }));
   const auto rows = MaskRows(item);
-  ASSERT_EQ(rows.size(), 3);
+  ASSERT_EQ(rows.size(), 2);
   auto* first  = rows.at(0);
   auto* second = rows.at(1);
-  auto* third  = rows.at(2);
   EXPECT_EQ(first->property("sourceKind").toString(), QStringLiteral("linearGradient"));
   EXPECT_EQ(second->property("sourceKind").toString(), QStringLiteral("radial"));
-  EXPECT_EQ(third->property("sourceKind").toString(), QStringLiteral("brush"));
   EXPECT_EQ(first->property("typeLabel").toString(), QStringLiteral("Gradient"));
   EXPECT_EQ(second->property("typeLabel").toString(), QStringLiteral("Radial"));
-  EXPECT_EQ(third->property("typeLabel").toString(), QStringLiteral("Brush"));
 
   QStringList texts;
   CollectTexts(item, &texts);
@@ -416,7 +412,6 @@ TEST_F(EditorNodeDelegateQml, MaskRowsShowOnlyApprovedTypeIconAndLabelInDisplayO
   EXPECT_FALSE(texts.contains(QStringLiteral("mask.gradient")));
   EXPECT_EQ(texts.count(QStringLiteral("Gradient")), 1);
   EXPECT_EQ(texts.count(QStringLiteral("Radial")), 1);
-  EXPECT_EQ(texts.count(QStringLiteral("Brush")), 1);
 
   auto* icon = FindMaskIcon(first);
   ASSERT_NE(icon, nullptr);
@@ -467,7 +462,7 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerStartsOpenAndUserCanCloseAndReopenWithou
 TEST_F(EditorNodeDelegateQml, OutputPortAndEdgesFollowOpenAndClosedDrawerHeight) {
   ui::AlcedoQanGraph adapter;
   auto               document = CreateDefaultPipelineDocument();
-  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
   const auto snapshot = ApplyDocument(&adapter, std::move(document));
 
@@ -504,7 +499,7 @@ TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurst
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
-  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
   const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
@@ -740,7 +735,7 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerWellIsInsetInsideVisibleCardBorder) {
 TEST_F(EditorNodeDelegateQml, MaskDrawerHeaderWashKeepsCardBorderVisibleOnHover) {
   ui::AlcedoQanGraph adapter;
   auto               document = CreateDefaultPipelineDocument();
-  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   ApplyDocument(&adapter, std::move(document));
   auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
   ASSERT_NE(item, nullptr);
@@ -912,7 +907,7 @@ TEST_F(EditorNodeDelegateQml, AccessibleNamesCoverNodeMaskAndEndpointRoles) {
 TEST_F(EditorNodeDelegateQml, CompactMaskIconsKeepSourceSizeForListedDevicePixelRatios) {
   ui::AlcedoQanGraph adapter;
   auto               document = CreateDefaultPipelineDocument();
-  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 0);
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   ApplyDocument(&adapter, std::move(document));
   auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
   ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
@@ -939,7 +934,7 @@ TEST_F(EditorNodeDelegateQml, MaskRowSelectionHighlightDoesNotRebuildList) {
   ASSERT_NE(grade, nullptr);
   grade->AddMask(MakeMask(MaskId{"mask.gradient"}, LinearGradientMaskSource{}), 0);
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
-  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 2);
+  grade->AddMask(MakeMask(MaskId{"mask.linear.2"}, LinearGradientMaskSource{}), 2);
   ApplyDocument(&adapter, std::move(document));
 
   auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
@@ -1069,7 +1064,7 @@ TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
   auto*              grade    = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
-  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 1);
+  grade->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 1);
   ApplyDocument(&adapter, std::move(document));
 
   auto* item = adapter.NodeFor(NodeId{"grade.primary"})->getItem();
@@ -1090,13 +1085,13 @@ TEST_F(EditorNodeDelegateQml, MaskRowDeleteRequestsExactMaskIdAndLeavesGrade) {
   EXPECT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
   EXPECT_EQ(MaskRows(item).size(), 2);
 
-  QSignalSpy brush_delete_spy(&adapter, &ui::AlcedoQanGraph::MaskRowDeleteRequested);
-  auto* brush_delete = FindDescendant(rows.at(1), QStringLiteral("editorNodeMaskTypeRowDelete"));
-  ASSERT_NE(brush_delete, nullptr);
-  EXPECT_EQ(brush_delete->property("actionName").toString(), QStringLiteral("Delete Brush"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(brush_delete, "clicked", Qt::DirectConnection));
-  ASSERT_TRUE(WaitFor([&] { return brush_delete_spy.count() == 1; }));
-  EXPECT_EQ(brush_delete_spy.at(0).at(1).toString(), QStringLiteral("mask.brush"));
+  QSignalSpy linear_delete_spy(&adapter, &ui::AlcedoQanGraph::MaskRowDeleteRequested);
+  auto* linear_delete = FindDescendant(rows.at(1), QStringLiteral("editorNodeMaskTypeRowDelete"));
+  ASSERT_NE(linear_delete, nullptr);
+  EXPECT_EQ(linear_delete->property("actionName").toString(), QStringLiteral("Delete Gradient"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(linear_delete, "clicked", Qt::DirectConnection));
+  ASSERT_TRUE(WaitFor([&] { return linear_delete_spy.count() == 1; }));
+  EXPECT_EQ(linear_delete_spy.at(0).at(1).toString(), QStringLiteral("mask.linear"));
   EXPECT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
 
   const auto workspace = ReadQmlFile("EditorWorkspace.qml");

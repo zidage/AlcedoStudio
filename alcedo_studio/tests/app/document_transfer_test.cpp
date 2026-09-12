@@ -21,11 +21,12 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/pipeline_history_format.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_asset.hpp"
+#endif
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
@@ -125,20 +126,17 @@ TEST(DocumentTransferTest, PasteKeepsTargetDevelopRawDataAndGeometry) {
 
 TEST(DocumentTransferTest, PasteRemapsEveryNodeAdjustmentAndMaskId) {
   auto source = test::DocumentWithExposureEv(0.75);
-  const auto first = grade_mask_test::MakePaintStroke("stroke.source", 8.0f, 12.0f, 4.0f);
-  auto second      = grade_mask_test::MakePaintStroke("stroke.erase", 9.0f, 10.0f, 3.0f);
-  second.mode      = BrushStrokeMode::Erase;
-  grade_mask_test::AddParameterizedBrushMask(source, MaskId{"mask.brush"}, {first, second},
-                                             Vector2{1.5f, -0.25f});
+  RadialMaskSource radial;
+  radial.major_radius = 0.3f;
+  radial.minor_radius = 0.2f;
+  grade_mask_test::AddRadialMask(source, MaskId{"mask.radial"}, radial);
   const auto package = CaptureDocumentTransfer(source);
-  EXPECT_TRUE(package.mask_assets_.empty());
   std::set<std::string> source_ids;
   for (const auto& grade : package.color_grades_) {
     const auto ids = CollectIds(grade);
     source_ids.insert(ids.begin(), ids.end());
   }
-  EXPECT_EQ(source_ids.count("stroke.source"), 1u);
-  EXPECT_EQ(source_ids.count("stroke.erase"), 1u);
+  EXPECT_EQ(source_ids.count("mask.radial"), 1u);
 
   auto target = CreateDefaultPipelineDocument();
   CountingTransferIdentitySource identity;
@@ -158,14 +156,8 @@ TEST(DocumentTransferTest, PasteRemapsEveryNodeAdjustmentAndMaskId) {
   EXPECT_EQ(prepared.package.color_grades_.front().at("id").get<std::string>(), "grade.t1");
   EXPECT_EQ(prepared.package.color_grades_.front().at("masks").front().at("id").get<std::string>(),
             "mask.t1");
-  const auto& remapped_strokes =
-      prepared.package.color_grades_.front().at("masks").front().at("source").at("strokes");
-  ASSERT_EQ(remapped_strokes.size(), 2u);
-  EXPECT_EQ(remapped_strokes.at(0).at("id").get<std::string>(), "stroke.t1");
-  EXPECT_EQ(remapped_strokes.at(1).at("id").get<std::string>(), "stroke.t2");
-  EXPECT_EQ(remapped_strokes.at(0).at("samples").at(0).at("local_x").get<float>(), 8.0f);
-  EXPECT_EQ(remapped_strokes.at(1).at("mode").get<int>(), 1);
-  EXPECT_TRUE(prepared.package.mask_assets_.empty());
+  EXPECT_EQ(prepared.package.color_grades_.front().at("masks").front().at("source").at("kind"),
+            "radial");
 
   auto        working = ClonePipelineDocument(target);
   std::string error;
@@ -178,14 +170,10 @@ TEST(DocumentTransferTest, PasteRemapsEveryNodeAdjustmentAndMaskId) {
   ASSERT_NE(grade, nullptr);
   const auto* mask = grade->FindMask(MaskId{"mask.t1"});
   ASSERT_NE(mask, nullptr);
-  const auto* brush = std::get_if<BrushMaskSource>(&mask->source);
-  ASSERT_NE(brush, nullptr);
-  ASSERT_EQ(brush->strokes.size(), 2u);
-  EXPECT_EQ(brush->strokes[0].id, StrokeId{"stroke.t1"});
-  EXPECT_EQ(brush->strokes[1].id, StrokeId{"stroke.t2"});
-  EXPECT_EQ(BrushStrokeSamples(brush->strokes[0])[0].local_x, 8.0f);
-  EXPECT_EQ(brush->placement_translation, (Vector2{1.5f, -0.25f}));
-  EXPECT_FALSE(brush->asset_key.has_value());
+  const auto* pasted_radial = std::get_if<RadialMaskSource>(&mask->source);
+  ASSERT_NE(pasted_radial, nullptr);
+  EXPECT_FLOAT_EQ(pasted_radial->major_radius, 0.3f);
+  EXPECT_FLOAT_EQ(pasted_radial->minor_radius, 0.2f);
 }
 
 TEST(DocumentTransferTest, IdentityCollisionIsRejectedBeforeDocumentMutation) {
@@ -201,7 +189,9 @@ TEST(DocumentTransferTest, IdentityCollisionIsRejectedBeforeDocumentMutation) {
       return MakeAdjustmentInstanceId(node_id, type);
     }
     auto NextMaskId() -> MaskId override { return MaskId{"mask.t1"}; }
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     auto NextStrokeId() -> StrokeId override { return StrokeId{"stroke.t1"}; }
+#endif
   } colliding;
   DocumentTransferPasteOptions options;
   options.identity_source = &colliding;

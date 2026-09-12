@@ -5,7 +5,6 @@
 #pragma once
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
@@ -15,7 +14,7 @@
 namespace alcedo {
 
 /**
- * @brief Graph value for one Mask source after evaluate (and fused Brush feather).
+ * @brief Graph value for one Mask source after evaluate.
  *
  * Producer is the owning Color Grade. The port is derived from @p mask_id, not a list
  * index.
@@ -23,14 +22,6 @@ namespace alcedo {
 [[nodiscard]] inline auto MaskSourceValue(const NodeId& owner, const MaskId& mask_id)
     -> GraphValueId {
   return GraphValueId{owner, PortId{std::string{mask_id.Value()} + ".source"}};
-}
-
-/**
- * @brief Distinct Brush feather value. Fused evaluate currently writes the source port.
- */
-[[nodiscard]] inline auto MaskFeatherValue(const NodeId& owner, const MaskId& mask_id)
-    -> GraphValueId {
-  return GraphValueId{owner, PortId{std::string{mask_id.Value()} + ".feather"}};
 }
 
 /**
@@ -51,22 +42,6 @@ namespace alcedo {
 }
 
 /**
- * @brief Signed-distance scratch owned by one Brush Mask. Distinct per @p mask_id.
- */
-[[nodiscard]] inline auto MaskSignedDistanceValue(const NodeId& owner, const MaskId& mask_id)
-    -> GraphValueId {
-  return GraphValueId{owner, PortId{std::string{mask_id.Value()} + ".signed_distance"}};
-}
-
-/**
- * @brief Per-Mask scratch value (horizontal/inside/outside distance planes).
- */
-[[nodiscard]] inline auto MaskScratchValue(const NodeId& owner, const MaskId& mask_id,
-                                           std::string_view suffix) -> GraphValueId {
-  return GraphValueId{owner, PortId{std::string{mask_id.Value()} + "." + std::string{suffix}}};
-}
-
-/**
  * @brief One compiled Mask source. Runtime reads enabled/opacity/invert from the live model.
  *
  * @p source_kind and @p mask_id are static structure. @p range_input is the owning
@@ -77,7 +52,6 @@ struct CompiledMaskSource {
   MaskId         mask_id;
   MaskSourceKind source_kind = MaskSourceKind::Radial;
   GraphValueId   source_output{NodeId{""}, PortId{""}};
-  GraphValueId   feather_output{NodeId{""}, PortId{""}};
   GraphValueId   effective_output{NodeId{""}, PortId{""}};
   GraphValueId   range_input{NodeId{""}, PortId{"image"}};
 };

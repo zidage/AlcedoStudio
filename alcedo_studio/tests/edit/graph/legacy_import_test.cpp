@@ -61,8 +61,8 @@ auto MakeLegacyStageJson() -> nlohmann::json {
   return json;
 }
 
-void ConnectRasterMask(PipelineDocument& document, std::string asset_key = "test.raster") {
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{std::move(asset_key)});
+void ConnectMask(PipelineDocument& document) {
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
 }
 
 }  // namespace
@@ -149,10 +149,10 @@ TEST(GpuDagModelGraph, LegacyPercentStrengthMapsAcrossFullHalationAndFilmGrainRa
   EXPECT_FLOAT_EQ(halo->Value(), 0.75f);
 }
 
-TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) {
+TEST(GpuDagModelGraph, ApplyOntoKeepsMaskCameraProfileAndUpdatesExposure) {
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
-  ConnectRasterMask(document);
+  ConnectMask(document);
   document.ClearTopologyDirty();
   const auto profile_before = document.Develop()->Params().Params().camera_profile;
   const auto method_before  = document.Develop()->Params().Params().demosaic_method;
@@ -164,7 +164,7 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsRasterMaskCameraProfileAndUpdatesExposure) 
 
   EXPECT_EQ(document.Graph().NodeCount(), 3u);
   EXPECT_FALSE(document.TopologyDirty());
-  EXPECT_NE(document.PrimaryGrade()->FindMask(MaskId{"mask.raster"}), nullptr);
+  EXPECT_NE(document.PrimaryGrade()->FindMask(MaskId{"mask.radial"}), nullptr);
   EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
   EXPECT_EQ(document.Develop()->Params().Params().camera_profile, profile_before);
   EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, method_before);

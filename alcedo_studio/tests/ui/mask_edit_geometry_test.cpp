@@ -312,7 +312,7 @@ TEST(MaskEditGeometryTest, CroppedRotatedPhotographUsesResolvedGeometryNotIdenti
   EXPECT_NE(published.geometry.render_to_reference.m[0], identity.render_to_reference.m[0]);
 }
 
-TEST(MaskEditGeometryTest, QualityToInteractiveEquivalentMappingKeepsBrushOpen) {
+TEST(MaskEditGeometryTest, QualityToInteractiveEquivalentMappingKeepsEditSessionOpen) {
   MaskEditViewMapping quality;
   quality.widget     = {800, 600, 1.0f};
   quality.photograph = {6000, 4000};

@@ -20,7 +20,6 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/version_ref.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
@@ -119,18 +118,7 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return SetError(error, "Editor live paste requires an immutable root document");
   }
 
-  std::optional<alcedo::MaskStore> owned_mask_store;
   alcedo::DocumentTransferPasteOptions options;
-  if (!package.mask_assets_.empty()) {
-    if (state->mask_store != nullptr) {
-      options.source_mask_store = state->mask_store;
-      options.target_mask_store = state->mask_store;
-    } else {
-      owned_mask_store.emplace(alcedo::DefaultProductMaskStoreRoot());
-      options.source_mask_store = &*owned_mask_store;
-      options.target_mask_store = &*owned_mask_store;
-    }
-  }
 
   alcedo::PreparedDocumentPaste prepared;
   try {
@@ -200,11 +188,8 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
     *state->pipeline_guard->document_ =
         alcedo::ClonePipelineDocument(*state->pipeline_guard->root_document_);
-    alcedo::PipelineHistoryApplyContext context;
-    context.mask_store = options.target_mask_store;
     if (!alcedo::ApplyPipelineEditBatch(*state->pipeline_guard->document_, prepared.batch,
-                                        alcedo::PipelineEditApplyDirection::Forward, error,
-                                        context)) {
+                                        alcedo::PipelineEditApplyDirection::Forward, error)) {
       (void)rollback_after_version();
       return false;
     }

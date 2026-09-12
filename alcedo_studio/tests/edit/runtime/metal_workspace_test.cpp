@@ -162,37 +162,6 @@ TEST_F(MetalWorkspaceFixture, MetalTexturePoolDoesNotReleaseBusySubmissionResour
   device.WaitIdle();
 }
 
-TEST_F(MetalWorkspaceFixture, MetalMaskTextureCacheUsesOneWorkspaceByteBudget) {
-  MetalRenderDevice device;
-  auto&             masks = device.Workspace().MaskTextures();
-  const Extent2D    extent{8, 8};
-  std::size_t       chain_bytes = 0;
-  auto              level       = extent;
-  while (true) {
-    chain_bytes += static_cast<std::size_t>(level.width) * level.height;
-    if (level.width == 1 && level.height == 1) {
-      break;
-    }
-    level.width  = std::max<std::uint32_t>(level.width / 2, 1);
-    level.height = std::max<std::uint32_t>(level.height / 2, 1);
-  }
-  masks.SetByteBudget(chain_bytes);
-
-  {
-    auto first = masks.Acquire(MaskAssetKey{"mask.a"}, extent);
-    EXPECT_EQ(masks.EntryCount(), 1U);
-    EXPECT_LE(masks.UsedBytes(), chain_bytes);
-  }
-  device.BeginRender();
-  device.EndRender();
-  device.WaitIdle();
-  auto second = masks.Acquire(MaskAssetKey{"mask.b"}, extent);
-  EXPECT_EQ(masks.EntryCount(), 1U);
-  EXPECT_FALSE(masks.Contains(MaskAssetKey{"mask.a"}));
-  EXPECT_TRUE(masks.Contains(MaskAssetKey{"mask.b"}));
-  EXPECT_LE(masks.UsedBytes(), chain_bytes);
-}
-
 TEST_F(MetalWorkspaceFixture, MetalSecondEmptyRenderCreatesNoBufferTextureHeapOrPipelineState) {
   MetalRenderDevice         device;
   auto&                     workspace = device.Workspace();
@@ -205,12 +174,10 @@ TEST_F(MetalWorkspaceFixture, MetalSecondEmptyRenderCreatesNoBufferTextureHeapOr
 
   workspace.Parameters().Reserve(256);
   workspace.TransientBuffers().Reserve(1 << 20);
-  workspace.MaskTextures().SetByteBudget(64 * 64);
 
   device.BeginRender();
   {
     auto texture = workspace.Textures().Acquire({64, 64, TextureFormat::R8});
-    auto mask    = workspace.MaskTextures().Acquire(MaskAssetKey{"mask.stable"}, {32, 32});
     ASSERT_NE(workspace.TransientBuffers().Allocate(2048), nullptr);
     auto buffer = workspace.Device().CreateBuffer(64);
     workspace.Values().Store({NodeId{"grade.primary"}, PortId{"commands"}}, std::move(buffer));
@@ -222,7 +189,6 @@ TEST_F(MetalWorkspaceFixture, MetalSecondEmptyRenderCreatesNoBufferTextureHeapOr
   device.BeginRender();
   {
     auto texture = workspace.Textures().Acquire({64, 64, TextureFormat::R8});
-    auto mask    = workspace.MaskTextures().Acquire(MaskAssetKey{"mask.stable"}, {32, 32});
     ASSERT_NE(workspace.TransientBuffers().Allocate(2048), nullptr);
     device.EndRender();
   }

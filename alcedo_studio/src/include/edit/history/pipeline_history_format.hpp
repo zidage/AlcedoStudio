@@ -18,7 +18,7 @@ namespace alcedo {
  *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.6.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.7.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 6 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 6 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 4 |
@@ -32,11 +32,11 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.6.0";
+inline constexpr std::string_view kProjectFileVersion = "0.7.0";
 /// Inclusive lower bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.6.0";
+inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.7.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.6.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.7.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 6;
 

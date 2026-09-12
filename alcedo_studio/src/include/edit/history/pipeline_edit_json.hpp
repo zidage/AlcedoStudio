@@ -11,7 +11,6 @@
 
 #include "edit/geometry/types.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
-#include "edit/mask/brush_stroke.hpp"
 #include "json.hpp"
 
 namespace alcedo::pipeline_edit_json {
@@ -21,7 +20,7 @@ namespace alcedo::pipeline_edit_json {
  *
  * This is the persistence / nested-document boundary: finite numbers, exact
  * object keys, scene edges, parameter targets, and canonical Color Grade / Mask
- * / Brush JSON. It does not apply a change to a live document.
+ * JSON. It does not apply a change to a live document.
  */
 
 [[noreturn]] void Fail(const std::string& message);
@@ -71,15 +70,6 @@ void RequireEdgeEndpoints(const PipelineSceneEdge& edge, const NodeId& from, con
     -> nlohmann::json;
 [[nodiscard]] auto CanonicalMaskSourceJson(const nlohmann::json& source, std::string_view context)
     -> nlohmann::json;
-[[nodiscard]] auto CanonicalBrushStrokeJson(const BrushStroke& stroke, std::string_view context)
-    -> nlohmann::json;
-[[nodiscard]] auto StrokeFromCanonicalJson(const nlohmann::json& json, std::string_view context)
-    -> BrushStroke;
-[[nodiscard]] auto TranslationVectorFromJson(const nlohmann::json& json, std::string_view context)
-    -> Vector2;
-[[nodiscard]] auto TranslationVectorToJson(Vector2 value) -> nlohmann::json;
-[[nodiscard]] auto AssetKeyFromBrushSource(const nlohmann::json& source, std::string_view context)
-    -> std::string;
 
 void               ValidateParameterTarget(const PipelineParameterTarget& target);
 [[nodiscard]] auto TargetToJson(const PipelineParameterTarget& target) -> nlohmann::json;

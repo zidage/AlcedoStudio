@@ -15,7 +15,9 @@
 #include <utility>
 #include <variant>
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
+#endif
 
 namespace alcedo {
 namespace {
@@ -66,6 +68,7 @@ auto ReadRequiredUint32(const nlohmann::json& json, const char* key, std::string
   return static_cast<std::uint32_t>(value);
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto TranslationToJson(Vector2 translation) -> nlohmann::json {
   return nlohmann::json::array({translation.x, translation.y});
 }
@@ -81,6 +84,7 @@ auto TranslationFromJson(const nlohmann::json& json, std::string_view owner) -> 
   RequireFinite(translation.y, "placement_translation.y");
   return translation;
 }
+#endif
 
 auto ReadRequiredFloat(const nlohmann::json& json, const char* key, std::string_view owner)
     -> float {
@@ -105,6 +109,7 @@ void ValidateRangeObject(const nlohmann::json& json, std::string_view name) {
   }
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 void ValidateBrush(const BrushMaskSource& brush) {
   RequireNonNegative(brush.feather_radius, "feather_radius");
   RequireFinite(brush.placement_translation.x, "placement_translation.x");
@@ -129,6 +134,7 @@ void ValidateBrush(const BrushMaskSource& brush) {
     Fail("Brush raster axes must be in [1, 4096] when an asset key is present");
   }
 }
+#endif
 
 void ValidateRadial(const RadialMaskSource& radial) {
   RequireFinite(radial.center_x, "center_x");
@@ -172,6 +178,7 @@ void ValidateRange(const std::optional<LuminanceRangeModel>& range, std::string_
   }
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto BrushToJson(const BrushMaskSource& brush) -> nlohmann::json {
   return {{"kind", "brush"},
           {"source_format_version", brush.source_format_version},
@@ -180,6 +187,7 @@ auto BrushToJson(const BrushMaskSource& brush) -> nlohmann::json {
           {"feather_radius", brush.feather_radius},
           {"strokes", BrushStrokeListToJson(brush.strokes)}};
 }
+#endif
 
 auto RadialToJson(const RadialMaskSource& radial) -> nlohmann::json {
   return {{"kind", "radial"},
@@ -217,6 +225,7 @@ auto RangeToJson(const std::optional<LuminanceRangeModel>& range) -> nlohmann::j
   return {{"enabled", range->enabled}};
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto BrushFromJson(const nlohmann::json& json) -> BrushMaskSource {
   if (json.contains("asset_key") || json.contains("width") || json.contains("height") ||
       json.contains("reference_bounds")) {
@@ -243,6 +252,7 @@ auto BrushFromJson(const nlohmann::json& json) -> BrushMaskSource {
   brush.strokes               = BrushStrokeListFromJson(json["strokes"]);
   return brush;
 }
+#endif
 
 auto RadialFromJson(const nlohmann::json& json) -> RadialMaskSource {
   RadialMaskSource radial;
@@ -286,15 +296,19 @@ auto LuminanceRangeFromJson(const nlohmann::json& json) -> std::optional<Luminan
 
 }  // namespace
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool {
   return !brush.strokes.empty() || brush.placement_translation.x != 0.0f ||
          brush.placement_translation.y != 0.0f;
 }
+#endif
 
 auto GetMaskSourceKind(const MaskSource& source) -> MaskSourceKind {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   if (std::holds_alternative<BrushMaskSource>(source)) {
     return MaskSourceKind::Brush;
   }
+#endif
   if (std::holds_alternative<RadialMaskSource>(source)) {
     return MaskSourceKind::Radial;
   }
@@ -303,8 +317,10 @@ auto GetMaskSourceKind(const MaskSource& source) -> MaskSourceKind {
 
 auto MaskSourceKindText(MaskSourceKind kind) -> std::string_view {
   switch (kind) {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     case MaskSourceKind::Brush:
       return "brush";
+#endif
     case MaskSourceKind::Radial:
       return "radial";
     case MaskSourceKind::LinearGradient:
@@ -324,9 +340,12 @@ void ValidateMaskModel(const MaskModel& mask) {
   std::visit(
       [](const auto& source) {
         using Source = std::decay_t<decltype(source)>;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
         if constexpr (std::is_same_v<Source, BrushMaskSource>) {
           ValidateBrush(source);
-        } else if constexpr (std::is_same_v<Source, RadialMaskSource>) {
+        } else
+#endif
+            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
           ValidateRadial(source);
         } else {
           ValidateLinearGradient(source);
@@ -343,9 +362,12 @@ auto MaskModelToJson(const MaskModel& mask) -> nlohmann::json {
   std::visit(
       [&source](const auto& value) {
         using Source = std::decay_t<decltype(value)>;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
         if constexpr (std::is_same_v<Source, BrushMaskSource>) {
           source = BrushToJson(value);
-        } else if constexpr (std::is_same_v<Source, RadialMaskSource>) {
+        } else
+#endif
+            if constexpr (std::is_same_v<Source, RadialMaskSource>) {
           source = RadialToJson(value);
         } else {
           source = LinearGradientToJson(value);
@@ -387,9 +409,12 @@ auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel {
   mask.enabled      = json.value("enabled", true);
   mask.opacity      = json.value("opacity", 1.0f);
   mask.invert       = json.value("invert", false);
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   if (kind == "brush") {
     mask.source = BrushFromJson(source_json);
-  } else if (kind == "radial") {
+  } else
+#endif
+      if (kind == "radial") {
     mask.source = RadialFromJson(source_json);
   } else if (kind == "linear_gradient") {
     mask.source = LinearGradientFromJson(source_json);

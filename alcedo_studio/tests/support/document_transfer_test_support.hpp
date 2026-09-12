@@ -41,9 +41,9 @@ inline auto DocumentWithLutPath(std::string cube_path) -> PipelineDocument {
   return document;
 }
 
-inline auto CaptureDocumentPackage(const PipelineDocument& document, MaskStore* mask_store = nullptr)
+inline auto CaptureDocumentPackage(const PipelineDocument& document)
     -> AdjustmentTransferPackage {
-  return CaptureDocumentTransfer(document, mask_store);
+  return CaptureDocumentTransfer(document);
 }
 
 inline auto MakeExposureTransferPackage(double exposure_ev) -> AdjustmentTransferPackage {

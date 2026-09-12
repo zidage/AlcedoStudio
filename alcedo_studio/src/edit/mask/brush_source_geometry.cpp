@@ -11,8 +11,6 @@
 #include <string_view>
 #include <variant>
 
-#include "edit/mask/active_raster_mask.hpp"
-
 namespace alcedo {
 namespace {
 
@@ -30,6 +28,17 @@ void RequireFiniteTranslation(Vector2 translation) {
   if (!std::isfinite(translation.x) || !std::isfinite(translation.y)) {
     FailGeometry("placement_translation must be finite");
   }
+}
+
+auto ClipRasterDirtyRectangle(RectI rectangle, Extent2D extent) -> RectI {
+  if (extent.Empty() || rectangle.width <= 0 || rectangle.height <= 0) {
+    return {};
+  }
+  const auto x0 = std::max(rectangle.x, 0);
+  const auto y0 = std::max(rectangle.y, 0);
+  const auto x1 = std::min(rectangle.X1(), static_cast<std::int32_t>(extent.width));
+  const auto y1 = std::min(rectangle.Y1(), static_cast<std::int32_t>(extent.height));
+  return x1 > x0 && y1 > y0 ? RectI{x0, y0, x1 - x0, y1 - y0} : RectI{};
 }
 
 auto DabSupport(const BrushCanonicalSample& sample, Vector2 translation, Extent2D raster,

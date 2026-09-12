@@ -109,7 +109,7 @@ struct HostRetentionHarness {
   HostRetentionHarness() {
     gpu_dag_test::EnsureTestCameraProfile(document);
     plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-    invalidation.CollectAndPropagate(plan, document, prepared, {});
+    invalidation.CollectAndPropagate(plan, document, prepared);
     ConsumeOperatorDirty(document);
   }
 
@@ -182,7 +182,7 @@ TEST(GraphImageCacheRetention, InvalidDownstreamDoesNotDropValidDevelopOrSharedG
       harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(0.5f);
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
   EXPECT_TRUE(harness.invalidation.HasCurrentRevision(
       harness.Sensor(), harness.cache.PublishedRevision(harness.Sensor())));
   EXPECT_FALSE(harness.invalidation.HasCurrentRevision(
@@ -277,7 +277,7 @@ TEST(GraphImageCacheRetention, DropStalePublishedKeepsCurrentDevelopAndFreesIdle
       harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(0.5f);
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
 
   harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
                                        const ResultRepresentation&) {
@@ -302,7 +302,7 @@ TEST(GraphImageCacheRetention, ExtraLeaseKeepsDisplayedTextureAfterStalePublishD
   auto payload            = harness.document.Develop()->Params().Params();
   payload.demosaic_method = payload.demosaic_method == "legacy" ? "neural_engine" : "legacy";
   harness.document.Develop()->Params().ReplaceParams(std::move(payload));
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
 
   harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
                                        const ResultRepresentation&) {
@@ -350,7 +350,7 @@ TEST(GraphImageCacheRetention, LastGoodGradeSurvivesExposureRevisionWhenFrameIde
       harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(0.5f);
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
   ASSERT_NE(harness.invalidation.RequiredRevision(harness.Grade()), grade_rev);
 
   harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
@@ -377,7 +377,7 @@ TEST(GraphImageCacheRetention, CropMismatchesFrameIdentityDropsGeometryAndFreesO
 
   harness.document.Geometry().SetCropRect({0.1f, 0.1f, 0.5f, 0.5f});
   GraphCompiler::BindFrameGeometry(harness.plan, harness.document, RenderRequest{});
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
   const auto geometry_needed = harness.invalidation.MakeImageRepresentation(
       harness.Geometry(), {kGeometry.width, kGeometry.height}, kGeometry.format);
   ASSERT_NE(geometry_needed.identity, geometry_identity);
@@ -410,7 +410,7 @@ TEST(GraphImageCacheRetention, QualityBaseKeepsInteractiveGeometryWhenCropChange
 
   harness.document.Geometry().SetCropRect({0.1f, 0.1f, 0.5f, 0.5f});
   GraphCompiler::BindFrameGeometry(harness.plan, harness.document, RenderRequest{});
-  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared, {});
+  harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared);
 
   harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision revision,
                                        const ResultRepresentation&) {

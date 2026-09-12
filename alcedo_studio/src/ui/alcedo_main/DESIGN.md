@@ -523,7 +523,6 @@ graph Grade deletion. Parameter editors stay in the Masks body.
 | --- | --- | --- |
 | `MaskSourceKind::LinearGradient` | `Gradient` | `mask_icons/gradient.svg` |
 | `MaskSourceKind::Radial` | `Radial` | `mask_icons/radial.svg` |
-| `MaskSourceKind::Brush` | `Brush` | `mask_icons/brush.svg` |
 
 Use these approved paths:
 
@@ -533,15 +532,9 @@ Use these approved paths:
 
 <!-- Radial: Tabler wash-dryclean -->
 <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
-
-<!-- Brush: Tabler brush -->
-<path d="M3 21v-4a4 4 0 1 1 4 4h-4" />
-<path d="M21 3a16 16 0 0 0 -12.8 10.2" />
-<path d="M21 3a16 16 0 0 1 -10.2 12.8" />
-<path d="M10.6 9a9 9 0 0 1 4.4 4.4" />
 ```
 
-Normalize all three files to the shared 24×24 viewBox and white source stroke.
+Normalize both files to the shared 24×24 viewBox and white source stroke.
 Keep the user-approved 2 px stroke width. Use one optical size and one source
 size for the group. The Radial circle is an approved type icon. Do not reuse it
 as a status dot.
@@ -590,7 +583,7 @@ on a 24×24 viewBox. At the compact 18 px optical size this resolves to roughly
 1.125 logical pixels before antialiasing, keeping dense navigation crisp rather
 than visually bold. Do not mix the upstream Tabler 2 px default with locally
 normalized icons in the same navigation group. The user-approved Nodes rail
-icon and Gradient, Radial, and Brush Mask icons are documented 2 px exceptions.
+icon and the Gradient and Radial Mask icons are documented 2 px exceptions.
 
 **Every SVG action must:**
 
@@ -660,8 +653,8 @@ The header is one vertical stack. Both rows fill the same header width:
      `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines,
      elided. Full name is the accessible name and tooltip. No node-kind subtitle.
      Do not use `monoFontFamily`.
-   - Right: Brush, Radial, then Gradient `IconActionButton` compact actions using
-     `qrc:/mask_icons/brush.svg`, `qrc:/mask_icons/radial.svg`, and
+   - Right: Radial, then Gradient `IconActionButton` compact actions using
+     `qrc:/mask_icons/radial.svg` and
      `qrc:/mask_icons/gradient.svg`. Idle fill is `buttonIdleFillColor`. Viewer
      Mask authoring is NM7; the buttons currently have no product command.
      Do not insert a vertical rule between the name and the tools.

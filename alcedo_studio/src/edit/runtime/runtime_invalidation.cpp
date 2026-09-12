@@ -49,10 +49,6 @@ auto SegmentForIndex(const CompiledGradeNode& grade, std::size_t index) -> Grade
   return GradeSegment::PostLlf;
 }
 
-auto PackedRasterRevision(const ActiveRasterMaskInput& input) -> std::uint64_t {
-  return (input.session_generation << 1) ^ (input.content_revision * 0x9E3779B97F4A7C15ull);
-}
-
 auto IsLocalTonePort(const GraphValueId& id) -> bool {
   const auto port = id.output_port.Value();
   return port == "local_tone.source.0" || port == "local_tone.result.0";
@@ -158,10 +154,9 @@ void RuntimeInvalidationState::CollectDevelopChanges(const ExecutionPlan& plan,
   }
 }
 
-void RuntimeInvalidationState::CollectGradeChanges(
-    const ExecutionPlan& plan, const PipelineDocument& document,
-    std::span<const ActiveRasterMaskInput> active_raster_masks,
-    std::vector<GraphValueId>& origins) {
+void RuntimeInvalidationState::CollectGradeChanges(const ExecutionPlan&       plan,
+                                                   const PipelineDocument&    document,
+                                                   std::vector<GraphValueId>& origins) {
   for (const auto& compiled : plan.grade_nodes) {
     const auto* grade =
         dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
@@ -194,14 +189,6 @@ void RuntimeInvalidationState::CollectGradeChanges(
       if (revision != last) {
         origins.push_back(source.effective_output);
         last = revision;
-      }
-      const auto* active =
-          FindActiveRasterMaskInput(active_raster_masks, compiled.node_id, source.mask_id);
-      auto& last_raster = last_raster_revision_[key];
-      const auto raster_rev = active == nullptr ? 0 : PackedRasterRevision(*active);
-      if (raster_rev != last_raster) {
-        origins.push_back(source.effective_output);
-        last_raster = raster_rev;
       }
     }
   }
@@ -290,9 +277,9 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   }
 }
 
-void RuntimeInvalidationState::CollectAndPropagate(
-    const ExecutionPlan& plan, PipelineDocument& document, const PreparedRawInput& input,
-    std::span<const ActiveRasterMaskInput> active_raster_masks) {
+void RuntimeInvalidationState::CollectAndPropagate(const ExecutionPlan&    plan,
+                                                   PipelineDocument&       document,
+                                                   const PreparedRawInput& input) {
   BindCompiledPlan(plan);
   CaptureFrameRepresentations(plan, input);
 
@@ -302,7 +289,7 @@ void RuntimeInvalidationState::CollectAndPropagate(
     document.ClearTopologyDirty();
   }
   CollectDevelopChanges(plan, document, origins);
-  CollectGradeChanges(plan, document, active_raster_masks, origins);
+  CollectGradeChanges(plan, document, origins);
   CollectDrtChanges(plan, document, origins);
 
   for (const auto& compiled : plan.grade_nodes) {
@@ -337,14 +324,12 @@ void RuntimeInvalidationState::AdvanceDocumentEpoch() {
     record.required = change_version_;
   }
   last_mask_revision_.clear();
-  last_raster_revision_.clear();
 }
 
 void RuntimeInvalidationState::Clear() {
   outgoing_.clear();
   records_.clear();
   last_mask_revision_.clear();
-  last_raster_revision_.clear();
   last_grade_bind_.clear();
   last_drt_input_     = {};
   bound_plan_         = {};

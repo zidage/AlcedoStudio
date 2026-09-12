@@ -45,15 +45,14 @@ auto LoadGolden(const std::string& name) -> std::string {
 auto MultiGradeDocument() -> PipelineDocument {
   auto document = CreateDefaultPipelineDocument();
   EXPECT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.look"}).empty());
-  grade_mask_test::AddParameterizedBrushMask(
-      document, MaskId{"mask.brush"}, {grade_mask_test::MakePaintStroke("stroke.1")});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   return document;
 }
 
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.6.0");
+  EXPECT_EQ(kProjectFileVersion, "0.7.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kPackedProjectFormatVersion, 6u);

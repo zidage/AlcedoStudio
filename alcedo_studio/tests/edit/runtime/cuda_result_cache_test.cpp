@@ -25,8 +25,6 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/mask/active_raster_mask.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -65,12 +63,12 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
   };
 }
 
-void ConnectFilledRasterMask(PipelineDocument& document, MaskStore& store) {
-  MaskAsset asset;
-  asset.descriptor.extent = {32, 32};
-  asset.pixels.assign(32U * 32U, 255);
-  asset.key = store.Put(asset.descriptor, asset.pixels);
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, asset.key, asset.descriptor);
+void ConnectFullCoverageMask(PipelineDocument& document) {
+  LinearGradientMaskSource flat;
+  flat.start_value         = 1.0f;
+  flat.end_value           = 1.0f;
+  flat.transition_distance = 1.0f;
+  grade_mask_test::AddLinearGradientMask(document, MaskId{"mask.full"}, flat);
 }
 
 auto RenderHost(CudaProductRenderer& renderer, const std::shared_ptr<ImageBuffer>& input,
@@ -230,8 +228,8 @@ TEST_F(CudaResultCacheProductFixture, ExposureEditRunsOnlyPrimaryGradeAndDrtPass
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       RasterMaskSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
-  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+       MaskSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
+  ConnectFullCoverageMask(*document_);
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   ASSERT_TRUE(OutputIsFinite(Render()));
@@ -251,8 +249,8 @@ TEST_F(CudaResultCacheProductFixture,
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       ApplyOntoExposureWithRasterMaskReusesSensorGeometryCameraAndMask) {
-  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+       ApplyOntoExposureWithMaskReusesSensorGeometryCameraAndMask) {
+  ConnectFullCoverageMask(*document_);
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   nlohmann::json json;
@@ -272,25 +270,6 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
   EXPECT_EQ(stats.pass.camera_color_skip, 1U);
   EXPECT_EQ(stats.pass.mask_skip, 1U);
-}
-
-TEST_F(CudaResultCacheProductFixture, BypassProductRenderRejectsActiveRasterWithoutPreviewFlag) {
-  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
-  ActiveRasterMaskInput input;
-  input.owner_node_id      = document_->PrimaryGrade()->Id();
-  input.mask_id            = MaskId{"mask.raster"};
-  input.session_generation = 1;
-  input.content_revision   = 1;
-  input.descriptor.extent  = {32, 32};
-  input.pixels =
-      std::make_shared<const std::vector<std::uint8_t>>(32U * 32U, std::uint8_t{200});
-  input.dirty_rectangle = {0, 0, 32, 32};
-  PipelineApplyRequest request;
-  request.decode_res          = DecodeRes::FULL;
-  request.require_host_output = true;
-  request.cache_policy        = RenderCachePolicy::BypassSessionCache;
-  request.active_raster_masks.push_back(std::move(input));
-  EXPECT_THROW((void)renderer_->Render(image_, request), std::runtime_error);
 }
 
 TEST_F(CudaResultCacheProductFixture,
@@ -777,7 +756,7 @@ TEST_F(CudaResultCacheProductFixture,
 }
 
 TEST_F(CudaResultCacheProductFixture, QualityBaseBypassesEveryResultCacheAfterSensorDevelop) {
-  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+  ConnectFullCoverageMask(*document_);
   auto* shadows = dynamic_cast<ShadowsModel*>(
       document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
   ASSERT_NE(shadows, nullptr);
@@ -931,7 +910,7 @@ TEST_F(CudaResultCacheProductFixture, QualityBasePixelsMatchFreshExecutionWithin
   // Same 32x32 fixture, QualityBase long-edge 32. Compare bypass-cache pixels
   // against a one-shot execution of the same request. Absolute tolerance 1e-4
   // on RGB in the renderer host RGBA32F download (ACES display encoding).
-  ConnectFilledRasterMask(*document_, renderer_->MaskAssets());
+  ConnectFullCoverageMask(*document_);
   auto* shadows = dynamic_cast<ShadowsModel*>(
       document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
   ASSERT_NE(shadows, nullptr);

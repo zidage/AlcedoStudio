@@ -15,23 +15,19 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph.hpp"
-#include "edit/mask/mask_asset.hpp"
 
 namespace alcedo {
 
 class CommitGraph;
-class MaskStore;
 
 /**
- * @brief Optional apply observers and Mask-asset resolution.
+ * @brief Optional apply observers.
  *
  * @p after_successful_change runs after each applied change while the caller
  * still holds the render lock. Tests use it to observe intermediate documents
- * and to inject a later-change failure. @p mask_store is required for
- * @ref ReplaceMaskAssetChange so both stored keys can be loaded.
+ * and to inject a later-change failure.
  */
 struct PipelineHistoryApplyContext {
-  MaskStore* mask_store = nullptr;
   std::function<void(std::size_t applied_count)> after_successful_change;
   TopologyDeltaStepHook after_topology_step;
 };
@@ -48,7 +44,7 @@ struct PipelineHistoryApplyContext {
  * @param direction Forward uses stored order and after values. Inverse reverses
  *        both order and before/after sides.
  * @param error Optional failure detail, including restoration errors.
- * @param context Optional Mask store and apply observer.
+ * @param context Optional apply observer.
  * @return false when validation, apply, or rollback fails. On false the document
  *         matches the pre-call hash: failed changes are inverse-applied when
  *         possible, and a pre-call clone is restored when graph validation fails
@@ -68,7 +64,7 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
  * @param root_document Immutable image root DAG.
  * @param first_parent_commits Root-to-head first-parent commits, oldest first.
  * @param error Optional failure detail.
- * @param context Optional Mask store and apply observer.
+ * @param context Optional apply observer.
  * @return The replayed document, or nullopt when a commit cannot be applied.
  */
 [[nodiscard]] auto ReplayPipelineDocumentFromRoot(
@@ -83,28 +79,5 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
  */
 [[nodiscard]] auto FirstParentCommitsForHead(const CommitGraph& graph, head_commit_hash_t head)
     -> std::vector<EditCommit>;
-
-/**
- * @brief Persistent Brush keys referenced by Color Grade Masks on @p document.
- *
- * Radial and Linear Gradient sources are omitted. Empty optional keys are omitted.
- */
-[[nodiscard]] auto CollectPersistentMaskAssetKeys(const PipelineDocument& document)
-    -> std::vector<MaskAssetKey>;
-
-/**
- * @brief Load every persistent Mask key referenced by @p document.
- *
- * Empty key sets succeed even when @p mask_store is null. A non-empty set with a
- * null store is an error. A missing or corrupt file is an error. Does not delete
- * files or consult GPU caches.
- *
- * @param document Replayed or live DAG whose Brush keys must resolve.
- * @param mask_store Persistent Mask store, or null when the document has no keys.
- * @param error Optional failure detail.
- * @return false when a referenced asset cannot be loaded.
- */
-auto VerifyPersistentMaskAssets(const PipelineDocument& document, MaskStore* mask_store,
-                                std::string* error) -> bool;
 
 }  // namespace alcedo

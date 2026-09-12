@@ -159,7 +159,7 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
 
       const auto recovered_head = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
       if (auto pipeline_service = PipelineMapper()) {
-        if (!pipeline_service->RebuildActiveEditorPipeline(guard, error, state->mask_store)) {
+        if (!pipeline_service->RebuildActiveEditorPipeline(guard, error)) {
           restore_recovery();
           std::string isolate_error;
           (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
@@ -330,14 +330,9 @@ auto EditorHistoryState::ReplayWorkingDocumentFromImmutableRoot(
     return false;
   }
 
-  alcedo::PipelineHistoryApplyContext context;
-  context.mask_store = state.mask_store;
-  auto replayed      = alcedo::ReplayPipelineDocumentFromRoot(
-      *state.pipeline_guard->root_document_, commits, error, context);
+  auto replayed = alcedo::ReplayPipelineDocumentFromRoot(
+      *state.pipeline_guard->root_document_, commits, error);
   if (!replayed.has_value()) {
-    return false;
-  }
-  if (!alcedo::VerifyPersistentMaskAssets(*replayed, state.mask_store, error)) {
     return false;
   }
 

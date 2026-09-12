@@ -8,7 +8,6 @@
 #include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
@@ -47,9 +46,9 @@ auto PrimaryGradeJson(nlohmann::json& document_json) -> nlohmann::json& {
 }
 
 TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants) {
-  EXPECT_EQ(kProjectFileVersion, "0.6.0");
-  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.6.0");
-  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.6.0");
+  EXPECT_EQ(kProjectFileVersion, "0.7.0");
+  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.7.0");
+  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.7.0");
   EXPECT_EQ(kPackedProjectFormatVersion, 6u);
   EXPECT_EQ(kPipelineDocumentFormatVersion, 6u);
   EXPECT_EQ(kImageEditSchemaVersion, 4u);
@@ -204,31 +203,6 @@ TEST(BrushSourceFormatBoundary, UnknownBrushSourceKindIsRejectedWithoutDocumentM
                       {"luminance_range", nullptr}}});
   EXPECT_THROW((void)PipelineDocument::FromJson(json), std::runtime_error);
   EXPECT_EQ(document.ToJson().dump(), before);
-}
-
-TEST(BrushSourceFormatBoundary, HeldMaskStoreReaderKeepsImmutablePixelsAfterHostCacheEviction) {
-  const auto root = TestRoot("reader_lifetime");
-  std::error_code ignored;
-  std::filesystem::remove_all(root, ignored);
-  MaskAssetDescriptor descriptor;
-  descriptor.extent           = {4, 2};
-  descriptor.reference_bounds = CanonicalBrushReferenceBounds();
-  const std::vector<std::uint8_t> first_pixels(8, 17);
-  const std::vector<std::uint8_t> second_pixels(8, 19);
-  MaskStore store(root, 8);
-  const auto first_key  = store.Put(descriptor, first_pixels);
-  const auto first_held = store.Load(first_key);
-  ASSERT_NE(first_held, nullptr);
-  EXPECT_EQ(first_held.get(), store.Load(first_key).get());
-  const auto* first_data = first_held->pixels.data();
-  const auto second_key  = store.Put(descriptor, second_pixels);
-  EXPECT_NE(first_key, second_key);
-  EXPECT_EQ(store.HostCacheEntryCount(), 1u);
-  EXPECT_EQ(first_held->pixels, first_pixels);
-  EXPECT_EQ(first_held->pixels.data(), first_data);
-  const auto reloaded = store.Load(first_key);
-  EXPECT_EQ(reloaded->pixels, first_pixels);
-  EXPECT_NE(reloaded.get(), first_held.get());
 }
 
 TEST(BrushSourceFormatBoundary, OrdinaryAdjustmentPathStillRejectsMaskTargets) {

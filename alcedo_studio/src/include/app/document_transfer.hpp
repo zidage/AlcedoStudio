@@ -12,9 +12,10 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
+#endif
 #include "edit/mask/mask_id.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "json.hpp"
 
@@ -47,8 +48,10 @@ class TransferIdentitySource {
   /** @brief Next MaskId. Must not be empty. */
   virtual auto NextMaskId() -> MaskId = 0;
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   /** @brief Next StrokeId. Must not be empty. */
   virtual auto NextStrokeId() -> StrokeId = 0;
+#endif
 };
 
 /**
@@ -63,19 +66,22 @@ class CountingTransferIdentitySource final : public TransferIdentitySource {
   auto NextAdjustmentInstanceId(const NodeId& node_id, const OperatorTypeId& type)
       -> AdjustmentInstanceId override;
   auto NextMaskId() -> MaskId override;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   auto NextStrokeId() -> StrokeId override;
+#endif
 
  private:
   std::uint32_t next_node_   = 1;
   std::uint32_t next_mask_   = 1;
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   std::uint32_t next_stroke_ = 1;
+#endif
 };
 
 /**
  * @brief Prepared Paste: remapped package and typed batch.
  *
- * @p batch is validated. It is not applied to a live document. Referenced Brush
- * raster assets, when listed, are copied into the target store before return.
+ * @p batch is validated. It is not applied to a live document.
  */
 struct PreparedDocumentPaste {
   AdjustmentTransferPackage package;
@@ -84,29 +90,22 @@ struct PreparedDocumentPaste {
 
 /**
  * @brief Optional Paste collaborators. Null identity uses a per-call default source
- *        or the testing hook. Null Mask stores are valid when the package has no
- *        Brush keys.
+ *        or the testing hook.
  */
 struct DocumentTransferPasteOptions {
-  TransferIdentitySource* identity_source   = nullptr;
-  MaskStore*              source_mask_store = nullptr;
-  MaskStore*              target_mask_store = nullptr;
+  TransferIdentitySource* identity_source = nullptr;
 };
 
 /**
  * @brief Capture transferable Color Grades, Masks, and DRT/Post from @p document.
  *
  * Omits Develop, RAW metadata, geometry, history, Version ids, and UI state.
- * Brush keys are recorded with their descriptors. Raster bytes stay in @p mask_store.
  *
  * @param document Source DAG. Must have at least one Color Grade on the backbone.
- * @param mask_store Required only when the document still references persistent
- *        Brush asset keys. Parameterized Brush packages do not copy raster files.
  * @return Validated package with a computed fingerprint.
  * @throws std::runtime_error when the document, owners, or referenced assets fail.
  */
-[[nodiscard]] auto CaptureDocumentTransfer(const PipelineDocument& document,
-                                           MaskStore*              mask_store = nullptr)
+[[nodiscard]] auto CaptureDocumentTransfer(const PipelineDocument& document)
     -> AdjustmentTransferPackage;
 
 /**
@@ -137,15 +136,15 @@ struct DocumentTransferPasteOptions {
 void ValidateDocumentTransfer(const AdjustmentTransferPackage& package);
 
 /**
- * @brief Remap identities, copy Brush assets, and build one typed Paste batch.
+ * @brief Remap identities and build one typed Paste batch.
  *
  * Reads @p root_document for target Develop, geometry, DRT identity, and occupied
- * IDs. Does not mutate @p root_document. Copies assets before returning. Rejects
- * ID collisions before any live document change.
+ * IDs. Does not mutate @p root_document. Rejects ID collisions before any live
+ * document change.
  *
  * @param package Validated source package.
  * @param root_document Target immutable root DAG.
- * @param options Identity source and Mask stores.
+ * @param options Identity source.
  * @return Remapped package plus a validated Paste batch.
  * @throws std::runtime_error on validation, collision, missing asset, or graph failure.
  */

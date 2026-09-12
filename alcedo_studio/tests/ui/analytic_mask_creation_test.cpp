@@ -25,7 +25,6 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/analytic_mask_edit.hpp"
-#include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/grade_mask_coverage.hpp"
 #include "edit/mask/mask_list_selection.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -95,14 +94,13 @@ constexpr Extent2D kRaster{64, 32};
 }
 
 [[nodiscard]] auto TexelNormalized(std::uint32_t x, std::uint32_t y) -> Vector2 {
-  const auto center = CanonicalBrushTexelReferenceCenter(x, y, kRaster, kRaster);
-  return {center.x / static_cast<float>(kRaster.width),
-          center.y / static_cast<float>(kRaster.height)};
+  return {(static_cast<float>(x) + 0.5f) / static_cast<float>(kRaster.width),
+          (static_cast<float>(y) + 0.5f) / static_cast<float>(kRaster.height)};
 }
 
 [[nodiscard]] auto MixAt(const GradeMaskCoverage& mix, std::uint32_t x, std::uint32_t y)
     -> std::uint8_t {
-  return mix.Pixels()[PackedR8Index(x, y, kRaster)];
+  return mix.Pixels()[static_cast<std::size_t>(y) * kRaster.width + x];
 }
 
 void ExpectMixMatchesIndependent(const GradeMaskCoverage& mix, const MaskModel& mask) {
@@ -380,7 +378,7 @@ TEST(AnalyticMaskCreationTest, RadialFeatherControlsMatchEvaluator) {
   ASSERT_TRUE(inner_rho.has_value());
   const float expected_center =
       IndependentRadialCoverage(*live, TexelNormalized(kRaster.width / 2, kRaster.height / 2));
-  EXPECT_NEAR(CoverageFromMaskR8(MixAt(harness.mix, kRaster.width / 2, kRaster.height / 2)),
+  EXPECT_NEAR(MixAt(harness.mix, kRaster.width / 2, kRaster.height / 2) / 255.0f,
               expected_center, 1.0f / 255.0f + 1.0e-6f);
 }
 
@@ -582,7 +580,7 @@ TEST(AnalyticMaskCreationTest, NodeDrawerSelectionLoadsExistingMaskWithoutCreati
   radial.major_radius = 0.20f;
   radial.minor_radius = 0.16f;
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.radial"}, radial);
-  grade_mask_test::AddParameterizedBrushMask(harness.document, MaskId{"mask.brush"});
+  grade_mask_test::AddLinearGradientMask(harness.document, MaskId{"mask.linear"});
   const auto head_before    = harness.history.working_head();
   const auto preview_before = harness.preview_count;
   const auto count_before   = harness.document.PrimaryGrade()->MaskCount();
@@ -601,15 +599,15 @@ TEST(AnalyticMaskCreationTest, NodeDrawerSelectionLoadsExistingMaskWithoutCreati
   EXPECT_FALSE(display.handles.empty());
   EXPECT_EQ(OverlayFillCount(display), 0);
 
-  const auto brush_loaded = harness.controller.SelectMask(harness.document.PrimaryGrade()->Id(),
-                                                          MaskId{"mask.brush"}, harness.session);
-  ASSERT_TRUE(brush_loaded.accepted);
-  EXPECT_FALSE(brush_loaded.committed);
-  EXPECT_FALSE(brush_loaded.interactive_preview);
+  const auto linear_loaded = harness.controller.SelectMask(harness.document.PrimaryGrade()->Id(),
+                                                           MaskId{"mask.linear"}, harness.session);
+  ASSERT_TRUE(linear_loaded.accepted);
+  EXPECT_FALSE(linear_loaded.committed);
+  EXPECT_FALSE(linear_loaded.interactive_preview);
   EXPECT_EQ(harness.history.working_head(), head_before);
   EXPECT_EQ(harness.preview_count, preview_before);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), count_before);
-  EXPECT_EQ(harness.controller.selected_mask_id(), MaskId{"mask.brush"});
+  EXPECT_EQ(harness.controller.selected_mask_id(), MaskId{"mask.linear"});
 }
 
 TEST(AnalyticMaskCreationTest, SelectedMaskCanBeEditedAfterWorkspaceReentry) {

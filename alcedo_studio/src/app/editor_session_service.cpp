@@ -1293,44 +1293,16 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
   const auto identity = lifecycle_.identity();
   switch (command.kind) {
     case EditorMaskCreationCommandKind::BeginCreation:
-      return mask_creation_.BeginCreation(command.source_kind, command.node_id, identity,
-                                          command.mask_id);
+      return mask_creation_.BeginCreation(command.source_kind, command.node_id, identity);
     case EditorMaskCreationCommandKind::SelectMask:
       return mask_creation_.SelectMask(command.node_id, command.mask_id, identity);
     case EditorMaskCreationCommandKind::BeginInput:
-      if (command.brush_radius > 0.0f) {
-        const auto parameters = mask_creation_.SetBrushStrokeParameters(
-            command.brush_radius, command.brush_strength, command.brush_hardness);
-        if (!parameters.accepted) {
-          return parameters;
-        }
-      }
-      if (command.brush_tool == EditorBrushTool::Paint ||
-          command.brush_tool == EditorBrushTool::Erase) {
-        const auto tool = mask_creation_.SetBrushTool(command.brush_tool);
-        if (!tool.accepted) {
-          return tool;
-        }
-      }
-      return mask_creation_.BeginMaskInput(command.sample, command.identity, command.source_kind,
-                                           command.default_feather_reference_px);
+      return mask_creation_.BeginMaskInput(command.sample, command.identity,
+                                           command.source_kind);
     case EditorMaskCreationCommandKind::BeginMove:
-      if (command.brush_tool == EditorBrushTool::Move) {
-        const auto tool = mask_creation_.SetBrushTool(EditorBrushTool::Move);
-        if (!tool.accepted) {
-          return tool;
-        }
-      }
       return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity,
                                           command.source_kind);
     case EditorMaskCreationCommandKind::Append:
-      if (command.brush_radius > 0.0f) {
-        const auto parameters = mask_creation_.SetBrushStrokeParameters(
-            command.brush_radius, command.brush_strength, command.brush_hardness);
-        if (!parameters.accepted) {
-          return parameters;
-        }
-      }
       return mask_creation_.AppendMaskInput(command.sample, command.identity);
     case EditorMaskCreationCommandKind::Finish:
       return mask_creation_.FinishMaskInput();
@@ -1342,11 +1314,6 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
       return mask_creation_.CancelCreationMode();
     case EditorMaskCreationCommandKind::RemoveMask:
       return mask_creation_.RemoveMask(command.node_id, command.mask_id);
-    case EditorMaskCreationCommandKind::SetBrushTool:
-      return mask_creation_.SetBrushTool(command.brush_tool);
-    case EditorMaskCreationCommandKind::SetBrushStrokeParameters:
-      return mask_creation_.SetBrushStrokeParameters(command.brush_radius, command.brush_strength,
-                                                     command.brush_hardness);
     case EditorMaskCreationCommandKind::BeginMaskField:
       return mask_creation_.BeginMaskFieldEdit(command.field_key);
     case EditorMaskCreationCommandKind::SetMaskField:

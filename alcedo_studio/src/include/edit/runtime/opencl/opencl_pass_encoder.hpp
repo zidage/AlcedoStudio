@@ -37,7 +37,7 @@ inline void CopyOpenClGraphImage(OpenClRenderDevice& device, const GraphValueId&
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::UploadRaw> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*) {
+                     const PreparedRawInput& input, PipelineDocument& document) {
     ExecuteOpenClDevelop(device, plan, input, document);
   }
 };
@@ -45,7 +45,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::UploadRaw> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::UploadRgb> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document, MaskStore*) {
+                     const PreparedRawInput& input, PipelineDocument& document) {
     ExecuteOpenClDevelop(device, plan, input, document);
   }
 };
@@ -53,7 +53,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::UploadRgb> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::GeometryResample> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&, MaskStore*) {
+                     PipelineDocument&) {
     ExecuteOpenClGeometryResample(device, plan);
   }
 };
@@ -61,7 +61,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::GeometryResample> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore*) {
+                     PipelineDocument& document) {
     ExecuteOpenClCameraColor(device, plan, document);
   }
 };
@@ -69,18 +69,16 @@ struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore* store,
-                     const CompiledGradeNode& compiled_grade, const CompiledMaskSource& source,
-                     std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
-    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source, store,
-                            active_raster_masks);
+                     PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const CompiledMaskSource& source) {
+    (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source);
   }
 };
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore*,
+                     PipelineDocument& document,
                      const CompiledGradeNode& compiled_grade) {
     (void)ExecuteOpenClMaskUnion(device, plan, document, compiled_grade);
   }
@@ -89,7 +87,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& prepared, PipelineDocument& document, MaskStore*,
+                     const PreparedRawInput& prepared, PipelineDocument& document,
                      const CompiledGradeNode& compiled_grade) {
     (void)ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);
   }
@@ -98,7 +96,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::Drt> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, MaskStore*) {
+                     PipelineDocument& document) {
     (void)ExecuteOpenClDrt(device, plan, document);
   }
 };

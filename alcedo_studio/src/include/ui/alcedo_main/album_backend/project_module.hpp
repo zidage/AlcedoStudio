@@ -58,7 +58,6 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_PROPERTY(QString taskStatus READ TaskStatus NOTIFY TaskStateChanged)
   Q_PROPERTY(int taskProgress READ TaskProgress NOTIFY TaskStateChanged)
   Q_PROPERTY(bool taskCancelVisible READ TaskCancelVisible NOTIFY TaskStateChanged)
-  Q_PROPERTY(QVariantMap maskCacheState READ MaskCacheState NOTIFY MaskCacheStateChanged)
 
  public:
   explicit ProjectModule(QObject* parent = nullptr);
@@ -112,15 +111,6 @@ class ProjectModule final : public QObject, public IUiStatusSink {
                                                 const QString& projectName);
   Q_INVOKABLE bool   SaveProject();
 
-  // ── Project Mask cache settings (Settings > Cache) ─────────────────────
-  // Project-scoped Mix-cache location/retention/usage. Not photo history and
-  // separate from the thumbnail disk cache surfaced by LibraryModule.
-  [[nodiscard]] auto MaskCacheState() const -> QVariantMap;
-  Q_INVOKABLE bool   ApplyMaskCacheRoot(const QString& chosenRoot);
-  Q_INVOKABLE bool   ApplyMaskCacheRetention(const QString& retentionKey);
-  Q_INVOKABLE bool   ClearMaskCache();
-  Q_INVOKABLE void   RefreshMaskCacheState();
-
   // ── Internals used by ProjectHandler / host ────────────────────────────
   void               InitializeAcceleratorSettings();
   void               RefreshTranslations();
@@ -143,7 +133,6 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void ProjectChanged();
   void projectChanged();
   void ProjectLoadStateChanged();
-  void MaskCacheStateChanged();
 
  private:
   void           StartOpenClPreparationIfNeeded();
@@ -174,7 +163,6 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          task_status_text_{};
   int                          task_progress_       = 0;
   bool                         task_cancel_visible_ = false;
-  QString                      mask_cache_apply_error_{};
 };
 
 }  // namespace alcedo::ui

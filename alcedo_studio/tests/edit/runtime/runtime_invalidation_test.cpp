@@ -16,7 +16,6 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/mask/active_raster_mask.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
@@ -70,9 +69,7 @@ struct ValidityHarness {
     GraphCompiler::BindFrameGeometry(plan, document, request);
   }
 
-  void Collect(std::span<const ActiveRasterMaskInput> rasters = {}) {
-    invalidation.CollectAndPropagate(plan, document, prepared, rasters);
-  }
+  void Collect() { invalidation.CollectAndPropagate(plan, document, prepared); }
 
   void Complete() {
     const ImageExtent sensor{plan.source.develop_output_extent.width,
@@ -138,7 +135,7 @@ TEST(RuntimeInvalidation, FreshStateAssignsRequiredWhenOperatorDirtyAlreadyConsu
   ASSERT_GT(first.Required(first.plan.sensor_linear_output), 0U);
 
   RuntimeInvalidationState fresh;
-  fresh.CollectAndPropagate(first.plan, first.document, first.prepared, {});
+  fresh.CollectAndPropagate(first.plan, first.document, first.prepared);
   EXPECT_GT(fresh.RequiredRevision(first.plan.sensor_linear_output), 0U);
   EXPECT_EQ(fresh.CompletedRevision(first.plan.sensor_linear_output), 0U);
   EXPECT_GT(fresh.RequiredRevision(first.plan.display_output), 0U);
@@ -320,39 +317,6 @@ TEST(RuntimeInvalidation, SiblingMaskSourceStaysValidWhenOneMaskChanges) {
   EXPECT_GT(harness.Required(harness.Primary().mask_output),
             harness.Completed(harness.Primary().mask_output));
   EXPECT_TRUE(harness.Current(LocalToneSourceId(harness.Primary().node_id)));
-}
-
-TEST(RuntimeInvalidation, ActiveRasterRevisionInvalidatesOnlyThatMaskSource) {
-  ValidityHarness harness;
-  grade_mask_test::AddBrushMask(harness.document, MaskId{"mask.brush"}, MaskAssetKey{"asset.a"});
-  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.radial"});
-  harness.Recompile();
-  ASSERT_TRUE(harness.Primary().mask_stack.has_value());
-  MaskId brush_id;
-  MaskId radial_id;
-  GraphValueId brush_out{};
-  GraphValueId radial_out{};
-  for (const auto& source : harness.Primary().mask_stack->sources) {
-    if (source.mask_id == MaskId{"mask.brush"}) {
-      brush_id  = source.mask_id;
-      brush_out = source.effective_output;
-    } else {
-      radial_id  = source.mask_id;
-      radial_out = source.effective_output;
-    }
-  }
-  ActiveRasterMaskInput raster;
-  raster.owner_node_id     = harness.Primary().node_id;
-  raster.mask_id           = brush_id;
-  raster.session_generation = 1;
-  raster.content_revision   = 1;
-  harness.Collect(std::span<const ActiveRasterMaskInput>{&raster, 1});
-  ConsumeOperatorDirty(harness.document);
-  harness.Complete();
-  raster.content_revision = 2;
-  harness.Collect(std::span<const ActiveRasterMaskInput>{&raster, 1});
-  EXPECT_GT(harness.Required(brush_out), harness.Completed(brush_out));
-  EXPECT_TRUE(harness.Current(radial_out));
 }
 
 TEST(RuntimeInvalidation, ViewportChangeKeepsCanonicalLlfAndMismatchesFrameResults) {

@@ -10,7 +10,6 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/runtime_revision.hpp"
@@ -153,11 +152,9 @@ struct FrameResultContentKeys {
  * @brief Build layer keys for the current document, prepared source, and bound geometry.
  *
  * @pre @p plan.geometry is the per-frame ResolvedRenderGeometry.
- * @param active_raster_masks Task-owned Brush overrides mixed into matching source keys.
- *        Dirty rectangles are omitted.
  */
 [[nodiscard]] auto BuildFrameResultContentKeys(
-    const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
-    std::span<const ActiveRasterMaskInput> active_raster_masks = {}) -> FrameResultContentKeys;
+    const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document)
+    -> FrameResultContentKeys;
 
 }  // namespace alcedo

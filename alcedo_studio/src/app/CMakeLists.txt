@@ -258,14 +258,12 @@ def_library(ModelDownloadService
 def_library(ProjectService
     SOURCES
         "${ALCEDO_APP_ROOT}/project_service.cpp"
-        "${ALCEDO_APP_ROOT}/project_mask_cache_settings.cpp"
-        "${ALCEDO_APP_ROOT}/project_mask_cache_service.cpp"
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
     PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
                 AiSidecarRuntimeService ModelDownloadService
-                StrConv JSON xxHash stduuid EditMaskStore
+                StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS
         AppDiagnostics
         Qt6::Core
@@ -282,7 +280,7 @@ def_library(AdjustmentTransferService
     SOURCES
         "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
         "${ALCEDO_APP_ROOT}/document_transfer.cpp"
-    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskStore EditHistory
+    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore EditHistory
                 PipelineHistoryApplier
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
@@ -433,12 +431,10 @@ def_library(PipelineHistoryApplier
     SOURCES
         "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"
         "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
-        "${ALCEDO_APP_ROOT}/mask_asset_reachability.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/mask_asset_reachability.hpp"
     PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline EditHistory EditGraph
-                EditMaskStore
+                EditMaskCore
 )
 
 target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
@@ -446,9 +442,7 @@ target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorA
 def_library(EditorMaskCreationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_mask_creation_controller.cpp"
-        "${ALCEDO_APP_ROOT}/brush_mask_input.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_creation_controller.hpp"
-        "${ALCEDO_INCLUDE_ROOT}/app/brush_mask_input.hpp"
     PUBLIC_DEPS EditGraph PipelineHistoryApplier
 )
 

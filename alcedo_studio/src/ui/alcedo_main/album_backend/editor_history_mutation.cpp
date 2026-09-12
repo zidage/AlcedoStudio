@@ -25,7 +25,6 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -150,14 +149,8 @@ auto MirrorTargetToExecutor(CPUPipelineExecutor& executor, const PipelineDocumen
   return RemirrorEditorParameterToExecutor(executor, document, target, error);
 }
 
-auto ApplyContext(MaskStore* mask_store) -> PipelineHistoryApplyContext {
-  PipelineHistoryApplyContext context;
-  context.mask_store = mask_store;
-  return context;
-}
-
 auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& commit, bool backward,
-                               MaskStore* mask_store, std::string* error) -> bool {
+                               std::string* error) -> bool {
   const auto use_after        = !backward;
   auto       restore_document = [&]() -> bool {
     if (IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
@@ -166,7 +159,7 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
         const auto direction =
             backward ? PipelineEditApplyDirection::Forward : PipelineEditApplyDirection::Inverse;
         return ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch, direction, error,
-                                      ApplyContext(mask_store));
+                                      {});
       } catch (const std::exception& ex) {
         if (error) *error = ex.what();
         return false;
@@ -186,7 +179,7 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
       const auto direction =
           backward ? PipelineEditApplyDirection::Inverse : PipelineEditApplyDirection::Forward;
       if (!ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch, direction, error,
-                                  ApplyContext(mask_store))) {
+                                  {})) {
         return false;
       }
     } catch (const std::exception& ex) {
@@ -217,9 +210,8 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
 }
 
 auto InverseApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& commit,
-                                      bool original_backward, MaskStore* mask_store,
-                                      std::string* error) -> bool {
-  return ApplyCommitToLiveDocument(state, commit, !original_backward, mask_store, error);
+                                      bool original_backward, std::string* error) -> bool {
+  return ApplyCommitToLiveDocument(state, commit, !original_backward, error);
 }
 
 /// WAL-first same-session head move. Hold the render lock across document reads,
@@ -227,7 +219,6 @@ auto InverseApplyCommitToLiveDocument(HistoryWorkingState& state, const EditComm
 auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
                                          EditorHistoryState&            history_state,
                                          const MiniGitPreparedHeadMove& prepared,
-                                         MaskStore*                     mask_store,
                                          std::string*                   error) -> bool {
   if (!state.pipeline_guard->pipeline_ || !state.pipeline_guard->document_) {
     if (error) *error = "Live pipeline document is unavailable";
@@ -242,10 +233,10 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
   std::vector<EditCommit> applied;
   applied.reserve(prepared.traversed_commits.size());
   for (const auto& commit : prepared.traversed_commits) {
-    if (!ApplyCommitToLiveDocument(state, commit, prepared.backward, mask_store, error)) {
+    if (!ApplyCommitToLiveDocument(state, commit, prepared.backward, error)) {
       std::string restore_error;
       for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
-        if (!InverseApplyCommitToLiveDocument(state, *it, prepared.backward, mask_store,
+        if (!InverseApplyCommitToLiveDocument(state, *it, prepared.backward,
                                               &restore_error) &&
             error) {
           *error += "; document restoration failed: " + restore_error;
@@ -269,7 +260,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
   if (!RefreshCommittedSnapshotFromLive(state, error, true)) {
     std::string restore_error;
     for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
-      (void)InverseApplyCommitToLiveDocument(state, *it, prepared.backward, mask_store,
+      (void)InverseApplyCommitToLiveDocument(state, *it, prepared.backward,
                                              &restore_error);
     }
     std::string abandon_error;
@@ -287,11 +278,11 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
 
 auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& history_state,
                               const PipelineEditBatch& batch, bool document_already_at_after,
-                              MaskStore* mask_store, std::string* error) -> bool {
+                              std::string* error) -> bool {
   if (!document_already_at_after) {
     if (!ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                 PipelineEditApplyDirection::Forward, error,
-                                ApplyContext(mask_store))) {
+                                {})) {
       return false;
     }
   }
@@ -302,7 +293,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!document_already_at_after) {
       (void)ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                    PipelineEditApplyDirection::Inverse, error,
-                                   ApplyContext(mask_store));
+                                   {});
     }
     return false;
   }
@@ -312,7 +303,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!document_already_at_after) {
       (void)ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                    PipelineEditApplyDirection::Inverse, error,
-                                   ApplyContext(mask_store));
+                                   {});
     }
     return false;
   }
@@ -323,7 +314,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!document_already_at_after) {
       (void)ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                    PipelineEditApplyDirection::Inverse, error,
-                                   ApplyContext(mask_store));
+                                   {});
     }
     return false;
   }
@@ -335,7 +326,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!document_already_at_after) {
       (void)ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                    PipelineEditApplyDirection::Inverse, error,
-                                   ApplyContext(mask_store));
+                                   {});
     }
     return false;
   }
@@ -345,7 +336,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!document_already_at_after) {
       (void)ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                    PipelineEditApplyDirection::Inverse, error,
-                                   ApplyContext(mask_store));
+                                   {});
     }
     return false;
   }
@@ -549,7 +540,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     (void)restore_before();
     return false;
   }
-  if (!PublishAppliedTypedBatch(*state, state_, batch, true, state->mask_store, error)) {
+  if (!PublishAppliedTypedBatch(*state, state_, batch, true, error)) {
     (void)restore_before();
     return false;
   }
@@ -578,7 +569,7 @@ auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
     return false;
   }
   if (prepared.is_noop) return true;
-  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, state->mask_store, error);
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, error);
 }
 
 auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
@@ -600,7 +591,7 @@ auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
     return false;
   }
   if (prepared.is_noop) return true;
-  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, state->mask_store, error);
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, error);
 }
 
 auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
@@ -623,7 +614,7 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
     return false;
   }
   if (prepared.is_noop) return true;
-  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, state->mask_store, error);
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, error);
 }
 
 auto EditorHistoryMutation::CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
@@ -640,7 +631,7 @@ auto EditorHistoryMutation::CommitPipelineEditBatch(const alcedo::EditorHistoryG
     return false;
   }
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
@@ -659,7 +650,7 @@ auto EditorHistoryMutation::EditNodeGraph(const alcedo::EditorHistoryGuardHandle
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   try {
     return PublishAppliedTypedBatch(*state, state_, MakeEditNodeGraphBatch(std::move(change)), false,
-                                    state->mask_store, error);
+                                    error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
@@ -688,7 +679,7 @@ auto EditorHistoryMutation::RenameColorGrade(const alcedo::EditorHistoryGuardHan
   }
   auto batch = MakeRenameColorGradeBatch(node_id, std::string{grade->DisplayName()},
                                          std::move(display_name));
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
@@ -713,7 +704,7 @@ auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuar
   }
   auto batch = MakeSetNodeEnabledBatch(node_id, PipelineEditNodeKind::ColorGrade, grade->Enabled(),
                                        enabled);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,
@@ -737,7 +728,7 @@ auto EditorHistoryMutation::SetColorGradeMix(const alcedo::EditorHistoryGuardHan
     return false;
   }
   auto batch = MakeSetNodeMixBatch(node_id, grade->Mix(), mix);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::AddMask(const alcedo::EditorHistoryGuardHandle& guard,
@@ -757,7 +748,7 @@ auto EditorHistoryMutation::AddMask(const alcedo::EditorHistoryGuardHandle& guar
   const auto mask_id = mask.id;
   auto       json    = MaskModelToJson(mask);
   auto batch = MakeAddMaskBatch(node_id, mask_id, std::move(json), display_index);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::RemoveMask(const alcedo::EditorHistoryGuardHandle& guard,
@@ -792,7 +783,7 @@ auto EditorHistoryMutation::RemoveMask(const alcedo::EditorHistoryGuardHandle& g
     return false;
   }
   auto batch = MakeRemoveMaskBatch(node_id, mask_id, MaskModelToJson(grade->MaskAt(*index)), *index);
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::ReplaceMaskSource(const alcedo::EditorHistoryGuardHandle& guard,
@@ -825,42 +816,7 @@ auto EditorHistoryMutation::ReplaceMaskSource(const alcedo::EditorHistoryGuardHa
   auto before = MaskModelToJson(*mask).at("source");
   auto batch  = MakeReplaceMaskSourceBatch(node_id, mask_id, std::move(before),
                                           std::move(after_source));
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
-}
-
-auto EditorHistoryMutation::ReplaceMaskAsset(const alcedo::EditorHistoryGuardHandle& guard,
-                                             const alcedo::NodeId& node_id,
-                                             const alcedo::MaskId& mask_id,
-                                             nlohmann::json after_source,
-                                             alcedo::MaskStore& mask_store, std::string* error)
-    -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
-    if (error) *error = "Editor history graph is unavailable";
-    return false;
-  }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock   = LockLivePipeline(*state->pipeline_guard->pipeline_);
-  state->mask_store  = &mask_store;
-  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
-  if (grade == nullptr) {
-    if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
-    return false;
-  }
-  const auto* mask = grade->FindMask(mask_id);
-  if (mask == nullptr) {
-    if (error) *error = "Mask is missing: " + std::string{mask_id.Value()};
-    return false;
-  }
-  auto before = MaskModelToJson(*mask).at("source");
-  auto batch  = MakeReplaceMaskAssetBatch(node_id, mask_id, std::move(before),
-                                         std::move(after_source));
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::SetMaskField(const alcedo::EditorHistoryGuardHandle& guard,
@@ -901,7 +857,7 @@ auto EditorHistoryMutation::SetMaskField(const alcedo::EditorHistoryGuardHandle&
   }
   auto batch = MakeSetMaskFieldBatch(node_id, mask_id, std::move(field_key), std::move(before),
                                      std::move(after_value));
-  return PublishAppliedTypedBatch(*state, state_, batch, false, state->mask_store, error);
+  return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
 auto EditorHistoryMutation::DiscardUnmaterializedChanges(
@@ -939,7 +895,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
             prepared.ready ? "Materialized history head could not be restored" : prepared.error;
       return false;
     }
-    if (!ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, state->mask_store, error))
+    if (!ApplyPreparedHeadMoveOnLivePipeline(*state, state_, prepared, error))
       return false;
   }
 
@@ -1030,8 +986,8 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   try {
     if (auto pipeline_service = state_.PipelineMapper()) {
       std::string checkout_error;
-      if (!pipeline_service->CheckoutVersion(state->pipeline_guard, version_id, &checkout_error,
-                                             state->mask_store)) {
+      if (!pipeline_service->CheckoutVersion(state->pipeline_guard, version_id,
+                                             &checkout_error)) {
         if (error) *error = checkout_error;
         return false;
       }
@@ -1129,7 +1085,7 @@ auto EditorHistoryMutation::WithLockedLiveDocument(
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   alcedo::IEditorHistoryPort::LockedMaskSettle settle =
       [this, state](const alcedo::PipelineEditBatch& batch, std::string* settle_error) {
-        return PublishAppliedTypedBatch(*state, state_, batch, true, state->mask_store,
+        return PublishAppliedTypedBatch(*state, state_, batch, true,
                                         settle_error);
       };
   return op(*state->pipeline_guard->document_, *state->history, settle, error);

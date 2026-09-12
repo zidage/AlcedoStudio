@@ -17,7 +17,9 @@
 #include "edit/geometry/types.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/i_node_model.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_mask_commands.hpp"
+#endif
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
@@ -160,6 +162,7 @@ class ColorGradeNodeModel final : public INodeModel {
    */
   void MoveMaskForDisplay(const MaskId& mask_id, std::size_t index);
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   /**
    * @brief Append one canonical stroke to an existing Brush Mask.
    *
@@ -208,6 +211,7 @@ class ColorGradeNodeModel final : public INodeModel {
    * @throws std::runtime_error when @p mask_id is missing or the Mask is not a Brush.
    */
   [[nodiscard]] auto BrushPlacementTranslation(const MaskId& mask_id) const -> Vector2;
+#endif
 
   [[nodiscard]] auto MaskCount() const -> std::size_t { return masks_.size(); }
   [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return masks_; }
@@ -218,8 +222,10 @@ class ColorGradeNodeModel final : public INodeModel {
 
  private:
   void TouchMask(const MaskId& mask_id);
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   auto RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
                         std::uint64_t expected_revision) -> MaskModel&;
+#endif
 
   NodeId id_;
   std::string display_name_ = "Color Grade";

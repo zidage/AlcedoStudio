@@ -17,8 +17,6 @@
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/mask/mask_asset.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -254,21 +252,18 @@ TEST_F(OpenClMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   multi_grade_test::GradeAdjustment<ContrastModel>(document, grade_b->Id(), type_ids::Contrast())
       .SetValue(100.0f);
 
-  const auto root = std::filesystem::path{"build/tmp/nm2/opencl_multi_grade_mask"} /
-                    ::testing::UnitTest::GetInstance()->current_test_info()->name();
-  MaskStore store(root);
-  auto make_fill = [&](std::uint8_t fill, const char* grade_id, const char* mask_id) {
-    MaskAsset asset;
-    asset.descriptor.extent           = {16, 12};
-    asset.descriptor.reference_bounds = {};
-    asset.pixels.assign(16U * 12U, fill);
-    asset.key                         = store.Put(asset.descriptor, asset.pixels);
+  auto make_fill = [&](float fill, const char* grade_id, const char* mask_id) {
+    LinearGradientMaskSource flat;
+    flat.start_value         = fill;
+    flat.end_value           = fill;
+    flat.transition_distance = 1.0f;
     auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{grade_id}));
     ASSERT_NE(grade, nullptr);
-    grade_mask_test::AddMask(*grade, grade_mask_test::MakeBrushMask(MaskId{mask_id}, asset));
+    grade_mask_test::AddMask(*grade,
+                             grade_mask_test::MakeLinearGradientMask(MaskId{mask_id}, flat));
   };
-  make_fill(255, "grade.primary", "mask.a");
-  make_fill(128, "grade.b", "mask.b");
+  make_fill(1.0f, "grade.primary", "mask.a");
+  make_fill(128.0f / 255.0f, "grade.b", "mask.b");
   document.MarkTopologyDirty();
 
   const auto plan = Compile(document);
@@ -277,7 +272,7 @@ TEST_F(OpenClMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   EXPECT_EQ(plan.grade_nodes[0].mask_stack->sources.front().mask_id, MaskId{"mask.a"});
   EXPECT_EQ(plan.grade_nodes[1].mask_stack->sources.front().mask_id, MaskId{"mask.b"});
   Device().ResetPassStats();
-  const auto output = Device().Execute(plan, prepared_, document, &store);
+  const auto output = Device().Execute(plan, prepared_, document);
   (void)output;
   Device().WaitIdle();
   EXPECT_EQ(Device().PassStats().mask_execute, 2U);

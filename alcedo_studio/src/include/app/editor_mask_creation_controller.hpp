@@ -10,7 +10,6 @@
 #include <string>
 #include <string_view>
 
-#include "app/brush_mask_input.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -18,7 +17,6 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/analytic_mask_edit.hpp"
-#include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "json.hpp"
@@ -33,22 +31,8 @@ enum class EditorMaskCreationState : std::uint8_t {
   Selected = 1,
   Creating = 2,
   Editing  = 3,
-  Painting = 4,
   Settling = 5,
   Failed   = 6,
-};
-
-/**
- * @brief Explicit Brush interaction. Paint and erase append strokes; Move does not.
- *
- * Drawer selection leaves this Idle so a handle drag cannot paint. The header Brush
- * action arms Paint. Erase and Move are set through @ref SetBrushTool.
- */
-enum class EditorBrushTool : std::uint8_t {
-  Idle  = 0,
-  Paint = 1,
-  Erase = 2,
-  Move  = 3,
 };
 
 /**
@@ -96,8 +80,8 @@ struct EditorMaskCreationResult {
  * @brief Queued Mask-creation operation for the session owner thread.
  *
  * GUI mapping produces these; the serial consumer applies them under the live
- * pipeline lock. Latest analytic or Brush-move Append samples with the same
- * pointer identity coalesce. Brush paint/erase Append sets @p ordered_append.
+ * pipeline lock. Latest Append samples with the same pointer identity
+ * coalesce.
  */
 enum class EditorMaskCreationCommandKind : std::uint8_t {
   BeginCreation = 0,
@@ -110,21 +94,16 @@ enum class EditorMaskCreationCommandKind : std::uint8_t {
   FinishMode,
   CancelMode,
   RemoveMask,
-  SetBrushTool,
-  SetBrushStrokeParameters,
   BeginMaskField,
   SetMaskField,
 };
 
-/// Mask value keys used by BeginMaskField / SetMaskField commands. The first
-/// four are Mask fields committed through SetMaskField; `brush.feather`
-/// rewrites the Brush source feather (reference pixels) and settles through
-/// ReplaceMaskSource.
+/// Mask value keys used by BeginMaskField / SetMaskField commands, committed
+/// through SetMaskField.
 inline constexpr std::string_view kMaskFieldEnabled      = "enabled";
 inline constexpr std::string_view kMaskFieldInvert       = "invert";
 inline constexpr std::string_view kMaskFieldOpacity      = "opacity";
 inline constexpr std::string_view kMaskFieldDisplayName  = "display_name";
-inline constexpr std::string_view kMaskFieldBrushFeather = "brush.feather";
 
 struct EditorMaskCreationCommand {
   EditorMaskCreationCommandKind kind        = EditorMaskCreationCommandKind::BeginCreation;
@@ -134,36 +113,24 @@ struct EditorMaskCreationCommand {
   MaskCreationSample            sample{};
   MaskPointerIdentity           identity{};
   AnalyticMaskHandle            handle         = AnalyticMaskHandle::None;
-  EditorBrushTool               brush_tool     = EditorBrushTool::Idle;
-  float                         brush_radius   = 0.0f;
-  float                         brush_strength = 1.0f;
-  float                         brush_hardness = 1.0f;
-  /// BeginInput only: source feather for a newly created Brush, in reference
-  /// pixels. Existing Brushes keep their stored feather; zero leaves the
-  /// source default unchanged.
-  float                         default_feather_reference_px = 0.0f;
   bool                          ordered_append = false;
   /**
    * @brief Mask-level value edit target.
    *
-   * `enabled`, `invert`, `opacity`, and `display_name` settle as SetMaskField;
-   * `brush.feather` rewrites the Brush source and settles as ReplaceMaskSource.
+   * `enabled`, `invert`, `opacity`, and `display_name` settle as SetMaskField.
    */
   std::string                   field_key;
   nlohmann::json                field_value;
 };
 
 /**
- * @brief Application owner of Mask creation, Brush strokes, and existing-mask movement.
+ * @brief Application owner of Mask creation and existing-mask movement.
  *
- * Owns mode, active handle, Brush tool settings, and captured identities. Does
- * not own the live @ref PipelineDocument, Grade selection, or Mix raster.
- * Provisional Grade fields are written before release so Interactive Mix can
- * update. First Brush release publishes AddMask; later strokes publish
- * AppendBrushStroke; Brush moves publish SetBrushTranslation. Analytic settle
- * stays AddMask or ReplaceMaskSource. Escape restores the live Grade and
- * publishes no commit. New Brush work never calls MaskStore::Put or
- * ReplaceMaskAsset.
+ * Owns mode, active handle, and captured identities. Does not own the live
+ * @ref PipelineDocument, Grade selection, or Mix raster. Provisional Grade
+ * fields are written before release so Interactive Mix can update. Analytic
+ * settle stays AddMask or ReplaceMaskSource. Escape restores the live Grade
+ * and publishes no commit.
  *
  * Thread: document-owning thread. Does not take the pipeline lock, perform
  * cache I/O, or build QSG geometry.
@@ -203,40 +170,19 @@ class EditorMaskCreationController {
   void DetachClosedDocument();
 
   /**
-   * @brief Arm Radial, Linear, or Brush creation on @p grade_id without a commit.
+   * @brief Arm Radial or Linear creation on @p grade_id without a commit.
    *
-   * Brush with no existing Mask stays Creating until the first valid stroke.
-   * One existing Brush is resumed. Several existing Brushes require @p resume_mask
-   * to name one of them; the document is not flattened. An open operation must
-   * be finished or cancelled first.
+   * An open operation must be finished or cancelled first.
    */
-  auto BeginCreation(MaskSourceKind kind, const NodeId& grade_id, EditorSessionIdentity session,
-                     MaskId resume_mask = {}) -> EditorMaskCreationResult;
-
-  /**
-   * @brief Select an existing Brush, Radial, or Linear Mask. Load-only; no Mix or commit.
-   *
-   * Brush selection does not arm paint or movement. Analytic kinds load handles
-   * for later movement.
-   */
-  auto SelectMask(const NodeId& grade_id, const MaskId& mask_id, EditorSessionIdentity session)
+  auto BeginCreation(MaskSourceKind kind, const NodeId& grade_id, EditorSessionIdentity session)
       -> EditorMaskCreationResult;
 
   /**
-   * @brief Arm Paint, Erase, or Move on the selected or creating Brush.
+   * @brief Select an existing Radial or Linear Mask. Load-only; no Mix or commit.
    *
-   * Rejected while a stroke or move is open. Move requires an existing Brush.
+   * Selection loads handles for later movement.
    */
-  auto SetBrushTool(EditorBrushTool tool) -> EditorMaskCreationResult;
-
-  /**
-   * @brief Size/strength/hardness for subsequent dabs, including an open stroke.
-   *
-   * Mid-stroke changes emit a parameter-boundary sample. Mask opacity is not
-   * Brush strength. Radius is in reference pixels; strength and hardness stay
-   * in `[0, 1]`.
-   */
-  auto SetBrushStrokeParameters(float radius, float strength, float hardness)
+  auto SelectMask(const NodeId& grade_id, const MaskId& mask_id, EditorSessionIdentity session)
       -> EditorMaskCreationResult;
 
   /**
@@ -250,10 +196,9 @@ class EditorMaskCreationController {
   /**
    * @brief Open a Mask value edit on the selected Mask.
    *
-   * Valid keys: `enabled`, `invert`, `opacity`, `display_name`, and
-   * `brush.feather` (Brush source feather, reference pixels). The live value is
-   * captured for Finish/Cancel. Requires a selected existing Mask with no open
-   * operation.
+   * Valid keys: `enabled`, `invert`, `opacity`, and `display_name`. The live
+   * value is captured for Finish/Cancel. Requires a selected existing Mask with
+   * no open operation.
    */
   auto BeginMaskFieldEdit(std::string field_key) -> EditorMaskCreationResult;
 
@@ -273,12 +218,9 @@ class EditorMaskCreationController {
    * Press outside the photograph is rejected. Degenerate zero-area input stays
    * transient until a later valid sample. @p expected_source must equal the
    * armed kind so a stale queued dispatch cannot drive the wrong Mask type.
-   * @p default_feather_reference_px is applied only when a new Brush Mask is
-   * created by this stroke.
    */
   auto BeginMaskInput(MaskCreationSample sample, MaskPointerIdentity identity,
-                      MaskSourceKind expected_source, float default_feather_reference_px = 0.0f)
-      -> EditorMaskCreationResult;
+                      MaskSourceKind expected_source) -> EditorMaskCreationResult;
 
   /**
    * @brief Start an existing-mask handle drag. Shape fields stay fixed for center/origin.
@@ -330,9 +272,6 @@ class EditorMaskCreationController {
    */
   [[nodiscard]] auto HasOpenOperation() const -> bool { return open_; }
   [[nodiscard]] auto OverlayIsCreating() const -> bool;
-  [[nodiscard]] auto brush_tool() const -> EditorBrushTool { return brush_tool_; }
-  [[nodiscard]] auto brush_radius() const -> float { return brush_input_.radius(); }
-  [[nodiscard]] auto brush_strength() const -> float { return brush_input_.strength(); }
   /**
    * @brief Live or draft source for overlay layout. Empty when Inactive/hidden.
    */
@@ -360,19 +299,8 @@ class EditorMaskCreationController {
   void RequestInteractive(EditorMaskCreationResult& result);
   auto UpdateCreation(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
-  auto BeginBrushStroke(const MaskCreationSample& sample, float default_feather_reference_px)
-      -> EditorMaskCreationResult;
-  auto UpdateBrushPaint(const MaskCreationSample& sample) -> EditorMaskCreationResult;
-  auto UpdateBrushMove(const MaskCreationSample& sample) -> EditorMaskCreationResult;
-  auto FinishBrushStroke() -> EditorMaskCreationResult;
-  auto PublishAppendStroke(BrushStroke stroke) -> EditorMaskCreationResult;
-  auto PublishSetTranslation() -> EditorMaskCreationResult;
   auto PublishMaskFieldEdit() -> EditorMaskCreationResult;
   auto ApplyLiveMaskField(const std::string& field_key, const nlohmann::json& value) -> bool;
-  auto ApplyLiveBrushDraft() -> bool;
-  [[nodiscard]] auto     AllocateStrokeId() const -> StrokeId;
-  [[nodiscard]] auto     ComposeDraftBrush() const -> BrushMaskSource;
-  [[nodiscard]] auto     BrushStrokeModeFromTool() const -> BrushStrokeMode;
 
   PipelineDocument*      document_ = nullptr;
   MiniGitWorkingHistory* history_  = nullptr;
@@ -395,16 +323,8 @@ class EditorMaskCreationController {
   bool                      terminated_    = false;
   std::optional<MaskSource> draft_source_;
   MaskId                    last_removed_mask_id_;
-  EditorBrushTool           brush_tool_ = EditorBrushTool::Idle;
-  BrushMaskInput            brush_input_;
-  BrushMaskSource           committed_brush_{};
-  Vector2                   press_reference_pixels_{};
-  Vector2                   before_translation_{};
   std::string               field_edit_key_;
   nlohmann::json            before_field_value_;
-  /// Draft-sample count already republished into the live Brush source; appends
-  /// that emit no new canonical dab skip the live-source republish.
-  std::size_t               published_draft_samples_ = 0;
 };
 
 }  // namespace alcedo
