@@ -659,7 +659,24 @@ bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const
 }
 
 void EditorInteractionController::setDisplayedMaskGeometry(const ResolvedRenderGeometry& geometry) {
+  const auto& current = displayed_mask_geometry_;
+  const bool  same =
+      current.full_reference_extent == geometry.full_reference_extent &&
+      current.render_extent == geometry.render_extent &&
+      current.edit_extent == geometry.edit_extent &&
+      current.decoded_extent == geometry.decoded_extent &&
+      MatrixApproxEqual(current.render_to_reference, geometry.render_to_reference) &&
+      MatrixApproxEqual(current.reference_to_render, geometry.reference_to_render) &&
+      MatrixApproxEqual(current.reference_to_edit, geometry.reference_to_edit) &&
+      MatrixApproxEqual(current.edit_to_render, geometry.edit_to_render) &&
+      MatrixApproxEqual(current.decoded_to_reference, geometry.decoded_to_reference);
+  if (same) {
+    return;
+  }
   displayed_mask_geometry_ = geometry;
+  // The Mask mapping basis changed with the presented frame; overlays holding
+  // mapped handles must rebuild even before the next pointer event.
+  emit overlayGeometryChanged();
 }
 
 auto EditorInteractionController::maskEditViewMapping() const -> MaskEditViewMapping {

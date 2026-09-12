@@ -5,10 +5,12 @@
 #include "ui/edit_viewer/mask_overlay_layout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <utility>
 
+#include "edit/mask/brush_stroke.hpp"
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
 
@@ -490,6 +492,65 @@ auto MakeBrushExistingOverlayDisplay(const MaskEditViewMapping& mapping,
   return display;
 }
 
+auto BrushPaintSupportReferenceBounds(const BrushMaskSource& source) -> QRectF {
+  QRectF bounds;
+  bool   any = false;
+  for (const auto& stroke : source.strokes) {
+    if (stroke.mode != BrushStrokeMode::Paint || stroke.samples == nullptr) {
+      continue;
+    }
+    for (const auto& sample : *stroke.samples) {
+      if (!(sample.strength > 0.0f) || !std::isfinite(sample.local_x) ||
+          !std::isfinite(sample.local_y) || !(sample.radius > 0.0f)) {
+        continue;
+      }
+      const qreal cx = static_cast<qreal>(sample.local_x + source.placement_translation.x);
+      const qreal cy = static_cast<qreal>(sample.local_y + source.placement_translation.y);
+      const qreal r  = static_cast<qreal>(sample.radius);
+      const QRectF dab(cx - r, cy - r, 2.0 * r, 2.0 * r);
+      bounds = any ? bounds.united(dab) : dab;
+      any    = true;
+    }
+  }
+  return bounds;
+}
+
+auto MakeBrushMoveOverlayDisplay(const MaskEditViewMapping& mapping, const BrushMaskSource& source,
+                                 const QRectF& clip) -> MaskOverlayDisplay {
+  auto bounds = BrushPaintSupportReferenceBounds(source);
+  if (bounds.isEmpty()) {
+    // No painted coverage: keep the single Move anchor at the placement origin.
+    return MakeBrushExistingOverlayDisplay(mapping, source.placement_translation, clip);
+  }
+  const qreal feather = static_cast<qreal>(std::max(0.0f, source.feather_radius));
+  bounds              = bounds.adjusted(-feather, -feather, feather, feather);
+
+  std::array<QPointF, 4> corners;
+  const Vector2          refs[4] = {
+      {static_cast<float>(bounds.left()), static_cast<float>(bounds.top())},
+      {static_cast<float>(bounds.right()), static_cast<float>(bounds.top())},
+      {static_cast<float>(bounds.right()), static_cast<float>(bounds.bottom())},
+      {static_cast<float>(bounds.left()), static_cast<float>(bounds.bottom())},
+  };
+  for (std::size_t i = 0; i < 4; ++i) {
+    const auto item = MaskEditGeometry::MapReferenceToItem(mapping, refs[i]);
+    if (!item) {
+      return MakeBrushExistingOverlayDisplay(mapping, source.placement_translation, clip);
+    }
+    corners[i] = *item;
+  }
+  MaskOverlayDisplay display;
+  display.mode                = MaskOverlayMode::Existing;
+  display.source_kind         = MaskOverlaySourceKind::Brush;
+  display.clip_rect           = EffectiveClip(mapping, clip);
+  display.move_frame_visible  = true;
+  for (const auto& corner : corners) {
+    display.handles.push_back(MaskOverlayHandle{MaskOverlayHandleId::BrushMove, corner,
+                                                MaskOverlayHandleShape::CornerTick});
+  }
+  return display;
+}
+
 auto MakeRadialExistingOverlayDisplay(const MaskEditViewMapping& mapping,
                                       const RadialMaskSource& source, const MaskOverlayStyle& style,
                                       const QRectF& clip) -> MaskOverlayDisplay {
@@ -530,8 +591,8 @@ auto MakeLinearExistingOverlayDisplay(const MaskEditViewMapping&      mapping,
 }
 
 auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path, QPointF cursor_item,
-                                     float cursor_radius_logical_px, const QRectF& clip)
-    -> MaskOverlayDisplay {
+                                     float cursor_radius_logical_px, const QRectF& clip,
+                                     bool erase_cursor) -> MaskOverlayDisplay {
   MaskOverlayDisplay display;
   display.mode           = MaskOverlayMode::Creating;
   display.source_kind    = MaskOverlaySourceKind::Brush;
@@ -541,6 +602,7 @@ auto MakeBrushCreatingOverlayDisplay(const std::vector<QPointF>& item_path, QPoi
                            cursor_radius_logical_px > 0.0f;
   display.cursor_center            = cursor_item;
   display.cursor_radius_logical_px = cursor_radius_logical_px;
+  display.cursor_dashed            = erase_cursor;
   return display;
 }
 
@@ -616,6 +678,44 @@ auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
   }
   if (hit != MaskOverlayHandleId::None) {
     return hit;
+  }
+  if (display.move_frame_visible) {
+    // Brush Move frame: the interior and the frame edges all begin a move.
+    // The mapped quad stays convex (an AABB under an affine map), so a
+    // consistent winding sign marks the interior.
+    std::vector<QPointF> corners;
+    for (const auto& handle : display.handles) {
+      if (handle.shape == MaskOverlayHandleShape::CornerTick) {
+        corners.push_back(handle.item);
+      }
+    }
+    if (corners.size() >= 3) {
+      bool inside     = true;
+      int  first_sign = 0;
+      for (std::size_t i = 0; i < corners.size() && inside; ++i) {
+        const QPointF& a     = corners[i];
+        const QPointF& b     = corners[(i + 1) % corners.size()];
+        const double   cross = (b.x() - a.x()) * (item.y() - a.y()) -
+                             (b.y() - a.y()) * (item.x() - a.x());
+        if (std::abs(cross) < 1.0e-12) {
+          continue;
+        }
+        const int sign = cross > 0.0 ? 1 : -1;
+        if (first_sign == 0) {
+          first_sign = sign;
+        } else if (sign != first_sign) {
+          inside = false;
+        }
+      }
+      bool near_edge = false;
+      for (std::size_t i = 0; i < corners.size() && !near_edge; ++i) {
+        near_edge = DistanceToSegment(item, corners[i], corners[(i + 1) % corners.size()]) <=
+                    hit_radius_logical_px;
+      }
+      if (inside || near_edge) {
+        return MaskOverlayHandleId::BrushMove;
+      }
+    }
   }
   for (const auto& guide : display.selected_guides) {
     if (guide.id == MaskOverlayHandleId::None) {

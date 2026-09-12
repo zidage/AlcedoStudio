@@ -4,6 +4,7 @@
 
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -183,9 +184,101 @@ auto MaskEditGeometry::Identity(const MaskEditViewMapping& mapping) -> MaskEditM
   return identity;
 }
 
+namespace {
+
+[[nodiscard]] auto AffineFromIdentityComponents(const float components[6]) -> Matrix3x3 {
+  Matrix3x3 matrix = Matrix3x3::Identity();
+  for (int i = 0; i < 6; ++i) {
+    matrix.m[i] = components[i];
+  }
+  return matrix;
+}
+
+[[nodiscard]] auto ViewMappingFromIdentity(const MaskEditMappingIdentity& identity)
+    -> MaskEditViewMapping {
+  MaskEditViewMapping mapping;
+  mapping.widget.widget_width        = identity.widget_width;
+  mapping.widget.widget_height       = identity.widget_height;
+  mapping.widget.device_pixel_ratio  = identity.device_pixel_ratio;
+  mapping.photograph.image_width     = identity.photograph_width;
+  mapping.photograph.image_height    = identity.photograph_height;
+  mapping.zoom                       = identity.zoom;
+  mapping.pan                        = QVector2D(identity.pan_x, identity.pan_y);
+  mapping.presentation               = identity.presentation;
+  mapping.displayed_roi              = FrameRoiRect{identity.roi_x, identity.roi_y, identity.roi_width,
+                                       identity.roi_height};
+  mapping.geometry.full_reference_extent = {identity.full_reference_width,
+                                            identity.full_reference_height};
+  mapping.geometry.render_extent     = {identity.render_width, identity.render_height};
+  mapping.geometry.edit_extent       = mapping.geometry.render_extent;
+  mapping.geometry.decoded_extent    = mapping.geometry.render_extent;
+  mapping.geometry.render_to_reference = AffineFromIdentityComponents(identity.render_to_reference);
+  try {
+    mapping.geometry.reference_to_render = InvertAffine(mapping.geometry.render_to_reference);
+  } catch (const std::runtime_error&) {
+    mapping.geometry.reference_to_render = {};
+  }
+  return mapping;
+}
+
+[[nodiscard]] auto ItemToReferenceShiftLogicalPx(const MaskEditViewMapping& mapping,
+                                                 Vector2                    reference_a,
+                                                 Vector2                    reference_b) -> float {
+  const auto item_a = MaskEditGeometry::MapReferenceToItem(mapping, reference_a);
+  const auto item_b = MaskEditGeometry::MapReferenceToItem(mapping, reference_b);
+  if (item_a.has_value() && item_b.has_value()) {
+    return static_cast<float>(
+        std::hypot(item_a->x() - item_b->x(), item_a->y() - item_b->y()));
+  }
+  return std::hypot(reference_a.x - reference_b.x, reference_a.y - reference_b.y);
+}
+
+}  // namespace
+
 auto MaskEditGeometry::MappingChanged(const MaskEditMappingIdentity& before,
                                       const MaskEditMappingIdentity& after) -> bool {
-  return before != after;
+  if (before.full_reference_width != after.full_reference_width ||
+      before.full_reference_height != after.full_reference_height ||
+      before.presentation != after.presentation || before.widget_width != after.widget_width ||
+      before.widget_height != after.widget_height ||
+      std::fabs(before.device_pixel_ratio - after.device_pixel_ratio) > 1.0e-4f) {
+    return true;
+  }
+  if (before == after) {
+    return false;
+  }
+
+  const auto mapping_before = ViewMappingFromIdentity(before);
+  const auto mapping_after  = ViewMappingFromIdentity(after);
+  if (!IsValid(mapping_before) || !IsValid(mapping_after)) {
+    return true;
+  }
+
+  const qreal width  = static_cast<qreal>(std::max(1, before.widget_width));
+  const qreal height = static_cast<qreal>(std::max(1, before.widget_height));
+  const QPointF probes[] = {
+      QPointF(width * 0.5, height * 0.5),
+      QPointF(1.0, 1.0),
+      QPointF(width - 1.0, height - 1.0),
+      QPointF(width * 0.25, height * 0.75),
+      QPointF(width * 0.80, height * 0.20),
+  };
+  for (const auto& item : probes) {
+    const auto sample_before = MapItemToReference(mapping_before, item, true);
+    const auto sample_after  = MapItemToReference(mapping_after, item, true);
+    if (!sample_before.has_value() && !sample_after.has_value()) {
+      continue;
+    }
+    if (!sample_before.has_value() || !sample_after.has_value()) {
+      return true;
+    }
+    if (ItemToReferenceShiftLogicalPx(mapping_before, sample_before->reference_pixels,
+                                      sample_after->reference_pixels) >
+        kMaskItemRoundTripLogicalPx) {
+      return true;
+    }
+  }
+  return false;
 }
 
 auto MaskEditGeometry::MapItemToReference(const MaskEditViewMapping& mapping, const QPointF& item,

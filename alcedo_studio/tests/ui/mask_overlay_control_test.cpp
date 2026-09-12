@@ -583,4 +583,105 @@ TEST(MaskOverlayControlTest, GradientControlAxisIsPerpendicularAfterNonSquareMap
   EXPECT_NEAR(dy, source.normal_y, 1.0e-5f);
 }
 
+TEST(MaskOverlayControlTest, MoveFrameEnclosesTranslatedPaintSupportWithFeather) {
+  const auto      mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  BrushMaskSource source;
+  source.placement_translation = {40.0f, 20.0f};
+  source.feather_radius        = 6.0f;
+  source.strokes.push_back(MakeBrushStroke(
+      StrokeId{"paint.a"}, BrushStrokeMode::Paint,
+      {{100.0f, 100.0f, 10.0f, 1.0f, 1.0f}, {140.0f, 110.0f, 10.0f, 0.8f, 0.5f}}));
+  // Zero-strength and Erase samples must not widen the conservative frame.
+  source.strokes.push_back(MakeBrushStroke(StrokeId{"faint"}, BrushStrokeMode::Paint,
+                                           {{300.0f, 200.0f, 30.0f, 0.0f, 1.0f}}));
+  source.strokes.push_back(MakeBrushStroke(StrokeId{"erase.b"}, BrushStrokeMode::Erase,
+                                           {{500.0f, 250.0f, 40.0f, 1.0f, 1.0f}}));
+
+  const auto display = MakeBrushMoveOverlayDisplay(mapping, source, {});
+  EXPECT_EQ(display.mode, MaskOverlayMode::Existing);
+  EXPECT_EQ(display.source_kind, MaskOverlaySourceKind::Brush);
+  EXPECT_TRUE(display.move_frame_visible);
+  ASSERT_EQ(display.handles.size(), 4u);
+  for (const auto& handle : display.handles) {
+    EXPECT_EQ(handle.id, MaskOverlayHandleId::BrushMove);
+    EXPECT_EQ(handle.shape, MaskOverlayHandleShape::CornerTick);
+  }
+
+  // Identity mapping: image and reference pixels coincide. Expected AABB in
+  // reference space: translated Paint supports expanded by feather.
+  const float left   = 100.0f + 40.0f - 10.0f - 6.0f;
+  const float right  = 140.0f + 40.0f + 10.0f + 6.0f;
+  const float top    = 100.0f + 20.0f - 10.0f - 6.0f;
+  const float bottom = 110.0f + 20.0f + 10.0f + 6.0f;
+  EXPECT_NEAR(display.handles[0].item.x(), left, 0.5);
+  EXPECT_NEAR(display.handles[0].item.y(), top, 0.5);
+  EXPECT_NEAR(display.handles[2].item.x(), right, 0.5);
+  EXPECT_NEAR(display.handles[2].item.y(), bottom, 0.5);
+
+  const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  EXPECT_FALSE(scene.edge_grips.empty());
+  EXPECT_FALSE(scene.selected_guides.empty());
+  EXPECT_EQ(scene.coverage_fill_vertex_count, 0);
+
+  // Interior and frame edges begin a move; a point outside the painted bounds
+  // does not.
+  const QPointF interior(0.5 * (left + right), 0.5 * (top + bottom));
+  EXPECT_EQ(HitTestMaskOverlayHandle(display, interior, kMaskHandleHitRadiusLogicalPx),
+            MaskOverlayHandleId::BrushMove);
+  const QPointF outside(left - 60.0, top - 60.0);
+  EXPECT_EQ(HitTestMaskOverlayHandle(display, outside, kMaskHandleHitRadiusLogicalPx),
+            MaskOverlayHandleId::None);
+}
+
+TEST(MaskOverlayControlTest, MoveFrameWithoutPaintedCoverageKeepsSingleMoveAnchor) {
+  const auto      mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  BrushMaskSource source;
+  source.placement_translation = {120.0f, 80.0f};
+  source.strokes.push_back(MakeBrushStroke(StrokeId{"erase"}, BrushStrokeMode::Erase,
+                                           {{120.0f, 80.0f, 10.0f, 1.0f, 1.0f}}));
+  const auto display = MakeBrushMoveOverlayDisplay(mapping, source, {});
+  EXPECT_EQ(display.mode, MaskOverlayMode::Existing);
+  EXPECT_FALSE(display.move_frame_visible);
+  ASSERT_EQ(display.handles.size(), 1u);
+  EXPECT_EQ(display.handles.front().id, MaskOverlayHandleId::BrushMove);
+  // Identity mapping: the anchor sits at the placement translation itself.
+  EXPECT_NEAR(display.handles.front().item.x(), 120.0, 0.5);
+  EXPECT_NEAR(display.handles.front().item.y(), 80.0, 0.5);
+}
+
+TEST(MaskOverlayControlTest, PaintAndEraseCursorsStayDistinctFromMoveFrame) {
+  const auto style  = DefaultMaskOverlayStyle();
+  const auto paint  = MakeBrushCreatingOverlayDisplay({QPointF(10, 10), QPointF(20, 20)},
+                                                      QPointF(30, 30), 12.0f, {}, false);
+  const auto erase  = MakeBrushCreatingOverlayDisplay({}, QPointF(30, 30), 12.0f, {}, true);
+  EXPECT_EQ(paint.mode, MaskOverlayMode::Creating);
+  EXPECT_EQ(paint.source_kind, MaskOverlaySourceKind::Brush);
+  EXPECT_TRUE(paint.cursor_visible);
+  EXPECT_FALSE(paint.cursor_dashed);
+  EXPECT_TRUE(erase.cursor_dashed);
+  EXPECT_TRUE(paint.handles.empty());
+  EXPECT_FALSE(paint.move_frame_visible);
+  EXPECT_EQ(paint.creation_path.size(), 2u);
+
+  const auto paint_scene = BuildMaskOverlaySceneGeometry(paint, style);
+  const auto erase_scene = BuildMaskOverlaySceneGeometry(erase, style);
+  EXPECT_FALSE(paint_scene.cursor.empty());
+  EXPECT_FALSE(erase_scene.cursor.empty());
+  // A dashed cursor must leave gaps: some ring samples carry no triangles.
+  int covered = 0;
+  int gapped  = 0;
+  constexpr float kTwoPi = 6.28318530718f;
+  for (int i = 0; i < 360; ++i) {
+    const float   t = (static_cast<float>(i) / 360.0f) * kTwoPi;
+    const QPointF ring(30.0 + 12.0 * std::cos(t), 30.0 + 12.0 * std::sin(t));
+    if (VerticesCoverPoint(erase_scene.cursor, ring)) {
+      ++covered;
+    } else {
+      ++gapped;
+    }
+  }
+  EXPECT_GT(covered, 0);
+  EXPECT_GT(gapped, 0);
+}
+
 }  // namespace alcedo

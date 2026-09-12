@@ -48,6 +48,8 @@ def_library(EditMaskStore
         ${ALCEDO_SRC_ROOT}/edit/mask/brush_signed_distance.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/grade_mask_coverage.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_raster.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_replay_cache.cpp
+        ${ALCEDO_SRC_ROOT}/edit/mask/brush_coverage_update.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
     PUBLIC_DEPS EditGeometry JSON
     PRIVATE_DEPS xxHash
@@ -173,6 +175,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_neighbor_grade.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_local_tone_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_brush_raster.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_plan_executor.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_product_renderer.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu

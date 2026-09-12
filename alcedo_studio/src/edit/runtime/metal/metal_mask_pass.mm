@@ -438,7 +438,7 @@ auto ExecuteMetalMask(MetalRenderDevice& device, const ExecutionPlan& plan,
   if (active == nullptr && BrushUsesParameterizedReplay(*brush)) {
     parameterized_replay = ParameterizedBrushActiveRasterForGrade(
         document, compiled_grade.node_id, compiled_source.mask_id, *brush,
-        plan.geometry.full_reference_extent);
+        plan.geometry.full_reference_extent, workspace.BrushReplay());
     active = &parameterized_replay;
   }
   const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,

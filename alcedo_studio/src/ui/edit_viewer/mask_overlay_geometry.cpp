@@ -302,6 +302,23 @@ void AppendHollowCircle(std::vector<MaskOverlayVertex>& triangles, const QPointF
   AppendRing(triangles, center, inner, outer, aa, color, clip);
 }
 
+void AppendDashedHollowCircle(std::vector<MaskOverlayVertex>& triangles, const QPointF& center,
+                              float radius, float width, float aa, const QColor& color,
+                              const QRectF& clip, float dash_len, float gap_len) {
+  if (radius <= 0.0f || !IsFinitePoint(center)) {
+    return;
+  }
+  const int segments = std::clamp(static_cast<int>(std::ceil(radius * 2.0f)), 24, 128);
+  std::vector<QPointF> ring;
+  ring.reserve(static_cast<std::size_t>(segments));
+  for (int i = 0; i < segments; ++i) {
+    const float a = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
+    ring.emplace_back(center.x() + std::cos(a) * radius, center.y() + std::sin(a) * radius);
+  }
+  AppendDashedPolylineStroke(triangles, ring, /*closed=*/true, width, aa, color, clip, dash_len,
+                             gap_len);
+}
+
 }  // namespace
 
 auto DefaultMaskOverlayStyle() -> MaskOverlayStyle { return {}; }
@@ -332,9 +349,60 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
     }
     return handle_r;
   };
+  const auto append_frame_segment = [&](const QPointF& a, const QPointF& b) {
+    AppendClippedStroke(scene.selected_guides, a, b, guide_outer, aa, style.control_fill, clip,
+                        /*round_caps=*/false);
+    AppendClippedStroke(scene.selected_guides, a, b, guide_inner, aa, style.control_outline, clip,
+                        /*round_caps=*/false);
+    ++scene.selected_guide_segment_count;
+  };
 
-  for (const auto& handle : display.handles) {
+  for (std::size_t handle_index = 0; handle_index < display.handles.size(); ++handle_index) {
+    const auto& handle = display.handles[handle_index];
     if (handle.id == MaskOverlayHandleId::None || !IsFinitePoint(handle.item)) {
+      continue;
+    }
+    if (handle.shape == MaskOverlayHandleShape::CornerTick) {
+      // Brush Move frame anchor: two short segments from the corner along the
+      // adjacent frame edges. Edge directions come from the neighbouring
+      // corner handles, so the tick follows the rotated frame.
+      const auto* prev = &handle;
+      const auto* next = &handle;
+      for (std::size_t i = 1; i <= display.handles.size(); ++i) {
+        const auto& candidate =
+            display.handles[(handle_index + display.handles.size() - i) % display.handles.size()];
+        if (candidate.shape == MaskOverlayHandleShape::CornerTick &&
+            IsFinitePoint(candidate.item)) {
+          prev = &candidate;
+          break;
+        }
+      }
+      for (std::size_t i = 1; i <= display.handles.size(); ++i) {
+        const auto& candidate = display.handles[(handle_index + i) % display.handles.size()];
+        if (candidate.shape == MaskOverlayHandleShape::CornerTick &&
+            IsFinitePoint(candidate.item)) {
+          next = &candidate;
+          break;
+        }
+      }
+      const float tick_len = handle_radius(handle.id) * 2.4f;
+      for (const auto* neighbour : {prev, next}) {
+        if (neighbour == &handle) {
+          continue;
+        }
+        const QPointF delta = neighbour->item - handle.item;
+        const double  len   = std::hypot(delta.x(), delta.y());
+        if (len < kMinLength) {
+          continue;
+        }
+        const QPointF end(handle.item.x() + delta.x() / len * tick_len,
+                          handle.item.y() + delta.y() / len * tick_len);
+        AppendClippedStroke(scene.edge_grips, handle.item, end, grip_outer, aa,
+                            style.control_fill, clip, /*round_caps=*/false);
+        AppendClippedStroke(scene.edge_grips, handle.item, end, grip_inner, aa,
+                            style.control_outline, clip, /*round_caps=*/false);
+      }
+      ++scene.handle_count;
       continue;
     }
     const float radius = handle_radius(handle.id);
@@ -351,6 +419,22 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
     ++scene.handle_count;
   }
 
+  if (display.move_frame_visible) {
+    // Brush Move frame: closed outline through the ordered CornerTick handles.
+    std::vector<QPointF> frame;
+    for (const auto& handle : display.handles) {
+      if (handle.shape == MaskOverlayHandleShape::CornerTick && IsFinitePoint(handle.item)) {
+        frame.push_back(handle.item);
+      }
+    }
+    for (std::size_t i = 0; i + 1 < frame.size(); ++i) {
+      append_frame_segment(frame[i], frame[i + 1]);
+    }
+    if (frame.size() > 2) {
+      append_frame_segment(frame.back(), frame.front());
+    }
+  }
+
   for (const auto& segment : display.connectors) {
     AppendClippedStroke(scene.connectors, segment.first, segment.second, stroke_w, aa,
                         style.control_fill, clip, /*round_caps=*/true);
@@ -358,8 +442,15 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
 
   if (display.cursor_visible && display.cursor_radius_logical_px > 0.0f &&
       IsFinitePoint(display.cursor_center)) {
-    AppendHollowCircle(scene.cursor, display.cursor_center, display.cursor_radius_logical_px,
-                       stroke_w, aa, style.control_fill, clip);
+    if (display.cursor_dashed) {
+      AppendDashedHollowCircle(scene.cursor, display.cursor_center,
+                              display.cursor_radius_logical_px, stroke_w, aa, style.control_fill,
+                              clip, kMaskOverlayDashLengthLogicalPx,
+                              kMaskOverlayDashGapLogicalPx);
+    } else {
+      AppendHollowCircle(scene.cursor, display.cursor_center, display.cursor_radius_logical_px,
+                         stroke_w, aa, style.control_fill, clip);
+    }
   }
 
   if (display.mode == MaskOverlayMode::Creating) {

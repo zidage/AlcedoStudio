@@ -355,53 +355,113 @@ Item {
                     // PointHandler records the true press position (no drag-distance
                     // threshold). DragHandler would only activate after the system
                     // drag distance, which lost crop-corner hit tests and click-zoom.
+                    // Mask left-button drawing stays on this handler: a second
+                    // DragHandler must not also write samples. Double-tap is
+                    // disabled while Mask owns the left button so its grab cannot
+                    // end the stream on the first press.
                     PointHandler {
                         id: viewportPointer
+                        objectName: "editorViewportPointer"
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
                         property bool _pressed: false
                         property bool _maskStream: false
+                        property bool _canceled: false
+                        property real _lastX: 0
+                        property real _lastY: 0
+                        property bool _haveLastItemPos: false
+
+                        function rememberItemPos(x, y) {
+                            _lastX = x
+                            _lastY = y
+                            _haveLastItemPos = true
+                        }
+
+                        function finishX() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastX
+                            return point.position.x
+                        }
+
+                        function finishY() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastY
+                            return point.position.y
+                        }
+
+                        function beginMaskOrPan() {
+                            _activeButton = (point.pressedButtons & Qt.MiddleButton)
+                                    ? Qt.MiddleButton : Qt.LeftButton
+                            rememberItemPos(point.position.x, point.position.y)
+                            if (_activeButton === Qt.LeftButton
+                                    && root.maskOwnsLeftButton
+                                    && root.maskCreation
+                                    && root.maskCreation.handlePress(
+                                           point.position.x, point.position.y, _activeButton)) {
+                                _maskStream = true
+                            } else {
+                                _maskStream = false
+                                editorInteraction.handlePress(
+                                            point.position.x, point.position.y, _activeButton)
+                            }
+                        }
+
+                        function finishMaskOrPan() {
+                            var x = finishX()
+                            var y = finishY()
+                            if (_canceled && _maskStream && root.maskCreation
+                                    && typeof root.maskCreation.cancelOpenPointerInput === "function") {
+                                root.maskCreation.cancelOpenPointerInput()
+                            } else if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleRelease(x, y, _activeButton)
+                            } else {
+                                editorInteraction.handleRelease(x, y, _activeButton)
+                            }
+                            _pressed = false
+                            _maskStream = false
+                            _canceled = false
+                            _haveLastItemPos = false
+                        }
+
+                        onCanceled: {
+                            _canceled = true
+                        }
                         onActiveChanged: {
                             if (active) {
                                 _pressed = true
-                                _activeButton = (point.pressedButtons & Qt.MiddleButton)
-                                        ? Qt.MiddleButton : Qt.LeftButton
-                                if (_activeButton === Qt.LeftButton
-                                        && root.maskOwnsLeftButton
-                                        && root.maskCreation
-                                        && root.maskCreation.handlePress(
-                                               point.position.x, point.position.y, _activeButton)) {
-                                    _maskStream = true
-                                } else {
-                                    _maskStream = false
-                                    editorInteraction.handlePress(
-                                                point.position.x, point.position.y, _activeButton)
-                                }
+                                _canceled = false
+                                beginMaskOrPan()
                             } else if (_pressed) {
-                                if (_maskStream && root.maskCreation) {
-                                    root.maskCreation.handleRelease(
-                                                point.position.x, point.position.y, _activeButton)
-                                } else {
-                                    editorInteraction.handleRelease(
-                                                point.position.x, point.position.y, _activeButton)
-                                }
-                                _pressed = false
-                                _maskStream = false
+                                finishMaskOrPan()
                             }
                         }
                         onPointChanged: {
-                            if (active) {
-                                if (_maskStream && root.maskCreation) {
-                                    root.maskCreation.handleMove(
-                                                point.position.x, point.position.y,
-                                                point.pressedButtons)
-                                } else {
-                                    editorInteraction.handleMove(
-                                                point.position.x, point.position.y,
-                                                point.pressedButtons)
-                                }
+                            if (!active) {
+                                return
+                            }
+                            // pointChanged can run before activeChanged; start the
+                            // Mask stream here so the first move is not sent to pan.
+                            if (!_pressed) {
+                                _pressed = true
+                                _canceled = false
+                                beginMaskOrPan()
+                            }
+                            if (point.pressedButtons !== 0) {
+                                rememberItemPos(point.position.x, point.position.y)
+                            }
+                            if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleMove(
+                                            _haveLastItemPos ? _lastX : point.position.x,
+                                            _haveLastItemPos ? _lastY : point.position.y,
+                                            point.pressedButtons)
+                            } else {
+                                editorInteraction.handleMove(
+                                            point.position.x, point.position.y,
+                                            point.pressedButtons)
                             }
                         }
                     }
@@ -539,10 +599,13 @@ Item {
                     // of being held as a would-be double-tap. A clean double-click
                     // (two clicks without a drag) still fires onDoubleTapped and
                     // toggles the zoom; only drags are excluded, which is what
-                    // separates pan from double-click-zoom.
+                    // separates pan from double-click-zoom. Mask left-button
+                    // drawing disables this handler so it cannot take the grab
+                    // on the first press of a stroke.
                     TapHandler {
                         id: viewportDoubleTap
-                        enabled: root.editorControlsEnabled
+                        objectName: "editorViewportDoubleTap"
+                        enabled: root.editorControlsEnabled && !root.maskOwnsLeftButton
                         acceptedButtons: Qt.LeftButton
                         gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {

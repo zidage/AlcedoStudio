@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
@@ -142,6 +143,19 @@ class EditorViewportItem : public QQuickRhiItem {
     return adjustment_frame_request_count_.load(std::memory_order_acquire);
   }
 
+  /**
+   * @brief Resolved geometry of the latest presented render-reference frame.
+   *
+   * Written by @c DirectFrameSink on the GUI thread after a submission is
+   * accepted. Mask pointer mapping must use this instead of a separately
+   * derived document geometry so the mask always tracks the displayed pixels.
+   */
+  void               NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                               qulonglong                    request_id);
+  [[nodiscard]] auto presentedMaskGeometry() const -> const ResolvedRenderGeometry& {
+    return presented_mask_geometry_;
+  }
+
   // Called by the application composition root before loading QML. The
   // registration is idempotent and also makes visible-window QML tests use the
   // same real type.
@@ -155,6 +169,8 @@ class EditorViewportItem : public QQuickRhiItem {
   void DisplayConfigChanged();
   // camelCase for QML handler onTargetSizeRequested.
   void targetSizeRequested(int width, int height);
+  /// Emitted after @ref NotePresentedMaskGeometry stores a newer frame geometry.
+  void PresentedMaskGeometryChanged();
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;
@@ -195,6 +211,9 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<std::uint64_t> adjustment_frame_request_count_{0};
   std::atomic<bool>          interactive_present_loop_{false};
   std::atomic<std::uint64_t> interactive_present_loop_tick_count_{0};
+  // GUI-thread only: geometry of the last accepted render-reference frame.
+  ResolvedRenderGeometry     presented_mask_geometry_{};
+  qulonglong                 presented_mask_request_id_ = 0;
   QQuickWindow*              attached_window_ = nullptr;
   QMetaObject::Connection    window_visibility_connection_;
   QMetaObject::Connection    window_screen_connection_;

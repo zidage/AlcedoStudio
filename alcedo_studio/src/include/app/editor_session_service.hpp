@@ -313,6 +313,15 @@ class IEditorSessionBackend {
   }
   [[nodiscard]] virtual auto mask_creation_node_id() const -> NodeId { return {}; }
   [[nodiscard]] virtual auto mask_creation_mask_id() const -> MaskId { return {}; }
+  /**
+   * @brief Owner-side Mask-creation state machine value.
+   *
+   * UI adapters compare this with their local armed state so a rejected tool
+   * arming cannot leave a stale armed kind waiting for the next press.
+   */
+  [[nodiscard]] virtual auto mask_creation_state() const -> EditorMaskCreationState {
+    return EditorMaskCreationState::Inactive;
+  }
   [[nodiscard]] virtual auto mask_creation_source() const -> std::optional<MaskSource> {
     return std::nullopt;
   }
@@ -515,6 +524,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
     return mask_creation_.selected_mask_id();
   }
+  [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
+    return mask_creation_.state();
+  }
   [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
     return mask_creation_.CurrentSource();
   }
@@ -587,6 +599,11 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
   auto               Emit(EditorSessionResult result) -> EditorSessionResult;
+  /// Record and deliver a result without marking the publication dirty. Use
+  /// for render outcomes that change no session-visible state (frame reuse on
+  /// continuous view churn): every field OnBackendChanged reads is unchanged,
+  /// so a full change notification per frame is pure cost.
+  auto               EmitQuiet(EditorSessionResult result) -> EditorSessionResult;
   auto               Reject(std::string message) -> EditorSessionResult;
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.

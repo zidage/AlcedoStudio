@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "edit/frame_presentation_types.hpp"
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {
@@ -63,6 +64,14 @@ enum class FramePresentationMode {
 struct FrameCompletionSubmission {
   FramePreviewMetadata  metadata{};
   FramePresentationMode mode = FramePresentationMode::FullFrame;
+  /**
+   * @brief Exact @c ResolveRenderGeometry result of the presented frame.
+   *
+   * Stamped by the renderer so Mask pointer mapping, overlays, and pixels use
+   * the same displayed-photograph geometry the frame was produced with. Empty
+   * extents mean no geometry was attached (analysis-only or legacy frames).
+   */
+  ResolvedRenderGeometry geometry{};
 };
 
 enum class FramePixelFormat {

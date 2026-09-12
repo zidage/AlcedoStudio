@@ -260,6 +260,10 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
     result.identity = lifecycle_.identity();
     BumpHistoryRevision();
   }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    EmitQuiet(std::move(result));
+    return;
+  }
   Emit(std::move(result));
 }
 
@@ -346,6 +350,18 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
   } else {
     NotifyChange();
   }
+  return result;
+}
+
+auto EditorSessionService::EmitQuiet(EditorSessionResult result) -> EditorSessionResult {
+  if (result.operation_id == 0) {
+    result.operation_id = current_operation_id_;
+  }
+  {
+    std::scoped_lock lock(results_mutex_);
+    results_.push_back(result);
+  }
+  NotifyResult(result);
   return result;
 }
 
@@ -1174,7 +1190,9 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::BeginInput ||
                                   pending.kind == EditorMaskCreationCommandKind::Append ||
                                   pending.kind == EditorMaskCreationCommandKind::Finish ||
-                                  pending.kind == EditorMaskCreationCommandKind::Cancel;
+                                  pending.kind == EditorMaskCreationCommandKind::Cancel ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
                          }),
           pending_mask_commands_.end());
     }
@@ -1189,7 +1207,9 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
                                   pending.kind == EditorMaskCreationCommandKind::BeginMove ||
                                   pending.kind == EditorMaskCreationCommandKind::Finish ||
                                   pending.kind == EditorMaskCreationCommandKind::FinishMode ||
-                                  pending.kind == EditorMaskCreationCommandKind::BeginInput;
+                                  pending.kind == EditorMaskCreationCommandKind::BeginInput ||
+                                  pending.kind == EditorMaskCreationCommandKind::BeginMaskField ||
+                                  pending.kind == EditorMaskCreationCommandKind::SetMaskField;
                          }),
           pending_mask_commands_.end());
     }
@@ -1292,7 +1312,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
           return tool;
         }
       }
-      return mask_creation_.BeginMaskInput(command.sample, command.identity);
+      return mask_creation_.BeginMaskInput(command.sample, command.identity, command.source_kind,
+                                           command.default_feather_reference_px);
     case EditorMaskCreationCommandKind::BeginMove:
       if (command.brush_tool == EditorBrushTool::Move) {
         const auto tool = mask_creation_.SetBrushTool(EditorBrushTool::Move);
@@ -1300,7 +1321,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
           return tool;
         }
       }
-      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity);
+      return mask_creation_.BeginMaskMove(command.handle, command.sample, command.identity,
+                                          command.source_kind);
     case EditorMaskCreationCommandKind::Append:
       if (command.brush_radius > 0.0f) {
         const auto parameters = mask_creation_.SetBrushStrokeParameters(
@@ -1323,8 +1345,12 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
     case EditorMaskCreationCommandKind::SetBrushTool:
       return mask_creation_.SetBrushTool(command.brush_tool);
     case EditorMaskCreationCommandKind::SetBrushStrokeParameters:
-      return mask_creation_.SetBrushStrokeParameters(
-          command.brush_radius, command.brush_strength, command.brush_hardness);
+      return mask_creation_.SetBrushStrokeParameters(command.brush_radius, command.brush_strength,
+                                                     command.brush_hardness);
+    case EditorMaskCreationCommandKind::BeginMaskField:
+      return mask_creation_.BeginMaskFieldEdit(command.field_key);
+    case EditorMaskCreationCommandKind::SetMaskField:
+      return mask_creation_.ApplyMaskFieldValue(command.field_key, command.field_value);
   }
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";
@@ -1905,13 +1931,16 @@ void EditorSessionService::SetPresentationSize(int width, int height) {
       accepted.state    = lifecycle_.state();
       accepted.identity = lifecycle_.identity();
       accepted.message  = "Presentation size updated";
-      NotifyChange();
+      // The presentation size is a render input consumed by the next render
+      // intent; no session-visible field moves, so per-frame resize bursts
+      // (panel fold, window drag) must not publish a change notification.
       return accepted;
     });
     return;
   }
   render_.SetPresentationSize(width, height);
-  NotifyChange();
+  // An enclosing command's own Emit publishes; the size itself is invisible
+  // to change observers.
 }
 
 void EditorSessionService::SetGeometryOverlayActive(bool active) {
@@ -2004,6 +2033,12 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
       result.kind    = EditorSessionResultKind::Rejected;
       result.message = event.message;
       break;
+  }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    // A reused frame changes no session-visible state; deliver the result
+    // without a change notification so continuous view churn (panel fold,
+    // window resize, zoom/pan) does not run a full backend refresh per frame.
+    return EmitQuiet(std::move(result));
   }
   return Emit(std::move(result));
 }

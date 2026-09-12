@@ -412,7 +412,30 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   FramePresentationMode mode       = submission.mode;
   FramePreviewMetadata  metadata   = submission.metadata;
   {
+    // Publish the presented frame's resolved geometry before the slot gate so
+    // zero-copy paths (Metal SubmitMetalFrame) and accepted full frames both
+    // refresh the viewer's Mask mapping reference. RoiFrame/DetailPatch
+    // submissions render a subrect of the same reference space and must not
+    // replace it. Stale request ids never publish.
+    const bool publish_geometry =
+        IsRenderReferenceFrame(mode, metadata.frame_role) &&
+        !submission.geometry.full_reference_extent.Empty() &&
+        !submission.geometry.render_extent.Empty();
     std::lock_guard lock(mutex_);
+    if (publish_geometry &&
+        AcceptSubmissionRequestId(metadata.presentation_request_id) && item_) {
+      const auto connection =
+          (item_->thread() == QThread::currentThread()) ? Qt::DirectConnection
+                                                       : Qt::QueuedConnection;
+      const auto geometry   = submission.geometry;
+      const auto request_id = metadata.presentation_request_id;
+      QMetaObject::invokeMethod(
+          item_,
+          [item = item_, geometry, request_id] {
+            item->NotePresentedMaskGeometry(geometry, request_id);
+          },
+          connection);
+    }
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="

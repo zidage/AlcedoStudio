@@ -12,6 +12,7 @@
 
 #include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/brush_source_geometry.hpp"
+#include "edit/mask/brush_stroke.hpp"
 
 namespace alcedo {
 namespace {
@@ -32,7 +33,7 @@ void RequireAlgorithm(const BrushMaskSource& source) {
 }  // namespace
 
 void BrushRasterizer::RequireGeometry() const {
-  if (raster_.Empty() || pixels_.size() !=
+  if (raster_.Empty() || pixels_->size() !=
                              static_cast<std::size_t>(raster_.width) *
                                  static_cast<std::size_t>(raster_.height)) {
     FailRaster("brush rasterizer geometry is unset");
@@ -45,12 +46,15 @@ void BrushRasterizer::SetGeometry(Extent2D raster, Extent2D full_reference) {
   }
   raster_          = raster;
   full_reference_  = full_reference;
-  pixels_.assign(static_cast<std::size_t>(raster.width) * raster.height, 0);
+  // Fresh storage: SharedPixels handles handed out for the previous geometry
+  // must keep the old bytes immutable.
+  pixels_ = std::make_shared<std::vector<std::uint8_t>>(
+      static_cast<std::size_t>(raster.width) * raster.height, 0);
 }
 
 void BrushRasterizer::ClearToZero() {
   RequireGeometry();
-  std::fill(pixels_.begin(), pixels_.end(), 0);
+  std::fill(pixels_->begin(), pixels_->end(), 0);
 }
 
 void BrushRasterizer::StampDab(const BrushCanonicalSample& sample, Vector2 translation,
@@ -74,9 +78,49 @@ void BrushRasterizer::StampDab(const BrushCanonicalSample& sample, Vector2 trans
                                                     sample.hardness));
       const auto index = PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                                        raster_);
-      pixels_[index]   = mode == BrushStrokeMode::Erase ? EraseBrushR8(pixels_[index], dab)
-                                                        : PaintBrushR8(pixels_[index], dab);
+      (*pixels_)[index] = mode == BrushStrokeMode::Erase ? EraseBrushR8((*pixels_)[index], dab)
+                                                          : PaintBrushR8((*pixels_)[index], dab);
     }
+  }
+}
+
+void BrushRasterizer::StampOrderedSamples(std::span<const BrushCanonicalSample> samples,
+                                          Vector2 translation, BrushStrokeMode mode, RectI clip) {
+  RequireGeometry();
+  const auto region = ClipTexelRect(clip, raster_);
+  if (RectIEmpty(region)) {
+    return;
+  }
+  for (const auto& sample : samples) {
+    StampDab(sample, translation, mode, region);
+  }
+}
+
+void BrushRasterizer::ApplyCoverageUpdate(const BrushMaskSource& source,
+                                          const BrushSpatialIndex& index,
+                                          const BrushCoverageUpdate& update) {
+  RequireGeometry();
+  RequireAlgorithm(source);
+  if (update.kind == BrushCoverageUpdateKind::Unchanged) {
+    return;
+  }
+  if (update.kind == BrushCoverageUpdateKind::ReplayDirty) {
+    ReplayRegion(source, index, update.dirty);
+    return;
+  }
+  if (update.stroke_index >= source.strokes.size() || update.stroke_end > source.strokes.size() ||
+      update.stroke_index >= update.stroke_end) {
+    FailRaster("coverage stamp stroke range is outside the source");
+  }
+  for (auto stroke_index = update.stroke_index; stroke_index < update.stroke_end; ++stroke_index) {
+    const auto& stroke  = source.strokes[stroke_index];
+    const auto  samples = BrushStrokeSamples(stroke);
+    const auto  begin   = stroke_index == update.stroke_index ? update.sample_begin : 0;
+    if (begin > samples.size()) {
+      FailRaster("coverage stamp sample begin is outside the stroke");
+    }
+    StampOrderedSamples(samples.subspan(begin), source.placement_translation, stroke.mode,
+                        update.dirty);
   }
 }
 
@@ -95,7 +139,7 @@ void BrushRasterizer::ReplayRegion(const BrushMaskSource& source, const BrushSpa
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
       const auto px = static_cast<std::uint32_t>(x);
       const auto py = static_cast<std::uint32_t>(y);
-      pixels_[PackedR8Index(px, py, raster_)] = 0;
+      (*pixels_)[PackedR8Index(px, py, raster_)] = 0;
     }
   }
   const auto spans = index.QueryOutput(region, source.placement_translation);

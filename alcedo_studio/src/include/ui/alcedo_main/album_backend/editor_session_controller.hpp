@@ -306,6 +306,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   auto               EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command) -> bool;
   [[nodiscard]] auto mask_creation_mask_id() const -> alcedo::MaskId;
   [[nodiscard]] auto mask_creation_node_id() const -> alcedo::NodeId;
+  [[nodiscard]] auto mask_creation_state() const -> alcedo::EditorMaskCreationState;
   [[nodiscard]] auto mask_creation_source() const -> std::optional<alcedo::MaskSource>;
   [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> alcedo::MaskId;
   [[nodiscard]] auto mask_creation_commands_pending() const -> bool;
@@ -420,6 +421,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QPointer<QObject>       interaction_controller_;
   QMetaObject::Connection interaction_view_change_connection_;
   QMetaObject::Connection interaction_policy_connection_;
+  QMetaObject::Connection presented_geometry_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
   QTimer*                                        admission_deadline_timer_ = nullptr;

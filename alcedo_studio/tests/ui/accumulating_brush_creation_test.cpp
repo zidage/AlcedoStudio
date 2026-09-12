@@ -123,7 +123,8 @@ struct BrushCreationHarness {
       -> EditorMaskCreationResult {
     const auto press  = SampleOf(mapping, ItemOf(mapping, from_normalized), false);
     const auto move   = SampleOf(mapping, ItemOf(mapping, to_normalized), true);
-    EXPECT_TRUE(controller.BeginMaskInput(press, identity).accepted);
+    EXPECT_TRUE(
+        controller.BeginMaskInput(press, identity, MaskSourceKind::Brush).accepted);
     EXPECT_TRUE(controller.AppendMaskInput(move, identity).accepted);
     return controller.FinishMaskInput();
   }
@@ -188,7 +189,9 @@ TEST(AccumulatingBrushCreationTest, SizeAndStrengthChangesPersistInStrokeSamples
   BrushCreationHarness harness;
   ASSERT_TRUE(harness.ArmPaint().accepted);
   const auto press = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.25f, 0.40f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(harness.controller
+                  .BeginMaskInput(press, harness.pointer, MaskSourceKind::Brush)
+                  .accepted);
   ASSERT_TRUE(harness.controller.SetBrushStrokeParameters(4.0f, 0.5f, 1.0f).accepted);
   const auto move =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.45f, 0.40f}), true);
@@ -230,7 +233,8 @@ TEST(AccumulatingBrushCreationTest, MovingExistingBrushUpdatesInteractivePixels)
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{16.0f / 64.0f, 12.0f / 32.0f}),
                false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer,
+                                 MaskSourceKind::Brush)
                   .accepted);
   const auto moved =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{40.0f / 64.0f, 20.0f / 32.0f}),
@@ -272,7 +276,8 @@ TEST(AccumulatingBrushCreationTest, BrushMoveDoesNotAppendStroke) {
   ASSERT_TRUE(harness.controller.SetBrushTool(EditorBrushTool::Move).accepted);
   const auto press = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.20f, 0.30f}), false);
   ASSERT_TRUE(harness.controller
-                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer)
+                  .BeginMaskMove(AnalyticMaskHandle::BrushMove, press, harness.pointer,
+                                 MaskSourceKind::Brush)
                   .accepted);
   const auto moved = SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.35f, 0.40f}), true);
   ASSERT_TRUE(harness.controller.AppendMaskInput(moved, harness.pointer).accepted);
@@ -392,12 +397,131 @@ TEST(AccumulatingBrushCreationTest, CancelledFirstStrokeLeavesGradeUnchanged) {
   ASSERT_TRUE(harness.ArmPaint().accepted);
   const auto press =
       SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.30f, 0.40f}), false);
-  ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer).accepted);
+  ASSERT_TRUE(harness.controller
+                  .BeginMaskInput(press, harness.pointer, MaskSourceKind::Brush)
+                  .accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 1u);
   ASSERT_TRUE(harness.controller.CancelMaskInput().accepted);
   EXPECT_EQ(harness.document.PrimaryGrade()->MaskCount(), 0u);
   EXPECT_EQ(harness.history.working_head(), head_before);
   EXPECT_TRUE(harness.controller.selected_mask_id().Empty());
+}
+
+TEST(AccumulatingBrushCreationTest, OneShotMaskFieldEditsPublishTypedHistory) {
+  BrushCreationHarness harness;
+  ASSERT_TRUE(harness.ArmPaint().accepted);
+  const auto first = harness.PaintStroke({0.20f, 0.40f}, {0.28f, 0.42f}, harness.pointer);
+  ASSERT_TRUE(first.accepted);
+  const auto mask_id = first.mask_id;
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+
+  const auto opacity = harness.controller.ApplyMaskFieldValue("opacity", 0.4);
+  ASSERT_TRUE(opacity.accepted);
+  EXPECT_TRUE(opacity.committed);
+  EXPECT_FLOAT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->opacity, 0.4f);
+  ASSERT_TRUE(harness.history.working_head().has_value());
+  auto batch = BatchFromCommit(
+      *harness.history.graph()->FindCommit(*harness.history.working_head()));
+  EXPECT_EQ(batch.operation_kind, PipelineEditOperationKind::SetMaskField);
+
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+  const auto invert = harness.controller.ApplyMaskFieldValue("invert", true);
+  ASSERT_TRUE(invert.accepted);
+  EXPECT_TRUE(invert.committed);
+  EXPECT_TRUE(harness.document.PrimaryGrade()->FindMask(mask_id)->invert);
+  batch = BatchFromCommit(
+      *harness.history.graph()->FindCommit(*harness.history.working_head()));
+  EXPECT_EQ(batch.operation_kind, PipelineEditOperationKind::SetMaskField);
+
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+  const auto name =
+      harness.controller.ApplyMaskFieldValue("display_name", std::string{"Sky brush"});
+  ASSERT_TRUE(name.accepted);
+  EXPECT_TRUE(name.committed);
+  EXPECT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->display_name, "Sky brush");
+
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+  const auto feather = harness.controller.ApplyMaskFieldValue("brush.feather", 2.5);
+  ASSERT_TRUE(feather.accepted);
+  EXPECT_TRUE(feather.committed);
+  const auto* brush = LiveBrush(harness.document, mask_id);
+  ASSERT_NE(brush, nullptr);
+  EXPECT_FLOAT_EQ(brush->feather_radius, 2.5f);
+  batch = BatchFromCommit(
+      *harness.history.graph()->FindCommit(*harness.history.working_head()));
+  EXPECT_EQ(batch.operation_kind, PipelineEditOperationKind::ReplaceMaskSource);
+}
+
+TEST(AccumulatingBrushCreationTest, MaskFieldDragSettlesOneCommit) {
+  BrushCreationHarness harness;
+  ASSERT_TRUE(harness.ArmPaint().accepted);
+  const auto first = harness.PaintStroke({0.20f, 0.40f}, {0.28f, 0.42f}, harness.pointer);
+  ASSERT_TRUE(first.accepted);
+  const auto mask_id = first.mask_id;
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+
+  ASSERT_TRUE(harness.controller.BeginMaskFieldEdit("opacity").accepted);
+  const auto head_before = harness.history.working_head();
+  const auto mid = harness.controller.ApplyMaskFieldValue("opacity", 0.3);
+  ASSERT_TRUE(mid.accepted);
+  EXPECT_FALSE(mid.committed);
+  EXPECT_TRUE(mid.interactive_preview);
+  EXPECT_FLOAT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->opacity, 0.3f);
+  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("opacity", 0.6).accepted);
+  const auto finish = harness.controller.FinishMaskInput();
+  ASSERT_TRUE(finish.accepted);
+  EXPECT_TRUE(finish.committed);
+  EXPECT_FLOAT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->opacity, 0.6f);
+
+  ASSERT_TRUE(harness.history.working_head().has_value());
+  const auto* commit =
+      harness.history.graph()->FindCommit(*harness.history.working_head());
+  ASSERT_NE(commit, nullptr);
+  const auto batch = BatchFromCommit(*commit);
+  EXPECT_EQ(batch.operation_kind, PipelineEditOperationKind::SetMaskField);
+  // Exactly one field commit beyond the AddMask history.
+  EXPECT_NE(harness.history.working_head(), head_before);
+  const auto parent = commit->GetFirstParentHash();
+  ASSERT_TRUE(parent.has_value());
+  const auto* parent_commit = harness.history.graph()->FindCommit(*parent);
+  ASSERT_NE(parent_commit, nullptr);
+  EXPECT_EQ(BatchFromCommit(*parent_commit).operation_kind,
+            PipelineEditOperationKind::AddMask);
+}
+
+TEST(AccumulatingBrushCreationTest, MaskFieldEditCancelRestoresLiveValueWithoutHistory) {
+  BrushCreationHarness harness;
+  ASSERT_TRUE(harness.ArmPaint().accepted);
+  const auto first = harness.PaintStroke({0.20f, 0.40f}, {0.28f, 0.42f}, harness.pointer);
+  ASSERT_TRUE(first.accepted);
+  const auto mask_id = first.mask_id;
+  ASSERT_TRUE(harness.controller
+                  .SelectMask(harness.document.PrimaryGrade()->Id(), mask_id, harness.session)
+                  .accepted);
+
+  const auto head_before = harness.history.working_head();
+  ASSERT_TRUE(harness.controller.BeginMaskFieldEdit("opacity").accepted);
+  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("opacity", 0.2).accepted);
+  EXPECT_FLOAT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->opacity, 0.2f);
+  ASSERT_TRUE(harness.controller.CancelMaskInput().accepted);
+  EXPECT_FLOAT_EQ(harness.document.PrimaryGrade()->FindMask(mask_id)->opacity, 1.0f);
+  EXPECT_EQ(harness.history.working_head(), head_before);
+}
+
+TEST(AccumulatingBrushCreationTest, MaskFieldEditRequiresSelectedMask) {
+  BrushCreationHarness harness;
+  EXPECT_FALSE(harness.controller.ApplyMaskFieldValue("opacity", 0.5).accepted);
+  EXPECT_FALSE(harness.controller.BeginMaskFieldEdit("opacity").accepted);
 }
 
 }  // namespace alcedo

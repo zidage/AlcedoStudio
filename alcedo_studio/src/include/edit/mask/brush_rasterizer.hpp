@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
+#include "edit/mask/brush_coverage_update.hpp"
 #include "edit/mask/brush_spatial_index.hpp"
 #include "edit/mask/mask_model.hpp"
 
@@ -57,19 +59,47 @@ class BrushRasterizer {
    */
   void ReplayRegion(const BrushMaskSource& source, const BrushSpatialIndex& index, RectI dirty);
 
-  [[nodiscard]] auto Pixels() const -> std::span<const std::uint8_t> { return pixels_; }
+  /**
+   * @brief Stamp @p samples in order onto existing pixels. Does not zero any texel.
+   *
+   * Empty @p samples is a no-op. @p clip limits which texels may change.
+   *
+   * @throws std::runtime_error when geometry is unset.
+   */
+  void StampOrderedSamples(std::span<const BrushCanonicalSample> samples, Vector2 translation,
+                           BrushStrokeMode mode, RectI clip);
+
+  /**
+   * @brief Apply a classified coverage update. @c StampNewSamples does not zero texels.
+   *
+   * @c ReplayDirty uses @p index over @c dirty. @c Unchanged is a no-op.
+   */
+  void ApplyCoverageUpdate(const BrushMaskSource& source, const BrushSpatialIndex& index,
+                           const BrushCoverageUpdate& update);
+
+  [[nodiscard]] auto Pixels() const -> std::span<const std::uint8_t> { return *pixels_; }
+  /**
+   * @brief Shared handle to the retained pixel buffer.
+   *
+   * The rasterizer keeps mutating it; later replay writes are visible through
+   * the handle. Consumers treat the pointee as immutable during a render.
+   */
+  [[nodiscard]] auto SharedPixels() const -> std::shared_ptr<const std::vector<std::uint8_t>> {
+    return pixels_;
+  }
   [[nodiscard]] auto Raster() const -> Extent2D { return raster_; }
   [[nodiscard]] auto FullReference() const -> Extent2D { return full_reference_; }
-  [[nodiscard]] auto Empty() const -> bool { return pixels_.empty(); }
+  [[nodiscard]] auto Empty() const -> bool { return pixels_->empty(); }
 
  private:
   void RequireGeometry() const;
   void StampDab(const BrushCanonicalSample& sample, Vector2 translation, BrushStrokeMode mode,
                 RectI clip);
 
-  Extent2D                  raster_{};
-  Extent2D                  full_reference_{};
-  std::vector<std::uint8_t> pixels_;
+  Extent2D                                  raster_{};
+  Extent2D                                  full_reference_{};
+  std::shared_ptr<std::vector<std::uint8_t>> pixels_ =
+      std::make_shared<std::vector<std::uint8_t>>();
 };
 
 }  // namespace alcedo

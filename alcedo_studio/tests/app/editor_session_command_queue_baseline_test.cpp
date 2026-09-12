@@ -629,5 +629,30 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(locking->capture_count, 1);
 }
 
+/// Regression: continuous view churn (panel fold, window resize, zoom/pan
+/// drags) submits one RequestViewChange plus one SetPresentationSize per
+/// frame. Frame reuse changes no session-visible state, so these commands
+/// must record results without publishing change notifications — otherwise
+/// every animation frame runs a full backend-changed refresh.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       FrameReuseAndPresentationSizeDoNotPublishChangeNotifications) {
+  openInteractive(10, 20);
+
+  const auto notifications_before = recorder_->change_notifications;
+  const auto results_before       = recorder_->results.size();
+
+  service_->SetPresentationSize(800, 600);
+  const auto resize_result = service_->RequestViewChange(EditorRenderReason::Resize, std::nullopt);
+  const auto pan_result    = service_->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
+  drainQueue();
+
+  EXPECT_EQ(resize_result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(pan_result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(recorder_->change_notifications, notifications_before)
+      << "frame reuse must not publish change notifications";
+  EXPECT_GT(recorder_->results.size(), results_before)
+      << "frame reuse results must still reach the result observer";
+}
+
 }  // namespace
 }  // namespace alcedo

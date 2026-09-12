@@ -27,11 +27,12 @@ struct CudaMaskResult {
  * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
  *
  * Persistent Brush textures are keyed by MaskAssetKey and are never patched. Parameterized
- * Brushes replay onto a request-owned canonical R8 and upload through the active-raster
- * cache, not MaskStore. Active Brush pixels use a separate session-generation texture and
- * dirty-rectangle upload. Changing only feather radius reuses signed distance when the
- * raster bytes are unchanged. Feather (when present), invert, and opacity run in that
- * order. No CPU image processing fallback is used.
+ * Brushes stamp canonical coverage on the GPU active-raster texture from stroke commands.
+ * There is no host R8 replay on this CUDA authoring path. Injected active Brush pixels still
+ * upload through the active-raster cache. Changing only feather radius reuses signed distance
+ * when the raster bytes are unchanged. Feather (when present), invert, and opacity run in that
+ * order. Soft-edge authoring does not fill unused R8 mips. No CPU image processing fallback is
+ * used.
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document,

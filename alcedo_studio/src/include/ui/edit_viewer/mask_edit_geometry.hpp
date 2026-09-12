@@ -64,9 +64,9 @@ struct MaskReferenceSample {
 /**
  * @brief Snapshot of mapping inputs used to cancel an open Mask operation.
  *
- * Viewport resize, DPR change, view transform, presentation, RoiFrame ROI, or
- * displayed-photograph geometry changes must cancel unfinished Mask input before
- * the new mapping is used.
+ * Widget resize, DPR, zoom/pan, presentation, or a different full-reference
+ * image cancel unfinished Mask input. Quality vs Interactive render extent is
+ * compared through the composed item→reference mapping, not raw field equality.
  */
 struct MaskEditMappingIdentity {
   int                   widget_width        = 0;
@@ -139,6 +139,11 @@ class MaskEditGeometry {
 
   /**
    * @brief True when unfinished Mask input must be cancelled before using @p after.
+   *
+   * Compares the composed item→ReferenceSpace mapping, not raw identity fields.
+   * Quality and Interactive frames of the same view (different render extent with
+   * a compensating @c render_to_reference) keep the stroke open. Widget resize,
+   * DPR, zoom/pan, presentation mode, or a different full-reference image cancel.
    */
   [[nodiscard]] static auto MappingChanged(const MaskEditMappingIdentity& before,
                                            const MaskEditMappingIdentity& after) -> bool;

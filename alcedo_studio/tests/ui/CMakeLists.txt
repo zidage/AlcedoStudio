@@ -1072,6 +1072,37 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentHeaderQmlTest
     PROPERTIES LABELS "workspace_qml;adjustment_header")
 alcedo_register_test_target(EditorAdjustmentHeaderQmlTest ui)
 
+add_executable(ProjectMaskCacheSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/project_mask_cache_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ProjectMaskCacheSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ProjectMaskCacheSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(ProjectMaskCacheSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(ProjectMaskCacheSettingsQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(ProjectMaskCacheSettingsQmlTest
+    TEST_PREFIX "ProjectMaskCacheSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask_cache_settings")
+alcedo_register_test_target(ProjectMaskCacheSettingsQmlTest ui)
+
 # Display Transform QML snapshot: verifies ODT params populate the
 # Display Transform panel on first bind and method/space/EOTF changes.
 add_executable(EditorDisplayTransformSnapshotQmlTest
@@ -1225,6 +1256,38 @@ alcedo_ui_gtest_discover_tests(MaskEditGeometryTest
     TEST_PREFIX "MaskEditGeometryTest."
     PROPERTIES LABELS "mask_edit;interaction")
 alcedo_register_test_target(MaskEditGeometryTest ui)
+
+add_executable(EditorBrushInteractionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_brush_interaction_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorBrushInteractionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorBrushInteractionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorBrushInteractionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorBrushInteractionQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorBrushInteractionQmlTest
+    TEST_PREFIX "EditorBrushInteractionQmlTest."
+    PROPERTIES LABELS "workspace_qml;mask_creation")
+alcedo_register_test_target(EditorBrushInteractionQmlTest ui)
+alcedo_link_quickqanava_qml(EditorBrushInteractionQmlTest)
 
 add_executable(MaskOverlayControlTest
     ${ALCEDO_TEST_ROOT}/ui/mask_overlay_control_test.cpp
