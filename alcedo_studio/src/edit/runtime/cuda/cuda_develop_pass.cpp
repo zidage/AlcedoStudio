@@ -20,6 +20,7 @@
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
 #include "gpu/transient_last_use.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -91,11 +92,17 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
       throw std::runtime_error("ExecuteCudaDevelop: expected tightly packed RGB input");
     }
     void* uploaded = AllocateTransient(workspace, input.pixels.ByteCount());
-    workspace.Device().UploadDeviceMemory(uploaded, input.pixels.Span(), ctx);
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      workspace.Device().UploadDeviceMemory(uploaded, input.pixels.Span(), ctx);
+    }
     auto rgba = WrapF32C4(uploaded, static_cast<int>(width), static_cast<int>(height));
     auto packed =
         WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
-    ExecuteCudaRgbAndPack(device, input, rgba, packed, hlr, stream);
+    {
+      diag::PreviewSubStageInterval pack(diag::PreviewSubStageKind::InverseCamMulPack);
+      ExecuteCudaRgbAndPack(device, input, rgba, packed, hlr, stream);
+    }
   } else {
     const int w = static_cast<int>(input.host_extent.width);
     const int h = static_cast<int>(input.host_extent.height);
@@ -110,20 +117,30 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     void* u16_ptr =
         AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(std::uint16_t));
     void* f32_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-    workspace.Device().UploadDeviceMemory(u16_ptr, input.pixels.Span(), ctx);
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      workspace.Device().UploadDeviceMemory(u16_ptr, input.pixels.Span(), ctx);
+    }
 
     auto src_u16 = WrapU16(u16_ptr, w, h);
     auto linear  = WrapF32C1(f32_ptr, w, h);
-    CUDA::ToLinearRef(src_u16, linear, input.linearization, input.cfa_pattern, &stream);
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      CUDA::ToLinearRef(src_u16, linear, input.linearization, input.cfa_pattern, &stream);
+    }
 
     if (!hlr) {
+      diag::PreviewSubStageInterval clamp(diag::PreviewSubStageKind::CfaClamp);
       CUDA::Clamp01(linear, &stream);
     }
     ReleaseTransientSlabsAfterGpuLastUse(device, {u16_ptr});
 
     cv::cuda::GpuMat packed =
         WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
-    ExecuteCudaSensorDemosaicAndPack(device, input, flags, linear, packed, stream);
+    {
+      diag::PreviewSubStageInterval demosaic(diag::PreviewSubStageKind::Demosaic);
+      ExecuteCudaSensorDemosaicAndPack(device, input, flags, linear, packed, stream);
+    }
   }
 
   if (input.dng_warp_rectilinear.has_value()) {
@@ -136,6 +153,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
                             static_cast<int>(out_h));
     auto warped = WrapF32C4(warped_lease.Texture().DevicePointer(), static_cast<int>(out_w),
                             static_cast<int>(out_h));
+    diag::PreviewSubStageInterval warp(diag::PreviewSubStageKind::DngWarp);
     CUDA::WarpDngRectilinear(source, warped, *input.dng_warp_rectilinear, &stream);
   }
 

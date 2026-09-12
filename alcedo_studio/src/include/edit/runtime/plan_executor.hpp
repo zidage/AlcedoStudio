@@ -23,6 +23,7 @@
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 
@@ -84,41 +85,52 @@ class PlanExecutor {
       const auto represent_before = workspace.Images().RepresentationMissCount();
       const auto publishes_before = workspace.Images().PersistentPublishCount();
 
-      if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed,
-                     stats)) {
-        ++stats.sensor_develop_skip;
-      } else {
-        const auto* develop_node = document.Develop();
-        const auto  develop_method =
-            develop_node == nullptr
-                ? RawDemosaicMethod::Legacy
-                : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), plan.source);
-        const bool highlights_reconstruct =
-            develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
-        const auto h2d_before = workspace.Device().HostToDeviceBytes();
-        workspace.ReleaseStalePublishedImagesAndIdleTextures();
-        try {
-          if (plan.Contains(GpuPassKind::UploadRgb)) {
-            PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document);
-          } else {
-            PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document);
+      {
+        const auto develop_kind = plan.Contains(GpuPassKind::UploadRgb)
+                                      ? diag::PreviewPassKind::UploadRgb
+                                      : diag::PreviewPassKind::UploadRaw;
+        diag::PreviewPassInterval develop_pass(plan.sensor_linear_output.producer.Value(),
+                                               develop_kind);
+        if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed,
+                       stats)) {
+          develop_pass.SetState(diag::PreviewExecutionState::Skipped);
+          ++stats.sensor_develop_skip;
+        } else {
+          const auto* develop_node = document.Develop();
+          const auto  develop_method =
+              develop_node == nullptr
+                  ? RawDemosaicMethod::Legacy
+                  : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), plan.source);
+          const bool highlights_reconstruct =
+              develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
+          const auto h2d_before = workspace.Device().HostToDeviceBytes();
+          workspace.ReleaseStalePublishedImagesAndIdleTextures();
+          try {
+            if (plan.Contains(GpuPassKind::UploadRgb)) {
+              PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document);
+            } else {
+              PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document);
+            }
+          } catch (const std::exception& ex) {
+            const std::string_view what = ex.what();
+            if (what.find("TransientBufferArena") == std::string_view::npos) {
+              throw;
+            }
+            throw std::runtime_error(DescribeDevelopTransientFailure(
+                plan.source, RawDemosaicMethodToString(develop_method), highlights_reconstruct,
+                ex.what()));
           }
-        } catch (const std::exception& ex) {
-          const std::string_view what = ex.what();
-          if (what.find("TransientBufferArena") == std::string_view::npos) {
-            throw;
+          stats.source_h2d_bytes += workspace.Device().HostToDeviceBytes() - h2d_before;
+          ++stats.source_h2d_count;
+          Record(device, invalidation, plan.sensor_linear_output, sensor_extent);
+          ++stats.sensor_develop_execute;
+          // Develop intermediates are not a cache. Finish remaining recorded work so
+          // backend-owned scratch can be destroyed before Geometry allocates display textures.
+          {
+            diag::PreviewCpuInterval wait(diag::PreviewCpuStage::Wait);
+            workspace.Device().SynchronizeRecordedWork(device.CommandContext());
           }
-          throw std::runtime_error(DescribeDevelopTransientFailure(
-              plan.source, RawDemosaicMethodToString(develop_method), highlights_reconstruct,
-              ex.what()));
         }
-        stats.source_h2d_bytes += workspace.Device().HostToDeviceBytes() - h2d_before;
-        ++stats.source_h2d_count;
-        Record(device, invalidation, plan.sensor_linear_output, sensor_extent);
-        ++stats.sensor_develop_execute;
-        // Develop intermediates are not a cache. Finish remaining recorded work so
-        // backend-owned scratch can be destroyed before Geometry allocates display textures.
-        workspace.Device().SynchronizeRecordedWork(device.CommandContext());
       }
       if constexpr (requires(Device& d) { d.ReleaseNeuralDemosaicWorkspace(); }) {
         device.ReleaseNeuralDemosaicWorkspace();
@@ -126,27 +138,37 @@ class PlanExecutor {
       workspace.TransientBuffers().Reset();
       workspace.TransientBuffers().ReleaseDeviceMemory();
 
-      if (BindOrMiss(workspace, invalidation, plan.geometry_output, geometry_extent, completed,
-                     stats)) {
-        ++stats.geometry_skip;
-      } else {
-        PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input,
-                                                                    document);
-        Record(device, invalidation, plan.geometry_output, geometry_extent);
-        ++stats.geometry_execute;
+      {
+        diag::PreviewPassInterval geometry_pass(plan.geometry_output.producer.Value(),
+                                                diag::PreviewPassKind::GeometryResample);
+        if (BindOrMiss(workspace, invalidation, plan.geometry_output, geometry_extent, completed,
+                       stats)) {
+          geometry_pass.SetState(diag::PreviewExecutionState::Skipped);
+          ++stats.geometry_skip;
+        } else {
+          PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input,
+                                                                      document);
+          Record(device, invalidation, plan.geometry_output, geometry_extent);
+          ++stats.geometry_execute;
+        }
       }
       if (exact_release && plan.encode_geometry_resample) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
         workspace.ReleaseConsumedImage(plan.sensor_linear_output);
       }
 
-      if (BindOrMiss(workspace, invalidation, plan.develop_output, geometry_extent, completed,
-                     stats)) {
-        ++stats.camera_color_skip;
-      } else {
-        PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
-        Record(device, invalidation, plan.develop_output, geometry_extent);
-        ++stats.camera_color_execute;
+      {
+        diag::PreviewPassInterval camera_pass(plan.develop_output.producer.Value(),
+                                              diag::PreviewPassKind::CameraToAp1);
+        if (BindOrMiss(workspace, invalidation, plan.develop_output, geometry_extent, completed,
+                       stats)) {
+          camera_pass.SetState(diag::PreviewExecutionState::Skipped);
+          ++stats.camera_color_skip;
+        } else {
+          PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
+          Record(device, invalidation, plan.develop_output, geometry_extent);
+          ++stats.camera_color_execute;
+        }
       }
       if (exact_release) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
@@ -166,39 +188,54 @@ class PlanExecutor {
             if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
               continue;
             }
-            if (BindOrMiss(workspace, invalidation, source.effective_output, geometry_extent,
-                           completed, stats, TextureFormat::R8)) {
-              ++stats.mask_skip;
-            } else {
-              PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(device, plan, input,
-                                                                      document, compiled_grade,
-                                                                      source);
-              Record(device, invalidation, source.effective_output, geometry_extent,
-                     TextureFormat::R8);
-              ++stats.mask_execute;
+            {
+              diag::PreviewPassInterval mask_pass(compiled_grade.node_id.Value(),
+                                                  diag::PreviewPassKind::MaskEvaluate, 0,
+                                                  source.mask_id.Value());
+              if (BindOrMiss(workspace, invalidation, source.effective_output, geometry_extent,
+                             completed, stats, TextureFormat::R8)) {
+                mask_pass.SetState(diag::PreviewExecutionState::Skipped);
+                ++stats.mask_skip;
+              } else {
+                PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
+                    device, plan, input, document, compiled_grade, source);
+                Record(device, invalidation, source.effective_output, geometry_extent,
+                       TextureFormat::R8);
+                ++stats.mask_execute;
+              }
             }
           }
-          if (BindOrMiss(workspace, invalidation, compiled_grade.mask_output, geometry_extent,
-                         completed, stats, TextureFormat::R8)) {
-            ++stats.mask_union_skip;
-          } else {
-            PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
-                                                                 compiled_grade);
-            Record(device, invalidation, compiled_grade.mask_output, geometry_extent,
-                   TextureFormat::R8);
-            ++stats.mask_union_execute;
+          {
+            diag::PreviewPassInterval union_pass(compiled_grade.node_id.Value(),
+                                                 diag::PreviewPassKind::MaskUnion);
+            if (BindOrMiss(workspace, invalidation, compiled_grade.mask_output, geometry_extent,
+                           completed, stats, TextureFormat::R8)) {
+              union_pass.SetState(diag::PreviewExecutionState::Skipped);
+              ++stats.mask_union_skip;
+            } else {
+              PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
+                                                                   compiled_grade);
+              Record(device, invalidation, compiled_grade.mask_output, geometry_extent,
+                     TextureFormat::R8);
+              ++stats.mask_union_execute;
+            }
           }
           workspace.TransientBuffers().Reset();
         }
 
         const GraphValueId grade_scene = compiled_grade.scene_output;
-        if (BindOrMiss(workspace, invalidation, grade_scene, geometry_extent, completed, stats)) {
-          ++stats.primary_grade_skip;
-        } else {
-          PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
-              device, plan, input, document, compiled_grade);
-          Record(device, invalidation, grade_scene, geometry_extent);
-          ++stats.primary_grade_execute;
+        {
+          diag::PreviewPassInterval grade_pass(compiled_grade.node_id.Value(),
+                                               diag::PreviewPassKind::PrimaryColorGrade);
+          if (BindOrMiss(workspace, invalidation, grade_scene, geometry_extent, completed, stats)) {
+            grade_pass.SetState(diag::PreviewExecutionState::Skipped);
+            ++stats.primary_grade_skip;
+          } else {
+            PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
+                device, plan, input, document, compiled_grade);
+            Record(device, invalidation, grade_scene, geometry_extent);
+            ++stats.primary_grade_execute;
+          }
         }
         if (exact_release) {
           workspace.Device().SynchronizeRecordedWork(device.CommandContext());
@@ -218,13 +255,18 @@ class PlanExecutor {
         }
       }
 
-      if (BindOrMiss(workspace, invalidation, plan.display_output, geometry_extent, completed,
-                     stats)) {
-        ++stats.drt_skip;
-      } else {
-        PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document);
-        Record(device, invalidation, plan.display_output, geometry_extent);
-        ++stats.drt_execute;
+      {
+        diag::PreviewPassInterval drt_pass(plan.display_output.producer.Value(),
+                                           diag::PreviewPassKind::Drt);
+        if (BindOrMiss(workspace, invalidation, plan.display_output, geometry_extent, completed,
+                       stats)) {
+          drt_pass.SetState(diag::PreviewExecutionState::Skipped);
+          ++stats.drt_skip;
+        } else {
+          PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document);
+          Record(device, invalidation, plan.display_output, geometry_extent);
+          ++stats.drt_execute;
+        }
       }
       if (exact_release && plan.display_output != plan.SceneInputForDrt()) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());

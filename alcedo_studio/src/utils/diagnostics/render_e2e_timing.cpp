@@ -4,291 +4,89 @@
 
 #include "utils/diagnostics/render_e2e_timing.hpp"
 
-#include <chrono>
-#include <cstdint>
-#include <cstdlib>
-#include <iomanip>
-#include <iostream>
-#include <mutex>
-#include <optional>
-#include <string>
-#include <unordered_map>
-#include <utility>
+#include "utils/diagnostics/preview_performance.hpp"
+
+#include <string_view>
 
 namespace alcedo::diag {
 namespace {
 
-using Clock = std::chrono::steady_clock;
-
-struct Sample {
-  Clock::time_point                submit_at{};
-  std::optional<Clock::time_point> scheduled_at;
-  std::optional<Clock::time_point> producer_ready_at;
-  std::optional<Clock::time_point> present_wake_at;
-  std::optional<Clock::time_point> gui_update_at;
-  std::optional<Clock::time_point> render_enter_at;
-  std::optional<Clock::time_point> consume_begin_at;
-  std::string                      reason;
-  std::string                      quality;
-  std::string                      role;
-};
-
-// Bound in-flight samples so a present-path miss cannot grow without limit
-// during a long interactive session.
-constexpr std::size_t kMaxPendingSamples = 256;
-
-std::mutex                                          g_mutex;
-std::unordered_map<std::uint64_t, Sample>           g_samples;
-std::unordered_map<std::string, Clock::time_point>  g_last_displayed_by_role;
-
-auto MsBetween(const Clock::time_point start, const Clock::time_point end) -> double {
-  return std::chrono::duration<double, std::milli>(end - start).count();
+auto RoleFromLabel(const std::string_view role) -> PreviewFrameRole {
+  if (role == "QualityBase") {
+    return PreviewFrameRole::QualityBase;
+  }
+  if (role == "DetailPatch") {
+    return PreviewFrameRole::DetailPatch;
+  }
+  return PreviewFrameRole::InteractivePrimary;
 }
 
-void EraseLocked(const std::uint64_t request_id) {
-  g_samples.erase(request_id);
+auto QualityFromLabel(const std::string_view quality) -> PreviewQuality {
+  if (quality == "Quality") {
+    return PreviewQuality::Quality;
+  }
+  if (quality == "Detail") {
+    return PreviewQuality::Detail;
+  }
+  return PreviewQuality::Interactive;
 }
 
-void PruneIfNeededLocked() {
-  if (g_samples.size() <= kMaxPendingSamples) {
-    return;
+auto OutcomeFromLabel(const std::string_view outcome) -> PreviewTerminalOutcome {
+  if (outcome == "replaced" || outcome == "superseded-metal-import") {
+    return PreviewTerminalOutcome::Coalesced;
   }
-  // Drop the lowest request ids first (oldest under monotonic allocator).
-  while (g_samples.size() > kMaxPendingSamples / 2) {
-    auto oldest = g_samples.begin();
-    for (auto it = g_samples.begin(); it != g_samples.end(); ++it) {
-      if (it->first < oldest->first) {
-        oldest = it;
-      }
-    }
-    g_samples.erase(oldest);
+  if (outcome == "cancelled") {
+    return PreviewTerminalOutcome::Cancelled;
   }
+  if (outcome == "failed" || outcome == "qrhi-import-failed" || outcome == "sink-not-mapped" ||
+      outcome == "sink-no-queue") {
+    return PreviewTerminalOutcome::Failed;
+  }
+  if (outcome == "stale-request-id") {
+    return PreviewTerminalOutcome::Stale;
+  }
+  return PreviewTerminalOutcome::Dropped;
 }
 
-auto FindSampleLocked(const std::uint64_t request_id) -> Sample* {
-  const auto it = g_samples.find(request_id);
-  if (it == g_samples.end()) {
-    return nullptr;
-  }
-  return &it->second;
-}
-
-void EnsurePresentChainPrefix(Sample* sample, const Clock::time_point now) {
-  if (sample == nullptr) {
-    return;
-  }
-  if (!sample->scheduled_at.has_value()) {
-    sample->scheduled_at = sample->submit_at;
-  }
-  if (!sample->producer_ready_at.has_value()) {
-    sample->producer_ready_at = now;
-  }
-  if (!sample->present_wake_at.has_value()) {
-    sample->present_wake_at = sample->producer_ready_at;
-  }
-}
-
-auto RenderE2ePrintEnabled() -> bool {
-  const char* value = std::getenv("ALCEDO_RENDER_E2E");
-  if (value == nullptr || value[0] == '\0') {
-    return true;
-  }
-  return value[0] != '0';
+auto HasUserInput(const std::string_view reason) -> bool {
+  return reason == "InteractiveAdjustment" || reason == "SettledAdjustment" ||
+         reason == "SettledMaskEdit";
 }
 
 }  // namespace
 
 void NoteRenderE2eSubmit(const std::uint64_t request_id, const std::string_view reason,
                          const std::string_view quality, const std::string_view role) {
-  if (request_id == 0) {
-    return;
-  }
-  Sample sample;
-  sample.submit_at = Clock::now();
-  sample.reason    = std::string(reason);
-  sample.quality   = std::string(quality);
-  sample.role      = std::string(role);
-
-  std::lock_guard lock(g_mutex);
-  g_samples.insert_or_assign(request_id, std::move(sample));
-  PruneIfNeededLocked();
+  PreviewPerformance::NoteSubmit(request_id, RoleFromLabel(role), QualityFromLabel(quality), reason,
+                                 HasUserInput(reason));
 }
 
 void NoteRenderE2eScheduled(const std::uint64_t request_id) {
-  if (request_id == 0) {
-    return;
-  }
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  Sample*         sample = FindSampleLocked(request_id);
-  if (sample == nullptr) {
-    return;
-  }
-  if (!sample->scheduled_at.has_value()) {
-    sample->scheduled_at = now;
-  }
+  PreviewPerformance::NoteScheduled(request_id);
 }
 
 void NoteRenderE2eProducerReady(const std::uint64_t request_id) {
-  if (request_id == 0) {
-    return;
-  }
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  Sample*         sample = FindSampleLocked(request_id);
-  if (sample == nullptr) {
-    return;
-  }
-  if (!sample->scheduled_at.has_value()) {
-    sample->scheduled_at = sample->submit_at;
-  }
-  if (!sample->producer_ready_at.has_value()) {
-    sample->producer_ready_at = now;
-  }
+  PreviewPerformance::NoteProducerReady(request_id);
 }
 
 void NoteRenderE2ePresentWake(const std::uint64_t request_id) {
-  if (request_id == 0) {
-    return;
-  }
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  Sample*         sample = FindSampleLocked(request_id);
-  if (sample == nullptr) {
-    return;
-  }
-  EnsurePresentChainPrefix(sample, now);
-  if (!sample->present_wake_at.has_value()) {
-    sample->present_wake_at = now;
-  }
+  PreviewPerformance::NotePresentWake(request_id);
 }
 
-void NoteRenderE2eGuiUpdate() {
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  for (auto& [request_id, sample] : g_samples) {
-    (void)request_id;
-    // Only frames that already asked for a redraw; ignore bare submit samples.
-    if (!sample.present_wake_at.has_value() || sample.gui_update_at.has_value()) {
-      continue;
-    }
-    sample.gui_update_at = now;
-  }
-}
+void NoteRenderE2eGuiUpdate() { PreviewPerformance::NoteGuiUpdate(); }
 
-void NoteRenderE2eRenderEnter() {
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  for (auto& [request_id, sample] : g_samples) {
-    (void)request_id;
-    if (!sample.present_wake_at.has_value() || sample.render_enter_at.has_value()) {
-      continue;
-    }
-    if (!sample.gui_update_at.has_value()) {
-      // Render can run without a dedicated wake stamp on some paths; keep the
-      // chain monotonic for printing.
-      sample.gui_update_at = sample.present_wake_at;
-    }
-    sample.render_enter_at = now;
-  }
-}
+void NoteRenderE2eRenderEnter() { PreviewPerformance::NoteRenderEnter(); }
 
 void NoteRenderE2eConsumeBegin(const std::uint64_t request_id) {
-  if (request_id == 0) {
-    return;
-  }
-  const auto      now = Clock::now();
-  std::lock_guard lock(g_mutex);
-  Sample*         sample = FindSampleLocked(request_id);
-  if (sample == nullptr) {
-    return;
-  }
-  EnsurePresentChainPrefix(sample, now);
-  if (!sample->gui_update_at.has_value()) {
-    sample->gui_update_at = sample->present_wake_at;
-  }
-  if (!sample->render_enter_at.has_value()) {
-    sample->render_enter_at = now;
-  }
-  if (!sample->consume_begin_at.has_value()) {
-    sample->consume_begin_at = now;
-  }
+  PreviewPerformance::NoteConsumeBegin(request_id);
 }
 
 void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
-  if (request_id == 0) {
-    return;
-  }
-  const auto now = Clock::now();
-
-  Sample                 sample;
-  std::optional<double>  display_dt_ms;
-  {
-    std::lock_guard lock(g_mutex);
-    const auto      it = g_samples.find(request_id);
-    if (it == g_samples.end()) {
-      return;
-    }
-    sample = std::move(it->second);
-    g_samples.erase(it);
-    // Cadence is per role so a same-tick QualityBase/DetailPatch import does
-    // not collapse InteractivePrimary display_dt to ~0.
-    const std::string role_key = sample.role.empty() ? std::string("?") : sample.role;
-    if (const auto last = g_last_displayed_by_role.find(role_key);
-        last != g_last_displayed_by_role.end()) {
-      display_dt_ms = MsBetween(last->second, now);
-    }
-    g_last_displayed_by_role[role_key] = now;
-  }
-
-  const double total_ms       = MsBetween(sample.submit_at, now);
-  const auto   scheduled      = sample.scheduled_at.value_or(sample.submit_at);
-  const auto   producer_ready = sample.producer_ready_at.value_or(now);
-  const auto   present_wake   = sample.present_wake_at.value_or(producer_ready);
-  const auto   gui_update     = sample.gui_update_at.value_or(present_wake);
-  const auto   render_enter   = sample.render_enter_at.value_or(sample.consume_begin_at.value_or(now));
-  const auto   consume_begin  = sample.consume_begin_at.value_or(render_enter);
-
-  const double queue_ms    = MsBetween(sample.submit_at, scheduled);
-  const double pipeline_ms = MsBetween(scheduled, producer_ready);
-  const double present_ms  = MsBetween(producer_ready, now);
-  const double wake_ms     = MsBetween(producer_ready, present_wake);
-  const double gui_wait_ms = MsBetween(present_wake, gui_update);
-  const double sg_wait_ms  = MsBetween(gui_update, render_enter);
-  // Render-thread work after the frame starts: target fulfill + createFrom.
-  // consume_begin is retained for diagnostics if fulfill ever grows.
-  const double import_ms = MsBetween(render_enter, now);
-
-  if (!RenderE2ePrintEnabled()) {
-    (void)consume_begin;
-    return;
-  }
-
-  std::cout << std::fixed << std::setprecision(2) << "[RENDER_E2E] request=" << request_id
-            << " reason=" << (sample.reason.empty() ? "?" : sample.reason)
-            << " quality=" << (sample.quality.empty() ? "?" : sample.quality)
-            << " role=" << (sample.role.empty() ? "?" : sample.role) << " total=" << total_ms
-            << "ms queue=" << queue_ms << "ms pipeline=" << pipeline_ms
-            << "ms present=" << present_ms << "ms (wake=" << wake_ms << "ms gui_wait=" << gui_wait_ms
-            << "ms sg_wait=" << sg_wait_ms << "ms import=" << import_ms << "ms)";
-  if (display_dt_ms.has_value() && *display_dt_ms > 0.0) {
-    const double cadence_fps = 1000.0 / *display_dt_ms;
-    std::cout << " display_dt=" << *display_dt_ms << "ms (~" << std::setprecision(1) << cadence_fps
-              << " fps)";
-  } else {
-    std::cout << " display_dt=n/a";
-  }
-  std::cout << std::endl;
-
-  (void)consume_begin;
+  PreviewPerformance::NoteDisplayed(request_id);
 }
 
-void NoteRenderE2eTerminal(const std::uint64_t request_id, const std::string_view /*outcome*/) {
-  if (request_id == 0) {
-    return;
-  }
-  std::lock_guard lock(g_mutex);
-  EraseLocked(request_id);
+void NoteRenderE2eTerminal(const std::uint64_t request_id, const std::string_view outcome) {
+  PreviewPerformance::NoteTerminal(request_id, OutcomeFromLabel(outcome), outcome);
 }
 
 }  // namespace alcedo::diag

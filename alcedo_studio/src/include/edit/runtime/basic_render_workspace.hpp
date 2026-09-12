@@ -20,6 +20,7 @@
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_buffer_arena.hpp"
+#include "utils/diagnostics/preview_performance_record.hpp"
 
 namespace alcedo {
 
@@ -114,47 +115,43 @@ class BasicRenderWorkspace {
   /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
   auto AcquireImageForWrite(const GraphValueId& id, const TextureRequest& request)
       -> ResourceLease<Backend>& {
-    auto&      lease = images_.AcquireTextureForWrite(textures_, id, request);
-    const auto bytes = static_cast<std::size_t>(request.width) * request.height *
-                       TextureFormatBytesPerPixel(request.format);
-    if (ShouldTraceGpuPoolAlloc(bytes)) {
-      DumpGpuPools("image-write");
-    }
-    return lease;
+    return images_.AcquireTextureForWrite(textures_, id, request);
   }
 
-  /** @brief Print pool totals. Per-resource lines require ALCEDO_GPU_POOL_TRACE. */
-  void DumpGpuPools(const char* reason) const {
+  /**
+   * @brief Aggregated pool and device totals for one request. Does not print.
+   */
+  [[nodiscard]] auto CaptureResourceSnapshot() const -> diag::PreviewResourceSnapshot {
+    diag::PreviewResourceSnapshot snapshot;
+    snapshot.texture_used_bytes       = textures_.UsedBytes();
+    snapshot.texture_leased_bytes     = textures_.LeasedBytes();
+    snapshot.texture_unleased_bytes   = textures_.UsedBytes() - textures_.LeasedBytes();
+    snapshot.texture_entry_count      = textures_.EntryCount();
+    snapshot.texture_allocation_count = textures_.AllocationCount();
+    snapshot.texture_peak_used_bytes  = textures_.PeakUsedBytes();
+    snapshot.transient_used_bytes     = transients_.used_bytes();
+    snapshot.transient_capacity_bytes = transients_.capacity_bytes();
+    snapshot.published_image_count    = images_.PublishedCount();
+    snapshot.write_image_count        = images_.UnpublishedCount();
+    snapshot.value_bytes              = values_.UsedBytes();
+    snapshot.value_count              = values_.Size();
     GpuDeviceMemorySnapshot device_memory{};
     if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
       device_memory = backend_.QueryDeviceMemory();
     }
-    const auto device_used =
-        device_memory.valid && device_memory.total_bytes > device_memory.free_bytes
-            ? device_memory.total_bytes - device_memory.free_bytes
-            : 0;
-    std::fprintf(stderr,
-                 "[GPU_POOL] %s textures=%.1f MiB n=%zu leased=%.1f unleased=%.1f MiB  "
-                 "transient=%.1f/%.1f MiB  "
-                 "images=pub%zu/write%zu  values=%.1f n=%zu",
-                 reason == nullptr ? "" : reason, GpuPoolMiB(textures_.UsedBytes()),
-                 textures_.EntryCount(),
-                 GpuPoolMiB(textures_.LeasedBytes()),
-                 GpuPoolMiB(textures_.UsedBytes() - textures_.LeasedBytes()),
-                 GpuPoolMiB(transients_.used_bytes()), GpuPoolMiB(transients_.capacity_bytes()),
-                 images_.PublishedCount(), images_.UnpublishedCount(),
-                 GpuPoolMiB(values_.UsedBytes()), values_.Size());
+    snapshot.device_memory_valid = device_memory.valid;
     if (device_memory.valid) {
-      std::fprintf(stderr, "  device used=%.1f free=%.1f total=%.1f MiB", GpuPoolMiB(device_used),
-                   GpuPoolMiB(device_memory.free_bytes), GpuPoolMiB(device_memory.total_bytes));
+      snapshot.device_free_bytes  = device_memory.free_bytes;
+      snapshot.device_total_bytes = device_memory.total_bytes;
+      snapshot.device_used_bytes =
+          device_memory.total_bytes > device_memory.free_bytes
+              ? device_memory.total_bytes - device_memory.free_bytes
+              : 0;
     }
-    std::fprintf(stderr, "\n");
-    if (GpuPoolTraceVerbose()) {
-      textures_.DumpToStderr(reason);
-      images_.DumpToStderr(reason, textures_);
-      values_.DumpToStderr(reason);
-    }
+    return snapshot;
   }
+
+  void DumpGpuPools(const char* reason) const { (void)reason; }
 
   /**
    * @brief Share @p source's current texture as an unpublished write of @p dest.

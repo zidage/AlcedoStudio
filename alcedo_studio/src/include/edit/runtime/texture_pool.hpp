@@ -93,6 +93,8 @@ class TexturePool {
   auto operator=(const TexturePool&) -> TexturePool& = delete;
 
   [[nodiscard]] auto UsedBytes() const -> std::size_t { return used_bytes_; }
+  [[nodiscard]] auto AllocationCount() const -> std::uint64_t { return allocation_count_; }
+  [[nodiscard]] auto PeakUsedBytes() const -> std::size_t { return peak_used_bytes_; }
 
   void BeginFrame() {
     for (auto& entry : entries_) {
@@ -124,12 +126,12 @@ class TexturePool {
     for (auto& vacant : entries_) {
       if (!vacant.alive) {
         vacant = std::move(entry);
-        used_bytes_ += bytes;
+        NoteNewAllocation(bytes);
         return TakeLease(vacant);
       }
     }
     entries_.push_back(std::move(entry));
-    used_bytes_ += bytes;
+    NoteNewAllocation(bytes);
     return TakeLease(entries_.back());
   }
 
@@ -273,27 +275,7 @@ class TexturePool {
     }
   }
 
-  /** @brief Print texture pool totals. Per-texture lines require ALCEDO_GPU_POOL_TRACE. */
-  void DumpToStderr(const char* reason) const {
-    std::fprintf(stderr, "[GPU_POOL] textures %s entries=%zu used=%.1f MiB\n",
-                 reason == nullptr ? "" : reason, EntryCount(), GpuPoolMiB(used_bytes_));
-    if (!GpuPoolTraceVerbose()) {
-      return;
-    }
-    for (const auto& entry : entries_) {
-      if (!entry.alive) {
-        continue;
-      }
-      std::fprintf(stderr,
-                   "[GPU_POOL]   tex handle=%llu %ux%u %s %.1f MiB leases=%u busy_sub=%llu "
-                   "frame=%d\n",
-                   static_cast<unsigned long long>(entry.handle), entry.request.width,
-                   entry.request.height, TextureFormatName(entry.request.format),
-                   GpuPoolMiB(entry.bytes), entry.lease_count,
-                   static_cast<unsigned long long>(entry.submitted_on),
-                   entry.used_this_frame ? 1 : 0);
-    }
-  }
+  void DumpToStderr(const char* reason) const { (void)reason; }
 
  private:
   friend class ResourceLease<Backend>;
@@ -377,10 +359,20 @@ class TexturePool {
     return ResourceLease<Backend>{this, entry.handle};
   }
 
-  Backend*           backend_      = nullptr;
-  std::deque<Entry> entries_;
-  std::size_t        used_bytes_   = 0;
-  std::uint64_t      next_handle_  = 1;
+  void NoteNewAllocation(std::size_t bytes) {
+    used_bytes_ += bytes;
+    ++allocation_count_;
+    if (used_bytes_ > peak_used_bytes_) {
+      peak_used_bytes_ = used_bytes_;
+    }
+  }
+
+  Backend*           backend_           = nullptr;
+  std::deque<Entry>  entries_;
+  std::size_t        used_bytes_        = 0;
+  std::size_t        peak_used_bytes_   = 0;
+  std::uint64_t      allocation_count_  = 0;
+  std::uint64_t      next_handle_       = 1;
 };
 
 template <class Backend>

@@ -373,15 +373,8 @@ auto OpenClBackend::CreateBuffer(std::size_t bytes) -> Buffer {
             << " exceeds device max allocation " << max_slab;
     throw std::runtime_error(message.str());
   }
-  if (GpuPoolTraceVerbose()) {
-    std::fprintf(stderr, "[GPU_POOL] OpenCL create buffer begin %.1f MiB\n", GpuPoolMiB(bytes));
-  }
   cl_int error  = CL_SUCCESS;
   cl_mem native = clCreateBuffer(context_, CL_MEM_READ_WRITE, bytes, nullptr, &error);
-  if (GpuPoolTraceVerbose()) {
-    std::fprintf(stderr, "[GPU_POOL] OpenCL create buffer end %.1f MiB status=%d\n",
-                 GpuPoolMiB(bytes), static_cast<int>(error));
-  }
   if (error != CL_SUCCESS) {
     std::ostringstream message;
     message << "OpenClBackend::CreateBuffer: OpenCL error " << error << " size=" << bytes

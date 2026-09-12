@@ -36,6 +36,7 @@
 #include "edit/runtime/texture_format.hpp"
 #include "image/metal_image.hpp"
 #include "metal/compute_pipeline_cache.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -379,7 +380,10 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
       throw std::runtime_error("ExecuteMetalDevelop: expected tightly packed RGB input");
     }
     auto& uploaded = AcquireScratch(workspace, width, height, TextureFormat::Rgba32f);
-    workspace.Device().UploadTexture2D(uploaded, input.pixels.Span(), device.CommandContext());
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      workspace.Device().UploadTexture2D(uploaded, input.pixels.Span(), device.CommandContext());
+    }
     auto* command_buffer = CommandBuffer(device);
     metal::EncodeLinearizeRgb(command_buffer, Native(uploaded),
                               input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
@@ -411,19 +415,30 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
 
     auto& cfa    = AcquireScratch(workspace, width, height, TextureFormat::R16u);
     auto& linear = AcquireScratch(workspace, width, height, TextureFormat::R32f);
-    workspace.Device().UploadTexture2D(cfa, input.pixels.Span(), device.CommandContext());
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      workspace.Device().UploadTexture2D(cfa, input.pixels.Span(), device.CommandContext());
+    }
     auto* command_buffer = CommandBuffer(device);
-    metal::EncodeToLinearRef(command_buffer, Native(cfa), Native(linear), input.linearization,
-                             input.cfa_pattern);
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      metal::EncodeToLinearRef(command_buffer, Native(cfa), Native(linear), input.linearization,
+                               input.cfa_pattern);
+    }
     if (!hlr) {
+      diag::PreviewSubStageInterval clamp(diag::PreviewSubStageKind::CfaClamp);
       metal::EncodeCfaClamp01(command_buffer, Native(linear), width, height);
     }
 
     const auto method =
         ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
     if (method == RawDemosaicMethod::NeuralEngine) {
+      diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::Tiled);
+      diag::PreviewSubStageInterval demosaic(diag::PreviewSubStageKind::Demosaic);
       EncodeNeural(device, input, linear, decoded_lease, hlr);
     } else {
+      diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::FullFrame);
+      diag::PreviewSubStageInterval demosaic(diag::PreviewSubStageKind::Demosaic);
       EncodeLegacyDemosaic(device, command_buffer, input, linear, decoded_lease, hlr);
     }
   }
@@ -435,6 +450,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
       throw std::runtime_error("ExecuteMetalDevelop: DNG warp source was lost");
     }
     auto* command_buffer = CommandBuffer(device);
+    diag::PreviewSubStageInterval warp(diag::PreviewSubStageKind::DngWarp);
     metal::EncodeWarpRectilinear(command_buffer, Native(source->Texture()),
                                  Native(warped.Texture()), *input.dng_warp_rectilinear, out_w,
                                  out_h);

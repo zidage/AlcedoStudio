@@ -17,6 +17,7 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 
@@ -90,6 +91,7 @@ class LocalToneExecutor {
     tone.trace = MakeLocalToneDecisionTrace(decision);
     const auto transient_mark = Ops::TransientBytes(device);
     if (decision.action == LocalToneAction::SampleCanonical) {
+      diag::PreviewSubStageInterval sample(diag::PreviewSubStageKind::LlfSampleCanonical);
       Ops::ApplyCanonicalSample(device, input, output, source_id, result_id, decision, width,
                                 height);
       tone.sampled_canonical_reference = true;
@@ -120,14 +122,18 @@ class LocalToneExecutor {
         static_cast<std::uint32_t>(Ops::TransientBytes(device) - transient_mark);
 
     if (!decision.reuse_source) {
+      diag::PreviewSubStageInterval extract(diag::PreviewSubStageKind::LlfExtract);
       if (decision.write_canonical_reference) {
         Ops::ExtractReference(device, input, source[0], width, height, decision, geometry);
       } else {
         Ops::Extract(device, input, source[0], width, height, decision);
       }
     }
-    for (int level = 1; level < decision.pyramid_level_count; ++level) {
-      Ops::PyramidDown(device, source[level - 1], source[level], decision, level);
+    {
+      diag::PreviewSubStageInterval pyramid(diag::PreviewSubStageKind::LlfPyramid);
+      for (int level = 1; level < decision.pyramid_level_count; ++level) {
+        Ops::PyramidDown(device, source[level - 1], source[level], decision, level);
+      }
     }
 
     const float shadow_amount    = ClampedLocalToneShadow(shadows_slider);
@@ -144,27 +150,40 @@ class LocalToneExecutor {
         Ops::PyramidDown(device, levels[level - 1], levels[level], decision, level);
       }
     };
-    BuildRemap(samples[0], remap_a);
-    BuildRemap(samples[1], remap_b);
-    for (std::size_t pair = 0; pair + 1 < samples.size(); ++pair) {
-      for (int level = 0; level < decision.pyramid_level_count; ++level) {
-        const bool top = level + 1 == decision.pyramid_level_count;
-        Ops::Select(device, source[level], remap_a[level],
-                    top ? remap_a[level] : remap_a[level + 1], remap_b[level],
-                    top ? remap_b[level] : remap_b[level + 1], result[level], decision, level,
-                    samples[pair], samples[pair + 1], pair == 0, pair + 2 == samples.size(), top);
-      }
-      if (pair + 2 < samples.size()) {
-        std::swap(remap_a, remap_b);
-        BuildRemap(samples[pair + 2], remap_b);
+    {
+      diag::PreviewSubStageInterval remap(diag::PreviewSubStageKind::LlfRemap);
+      BuildRemap(samples[0], remap_a);
+      BuildRemap(samples[1], remap_b);
+    }
+    {
+      diag::PreviewSubStageInterval select(diag::PreviewSubStageKind::LlfSelect);
+      for (std::size_t pair = 0; pair + 1 < samples.size(); ++pair) {
+        for (int level = 0; level < decision.pyramid_level_count; ++level) {
+          const bool top = level + 1 == decision.pyramid_level_count;
+          Ops::Select(device, source[level], remap_a[level],
+                      top ? remap_a[level] : remap_a[level + 1], remap_b[level],
+                      top ? remap_b[level] : remap_b[level + 1], result[level], decision, level,
+                      samples[pair], samples[pair + 1], pair == 0, pair + 2 == samples.size(),
+                      top);
+        }
+        if (pair + 2 < samples.size()) {
+          std::swap(remap_a, remap_b);
+          BuildRemap(samples[pair + 2], remap_b);
+        }
       }
     }
-    for (int level = decision.pyramid_level_count - 2; level >= 0; --level) {
-      Ops::Collapse(device, result[level], result[level + 1], remap_a[level], decision, level);
-      std::swap(result[level], remap_a[level]);
+    {
+      diag::PreviewSubStageInterval collapse(diag::PreviewSubStageKind::LlfCollapse);
+      for (int level = decision.pyramid_level_count - 2; level >= 0; --level) {
+        Ops::Collapse(device, result[level], result[level + 1], remap_a[level], decision, level);
+        std::swap(result[level], remap_a[level]);
+      }
     }
 
-    Ops::ApplyAdjusted(device, input, output, source[0], result[0], width, height, decision);
+    {
+      diag::PreviewSubStageInterval apply(diag::PreviewSubStageKind::LlfApply);
+      Ops::ApplyAdjusted(device, input, output, source[0], result[0], width, height, decision);
+    }
     if (decision.persist_canonical) {
       if (!decision.reuse_source) {
         Ops::PersistCanonicalSource(device, source[0], source_id, decision, current_long_edge);

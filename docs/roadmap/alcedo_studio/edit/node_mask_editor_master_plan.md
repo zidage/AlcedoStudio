@@ -5,7 +5,8 @@ Date: 2026-08-29
 Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P complete
 per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
 NM7 complete per user confirmation on 2026-09-12, with historical execution records retained;
-NM8 planned under the 2026-09-12 pass/buffer decisions and the Brush-disabled release boundary.
+NM8.1 complete 2026-09-12; NM8.2–NM8.6 planned under the 2026-09-12 pass/buffer
+decisions and the Brush-disabled release boundary.
 NML was cancelled on 2026-08-30.
 
 2026-09-12 NM8 design approval: each Color Grade uses
@@ -18,9 +19,8 @@ This supersedes NM6 requirements to retain each Grade output and any proposal to
 Grade prefixes. Mix must retain the original node input until its last read; final LLF application
 and Mix use an explicitly verified same-pixel read/write pass. The
 [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) defines source audit,
-timing, logging, buffer ownership, tests, and platform qualification. The first work scope is
-NM8.1–NM8.2 performance measurement on the current execution path; no timing or optimization has
-been implemented by this planning update. NM7 completion above records the user's confirmation,
+timing, logging, buffer ownership, tests, and platform qualification. NM8.1 low-overhead logging
+is complete; NM8.2 native GPU timing has not started. NM7 completion above records the user's confirmation,
 not additional tests performed during NM8 planning.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
@@ -1988,9 +1988,8 @@ features from QuickQanava examples.
 ### 21.9 Phase NM8 — Whole-DAG Performance and Brush-disabled Product Qualification
 
 **Execution plan:** [Preview Performance, Pass Scheduling and Product Qualification](node_mask_editor/phase_nm8_product_qualification_plan.md).
-**Status:** planned; plan written 2026-09-12. NM8.1–NM8.2 is the first implementation scope:
-low-overhead structured performance logs, input/producer/presentation timing, native node/pass
-timing, and measurements of the existing implementation. Optimization follows those measurements.
+**Status:** NM8.1 complete 2026-09-12 per the execution record in the NM8 plan.
+NM8.2–NM8.6 planned. Native GPU pass timestamps are not installed yet.
 
 **Reason for a separate phase:** Unit and component tests cannot prove that the packaged
 QuickQanava module, real RAW input, all backends, history recovery, analytic Masks, whole-DAG

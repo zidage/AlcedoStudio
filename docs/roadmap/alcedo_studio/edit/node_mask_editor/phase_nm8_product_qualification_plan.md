@@ -2,7 +2,8 @@
 
 Date: 2026-09-12
 
-Status: planned. 本次完成方案编写，尚未实施计时、运行性能采集或修改 GPU 执行。
+Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
+NM8.2–NM8.6 planned. Native GPU timestamps are still unavailable.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
 NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
@@ -222,7 +223,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 
 | 阶段 | 内容 | 依赖 | 初始状态 |
 | --- | --- | --- | --- |
-| NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | planned；首轮范围 |
+| NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
 | NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | planned；首轮范围 |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
@@ -234,8 +235,14 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 **工作：** 扩展第 2 节 diagnostics、输入/serial admission/coordinator/sink/viewport 路径；
 用第 3 节口径关联 input、request 和 Qt frame，拆出 owner 消费、plan、CPU 编码和等待。
 把 E2E stdout 迁到结构化日志；提供 Off/Summary/Detail、有界事件存储和后台写出。
-控制开关需要有一个明确配置入口，在本阶段记录实际配置名及默认值。
+控制开关：`ALCEDO_PREVIEW_PERF=off|summary|detail`，默认 `off`；
+可选 `ALCEDO_PREVIEW_PERF_LOG` 指定文件，缺省写在应用日志目录
+`alcedo_preview_perf_<log-basename>.log`。
+额外落地：删除产品预览路径上的 legacy `[RENDER_E2E]` / `[GPU_POOL]` / RAW `[LOG]` /
+fused-pipeline FPS 打印；Develop 记录 decode 参数；每个 pass 记录子阶段 CPU 时间
+（LLF / Mix / Linearize / Demosaic 等）；显存只在请求结束写一份汇总快照。
 当前执行顺序、缓存、分辨率和 GPU 调度保持原样，以便取得改动前证据。
+移除仅用于旧 profile 打印的 `stream.waitForCompletion()`，不增加新的逐 pass 设备等待。
 
 **主链：** 输入接收 → serial owner → coordinator → scheduler → sink → Qt frame → 后台性能日志。
 **失败链：** 请求合并/取消/失败/过期 → 记录终态 → 回收计时状态；日志满 → 记录丢失数量，渲染继续。
@@ -250,6 +257,88 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 
 **完成条件：** 文件日志可以还原一个 Interactive 请求及其呈现边界；关闭采集可快速退出；
 日志事件与渲染失败分开处理；原有 app logging 测试通过；尚未取得的 GPU 字段明确不可用。
+
+##### Phase NM8.1 completion record (2026-09-12)
+
+**Status:** complete — Off/Summary/Detail preview timing, input-to-present correlation,
+CPU pass/sub-stage intervals, Develop decode parameters, aggregated GPU resource snapshot.
+Native GPU durations remain unavailable.
+
+**Primary success call chain:**
+
+```text
+AdmitFieldChange (first_accepted_ns / latest_accepted_ns)
+  -> EditorSessionService::ConsumeTakenSequence (apply duration)
+  -> EditorRenderCoordinator::Submit / Schedule
+  -> PreviewPerformance::NoteSubmit / NoteInputTimes / NoteScheduled
+  -> Renderer::Render (plan key/lookup/compile, encode, Develop decode params)
+  -> PlanExecutor / GradeExecutor / LocalToneExecutor (pass + sub-stage CPU ns)
+  -> workspace.CaptureResourceSnapshot
+  -> DirectFrameSink (producer ready / present wake)
+  -> EditorViewportRenderer::render (Qt frame of the imported request only)
+  -> NoteDisplayed -> bounded queue -> background writer
+```
+
+**Primary failure call chain:**
+
+```text
+replaced / cancelled / failed / stale / dropped
+  -> NoteTerminal
+  -> pending sample released
+  -> render owner continues
+
+queue full
+  -> events_lost++
+  -> record not queued
+  -> pending sample still released
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `DisabledTimingDoesNotAllocateOrQueueEvents` | `PreviewPerformanceTest` | PASS |
+| `CoalescedInputsRetainFirstAndLatestAcceptedTimes` | `PreviewPerformanceTest` | PASS |
+| `PresentedFrameTimingMatchesConsumedRequest` | `PreviewPerformanceTest` | PASS |
+| `CancelledAndFailedRequestsReleaseTimingEntries` | `PreviewPerformanceTest` | PASS |
+| `FullDiagnosticQueueDoesNotBlockRenderOwner` | `PreviewPerformanceTest` | PASS |
+| `BackgroundWriterProducesCompleteStructuredRecords` | `PreviewPerformanceTest` | PASS |
+| `DevelopPassRecordIncludesDecodeParameters` | `PreviewPerformanceTest` | PASS |
+| `GradePassRecordsLlfAndMixSubStages` | `PreviewPerformanceTest` | PASS |
+| `ResourceSnapshotReportsAggregatedPoolTotals` | `PreviewPerformanceTest` | PASS |
+| `DefaultLoggingWritesNoPerFramePresentationInfo` | `EditorAppLoggingTest` | PASS |
+| `EnablingPresentDebugCategoryRestoresPerFrameDetail` | `EditorAppLoggingTest` | PASS |
+| `InfoAndDebugLoggingDoesNotFlushOncePerFrame` | `EditorAppLoggingTest` | PASS |
+| `WarningAndCriticalFlushImmediately` | `EditorAppLoggingTest` | PASS |
+| `ResourceSnapshotReportsAggregatedTextureAndTransientTotals` | `GpuDagCudaWorkspaceTest` | PASS |
+| EditorPendingInputTest (13 cases) | `EditorPendingInputTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DALCEDO_ENABLE_BRUSH_MASK=OFF -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PreviewPerformanceTest --target EditorAppLoggingTest --target EditRuntime --target EditRuntimeCuda
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorPendingInputTest --target EditorSessionService --target EditRuntimeOpenCl --target GpuDagCudaWorkspaceTest
+ctest --test-dir build/debug -R "PreviewPerformanceTest|EditorAppLoggingTest" --output-on-failure
+ctest --test-dir build/debug -R "EditorPendingInputTest\." --output-on-failure
+ctest --test-dir build/debug -R "ResourceSnapshotReportsAggregated" --output-on-failure
+```
+
+Suite totals: PreviewPerformanceTest 9/9 PASS; EditorAppLoggingTest 4/4 PASS;
+EditorPendingInputTest 13/13 PASS; GpuDagCudaWorkspaceTest snapshot case PASS.
+`build/debug/CMakeCache.txt` has `ALCEDO_ENABLE_BRUSH_MASK:BOOL=OFF`.
+
+**Checklist / exit condition:** all NM8.1 boxes covered by the tests above. GPU time
+fields write `gpu=unavailable`. Qt frame is stamped only on the imported request.
+
+**LOC note (grill-code-review):** `preview_performance.cpp` ~930 LOC (queue, intern,
+writer, notes). Types live in `preview_performance_record.hpp`. RAII notes in
+`preview_performance.hpp`. No file crossed 1000 LOC.
+
+**Residual gaps:** native GPU events/counters are NM8.2. No 10 s Interactive traces
+or P95 tables (NM8.2 measurement list). Metal product binary was not rebuilt on
+this Windows host; Metal develop sub-stage notes are in source. Summary mode writes
+quantile lines from completed presented samples; Detail writes per-request records.
 
 ### NM8.2 — 原生 GPU 计时与改动前基线
 
@@ -482,4 +571,5 @@ Numerical tolerance and result:
 Remaining platform or product verification:
 ```
 
-当前执行记录：无。2026-09-12 仅完成本方案和总方案中的 NM8 决策同步。
+当前执行记录：NM8.1 complete 2026-09-12. See the dated record under the NM8.1 heading.
+NM8.2–NM8.6 have no execution evidence yet.

@@ -34,28 +34,14 @@ using ProfileClock = std::chrono::steady_clock;
 
 struct DeferredMetalLog {
   std::vector<std::string> entries;
-
-  void Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 void PrintProfileMs(DeferredMetalLog& log, const char* label, const ProfileClock::duration elapsed) {
-  std::ostringstream oss;
-  oss << label << '=' << std::chrono::duration<double, std::milli>(elapsed).count() << " ms";
-  log.Add(oss.str());
+  (void)log;
+  (void)label;
+  (void)elapsed;
 }
 
 void LogProfileStep(DeferredMetalLog& log, const char* label, const ProfileClock::time_point start) {

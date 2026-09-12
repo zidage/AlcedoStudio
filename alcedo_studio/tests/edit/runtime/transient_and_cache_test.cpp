@@ -92,25 +92,19 @@ TEST_F(CudaWorkspaceFixture, SecondRenderUsesNoCudaAllocationAfterPeakReserve) {
   EXPECT_EQ(workspace.Device().FreeCount(), 0U);
 }
 
-TEST(GpuDagGpuPoolTrace, LargeAllocThresholdIsSixteenMebibytes) {
-  EXPECT_TRUE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes));
-  EXPECT_TRUE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes + 1));
-  if (!GpuPoolTraceEnvEnabled()) {
-    EXPECT_FALSE(ShouldTraceGpuPoolAlloc(kGpuPoolTraceMinAllocBytes - 1));
-    EXPECT_FALSE(GpuPoolTraceVerbose());
-  } else {
-    EXPECT_TRUE(GpuPoolTraceVerbose());
-  }
-}
-
-TEST_F(CudaWorkspaceFixture, DumpGpuPoolsPrintsResidentTexturesAndTransientsWithoutThrowing) {
+TEST_F(CudaWorkspaceFixture, ResourceSnapshotReportsAggregatedTextureAndTransientTotals) {
   CudaRenderDevice device;
   auto&            workspace = device.Workspace();
   device.BeginRender();
   const GraphValueId id{NodeId{"develop"}, PortId{"sensor_linear"}};
   (void)workspace.AcquireImageForWrite(id, {8, 8, TextureFormat::Rgba32f});
   (void)workspace.TransientBuffers().Allocate(512);
-  workspace.DumpGpuPools("test");
+  const auto snapshot = workspace.CaptureResourceSnapshot();
+  EXPECT_GE(snapshot.texture_used_bytes, 8u * 8u * 16u);
+  EXPECT_GE(snapshot.texture_entry_count, 1u);
+  EXPECT_GE(snapshot.texture_allocation_count, 1u);
+  EXPECT_GE(snapshot.transient_used_bytes, 512u);
+  EXPECT_GE(snapshot.write_image_count, 1u);
   device.CancelRender();
 }
 

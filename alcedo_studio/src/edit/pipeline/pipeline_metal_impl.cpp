@@ -153,17 +153,23 @@ class MetalPreviewReporter {
     static std::mutex           print_mutex;
     std::lock_guard<std::mutex> guard(print_mutex);
 
-    std::cout << "\r\033[2KMetal preview: " << std::fixed << std::setprecision(1) << ema_fps_
-              << " fps"
-              << " | last " << std::setprecision(2) << last_frame_ms_ << " ms"
-              << " | parts in:" << last_input_ms_ << " fe:" << last_fused_ms_
-              << " lt:" << last_hs_ms_ << " hs_src:" << last_hs_source_ms_
-              << " hs_remap:" << last_hs_remap_ms_ << " hs_sel:" << last_hs_select_ms_
-              << " hs_col:" << last_hs_collapse_ms_ << " hs_app:" << last_hs_apply_ms_
-              << " ne:" << last_neighbor_ms_ << " gw:" << last_gpu_wait_ms_
-              << " hd:" << last_download_ms_ << " sub:" << last_submit_ms_
-              << " ow:" << last_output_ms_ << " | stages " << last_stage_count_ << " | frames "
-              << total_frames_ << std::flush;
+    (void)ema_fps_;
+    (void)last_frame_ms_;
+    (void)last_input_ms_;
+    (void)last_fused_ms_;
+    (void)last_hs_ms_;
+    (void)last_hs_source_ms_;
+    (void)last_hs_remap_ms_;
+    (void)last_hs_select_ms_;
+    (void)last_hs_collapse_ms_;
+    (void)last_hs_apply_ms_;
+    (void)last_neighbor_ms_;
+    (void)last_gpu_wait_ms_;
+    (void)last_download_ms_;
+    (void)last_submit_ms_;
+    (void)last_output_ms_;
+    (void)last_stage_count_;
+    (void)total_frames_;
 
     last_report_time_ = now;
   }

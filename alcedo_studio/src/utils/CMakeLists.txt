@@ -6,13 +6,20 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
+def_library(PreviewPerformance
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance.cpp
+        ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance.hpp
+        ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_record.hpp
+)
+
 def_library(AppDiagnostics
     SOURCES
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/app_logging.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/app_logging.hpp
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/render_e2e_timing.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/render_e2e_timing.hpp
-    PUBLIC_DEPS Qt6::Core
+    PUBLIC_DEPS Qt6::Core PreviewPerformance
 )
 
 def_library(CudaDriverRequirements

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -15,11 +16,13 @@
 #include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "image/image_buffer.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace detail {
@@ -101,11 +104,19 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   std::optional<PreparedRawInput>           one_shot_prepared;
   ExecutionPlan                             plan;
   RenderDevice*                             render_device = device_.get();
+  struct BoundPreviewRequest {
+    explicit BoundPreviewRequest(std::uint64_t request_id) {
+      diag::PreviewPerformance::BindCurrentRequest(request_id);
+    }
+    ~BoundPreviewRequest() { diag::PreviewPerformance::ClearCurrentRequest(); }
+  };
+  BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
   if (use_session_cache) {
     prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
     plan = plan_cache_.GetOrCompile(*document_, prepared_lease->Get().CompileSource());
   } else {
     one_shot_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
+    diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
     plan          = GraphCompiler::CompileStatic(*document_, one_shot_prepared->CompileSource(),
                                                  Backend::kCapabilityVersion);
     render_device = one_shot_device_.get();
@@ -117,11 +128,69 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   const auto persistence =
       use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
                         : ResultPersistenceScope::AllCurrentResults;
-  const auto output_id = render_device->Execute(
-      plan, prepared, *document_, false,
-      use_session_cache ? TransientAllocationPolicy::SessionPacked
-                        : TransientAllocationPolicy::ExactRelease,
-      persistence);
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewDevelopDecodeParams develop;
+    switch (request.decode_res) {
+      case DecodeRes::HALF:
+        develop.decode_res = diag::PreviewDecodeRes::Half;
+        break;
+      case DecodeRes::QUARTER:
+        develop.decode_res = diag::PreviewDecodeRes::Quarter;
+        break;
+      case DecodeRes::EIGHTH:
+        develop.decode_res = diag::PreviewDecodeRes::Eighth;
+        break;
+      case DecodeRes::FULL:
+      default:
+        develop.decode_res = diag::PreviewDecodeRes::Full;
+        break;
+    }
+    switch (prepared.CompileSource().kind) {
+      case DevelopInputKind::XTransCfa:
+        develop.cfa = diag::PreviewCfaKind::XTrans;
+        break;
+      case DevelopInputKind::DirectRgb:
+        develop.cfa = diag::PreviewCfaKind::DirectRgb;
+        develop.upload_rgb = true;
+        develop.layout = diag::PreviewDevelopLayout::UploadRgb;
+        break;
+      case DevelopInputKind::BayerCfa:
+      default:
+        develop.cfa = diag::PreviewCfaKind::Bayer;
+        break;
+    }
+    const auto* develop_node = document_->Develop();
+    const auto method =
+        develop_node == nullptr
+            ? RawDemosaicMethod::Legacy
+            : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), prepared.CompileSource());
+    develop.demosaic = method == RawDemosaicMethod::NeuralEngine
+                           ? diag::PreviewDemosaicMethod::NeuralEngine
+                           : diag::PreviewDemosaicMethod::Legacy;
+    develop.highlights_reconstruct =
+        develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
+    develop.downsample_passes = prepared.downsample_passes;
+    develop.host_width        = prepared.host_extent.width;
+    develop.host_height       = prepared.host_extent.height;
+    develop.develop_width     = prepared.develop_output_extent.width;
+    develop.develop_height    = prepared.develop_output_extent.height;
+    develop.full_ref_width    = prepared.full_reference_extent.width;
+    develop.full_ref_height   = prepared.full_reference_extent.height;
+    diag::PreviewPerformance::NoteDevelopDecode(develop);
+  }
+  GraphValueId output_id;
+  {
+    diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
+    output_id = render_device->Execute(
+        plan, prepared, *document_, false,
+        use_session_cache ? TransientAllocationPolicy::SessionPacked
+                          : TransientAllocationPolicy::ExactRelease,
+        persistence);
+  }
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteResourceSnapshot(
+        render_device->Workspace().CaptureResourceSnapshot());
+  }
   const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;

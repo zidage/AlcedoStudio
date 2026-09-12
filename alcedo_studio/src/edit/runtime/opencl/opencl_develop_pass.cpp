@@ -42,17 +42,14 @@
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
 
 OpenClDemosaicNetModelCache* g_opencl_neural_cache_for_test = nullptr;
 
-void                         TraceDevelopStage(const char* stage) {
-  if (GpuPoolTraceVerbose()) {
-    std::fprintf(stderr, "[GPU_POOL] OpenCL Develop %s\n", stage);
-  }
-}
+void TraceDevelopStage(const char* stage) { (void)stage; }
 
 struct GeometryResampleParams {
   float         m00;
@@ -481,10 +478,16 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     const auto bytes    = input.pixels.ByteCount();
     void*      uploaded = workspace.TransientBuffers().Allocate(bytes);
     const auto source   = ViewFromPtr(backend, uploaded, bytes);
-    backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+    }
     auto stream = MakeEncodeQueue(device);
-    OpenCL::EncodeLinearizeRgb(stream, source, width, height,
-                               input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      OpenCL::EncodeLinearizeRgb(stream, source, width, height,
+                                 input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+    }
     auto& decoded = AcquireRgba(workspace, demosaic_id, out_w, out_h);
     if (hlr && input.rgb_linearization.has_value()) {
       void*      dst_ptr = workspace.TransientBuffers().Allocate(bytes);
@@ -520,14 +523,21 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     TraceDevelopStage("acquire output begin");
     auto& decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
     TraceDevelopStage("acquire output end");
-    backend.UploadDeviceMemory(u16_ptr, input.pixels.Span(), device.CommandContext());
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      backend.UploadDeviceMemory(u16_ptr, input.pixels.Span(), device.CommandContext());
+    }
     TraceDevelopStage("enqueue CFA upload end");
     auto stream = MakeEncodeQueue(device);
     auto linear = ViewFromPtr(backend, f32_ptr, f32_bytes);
-    OpenCL::EncodeToLinearRef(stream, ViewFromPtr(backend, u16_ptr, u16_bytes), linear, width,
-                              height, input.linearization, input.cfa_pattern);
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      OpenCL::EncodeToLinearRef(stream, ViewFromPtr(backend, u16_ptr, u16_bytes), linear, width,
+                                height, input.linearization, input.cfa_pattern);
+    }
     TraceDevelopStage("enqueue linearize end");
     if (!hlr) {
+      diag::PreviewSubStageInterval clamp(diag::PreviewSubStageKind::CfaClamp);
       OpenCL::EncodeCfaClamp01(stream, linear, width, height);
       TraceDevelopStage("enqueue CFA clamp end");
     }
@@ -536,15 +546,23 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     const auto method =
         ResolveDevelopDemosaicMethod(flags, input.cfa_pattern.kind, input.downsample_passes);
     if (method == RawDemosaicMethod::NeuralEngine) {
+      diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::Tiled);
       TraceDevelopStage("neural begin");
-      EncodeNeural(device, stream, input, linear, f32_ptr, decoded_lease.Texture().Native(), hlr);
+      {
+        diag::PreviewSubStageInterval demosaic(diag::PreviewSubStageKind::Demosaic);
+        EncodeNeural(device, stream, input, linear, f32_ptr, decoded_lease.Texture().Native(), hlr);
+      }
       TraceDevelopStage("neural end");
     } else {
+      diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::FullFrame);
       TraceDevelopStage("allocate legacy scratch end");
       auto legacy_scratch = AllocateLegacyDemosaicScratch(device, input, hlr);
       TraceDevelopStage("legacy demosaic begin");
-      EncodeLegacyDemosaic(device, stream, input, linear, f32_ptr, decoded_lease.Texture().Native(),
-                           hlr, legacy_scratch);
+      {
+        diag::PreviewSubStageInterval demosaic(diag::PreviewSubStageKind::Demosaic);
+        EncodeLegacyDemosaic(device, stream, input, linear, f32_ptr,
+                             decoded_lease.Texture().Native(), hlr, legacy_scratch);
+      }
       TraceDevelopStage("legacy demosaic end");
     }
   }
@@ -555,6 +573,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     if (source == nullptr) {
       throw std::runtime_error("ExecuteOpenClDevelop: DNG warp source was lost");
     }
+    diag::PreviewSubStageInterval warp(diag::PreviewSubStageKind::DngWarp);
     EncodeWarp(device, source->Texture().Native(), warped.Texture().Native(),
                *input.dng_warp_rectilinear, out_w, out_h);
   }

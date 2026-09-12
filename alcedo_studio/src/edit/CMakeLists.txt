@@ -117,6 +117,7 @@ endif()
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry EditInput
+    PRIVATE_DEPS PreviewPerformance
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)
     target_link_libraries(EditRuntime PUBLIC EditMaskBrush)
@@ -134,7 +135,7 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
-        PRIVATE_DEPS RawProcessorOp Operators MetalGeometryUtils MetalImage MetalDemosaicNetEntry
+        PRIVATE_DEPS RawProcessorOp Operators MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
     target_compile_definitions(EditRuntimeMetal PRIVATE
@@ -188,7 +189,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp Operators CudaDemosaicNetEntry
+        PRIVATE_DEPS EditInput RawProcessorOp Operators CudaDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()
@@ -205,7 +206,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
-        PRIVATE_DEPS Operators
+        PRIVATE_DEPS Operators PreviewPerformance
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()
