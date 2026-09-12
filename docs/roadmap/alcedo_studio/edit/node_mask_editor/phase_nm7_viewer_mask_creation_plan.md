@@ -2,26 +2,25 @@
 
 Date: 2026-09-08
 
-Status: NM7.1–NM7.12 completion records retained; NM7.12R implemented and partially
-verified (release latency, real-adapter QML harness, and Metal still open);
-NM7.12RR partial — CUDA GPU stamp (2026-09-11) plus first-drag pointer routing
-and equivalent-mapping keep-open (2026-09-12); erase persistence, parallel EDT,
-and viewer latency remain; NM7.13–NM7.15 planned.
+Status: NM7.1–NM7.12 completion records retained; NM7.12R and NM7.12RR remain historical
+partial Brush work. The 2026-09-11 release decision stops Brush delivery in this version.
+NM7.13–NM7.14 are redefined as the disabled-Brush project-format/build cut and complete
+Radial/Linear Gradient qualification. Whole-DAG performance belongs to NM8. All later Node Editor
+work uses `ALCEDO_ENABLE_BRUSH_MASK=OFF`.
 This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
 shared ReferenceSpace mapping with Brush placement, NM7.6 control-only retained QSG,
 NM7.7 Radial/Linear creation plus existing-mask movement, NM7.8 parameter-mask
-controls, drawer selection/deletion, and crop-style Gradient, NM7.9 accumulating
-Brush paint/erase/move with typed stroke history, NM7.10 serial Interactive Mix
-with one current Grade coverage result, NM7.11 project Mix-cache storage plus
-Keep/DeleteOnProjectClose cleanup, and NM7.12 production Mask controls plus project
-storage UI. The six reported Brush regressions require NM7.12R acceptance before Brush UI
-can be considered qualified. Newly reported second-scale drawing, first-drag input loss,
-and erased-content reappearance are covered by NM7.12RR. NM7.13–NM7.15 acceptance remains outstanding.
+controls, drawer selection/deletion, and crop-style Gradient, and the historical
+NM7.9–NM7.12RR Brush implementation records. NM7.13 increments the project format and removes
+Brush from the current product build; NM7.14 completes the two analytic Mask sources.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 8–12, 18, 20.3–20.4, 21.8, 23.5, and 24.
+
+Deferred Brush architecture:
+[Brush Mask Architecture, History, and Raster Materialization Master Plan](../brush_mask_architecture_master_plan.md).
 
 Prerequisites: NM1–NM5 ownership, multi-Grade/multi-Mask runtime and typed history,
 and node selection; NM6 serial input consumption, native parameter access, result retention,
@@ -38,8 +37,8 @@ highlighting. This revision supersedes the earlier per-stroke immutable-asset de
 
 Required algorithm/storage design:
 [Parameterized commands, regional replay and project cache](mask_command_replay_and_project_cache_plan.md).
-Read it before implementing NM7.2–NM7.15. It gives equations, inverse operations, replay bounds,
-cache lifecycle, project settings, failure behavior and an initial executable algorithm experiment.
+It governed the historical NM7.2–NM7.12RR work. Do not use it as the target for NM7.13–NM7.14;
+future Brush storage and raster work belongs to the separate Brush Master Plan.
 
 2026-09-08 parameter-mask revision: retain NM7.1–NM7.7 completion records. Insert NM7.8
 for Radial feather/range controls, Node drawer selection/deletion, and Geometry crop-style
@@ -48,6 +47,16 @@ records use the new numbering. Selected analytic boundary lines are required dur
 editing as well as creation; coverage fill remains prohibited. The reported Radial “半圆范围”
 is specified here as the radial/elliptical range contour and feather boundaries of the existing
 full-ellipse evaluator, without introducing a semicircle coverage algorithm.
+
+2026-09-11 current-release revision: Brush is not delivered in this version. Historical NM7.1–
+NM7.12RR implementation and evidence remain recorded below, but they do not define current release
+acceptance. NM7.13 increments the project format, rejects the experimental Brush-bearing format,
+creates a real optional-module boundary, and sets the product default to
+`ALCEDO_ENABLE_BRUSH_MASK=OFF`. NM7.14 qualifies Radial and Linear Gradient as the only shipped Mask
+sources. NM8 owns whole-DAG performance and final product qualification. NM8 and every remaining
+Node Editor plan must configure, build, test, install, package, and profile with Brush disabled. The
+separate Brush Master Plan owns the next-version history, storage, raster, native, UI, and release
+work; no remaining Brush checkbox in this document can block the current version after NM7.13.
 
 ## 1. Purpose and background for the executor
 
@@ -58,8 +67,8 @@ earlier Brush single-point movement controls and hard-edge creation defaults. Hi
 completion records remain evidence for the tests they actually ran, not proof that the six
 reported viewer problems are resolved.
 
-NM7 makes local adjustment possible directly on the photograph. A user selects a Color Grade,
-creates an area of influence with Brush, Radial, or Linear Gradient, and sees that Grade change
+NM7 makes local adjustment possible directly on the photograph. In the current release, a user
+selects a Color Grade, creates an area of influence with Radial or Linear Gradient, and sees that Grade change
 only the covered pixels. Later edits, Undo, Version checkout, reopening, and export must reproduce
 that same area. The drawing is therefore an editing input to the existing image pipeline, not an
 independent illustration layered over an otherwise unchanged photograph.
@@ -588,11 +597,10 @@ transitions immediate, and input-following geometry is never animated behind the
 
 ## 10. Revised ordered implementation phases
 
-本次改变 NM3 source、NM4 history 与 runtime cache，因此先完成数据和重放能力，再开放 viewer。
-保留已完成的 NM7.1–NM7.7，新增 NM7.8 参数蒙版改进；原 NM7.8–NM7.14
-顺延为 NM7.9–NM7.15。原 NM7.11（现 NM7.12）的部分 UI 已为测试提前接线，
-不代表该阶段全部完成。不能把旧的 immutable asset 测试当作新格式验收。
-保持总体 NM1→NM6→NM7→NM8 顺序。
+NM7.1–NM7.12RR 保留原编号和实际完成记录。2026-09-11 决策不重写这些历史提交，但重新定义
+NM7.13–NM7.14：先递增项目格式并从当前产品构建剥离 Brush，再完成两个 analytic Mask。
+整个 DAG 的性能优化与资格验证属于 NM8。保持总体 NM1→NM6→NM7→NM8 顺序；从 NM7.13 起
+所有 Node Editor 构建都关闭 Brush。
 
 | Phase | Result | Dependency |
 | --- | --- | --- |
@@ -610,13 +618,12 @@ transitions immediate, and input-following geometry is never animated behind the
 | NM7.12 | Production Mask controls and project storage UI | NM7.11 |
 | NM7.12R | Repair Brush tool state, pointer alignment, move frame, erase, drawing cost and default feather | NM7.5–NM7.12 |
 | NM7.12RR | Complete continuous Brush input, stable Erase, GPU execution and measured viewer responsiveness in one phase | NM7.12R implementation |
-| NM7.13 | Interruptions, late jobs and complete lifecycle | NM7.12, NM7.12R, NM7.12RR |
-| NM7.14 | Native pixel, persistence, cache bounds and recovery qualification | NM7.13 |
-| NM7.15 | Real viewer/package/performance qualification and NM8 handoff | NM7.14 |
+| NM7.13 | New project-format identity, detachable Brush modules and disabled product build/package | retained NM7.12RR history |
+| NM7.14 | Complete Radial and Linear Gradient lifecycle, native pixels and product qualification | NM7.13 |
 
 Each phase records actual files/APIs, success and failure call chains, commands, executed test
-counts and remaining gaps. Branch names describe the result, e.g. `feature/brush-command-replay`
-or `feature/project-mask-cache`. New names below are proposals, not existing APIs.
+counts and remaining gaps. Branch names describe the result, e.g. `build/detachable-brush-mask`,
+or `feature/analytic-mask-release`. New names below are proposals, not existing APIs.
 
 ### NM7.1 — Audit the revised source and format boundary
 
@@ -2561,7 +2568,8 @@ Failed GPU work -> invalidate pending content/base -> retain valid published res
 - [ ] 完成记录包含 commit、实际文件/API、两个调用链、测试精确命令/数量、像素误差、时延/资源表与平台执行范围。
 
 本阶段任一条未满足时保持 partial，列出本阶段剩余工作并继续处理；不能再命名一个补修子阶段
-把这些退出条件移走。其他原有 NM7.13–NM7.15 内容仍按原范围保留。
+把这些退出条件移走。该句记录 7.12RR 当时的执行要求；2026-09-11 决策已在下文重新定义
+NM7.13–NM7.14，并把未完成 Brush 资格验证移交独立 Master Plan。
 
 ##### Phase NM7.12RR completion record (2026-09-11)
 
@@ -2665,166 +2673,241 @@ Suite totals: `7/7` MaskEditGeometryTest PASS; `1/1` EditorBrushInteractionQmlTe
 
 **Remaining gaps:** Main.qml + RAW e2e for this drag hung/segfaulted under offscreen RHI in this session, so coverage-at-mid/end on a live Grade is not proven here. Rebuild `alcedo_main` to exercise the production workspace. Erase, EDT, and latency work remain in this phase.
 
-### NM7.13 — Complete cancellation and project/session lifecycle
+### NM7.13 — Cut the project format and extract Brush into a disabled optional module
 
-**Purpose:** preserve state when operations terminate without a normal release.
+**Decision:** Brush is removed from the current Node Editor release. The product configure uses
+`ALCEDO_ENABLE_BRUSH_MASK=OFF`. The project metadata version advances from `0.6.0` to `0.7.0`, and
+the accepted minimum and maximum both become `0.7.0`. This is a project-format, compile, and package
+boundary, not a hidden UI flag.
 
-**Work:** route grab cancellation, deactivation, workspace hide, adjustment input, owner deletion,
-Undo/Redo, image/Version/project switch and close through ordered boundaries. Restore unfinished
-commands and rebuild affected results, with no raster before-state. Fence old cache jobs by project
-and storage generation in addition to image/Version/sequence identity. Keep graph actions disabled
-only while creation mode owns input; release resources even when results are rejected.
+**Purpose:** make the current Radial/Linear Gradient delivery incapable of accumulating unreachable
+Brush code or accepting the abandoned experimental Brush parameters. The `0.6.0` project format is
+an experimental dead end: do not read, inspect, migrate, or selectively salvage its Brush state.
+Preserve the existing Brush work only inside a detachable module owned by the separate
+[Brush Mask Architecture Master Plan](../brush_mask_architecture_master_plan.md).
 
-**Files/APIs:** workspace input adapter, controller, session/project lifecycle, node/shortcut gates,
-cache service and frame validation.
+**Work:**
 
-**Primary chain:** interruption → cancel/settle command → owner restore/commit → requested lifecycle
-operation → stale result rejection / old writer retirement.
+- add the cache option `ALCEDO_ENABLE_BRUSH_MASK`, default `OFF` in product presets;
+- change `kProjectFileVersion`, `kMinSupportedProjectFileVersion`, and
+  `kMaxSupportedProjectFileVersion` from `0.6.0` to `0.7.0` in one atomic format cut;
+- reject every `0.6.0` project at the project metadata read boundary before decoding a pipeline
+  document, history row, checkpoint, transfer payload, or Brush parameter body; do not add a
+  `0.6.0` conversion path;
+- write only `0.7.0` metadata from new/save/package paths and update the exact-version tests and
+  user-facing incompatibility error together;
+- split common Mask ownership/Union/range behavior from analytic and Brush implementations;
+- keep Radial and Linear Gradient model, history, native evaluator, application, UI, resources, and
+  tests in the always-built analytic path;
+- move Brush model/reference types, stroke/sample code, history changes, stores, CPU/native raster,
+  application input/controller code, QML actions, icons, translations, tests, and benchmarks behind
+  optional targets;
+- make the disabled `MaskSource`/serializer/history registries contain only current-release source
+  kinds and changes; do not compile Brush branches followed by runtime `if (false)` checks;
+- remove Brush actions and rows from production QML and accessibility trees when disabled;
+- reject a structurally invalid `0.7.0` document that declares a Brush source or Brush history
+  change at its versioned decoder boundary; do not substitute another source or zero coverage;
+- ensure install/package manifests exclude Brush objects, kernels, QML, icons, and translations;
+- add dependency, link-map, QML-resource, and test-registration checks that prove absence;
+- build the isolated `ON` configuration once during extraction to prove that the module boundary is
+  coherent, but do not use it for later Node Editor implementation or qualification.
 
-**Tests:** `GrabCancellationDoesNotCommitBrush`, `DuplicateReleaseCommitsOnce`,
-`VersionCheckoutRejectsOldMaskFrame`, `ProjectSwitchRejectsOldCacheWrite`,
-`MaskDeleteWithViewerFocusDoesNotDeleteGrade`, `WorkspaceHideRestoresUnfinishedMaskMove`.
+**Required target boundary:**
 
-**Exit:** delayed native completion, write jobs and genuine Qt input all obey the same outcome.
+```text
+EditMaskCore
+  -> Mask identity, common fields, Union, ranges, owner operations
 
-### NM7.14 — Qualify native pixels, bounded disk storage and recovery
+EditMaskAnalytic
+  -> Radial + Linear Gradient model/history/runtime
 
-**Purpose:** verify source, command replay and disposable cache as one product path.
+EditMaskBrush                       [ALCEDO_ENABLE_BRUSH_MASK=ON only]
+  -> Brush model/history/storage/raster/native code
 
-**Work:** run the companion acceptance matrix plus main Section 11. Exercise 1,000 strokes,
-1,000 Undo/Redo, many Versions and Clear on multiple projects. Reopen/cacheless package/Paste,
-error injection, crash during atomic replacement and schema rejection. Record native backends
-separately; no CPU/other-backend substitution for unavailable qualification hardware.
+EditorMaskAnalytic
+  -> Radial + Linear Gradient controller/adapter/QML integration
 
-**Files/APIs:** shared native Mask fixtures, history/recovery/project/cache/UI tests and package tests.
-**Primary chain:** actual tool → source commands → clear/save/reopen/Version/Paste → fresh native
-coverage → expected pixels independent of any previous cache.
+EditorMaskBrush                     [ALCEDO_ENABLE_BRUSH_MASK=ON only]
+  -> Brush input/controller/adapter/QML integration
+```
 
-**Tests:** `CachelessProjectRestoresAllMaskVersions`, `NativeMaskReplayMatchesExpectedCoverage`,
-`RepeatedHistoryNavigationKeepsRasterFileCountBounded`, `InterruptedCacheReplaceLeavesNoPartialFile`,
-`PastedBrushUsesTargetProjectStoragePolicy`.
+One generated build configuration header or narrow registration boundary may expose availability.
+Unrelated node, Grade, session, and render files must not accumulate scattered feature checks.
 
-**Exit:** registered tests execute nonzero counts; actual file count/bytes and error cases recorded.
+**Primary disabled-build chain:**
 
-### NM7.15 — Qualify real viewer, packages and performance
+```text
+configure ALCEDO_ENABLE_BRUSH_MASK=OFF
+  -> analytic Mask targets only
+  -> write project_file_version 0.7.0
+  -> current project document accepts Radial / Linear Gradient only
+  -> node drawer and header expose Radial / Linear Gradient
+  -> compiler/runtime contain analytic Mask evaluation only
+  -> install/package contains no Brush implementation or resource
+```
 
-**Purpose:** measure the requested Interactive editing and ensure it ships in installed builds.
+**Primary abandoned-format chain:**
 
-**Work:** real RAW, nonidentity Grade, three sources, existing-source moves, paint/erase, Undo/Redo,
-project cache root/clear/close, packaged reopen. Capture control-only QSG and actual image pixels;
-measure event/queue/replay/feather/Union/Mix/presentation/cache-write costs and memory separately.
-Update completion records and master status only after all required evidence exists.
+```text
+open project_file_version 0.6.0
+  -> project metadata version check
+  -> IncompatibleProjectFormat error before document/history decoding
+  -> project/session remains unopened and unchanged
+```
 
-**Files/APIs:** package/viewer tooling, plan and master completion records; temporary outputs under
-`build/tmp/nm7/`. Preserve the source/owner naming and copy rules of AGENTS.md.
+**Primary invalid-current-document chain:**
 
-**Primary chain:** installed app → real input → Interactive photo → parameter commit → Quality →
-cache clear → reopen/rebuild → same final photo.
+```text
+project_file_version 0.7.0 declares Brush source/change while Brush is disabled
+  -> versioned document/history decoder
+  -> UnsupportedMaskSourceKind error
+  -> project/session remains unopened and unchanged
+```
 
-**Exit:** NM8 receives exact platforms, commands, fixtures, latency distributions, storage bounds,
-and explicitly unexecuted platform checks. No quality reduction or hidden raster-history cache.
+**Tests:** `BrushDisabledBuildExcludesBrushTargets`, `BrushDisabledPackageContainsNoBrushResources`,
+`BrushDisabledQmlExposesOnlyAnalyticMasks`, `BrushDisabledDocumentRejectsBrushSource`,
+`BrushDisabledHistoryRejectsBrushChanges`, `ProjectVersionCutRejectsExperimentalBrushFormat`,
+`ProjectSaveAndPackageWriteOnlyVersion070`, `BrushEnabledIsolationBuildCompiles`.
 
-## 11. Acceptance matrix and independent oracles
+**Exit:** the normal Windows and macOS Node Editor build/install/package commands explicitly use
+`ALCEDO_ENABLE_BRUSH_MASK=OFF`; build dependency and package evidence contain no Brush implementation.
+Every product writer emits `0.7.0`; the minimum and maximum accepted project versions are both
+`0.7.0`; a `0.6.0` project fails before any experimental Brush parameter is decoded. The isolated
+enabled build has no unresolved cross-module ownership, but no Brush product behavior is claimed.
+NM7.14, NM8, and all remaining Node Editor work use only the disabled configuration.
 
-Test implementation and expected outputs must not share the same bug. Use independent analytic
-calculations at chosen sample points and hand-specified R8 dab results, not production geometry
-helpers to generate both sides of a comparison.
+### NM7.14 — Complete and qualify Radial and Linear Gradient delivery
+
+**Purpose:** finish current-release Mask behavior without carrying Brush lifecycle, storage, input,
+or qualification requirements.
+
+**Work:**
+
+- complete cancellation, deactivation, workspace hide, adjustment input, owner deletion,
+  Undo/Redo, image/Version/project switch, close, and stale-session rejection for analytic Masks;
+- qualify Radial center/radii/rotation/feather/range contours and Linear Gradient origin/direction/
+  transition controls against independent equations;
+- qualify the Node drawer selection, deletion, re-editing, stable identity, focus, keyboard,
+  accessibility, two themes, and reduced-motion behavior;
+- qualify real Interactive and Quality pixels before/after release, move, parameter edit, Undo/Redo,
+  Version checkout, save/reopen, Paste, export, and package load;
+- remove current-release project settings or cache UI that exists only for Brush R8;
+- update product copy and format data so the supported Mask list is exactly Radial and Linear
+  Gradient;
+- run CUDA, OpenCL, and Metal qualification separately with no backend substitute.
+
+**Primary chain:**
+
+```text
+header or Node Mask row
+  -> select Radial / Linear Gradient
+  -> viewer ReferenceSpace input
+  -> owner applies provisional analytic parameters
+  -> QSG controls + actual Interactive Mask evaluation
+  -> release/confirm
+  -> one typed history operation
+  -> Quality
+  -> Version/reopen/Paste/export restore the same analytic parameters and pixels
+```
+
+**Primary cancellation chain:**
+
+```text
+Escape / grab cancellation / workspace or identity change
+  -> serial owner cancellation boundary
+  -> restore pre-input analytic fields when provisional values were visible
+  -> no commit
+  -> stale input and frame rejection
+```
+
+**Tests:** `CanceledRadialRestoresFieldsWithoutCommit`,
+`CanceledLinearGradientRestoresFieldsWithoutCommit`,
+`RadialHistoryVersionReopenAndPastePreserveCoverage`,
+`LinearGradientHistoryVersionReopenAndPastePreserveCoverage`,
+`AnalyticMaskDrawerSelectionDeletionAndReeditingUseStableIds`,
+`PackagedEditorExposesOnlyQualifiedAnalyticMasks`.
+
+**Exit:** Radial and Linear Gradient pass Section 11 on the real viewer and installed package. Every
+recorded build uses Brush disabled. No Brush-specific storage setting, action, source kind, history
+change, runtime branch, or product resource remains in the current-release path.
+
+## 11. Current-release acceptance matrix and independent expected results
+
+Test implementation and expected results must not share the same formulas or geometry helper. Brush
+is outside this matrix and must be absent from the build.
 
 | Area | Required cases | Evidence / tolerance |
 | --- | --- | --- |
+| Project-format cut | `0.6.0` project presented to the current product | Rejected at metadata version check before document/history decoding; no migration or partial open; source files unchanged |
+| Build boundary | Windows/macOS product configure, build, install and package at `0.7.0` with Brush disabled | Dependency/link/resource/test manifests show no Brush source, symbol, QML, kernel, icon, translation, history kind, or product test |
+| Unsupported input | Brush source/history data embedded in a structurally invalid `0.7.0` document | Precise versioned decode error; no empty Mask or analytic substitute; session remains unchanged |
 | Mapping | landscape/portrait; crop/rotation/orientation; fit/actual/zoomed; pan; DPR 1/1.25/1.5/2; DetailPatch | Reference and item round-trip tolerances in NM7.5; exact identity preservation |
-| Analytic coverage | Radial center/inside/feather/outside and rotated axes; Linear both ends/midpoint/direction | Independent scalar formulas; R8 error ≤ 1 code value unless existing tests are stricter |
-| Brush pixels | multiple strokes on one MaskId, size/strength changes, click, sparse/dense events, overlaps, duplicates, hard/soft edge, erase, zero changes | Exact R8 bytes for deterministic raster output; different event grouping gives same bytes |
-| Native runtime | CUDA/OpenCL/Metal, one/many Masks, two Grades, invert/opacity/feather, current-cache/fresh-replay | Existing NM3 numerical tolerances; record backend and runtime actually used |
-| Overlay | finite vertices, winding, clipping, alpha seams, constant handle widths, next available Qt frame | Geometry assertions plus accelerated window captures; contour deviation ≤ 0.25 logical px |
-| Parameter-mask UI | selected Radial range/feather lines; crop-style Gradient guides; drawer select/re-edit/delete | NM7.8 production QML input, IDs/history, before-release pixels and captures; no fill |
-| Movement | existing Brush/Radial/Gradient; old/new domains; repeated translation; press/move/release | Interactive pixels update before release; controls only, no coverage fill; one final commit |
-| Project cache | custom root, Clear, close cleanup, two projects, repeated Versions | Stable file count; delete-all-cache restores same history/coverage; no cross-project deletion |
-| Input | press under threshold, outside release, canceled grab, synthesized mouse, second touch, repeated Enter | One source stream and exactly one terminal outcome; no duplicate commit |
-| Ownership | held GPU/request reader, late callback, load/checkout during settle, new image with reused IDs | No simultaneous raster read/write or live mutation/render; no stale publication |
-| History | creation, later edit, delete, cancel, no-op, Undo/Redo, cache corruption, WAL failure | Exact commit counts/HEAD, canonical document values and replayed expected coverage with no prior cache |
-| UI | header/node entry, seven pages with Mask disabled outside editing, stable rows, focus, renamed/missing target, two themes/reduced motion | Production QML load; load-only emits zero commands/renders; actual reachable control path |
-| Persistence | reopen, two Versions, Paste, export | Same settled source-derived coverage; target RAW metadata retained; no overlay in exported pixels |
+| Radial coverage | center/inside/feather/outside, rotated axes, range and feather contours | Independent scalar equations; R8 error ≤ 1 code value unless an existing test is stricter |
+| Linear Gradient coverage | both ends, midpoint, direction, transition distance and reversed direction | Independent scalar equations; R8 error ≤ 1 code value unless an existing test is stricter |
+| Native runtime | CUDA/OpenCL/Metal; one/many analytic Masks; two Grades; invert/opacity/feather | Existing NM3 numerical tolerances; record backend and runtime actually executed |
+| Overlay | finite vertices, clipping, constant handle width and next available Qt frame | Geometry assertions plus accelerated-window captures; contour deviation ≤ 0.25 logical px |
+| UI | header/node entry, selected guides, drawer select/re-edit/delete, stable rows, focus, keyboard, accessibility, themes, reduced motion | Production QML load; load-only path emits zero edits/renders; actual reachable controls |
+| Lifecycle | normal release, Escape, canceled grab, workspace hide, owner deletion, image/Version/project change | One terminal outcome; exact commit counts; provisional values restored or settled once; stale input/frame rejected |
+| History | create/edit/move/delete/no-op, Undo/Redo, WAL recovery and persistence error | Exact HEAD/document values and expected analytic coverage |
+| Persistence | reopen, two Versions, Paste, export and installed package | Same analytic parameters and final pixels; target RAW metadata retained; no overlay in export |
 
-For final RGB comparisons use existing pipeline fixture tolerances and record max/mean error plus
-failure coordinates. Do not loosen tolerances merely because R8 edges make a visual mismatch
-noticeable. Separate contour quantization tolerance from wrong transforms, wrong target or stale data.
+For final RGB comparisons, record maximum and mean error plus failure coordinates. Do not loosen
+tolerances to hide wrong transforms, target identity, stale data, invalidation, or native execution.
 
-No native execution is required for this documentation-only change. During execution, discover
-registered targets with `ctest -N` and inspect CMake before naming exact commands in records.
-Use repository macOS presets and the MSVC wrapper on Windows. New tests must have behavior-specific
-names and be registered; a filter that executes zero tests is not qualification.
+During execution, discover registered targets with `ctest -N` and inspect CMake before recording exact
+commands. Use repository macOS presets and the MSVC wrapper on Windows. A filtered command that runs
+zero tests is not qualification.
 
-## 12. Performance and resource evidence
-
-Preserve NM6's 16 ms total Interactive cycle target, including owner consumption, invalidation,
-Mask work, Grade processing and safe completion. Measure separately:
-
-- Qt event to overlay synchronization/presentation;
-- enqueue to owner consume and queue depth/sample backlog;
-- sample processing/raster update, dirty upload bytes and actual feather work;
-- owner cycle total and Qt photo presentation latency;
-- release to durable parameter commit and Quality presentation; coalesced cache publication separately;
-- current CPU raster bytes, pending sample bytes, QSG vertices/nodes, native allocations/leases.
-
-Run identical fixed sample paths on the same RAW/view/backend/build: one Mask and many Masks;
-small Brush and large soft Brush; cold and warm runtime; first and subsequent parameterized edits. Report
-p50/p95/max and actual operation counts. Do not compare Debug CUDA to Release Metal as a performance
-conclusion. Deliberately hold a render to prove overlay input and cancellation stay responsive.
-
-Expected bounds: no unnecessary full-raster copy/upload for local moves; full-domain changes
-and required feather work are measured explicitly, no R8 history file per stroke, no
-per-frame entire-stroke QML object rebuild, no repeated whole-prefix history copies, no overlapping
-owner cycles, and no valid upstream Interactive-result eviction. Initial texture creation and
-algorithm-required wide feather processing must be reported separately from local source uploads.
-If resources cannot satisfy a complete operation, report the error and restore unfinished work;
-do not drop data, lower quality or switch the backend.
-
-## 13. Failure matrix and completion record template
+## 12. Failure matrix and completion record template
 
 | Failure | Required committed state | Required user/session behavior |
 | --- | --- | --- |
-| Invalid target / transform / fields | Unchanged | Precise rejection; no provisional half-Mask |
+| Brush data in disabled build | Unchanged/unopened | Precise unsupported-format error; no substitute source or coverage |
+| Invalid analytic target / transform / fields | Unchanged | Precise rejection; no provisional partial Mask |
 | Cancel before owner consume | Unchanged | Drop queued sequence; no restore render needed |
-| Cancel after provisional application | Original state restored | Restore frame if pixels changed; no commit |
-| Required R8/scratch allocation failure | Original source remains recoverable | Restore unfinished operation if needed; real error; no lower quality |
-| Cache write failure | Durable parameter HEAD retained | Report I/O error, keep dirty status; no alternate directory or history rollback |
-| Stale cache-job completion | New session untouched | Reject old generation; release temp files/readers through project cache owner |
-| History persistence failure | Existing NM4 durable/restore rules | Never falsely report success; retain real error |
-| GPU failure before/after settle | No invalid output published; valid durable commit retained | Real backend error; no alternate evaluator |
-| Scene graph invalidation | Document/history unchanged | Recreate display geometry on next valid scene |
+| Cancel after provisional analytic apply | Original fields restored | Restore frame if pixels changed; no commit |
+| Image/Version/project identity changes | Requested valid state only | Reject old input and frames; release readers/resources |
+| History persistence failure | Existing NM4 durable/restore rules | Never report success; retain exact error and consistent HEAD |
+| Required native allocation or execution failure | No invalid output published | Real backend error; no CPU or other-backend evaluator |
+| Static-plan or invalidation failure | Prior valid document/result retained where applicable | Report the failing node/value/revision; do not execute an unverified plan |
+| Scene graph invalidation | Document/history unchanged | Recreate analytic display geometry on the next valid scene |
 
-Each executor appends this record under its sub-phase; do not replace planned tests with a vague
+Each executor appends this record under its sub-phase; do not replace planned evidence with a vague
 “tested” line:
 
 ```text
 NM7.x completion record
-Date / commit / platform / Qt version / native backend / build type:
+Date / commit / platform / Qt version / native backend / build type / Brush option:
 Status: planned | in progress | complete
 Resolved decisions and actual files/APIs:
 Primary success call chain:
-Primary cancel/failure call chain:
+Primary cancellation/failure call chain:
 Test name -> registered target -> command -> executed count -> result:
 Reference fixture / expected output / tolerance:
-Resource and latency measurements where applicable:
+Build dependency and package-resource evidence where applicable:
 Source/header ownership and naming checks:
 Remaining gaps and next dependency:
 ```
 
 Global NM7 completion checklist:
 
-- [ ] Section 2 approved decisions are reflected in the master/UI specification and implementation.
-- [ ] All three source types work in the real viewer on the selected exact Color Grade.
-- [ ] QSG input/geometry, actual evaluator and ReferenceSpace agree.
-- [ ] Brush canonical input, parameterized strokes, one current Grade R8 slot, regional replay and reader ownership are proven.
-- [ ] Creation, each edit/stroke, cancellation and deletion have the specified history outcome.
-- [ ] Stale inputs, cache jobs and frames cannot cross image/Version/sequence boundaries.
-- [ ] UI entry points, accessibility, disabled-until-editing Mask page and load-only selection restore are tested.
-- [ ] Native runtime, cacheless persistence/recovery and exported pixels pass the acceptance matrix.
-- [ ] One thousand strokes/Undo/Redo do not create per-step R8 files or pixel history.
-- [ ] Per-project paths, retain/close-cleanup/Clear and stale-writer rejection are qualified.
-- [ ] Resource/performance records include real platform results and no quality substitutions.
+- [ ] `ALCEDO_ENABLE_BRUSH_MASK=OFF` is the default current product configuration.
+- [ ] `kProjectFileVersion`, `kMinSupportedProjectFileVersion`, and
+      `kMaxSupportedProjectFileVersion` are all `0.7.0`; every `0.6.0` project is rejected before
+      document/history decoding and no experimental Brush conversion path exists.
+- [ ] Brush model/history/runtime/application/UI/test/resource code is outside the disabled build and
+      package, not merely hidden at runtime.
+- [ ] Unsupported Brush data fails at the versioned read boundary without changing session state.
+- [ ] All later Node Editor plans, builds, tests, packages, and performance traces explicitly disable
+      Brush.
+- [ ] Radial and Linear Gradient work in the real viewer on the selected exact Color Grade.
+- [ ] QSG input/geometry, analytic evaluator and ReferenceSpace agree.
+- [ ] Creation, editing, cancellation and deletion have the specified history outcome.
+- [ ] Stale inputs and frames cannot cross image/Version/project/sequence boundaries.
+- [ ] UI entry points, accessibility, disabled-until-editing Mask page and load-only selection restore
+      are tested for the two supported sources.
+- [ ] Native runtime, persistence/recovery, Paste, export and installed-package paths pass Section 11.
 - [ ] New headers include defining headers unless a documented include-cycle/PIMPL exception applies.
-- [ ] Added copies have the concrete owner/lifetime/consistency purpose specified in Section 5.1.
+- [ ] Added copies have a concrete owner, lifetime, and consistency need.
 - [ ] Touched first-party names and roadmap text/links satisfy repository terminology rules.
-- [ ] Master NM7 status and NM8 handoff accurately distinguish completion from remaining evidence.
+- [ ] The Node Editor master status and NM8 handoff identify Brush as a separate next-release plan.
