@@ -298,6 +298,12 @@ Skills are reusable, composable capabilities that enhance agent abilities. Each 
 The canonical, complete catalog is `.agents/skills/`; the summaries below are highlights and are not
 an exhaustive list. Agents should read the matching canonical `SKILL.md` before using a skill.
 
+### alcedo-create-pr
+Use when opening an Alcedo Studio GitHub pull request, or when the user runs
+`/alcedo-create-pr`. Canonical path: `.agents/skills/alcedo-create-pr/SKILL.md`.
+Write the title and body in English with ASD-STE100 wording. Use Why, Changes,
+and Verification. Do not put a phase id in the title.
+
 ### alcedo-msvc-cmake
 Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or `scripts/msvc_env.cmd`, or when an agent would otherwise run bare cmake commands in this repository.
 
